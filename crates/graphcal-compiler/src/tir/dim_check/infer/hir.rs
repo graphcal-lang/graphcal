@@ -1390,23 +1390,7 @@ fn infer_hir_unary(
     )
 }
 
-use super::rules::{self, LiteralExponent, Operand};
-
-fn hir_literal_exponent(expr: &hir::Expr) -> Option<LiteralExponent> {
-    match &expr.kind {
-        hir::ExprKind::Integer(n) => Some(LiteralExponent::Int(*n)),
-        hir::ExprKind::Number(n) => Some(LiteralExponent::Float(*n)),
-        hir::ExprKind::UnaryOp {
-            op: UnaryOp::Neg,
-            operand,
-        } => match &operand.kind {
-            hir::ExprKind::Integer(n) => Some(LiteralExponent::Int(n.wrapping_neg())),
-            hir::ExprKind::Number(n) => Some(LiteralExponent::Float(-*n)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
+use super::rules::{self, Operand};
 
 fn try_const_int(expr: &hir::Expr) -> Option<i64> {
     use crate::desugar::desugared_ast::BinOp;
@@ -1425,7 +1409,7 @@ fn try_const_int(expr: &hir::Expr) -> Option<i64> {
                 BinOp::Mul => l.checked_mul(r),
                 BinOp::Div if r != 0 => l.checked_div(r),
                 BinOp::Mod if r != 0 => l.checked_rem(r),
-                BinOp::Pow if r >= 0 => u32::try_from(r).ok().and_then(|e| l.checked_pow(e)),
+                BinOp::Pow(_) if r >= 0 => u32::try_from(r).ok().and_then(|e| l.checked_pow(e)),
                 _ => None,
             }
         }
@@ -1471,12 +1455,12 @@ fn infer_hir_binop(
         builtin_fns,
         src,
     )?;
-    // Only the `^` rule reads the exponent shape; `x ^ -2` is structurally
-    // `Unary(Neg, IntLit(2))`, which is still compile-time-known.
-    let (rhs_lit, rhs_const_int) = if matches!(op, BinOp::Pow) {
-        (hir_literal_exponent(rhs), try_const_int(rhs))
+    // Exact exponent shape is carried by `BinOp::Pow`; constant folding is
+    // needed only for runtime-classified right-associated Int power chains.
+    let rhs_const_int = if matches!(op, BinOp::Pow(_)) {
+        try_const_int(rhs)
     } else {
-        (None, None)
+        None
     };
     rules::binop_rule(
         span,
@@ -1489,7 +1473,6 @@ fn infer_hir_binop(
             ty: rhs_type,
             span: rhs.span,
         },
-        rhs_lit,
         rhs_const_int,
         registry,
         src,

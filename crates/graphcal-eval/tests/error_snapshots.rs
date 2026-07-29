@@ -343,6 +343,13 @@ fn error_non_literal_exponent() {
 }
 
 #[test]
+fn error_float_power_exponent() {
+    let source = include_str!("../../../tests/fixtures/invalid/float_power_exponent.gcl");
+    let rendered = render_error(source, "float_power_exponent.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_boolean_dim_error() {
     let source = include_str!("../../../tests/fixtures/invalid/boolean_dim_error.gcl");
     let rendered = render_error(source, "boolean_dim_error.gcl");

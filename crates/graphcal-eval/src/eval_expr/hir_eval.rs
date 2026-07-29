@@ -255,6 +255,7 @@ fn eval_hir_binop(
             let r = eval_hir_expr(rhs, values, local_values, ctx)?;
             super::arithmetic::eval_ordering_values(op, &l, &r, ctx, span)
         }
+        BinOp::Pow(exponent) => eval_hir_power(span, exponent, lhs, rhs, values, local_values, ctx),
         _ => {
             let l = eval_hir_expr(lhs, values, local_values, ctx)?;
             let r = eval_hir_expr(rhs, values, local_values, ctx)?;
@@ -314,6 +315,59 @@ fn eval_hir_binop(
             super::arithmetic::eval_quantity_binop(op, lv, rv, ctx, span)
                 .map(RuntimeValue::Quantity)
         }
+    }
+}
+
+fn eval_hir_power(
+    span: Span,
+    exponent: graphcal_compiler::syntax::ast::PowerExponent,
+    base: &hir::Expr,
+    exponent_expr: &hir::Expr,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::desugar::desugared_ast::BinOp;
+    use graphcal_compiler::syntax::ast::PowerExponent;
+
+    let base = eval_hir_expr(base, values, local_values, ctx)?;
+    let op = BinOp::Pow(exponent);
+    match (base, exponent) {
+        (RuntimeValue::Int(base), PowerExponent::Exact(exact)) => {
+            if !exact.is_integer() {
+                return Err(ctx.internal_error(
+                    "fractional exact exponent reached Int power evaluation",
+                    span,
+                ));
+            }
+            super::arithmetic::eval_int_binop(op, base, exact.numerator(), ctx, span)
+                .map(RuntimeValue::Int)
+        }
+        (RuntimeValue::Int(base), _) => {
+            let runtime_exponent = eval_hir_expr(exponent_expr, values, local_values, ctx)?;
+            let RuntimeValue::Int(runtime_exponent) = runtime_exponent else {
+                return Err(
+                    ctx.internal_error("non-Int exponent reached Int power evaluation", span)
+                );
+            };
+            super::arithmetic::eval_int_binop(op, base, runtime_exponent, ctx, span)
+                .map(RuntimeValue::Int)
+        }
+        (RuntimeValue::Quantity(base), PowerExponent::Exact(exact)) => {
+            super::arithmetic::eval_exact_quantity_power(base, exact, ctx, span)
+                .map(RuntimeValue::Quantity)
+        }
+        (RuntimeValue::Quantity(base), _) => {
+            let runtime_exponent = eval_hir_expr(exponent_expr, values, local_values, ctx)?
+                .expect_quantity("power exponent")
+                .map_err(|error| ctx.internal_error(error.to_string(), span))?;
+            super::arithmetic::eval_quantity_binop(op, base, runtime_exponent, ctx, span)
+                .map(RuntimeValue::Quantity)
+        }
+        (other, _) => Err(ctx.internal_error(
+            format!("non-numeric base reached power evaluation: {other:?}"),
+            span,
+        )),
     }
 }
 

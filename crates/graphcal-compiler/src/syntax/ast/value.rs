@@ -1,6 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::dimension::Rational;
+use crate::exact_rational::ExactRational;
 use crate::syntax::ast::common::{Ident, ModulePath};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::UnitRef;
@@ -1125,6 +1126,22 @@ pub enum PatternBinding {
     },
 }
 
+/// Source classification of a power exponent.
+///
+/// The parser records this before numeric literals lose their source spelling.
+/// HIR carries the classification unchanged so dimensional analysis and
+/// evaluation never reconstruct exact rationals from binary64 or source text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerExponent {
+    /// Integer or parenthesized rational syntax such as `2`, `-2`, or `(3/2)`.
+    Exact(ExactRational),
+    /// Decimal/scientific float syntax. `exact` is present only when the
+    /// decimal spelling can be represented exactly by [`ExactRational`].
+    FloatSyntax { exact: Option<ExactRational> },
+    /// Any other exponent expression, whose value is available only at runtime.
+    Runtime,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Add,
@@ -1132,7 +1149,7 @@ pub enum BinOp {
     Mul,
     Div,
     Mod,
-    Pow,
+    Pow(PowerExponent),
     Eq,
     Ne,
     Lt,

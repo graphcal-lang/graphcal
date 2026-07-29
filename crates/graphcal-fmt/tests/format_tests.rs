@@ -421,6 +421,16 @@ fn format_keeps_parens_around_neg_in_pow_lhs() {
 }
 
 #[test]
+fn format_keeps_exact_rational_power_parenthesized() {
+    let source = "param x: Length = 8.0 m;\nnode y: Length^(1/3) = @x ^ (1 / 3);\n";
+    let formatted = format_source(source).unwrap();
+    assert!(
+        formatted.contains("@x ^ (1 / 3)"),
+        "exact rational exponent lost its required parentheses: {formatted}"
+    );
+}
+
+#[test]
 fn format_pow_with_signed_literal_rhs_no_parens() {
     // `x ^ -2` is unambiguous because `^` is right-assoc; no parens needed.
     let source = "param x: Dimensionless = 2.0;\nnode y: Dimensionless = @x ^ -2.0;\n";

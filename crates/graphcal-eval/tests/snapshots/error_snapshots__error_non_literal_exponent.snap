@@ -1,13 +1,14 @@
 ---
 source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 342
 expression: rendered
 ---
-exponent in power must be a numeric literal for dimensional analysis
+a dimensioned base requires a statically exact rational exponent
     Diagnostic severity: error
 Begin snippet for non_literal_exponent.gcl starting at line 2, column 1
 
 snippet line 2: param n: Dimensionless = 2.0;
 snippet line 3: node bad: Area = @x ^ @n;
-    label at line 3, columns 23 to 24: non-literal exponent
-diagnostic help: use a literal exponent like `x ^ 2.0` so dimensions can be checked at compile time
+    label at line 3, columns 23 to 24: runtime exponent cannot determine the result dimension
+diagnostic help: use an exact integer such as `2` or a parenthesized rational such as `(3/2)`
 diagnostic code: graphcal::D005

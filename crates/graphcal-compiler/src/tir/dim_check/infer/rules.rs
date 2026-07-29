@@ -13,8 +13,10 @@ use miette::NamedSource;
 
 use crate::desugar::desugared_ast::{BinOp, UnaryOp, UnitExpr};
 use crate::dimension::{Dimension, Rational};
+use crate::exact_rational::ExactRational;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
+use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
 use super::super::InferredType;
@@ -45,20 +47,20 @@ fn comparison_operand_type<'a>(
     }
 }
 
-/// A compile-time-known exponent literal (possibly behind a unary minus).
-#[derive(Clone, Copy)]
-pub(super) enum LiteralExponent {
-    Int(i64),
-    Float(f64),
+fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
+    let rational = Rational::try_from(exact?).ok()?;
+    Some(if rational.is_integer() {
+        rational.num().to_string()
+    } else {
+        format!("({}/{})", rational.num(), rational.den())
+    })
 }
 
 /// Typing rule for a binary operation, given already-inferred operands.
 ///
-/// `rhs_lit` is the literal exponent of the right operand when it is
-/// compile-time-known, and `rhs_const_int` is its constant-folded Int value
-/// (for `Int ^ Int` chains, issue #578) — both computed by the calling
-/// engine from its own expression representation; only the `^` arm reads
-/// them.
+/// `rhs_const_int` is the right operand's constant-folded `Int` value for
+/// runtime-classified `Int ^ Int` chains (issue #578). Exact literal and
+/// rational power syntax is carried directly by [`BinOp::Pow`].
 #[expect(
     clippy::too_many_lines,
     reason = "exhaustive match over all BinOp variants"
@@ -68,7 +70,6 @@ pub(super) fn binop_rule(
     op: BinOp,
     lhs: &Operand,
     rhs: &Operand,
-    rhs_lit: Option<LiteralExponent>,
     rhs_const_int: Option<i64>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -329,101 +330,99 @@ pub(super) fn binop_rule(
                 span: expr_span.into(),
             })
         }
-        BinOp::Pow => {
-            // Int/Fin ^ Int (literal or constant-foldable, non-negative) -> Int
+        BinOp::Pow(exponent) => {
+            // Int/Fin powers remain integer-only. Exact integer syntax is
+            // preferred; right-associated constant Int chains retain their
+            // existing checked constant folding.
             if lhs_type.is_int_like() {
-                let int_exp = match rhs_lit {
-                    Some(LiteralExponent::Int(n)) => Some(n),
-                    // Constant-fold Int^Int chains so `2 ^ 3 ^ 2` symmetrizes
-                    // with the de facto floating-point behavior (issue #578).
-                    _ => rhs_const_int,
+                let int_exp = match exponent {
+                    PowerExponent::Exact(exact) if exact.is_integer() => Some(exact.numerator()),
+                    PowerExponent::Runtime => rhs_const_int,
+                    PowerExponent::Exact(_) | PowerExponent::FloatSyntax { .. } => None,
                 };
-                if let Some(n) = int_exp {
-                    if n >= 0 {
+                if let Some(value) = int_exp {
+                    if value >= 0 {
                         return Ok(InferredType::Int);
                     }
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "non-negative Int exponent".to_string(),
-                        found: format!("{n}"),
-                        help: "integer power requires a non-negative exponent".to_string(),
+                        found: value.to_string(),
+                        help: "integer power requires a non-negative exact integer exponent"
+                            .to_string(),
                         src: src.clone(),
                         span: rhs.span.into(),
                     });
                 }
-                return Err(GraphcalError::NonLiteralExponent {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "non-negative exact Int exponent".to_string(),
+                    found: format_inferred_type(rhs_type, registry),
+                    help: "integer power requires an exact integer exponent such as `2`"
+                        .to_string(),
                     src: src.clone(),
                     span: rhs.span.into(),
                 });
             }
-            // Quantity ^ literal exponent
+
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
-            match rhs_lit {
-                Some(LiteralExponent::Float(n)) => {
-                    if n.fract() == 0.0 {
-                        // `as i32` saturates for out-of-range floats, which
-                        // would silently produce a wrong dimension exponent;
-                        // reject instead.
-                        if n < f64::from(i32::MIN) || n > f64::from(i32::MAX) {
-                            return Err(GraphcalError::DimensionOverflow {
+
+            // Non-exact exponent expressions must still be dimensionless.
+            if !matches!(exponent, PowerExponent::Exact(_)) {
+                let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
+                if !rhs_dim.is_dimensionless() {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "Dimensionless exponent".to_string(),
+                        found: registry.dimensions.format_dimension(&rhs_dim),
+                        help: "the exponent of a power must be dimensionless".to_string(),
+                        src: src.clone(),
+                        span: rhs.span.into(),
+                    });
+                }
+            }
+
+            match exponent {
+                PowerExponent::Exact(exact) => {
+                    if lhs_dim.is_dimensionless() {
+                        return Ok(InferredType::Quantity(Dimension::dimensionless()));
+                    }
+                    let rational = Rational::try_from(exact).map_err(|_| {
+                        GraphcalError::DimensionOverflow {
+                            src: src.clone(),
+                            span: rhs.span.into(),
+                        }
+                    })?;
+                    let dim =
+                        lhs_dim
+                            .pow(rational)
+                            .map_err(|_| GraphcalError::DimensionOverflow {
                                 src: src.clone(),
                                 span: expr_span.into(),
-                            });
-                        }
-                        #[expect(
-                            clippy::cast_possible_truncation,
-                            reason = "guarded by fract() == 0.0 and range checks"
-                        )]
-                        let exp = n as i32;
-                        let dim =
-                            lhs_dim
-                                .pow(exp)
-                                .map_err(|_| GraphcalError::DimensionOverflow {
-                                    src: src.clone(),
-                                    span: expr_span.into(),
-                                })?;
-                        Ok(InferredType::Quantity(dim))
-                    } else {
-                        #[expect(
-                            clippy::float_cmp,
-                            reason = "checking exact 0.5 literal for square-root exponent"
-                        )]
-                        if n == 0.5 {
-                            let dim = lhs_dim.pow(Rational::HALF).map_err(|_| {
-                                GraphcalError::DimensionOverflow {
-                                    src: src.clone(),
-                                    span: expr_span.into(),
-                                }
                             })?;
-                            Ok(InferredType::Quantity(dim))
-                        } else {
-                            Err(GraphcalError::NonLiteralExponent {
-                                src: src.clone(),
-                                span: rhs.span.into(),
-                            })
-                        }
-                    }
-                }
-                Some(LiteralExponent::Int(n)) => {
-                    // `as i32` would wrap: `x ^ 4294967296` (2^32) used to
-                    // truncate to exponent 0 and silently infer Dimensionless.
-                    let exp = i32::try_from(n).map_err(|_| GraphcalError::DimensionOverflow {
-                        src: src.clone(),
-                        span: expr_span.into(),
-                    })?;
-                    let dim = lhs_dim
-                        .pow(exp)
-                        .map_err(|_| GraphcalError::DimensionOverflow {
-                            src: src.clone(),
-                            span: expr_span.into(),
-                        })?;
                     Ok(InferredType::Quantity(dim))
                 }
-                None => {
-                    if rhs_dim.is_dimensionless() && lhs_dim.is_dimensionless() {
+                PowerExponent::FloatSyntax { exact } => {
+                    if lhs_dim.is_dimensionless() {
+                        return Ok(InferredType::Quantity(Dimension::dimensionless()));
+                    }
+                    let replacement = exact_float_replacement(exact);
+                    let help = replacement.as_ref().map_or_else(
+                        || {
+                            "write the exponent as an exact integer or parenthesized rational"
+                                .to_string()
+                        },
+                        |replacement| format!("replace the float exponent with `{replacement}`"),
+                    );
+                    Err(GraphcalError::FloatPowerExponent {
+                        replacement,
+                        help,
+                        src: src.clone(),
+                        span: rhs.span.into(),
+                    })
+                }
+                PowerExponent::Runtime => {
+                    if lhs_dim.is_dimensionless() {
                         Ok(InferredType::Quantity(Dimension::dimensionless()))
                     } else {
-                        Err(GraphcalError::NonLiteralExponent {
+                        Err(GraphcalError::RuntimeExponentForDimensionedBase {
                             src: src.clone(),
                             span: rhs.span.into(),
                         })

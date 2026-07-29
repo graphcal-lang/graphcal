@@ -1,0 +1,2 @@
+param x: Length = 1.0 m;
+node bad: Length^(1/4) = @x ^ 0.25;

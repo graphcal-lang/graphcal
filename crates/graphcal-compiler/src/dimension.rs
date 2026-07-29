@@ -5,6 +5,8 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::exact_rational::ExactRational;
+
 /// A rational number for dimension exponents (e.g., 1/2 for sqrt).
 ///
 /// Always stored in reduced form with `den > 0`.
@@ -33,6 +35,14 @@ impl fmt::Display for Rational {
 impl From<i32> for Rational {
     fn from(value: i32) -> Self {
         Self { num: value, den: 1 }
+    }
+}
+
+impl TryFrom<ExactRational> for Rational {
+    type Error = RationalError;
+
+    fn try_from(value: ExactRational) -> Result<Self, Self::Error> {
+        Self::try_new_i64(value.numerator(), value.denominator())
     }
 }
 

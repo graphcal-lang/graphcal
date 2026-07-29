@@ -1,4 +1,5 @@
 use graphcal_compiler::desugar::desugared_ast::BinOp;
+use graphcal_compiler::exact_rational::ExactRational;
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::syntax::span::Span;
 
@@ -226,7 +227,7 @@ pub(super) fn eval_int_binop(
             }
             l.checked_rem(r)
         }
-        BinOp::Pow => {
+        BinOp::Pow(_) => {
             if r < 0 {
                 return Err(ctx.eval_error("integer exponent must be non-negative", span));
             }
@@ -242,6 +243,24 @@ pub(super) fn eval_int_binop(
         }
     }
     .ok_or_else(|| ctx.eval_error("integer arithmetic overflow", span))
+}
+
+/// Evaluate an exact rational power without discarding the rational metadata.
+///
+/// Integer exponents use `powi` when possible. Negative bases have a real
+/// result exactly when the reduced denominator is odd; preserving the exact
+/// denominator makes that rule deterministic instead of relying on `powf`'s
+/// treatment of a rounded exponent.
+pub(super) fn eval_exact_quantity_power(
+    base: f64,
+    exponent: ExactRational,
+    ctx: &EvalContext<'_>,
+    span: Span,
+) -> Result<f64, GraphcalError> {
+    let result = exponent
+        .pow_f64(base)
+        .map_err(|error| ctx.eval_error(error.to_string(), span))?;
+    check_finite(result, "power operation", ctx, span)
 }
 
 /// Evaluate an arithmetic binary operator on two f64 values.
@@ -267,7 +286,7 @@ pub(super) fn eval_quantity_binop(
             }
             l / r
         }
-        BinOp::Pow => l.powf(r),
+        BinOp::Pow(_) => l.powf(r),
         _ => {
             return Err(
                 ctx.internal_error(format!("unexpected operator {op:?} in arithmetic"), span)

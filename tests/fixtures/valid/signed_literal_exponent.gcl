@@ -6,5 +6,5 @@ param x: Dimensionless = 2.0;
 param length: Length = 2.0 m;
 
 node inv_square: Dimensionless = @x ^ -2.0;
-node inv_length_sq: InvLengthSquared = @length ^ -2.0;
+node inv_length_sq: InvLengthSquared = @length ^ -2;
 node neg_one: Dimensionless = @x ^ -1.0;

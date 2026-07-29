@@ -39,8 +39,27 @@ left.
 | `a ^ n` | Exponentiation | Integer exponentiation (non-negative exponent) | Dimension raised to power |
 | `-a` | Negation | Negation | Dimension preserved |
 
-!!! note "Exponent restriction"
-    The exponent in `^` must be **compile-time-known** so the resulting dimension can be resolved before evaluation. In practice that means a numeric literal (integer or floating-point, optionally with a leading unary `-`); for `Int ^ Int`, any expression that constant-folds to a non-negative integer is also accepted (e.g., `2 ^ 3 ^ 2` parses as `2 ^ (3 ^ 2)` and folds to `2 ^ 9 = 512`). Variable exponents whose value would only be known at runtime are not allowed.
+### Power exponents
+
+Every quantity exponent must be dimensionless. If the base is
+`Dimensionless`, the exponent may be any runtime `Dimensionless` quantity:
+`@ratio ^ @runtime_exponent` is valid.
+
+If the base has a physical dimension, its exponent must instead use exact
+static syntax: an integer (`2`, `-2`, or `0`) or a parenthesized rational
+(`(3/2)` or `(-1/3)`). The result dimension is raised by that exact rational.
+Decimal/scientific syntax is not accepted for a dimensioned base: write
+`(1/4)` instead of `0.25`, and `2` instead of `2.0` (`D020`).
+
+Exact rational metadata is also used at runtime. For example,
+`(-8.0) ^ (1/3)` evaluates to `-2.0`; an even-denominator root of a negative
+base is not a real value and produces an evaluation error. Value-level
+exponent zero is valid even though zero powers are omitted from dimension and
+unit declarations.
+
+`Int ^ Int` requires a non-negative exact integer exponent. A right-associated
+expression that constant-folds to one is also accepted: `2 ^ 3 ^ 2` parses as
+`2 ^ (3 ^ 2)` and evaluates as `2 ^ 9`.
 
 !!! note "Finite quantities"
     Floating-point literals must be finite. Quantity operations that would

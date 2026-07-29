@@ -33,7 +33,7 @@ dag hohmann_transfer {
         dv1: @dv1,
         dv2: @dv2,
         total_dv: @dv1 + @dv2,
-        tof: PI * sqrt(@a ^ 3.0 / @gm_earth),
+        tof: PI * sqrt(@a ^ 3 / @gm_earth),
     );
 }
 
