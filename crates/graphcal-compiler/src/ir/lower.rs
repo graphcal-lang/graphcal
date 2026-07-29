@@ -1103,10 +1103,14 @@ impl UnfrozenIR {
         let lower_in = |expr: &Expr,
                         resolution_owner: &crate::dag_id::DagId,
                         body_src: &NamedSource<Arc<String>>| {
-            let expr_ctx =
-                crate::hir::ExprLoweringContext::new(resolution_owner, resolver, &generic_scope)
-                    .with_prelude(&prelude)
-                    .with_decl_bindings(&decl_bindings);
+            let expr_ctx = crate::hir::ExprLoweringContext::new(
+                resolution_owner,
+                resolver,
+                &generic_scope,
+                &registry.time_zones,
+            )
+            .with_prelude(&prelude)
+            .with_decl_bindings(&decl_bindings);
             crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
                 crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
             })
@@ -1184,6 +1188,7 @@ impl UnfrozenIR {
                             &entry.body_resolution_owner,
                             resolver,
                             &generic_scope,
+                            &registry.time_zones,
                         )
                         .with_prelude(&prelude)
                         .with_decl_bindings(&decl_bindings);
@@ -1201,10 +1206,14 @@ impl UnfrozenIR {
         // an expression that fails to lower leaves the body incomplete (the
         // runtime skips it) instead of failing the compile.
         let lower_optional = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
-            let expr_ctx =
-                crate::hir::ExprLoweringContext::new(resolution_owner, resolver, &generic_scope)
-                    .with_prelude(&prelude)
-                    .with_decl_bindings(&decl_bindings);
+            let expr_ctx = crate::hir::ExprLoweringContext::new(
+                resolution_owner,
+                resolver,
+                &generic_scope,
+                &registry.time_zones,
+            )
+            .with_prelude(&prelude)
+            .with_decl_bindings(&decl_bindings);
             crate::hir::lower_expr(expr, expr_ctx).ok()
         };
         let plots = self

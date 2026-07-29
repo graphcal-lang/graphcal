@@ -200,10 +200,12 @@ param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
 
 Supported time scales: `UTC`, `TAI`, `TT`, `TDB`, `ET`, `GPST`, `GST`, `BDT`, `QZSST`.
 
-Named civil timezones use the IANA database bundled and pinned with the
-Graphcal toolchain. Compilation, evaluation, and display never depend on the
-host operating system's zoneinfo database; invalid-timezone diagnostics expose
-the bundled tzdb release.
+Named civil timezones use quoted contextual `TimezoneLiteral`s. A timezone
+literal is not a first-class `String` value: checking validates and
+canonicalizes it into an opaque IANA identifier before evaluation. The IANA
+database is bundled and pinned with the Graphcal toolchain. Compilation,
+evaluation, and display never depend on the host operating system's zoneinfo
+database; invalid-timezone diagnostics expose the bundled tzdb release.
 
 Datetime values follow **point-vs-vector** semantics:
 

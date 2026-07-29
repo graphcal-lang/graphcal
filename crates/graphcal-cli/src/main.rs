@@ -936,7 +936,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 let mut map = serde_json::Map::new();
                 let formatted = graphcal_eval::eval::format_epoch_with_tz(
                     epoch,
-                    display_tz.as_deref(),
+                    display_tz.as_ref(),
                     time_zones,
                 );
                 map.insert("datetime".to_string(), serde_json::json!(formatted));
@@ -945,7 +945,7 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                     serde_json::json!(time_scale.to_string()),
                 );
                 if let Some(tz) = display_tz {
-                    map.insert("display_tz".to_string(), serde_json::json!(tz));
+                    map.insert("display_tz".to_string(), serde_json::json!(tz.as_str()));
                 }
                 serde_json::Value::Object(map)
             }

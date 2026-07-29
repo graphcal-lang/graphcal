@@ -583,6 +583,7 @@ fn check_ineffective_conversions_inner(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)

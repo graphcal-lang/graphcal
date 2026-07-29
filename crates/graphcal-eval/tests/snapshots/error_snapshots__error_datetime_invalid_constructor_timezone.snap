@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+unknown timezone `Not/A_Timezone`
+    Diagnostic severity: error
+Begin snippet for datetime_invalid_constructor_timezone.gcl starting at line 1, column 1
+
+snippet line 1: // Error: datetime timezone literals are validated during semantic lowering
+snippet line 2: param bad: Datetime = datetime("2024-11-05T12:00:00", "Not/A_Timezone");
+    label at line 2, columns 55 to 70: not a recognized IANA timezone
+diagnostic help: use a name present in Graphcal's bundled IANA tzdb 2026c, such as "UTC", "America/New_York", or "Asia/Tokyo"
+diagnostic code: graphcal::D007

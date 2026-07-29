@@ -15,6 +15,7 @@
     reason = "raw strings used for readability of graphcal source"
 )]
 
+use graphcal_compiler::registry::time_zone::IanaTimeZoneId;
 use graphcal_eval::eval::{EvalResult, NodeError, Value, compile_and_eval};
 use proptest::prelude::*;
 
@@ -1062,7 +1063,10 @@ fn display_unit_propagates_through_reads() {
     // Timezone display follows reads the same way.
     match find_entry(&result, "tz_read") {
         Value::Datetime { display_tz, .. } => {
-            assert_eq!(display_tz.as_deref(), Some("Asia/Tokyo"));
+            assert_eq!(
+                display_tz.as_ref().map(IanaTimeZoneId::as_str),
+                Some("Asia/Tokyo")
+            );
         }
         other => panic!("expected datetime, got {other:?}"),
     }

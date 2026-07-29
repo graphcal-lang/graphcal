@@ -127,11 +127,11 @@ fn infer_hir_type_inner(
         hir::ExprKind::Number(_) => InferredType::Quantity(Dimension::dimensionless()),
         hir::ExprKind::Integer(_) => InferredType::Int,
         hir::ExprKind::Bool(_) => InferredType::Bool,
-        hir::ExprKind::StringLiteral(_) => {
+        hir::ExprKind::StringLiteral(_) | hir::ExprKind::IanaTimeZoneLiteral(_) => {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "a numeric or boolean expression".to_string(),
-                found: "string literal".to_string(),
-                help: "string literals can only be used as arguments to datetime() or epoch()"
+                found: "contextual string literal".to_string(),
+                help: "string literals can only be used in their declared datetime contexts"
                     .to_string(),
                 src: src.clone(),
                 span: expr.span.into(),
@@ -269,7 +269,6 @@ fn infer_hir_type_inner(
             expr: inner,
             timezone,
         } => infer_hir_display_timezone(
-            expr,
             inner,
             timezone,
             owner_decl_name,
@@ -1204,7 +1203,7 @@ fn infer_hir_datetime_constructor(
                     span: args[0].span.into(),
                 });
             }
-            if args.len() == 2 && !matches!(args[1].kind, hir::ExprKind::StringLiteral(_)) {
+            if args.len() == 2 && !matches!(args[1].kind, hir::ExprKind::IanaTimeZoneLiteral(_)) {
                 let found = infer_arg(
                     &args[1],
                     declared_types,
@@ -1968,9 +1967,8 @@ fn infer_hir_convert(
     reason = "display timezone expression context"
 )]
 fn infer_hir_display_timezone(
-    expr: &hir::Expr,
     inner: &hir::Expr,
-    timezone: &str,
+    timezone: &crate::registry::time_zone::IanaTimeZoneId,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -1999,14 +1997,6 @@ fn infer_hir_display_timezone(
             help: format!("timezone display `-> \"{timezone}\"` requires a Datetime expression"),
             src: src.clone(),
             span: inner.span.into(),
-        });
-    }
-    if registry.time_zones.get(timezone).is_err() {
-        return Err(GraphcalError::InvalidTimezone {
-            timezone: timezone.to_string(),
-            tzdb_version: registry.time_zones.version().unwrap_or("unknown"),
-            src: src.clone(),
-            span: expr.span.into(),
         });
     }
     Ok(inner_type)
