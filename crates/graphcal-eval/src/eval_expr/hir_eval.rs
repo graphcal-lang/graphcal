@@ -1871,7 +1871,6 @@ fn eval_hir_inline_dag_call(
         builtin_fns: ctx.builtin_fns,
         registry: ctx.registry,
         src: ctx.src,
-        unfold_context: None,
         tir: ctx.tir,
         current_dag: Some(dag_tir),
         root_values: ctx.root_values,
