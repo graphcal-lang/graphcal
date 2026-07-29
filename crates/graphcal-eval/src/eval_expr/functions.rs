@@ -1,12 +1,16 @@
+use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
+
 /// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.
 ///
-/// Uses jiff to resolve the civil time to a UTC instant, then converts to hifitime.
+/// Uses Graphcal's explicit bundled timezone registry to resolve the civil time,
+/// then converts the resulting instant to hifitime.
 pub(super) fn datetime_with_timezone(
     datetime_str: &str,
     tz_name: &str,
+    time_zones: &TimeZoneRegistry,
 ) -> Result<hifitime::Epoch, Box<dyn std::error::Error>> {
     let civil_dt: jiff::civil::DateTime = datetime_str.parse()?;
-    let tz = jiff::tz::TimeZone::get(tz_name)?;
+    let tz = time_zones.get(tz_name)?;
     let zdt = tz.to_zoned(civil_dt)?;
     let ts = zdt.timestamp();
     #[expect(

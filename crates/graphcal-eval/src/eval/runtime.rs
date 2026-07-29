@@ -208,6 +208,7 @@ pub(super) fn runtime_to_value(
                 epoch: *epoch,
                 time_scale,
                 display_tz: None,
+                time_zones: registry.time_zones.clone(),
             }
         }
     }

@@ -200,6 +200,11 @@ param t_tt: Datetime<TT> = epoch("2024-11-05T12:00:00", TT);
 
 Supported time scales: `UTC`, `TAI`, `TT`, `TDB`, `ET`, `GPST`, `GST`, `BDT`, `QZSST`.
 
+Named civil timezones use the IANA database bundled and pinned with the
+Graphcal toolchain. Compilation, evaluation, and display never depend on the
+host operating system's zoneinfo database; invalid-timezone diagnostics expose
+the bundled tzdb release.
+
 Datetime values follow **point-vs-vector** semantics:
 
 | Operation | Result | Notes |

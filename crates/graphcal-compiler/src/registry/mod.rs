@@ -12,6 +12,7 @@ pub mod prelude;
 pub mod resolve_types;
 pub mod runtime_value;
 pub mod time_scale;
+pub mod time_zone;
 pub mod type_def;
 pub mod types;
 pub mod unit;

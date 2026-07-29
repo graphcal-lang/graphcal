@@ -931,10 +931,14 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 epoch,
                 time_scale,
                 display_tz,
+                time_zones,
             } => {
                 let mut map = serde_json::Map::new();
-                let formatted =
-                    graphcal_eval::eval::format_epoch_with_tz(epoch, display_tz.as_deref());
+                let formatted = graphcal_eval::eval::format_epoch_with_tz(
+                    epoch,
+                    display_tz.as_deref(),
+                    time_zones,
+                );
                 map.insert("datetime".to_string(), serde_json::json!(formatted));
                 map.insert(
                     "time_scale".to_string(),

@@ -468,7 +468,7 @@ fn eval_hir_fn_call(
             ))
         }
         EvalBuiltinRule::DatetimeConstructor(kind) => {
-            eval_hir_datetime_constructor(kind, expr.span, args, ctx.src)
+            eval_hir_datetime_constructor(kind, expr.span, args, ctx.src, &ctx.registry.time_zones)
         }
         EvalBuiltinRule::DatetimeExtract(kind) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
@@ -646,6 +646,7 @@ fn eval_hir_datetime_constructor(
     span: Span,
     args: &[hir::Expr],
     src: &NamedSource<Arc<String>>,
+    time_zones: &graphcal_compiler::registry::time_zone::TimeZoneRegistry,
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         DatetimeConstructorFn::Datetime => {
@@ -674,7 +675,7 @@ fn eval_hir_datetime_constructor(
                         span: args[1].span.into(),
                     });
                 };
-                super::functions::datetime_with_timezone(s, tz_name).map_err(|e| {
+                super::functions::datetime_with_timezone(s, tz_name, time_zones).map_err(|e| {
                     GraphcalError::EvalError {
                         message: format!("invalid datetime with timezone: {e}"),
                         src: src.clone(),

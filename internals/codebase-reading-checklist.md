@@ -11,6 +11,7 @@ All Rust files in the workspace, in library-consumer order: every `use`d file ap
 - [x] `crates/graphcal-compiler/src/desugar/mod.rs`
 - [x] `crates/graphcal-compiler/src/registry/mod.rs`
 - [x] `crates/graphcal-compiler/src/registry/time_scale.rs`
+- [ ] `crates/graphcal-compiler/src/registry/time_zone.rs`
 - [x] `crates/graphcal-compiler/src/builtin.rs`
 - [x] `crates/graphcal-compiler/src/registry/manifest.rs`
 - [x] `crates/graphcal-compiler/src/ir/mod.rs`
