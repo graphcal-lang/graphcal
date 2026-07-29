@@ -147,11 +147,10 @@ fn eval_hir_expr_inner(
             body,
         } => eval_hir_scan(source, init, acc, val, body, values, local_values, ctx),
         hir::ExprKind::Unfold {
+            recurrence,
             init,
-            prev,
-            curr,
             body,
-        } => eval_hir_unfold(expr.span, init, prev, curr, body, values, ctx),
+        } => eval_hir_unfold(recurrence, init, body, values, local_values, ctx),
         hir::ExprKind::Match { scrutinee, arms } => {
             eval_hir_match(expr.span, scrutinee, arms, values, local_values, ctx)
         }
@@ -1687,88 +1686,60 @@ fn eval_hir_scan(
 }
 
 fn eval_hir_unfold(
-    span: Span,
+    recurrence: &hir::expr::UnfoldRecurrence,
     init: &hir::Expr,
-    prev: &hir::LocalDef,
-    curr: &hir::LocalDef,
     body: &hir::Expr,
     values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let unfold_ctx = ctx.unfold_context.as_ref().ok_or_else(|| {
-        ctx.eval_error(
-            "unfold expression requires evaluation context with self_key and declared type",
-            span,
+    let axis = &recurrence.axis;
+    let index_ref = IndexTypeRef::from_resolved(axis.value.clone());
+    let idx_def = index_def_for_ref(&index_ref, ctx).ok_or_else(|| {
+        ctx.internal_error(
+            format!("missing resolved unfold axis `{}`", axis.value),
+            axis.span,
         )
     })?;
-    let self_key = unfold_ctx.self_key.clone();
-    let index_ref = match unfold_ctx.self_declared_type {
-        graphcal_compiler::registry::declared_type::DeclaredType::Indexed { index, .. } => {
-            index.clone()
-        }
-        _ => {
-            return Err(ctx.eval_error(
-                format!("node `{self_key}` must have an indexed type for time scan"),
-                Span::new(0, 0),
-            ));
-        }
-    };
-    let idx_def = index_def_for_ref(&index_ref, ctx)
-        .ok_or_else(|| ctx.eval_error(format!("unknown index `{index_ref}`"), Span::new(0, 0)))?;
-    let cardinality = idx_def.cardinality();
     let variants = idx_def.entry_keys();
     let coordinate_data = idx_def.coordinate_data().ok_or_else(|| {
         ctx.eval_error(
             format!(
                 "unfold requires a coordinate index, but `{index_ref}` is not coordinate-valued"
             ),
-            Span::new(0, 0),
+            axis.span,
         )
     })?;
-    let empty_locals = HirLocalValueMap::root();
-    let init_val = eval_hir_expr(init, values, &empty_locals, ctx)?;
+    let init_value = eval_hir_expr(init, values, local_values, ctx)?;
+    let mut previous_state = init_value.clone();
     let mut result_entries = IndexMap::new();
-    result_entries.insert(variants[0].clone(), init_val);
+    result_entries.insert(variants[0].clone(), init_value);
 
-    let mut overlay_values = values.clone();
-    overlay_values.insert(
-        self_key.clone(),
-        RuntimeValue::Indexed {
-            index_name: index_ref.clone(),
-            entries: IndexMap::new(),
-        },
-    );
-    let mut scan_locals = HirLocalValueMap::root();
-    #[expect(
-        clippy::needless_range_loop,
-        reason = "position addresses both labels and accumulated values"
-    )]
-    for i in 1..cardinality {
-        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
-            *entries = std::mem::take(&mut result_entries);
-        }
-        let previous_position = i.saturating_sub(1);
-        scan_locals.bind(
-            prev.id,
+    let mut unfold_locals = local_values.child(Vec::new());
+    for (position, variant) in variants.iter().enumerate().skip(1) {
+        let previous_position = position
+            .checked_sub(1)
+            .ok_or_else(|| ctx.internal_error("unfold step has no previous position", axis.span))?;
+        unfold_locals.bind(recurrence.previous_state.id, previous_state);
+        unfold_locals.bind(
+            recurrence.previous_index.id,
             RuntimeValue::CoordinateLabel {
                 index_name: index_ref.clone(),
                 position: previous_position,
                 value: coordinate_data.coordinate_value(previous_position),
             },
         );
-        scan_locals.bind(
-            curr.id,
+        unfold_locals.bind(
+            recurrence.current_index.id,
             RuntimeValue::CoordinateLabel {
                 index_name: index_ref.clone(),
-                position: i,
-                value: coordinate_data.coordinate_value(i),
+                position,
+                value: coordinate_data.coordinate_value(position),
             },
         );
-        let body_val = eval_hir_expr(body, &overlay_values, &scan_locals, ctx)?;
-        if let Some(RuntimeValue::Indexed { entries, .. }) = overlay_values.get_mut(&self_key) {
-            result_entries = std::mem::take(entries);
-        }
-        result_entries.insert(variants[i].clone(), body_val);
+        let body_value = eval_hir_expr(body, values, &unfold_locals, ctx)?;
+        result_entries.insert(variant.clone(), body_value.clone());
+        previous_state = body_value;
     }
     Ok(RuntimeValue::Indexed {
         index_name: index_ref,

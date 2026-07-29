@@ -1623,10 +1623,38 @@ node w: Dimensionless[TimeGrid] = for t: TimeGrid { @v[t] };";
 }
 
 #[test]
+fn unfold_uses_explicit_coordinate_axis_and_previous_state() {
+    let source = "\
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+node distance: Length[Step] = unfold(
+    Step,
+    1.0 m,
+    |prev_distance, prev_t, t| prev_distance + (2.0 m/s) * (t - prev_t)
+);";
+    check(source).unwrap();
+}
+
+#[test]
+fn unfold_rejects_non_coordinate_axis() {
+    let source = "\
+index Phase = { Start, End };
+node values: Dimensionless[Phase] = unfold(
+    Phase,
+    1.0,
+    |prev_value, prev_phase, phase| prev_value + 1.0
+);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unfold requires a coordinate index")),
+        "got: {err:?}"
+    );
+}
+
+#[test]
 fn unfold_init_self_reference_is_cycle() {
     let source = "\
 index Step = range(0.0 s, 2.0 s, step: 1.0 s);
-node y: Dimensionless[Step] = unfold(sum(@y), |p, t| @y[p] + 1.0);";
+node y: Dimensionless[Step] = unfold(Step, sum(@y), |prev_y, p, t| prev_y + 1.0);";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::CyclicDependency { .. }),

@@ -559,7 +559,13 @@ fn collect_resolved_collection_refs_from_expr_inner(
             collect_resolved_collection_refs_from_expr(init, ctx, src, refs)?;
             collect_resolved_collection_refs_from_expr(body, ctx, src, refs)
         }
-        hir::ExprKind::Unfold { init, body, .. } => {
+        hir::ExprKind::Unfold {
+            recurrence,
+            init,
+            body,
+        } => {
+            let axis = &recurrence.axis;
+            record_resolved_collection_index(&axis.value, ctx, src, axis.span, refs)?;
             collect_resolved_collection_refs_from_expr(init, ctx, src, refs)?;
             collect_resolved_collection_refs_from_expr(body, ctx, src, refs)
         }

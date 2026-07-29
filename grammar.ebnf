@@ -1065,15 +1065,16 @@ scan_expr
      "|", IDENT, ",", IDENT, "|",
      expr, ")";
 
-(* scan(source, init, |acc, val| body)
+(* scan(source, init, |acc, item| body)
    Folds over an indexed value, accumulating a result. *)
 unfold_expr
-   = "unfold", "(", expr, ",",
-     "|", IDENT, ",", IDENT, "|",
+   = "unfold", "(", ident_path, ",", expr, ",",
+     "|", IDENT, ",", IDENT, ",", IDENT, "|",
      expr, ")";
 
-(* unfold(init, |prev, curr| body)
-   Generates an indexed value from an initial value. *)
+(* unfold(index, init, |prev_state, prev_i, i| body)
+   Generates an indexed value over an explicit coordinate index. The first
+   argument is an index reference, not a value expression. *)
 
 (* ================================================================== *)
 (* 10. Precedence and Associativity Summary                           *)

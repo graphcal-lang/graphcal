@@ -71,7 +71,7 @@ count. Direct multi-axis aggregation is not yet defined.
 `scan` computes a running accumulation across the index:
 
 ```
-node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
+node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, item| acc + item);
 ```
 
 This produces:
@@ -98,7 +98,7 @@ node double_dv: Velocity[Maneuver] = for m: Maneuver {
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node max_dv: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node n_maneuvers: Int = count(@delta_v);
-node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
+node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, item| acc + item);
 node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 ```
 

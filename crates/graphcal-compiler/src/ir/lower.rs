@@ -2120,9 +2120,9 @@ fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<DeclName>
 /// Visitor that rewrites index names in expressions according to a binding map.
 ///
 /// Overrides the per-variant handler methods for nodes that carry index name
-/// fields (`VariantLiteral`, `ForComp`, `IndexAccess`, `MapLiteral`,
-/// `TableLiteral`, `Match`) to rewrite those names before recursing into
-/// child expressions.
+/// fields (`VariantLiteral`, `ForComp`, `Unfold`, `IndexAccess`,
+/// `MapLiteral`, `TableLiteral`, `Match`) to rewrite those names before
+/// recursing into child expressions.
 struct IndexSubstituter<'a> {
     bindings: &'a HashMap<IndexName, IndexName>,
 }
@@ -2155,6 +2155,20 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
                     spanned_idx.value = new.clone().into();
                 }
             }
+            self.visit_expr_mut(body)?;
+        }
+        Ok(())
+    }
+
+    fn visit_unfold_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::Unfold {
+            axis, init, body, ..
+        } = &mut expr.kind
+        {
+            if let Some(new) = self.bindings.get(axis.value.leaf().as_str()) {
+                axis.value = new.clone().into();
+            }
+            self.visit_expr_mut(init)?;
             self.visit_expr_mut(body)?;
         }
         Ok(())

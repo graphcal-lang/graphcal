@@ -1911,23 +1911,29 @@ impl FormatEquivalent for ExprKind {
                     && body.format_equivalent(other_body)
             }
             Self::Unfold {
+                axis,
                 init,
-                prev_name,
-                curr_name,
+                prev_state_name,
+                prev_index_name,
+                index_name,
                 body,
             } => {
                 let Self::Unfold {
+                    axis: other_axis,
                     init: other_init,
-                    prev_name: other_prev_name,
-                    curr_name: other_curr_name,
+                    prev_state_name: other_prev_state_name,
+                    prev_index_name: other_prev_index_name,
+                    index_name: other_index_name,
                     body: other_body,
                 } = other
                 else {
                     return false;
                 };
-                init.format_equivalent(other_init)
-                    && prev_name.format_equivalent(other_prev_name)
-                    && curr_name.format_equivalent(other_curr_name)
+                axis.format_equivalent(other_axis)
+                    && init.format_equivalent(other_init)
+                    && prev_state_name.format_equivalent(other_prev_state_name)
+                    && prev_index_name.format_equivalent(other_prev_index_name)
+                    && index_name.format_equivalent(other_index_name)
                     && body.format_equivalent(other_body)
             }
             Self::Match { scrutinee, arms } => {

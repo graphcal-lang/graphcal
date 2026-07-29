@@ -358,10 +358,7 @@ pub trait ExprVisitorMut<P: Phase> {
                 self.visit_expr_mut(init)?;
                 self.visit_expr_mut(body)
             }
-            ExprKind::Unfold { init, body, .. } => {
-                self.visit_expr_mut(init)?;
-                self.visit_expr_mut(body)
-            }
+            ExprKind::Unfold { .. } => self.visit_unfold_mut(expr),
             ExprKind::Match { .. } => self.visit_match_mut(expr),
         }
     }
@@ -377,6 +374,14 @@ pub trait ExprVisitorMut<P: Phase> {
     /// rewrite reference shapes rewrite the syntactic path.
     fn visit_unresolved_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {
         Ok(())
+    }
+
+    fn visit_unfold_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
+        let ExprKind::Unfold { init, body, .. } = &mut expr.kind else {
+            return Ok(());
+        };
+        self.visit_expr_mut(init)?;
+        self.visit_expr_mut(body)
     }
 
     fn visit_fn_call_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {

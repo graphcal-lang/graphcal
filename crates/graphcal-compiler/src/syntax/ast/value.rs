@@ -602,7 +602,7 @@ pub enum ExprKind<P: Phase = Raw> {
         expr: Box<Expr<P>>,
         args: Vec<IndexArg<P>>,
     },
-    /// Scan: `scan(source, init, |acc, val| body)`
+    /// Scan: `scan(source, init, |acc, item| body)`
     Scan {
         source: Box<Expr<P>>,
         init: Box<Expr<P>>,
@@ -610,15 +610,17 @@ pub enum ExprKind<P: Phase = Raw> {
         val_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
     },
-    /// Unfold: `unfold(init, |prev_i, i| body)`
+    /// Unfold: `unfold(axis, init, |prev_state, prev_i, i| body)`
     ///
-    /// Generates an indexed value from a seed over a coordinate index.
-    /// The closure receives `(prev_i, i)` bindings for the previous and current
-    /// step indices, and the body can reference `@node_name[prev_i]`.
+    /// Generates an indexed value from a seed over an explicit coordinate
+    /// index. The closure receives the previous state and the previous/current
+    /// coordinate labels.
     Unfold {
+        axis: Spanned<NamePath>,
         init: Box<Expr<P>>,
-        prev_name: Spanned<LocalName>,
-        curr_name: Spanned<LocalName>,
+        prev_state_name: Spanned<LocalName>,
+        prev_index_name: Spanned<LocalName>,
+        index_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
     },
     /// Match expression: `match @status { Nominal => ..., Warning(message: code) => ... }`

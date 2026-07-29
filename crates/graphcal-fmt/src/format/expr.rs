@@ -26,6 +26,10 @@ fn render_table_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
     render_doc_to_string(&format_expr(&mut cell_fmt, expr))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive expression dispatch keeps each syntax variant visible in one place"
+)]
 fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
     match &expr.kind {
         ExprKind::Number(_) | ExprKind::Integer(_) => {
@@ -118,11 +122,21 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             body,
         } => format_scan(fmt, source, init, acc_name, val_name, body),
         ExprKind::Unfold {
+            axis,
             init,
-            prev_name,
-            curr_name,
+            prev_state_name,
+            prev_index_name,
+            index_name,
             body,
-        } => format_unfold(fmt, init, prev_name, curr_name, body),
+        } => format_unfold(
+            fmt,
+            axis,
+            init,
+            prev_state_name,
+            prev_index_name,
+            index_name,
+            body,
+        ),
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
     }
 }
@@ -792,31 +806,30 @@ pub fn format_for_comp(
     flat_alt_group(single_line, multi_line)
 }
 
-/// Format a call of the shape `head(<args>, |p1, p2| <body>)`.
-///
-/// `scan`, `unfold`, and similar builtins all follow this pattern — a fixed
-/// `head`, a list of positional argument expressions, and a closing lambda
-/// over two identifiers whose body is another expression.
+/// Format a call of the shape `head(<args>, |p1, ...| <body>)`.
 fn format_lambda_call(
     fmt: &mut Formatter<'_>,
     head: &'static str,
-    args: &[&Expr],
-    lambda_params: (&Spanned<LocalName>, &Spanned<LocalName>),
+    arg_docs: Vec<RcDoc<'static>>,
+    lambda_params: &[&Spanned<LocalName>],
     body: &Expr,
 ) -> RcDoc<'static> {
+    let params = RcDoc::intersperse(
+        lambda_params
+            .iter()
+            .map(|param| RcDoc::text(param.value.as_str().to_owned())),
+        RcDoc::text(", "),
+    );
     let lambda_body = RcDoc::text("|")
-        .append(RcDoc::text(lambda_params.0.value.as_str().to_owned()))
-        .append(RcDoc::text(", "))
-        .append(RcDoc::text(lambda_params.1.value.as_str().to_owned()))
+        .append(params)
         .append(RcDoc::text("|"))
         .append(RcDoc::line().append(format_expr(fmt, body)).nest(INDENT))
         .group();
-    let arg_docs = args
-        .iter()
-        .map(|arg| format_expr(fmt, arg))
+    let docs = arg_docs
+        .into_iter()
         .chain(std::iter::once(lambda_body))
         .collect();
-    RcDoc::text(head).append(soft_parenthesized_list(arg_docs, false))
+    RcDoc::text(head).append(soft_parenthesized_list(docs, false))
 }
 
 fn format_scan(
@@ -827,17 +840,27 @@ fn format_scan(
     val_name: &Spanned<LocalName>,
     body: &Expr,
 ) -> RcDoc<'static> {
-    format_lambda_call(fmt, "scan", &[source, init], (acc_name, val_name), body)
+    let arg_docs = vec![format_expr(fmt, source), format_expr(fmt, init)];
+    format_lambda_call(fmt, "scan", arg_docs, &[acc_name, val_name], body)
 }
 
 fn format_unfold(
     fmt: &mut Formatter<'_>,
+    axis: &Spanned<graphcal_compiler::syntax::names::NamePath>,
     init: &Expr,
-    prev_name: &Spanned<LocalName>,
-    curr_name: &Spanned<LocalName>,
+    prev_state_name: &Spanned<LocalName>,
+    prev_index_name: &Spanned<LocalName>,
+    index_name: &Spanned<LocalName>,
     body: &Expr,
 ) -> RcDoc<'static> {
-    format_lambda_call(fmt, "unfold", &[init], (prev_name, curr_name), body)
+    let arg_docs = vec![RcDoc::text(axis.value.to_string()), format_expr(fmt, init)];
+    format_lambda_call(
+        fmt,
+        "unfold",
+        arg_docs,
+        &[prev_state_name, prev_index_name, index_name],
+        body,
+    )
 }
 
 pub fn format_match(

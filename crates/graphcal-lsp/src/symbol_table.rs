@@ -587,25 +587,34 @@ impl<'a> HirRefCollector<'a> {
                 self.walk(body, table);
             }
             hir::ExprKind::Unfold {
+                recurrence,
                 init,
-                prev,
-                curr,
                 body,
             } => {
+                let axis = &recurrence.axis;
+                let axis_key = self.name_key(axis.value.owner(), axis.value.as_str());
+                Self::reference(table, axis.span, axis_key);
                 self.walk(init, table);
                 let offset = expr.span.offset();
                 self.define_local(
-                    prev,
+                    &recurrence.previous_state,
                     ExprScopeKind::Unfold,
                     offset,
-                    "unfold previous step".into(),
+                    "unfold previous state".into(),
                     table,
                 );
                 self.define_local(
-                    curr,
+                    &recurrence.previous_index,
                     ExprScopeKind::Unfold,
                     offset,
-                    "unfold current step".into(),
+                    "unfold previous index".into(),
+                    table,
+                );
+                self.define_local(
+                    &recurrence.current_index,
+                    ExprScopeKind::Unfold,
+                    offset,
+                    "unfold current index".into(),
                     table,
                 );
                 self.walk(body, table);
@@ -1757,8 +1766,7 @@ fn collect_import_or_include_names(
 
 /// Register an expression-scoped local variable: build the `SymbolKey`,
 /// insert a `LocalVar` definition into the table, and bind the name in the
-/// current scope. Used by `Scan` and `Unfold`, which both bind two locals
-/// the same way and only differ in `kind` and the cosmetic `detail` text.
+/// current scope. Used by expression forms such as `Scan` and `Unfold`.
 type GenericParamSymbolScope = HashMap<GenericParamName, SymbolKey>;
 
 /// Collect references from a type expression outside a generic declaration.
@@ -2275,6 +2283,45 @@ mod tests {
             table.references.iter().any(|r| r.target == x_key),
             "expected @x reference"
         );
+    }
+
+    #[test]
+    fn unfold_axis_and_three_locals_are_navigable() {
+        let source = r"
+index Step = range(0.0 s, 1.0 s, step: 1.0 s);
+node y: Dimensionless[Step] = unfold(
+    Step,
+    0.0,
+    |prev_y, prev_t, t| prev_y + (t - prev_t) / 1.0 s
+);
+";
+        let raw_file = graphcal_compiler::syntax::parser::Parser::with_name(source, "test.gcl")
+            .parse_file()
+            .unwrap();
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let table = build_for_buffer(&file, source);
+
+        let axis_offset = source.find("unfold(\n    Step").unwrap() + "unfold(\n    ".len();
+        assert_eq!(
+            table
+                .find_reference_at(axis_offset)
+                .map(|reference| &reference.target),
+            Some(&SymbolKey::TopLevel("Step".to_string()))
+        );
+        for local in ["prev_y", "prev_t", "t"] {
+            let key = table
+                .definitions
+                .iter()
+                .find_map(|(key, definition)| {
+                    (definition.category == SymbolCategory::LocalVar && definition.name == local)
+                        .then_some(key)
+                })
+                .unwrap_or_else(|| panic!("missing unfold local `{local}`"));
+            assert!(
+                !table.find_all_references(key).is_empty(),
+                "missing body reference for unfold local `{local}`"
+            );
+        }
     }
 
     #[test]
