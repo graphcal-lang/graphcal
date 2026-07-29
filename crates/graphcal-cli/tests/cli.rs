@@ -2884,7 +2884,7 @@ fn eval_datetime_extract() {
     assert!(stdout.contains("h   = 14"), "hour should be 14");
     assert!(stdout.contains("mi  = 30"), "minute should be 30");
     assert!(stdout.contains("s   = 45"), "second should be 45");
-    assert!(stdout.contains("wd  = 1"), "weekday should be 1 (Tuesday)");
+    assert!(stdout.contains("wd  = 2"), "weekday should be 2 (Tuesday)");
     assert!(stdout.contains("doy = 310"), "day_of_year should be 310");
     assert!(!stdout.contains("FAIL"), "no assertions should fail");
 }

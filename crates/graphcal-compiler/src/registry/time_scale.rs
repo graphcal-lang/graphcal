@@ -35,6 +35,19 @@ pub enum TimeScale {
 }
 
 impl TimeScale {
+    /// Every time scale supported by Graphcal.
+    pub const ALL: [Self; 9] = [
+        Self::UTC,
+        Self::TAI,
+        Self::TT,
+        Self::TDB,
+        Self::ET,
+        Self::GPST,
+        Self::GST,
+        Self::BDT,
+        Self::QZSST,
+    ];
+
     /// All supported time scale names, for error messages and validation.
     pub(crate) const ALL_NAMES: &[&str] = &[
         "UTC", "TAI", "TT", "TDB", "ET", "GPST", "GST", "BDT", "QZSST",
@@ -162,22 +175,15 @@ mod tests {
 
     #[test]
     fn display_roundtrip() {
-        let scales = [
-            TimeScale::UTC,
-            TimeScale::TAI,
-            TimeScale::TT,
-            TimeScale::TDB,
-            TimeScale::ET,
-            TimeScale::GPST,
-            TimeScale::GST,
-            TimeScale::BDT,
-            TimeScale::QZSST,
-        ];
-        for scale in &scales {
-            let s = scale.to_string();
-            let parsed: TimeScale = s.parse().unwrap();
-            assert_eq!(*scale, parsed);
+        for scale in TimeScale::ALL {
+            let spelling = scale.to_string();
+            let parsed: TimeScale = spelling.parse().unwrap();
+            assert_eq!(scale, parsed);
         }
+        assert_eq!(
+            TimeScale::ALL.map(|scale| scale.to_string()).as_slice(),
+            TimeScale::ALL_NAMES
+        );
     }
 
     #[test]
@@ -189,21 +195,10 @@ mod tests {
 
     #[test]
     fn hifitime_roundtrip() {
-        let scales = [
-            TimeScale::UTC,
-            TimeScale::TAI,
-            TimeScale::TT,
-            TimeScale::TDB,
-            TimeScale::ET,
-            TimeScale::GPST,
-            TimeScale::GST,
-            TimeScale::BDT,
-            TimeScale::QZSST,
-        ];
-        for scale in &scales {
-            let hf = scale.to_hifitime();
-            let back = TimeScale::from_hifitime(hf).unwrap();
-            assert_eq!(*scale, back);
+        for scale in TimeScale::ALL {
+            let hifitime = scale.to_hifitime();
+            let back = TimeScale::from_hifitime(hifitime).unwrap();
+            assert_eq!(scale, back);
         }
     }
 

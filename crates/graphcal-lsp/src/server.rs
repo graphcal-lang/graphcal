@@ -1825,6 +1825,40 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hints_use_declared_scale_datetime_extractors() {
+        let text = "node tt: Datetime<TT> = epoch<TT>(\"2024-01-01T00:00:30\");\n\
+                    node utc: Datetime = to_utc(@tt);\n\
+                    node tt_hour: Int = hour(@tt);\n\
+                    node utc_hour: Int = hour(@utc);\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+
+        let hints = crate::inlay_hints::inlay_hints(
+            &analysis,
+            Range::new(
+                tower_lsp::lsp_types::Position::new(0, 0),
+                tower_lsp::lsp_types::Position::new(u32::MAX, u32::MAX),
+            ),
+        )
+        .expect("expected datetime inlay hints");
+        let label_on_line = |line| {
+            hints
+                .iter()
+                .find(|hint| hint.position.line == line)
+                .and_then(|hint| match &hint.label {
+                    tower_lsp::lsp_types::InlayHintLabel::String(label) => Some(label.as_str()),
+                    tower_lsp::lsp_types::InlayHintLabel::LabelParts(_) => None,
+                })
+        };
+        assert_eq!(label_on_line(2), Some(" = 0"));
+        assert_eq!(label_on_line(3), Some(" = 23"));
+    }
+
+    #[test]
     fn format_indexed() {
         let symbols = empty_symbols();
         let mut entries = IndexMap::new();
