@@ -20,6 +20,7 @@ use graphcal_compiler::syntax::type_name::GenericParamName;
 
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::format::format_unit_expr_with_config;
+use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 use graphcal_compiler::registry::types::{IndexKind, Registry, UnitScale};
 use graphcal_compiler::tir::typed::{ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
@@ -202,6 +203,7 @@ pub fn build_for_buffer(
 struct HirRefCollector<'a> {
     dag_id: &'a DagId,
     resolver: &'a ModuleResolver,
+    time_zones: TimeZoneRegistry,
     /// Canonical module owner → the alias this file imports it under.
     alias_of: HashMap<DagId, String>,
     /// Lexical local definitions of the current body, keyed by HIR identity.
@@ -232,6 +234,7 @@ impl<'a> HirRefCollector<'a> {
         Self {
             dag_id,
             resolver,
+            time_zones: TimeZoneRegistry::bundled(),
             alias_of,
             locals: HashMap::new(),
         }
@@ -296,8 +299,13 @@ impl<'a> HirRefCollector<'a> {
     ) {
         let generic_scope = hir::GenericScope::new();
         let prelude = hir::PreludeTypeScope::graphcal();
-        let ctx = hir::ExprLoweringContext::new(self.dag_id, self.resolver, &generic_scope)
-            .with_prelude(&prelude);
+        let ctx = hir::ExprLoweringContext::new(
+            self.dag_id,
+            self.resolver,
+            &generic_scope,
+            &self.time_zones,
+        )
+        .with_prelude(&prelude);
         let (lowered, diagnostics) = hir::lower_expr_tolerant(expr, ctx);
         self.locals.clear();
         self.walk(&lowered, table);
@@ -401,7 +409,8 @@ impl<'a> HirRefCollector<'a> {
             | hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
-            | hir::ExprKind::StringLiteral(_) => {}
+            | hir::ExprKind::StringLiteral(_)
+            | hir::ExprKind::IanaTimeZoneLiteral(_) => {}
             hir::ExprKind::GraphRef(target) => {
                 let key = self.name_key(target.value.owner(), target.value.as_str());
                 Self::reference(table, target.span, key);

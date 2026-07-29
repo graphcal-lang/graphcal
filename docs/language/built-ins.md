@@ -90,7 +90,7 @@ These selectors always take exactly two values. To reduce an indexed value, use
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `datetime("...")` | `String -> Datetime` | Parse ISO 8601/RFC 3339 datetime string (UTC) |
-| `datetime("...", "tz")` | `(String, String) -> Datetime` | Parse civil datetime in a timezone (e.g., `"Asia/Tokyo"`) |
+| `datetime("...", "tz")` | `(String, TimezoneLiteral) -> Datetime` | Parse civil datetime in a timezone (e.g., `"Asia/Tokyo"`) |
 | `epoch("...", Scale)` | `(String, TimeScale) -> Datetime<Scale>` | Parse datetime in a specific time scale |
 | `from_jd(x)` | `Dimensionless -> Datetime` | Construct from Julian Date (UTC) |
 | `from_mjd(x)` | `Dimensionless -> Datetime` | Construct from Modified Julian Date (UTC) |
@@ -138,6 +138,11 @@ The `->` operator can display a datetime in a specific timezone without changing
 ```
 node meeting_ny: Datetime = @meeting -> "America/New_York";
 ```
+
+Quoted timezone spellings are contextual `TimezoneLiteral`s, not first-class
+`String` values. They are validated and canonicalized while the program is
+checked, then carried through compilation and evaluation as opaque IANA
+identifiers.
 
 Timezone construction, validation, and display all use the same IANA timezone
 database bundled with the Graphcal toolchain. Graphcal never consults the

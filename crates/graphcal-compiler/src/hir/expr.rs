@@ -27,6 +27,7 @@ use crate::builtin::{BuiltinConst, BuiltinFnName};
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
+use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
@@ -116,6 +117,13 @@ pub enum ExprLowerError {
         got: usize,
         span: Span,
     },
+    /// A timezone literal was not present in Graphcal's bundled IANA registry.
+    #[error("unknown timezone `{timezone}`")]
+    InvalidTimezone {
+        timezone: String,
+        tzdb_version: &'static str,
+        span: Span,
+    },
     /// A path-pattern could not be resolved to a constructor or index label.
     #[error("unknown match pattern `{path}`")]
     UnknownPattern { path: String, span: Span },
@@ -127,6 +135,7 @@ pub struct ExprLoweringContext<'a> {
     owner: &'a DagId,
     resolver: &'a ModuleResolver,
     generic_scope: &'a GenericScope,
+    time_zones: &'a TimeZoneRegistry,
     prelude: Option<&'a PreludeTypeScope>,
     decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
 }
@@ -138,11 +147,13 @@ impl<'a> ExprLoweringContext<'a> {
         owner: &'a DagId,
         resolver: &'a ModuleResolver,
         generic_scope: &'a GenericScope,
+        time_zones: &'a TimeZoneRegistry,
     ) -> Self {
         Self {
             owner,
             resolver,
             generic_scope,
+            time_zones,
             prelude: None,
             decl_bindings: None,
         }
@@ -155,6 +166,7 @@ impl<'a> ExprLoweringContext<'a> {
             owner: self.owner,
             resolver: self.resolver,
             generic_scope: self.generic_scope,
+            time_zones: self.time_zones,
             prelude: Some(prelude),
             decl_bindings: self.decl_bindings,
         }
@@ -171,6 +183,7 @@ impl<'a> ExprLoweringContext<'a> {
             owner: self.owner,
             resolver: self.resolver,
             generic_scope: self.generic_scope,
+            time_zones: self.time_zones,
             prelude: self.prelude,
             decl_bindings: Some(decl_bindings),
         }
@@ -454,6 +467,8 @@ pub enum ExprKind {
     Integer(i64),
     Bool(bool),
     StringLiteral(String),
+    /// An IANA timezone literal validated and canonicalized during HIR lowering.
+    IanaTimeZoneLiteral(IanaTimeZoneId),
     TypeSystemRef(Spanned<TypeSystemRef>),
     GraphRef(Spanned<ResolvedDeclName>),
     ConstRef(Spanned<ConstRef>),
@@ -486,7 +501,7 @@ pub enum ExprKind {
     },
     DisplayTimezone {
         expr: Box<Expr>,
-        timezone: String,
+        timezone: IanaTimeZoneId,
     },
     FieldAccess {
         expr: Box<Expr>,
@@ -574,6 +589,7 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral(_)
@@ -753,6 +769,7 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
+        | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
@@ -1001,13 +1018,12 @@ impl<'a> ExprLowerer<'a> {
                             .map_or_else(|| callee.span(), ast::GenericArg::span),
                     });
                 }
+                let function_ref = self.lower_function_ref(callee)?;
+                Self::check_function_arity(&function_ref, args.len(), callee.span())?;
+                let args = self.lower_function_args(&function_ref, args)?;
                 ExprKind::FnCall {
-                    callee: {
-                        let function_ref = self.lower_function_ref(callee)?;
-                        Self::check_function_arity(&function_ref, args.len(), callee.span())?;
-                        Spanned::new(function_ref, callee.span())
-                    },
-                    args: args.iter().map(|arg| self.lower_expr(arg)).collect(),
+                    callee: Spanned::new(function_ref, callee.span()),
+                    args,
                 }
             }
             ast::ExprKind::If {
@@ -1027,9 +1043,12 @@ impl<'a> ExprLowerer<'a> {
                 expr: Box::new(self.lower_expr(expr)),
                 target: target.clone(),
             },
-            ast::ExprKind::DisplayTimezone { expr, timezone } => ExprKind::DisplayTimezone {
-                expr: Box::new(self.lower_expr(expr)),
-                timezone: timezone.clone(),
+            ast::ExprKind::DisplayTimezone {
+                expr: operand,
+                timezone,
+            } => ExprKind::DisplayTimezone {
+                expr: Box::new(self.lower_expr(operand)),
+                timezone: self.lower_iana_time_zone_id(timezone, expr.span)?,
             },
             // `@alias.member` parses as `FieldAccess(GraphRef(alias), member)`.
             // When `alias.member` resolves as a module-qualified declaration,
@@ -1555,6 +1574,46 @@ impl<'a> ExprLowerer<'a> {
         })
     }
 
+    /// Lower function arguments, promoting contextual timezone strings into
+    /// validated typed HIR literals only in `datetime(civil, timezone)`.
+    fn lower_function_args(
+        &mut self,
+        function_ref: &FunctionRef,
+        args: &[ast::Expr],
+    ) -> Result<Vec<Expr>, ExprLowerError> {
+        args.iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                let is_datetime_timezone =
+                    matches!(function_ref, FunctionRef::Builtin(BuiltinFnName::Datetime))
+                        && index == 1;
+                match (&arg.kind, is_datetime_timezone) {
+                    (ast::ExprKind::StringLiteral(timezone), true) => self
+                        .lower_iana_time_zone_id(timezone, arg.span)
+                        .map(|timezone| {
+                            Expr::new(ExprKind::IanaTimeZoneLiteral(timezone), arg.span)
+                        }),
+                    _ => Ok(self.lower_expr(arg)),
+                }
+            })
+            .collect()
+    }
+
+    fn lower_iana_time_zone_id(
+        &self,
+        timezone: &str,
+        span: Span,
+    ) -> Result<IanaTimeZoneId, ExprLowerError> {
+        self.ctx
+            .time_zones
+            .parse_iana_id(timezone)
+            .map_err(|_| ExprLowerError::InvalidTimezone {
+                timezone: timezone.to_string(),
+                tzdb_version: self.ctx.time_zones.version().unwrap_or("unknown"),
+                span,
+            })
+    }
+
     /// Validate a built-in call's argument count against the registry's
     /// arity table. Aggregations are variadic over collections and skip the
     /// check; their argument shapes are validated during type checking.
@@ -2064,7 +2123,7 @@ mod tests {
 
         let expr = lower_expr(
             node_value(&main, "phase"),
-            ExprLoweringContext::new(&main_id, &resolver, &scope),
+            ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
         .unwrap();
 
@@ -2098,7 +2157,7 @@ mod tests {
 
         let expr = lower_expr(
             node_value(&main, "burn"),
-            ExprLoweringContext::new(&main_id, &resolver, &scope),
+            ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
         .unwrap();
 
@@ -2126,7 +2185,7 @@ mod tests {
 
         let expr = lower_expr(
             node_value(&file, "x"),
-            ExprLoweringContext::new(&owner, &resolver, &scope),
+            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
         .unwrap();
 
@@ -2157,7 +2216,7 @@ mod tests {
 
         let expr = lower_expr(
             node_value(&main, "dv"),
-            ExprLoweringContext::new(&main_id, &resolver, &scope),
+            ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
         .unwrap();
 
@@ -2200,7 +2259,7 @@ mod tests {
 
         let expr = lower_expr(
             node_value(&main, "x"),
-            ExprLoweringContext::new(&main_id, &resolver, &scope),
+            ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
         .unwrap();
         let deps = collect_expr_dependencies(&expr);
@@ -2231,7 +2290,7 @@ mod tests {
 
         let err = lower_expr(
             node_value(&file, "x"),
-            ExprLoweringContext::new(&owner, &resolver, &scope),
+            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
         .unwrap_err();
 

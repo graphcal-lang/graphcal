@@ -322,6 +322,24 @@ mod tests {
     }
 
     #[test]
+    fn invalid_datetime_timezone_points_at_the_timezone_argument() {
+        let source = "node bad: Datetime = datetime(\"2024-11-05T10:00\", \"Not/A_Timezone\");";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                matches!(
+                    &diagnostic.code,
+                    Some(NumberOrString::String(code)) if code == "graphcal::D007"
+                )
+            })
+            .expect("expected D007 timezone diagnostic");
+        assert_eq!(diagnostic.range.start.character, 50);
+        assert_eq!(diagnostic.range.end.character, 66);
+        assert!(diagnostic.message.contains("bundled IANA tzdb"));
+    }
+
+    #[test]
     fn parse_error_produces_diagnostic() {
         let source = "param = ;";
         let diags = produce_diagnostics(source, "test.gcl");

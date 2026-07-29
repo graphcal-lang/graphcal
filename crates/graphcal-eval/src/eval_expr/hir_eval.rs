@@ -68,9 +68,11 @@ fn eval_hir_expr_inner(
         hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx),
         hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
         hir::ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
-        hir::ExprKind::StringLiteral(_) => {
-            Err(ctx.eval_error("unexpected string literal in evaluation context", expr.span))
-        }
+        hir::ExprKind::StringLiteral(_) | hir::ExprKind::IanaTimeZoneLiteral(_) => Err(ctx
+            .eval_error(
+                "unexpected contextual literal in evaluation context",
+                expr.span,
+            )),
         hir::ExprKind::TypeSystemRef(name) => Err(ctx.eval_error(
             format!(
                 "unexpected type-system name `{:?}` in evaluation context",
@@ -668,20 +670,20 @@ fn eval_hir_datetime_constructor(
                 });
             };
             let epoch = if args.len() == 2 {
-                let hir::ExprKind::StringLiteral(tz_name) = &args[1].kind else {
+                let hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &args[1].kind else {
                     return Err(GraphcalError::InternalError {
-                        message: "datetime() received non-string timezone argument".to_string(),
+                        message: "datetime() received an unvalidated timezone argument".to_string(),
                         src: src.clone(),
                         span: args[1].span.into(),
                     });
                 };
-                super::functions::datetime_with_timezone(s, tz_name, time_zones).map_err(|e| {
-                    GraphcalError::EvalError {
+                super::functions::datetime_with_timezone(s, time_zone_id, time_zones).map_err(
+                    |e| GraphcalError::EvalError {
                         message: format!("invalid datetime with timezone: {e}"),
                         src: src.clone(),
                         span: args[0].span.into(),
-                    }
-                })?
+                    },
+                )?
             } else {
                 hifitime::Epoch::from_gregorian_str(s).map_err(|e| GraphcalError::EvalError {
                     message: format!("invalid datetime string: {e}"),

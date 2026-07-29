@@ -8,7 +8,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
-use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
+use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -77,7 +77,7 @@ pub enum Value {
         /// The time scale for display purposes.
         time_scale: graphcal_compiler::registry::time_scale::TimeScale,
         /// Optional IANA timezone for display (e.g. `"America/New_York"`).
-        display_tz: Option<String>,
+        display_tz: Option<IanaTimeZoneId>,
         /// Explicit bundled registry used for timezone-aware display.
         time_zones: TimeZoneRegistry,
     },
@@ -355,7 +355,7 @@ impl Value {
                 display_tz,
                 time_zones,
                 ..
-            } => format_epoch_with_tz(epoch, display_tz.as_deref(), time_zones),
+            } => format_epoch_with_tz(epoch, display_tz.as_ref(), time_zones),
             Self::Quantity {
                 si_value,
                 display_unit,
@@ -391,11 +391,7 @@ impl Value {
         else {
             return None;
         };
-        Some(format_epoch_with_tz(
-            epoch,
-            display_tz.as_deref(),
-            time_zones,
-        ))
+        Some(format_epoch_with_tz(epoch, display_tz.as_ref(), time_zones))
     }
 }
 
@@ -478,11 +474,11 @@ fn push_unit_factor(
 #[must_use]
 pub fn format_epoch_with_tz(
     epoch: &hifitime::Epoch,
-    tz: Option<&str>,
+    tz: Option<&IanaTimeZoneId>,
     time_zones: &TimeZoneRegistry,
 ) -> String {
-    if let Some(tz_name) = tz
-        && let Ok(formatted) = format_epoch_in_timezone(epoch, tz_name, time_zones)
+    if let Some(time_zone_id) = tz
+        && let Ok(formatted) = format_epoch_in_timezone(epoch, time_zone_id, time_zones)
     {
         return formatted;
     }
@@ -493,11 +489,11 @@ pub fn format_epoch_with_tz(
 /// and format it as an ISO 8601 string.
 fn format_epoch_in_timezone(
     epoch: &hifitime::Epoch,
-    tz_name: &str,
+    time_zone_id: &IanaTimeZoneId,
     time_zones: &TimeZoneRegistry,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let ts = epoch_to_jiff_timestamp(epoch)?;
-    let zdt = ts.to_zoned(time_zones.get(tz_name)?);
+    let zdt = ts.to_zoned(time_zones.get(time_zone_id)?);
     Ok(zdt.strftime("%Y-%m-%dT%H:%M:%S%:z[%Q]").to_string())
 }
 

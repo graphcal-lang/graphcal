@@ -1,4 +1,4 @@
-use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
+use graphcal_compiler::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 
 /// Parse a civil datetime string in a given IANA timezone and return a UTC `hifitime::Epoch`.
 ///
@@ -6,11 +6,11 @@ use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 /// then converts the resulting instant to hifitime.
 pub(super) fn datetime_with_timezone(
     datetime_str: &str,
-    tz_name: &str,
+    time_zone_id: &IanaTimeZoneId,
     time_zones: &TimeZoneRegistry,
 ) -> Result<hifitime::Epoch, Box<dyn std::error::Error>> {
     let civil_dt: jiff::civil::DateTime = datetime_str.parse()?;
-    let tz = time_zones.get(tz_name)?;
+    let tz = time_zones.get(time_zone_id)?;
     let zdt = tz.to_zoned(civil_dt)?;
     let ts = zdt.timestamp();
     #[expect(

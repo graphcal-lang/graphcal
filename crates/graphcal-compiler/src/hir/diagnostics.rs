@@ -89,6 +89,18 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::InvalidTimezone {
+            timezone,
+            tzdb_version,
+            span,
+        } => {
+            return GraphcalError::InvalidTimezone {
+                timezone: timezone.clone(),
+                tzdb_version,
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::ExtraMapVariant {
             index_name,
             variant_name,
@@ -158,7 +170,8 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownFunction { span, .. }
         | hir::ExprLowerError::UnknownExternFunction { span, .. }
         | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
-        | hir::ExprLowerError::WrongArity { span, .. } => *span,
+        | hir::ExprLowerError::WrongArity { span, .. }
+        | hir::ExprLowerError::InvalidTimezone { span, .. } => *span,
         hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {

@@ -1,0 +1,2 @@
+// Error: datetime timezone literals are validated during semantic lowering
+param bad: Datetime = datetime("2024-11-05T12:00:00", "Not/A_Timezone");

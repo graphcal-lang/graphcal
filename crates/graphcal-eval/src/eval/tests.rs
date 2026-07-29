@@ -761,6 +761,65 @@ fn indexed_si_values(value: &Value) -> Vec<(&str, f64)> {
 }
 
 #[test]
+fn datetime_timezone_literals_are_typed_and_canonicalized_before_evaluation() {
+    let source = r#"
+node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
+node displayed: Datetime = @meeting -> "america/new_york";
+"#;
+    let tir = compile_to_tir(source, "test.gcl").unwrap();
+    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = &tir.root().nodes[0].expr.kind
+    else {
+        panic!("expected datetime function call");
+    };
+    let graphcal_compiler::hir::ExprKind::IanaTimeZoneLiteral(time_zone_id) = &args[1].kind else {
+        panic!("expected a typed IANA timezone literal, got {:?}", args[1]);
+    };
+    assert_eq!(time_zone_id.as_str(), "Asia/Tokyo");
+
+    let result = compile_and_eval(source).unwrap();
+    let Value::Datetime {
+        display_tz: Some(display_tz),
+        ..
+    } = find_entry(&result, "displayed")
+    else {
+        panic!("expected displayed datetime value");
+    };
+    assert_eq!(display_tz.as_str(), "America/New_York");
+}
+
+#[test]
+fn invalid_datetime_timezone_is_rejected_in_every_expression_owner() {
+    let cases = [
+        (
+            "param",
+            r#"param bad: Datetime = datetime("2024-11-05T10:00", "Not/A_Timezone");"#,
+        ),
+        (
+            "node",
+            r#"node bad: Datetime = datetime("2024-11-05T10:00", "Not/A_Timezone");"#,
+        ),
+        (
+            "const node",
+            r#"const node bad: Datetime = datetime("2024-11-05T10:00", "Not/A_Timezone");"#,
+        ),
+        (
+            "nested",
+            r#"node bad: Datetime = to_utc(datetime("2024-11-05T10:00", "Not/A_Timezone"));"#,
+        ),
+    ];
+
+    for (context, source) in cases {
+        let error = compile_to_tir(source, "test.gcl").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown timezone `Not/A_Timezone`"),
+            "{context} did not reject the timezone during checking: {error}"
+        );
+    }
+}
+
+#[test]
 fn epoch_constructor_applies_explicit_scale_without_suffix_concat() {
     let result =
         compile_and_eval(r#"node tt: Datetime<TT> = epoch("2000-01-01T12:00:00", TT);"#).unwrap();

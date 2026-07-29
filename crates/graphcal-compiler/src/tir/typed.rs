@@ -282,9 +282,14 @@ fn lower_dynamic_unit_scales(
 ) {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
-    let expr_ctx = hir::ExprLoweringContext::new(ctx.owner, ctx.resolver, &generic_scope)
-        .with_prelude(&prelude)
-        .with_decl_bindings(&semantic.decl_bindings);
+    let expr_ctx = hir::ExprLoweringContext::new(
+        ctx.owner,
+        ctx.resolver,
+        &generic_scope,
+        &registry.time_zones,
+    )
+    .with_prelude(&prelude)
+    .with_decl_bindings(&semantic.decl_bindings);
     for (name, _dim, scale) in registry.units.all_units() {
         if let crate::registry::types::UnitScale::Dynamic { scale_expr, .. } = scale
             && let Ok(lowered) = hir::lower_expr(scale_expr, expr_ctx)
@@ -378,6 +383,7 @@ fn type_resolve_dag(
         asserts,
         module_ctx,
         imported_value_sources,
+        registry,
         src,
     )?;
     let dependencies =
@@ -559,9 +565,13 @@ fn record_resolved_struct_type_def(
     if let Some(members) = type_def.union_members() {
         let generic_scope = generic_scope_for_type_def(name, type_def, src)?;
         let prelude = hir::PreludeTypeScope::graphcal();
-        let bound_expr_ctx =
-            hir::ExprLoweringContext::new(name.owner(), ctx.resolver, &generic_scope)
-                .with_prelude(&prelude);
+        let bound_expr_ctx = hir::ExprLoweringContext::new(
+            name.owner(),
+            ctx.resolver,
+            &generic_scope,
+            &registry.time_zones,
+        )
+        .with_prelude(&prelude);
         for member in members {
             for field in &member.fields {
                 let key = ResolvedStructFieldTypeKey {
@@ -628,6 +638,10 @@ fn generic_scope_for_type_def(
 /// this step keys them by canonical declaration identity and lowers the
 /// type-annotation domain-bound expressions, which live in declaration
 /// signatures rather than bodies.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "expression lowering needs declaration slices, module identity, timezone registry, and diagnostics source"
+)]
 fn lower_resolved_expressions(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
@@ -635,6 +649,7 @@ fn lower_resolved_expressions(
     asserts: &[crate::ir::lower::AssertEntry],
     ctx: ModuleTypeContext<'_>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<LoweredDagExpressions, GraphcalError> {
     let generic_scope = hir::GenericScope::new();
@@ -650,10 +665,14 @@ fn lower_resolved_expressions(
     let lower_bounds_in = |type_ann: &crate::desugar::desugared_ast::TypeExpr,
                            resolution_owner: &crate::dag_id::DagId,
                            body_src: &NamedSource<Arc<String>>| {
-        let expr_ctx =
-            hir::ExprLoweringContext::new(resolution_owner, ctx.resolver, &generic_scope)
-                .with_prelude(&prelude)
-                .with_decl_bindings(&decl_bindings);
+        let expr_ctx = hir::ExprLoweringContext::new(
+            resolution_owner,
+            ctx.resolver,
+            &generic_scope,
+            &registry.time_zones,
+        )
+        .with_prelude(&prelude)
+        .with_decl_bindings(&decl_bindings);
         lower_domain_bounds(type_ann, expr_ctx, body_src)
     };
     let mut exprs = ResolvedExpressions::default();
@@ -959,6 +978,7 @@ impl HirPolicyChecker<'_> {
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
             | hir::ExprKind::StringLiteral(_)
+            | hir::ExprKind::IanaTimeZoneLiteral(_)
             | hir::ExprKind::TypeSystemRef(_)
             | hir::ExprKind::ConstRef(_)
             | hir::ExprKind::LocalRef(_) => Ok(()),
