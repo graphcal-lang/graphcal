@@ -802,7 +802,11 @@ unary_expr
 power_expr
    = postfix_expr, [ "^", unary_expr ];
 
-(* Right-associative: the exponent parses at the unary level. *)
+(* Right-associative: the exponent parses at the unary level. Integer syntax and
+   a parenthesized ratio of signed integer literals are preserved as exact
+   power exponents; float syntax remains distinct, and every other unary_expr
+   is a runtime exponent. This classification is semantic, not a restriction
+   of the expression grammar. *)
 postfix_expr
    = atom, { postfix_op };
 

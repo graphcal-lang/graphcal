@@ -612,7 +612,7 @@ The compiler determines the dimension of the result of each arithmetic operation
 | `a - b` | Same as operands | `dim(a)` must equal `dim(b)` |
 | `a * b` | Product | `dim(a) * dim(b)` -- exponents add |
 | `a / b` | Quotient | `dim(a) / dim(b)` -- exponents subtract |
-| `a ^ n` | Power | `dim(a) ^ n` -- exponents multiply by `n` |
+| `a ^ n` | Power | `dim(a) ^ n` -- a dimensioned base requires exact integer/rational syntax |
 | `a % b` | Same as operands | `dim(a)` must equal `dim(b)` |
 
 Examples:
@@ -691,8 +691,15 @@ This section lists the type of each expression form and the constraints the comp
 | `a * b` | `dim(a) * dim(b)` | |
 | `a / b` | `dim(a) / dim(b)` | |
 | `a % b` | `dim(a)` | `dim(a) == dim(b)` |
-| `a ^ n` | `dim(a) ^ n` | `n` is a numeric literal |
+| `a ^ n` | `dim(a) ^ n` | `n` is dimensionless; a dimensioned base requires an exact integer or parenthesized rational |
 | `-a` | `dim(a)` | |
+
+For a `Dimensionless` base, `n` may be a runtime `Dimensionless` quantity. For
+any other quantity dimension, `n` must be written exactly as an integer such as
+`2` or `-2`, or as a parenthesized rational such as `(3/2)`. Decimal syntax
+cannot determine a dimension exponent: use `(1/4)` instead of `0.25` and `2`
+instead of `2.0`. The compiler preserves that rational exactly through
+checking and evaluation rather than recovering it from binary64.
 
 ### Comparison and Logical Operators
 

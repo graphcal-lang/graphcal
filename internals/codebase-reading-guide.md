@@ -251,7 +251,9 @@ the single resolution stage of the compiler:
   directly and classifies every reference path in one pass: lexical locals,
   built-in constants and time scales, constructors, type-system names, generic
   `Nat` params, and declarations — resolving each to its canonical identity at
-  the same time.
+  the same time. Power operators also retain the parser's typed
+  `PowerExponent` classification, backed by `ExactRational`, so checking and
+  evaluation never infer an exact exponent from binary64 or source text.
 - `hir/lower.rs` lowers syntax AST type references into HIR with a
   `ModuleResolver`, a `GenericScope`, and an optional prelude scope.
 

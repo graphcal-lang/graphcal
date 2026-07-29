@@ -1,6 +1,7 @@
 //! textDocument/codeAction handler.
 //!
-//! Provides quick-fix code actions for visibility-related diagnostics:
+//! Provides quick-fix code actions for compiler diagnostics:
+//! - D020: Replace a decimal power exponent with an exactly equivalent rational.
 //! - V002: Add `pub(bind)` to a required `index` / `type` / `dim`.
 //! - V003: Add `pub` to a private item referenced by a public declaration.
 //! - V006: Add `pub` to a leaked symbol referenced by a re-exported declaration.
@@ -40,6 +41,11 @@ pub fn code_actions(
         };
 
         match code {
+            "graphcal::D020" => {
+                if let Some(action) = make_exact_power_action(diag, &params.text_document.uri) {
+                    actions.push(CodeActionOrCommand::CodeAction(action));
+                }
+            }
             "graphcal::V002" => {
                 if let Some(action) =
                     make_add_pub_bind_action_v002(diag, source, &params.text_document.uri)
@@ -76,6 +82,35 @@ fn referenced_name_from_data(diag: &Diagnostic) -> Option<String> {
         .get("referencedName")?
         .as_str()
         .map(str::to_string)
+}
+
+/// Build the D020 exact-syntax replacement. The compiler supplies the
+/// replacement as structured data only after proving decimal equivalence; the
+/// LSP never derives a rational from rendered text or binary64.
+fn make_exact_power_action(diag: &Diagnostic, uri: &Url) -> Option<CodeAction> {
+    let replacement = diag
+        .data
+        .as_ref()?
+        .get("replacement")?
+        .as_str()?
+        .to_string();
+    let edit = TextEdit {
+        range: diag.range,
+        new_text: replacement.clone(),
+    };
+    let mut changes = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    Some(CodeAction {
+        title: format!("Use exact exponent `{replacement}`"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }),
+        is_preferred: Some(true),
+        ..Default::default()
+    })
 }
 
 /// Line (0-based) of the declaration named `name`, resolved through the
@@ -482,6 +517,37 @@ mod tests {
         );
         let params = make_params(&uri, vec![diag]);
         assert!(code_actions(&params, &analysis, &analysis.source).is_none());
+    }
+
+    #[test]
+    fn d020_replaces_only_with_compiler_supplied_exact_exponent() {
+        let analysis =
+            analysis_from_source("param x: Length = 1.0 m;\nnode bad: Length^(1/4) = @x ^ 0.25;");
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let range = Range {
+            start: Position {
+                line: 1,
+                character: 37,
+            },
+            end: Position {
+                line: 1,
+                character: 41,
+            },
+        };
+        let diag = make_diag(
+            "graphcal::D020",
+            "float syntax cannot be the exponent of a dimensioned base",
+            range,
+            Some(serde_json::json!({ "replacement": "(1/4)" })),
+        );
+        let params = make_params(&uri, vec![diag]);
+        let actions = code_actions(&params, &analysis, &analysis.source).unwrap();
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected CodeAction");
+        };
+        let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
+        assert_eq!(edits[0].range, range);
+        assert_eq!(edits[0].new_text, "(1/4)");
     }
 
     #[test]

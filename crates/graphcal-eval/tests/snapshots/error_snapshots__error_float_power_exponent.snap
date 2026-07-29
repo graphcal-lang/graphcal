@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 349
+expression: rendered
+---
+float syntax cannot be the exponent of a dimensioned base
+    Diagnostic severity: error
+Begin snippet for float_power_exponent.gcl starting at line 1, column 1
+
+snippet line 1: param x: Length = 1.0 m;
+snippet line 2: node bad: Length^(1/4) = @x ^ 0.25;
+    label at line 2, columns 31 to 34: exact rational syntax is required here
+diagnostic help: replace the float exponent with `(1/4)`
+diagnostic code: graphcal::D020

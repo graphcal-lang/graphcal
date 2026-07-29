@@ -419,12 +419,9 @@ node t: Time[Step] = for i: Step { i };
 // ============================================================================
 // BUG 3: Quantity power edge cases
 //
-// The evaluator uses `l.powf(r)` for float power, with a post-check for
-// finite results. But some edge cases slip through:
-// - 0.0 ^ 0.0: mathematically debatable, IEEE 754 says 1.0, but for
-//   engineering this may be surprising
-// - (-2.0) ^ 3.0: this should be -8.0, but powf(-2.0, 3.0) returns NaN
-//   because powf uses exp(3.0 * ln(-2.0)) which involves ln of negative
+// Exact integer/rational exponent metadata must reach evaluation so negative
+// bases use integer powers and real odd roots instead of a rounded `powf`
+// exponent.
 // ============================================================================
 
 #[test]
@@ -445,17 +442,11 @@ fn power_zero_to_zero_is_one() {
 
 #[test]
 fn negative_base_integer_exponent_should_work() {
-    // (-2.0) ^ 3.0 should be -8.0 in engineering contexts.
-    // But f64::powf(-2.0, 3.0) returns NaN because it uses exp(3*ln(-2)).
-    // This is a critical bug for engineering: users expect integer-like
-    // exponents on negative bases to work correctly.
-    let source = "node x: Dimensionless = (-2.0) ^ 3.0;";
+    let source = "node x: Dimensionless = (-2.0) ^ 3;";
     let result = compile_and_eval(source).unwrap();
-    // BUG: powf(-2.0, 3.0) = NaN, which is caught as an error.
-    // But the user expects -8.0 since 3.0 is effectively an integer exponent.
     assert!(
         !has_node_error(&result, "x"),
-        "(-2.0) ^ 3.0 should evaluate to -8.0, not produce an error. \
+        "(-2.0) ^ 3 should evaluate to -8.0, not produce an error. \
          Error: {:?}",
         get_node_error_message(&result, "x")
     );
@@ -463,21 +454,18 @@ fn negative_base_integer_exponent_should_work() {
         let x = find_value(&result, "x");
         assert!(
             (x - (-8.0)).abs() < f64::EPSILON,
-            "(-2.0) ^ 3.0 should be -8.0 but got {x}"
+            "(-2.0) ^ 3 should be -8.0 but got {x}"
         );
     }
 }
 
 #[test]
 fn negative_base_even_integer_exponent_should_work() {
-    // (-3.0) ^ 2.0 should be 9.0
-    // powf(-3.0, 2.0) = NaN on most platforms
-    let source = "node x: Dimensionless = (-3.0) ^ 2.0;";
+    let source = "node x: Dimensionless = (-3.0) ^ 2;";
     let result = compile_and_eval(source).unwrap();
-    // BUG: Same as above - powf returns NaN for negative bases
     assert!(
         !has_node_error(&result, "x"),
-        "(-3.0) ^ 2.0 should evaluate to 9.0, not produce an error. \
+        "(-3.0) ^ 2 should evaluate to 9.0, not produce an error. \
          Error: {:?}",
         get_node_error_message(&result, "x")
     );
@@ -485,20 +473,31 @@ fn negative_base_even_integer_exponent_should_work() {
         let x = find_value(&result, "x");
         assert!(
             (x - 9.0).abs() < f64::EPSILON,
-            "(-3.0) ^ 2.0 should be 9.0 but got {x}"
+            "(-3.0) ^ 2 should be 9.0 but got {x}"
         );
     }
 }
 
 #[test]
 fn negative_base_fractional_exponent_should_error() {
-    // (-2.0) ^ 0.5 should definitely error (imaginary result)
-    let source = "node x: Dimensionless = (-2.0) ^ 0.5;";
+    let source = "node x: Dimensionless = (-2.0) ^ (1/2);";
     let result = compile_and_eval(source).unwrap();
     assert!(
         has_node_error(&result, "x"),
-        "(-2.0) ^ 0.5 should produce an error (imaginary result)"
+        "(-2.0) ^ (1/2) should produce an error (imaginary result)"
     );
+}
+
+#[test]
+fn negative_base_exact_odd_roots_are_real() {
+    let source = "\
+node cube_root: Dimensionless = (-8.0) ^ (1/3);
+node two_fifths: Dimensionless = (-32.0) ^ (2/5);
+node reciprocal_cube_root: Dimensionless = (-8.0) ^ (-1/3);";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "cube_root") + 2.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "two_fifths") - 4.0).abs() < f64::EPSILON);
+    assert!((find_value(&result, "reciprocal_cube_root") + 0.5).abs() < f64::EPSILON);
 }
 
 // ============================================================================

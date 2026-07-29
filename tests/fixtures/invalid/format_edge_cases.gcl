@@ -45,7 +45,7 @@ dag compute_transfer_velocity {
 
     node dv_plane: Velocity = 2.0 * @v1 * sin(@inclination_change / 2.0);
 
-    node result: Velocity = sqrt(@dv_hohmann ^ 2.0 + @dv_plane ^ 2.0);
+    node result: Velocity = sqrt(@dv_hohmann ^ 2 + @dv_plane ^ 2);
 }
 
 // DAG with short expression body (replaces expression-body function)

@@ -140,7 +140,7 @@ const fn precedence(op: BinOp) -> u8 {
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => 4,
         BinOp::Add | BinOp::Sub => 5,
         BinOp::Mul | BinOp::Div | BinOp::Mod => 6,
-        BinOp::Pow => 8,
+        BinOp::Pow(_) => 8,
     }
 }
 
@@ -155,7 +155,7 @@ const fn op_str(op: BinOp) -> &'static str {
         BinOp::Mul => " * ",
         BinOp::Div => " / ",
         BinOp::Mod => " % ",
-        BinOp::Pow => " ^ ",
+        BinOp::Pow(_) => " ^ ",
         BinOp::Eq => " == ",
         BinOp::Ne => " != ",
         BinOp::Lt => " < ",
@@ -197,9 +197,10 @@ fn format_binop_child(
             let child_prec = precedence(*child_op);
             // Lower precedence wraps; equal-precedence wraps on the
             // "wrong" associativity side (all left-associative except `^`).
+            let parent_is_power = matches!(parent_op, BinOp::Pow(_));
             child_prec < parent_prec
-                || (child_prec == parent_prec && is_right && parent_op != BinOp::Pow)
-                || (child_prec == parent_prec && !is_right && parent_op == BinOp::Pow)
+                || (child_prec == parent_prec && is_right && !parent_is_power)
+                || (child_prec == parent_prec && !is_right && parent_is_power)
         }
         // A bare unary on the lhs of a higher-binding operator must be
         // parenthesized: stripping `(-x) ^ 2` to `-x ^ 2` reparses as

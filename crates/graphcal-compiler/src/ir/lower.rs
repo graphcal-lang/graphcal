@@ -3686,14 +3686,24 @@ fn eval_scale_expr(expr: &Expr, src: &NamedSource<Arc<String>>) -> Result<f64, G
         }
         ExprKind::BinOp { op, lhs, rhs } => {
             use crate::desugar::desugared_ast::BinOp;
-            let l = eval_scale_expr(lhs, src)?;
-            let r = eval_scale_expr(rhs, src)?;
+            use crate::syntax::ast::PowerExponent;
+            let lhs_value = eval_scale_expr(lhs, src)?;
+            if let BinOp::Pow(PowerExponent::Exact(exponent)) = op {
+                return exponent
+                    .pow_f64(lhs_value)
+                    .map_err(|error| GraphcalError::EvalError {
+                        message: error.to_string(),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+            }
+            let rhs_value = eval_scale_expr(rhs, src)?;
             match op {
-                BinOp::Add => Ok(l + r),
-                BinOp::Sub => Ok(l - r),
-                BinOp::Mul => Ok(l * r),
-                BinOp::Div => Ok(l / r),
-                BinOp::Pow => Ok(l.powf(r)),
+                BinOp::Add => Ok(lhs_value + rhs_value),
+                BinOp::Sub => Ok(lhs_value - rhs_value),
+                BinOp::Mul => Ok(lhs_value * rhs_value),
+                BinOp::Div => Ok(lhs_value / rhs_value),
+                BinOp::Pow(_) => Ok(lhs_value.powf(rhs_value)),
                 _ => Err(GraphcalError::EvalError {
                     message: format!(
                         "unsupported operator `{op:?}` in scale expression; \

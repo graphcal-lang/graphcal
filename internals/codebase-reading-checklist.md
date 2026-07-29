@@ -44,6 +44,7 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 Note: `syntax/ast/value.rs`, `syntax/ast/decl.rs`, `syntax/ast/format_equivalent.rs`, `syntax/ast.rs`, and `syntax/parser/mod.rs` are mutually dependent; they are ordered with reusable AST pieces first.
 
 - [ ] `crates/graphcal-compiler/src/syntax/ast/common.rs`
+- [ ] `crates/graphcal-compiler/src/exact_rational.rs`
 - [ ] `crates/graphcal-compiler/src/dimension.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/value.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/decl.rs`

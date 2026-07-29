@@ -39,7 +39,7 @@ delta_v    = 3778.220768 m/s
 ## Why Graphcal?
 
 - **Dimensions as types.** Every Graphcal quantity carries a compile-time dimension (`Dimensionless` when unitless). The compiler catches `km + kg` and demands explicit unit conversions.
-- **Safety-oriented numerics.** Non-finite literals, invalid unit scales, empty indexes, and out-of-range numeric conversions are rejected instead of silently producing `NaN`, `inf`, or saturated integers.
+- **Safety-oriented numerics.** Non-finite literals, invalid unit scales, empty indexes, and out-of-range numeric conversions are rejected instead of silently producing `NaN`, `inf`, or saturated integers. Dimensioned powers require exact integer or rational exponents (`^ 2`, `^ (1/3)`), while runtime exponents are allowed only when the base is dimensionless.
 - **Reactive by design.** `param`, `node`, and `const node` declarations form a DAG that evaluates in dependency order. Override any input from the CLI and dependents recompute automatically.
 - **Git-friendly.** Plain text `.gcl` files diff and merge cleanly. No binary spreadsheets, no hidden state.
 - **Locked Git dependencies.** Exact-rev package dependencies are resolved into a deterministic `graphcal.lock` with package-instance identities, so multiple revisions of the same package can coexist without global name collisions.

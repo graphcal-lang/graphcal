@@ -162,6 +162,12 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
         GraphcalError::GenericsLeakage { leaked_name, .. } => {
             Some(serde_json::json!({ "referencedName": leaked_name }))
         }
+        // D020: an exact replacement exists only when the decimal spelling
+        // maps exactly into the dimension rational model.
+        GraphcalError::FloatPowerExponent {
+            replacement: Some(replacement),
+            ..
+        } => Some(serde_json::json!({ "replacement": replacement })),
         _ => None,
     }
 }
@@ -346,6 +352,19 @@ mod tests {
                 &diagnostic.code,
                 Some(NumberOrString::String(code)) if code == "graphcal::D019"
             ) && diagnostic.message.contains("explicit `for` comprehension")
+        }));
+    }
+
+    #[test]
+    fn float_power_on_dimensioned_base_produces_exact_syntax_diagnostic() {
+        let source = "param x: Length = 1.0 m;\nnode bad: Length^(1/4) = @x ^ 0.25;";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::D020"
+            ) && diagnostic.message.contains("`(1/4)`")
+                && diagnostic.data == Some(serde_json::json!({ "replacement": "(1/4)" }))
         }));
     }
 

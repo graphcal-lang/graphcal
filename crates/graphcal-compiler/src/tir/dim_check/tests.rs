@@ -445,7 +445,7 @@ fn check_multiplication_creates_new_dim() {
 
 #[test]
 fn check_power_with_literal() {
-    let source = "param r: Length = 5.0 m;\nnode area: Area = @r ^ 2.0;";
+    let source = "param r: Length = 5.0 m;\nnode area: Area = @r ^ 2;";
     // Area is Length^2, r^2 = Length^2
     // But we need PI * r^2 for circle area — just testing r^2 = Area
     check(source).unwrap();
@@ -777,15 +777,14 @@ fn check_power_half_exponent() {
 }
 
 #[test]
-fn check_power_non_literal_exponent_dimensioned_base() {
-    // dimensioned ^ non-literal → NonLiteralExponent
+fn check_power_runtime_exponent_dimensioned_base() {
     let source = "\
 param x: Length = 1.0 m;
 param n: Dimensionless = 2.0;
 node bad: Area = @x ^ @n;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NonLiteralExponent { .. }),
+        matches!(err, GraphcalError::RuntimeExponentForDimensionedBase { .. }),
         "got: {err:?}"
     );
 }
@@ -801,26 +800,93 @@ node y: Dimensionless = @x ^ @n;";
 }
 
 #[test]
-fn check_power_bad_fractional_exponent() {
-    // x ^ 0.3 → NonLiteralExponent (not 0.5 and not integer)
-    let source = "param x: Length = 1.0 m;\nnode bad: Length = @x ^ 0.3;";
+fn check_power_float_syntax_on_dimensioned_base_has_exact_replacement() {
+    let source = "param x: Length = 1.0 m;\nnode bad: Length^(1/4) = @x ^ 0.25;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NonLiteralExponent { .. }),
+        matches!(
+            err,
+            GraphcalError::FloatPowerExponent {
+                replacement: Some(ref replacement),
+                ..
+            } if replacement == "(1/4)"
+        ),
         "got: {err:?}"
     );
 }
 
 #[test]
-fn check_power_dimensioned_exponent() {
-    // anything ^ dimensioned → NonLiteralExponent
+fn check_power_integral_float_syntax_suggests_integer() {
+    let source = "param x: Length = 1.0 m;\nnode bad: Area = @x ^ 2.0;";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            GraphcalError::FloatPowerExponent {
+                replacement: Some(ref replacement),
+                ..
+            } if replacement == "2"
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_power_dimensioned_exponent_uses_d001() {
     let source = "\
 param x: Dimensionless = 2.0;
 param n: Length = 1.0 m;
 node bad: Dimensionless = @x ^ @n;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::NonLiteralExponent { .. }),
+        matches!(err, GraphcalError::DimensionMismatch { .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn hir_preserves_exact_power_metadata() {
+    let (tir, _) = module_aware_tir("param x: Length = 4.0 m;\nnode y: Length^(3/2) = @x ^ (3/2);");
+    let expression = tir
+        .root()
+        .semantic
+        .expressions
+        .nodes
+        .values()
+        .next()
+        .unwrap();
+    assert!(matches!(
+        expression.kind,
+        crate::hir::ExprKind::BinOp {
+            op: crate::syntax::ast::BinOp::Pow(
+                crate::syntax::ast::PowerExponent::Exact(exponent)
+            ),
+            ..
+        } if exponent == crate::exact_rational::ExactRational::try_new(3, 2).unwrap()
+    ));
+}
+
+#[test]
+fn check_power_arbitrary_exact_rational_exponent() {
+    let source = "\
+pub dim LengthThreeHalves = Length ^ (3/2);
+param x: Length = 4.0 m;
+node y: LengthThreeHalves = @x ^ (3/2);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_power_exact_zero_exponent_is_valid() {
+    let source = "param x: Length = 4.0 m;\nnode y: Dimensionless = @x ^ 0;";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_power_dimension_rational_overflow_uses_d010() {
+    let source = "param x: Length = 4.0 m;\nnode bad: Dimensionless = @x ^ (1/2147483648);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::DimensionOverflow { .. }),
         "got: {err:?}"
     );
 }
@@ -833,7 +899,7 @@ fn check_power_signed_integer_literal_exponent() {
     let source = "\
 pub dim InvLengthSquared = Length ^ -2;
 param x: Length = 2.0 m;
-node y: InvLengthSquared = @x ^ -2.0;";
+node y: InvLengthSquared = @x ^ -2;";
     check(source).unwrap();
 }
 
@@ -2043,27 +2109,32 @@ node y: Length = @forward(v: @src).b;
 }
 
 #[test]
-fn int_exponent_beyond_i32_is_rejected() {
-    // Quantity `^` requires a float-literal exponent, so an Int-typed
-    // exponent is rejected by the rhs quantity check before the exponent arm.
-    // The arm's former `as i32` wrap is additionally hardened to a
-    // DimensionOverflow error, so a huge exponent can never silently wrap
-    // even if that earlier check changes.
-    let source = "node x: Dimensionless = (2.0 m) ^ 4294967296;";
-    assert!(check(source).is_err());
-    let negative = "node x: Dimensionless = (2.0 m) ^ -4294967296;";
-    assert!(check(negative).is_err());
+fn exact_exponent_beyond_dimension_model_uses_d010() {
+    for source in [
+        "node x: Dimensionless = (2.0 m) ^ 4294967296;",
+        "node x: Dimensionless = (2.0 m) ^ -4294967296;",
+    ] {
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::DimensionOverflow { .. }),
+            "expected DimensionOverflow, got: {err:?}"
+        );
+    }
 }
 
 #[test]
-fn float_exponent_beyond_i32_errors_with_overflow() {
-    // The float-literal arm saturates at i32::MAX before `pow`, which must
-    // surface as DimensionOverflow rather than a wrong dimension.
+fn out_of_range_float_exponent_still_uses_float_syntax_diagnostic() {
     let source = "node x: Dimensionless = (2.0 m) ^ 4294967296.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::DimensionOverflow { .. }),
-        "expected DimensionOverflow, got: {err:?}"
+        matches!(
+            err,
+            GraphcalError::FloatPowerExponent {
+                replacement: None,
+                ..
+            }
+        ),
+        "expected FloatPowerExponent without an unusable fix, got: {err:?}"
     );
 }
 

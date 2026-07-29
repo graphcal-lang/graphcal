@@ -655,16 +655,30 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("exponent in power must be a numeric literal for dimensional analysis")]
+    #[error("a dimensioned base requires a statically exact rational exponent")]
     #[diagnostic(
         code(graphcal::D005),
-        help("use a literal exponent like `x ^ 2.0` so dimensions can be checked at compile time")
+        help("use an exact integer such as `2` or a parenthesized rational such as `(3/2)`")
     )]
-    NonLiteralExponent {
+    RuntimeExponentForDimensionedBase {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("non-literal exponent")]
+        #[label("runtime exponent cannot determine the result dimension")]
         span: SourceSpan,
+    },
+
+    #[error("float syntax cannot be the exponent of a dimensioned base")]
+    #[diagnostic(code(graphcal::D020))]
+    FloatPowerExponent {
+        /// Exact source replacement when the decimal value fits the dimension
+        /// rational model. Also carried as structured LSP diagnostic data.
+        replacement: Option<String>,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("exact rational syntax is required here")]
+        span: SourceSpan,
+        #[help]
+        help: String,
     },
 
     #[error("conversion target dimension {target} does not match expression dimension {expr_dim}")]
@@ -1894,7 +1908,8 @@ impl GraphcalError {
             | Self::UnknownDimension { src, .. }
             | Self::CyclicDimension { src, .. }
             | Self::CyclicUnit { src, .. }
-            | Self::NonLiteralExponent { src, .. }
+            | Self::RuntimeExponentForDimensionedBase { src, .. }
+            | Self::FloatPowerExponent { src, .. }
             | Self::ConversionDimensionMismatch { src, .. }
             | Self::NestedConversion { src, .. }
             | Self::IneffectiveConversion { src, .. }

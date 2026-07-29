@@ -1,4 +1,7 @@
-use crate::syntax::ast::{BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, UnaryOp};
+use crate::exact_rational::{ExactRational, ExactRationalError};
+use crate::syntax::ast::{
+    BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, PowerExponent, UnaryOp,
+};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ScopedName;
@@ -33,6 +36,57 @@ fn scan_ascii_ident(bytes: &[u8], pos: usize) -> Option<usize> {
         end += 1;
     }
     Some(end)
+}
+
+/// Parse a decimal/scientific literal as an exact rational when its reduced
+/// value fits the HIR exact-exponent representation.
+fn exact_decimal_literal(text: &str) -> Option<ExactRational> {
+    let normalized = text.replace('_', "");
+    let (mantissa, exponent) = match normalized.split_once(['e', 'E']) {
+        Some((mantissa, exponent)) => (mantissa, exponent.parse::<i32>().ok()?),
+        None => (normalized.as_str(), 0_i32),
+    };
+    let (whole, fractional) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{whole}{fractional}");
+    let numerator = digits.parse::<i128>().ok()?;
+    let fractional_digits = i32::try_from(fractional.len()).ok()?;
+    let decimal_scale = fractional_digits.checked_sub(exponent)?;
+
+    let (numerator, denominator) = if decimal_scale >= 0 {
+        let scale = u32::try_from(decimal_scale).ok()?;
+        (numerator, 10_i128.checked_pow(scale)?)
+    } else {
+        let scale = decimal_scale
+            .checked_neg()
+            .and_then(|n| u32::try_from(n).ok())?;
+        (numerator.checked_mul(10_i128.checked_pow(scale)?)?, 1)
+    };
+    ExactRational::try_new_i128(numerator, denominator).ok()
+}
+
+fn signed_integer_expr(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::Integer(value) => Some(*value),
+        ExprKind::UnaryOp {
+            op: UnaryOp::Neg,
+            operand,
+        } => match operand.kind {
+            ExprKind::Integer(value) => value.checked_neg(),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn signed_float_literal_span(expr: &Expr) -> Option<(bool, Span)> {
+    match &expr.kind {
+        ExprKind::Number(_) => Some((false, expr.span)),
+        ExprKind::UnaryOp {
+            op: UnaryOp::Neg,
+            operand,
+        } if matches!(operand.kind, ExprKind::Number(_)) => Some((true, operand.span)),
+        _ => None,
+    }
 }
 
 /// Map comparison tokens to their corresponding `BinOp`.
@@ -283,20 +337,66 @@ impl Parser<'_> {
         let base = self.parse_postfix()?;
         if self.lexer.peek() == Some(&Token::Caret) {
             self.lexer.next_token();
-            // Right-associative: recurse into parse_unary, not parse_power
-            let exp = self.parse_unary()?;
-            let span = base.span.merge(exp.span);
+            // Right-associative: recurse into parse_unary, not parse_power.
+            let exponent = self.parse_unary()?;
+            let exponent_kind = self.classify_power_exponent(&exponent)?;
+            let span = base.span.merge(exponent.span);
             Ok(Expr::new(
                 ExprKind::BinOp {
-                    op: BinOp::Pow,
+                    op: BinOp::Pow(exponent_kind),
                     lhs: Box::new(base),
-                    rhs: Box::new(exp),
+                    rhs: Box::new(exponent),
                 },
                 span,
             ))
         } else {
             Ok(base)
         }
+    }
+
+    /// Preserve exact exponent syntax before HIR loses token spelling.
+    fn classify_power_exponent(&self, exponent: &Expr) -> Result<PowerExponent, ParseError> {
+        if let Some(value) = signed_integer_expr(exponent) {
+            return Ok(PowerExponent::Exact(ExactRational::from_integer(value)));
+        }
+
+        if let ExprKind::BinOp {
+            op: BinOp::Div,
+            lhs,
+            rhs,
+        } = &exponent.kind
+            && let (Some(numerator), Some(denominator)) =
+                (signed_integer_expr(lhs), signed_integer_expr(rhs))
+        {
+            return ExactRational::try_new(numerator, denominator)
+                .map(PowerExponent::Exact)
+                .map_err(|error| ParseError::InvalidNumber {
+                    reason: match error {
+                        ExactRationalError::ZeroDenominator => {
+                            "power exponent denominator must be non-zero".to_string()
+                        }
+                        ExactRationalError::Overflow => {
+                            "exact power exponent overflows `i64`".to_string()
+                        }
+                    },
+                    src: self.named_source(),
+                    span: exponent.span.into(),
+                });
+        }
+
+        if let Some((negative, literal_span)) = signed_float_literal_span(exponent) {
+            let exact =
+                exact_decimal_literal(self.lexer.slice_at(literal_span)).and_then(|value| {
+                    if negative {
+                        value.checked_neg().ok()
+                    } else {
+                        Some(value)
+                    }
+                });
+            return Ok(PowerExponent::FloatSyntax { exact });
+        }
+
+        Ok(PowerExponent::Runtime)
     }
 
     /// Apply postfix operators (field access `.field`, index access `[i]`) to an already-parsed expression.
@@ -1144,11 +1244,40 @@ mod tests {
     fn parse_power_right_assoc() {
         let expr = parse_node_expr("2.0 ^ 3.0 ^ 2.0");
         if let ExprKind::BinOp { op, rhs, .. } = &expr.kind {
-            assert_eq!(*op, BinOp::Pow);
-            assert!(matches!(rhs.kind, ExprKind::BinOp { op: BinOp::Pow, .. }));
+            assert!(matches!(op, BinOp::Pow(PowerExponent::Runtime)));
+            assert!(matches!(
+                rhs.kind,
+                ExprKind::BinOp {
+                    op: BinOp::Pow(PowerExponent::FloatSyntax { .. }),
+                    ..
+                }
+            ));
         } else {
             panic!("expected Pow");
         }
+    }
+
+    #[test]
+    fn parse_power_preserves_exact_rational_and_decimal_syntax() {
+        let rational = parse_node_expr("@x ^ (-6/4)");
+        assert!(matches!(
+            rational.kind,
+            ExprKind::BinOp {
+                op: BinOp::Pow(PowerExponent::Exact(value)),
+                ..
+            } if value == ExactRational::try_new(-3, 2).unwrap()
+        ));
+
+        let decimal = parse_node_expr("@x ^ 2.5e-1");
+        assert!(matches!(
+            decimal.kind,
+            ExprKind::BinOp {
+                op: BinOp::Pow(PowerExponent::FloatSyntax {
+                    exact: Some(value)
+                }),
+                ..
+            } if value == ExactRational::try_new(1, 4).unwrap()
+        ));
     }
 
     #[test]
@@ -1161,7 +1290,10 @@ mod tests {
         {
             assert!(matches!(
                 operand.kind,
-                ExprKind::BinOp { op: BinOp::Pow, .. }
+                ExprKind::BinOp {
+                    op: BinOp::Pow(_),
+                    ..
+                }
             ));
         } else {
             panic!("expected Neg(Pow(...))");

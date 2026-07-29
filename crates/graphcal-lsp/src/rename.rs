@@ -450,7 +450,7 @@ node t: Dimensionless = match @s { Idle => 1.0, Active => 2.0 };
 param mass: Mass = 100.0 kg;
 param velocity: Velocity = 50.0 m/s;
 node momentum: Force * Time = @mass * @velocity;
-node kinetic: Energy = 0.5 * @mass * @velocity ^ 2.0;
+node kinetic: Energy = 0.5 * @mass * @velocity ^ 2;
 ";
         let analysis = analysis_from_source(source);
         let uri = Url::parse("file:///test.gcl").unwrap();

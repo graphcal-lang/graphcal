@@ -94,7 +94,7 @@ node transfer: TransferResult = TransferResult(
     dv1: @dv1,
     dv2: @dv2,
     total_dv: @dv1 + @dv2,
-    tof: PI * sqrt(@a ^ 3.0 / @gm_earth),
+    tof: PI * sqrt(@a ^ 3 / @gm_earth),
 );
 
 node total_dv: Velocity = @transfer.total_dv;
