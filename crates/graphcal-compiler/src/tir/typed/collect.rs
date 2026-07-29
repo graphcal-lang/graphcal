@@ -248,16 +248,7 @@ pub(super) fn collect_resolved_dag_dependencies(
                 entry.span,
             )
         })?;
-        let mut deps = hir::collect_expr_dependencies(hir_expr);
-        // Unfold self-references access the previous step, not the node's
-        // own value: drop the self-edge whenever every self-reference lies
-        // inside an unfold subtree (covers nested forms like
-        // `if c { unfold(…) } else { unfold(…) }`, not just a top-level
-        // unfold). A self-reference outside any unfold stays and is
-        // reported as a genuine cycle.
-        if !hir::has_ref_outside_unfold(hir_expr, &key) {
-            deps.graph_refs.remove(&key);
-        }
+        let deps = hir::collect_expr_dependencies(hir_expr);
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 

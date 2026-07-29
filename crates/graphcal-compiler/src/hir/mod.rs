@@ -34,7 +34,7 @@ pub use expr::{
     ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, collect_expr_dependencies,
     lower_expr_tolerant,
 };
-pub(crate) use expr::{find_extern_call, has_ref_outside_unfold, lower_assert_body, lower_expr};
+pub(crate) use expr::{find_extern_call, lower_assert_body, lower_expr};
 pub use lower::{
     GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, lower_generic_params,
 };

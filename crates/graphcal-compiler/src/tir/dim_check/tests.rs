@@ -1663,6 +1663,25 @@ node y: Dimensionless[Step] = unfold(Step, sum(@y), |prev_y, p, t| prev_y + 1.0)
 }
 
 #[test]
+fn unfold_body_self_references_are_cycles_for_every_coordinate() {
+    for self_read in ["@y[prev_t]", "@y[t]", "@y[t + (1.0 s)]"] {
+        let source = format!(
+            "index Step = range(0.0 s, 2.0 s, step: 1.0 s);\n\
+             node y: Dimensionless[Step] = unfold(\n\
+                 Step,\n\
+                 1.0,\n\
+                 |prev_y, prev_t, t| {self_read} + 1.0\n\
+             );"
+        );
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::CyclicDependency { .. }),
+            "expected CyclicDependency for `{self_read}`, got: {err:?}"
+        );
+    }
+}
+
+#[test]
 fn negation_rejects_fin_index_variable() {
     let source = "\
 param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };

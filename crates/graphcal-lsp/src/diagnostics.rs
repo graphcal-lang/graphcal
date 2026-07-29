@@ -356,6 +356,23 @@ mod tests {
     }
 
     #[test]
+    fn unfold_self_reference_produces_cycle_diagnostic() {
+        let source = "index Step = range(0.0 s, 1.0 s, step: 1.0 s);\n\
+                      node y: Dimensionless[Step] = unfold(\n\
+                          Step,\n\
+                          0.0,\n\
+                          |prev_y, prev_t, t| @y[t] + 1.0\n\
+                      );";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::G001"
+            )
+        }));
+    }
+
+    #[test]
     fn multi_axis_count_produces_rank_diagnostic() {
         let source = "index Row = { A, B };\n\
                       index Column = { X, Y };\n\
