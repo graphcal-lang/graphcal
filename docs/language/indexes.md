@@ -574,8 +574,9 @@ node x: Dimensionless[TimeStep] = unfold(
 
 The first coordinate receives `@x0`. At every later coordinate, the body
 receives the previous value, the previous coordinate, and the current
-coordinate. The axis belongs to the expression, so `unfold` can be nested or
-consumed immediately:
+coordinate. The axis belongs to the expression; the enclosing declaration's
+type is not consulted to select it, so `unfold` can be nested or consumed
+immediately:
 
 ```
 node total: Dimensionless = sum(

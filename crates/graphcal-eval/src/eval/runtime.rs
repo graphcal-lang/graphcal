@@ -15,7 +15,7 @@ use graphcal_compiler::syntax::span::Span;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::eval_expr::{
-    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, UnfoldContext, eval_hir_expr,
+    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
 };
 use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::registry::builtins::{
@@ -219,20 +219,10 @@ pub(super) struct EvalLoopResult {
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
 }
 
-fn declared_type_for_runtime_key<'a>(
-    dag: &graphcal_compiler::tir::typed::DagTIR,
-    declared_types: &'a HashMap<ScopedName, DeclaredType>,
-    key: &RuntimeDeclKey,
-) -> Option<&'a DeclaredType> {
-    declared_types.iter().find_map(|(name, declared_type)| {
-        (RuntimeDeclKey::for_visible_name(dag, name) == *key).then_some(declared_type)
-    })
-}
-
 /// Core evaluation loop shared by `evaluate_plan` and `extract_runtime_values`.
 ///
 /// Inserts imported and const values, then iterates in topological order.
-/// Unfold expressions are handled inline by `eval_expr` via `EvalContext`.
+/// Unfold expressions carry their resolved axis and are evaluated inline.
 /// Domain constraints are checked after successful evaluation.
 ///
 /// Returns all computed values and any per-node errors. Internal invariant
@@ -241,7 +231,6 @@ fn declared_type_for_runtime_key<'a>(
 pub(super) fn run_eval_loop(
     plan: &crate::exec_plan::ExecPlan,
     tir: &graphcal_compiler::tir::typed::TIR,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
@@ -281,27 +270,11 @@ pub(super) fn run_eval_loop(
             continue;
         }
 
-        let Some(self_declared_type) =
-            declared_type_for_runtime_key(tir.root(), declared_types, name)
-        else {
-            return Err(GraphcalError::InternalError {
-                message: format!("declared type map missing runtime key `{name}`"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            });
-        };
-
-        // Build eval context with unfold support for this node.
-        let unfold_ctx = UnfoldContext {
-            self_key: name.clone(),
-            self_declared_type,
-        };
         let ctx = EvalContext {
             builtin_consts,
             builtin_fns,
             registry: &tir.registry,
             src,
-            unfold_context: Some(unfold_ctx),
             tir,
             current_dag: Some(tir.root()),
             root_values: Some(&values),
@@ -395,7 +368,6 @@ pub(super) fn export_dynamic_unit_scales(
         builtin_fns,
         registry: &tir.registry,
         src,
-        unfold_context: None,
         tir,
         current_dag: Some(tir.root()),
         root_values: Some(values),
@@ -439,22 +411,14 @@ pub(super) fn evaluate_plan_with_values(
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
 
-    let EvalLoopResult { values, errors } = run_eval_loop(
-        plan,
-        tir,
-        declared_types,
-        src,
-        builtin_consts,
-        builtin_fns,
-        host_fns,
-    )?;
+    let EvalLoopResult { values, errors } =
+        run_eval_loop(plan, tir, src, builtin_consts, builtin_fns, host_fns)?;
 
     let ctx = EvalContext {
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
         src,
-        unfold_context: None,
         tir,
         current_dag: Some(tir.root()),
         root_values: Some(&values),
