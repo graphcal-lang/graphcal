@@ -1,0 +1,10 @@
+// Comparison operators never broadcast indexed operands. Element-wise
+// comparison must be written as an explicit `for` comprehension.
+index Case = { A, B };
+
+node values: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.0 m,
+};
+
+node implicit: Bool[Case] = @values < 3.0 m;

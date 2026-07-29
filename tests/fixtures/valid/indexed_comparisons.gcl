@@ -1,5 +1,5 @@
-// #809: comparisons broadcast element-wise over indexed operands.
-// `T[I] op T[I]` zips per key; `T[I] op unindexed T` broadcasts the unindexed operand.
+// Comparison operators require unindexed operands. Use an explicit `for`
+// comprehension to compare indexed values one element at a time.
 index Case = { A, B };
 
 node actual: Length[Case] = {
@@ -11,10 +11,9 @@ node expected: Length[Case] = {
     Case.B: 2.5 m,
 };
 
-node same: Bool[Case] = @actual == @expected;
-node below: Bool[Case] = @actual < 3.0 m;
+node same: Bool[Case] = for case: Case { @actual[case] == @expected[case] };
+node below: Bool[Case] = for case: Case { @actual[case] < 3.0 m };
 
-// The docs' indexed-boolean example shape: indexed-vs-unindexed in an assert
-// body infers Bool[Case] and reports per key.
-assert all_below = @actual < 3.0 m;
-assert none_above = 0.0 m < @actual;
+// Indexed Boolean assertions also use an explicit comprehension.
+assert all_below = for case: Case { @actual[case] < 3.0 m };
+assert none_above = for case: Case { 0.0 m < @actual[case] };

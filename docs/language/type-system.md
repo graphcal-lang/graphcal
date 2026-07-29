@@ -99,7 +99,7 @@ The stratification connects directly to the computation model:
 | `node x: Velocity[Maneuver]` (3 labels) | 3 nodes |
 | `node x: Velocity[Phase, Maneuver]` (2 x 3) | 6 nodes |
 
-The `for` comprehension expands a single declaration into multiple DAG nodes. Each node is independently evaluable (modulo data dependencies), making indexed values naturally parallelizable. This also explains why arithmetic on indexed values requires explicit `for`: you are defining the computation for each individual DAG node, not operating on the collection as a whole.
+The `for` comprehension expands a single declaration into multiple DAG nodes. Each node is independently evaluable (modulo data dependencies), making indexed values naturally parallelizable. This also explains why element-wise arithmetic and comparison on indexed values require explicit `for`: you are defining the computation for each individual DAG node, not operating on the collection as a whole.
 
 ## Name Universes
 
@@ -549,19 +549,28 @@ scan(
 
 ### No Implicit Broadcasting
 
-Arithmetic on indexed values requires explicit `for`. This is a deliberate safety decision:
+Arithmetic and comparison operators require unindexed operands. Element-wise
+work on indexed values must use an explicit `for`; comparison operators
+`==`, `!=`, `<`, `<=`, `>`, and `>=` reject an indexed operand with `D019`.
+This is a deliberate safety decision:
 
-```
-// ERROR: cannot add Velocity[Maneuver] + Velocity[Maneuver]
-node bad = @delta_v + @extra_dv;
+```gcl
+// ERROR: neither arithmetic nor comparison broadcasts indexed values
+node bad_sum: Velocity[Maneuver] = @delta_v + @extra_dv;
+node bad_limit: Bool[Maneuver] = @delta_v < 3.0 km/s;
 
-// CORRECT: explicit element-wise operation
-node good: Velocity[Maneuver] = for m: Maneuver {
+// CORRECT: explicit element-wise operations
+node sum: Velocity[Maneuver] = for m: Maneuver {
     @delta_v[m] + @extra_dv[m]
-}
+};
+node below_limit: Bool[Maneuver] = for m: Maneuver {
+    @delta_v[m] < 3.0 km/s
+};
 ```
 
-This prevents the class of silent broadcasting bugs common in NumPy and Excel, where mismatched shapes are silently resolved.
+This prevents the class of silent broadcasting bugs common in NumPy and Excel,
+where mismatched shapes may otherwise be resolved without making the selected
+axes or element pairing explicit.
 
 ## Type Conversions
 
@@ -689,8 +698,8 @@ This section lists the type of each expression form and the constraints the comp
 
 | Expression | Result Type | Constraint |
 |-----------|-------------|------------|
-| `a == b`, `a != b` | `Bool` | `a` and `b` must have the same type |
-| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | `a` and `b` must be quantities with the same dimension |
+| `a == b`, `a != b` | `Bool` | `a` and `b` must be unindexed and have the same type |
+| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | operands must be unindexed and either Int/Fin-compatible, same-dimension quantities, or same-scale datetimes |
 | `a && b`, `a \|\| b` | `Bool` | `a` and `b` must be `Bool` |
 | `!a` | `Bool` | `a` must be `Bool` |
 

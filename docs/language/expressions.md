@@ -65,10 +65,24 @@ Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Datetime - Datetime` produces a `Time` duration. `Time - Datetime` and
 `Datetime + Datetime` are errors.
 
-Comparisons broadcast element-wise over indexed operands: `T[I] op T[I]`
-zips the two collections per key, and `T[I] op unindexed T` applies the
-unindexed operand to every key — both return `Bool[I]`. Indexed operands must share the same
-axes in the same order; mismatched axes are a compile error (`D011`).
+Comparison operators do not broadcast: every operand must be unindexed.
+Passing an indexed value to `==`, `!=`, `<`, `>`, `<=`, or `>=` is a compile
+error (`D019`). Write element-wise comparison explicitly with `for` and index
+each collection in the body:
+
+```gcl
+index Case = { A, B };
+node values: Length[Case] = {
+    Case.A: 1.0 m,
+    Case.B: 2.0 m,
+};
+node below_limit: Bool[Case] = for case: Case {
+    @values[case] < 3.0 m
+};
+```
+
+This makes the selected axes and element pairing visible in source instead of
+silently resolving collection shapes.
 
 ## Logical Operators
 

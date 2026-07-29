@@ -686,7 +686,47 @@ node total: Velocity = sum(for m: Maneuver { @dv[m] });";
     check(source).unwrap();
 }
 
-// --- Comparison dimension mismatch ---
+// --- Comparison rules ---
+
+#[test]
+fn check_comparison_rejects_indexed_operands_for_every_operator() {
+    let prefix = "\
+index Case = { A, B };
+node values: Length[Case] = {
+Case.A: 1.0 m,
+Case.B: 2.0 m,
+};";
+
+    for op in ["==", "!=", "<", "<=", ">", ">="] {
+        for expr in [
+            format!("@values {op} 1.0 m"),
+            format!("1.0 m {op} @values"),
+            format!("@values {op} @values"),
+        ] {
+            let source = format!("{prefix}\nnode bad: Bool = {expr};");
+            let err = check(&source).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    GraphcalError::IndexedComparisonOperand { found, .. }
+                        if found == "Length[Case]"
+                ),
+                "operator `{op}` in `{expr}` produced: {err:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn check_explicit_for_comparison_of_indexed_values() {
+    let source = "\
+index Case = { A, B };
+node lhs: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };
+node rhs: Length[Case] = { Case.A: 1.0 m, Case.B: 2.5 m };
+node same: Bool[Case] = for case: Case { @lhs[case] == @rhs[case] };
+node below: Bool[Case] = for case: Case { @lhs[case] < 3.0 m };";
+    check(source).unwrap();
+}
 
 #[test]
 fn check_comparison_dimension_mismatch() {
