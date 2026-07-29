@@ -322,8 +322,29 @@ mod tests {
     }
 }
 
+/// A concrete generic argument classified by its declared sort.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclaredGenericArg {
+    Dim(Dimension),
+    Index(IndexTypeRef),
+    Nat(NatPolyForm),
+    Type(DeclaredType),
+}
+
+impl DeclaredGenericArg {
+    fn format(&self, dims: &DimensionRegistry) -> String {
+        match self {
+            Self::Dim(dimension) => dims.format_dimension(dimension),
+            Self::Index(index) => index.to_string(),
+            Self::Nat(value) => value.format(),
+            Self::Type(type_expr) => type_expr.format(dims),
+        }
+    }
+}
+
 /// A concrete declared type: primitive, struct, or indexed value type.
-/// `IndexArg` is metadata carried only by generic struct instantiations.
+/// `IndexArg` is retained for index-only boundary values; generic struct
+/// metadata uses [`DeclaredGenericArg`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclaredType {
     Quantity(Dimension),
@@ -336,8 +357,8 @@ pub enum DeclaredType {
     /// This is not a standalone value type; it is carried only as metadata for
     /// generic type parameters constrained as `Index`.
     IndexArg(IndexTypeRef),
-    /// A struct type, optionally with concrete type arguments for generic structs.
-    Struct(StructTypeRef, Vec<Self>),
+    /// A struct type, optionally with concrete sorted generic arguments.
+    Struct(StructTypeRef, Vec<DeclaredGenericArg>),
     Indexed {
         element: Box<Self>,
         index: IndexTypeRef,
@@ -364,7 +385,7 @@ impl DeclaredType {
                 if args.is_empty() {
                     name.to_string()
                 } else {
-                    let args_str: Vec<String> = args.iter().map(|a| a.format(dims)).collect();
+                    let args_str: Vec<String> = args.iter().map(|arg| arg.format(dims)).collect();
                     format!("{name}<{}>", args_str.join(", "))
                 }
             }

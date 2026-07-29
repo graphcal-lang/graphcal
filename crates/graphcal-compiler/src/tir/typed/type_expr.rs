@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -18,8 +19,8 @@ use crate::syntax::span::Span;
 use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName, StructTypeName};
 
 use super::{
-    ModuleTypeContext, ModuleTypeRegistry, ResolvedDimTerm, ResolvedIndex, ResolvedTypeExpr,
-    nat_overflow_error, normalize_nat_expr,
+    ModuleTypeContext, ModuleTypeRegistry, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,
+    ResolvedIndex, ResolvedTypeExpr, nat_overflow_error, normalize_nat_expr,
 };
 
 // ---------------------------------------------------------------------------
@@ -111,8 +112,14 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
                     crate::desugar::desugared_ast::IndexExpr::NatExpr(_) => false,
                 })
         }
-        TypeExprKind::TypeApplication { type_args, .. }
-        | TypeExprKind::DatetimeApplication { type_args } => type_args
+        TypeExprKind::TypeApplication { generic_args, .. } => generic_args.iter().any(|arg| {
+            matches!(
+                arg,
+                crate::desugar::desugared_ast::GenericArg::Type(type_expr)
+                    if type_expr_has_index_name_at_span(type_expr, span)
+            )
+        }),
+        TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_index_name_at_span(arg, span)),
         TypeExprKind::Dimensionless
@@ -130,8 +137,14 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
             .iter()
             .any(|item| item.term.name.span == span),
         TypeExprKind::Indexed { base, .. } => type_expr_has_dim_term_at_span(base, span),
-        TypeExprKind::TypeApplication { type_args, .. }
-        | TypeExprKind::DatetimeApplication { type_args } => type_args
+        TypeExprKind::TypeApplication { generic_args, .. } => generic_args.iter().any(|arg| {
+            matches!(
+                arg,
+                crate::desugar::desugared_ast::GenericArg::Type(type_expr)
+                    if type_expr_has_dim_term_at_span(type_expr, span)
+            )
+        }),
+        TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_dim_term_at_span(arg, span)),
         TypeExprKind::Dimensionless
@@ -220,8 +233,8 @@ fn resolve_hir_type_expr_inner(
             param.value.name.clone(),
             param.span,
         )),
-        hir::TypeExprKind::TypeApplication { name, type_args } => {
-            resolve_hir_type_application(type_ann, name, type_args, ctx)
+        hir::TypeExprKind::TypeApplication { name, generic_args } => {
+            resolve_hir_type_application(type_ann, name, generic_args, ctx)
         }
         hir::TypeExprKind::Indexed { base, indexes } => {
             let resolved_base = resolve_hir_type_expr_inner(base, ctx)?;
@@ -450,8 +463,311 @@ fn normalize_hir_nat_expr(
     }
 }
 
-/// Validate the generic-argument count for a type application: at least
-/// the number of non-defaulted parameters, at most the total count.
+#[derive(Default)]
+struct ResolvedGenericSubstitutions {
+    dims: HashMap<GenericParamName, ResolvedDimArg>,
+    indexes: HashMap<GenericParamName, ResolvedIndex>,
+    nats: HashMap<GenericParamName, NatPolyForm>,
+    types: HashMap<GenericParamName, ResolvedTypeExpr>,
+}
+
+impl ResolvedGenericSubstitutions {
+    fn from_resolved_prefix(type_def: &TypeDef, resolved_args: &[ResolvedGenericArg]) -> Self {
+        type_def.generic_params.iter().zip(resolved_args).fold(
+            Self::default(),
+            |mut substitutions, (param, arg)| {
+                match arg {
+                    ResolvedGenericArg::Dim(dim) => {
+                        substitutions.dims.insert(param.name.clone(), dim.clone());
+                    }
+                    ResolvedGenericArg::Index(index) => {
+                        substitutions
+                            .indexes
+                            .insert(param.name.clone(), index.clone());
+                    }
+                    ResolvedGenericArg::Nat(form, _) => {
+                        substitutions.nats.insert(param.name.clone(), form.clone());
+                    }
+                    ResolvedGenericArg::Type(type_expr) => {
+                        substitutions
+                            .types
+                            .insert(param.name.clone(), type_expr.clone());
+                    }
+                }
+                substitutions
+            },
+        )
+    }
+}
+
+enum GenericDefaultSubstitutionError {
+    Nat(crate::nat::NatOverflowError),
+    Dimension(crate::dimension::RationalError),
+    UnexpectedGenericDimensionTerm,
+}
+
+impl From<crate::nat::NatOverflowError> for GenericDefaultSubstitutionError {
+    fn from(error: crate::nat::NatOverflowError) -> Self {
+        Self::Nat(error)
+    }
+}
+
+impl From<crate::dimension::RationalError> for GenericDefaultSubstitutionError {
+    fn from(error: crate::dimension::RationalError) -> Self {
+        Self::Dimension(error)
+    }
+}
+
+fn instantiate_params_in_default(
+    default: &mut ResolvedGenericArg,
+    type_def: &TypeDef,
+    resolved_args: &[ResolvedGenericArg],
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    let substitutions = ResolvedGenericSubstitutions::from_resolved_prefix(type_def, resolved_args);
+    substitute_params_in_generic_arg(default, &substitutions).map_err(|error| match error {
+        GenericDefaultSubstitutionError::Nat(error) => nat_overflow_error(error, src, span),
+        GenericDefaultSubstitutionError::Dimension(_error) => GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: span.into(),
+        },
+        GenericDefaultSubstitutionError::UnexpectedGenericDimensionTerm => internal_error(
+            "generic dimension term remained after concrete-default substitution".to_string(),
+            src,
+            span,
+        ),
+    })
+}
+
+fn substitute_params_in_generic_arg(
+    arg: &mut ResolvedGenericArg,
+    substitutions: &ResolvedGenericSubstitutions,
+) -> Result<(), GenericDefaultSubstitutionError> {
+    match arg {
+        ResolvedGenericArg::Dim(dim) => substitute_params_in_dim_arg(dim, substitutions),
+        ResolvedGenericArg::Index(index) => {
+            substitute_params_in_resolved_index(index, substitutions)
+        }
+        ResolvedGenericArg::Nat(form, _) => {
+            *form = form.substitute_forms(&substitutions.nats)?;
+            Ok(())
+        }
+        ResolvedGenericArg::Type(type_expr) => {
+            substitute_params_in_resolved_type(type_expr, substitutions)
+        }
+    }
+}
+
+fn substitute_params_in_dim_arg(
+    arg: &mut ResolvedDimArg,
+    substitutions: &ResolvedGenericSubstitutions,
+) -> Result<(), GenericDefaultSubstitutionError> {
+    match arg {
+        ResolvedDimArg::GenericParam(name, _) => {
+            if let Some(replacement) = substitutions.dims.get(name) {
+                *arg = replacement.clone();
+            }
+            Ok(())
+        }
+        ResolvedDimArg::Expr { terms, span } => {
+            let expression_span = *span;
+            let substituted =
+                std::mem::take(terms)
+                    .into_iter()
+                    .try_fold(Vec::new(), |mut output, term| {
+                        match term {
+                            ResolvedDimTerm::GenericParam {
+                                name,
+                                power,
+                                op,
+                                span,
+                            } => match substitutions.dims.get(&name) {
+                                Some(replacement) => {
+                                    output.extend(expand_dim_arg(replacement, power, op)?);
+                                }
+                                None => output.push(ResolvedDimTerm::GenericParam {
+                                    name,
+                                    power,
+                                    op,
+                                    span,
+                                }),
+                            },
+                            concrete @ ResolvedDimTerm::Concrete { .. } => output.push(concrete),
+                        }
+                        Ok::<_, GenericDefaultSubstitutionError>(output)
+                    })?;
+            *arg = collapse_dim_terms(substituted, expression_span)?;
+            Ok(())
+        }
+        ResolvedDimArg::Dimensionless | ResolvedDimArg::Concrete(_) => Ok(()),
+    }
+}
+
+fn expand_dim_arg(
+    arg: &ResolvedDimArg,
+    outer_power: Rational,
+    outer_op: MulDivOp,
+) -> Result<Vec<ResolvedDimTerm>, GenericDefaultSubstitutionError> {
+    match arg {
+        ResolvedDimArg::Dimensionless => Ok(Vec::new()),
+        ResolvedDimArg::Concrete(dim) => Ok(vec![ResolvedDimTerm::Concrete {
+            dim: dim.clone(),
+            power: outer_power,
+            op: outer_op,
+        }]),
+        ResolvedDimArg::GenericParam(name, span) => Ok(vec![ResolvedDimTerm::GenericParam {
+            name: name.clone(),
+            power: outer_power,
+            op: outer_op,
+            span: *span,
+        }]),
+        ResolvedDimArg::Expr { terms, .. } => terms
+            .iter()
+            .map(|term| match term {
+                ResolvedDimTerm::Concrete { dim, power, op } => Ok(ResolvedDimTerm::Concrete {
+                    dim: dim.clone(),
+                    power: (*power * outer_power)?,
+                    op: combine_dim_ops(outer_op, *op),
+                }),
+                ResolvedDimTerm::GenericParam {
+                    name,
+                    power,
+                    op,
+                    span,
+                } => Ok(ResolvedDimTerm::GenericParam {
+                    name: name.clone(),
+                    power: (*power * outer_power)?,
+                    op: combine_dim_ops(outer_op, *op),
+                    span: *span,
+                }),
+            })
+            .collect(),
+    }
+}
+
+const fn combine_dim_ops(outer: MulDivOp, inner: MulDivOp) -> MulDivOp {
+    if matches!(
+        (outer, inner),
+        (MulDivOp::Mul, MulDivOp::Mul) | (MulDivOp::Div, MulDivOp::Div)
+    ) {
+        MulDivOp::Mul
+    } else {
+        MulDivOp::Div
+    }
+}
+
+fn collapse_dim_terms(
+    terms: Vec<ResolvedDimTerm>,
+    span: Span,
+) -> Result<ResolvedDimArg, GenericDefaultSubstitutionError> {
+    if terms.is_empty() {
+        return Ok(ResolvedDimArg::Dimensionless);
+    }
+    if terms
+        .iter()
+        .any(|term| matches!(term, ResolvedDimTerm::GenericParam { .. }))
+    {
+        return Ok(ResolvedDimArg::Expr { terms, span });
+    }
+    let dimension =
+        terms
+            .iter()
+            .try_fold(Dimension::dimensionless(), |dimension, term| match term {
+                ResolvedDimTerm::Concrete { dim, power, op } => {
+                    let powered = dim.pow(*power)?;
+                    match op {
+                        MulDivOp::Mul => dimension.checked_mul(&powered).map_err(Into::into),
+                        MulDivOp::Div => dimension.checked_div(&powered).map_err(Into::into),
+                    }
+                }
+                ResolvedDimTerm::GenericParam { .. } => {
+                    Err(GenericDefaultSubstitutionError::UnexpectedGenericDimensionTerm)
+                }
+            })?;
+    if dimension.is_dimensionless() {
+        Ok(ResolvedDimArg::Dimensionless)
+    } else {
+        Ok(ResolvedDimArg::Concrete(dimension))
+    }
+}
+
+fn substitute_params_in_resolved_index(
+    index: &mut ResolvedIndex,
+    substitutions: &ResolvedGenericSubstitutions,
+) -> Result<(), GenericDefaultSubstitutionError> {
+    match index {
+        ResolvedIndex::GenericParam(name, _) => {
+            if let Some(replacement) = substitutions.indexes.get(name) {
+                *index = replacement.clone();
+            }
+        }
+        ResolvedIndex::NatExpr(form, _) => {
+            *form = form.substitute_forms(&substitutions.nats)?;
+        }
+        ResolvedIndex::Concrete(_, _) => {}
+    }
+    Ok(())
+}
+
+fn dim_arg_as_resolved_type(arg: ResolvedDimArg) -> ResolvedTypeExpr {
+    match arg {
+        ResolvedDimArg::Dimensionless => ResolvedTypeExpr::Dimensionless,
+        ResolvedDimArg::Concrete(dim) => ResolvedTypeExpr::Quantity(dim),
+        ResolvedDimArg::GenericParam(name, span) => ResolvedTypeExpr::GenericDimParam(name, span),
+        ResolvedDimArg::Expr { terms, span } => ResolvedTypeExpr::GenericDimExpr { terms, span },
+    }
+}
+
+fn substitute_params_in_resolved_type(
+    type_expr: &mut ResolvedTypeExpr,
+    substitutions: &ResolvedGenericSubstitutions,
+) -> Result<(), GenericDefaultSubstitutionError> {
+    match type_expr {
+        ResolvedTypeExpr::IndexArg(index) => {
+            substitute_params_in_resolved_index(index, substitutions)
+        }
+        ResolvedTypeExpr::GenericDimParam(name, _) => {
+            if let Some(replacement) = substitutions.dims.get(name) {
+                *type_expr = dim_arg_as_resolved_type(replacement.clone());
+            }
+            Ok(())
+        }
+        ResolvedTypeExpr::GenericTypeParam(name, _) => {
+            if let Some(replacement) = substitutions.types.get(name) {
+                *type_expr = replacement.clone();
+            }
+            Ok(())
+        }
+        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
+            let mut dim_arg = ResolvedDimArg::Expr {
+                terms: std::mem::take(terms),
+                span: *span,
+            };
+            substitute_params_in_dim_arg(&mut dim_arg, substitutions)?;
+            *type_expr = dim_arg_as_resolved_type(dim_arg);
+            Ok(())
+        }
+        ResolvedTypeExpr::GenericStruct { generic_args, .. } => generic_args
+            .iter_mut()
+            .try_for_each(|arg| substitute_params_in_generic_arg(arg, substitutions)),
+        ResolvedTypeExpr::Indexed { base, indexes } => {
+            substitute_params_in_resolved_type(base, substitutions)?;
+            indexes
+                .iter_mut()
+                .try_for_each(|index| substitute_params_in_resolved_index(index, substitutions))
+        }
+        ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Bool
+        | ResolvedTypeExpr::Int
+        | ResolvedTypeExpr::Datetime(_)
+        | ResolvedTypeExpr::Quantity(_)
+        | ResolvedTypeExpr::Struct(_, _) => Ok(()),
+    }
+}
+
+/// Validate the generic-argument count for a type application: enough to
+/// reach the last non-defaulted parameter, and at most the total count.
 /// Shared by the HIR and syntax type-application resolvers.
 fn check_type_application_arity(
     type_name: &str,
@@ -464,8 +780,8 @@ fn check_type_application_arity(
     let required_count = type_def
         .generic_params
         .iter()
-        .take_while(|p| p.default.is_none())
-        .count();
+        .rposition(|param| param.default.is_none())
+        .map_or(0, |index| index.saturating_add(1));
     if arg_count < required_count || arg_count > total_params {
         let hint = if required_count == total_params {
             format!("{total_params}")
@@ -473,7 +789,9 @@ fn check_type_application_arity(
             format!("{required_count}..{total_params}")
         };
         return Err(GraphcalError::EvalError {
-            message: format!("type `{type_name}` expects {hint} type argument(s), got {arg_count}"),
+            message: format!(
+                "type `{type_name}` expects {hint} generic argument(s), got {arg_count}"
+            ),
             src: src.clone(),
             span: span.into(),
         });
@@ -484,25 +802,25 @@ fn check_type_application_arity(
 fn resolve_hir_type_application(
     type_ann: &hir::TypeExpr,
     name: &crate::syntax::span::Spanned<ResolvedStructTypeName>,
-    type_args: &[hir::TypeExpr],
+    generic_args: &[hir::GenericArg],
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     let type_def = hir_struct_type_def(&name.value, name.span, ctx)?;
     check_type_application_arity(
         name.value.as_str(),
         type_def,
-        type_args.len(),
+        generic_args.len(),
         type_ann.span,
         ctx.src,
     )?;
 
     let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
-    for (param, arg) in type_def.generic_params.iter().zip(type_args) {
-        resolved_args.push(resolve_hir_type_arg_for_param(param, arg, ctx)?);
+    for (param, arg) in type_def.generic_params.iter().zip(generic_args) {
+        resolved_args.push(resolve_hir_generic_arg_for_param(param, arg, ctx)?);
     }
 
-    for param in type_def.generic_params.iter().skip(type_args.len()) {
-        let default_expr = param
+    for param in type_def.generic_params.iter().skip(generic_args.len()) {
+        let default = param
             .default
             .as_ref()
             .ok_or_else(|| GraphcalError::EvalError {
@@ -513,81 +831,158 @@ fn resolve_hir_type_application(
                 src: ctx.src.clone(),
                 span: type_ann.span.into(),
             })?;
-        let default_hir = lower_type_generic_default(default_expr, &name.value, type_def, ctx)?;
-        resolved_args.push(resolve_hir_type_arg_for_param(param, &default_hir, ctx)?);
+        let default_hir = lower_generic_default(default, param, &name.value, type_def, ctx)?;
+        let mut resolved = resolve_hir_generic_arg_for_param(param, &default_hir, ctx)?;
+        instantiate_params_in_default(
+            &mut resolved,
+            type_def,
+            &resolved_args,
+            ctx.src,
+            default_hir.span(),
+        )?;
+        resolved_args.push(resolved);
     }
 
     Ok(ResolvedTypeExpr::GenericStruct {
         name: name.value.clone(),
-        type_args: resolved_args,
+        generic_args: resolved_args,
         span: type_ann.span,
     })
 }
 
-fn resolve_hir_type_arg_for_param(
+fn resolve_hir_generic_arg_for_param(
     param: &crate::registry::types::TypeGenericParam,
-    arg: &hir::TypeExpr,
+    arg: &hir::GenericArg,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    match param.constraint {
-        TypeGenericConstraint::Index => match &arg.kind {
-            hir::TypeExprKind::Index(index) => {
-                resolve_hir_index_ref(index, ctx).map(ResolvedTypeExpr::IndexArg)
-            }
-            _ => Err(GraphcalError::EvalError {
-                message: format!(
-                    "generic parameter `{}` expects an Index argument",
-                    param.name
-                ),
-                src: ctx.src.clone(),
-                span: arg.span.into(),
-            }),
-        },
-        TypeGenericConstraint::Nat => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic parameter `{}` expects a Nat argument, got a type argument",
+) -> Result<ResolvedGenericArg, GraphcalError> {
+    match (param.constraint, arg) {
+        (TypeGenericConstraint::Dim, hir::GenericArg::Dim(dim)) => {
+            resolve_hir_dim_arg(dim, ctx).map(ResolvedGenericArg::Dim)
+        }
+        (TypeGenericConstraint::Index, hir::GenericArg::Index(index)) => {
+            resolve_hir_index_ref(index, ctx).map(ResolvedGenericArg::Index)
+        }
+        (TypeGenericConstraint::Nat, hir::GenericArg::Nat(nat)) => Ok(ResolvedGenericArg::Nat(
+            normalize_hir_nat_expr(nat)
+                .map_err(|err| nat_overflow_error(err, ctx.src, nat.span()))?,
+            nat.span(),
+        )),
+        (TypeGenericConstraint::Type, hir::GenericArg::Type(type_expr)) => {
+            resolve_hir_type_expr_inner(type_expr, ctx).map(ResolvedGenericArg::Type)
+        }
+        _ => Err(internal_error(
+            format!(
+                "HIR generic argument for `{}` does not match its registered sort",
                 param.name
             ),
-            src: ctx.src.clone(),
-            span: arg.span.into(),
-        }),
-        TypeGenericConstraint::Dim | TypeGenericConstraint::Unconstrained => {
-            resolve_hir_type_expr_inner(arg, ctx)
-        }
+            ctx.src,
+            arg.span(),
+        )),
     }
 }
 
-fn lower_type_generic_default(
-    default_expr: &TypeExpr,
+fn resolve_hir_dim_arg(
+    arg: &hir::DimArg,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<ResolvedDimArg, GraphcalError> {
+    match arg {
+        hir::DimArg::Dimensionless(_) => Ok(ResolvedDimArg::Dimensionless),
+        hir::DimArg::Expr(dim_expr) => match resolve_hir_dim_expr(dim_expr, ctx)? {
+            ResolvedTypeExpr::Dimensionless => Ok(ResolvedDimArg::Dimensionless),
+            ResolvedTypeExpr::Quantity(dim) => Ok(ResolvedDimArg::Concrete(dim)),
+            ResolvedTypeExpr::GenericDimParam(name, span) => {
+                Ok(ResolvedDimArg::GenericParam(name, span))
+            }
+            ResolvedTypeExpr::GenericDimExpr { terms, span } => {
+                Ok(ResolvedDimArg::Expr { terms, span })
+            }
+            other => Err(internal_error(
+                format!("dimension argument resolved to non-dimension type {other:?}"),
+                ctx.src,
+                arg.span(),
+            )),
+        },
+    }
+}
+
+fn generic_scope_for_type(
     type_owner: &ResolvedStructTypeName,
     type_def: &TypeDef,
+    span: Span,
     ctx: HirTypeResolutionContext<'_>,
-) -> Result<hir::TypeExpr, GraphcalError> {
+) -> Result<hir::GenericScope, GraphcalError> {
     let mut scope = hir::GenericScope::new();
     for param in &type_def.generic_params {
-        let constraint = match param.constraint {
-            TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
-            TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
-            TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
-            TypeGenericConstraint::Unconstrained => crate::syntax::ast::GenericConstraint::Type,
-        };
+        let constraint = generic_constraint(param.constraint);
         let id = hir::GenericParamId::new(
             hir::GenericParamOwner::Type(type_owner.clone()),
             param.name.clone(),
         );
         scope
+            .insert_binding(hir::GenericParamBinding::new(id, constraint, span))
+            .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))?;
+    }
+    Ok(scope)
+}
+
+const fn generic_constraint(
+    constraint: TypeGenericConstraint,
+) -> crate::syntax::ast::GenericConstraint {
+    match constraint {
+        TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
+        TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
+        TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
+        TypeGenericConstraint::Type => crate::syntax::ast::GenericConstraint::Type,
+    }
+}
+
+fn lower_type_expr_in_generic_scope(
+    type_expr: &TypeExpr,
+    type_owner: &ResolvedStructTypeName,
+    type_def: &TypeDef,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<hir::TypeExpr, GraphcalError> {
+    let scope = generic_scope_for_type(type_owner, type_def, type_expr.span, ctx)?;
+    let lower_ctx = hir::TypeLoweringContext::new(type_owner.owner(), ctx.resolver, &scope)
+        .with_prelude(ctx.prelude);
+    hir::lower_type_expr(type_expr, lower_ctx)
+        .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
+}
+
+fn lower_generic_default(
+    default: &crate::desugar::desugared_ast::GenericArg,
+    param: &crate::registry::types::TypeGenericParam,
+    type_owner: &ResolvedStructTypeName,
+    type_def: &TypeDef,
+    ctx: HirTypeResolutionContext<'_>,
+) -> Result<hir::GenericArg, GraphcalError> {
+    let mut scope = hir::GenericScope::new();
+    for earlier in type_def
+        .generic_params
+        .iter()
+        .take_while(|earlier| earlier.name != param.name)
+    {
+        let id = hir::GenericParamId::new(
+            hir::GenericParamOwner::Type(type_owner.clone()),
+            earlier.name.clone(),
+        );
+        scope
             .insert_binding(hir::GenericParamBinding::new(
                 id,
-                constraint,
-                default_expr.span,
+                generic_constraint(earlier.constraint),
+                default.span(),
             ))
             .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))?;
     }
-
     let lower_ctx = hir::TypeLoweringContext::new(type_owner.owner(), ctx.resolver, &scope)
         .with_prelude(ctx.prelude);
-    hir::lower_type_expr(default_expr, lower_ctx)
-        .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
+    hir::lower::lower_generic_arg_for_constraint(
+        default,
+        generic_constraint(param.constraint),
+        &param.name,
+        lower_ctx,
+    )
+    .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
 }
 
 #[expect(
@@ -771,6 +1166,27 @@ fn resolve_dimension_path(
     Ok(registry.dimensions.get_dimension(text).cloned())
 }
 
+pub(super) fn resolve_generic_default_in_struct_scope(
+    default: &crate::desugar::desugared_ast::GenericArg,
+    param: &crate::registry::types::TypeGenericParam,
+    type_owner: &ResolvedStructTypeName,
+    type_def: &TypeDef,
+    ctx: ModuleTypeContext<'_>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedGenericArg, GraphcalError> {
+    let prelude = hir::PreludeTypeScope::graphcal();
+    let resolve_ctx = HirTypeResolutionContext {
+        src,
+        resolver: ctx.resolver,
+        module_types: ctx.types,
+        registry: Some(registry),
+        prelude: &prelude,
+    };
+    let hir_arg = lower_generic_default(default, param, type_owner, type_def, resolve_ctx)?;
+    resolve_hir_generic_arg_for_param(param, &hir_arg, resolve_ctx)
+}
+
 pub(super) fn resolve_type_expr_in_struct_scope(
     type_expr: &TypeExpr,
     type_owner: &ResolvedStructTypeName,
@@ -787,7 +1203,7 @@ pub(super) fn resolve_type_expr_in_struct_scope(
         registry: Some(registry),
         prelude: &prelude,
     };
-    let hir_type = lower_type_generic_default(type_expr, type_owner, type_def, resolve_ctx)?;
+    let hir_type = lower_type_expr_in_generic_scope(type_expr, type_owner, type_def, resolve_ctx)?;
     resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
 }
 
@@ -925,14 +1341,15 @@ pub(super) fn resolve_type_expr_inner(
             owner,
             dim_params,
             index_params,
+            nat_params,
             src,
             module_ctx,
         ),
 
-        TypeExprKind::TypeApplication { name, type_args } => resolve_type_application(
+        TypeExprKind::TypeApplication { name, generic_args } => resolve_type_application(
             type_ann,
             name,
-            type_args,
+            generic_args,
             registry,
             owner,
             dim_params,
@@ -951,12 +1368,17 @@ pub(super) fn resolve_type_expr_inner(
 /// A single-term, no-power expression is first checked against named indexes,
 /// struct types, and generic dimension parameters. Multi-term expressions with
 /// generic params become `GenericDimExpr`; fully concrete expressions become `Quantity`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resolves ambiguous nominal or dimension syntax with all generic scopes"
+)]
 fn resolve_dim_expr(
     dim_expr: &crate::desugar::desugared_ast::DimExpr,
     registry: &Registry,
     owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
     index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
@@ -984,7 +1406,7 @@ fn resolve_dim_expr(
                 term.span,
             )));
         }
-        if let Some((type_name, _)) = resolve_struct_type_path(
+        if let Some((type_name, type_def)) = resolve_struct_type_path(
             &term.name.value,
             term.name.span,
             registry,
@@ -992,7 +1414,23 @@ fn resolve_dim_expr(
             src,
             module_ctx,
         )? {
-            return Ok(ResolvedTypeExpr::Struct(type_name, term.span));
+            return if type_def.generic_params.is_empty() {
+                Ok(ResolvedTypeExpr::Struct(type_name, term.span))
+            } else {
+                resolve_known_type_application(
+                    term.span,
+                    type_name,
+                    type_def,
+                    &[],
+                    registry,
+                    owner,
+                    dim_params,
+                    index_params,
+                    nat_params,
+                    src,
+                    module_ctx,
+                )
+            };
         }
         if let Some(atom) = term.name.value.as_bare()
             && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
@@ -1157,7 +1595,7 @@ fn resolve_datetime_application(
 fn resolve_type_application(
     type_ann: &TypeExpr,
     name: &crate::syntax::span::Spanned<NamePath>,
-    type_args: &[TypeExpr],
+    generic_args: &[crate::desugar::desugared_ast::GenericArg],
     registry: &Registry,
     owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
@@ -1173,15 +1611,41 @@ fn resolve_type_application(
                 src: src.clone(),
                 span: name.span.into(),
             })?;
-    check_type_application_arity(
-        type_name.as_str(),
-        type_def,
-        type_args.len(),
+    resolve_known_type_application(
         type_ann.span,
+        type_name,
+        type_def,
+        generic_args,
+        registry,
+        owner,
+        dim_params,
+        index_params,
+        nat_params,
         src,
-    )?;
+        module_ctx,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes a resolved type declaration plus the full type resolution context"
+)]
+fn resolve_known_type_application(
+    span: Span,
+    type_name: ResolvedStructTypeName,
+    type_def: &TypeDef,
+    generic_args: &[crate::desugar::desugared_ast::GenericArg],
+    registry: &Registry,
+    owner: &crate::dag_id::DagId,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    check_type_application_arity(type_name.as_str(), type_def, generic_args.len(), span, src)?;
     let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
-    for (param, arg) in type_def.generic_params.iter().zip(type_args) {
+    for (param, arg) in type_def.generic_params.iter().zip(generic_args) {
         let resolved = resolve_type_arg_for_param(
             param,
             arg,
@@ -1195,8 +1659,7 @@ fn resolve_type_application(
         )?;
         resolved_args.push(resolved);
     }
-    // Fill in defaults for any remaining params
-    for param in type_def.generic_params.iter().skip(type_args.len()) {
+    for param in type_def.generic_params.iter().skip(generic_args.len()) {
         let default_expr = param
             .default
             .as_ref()
@@ -1206,11 +1669,11 @@ fn resolve_type_application(
                     param.name
                 ),
                 src: src.clone(),
-                span: type_ann.span.into(),
+                span: span.into(),
             })?;
         let default_ctx = module_ctx
             .map(|ctx| ModuleTypeContext::new(type_name.owner(), ctx.resolver, ctx.types));
-        let resolved = resolve_type_arg_for_param(
+        let mut resolved = resolve_type_arg_for_param(
             param,
             default_expr,
             registry,
@@ -1221,12 +1684,19 @@ fn resolve_type_application(
             src,
             default_ctx,
         )?;
+        instantiate_params_in_default(
+            &mut resolved,
+            type_def,
+            &resolved_args,
+            src,
+            default_expr.span(),
+        )?;
         resolved_args.push(resolved);
     }
     Ok(ResolvedTypeExpr::GenericStruct {
         name: type_name,
-        type_args: resolved_args,
-        span: type_ann.span,
+        generic_args: resolved_args,
+        span,
     })
 }
 
@@ -1236,7 +1706,7 @@ fn resolve_type_application(
 )]
 fn resolve_type_arg_for_param(
     param: &crate::registry::types::TypeGenericParam,
-    arg: &TypeExpr,
+    arg: &crate::desugar::desugared_ast::GenericArg,
     registry: &Registry,
     owner: &crate::dag_id::DagId,
     dim_params: &[GenericParamName],
@@ -1244,55 +1714,101 @@ fn resolve_type_arg_for_param(
     nat_params: &[GenericParamName],
     src: &NamedSource<Arc<String>>,
     module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let resolved = resolve_type_expr_inner(
-        arg,
-        registry,
-        owner,
-        dim_params,
-        index_params,
-        nat_params,
-        src,
-        module_ctx,
-    )?;
-    match (param.constraint, &resolved) {
-        (TypeGenericConstraint::Index, ResolvedTypeExpr::IndexArg(_)) => Ok(resolved),
-        (TypeGenericConstraint::Index, _) => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic parameter `{}` expects an Index argument",
-                param.name
-            ),
-            src: src.clone(),
-            span: arg.span.into(),
-        }),
-        (TypeGenericConstraint::Nat, _) => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic parameter `{}` expects a Nat argument, got a type argument",
-                param.name
-            ),
-            src: src.clone(),
-            span: arg.span.into(),
-        }),
-        (TypeGenericConstraint::Dim, ResolvedTypeExpr::IndexArg(index)) => {
-            Err(GraphcalError::EvalError {
-                message: format!(
-                    "index `{}` cannot be used as a Dim argument",
-                    index.format_for_diagnostic()
-                ),
-                src: src.clone(),
-                span: arg.span.into(),
-            })
+) -> Result<ResolvedGenericArg, GraphcalError> {
+    let resolve_as_type = || {
+        let ambiguous_as_type;
+        let type_expr = match arg {
+            crate::desugar::desugared_ast::GenericArg::Type(type_expr) => type_expr,
+            crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+                ambiguous_as_type = hir::lower::ambiguous_generic_arg_as_type(ambiguous);
+                &ambiguous_as_type
+            }
+            crate::desugar::desugared_ast::GenericArg::Nat(_) => {
+                return Err(generic_sort_error(param, "Nat", arg.span(), src));
+            }
+        };
+        resolve_type_expr_inner(
+            type_expr,
+            registry,
+            owner,
+            dim_params,
+            index_params,
+            nat_params,
+            src,
+            module_ctx,
+        )
+    };
+
+    match param.constraint {
+        TypeGenericConstraint::Nat => {
+            let ambiguous_as_nat;
+            let nat = match arg {
+                crate::desugar::desugared_ast::GenericArg::Nat(nat) => nat,
+                crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+                    ambiguous_as_nat = hir::lower::ambiguous_generic_arg_as_nat(ambiguous);
+                    &ambiguous_as_nat
+                }
+                crate::desugar::desugared_ast::GenericArg::Type(_) => {
+                    return Err(generic_sort_error(param, "type", arg.span(), src));
+                }
+            };
+            normalize_nat_expr(nat, nat_params, src)
+                .map(|form| ResolvedGenericArg::Nat(form, nat.span()))
         }
-        (TypeGenericConstraint::Unconstrained, ResolvedTypeExpr::IndexArg(index)) => {
-            Err(GraphcalError::EvalError {
-                message: format!(
-                    "index `{}` cannot be used as a Type argument",
-                    index.format_for_diagnostic()
-                ),
-                src: src.clone(),
-                span: arg.span.into(),
-            })
+        TypeGenericConstraint::Dim => resolved_type_as_dim_arg(resolve_as_type()?)
+            .map(ResolvedGenericArg::Dim)
+            .ok_or_else(|| generic_sort_error(param, "non-dimension type", arg.span(), src)),
+        TypeGenericConstraint::Index => match resolve_as_type()? {
+            ResolvedTypeExpr::IndexArg(index) => Ok(ResolvedGenericArg::Index(index)),
+            _ => Err(generic_sort_error(param, "non-index type", arg.span(), src)),
+        },
+        TypeGenericConstraint::Type => match resolve_as_type()? {
+            ResolvedTypeExpr::IndexArg(_) => {
+                Err(generic_sort_error(param, "Index", arg.span(), src))
+            }
+            ResolvedTypeExpr::Indexed { .. } => Err(generic_sort_error(
+                param,
+                "indexed declaration type",
+                arg.span(),
+                src,
+            )),
+            resolved => Ok(ResolvedGenericArg::Type(resolved)),
+        },
+    }
+}
+
+fn resolved_type_as_dim_arg(resolved: ResolvedTypeExpr) -> Option<ResolvedDimArg> {
+    match resolved {
+        ResolvedTypeExpr::Dimensionless => Some(ResolvedDimArg::Dimensionless),
+        ResolvedTypeExpr::Quantity(dim) => Some(ResolvedDimArg::Concrete(dim)),
+        ResolvedTypeExpr::GenericDimParam(name, span) => {
+            Some(ResolvedDimArg::GenericParam(name, span))
         }
-        (TypeGenericConstraint::Dim | TypeGenericConstraint::Unconstrained, _) => Ok(resolved),
+        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
+            Some(ResolvedDimArg::Expr { terms, span })
+        }
+        _ => None,
+    }
+}
+
+fn generic_sort_error(
+    param: &crate::registry::types::TypeGenericParam,
+    actual: &str,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> GraphcalError {
+    let expected = match param.constraint {
+        TypeGenericConstraint::Dim => "Dim",
+        TypeGenericConstraint::Index => "Index",
+        TypeGenericConstraint::Nat => "Nat",
+        TypeGenericConstraint::Type => "Type",
+    };
+    GraphcalError::EvalError {
+        message: format!(
+            "generic parameter `{}` expects an argument of sort `{expected}`, got {actual}",
+            param.name
+        ),
+        src: src.clone(),
+        span: span.into(),
     }
 }

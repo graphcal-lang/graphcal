@@ -51,9 +51,9 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }
         ExprKind::FnCall {
             callee,
-            type_args,
+            generic_args,
             args,
-        } => format_fn_call_expr(fmt, callee, type_args, args),
+        } => format_fn_call_expr(fmt, callee, generic_args, args),
         ExprKind::If {
             condition,
             then_branch,
@@ -251,7 +251,7 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
 pub fn format_fn_call_expr(
     fmt: &mut Formatter<'_>,
     callee: &graphcal_compiler::syntax::ast::IdentPath,
-    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
+    generic_args: &[graphcal_compiler::syntax::ast::GenericArg],
     args: &[Expr],
 ) -> RcDoc<'static> {
     let mut arg_docs: Vec<RcDoc<'static>> = Vec::new();
@@ -278,8 +278,8 @@ pub fn format_fn_call_expr(
         arg_docs_with_commas.push(prepend_comments(leading, comma_doc));
     }
     let mut doc = RcDoc::text(callee.display_path());
-    if !type_args.is_empty() {
-        doc = doc.append(format_generic_args(fmt, type_args));
+    if !generic_args.is_empty() {
+        doc = doc.append(format_generic_args(fmt, generic_args));
     }
     if has_trailing_comment {
         let body = RcDoc::intersperse(arg_docs_with_commas, RcDoc::hardline());
@@ -294,15 +294,11 @@ pub fn format_fn_call_expr(
 
 fn format_generic_args(
     fmt: &mut Formatter<'_>,
-    type_args: &[graphcal_compiler::syntax::ast::GenericArg],
+    generic_args: &[graphcal_compiler::syntax::ast::GenericArg],
 ) -> RcDoc<'static> {
-    use graphcal_compiler::syntax::ast::GenericArg;
-    let docs: Vec<RcDoc<'static>> = type_args
+    let docs: Vec<RcDoc<'static>> = generic_args
         .iter()
-        .map(|arg| match arg {
-            GenericArg::Type(te) => super::type_expr::format_type_expr_inline(fmt, te),
-            GenericArg::Nat(ne) => RcDoc::text(ne.to_string()),
-        })
+        .map(|arg| super::type_expr::format_generic_arg_inline(fmt, arg))
         .collect();
     let sep = RcDoc::text(", ");
     RcDoc::text("<")

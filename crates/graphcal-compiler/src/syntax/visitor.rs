@@ -54,9 +54,9 @@ pub(crate) trait ExprVisitor<P: Phase> {
             ExprKind::InlineDagRef { args, .. } => self.visit_inline_dag_ref(expr, args),
 
             ExprKind::FnCall {
-                type_args, args, ..
+                generic_args, args, ..
             } => {
-                self.visit_generic_args(type_args)?;
+                self.visit_generic_args(generic_args)?;
                 self.visit_fn_call(expr, args)
             }
 
@@ -166,11 +166,13 @@ pub(crate) trait ExprVisitor<P: Phase> {
             self.visit_expr(&bound.value)?;
         }
         match &type_expr.kind {
-            TypeExprKind::DatetimeApplication { type_args }
-            | TypeExprKind::TypeApplication { type_args, .. } => {
+            TypeExprKind::DatetimeApplication { type_args } => {
                 for arg in type_args {
                     self.visit_type_expr(arg)?;
                 }
+            }
+            TypeExprKind::TypeApplication { generic_args, .. } => {
+                self.visit_generic_args(generic_args)?;
             }
             TypeExprKind::Indexed { base, .. } => self.visit_type_expr(base)?,
             TypeExprKind::Dimensionless
@@ -379,10 +381,10 @@ pub trait ExprVisitorMut<P: Phase> {
 
     fn visit_fn_call_mut(&mut self, expr: &mut Expr<P>) -> Result<(), Self::Error> {
         if let ExprKind::FnCall {
-            type_args, args, ..
+            generic_args, args, ..
         } = &mut expr.kind
         {
-            Self::visit_generic_args_mut(self, type_args)?;
+            Self::visit_generic_args_mut(self, generic_args)?;
             for arg in args {
                 self.visit_expr_mut(arg)?;
             }
@@ -404,11 +406,13 @@ pub trait ExprVisitorMut<P: Phase> {
             self.visit_expr_mut(&mut bound.value)?;
         }
         match &mut type_expr.kind {
-            TypeExprKind::DatetimeApplication { type_args }
-            | TypeExprKind::TypeApplication { type_args, .. } => {
+            TypeExprKind::DatetimeApplication { type_args } => {
                 for arg in type_args {
                     self.visit_type_expr_mut(arg)?;
                 }
+            }
+            TypeExprKind::TypeApplication { generic_args, .. } => {
+                Self::visit_generic_args_mut(self, generic_args)?;
             }
             TypeExprKind::Indexed { base, .. } => self.visit_type_expr_mut(base)?,
             TypeExprKind::Dimensionless

@@ -1,7 +1,8 @@
 use crate::dimension::Rational;
 use crate::syntax::ast::{
-    DimExpr, DimExprItem, DimTerm, Expr, ExprKind, GenericConstraint, GenericParam, IdentPath,
-    IndexExpr, MulDivOp, NatExpr, TypeExpr, TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
+    AmbiguousGenericArg, DimExpr, DimExprItem, DimTerm, Expr, ExprKind, GenericArg,
+    GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr, TypeExpr,
+    TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::module_name::ModuleAliasName;
@@ -79,11 +80,11 @@ impl Parser<'_> {
                     // ASCII-uppercase check silently misparsed non-ASCII
                     // type names into dim expressions.
                     let name = path.into_spanned_name_path();
-                    let type_args = self.parse_type_arg_list()?;
-                    let end_span = type_args.last().map_or(name.span, |a| a.span);
+                    let generic_args = self.parse_generic_arg_list()?;
+                    let end_span = generic_args.last().map_or(name.span, GenericArg::span);
                     let span = name.span.merge(end_span);
                     TypeExpr {
-                        kind: TypeExprKind::TypeApplication { name, type_args },
+                        kind: TypeExprKind::TypeApplication { name, generic_args },
                         constraints: vec![],
                         span,
                     }
@@ -634,12 +635,85 @@ impl Parser<'_> {
         }
     }
 
-    /// Parse a type argument list: `<TypeExpr, TypeExpr, ...>`
+    /// Parse a type-only argument list: `<TypeExpr, TypeExpr, ...>`.
+    ///
+    /// This is used by closed built-in forms such as `Datetime<Scale>`. User-
+    /// defined type and constructor applications use [`Self::parse_generic_arg_list`].
     fn parse_type_arg_list(&mut self) -> Result<Vec<TypeExpr>, ParseError> {
         self.expect(Token::Lt)?;
         let args = self.parse_comma_separated(Token::Gt, Self::parse_type_expr)?;
         self.expect(Token::Gt)?;
         Ok(args)
+    }
+
+    /// Parse the generic-argument surface shared by user-defined type and
+    /// constructor applications.
+    pub(super) fn parse_generic_arg_list(&mut self) -> Result<Vec<GenericArg>, ParseError> {
+        self.expect(Token::Lt)?;
+        let args = self.parse_comma_separated(Token::Gt, Self::parse_generic_arg)?;
+        self.expect(Token::Gt)?;
+        Ok(args)
+    }
+
+    /// Parse one generic argument without guessing its semantic sort.
+    ///
+    /// A type-expression parse is attempted on a cloned parser. If it consumes
+    /// the complete argument, a bare name or name-only product is retained as
+    /// [`GenericArg::Ambiguous`]; other type shapes are unambiguously
+    /// [`GenericArg::Type`]. Forms involving a literal or `+` are parsed as Nat.
+    fn parse_generic_arg(&mut self) -> Result<GenericArg, ParseError> {
+        if self.lexer.peek() != Some(&Token::Number) {
+            let mut type_candidate = self.clone();
+            if let Ok(type_expr) = type_candidate.parse_type_expr()
+                && matches!(
+                    type_candidate.lexer.peek(),
+                    Some(&Token::Comma | &Token::Gt)
+                )
+            {
+                *self = type_candidate;
+                return Ok(Self::ambiguous_generic_arg(&type_expr)
+                    .map_or(GenericArg::Type(type_expr), GenericArg::Ambiguous));
+            }
+        }
+
+        let nat = self.parse_nat_expr()?;
+        if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
+            return Err(self.nat_subtraction_unsupported(span));
+        }
+        Ok(GenericArg::Nat(nat))
+    }
+
+    /// Reclassify only the source shapes that genuinely have two possible
+    /// sorts: a bare name or a multiplication of bare names.
+    fn ambiguous_generic_arg(type_expr: &TypeExpr) -> Option<AmbiguousGenericArg> {
+        if !type_expr.constraints.is_empty() {
+            return None;
+        }
+        let TypeExprKind::DimExpr(dim_expr) = &type_expr.kind else {
+            return None;
+        };
+        let mut terms = dim_expr.terms.iter();
+        let first = terms.next()?;
+        if first.op != MulDivOp::Mul || first.term.power.is_some() {
+            return None;
+        }
+        let first_atom = first.term.name.value.as_bare()?.clone();
+        let initial = AmbiguousGenericArg::Name(Ident {
+            name: first_atom,
+            span: first.term.name.span,
+        });
+        terms.try_fold(initial, |lhs, item| {
+            if item.op != MulDivOp::Mul || item.term.power.is_some() {
+                return None;
+            }
+            let atom = item.term.name.value.as_bare()?.clone();
+            let rhs = AmbiguousGenericArg::Name(Ident {
+                name: atom,
+                span: item.term.name.span,
+            });
+            let span = lhs.span().merge(rhs.span());
+            Some(AmbiguousGenericArg::Mul(Box::new(lhs), Box::new(rhs), span))
+        })
     }
 
     /// Parse an index expression in type position.
@@ -660,6 +734,9 @@ impl Parser<'_> {
         let has_operator = matches!(self.lexer.peek(), Some(&Token::Star | &Token::Plus));
 
         if !has_operator {
+            if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
+                return Err(self.nat_subtraction_unsupported(span));
+            }
             // Simple case: a path is an index/type-level name; a literal is a
             // nat expression. Semantic resolution later decides whether the
             // path names a concrete index or an in-scope generic parameter.
@@ -684,6 +761,9 @@ impl Parser<'_> {
             lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), full_span);
         }
 
+        if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
+            return Err(self.nat_subtraction_unsupported(span));
+        }
         Ok(IndexExpr::NatExpr(lhs))
     }
 
@@ -774,10 +854,12 @@ impl Parser<'_> {
                     ));
                 }
             };
-            // Optional default: `= TypeExpr`
+            // Optional sorted default: `= GenericArg`.
+            // Classification is deferred until HIR lowering checks it against
+            // the declared constraint, so `N: Nat = M` stays ambiguous here.
             let default = if self.lexer.peek() == Some(&Token::Eq) {
                 self.lexer.next_token(); // consume `=`
-                Some(self.parse_type_expr()?)
+                Some(self.parse_generic_arg()?)
             } else {
                 None
             };
@@ -812,6 +894,13 @@ mod tests {
         }
     }
 
+    fn generic_arg_name(arg: &GenericArg) -> &str {
+        match arg {
+            GenericArg::Ambiguous(AmbiguousGenericArg::Name(ident)) => ident.name.as_str(),
+            other => panic!("expected ambiguous bare-name argument, got {other:?}"),
+        }
+    }
+
     #[test]
     fn dim_power_flattening_overflow_errors() {
         // Regression: distributing an outer power over a parenthesized
@@ -835,15 +924,53 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
-                TypeExprKind::TypeApplication { name, type_args } => {
+                TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
-                    assert_eq!(type_args.len(), 2);
-                    assert_eq!(dim_expr_name(&type_args[0]), "Length");
-                    assert_eq!(dim_expr_name(&type_args[1]), "ECI");
+                    assert_eq!(generic_args.len(), 2);
+                    assert_eq!(generic_arg_name(&generic_args[0]), "Length");
+                    assert_eq!(generic_arg_name(&generic_args[1]), "ECI");
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
             },
             _ => panic!("expected param"),
+        }
+    }
+
+    #[test]
+    fn parse_type_application_accepts_nat_expressions_without_sort_guessing() {
+        let source = "param value: Tensor<N + 1, M * N, 3> = 1.0;";
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        let TypeExprKind::TypeApplication { generic_args, .. } = &param.type_ann.kind else {
+            panic!("expected type application");
+        };
+        assert!(matches!(
+            &generic_args[0],
+            GenericArg::Nat(NatExpr::Add(_, _, _))
+        ));
+        assert!(matches!(
+            &generic_args[1],
+            GenericArg::Ambiguous(AmbiguousGenericArg::Mul(_, _, _))
+        ));
+        assert!(matches!(
+            &generic_args[2],
+            GenericArg::Nat(NatExpr::Literal(3, _))
+        ));
+    }
+
+    #[test]
+    fn nat_subtraction_in_type_application_and_index_has_targeted_error() {
+        for source in [
+            "param value: Fixed<N - 1>;",
+            "param value: Dimensionless[N - 1];",
+        ] {
+            let error = Parser::new(source).parse_file().unwrap_err();
+            assert!(
+                matches!(error, ParseError::NatSubtractionUnsupported { .. }),
+                "unexpected error for `{source}`: {error:?}"
+            );
         }
     }
 
@@ -853,10 +980,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
-                TypeExprKind::TypeApplication { name, type_args } => {
+                TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Timestamp");
-                    assert_eq!(type_args.len(), 1);
-                    assert_eq!(dim_expr_name(&type_args[0]), "UTC");
+                    assert_eq!(generic_args.len(), 1);
+                    assert_eq!(generic_arg_name(&generic_args[0]), "UTC");
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
             },
@@ -870,10 +997,10 @@ mod tests {
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
-                TypeExprKind::TypeApplication { name, type_args } => {
+                TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.display_path(), "math.Vec3");
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
-                    assert_eq!(type_args.len(), 1);
+                    assert_eq!(generic_args.len(), 1);
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
             },

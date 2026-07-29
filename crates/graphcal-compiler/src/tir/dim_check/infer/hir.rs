@@ -31,7 +31,9 @@ use super::super::helpers::{
     cartesian_product, expect_quantity, format_inferred_type, resolved_type_matches_inferred,
     struct_type_def_for_inferred,
 };
-use super::super::{DeclaredType, InferredIndex, InferredStructType, InferredType};
+use super::super::{
+    DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType,
+};
 use super::builtin_call::{
     AggregationFn, BuiltinTypeRule, DatetimeConstructorFn, TypeConversionFn, type_rule_for_builtin,
 };
@@ -521,7 +523,7 @@ fn infer_hir_const_ref(
                     span: target.span.into(),
                 });
             }
-            let type_args = resolve_constructor_generic_args(
+            let type_args = resolve_applied_generic_args(
                 &target_def.owning_type,
                 &target_def.type_def,
                 &[],
@@ -2029,8 +2031,8 @@ fn resolved_type_field_key(
 
 fn generic_substitutions(
     type_def: &TypeDef,
-    type_args: &[InferredType],
-    registry: &Registry,
+    type_args: &[InferredGenericArg],
+    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<GenericSubstitutions, GraphcalError> {
@@ -2038,45 +2040,59 @@ fn generic_substitutions(
     for (param, arg) in type_def.generic_params.iter().zip(type_args.iter()) {
         match param.constraint {
             TypeGenericConstraint::Dim => match arg {
-                InferredType::Quantity(dim) => {
+                InferredGenericArg::Dim(dim) => {
                     subs.dims.insert(param.name.clone(), dim.clone());
                 }
-                other => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic parameter `{}` expects a quantity type, but got {}",
-                            param.name,
-                            format_inferred_type(other, registry)
-                        ),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
-                }
+                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             TypeGenericConstraint::Index => match arg {
-                InferredType::NamedIndex(index) => {
+                InferredGenericArg::Index(index) => {
                     subs.indexes
                         .insert(param.name.clone(), index.type_ref().clone());
                 }
-                other => {
+                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
+            },
+            TypeGenericConstraint::Nat => match arg {
+                InferredGenericArg::Nat(form) if form.is_constant() => {
+                    subs.nats.insert(param.name.clone(), form.constant());
+                }
+                InferredGenericArg::Nat(form) => {
                     return Err(GraphcalError::EvalError {
                         message: format!(
-                            "generic parameter `{}` expects an index type, but got {}",
-                            param.name,
-                            format_inferred_type(other, registry)
+                            "generic Nat argument `{}` for `{}` is not concrete",
+                            form.format(),
+                            param.name
                         ),
                         src: src.clone(),
                         span: span.into(),
                     });
                 }
+                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
-            TypeGenericConstraint::Nat => {}
-            TypeGenericConstraint::Unconstrained => {
-                subs.types.insert(param.name.clone(), arg.clone());
-            }
+            TypeGenericConstraint::Type => match arg {
+                InferredGenericArg::Type(type_expr) => {
+                    subs.types.insert(param.name.clone(), type_expr.clone());
+                }
+                _ => return Err(generic_arg_internal_sort_error(param, src, span)),
+            },
         }
     }
     Ok(subs)
+}
+
+fn generic_arg_internal_sort_error(
+    param: &crate::registry::types::TypeGenericParam,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::InternalError {
+        message: format!(
+            "generic argument for `{}` does not match its registered sort",
+            param.name
+        ),
+        src: src.clone(),
+        span: span.into(),
+    }
 }
 
 #[derive(Default)]
@@ -2102,12 +2118,27 @@ fn substitute_resolved_type_with_type_params(
     )
 }
 
+fn substitute_resolved_generic_arg_with_type_params(
+    resolved: &crate::tir::typed::ResolvedGenericArg,
+    subs: &GenericSubstitutions,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredGenericArg, GraphcalError> {
+    crate::tir::typed::substitute_resolved_generic_arg(
+        resolved,
+        &subs.dims,
+        &subs.indexes,
+        &subs.nats,
+        &subs.types,
+        src,
+    )
+}
+
 fn resolved_field_type(
     owning_type: &ResolvedStructTypeName,
     constructor: &UnionMemberDef,
     field: &FieldName,
     type_def: &TypeDef,
-    type_args: &[InferredType],
+    type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -2220,6 +2251,7 @@ fn infer_hir_field_access(
 
 fn infer_hir_generic_type_arg(
     type_expr: &hir::TypeExpr,
+    dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -2250,15 +2282,35 @@ fn infer_hir_generic_type_arg(
             src: src.clone(),
             span: param.span.into(),
         }),
-        hir::TypeExprKind::TypeApplication { name, type_args } => Ok(InferredType::Struct(
-            InferredStructType::from_resolved(name.value.clone()),
-            type_args
-                .iter()
-                .map(|arg| infer_hir_generic_type_arg(arg, registry, src))
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
+        hir::TypeExprKind::TypeApplication { name, generic_args } => {
+            let type_def = dag
+                .semantic
+                .type_defs
+                .struct_types
+                .get(&name.value)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "semantic type metadata missing generic type `{}`",
+                        name.value
+                    ),
+                    src: src.clone(),
+                    span: name.span.into(),
+                })?;
+            Ok(InferredType::Struct(
+                InferredStructType::from_resolved(name.value.clone()),
+                resolve_applied_generic_args(
+                    &name.value,
+                    type_def,
+                    generic_args,
+                    dag,
+                    registry,
+                    src,
+                    name.span,
+                )?,
+            ))
+        }
         hir::TypeExprKind::Indexed { base, indexes } => {
-            let mut result = infer_hir_generic_type_arg(base, registry, src)?;
+            let mut result = infer_hir_generic_type_arg(base, dag, registry, src)?;
             for index in indexes.iter().rev() {
                 let inferred_index = match index {
                     hir::IndexRef::Concrete(index) => {
@@ -2287,6 +2339,31 @@ fn infer_hir_generic_type_arg(
                 };
             }
             Ok(result)
+        }
+    }
+}
+
+fn infer_hir_sorted_generic_arg(
+    arg: &hir::GenericArg,
+    dag: &crate::tir::typed::DagTIR,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredGenericArg, GraphcalError> {
+    match arg {
+        hir::GenericArg::Dim(hir::DimArg::Dimensionless(_)) => {
+            Ok(InferredGenericArg::Dim(Dimension::dimensionless()))
+        }
+        hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
+            infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredGenericArg::Dim)
+        }
+        hir::GenericArg::Index(index) => {
+            inferred_index_from_type_arg(index, src).map(InferredGenericArg::Index)
+        }
+        hir::GenericArg::Nat(nat) => hir_nat_to_linear_form(nat)
+            .map(InferredGenericArg::Nat)
+            .map_err(|err| nat_overflow_error(err, src, nat.span())),
+        hir::GenericArg::Type(type_expr) => {
+            infer_hir_generic_type_arg(type_expr, dag, registry, src).map(InferredGenericArg::Type)
         }
     }
 }
@@ -2379,7 +2456,7 @@ fn infer_hir_dim_expr_arg(
 fn infer_hir_constructor_call(
     expr: &hir::Expr,
     callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
-    constructor_generic_args: &[hir::expr::GenericArg],
+    constructor_generic_args: &[hir::GenericArg],
     fields: &[hir::expr::FieldInit],
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -2407,7 +2484,7 @@ fn infer_hir_constructor_call(
     let owning_type_identity = InferredStructType::from_resolved(target.owning_type.clone());
     let owning_type_name = type_def.name.clone();
 
-    let resolved_type_args = resolve_constructor_generic_args(
+    let resolved_type_args = resolve_applied_generic_args(
         &target.owning_type,
         type_def,
         constructor_generic_args,
@@ -2522,27 +2599,25 @@ fn infer_hir_constructor_call(
     ))
 }
 
-fn resolve_constructor_generic_args(
+fn resolve_applied_generic_args(
     owning_type: &ResolvedStructTypeName,
     type_def: &TypeDef,
-    constructor_generic_args: &[hir::expr::GenericArg],
+    applied_generic_args: &[hir::GenericArg],
     dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
-) -> Result<Vec<InferredType>, GraphcalError> {
-    if constructor_generic_args.is_empty() && type_def.generic_params.is_empty() {
+) -> Result<Vec<InferredGenericArg>, GraphcalError> {
+    if applied_generic_args.is_empty() && type_def.generic_params.is_empty() {
         return Ok(Vec::new());
     }
     let total_params = type_def.generic_params.len();
     let required_count = type_def
         .generic_params
         .iter()
-        .take_while(|param| param.default.is_none())
-        .count();
-    if constructor_generic_args.len() < required_count
-        || constructor_generic_args.len() > total_params
-    {
+        .rposition(|param| param.default.is_none())
+        .map_or(0, |index| index.saturating_add(1));
+    if applied_generic_args.len() < required_count || applied_generic_args.len() > total_params {
         let hint = if required_count == total_params {
             format!("{total_params}")
         } else {
@@ -2552,62 +2627,31 @@ fn resolve_constructor_generic_args(
             message: format!(
                 "type `{}` expects {hint} generic argument(s), got {}",
                 type_def.name,
-                constructor_generic_args.len()
+                applied_generic_args.len()
             ),
             src: src.clone(),
             span: span.into(),
         });
     }
     let mut args = Vec::with_capacity(total_params);
-    for (param, arg) in type_def.generic_params.iter().zip(constructor_generic_args) {
-        match (param.constraint, arg) {
-            (TypeGenericConstraint::Nat, hir::expr::GenericArg::Nat(nat_expr)) => {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "constructor generic argument `{}` for Nat parameter `{}` cannot be used in constructor value types",
-                        // The argument is rejected either way; render a
-                        // placeholder if its Nat arithmetic overflows.
-                        hir_nat_to_linear_form(nat_expr)
-                            .map_or_else(|_| "<overflow>".to_string(), |f| f.format()),
-                        param.name
-                    ),
-                    src: src.clone(),
-                    span: nat_expr.span().into(),
-                });
-            }
-            (TypeGenericConstraint::Nat, hir::expr::GenericArg::Type(type_expr)) => {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "generic parameter `{}` expects a Nat argument, got a type argument",
-                        param.name
-                    ),
-                    src: src.clone(),
-                    span: type_expr.span.into(),
-                });
-            }
-            (_, hir::expr::GenericArg::Nat(nat_expr)) => {
-                return Err(GraphcalError::EvalError {
-                    message: format!(
-                        "generic parameter `{}` expects a type argument, got Nat argument `{}`",
-                        param.name,
-                        // The argument is rejected either way; render a
-                        // placeholder if its Nat arithmetic overflows.
-                        hir_nat_to_linear_form(nat_expr)
-                            .map_or_else(|_| "<overflow>".to_string(), |f| f.format())
-                    ),
-                    src: src.clone(),
-                    span: nat_expr.span().into(),
-                });
-            }
-            (_, hir::expr::GenericArg::Type(type_expr)) => {
-                args.push(infer_hir_generic_type_arg(type_expr, registry, src)?);
-            }
+    for (param, arg) in type_def.generic_params.iter().zip(applied_generic_args) {
+        let inferred = infer_hir_sorted_generic_arg(arg, dag, registry, src)?;
+        let matches_sort = matches!(
+            (param.constraint, &inferred),
+            (TypeGenericConstraint::Dim, InferredGenericArg::Dim(_))
+                | (TypeGenericConstraint::Index, InferredGenericArg::Index(_))
+                | (TypeGenericConstraint::Nat, InferredGenericArg::Nat(_))
+                | (TypeGenericConstraint::Type, InferredGenericArg::Type(_))
+        );
+        if !matches_sort {
+            return Err(generic_arg_internal_sort_error(param, src, arg.span()));
         }
+        args.push(inferred);
     }
     for param in type_def
         .generic_params
         .iter()
-        .skip(constructor_generic_args.len())
+        .skip(applied_generic_args.len())
     {
         let resolved_default = dag
             .semantic
@@ -2623,7 +2667,7 @@ fn resolve_constructor_generic_args(
                 span: span.into(),
             })?;
         let subs = generic_substitutions(type_def, &args, registry, src, span)?;
-        args.push(substitute_resolved_type_with_type_params(
+        args.push(substitute_resolved_generic_arg_with_type_params(
             resolved_default,
             &subs,
             src,
@@ -3144,7 +3188,7 @@ fn constructor_field_type(
     variant: &UnionMemberDef,
     owning_type: &ResolvedStructTypeName,
     type_def: &TypeDef,
-    scrutinee_type_args: &[InferredType],
+    scrutinee_type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,

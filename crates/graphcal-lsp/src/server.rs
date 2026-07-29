@@ -1250,6 +1250,14 @@ fn rekey_selective_import(
                     field_name: field_name.clone(),
                 })
         }
+        SymbolKey::GenericParam { owner, name } => {
+            owner
+                .rekey_first_segment(original, local)
+                .map(|owner| SymbolKey::GenericParam {
+                    owner,
+                    name: name.clone(),
+                })
+        }
         SymbolKey::Qualified { module, name } if module.first().is_some_and(|m| m == original) => {
             let mut rekeyed = Vec::with_capacity(module.len());
             rekeyed.push(local.to_string());
@@ -1268,12 +1276,14 @@ const fn selective_import_allows_category(
     category: SymbolCategory,
 ) -> bool {
     match namespace {
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Type => {
-            matches!(category, SymbolCategory::StructType | SymbolCategory::Field)
-        }
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Default => {
-            !matches!(category, SymbolCategory::StructType)
-        }
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Type => matches!(
+            category,
+            SymbolCategory::StructType | SymbolCategory::Field | SymbolCategory::GenericParam
+        ),
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Default => !matches!(
+            category,
+            SymbolCategory::StructType | SymbolCategory::GenericParam
+        ),
     }
 }
 
@@ -1305,6 +1315,10 @@ fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
             owner: owner.prepend_module(module_name),
             field_name: field_name.clone(),
         },
+        SymbolKey::GenericParam { owner, name } => SymbolKey::GenericParam {
+            owner: owner.prepend_module(module_name),
+            name: name.clone(),
+        },
         other @ SymbolKey::ExprScoped { .. } => other.clone(),
     }
 }
@@ -1333,6 +1347,7 @@ fn local_display_name(key: &SymbolKey) -> Option<String> {
         SymbolKey::Constructor(_)
         | SymbolKey::Variant { .. }
         | SymbolKey::Field { .. }
+        | SymbolKey::GenericParam { .. }
         | SymbolKey::ExprScoped { .. } => None,
     }
 }

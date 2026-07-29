@@ -40,10 +40,10 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{FieldName, GenericParamName};
 
 use super::lower::{
-    GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext, lower_nat_expr,
-    lower_type_expr,
+    GenericScope, HirLowerError, PreludeTypeScope, TypeLoweringContext, lower_generic_args,
+    lower_nat_expr,
 };
-use super::types::{NatExpr, TypeExpr};
+use super::types::{GenericArg, NatExpr};
 
 /// Errors produced while lowering syntax expressions into HIR.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -102,6 +102,9 @@ pub enum ExprLowerError {
         name: crate::syntax::function_name::FnName,
         span: Span,
     },
+    /// A function call supplied generic arguments that no function signature consumes.
+    #[error("function `{path}` does not accept generic arguments")]
+    UnsupportedFunctionGenericArgs { path: String, span: Span },
     /// A built-in function was called with the wrong number of arguments.
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     WrongArity {
@@ -142,7 +145,7 @@ impl<'a> ExprLoweringContext<'a> {
         }
     }
 
-    /// Add implicit prelude type symbols for lowering type arguments.
+    /// Add implicit prelude type symbols for lowering generic arguments.
     #[must_use]
     pub const fn with_prelude(self, prelude: &'a PreludeTypeScope) -> Self {
         Self {
@@ -465,7 +468,6 @@ pub enum ExprKind {
     },
     FnCall {
         callee: Spanned<FunctionRef>,
-        type_args: Vec<GenericArg>,
         args: Vec<Expr>,
     },
     If {
@@ -882,13 +884,6 @@ pub enum AssertBody {
     },
 }
 
-/// Generic argument at an expression call site.
-#[derive(Debug, Clone)]
-pub enum GenericArg {
-    Type(TypeExpr),
-    Nat(NatExpr),
-}
-
 /// Field initializer after expression lowering.
 #[derive(Debug, Clone)]
 pub struct FieldInit {
@@ -1065,20 +1060,26 @@ impl<'a> ExprLowerer<'a> {
             },
             ast::ExprKind::FnCall {
                 callee,
-                type_args,
+                generic_args,
                 args,
-            } => ExprKind::FnCall {
-                callee: {
-                    let function_ref = self.lower_function_ref(callee)?;
-                    Self::check_function_arity(&function_ref, args.len(), callee.span())?;
-                    Spanned::new(function_ref, callee.span())
-                },
-                type_args: type_args
-                    .iter()
-                    .map(|arg| self.lower_generic_arg(arg))
-                    .collect::<Result<Vec<_>, _>>()?,
-                args: args.iter().map(|arg| self.lower_expr(arg)).collect(),
-            },
+            } => {
+                if !generic_args.is_empty() {
+                    return Err(ExprLowerError::UnsupportedFunctionGenericArgs {
+                        path: callee.display_path(),
+                        span: generic_args
+                            .first()
+                            .map_or_else(|| callee.span(), ast::GenericArg::span),
+                    });
+                }
+                ExprKind::FnCall {
+                    callee: {
+                        let function_ref = self.lower_function_ref(callee)?;
+                        Self::check_function_arity(&function_ref, args.len(), callee.span())?;
+                        Spanned::new(function_ref, callee.span())
+                    },
+                    args: args.iter().map(|arg| self.lower_expr(arg)).collect(),
+                }
+            }
             ast::ExprKind::If {
                 condition,
                 then_branch,
@@ -1116,26 +1117,39 @@ impl<'a> ExprLowerer<'a> {
                 callee,
                 generic_args,
                 fields,
-            } => ExprKind::ConstructorCall {
-                callee: Spanned::new(
-                    self.ctx
-                        .resolver
-                        .resolve_constructor_ident_path(self.ctx.owner, callee)
-                        .map_err(|source| ExprLowerError::ModuleResolve {
-                            source,
-                            span: callee.span(),
-                        })?,
-                    callee.span(),
-                ),
-                generic_args: generic_args
-                    .iter()
-                    .map(|arg| self.lower_generic_arg(arg))
-                    .collect::<Result<Vec<_>, _>>()?,
-                fields: fields
-                    .iter()
-                    .map(|field| self.lower_field_init(field))
-                    .collect(),
-            },
+            } => {
+                let resolved = self
+                    .ctx
+                    .resolver
+                    .resolve_constructor_ident_path(self.ctx.owner, callee)
+                    .map_err(|source| ExprLowerError::ModuleResolve {
+                        source,
+                        span: callee.span(),
+                    })?;
+                let params = self
+                    .ctx
+                    .resolver
+                    .constructor_generic_params(&resolved)
+                    .map_err(|source| ExprLowerError::ModuleResolve {
+                        source,
+                        span: callee.span(),
+                    })?;
+                let lowered_args = lower_generic_args(
+                    resolved.as_str(),
+                    params,
+                    generic_args,
+                    expr.span,
+                    self.ctx.type_context(),
+                )?;
+                ExprKind::ConstructorCall {
+                    callee: Spanned::new(resolved, callee.span()),
+                    generic_args: lowered_args,
+                    fields: fields
+                        .iter()
+                        .map(|field| self.lower_field_init(field))
+                        .collect(),
+                }
+            }
             ast::ExprKind::MapLiteral { entries } => ExprKind::MapLiteral {
                 entries: entries
                     .iter()
@@ -1453,19 +1467,6 @@ impl<'a> ExprLowerer<'a> {
             additional_index_spans: Vec::new(),
             variant_span: member.span,
         })
-    }
-
-    fn lower_generic_arg(&self, arg: &ast::GenericArg) -> Result<GenericArg, ExprLowerError> {
-        match arg {
-            ast::GenericArg::Type(type_expr) => Ok(GenericArg::Type(lower_type_expr(
-                type_expr,
-                self.ctx.type_context(),
-            )?)),
-            ast::GenericArg::Nat(nat_expr) => Ok(GenericArg::Nat(lower_nat_expr(
-                nat_expr,
-                self.ctx.type_context(),
-            )?)),
-        }
     }
 
     fn lower_field_init(&mut self, field: &ast::FieldInit) -> FieldInit {

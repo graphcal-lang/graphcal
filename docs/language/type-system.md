@@ -696,7 +696,10 @@ function_name(arg1, arg2, ...)
 ```
 
 - Arguments are matched positionally against the function's parameter types.
-- For generic functions, type parameters are unified from the argument types (see [Generics](#generics) below).
+- Generic dimensions and indexes in built-in or extern signatures are inferred
+  from ordinary value arguments.
+- Explicit non-empty function generic arguments are not supported. A form such
+  as `sqrt<3>(x)` is rejected rather than silently ignoring `<3>`.
 - The result type is the function's return type after generic substitution.
 
 ### Field Access
@@ -865,7 +868,7 @@ are legal and how the parameter may be used in the declaration.
 |------|--------|-----------------------|------------|
 | `Dim` | `<D: Dim>` | Any dimension, such as `Length` or `Length / Time` | Quantity field types and dimension expressions such as `D^2` |
 | `Type` | `<T: Type>` | Any `ValueType`, such as `Bool`, `Length`, or `Vec3<Length, Eci>` | A payload field type, or a phantom/tag parameter if unused in any payload |
-| `Index` | `<I: Index>` | Any finite ordered index axis, including named, range, and Nat-range axes | An axis in an indexed type such as `D[I]` |
+| `Index` | `<I: Index>` | A finite ordered index axis | An axis in an indexed type such as `D[I]` |
 | `Nat` | `<N: Nat>` | A non-negative natural number used in type-level size arithmetic | A Nat-range axis such as `D[N]`, subject to the non-empty-axis rule |
 
 These kinds are not themselves `ValueType`s. For example, `Index` denotes the
@@ -878,19 +881,63 @@ declaration carries it for nominal distinction without using it in a
 constructor payload. In `Vec3<D, Frame>`, for example, `D` determines the field
 types while `Frame` is a phantom parameter.
 
-### Default Type Parameters
+### Generic Arguments and Defaults
 
-Generic parameters can have defaults:
+Type annotations and constructors use the same generic-argument surface. Each
+argument is checked positionally against the declared `Dim`, `Index`, `Nat`, or
+`Type` kind; spelling or identifier casing never determines its kind. Ordinary
+functions do not declare or consume these arguments, so a non-empty application
+such as `sqrt<3>(x)` is rejected rather than silently ignored.
 
+A `Nat` argument may be an integer literal, an in-scope `Nat` parameter, or a
+polynomial expression using `+` and `*`:
+
+```gcl
+type Fixed<N: Nat> {
+    Fixed(value: Dimensionless),
+}
+
+type Matrix<M: Nat, N: Nat> {
+    Matrix(value: Fixed<M * N + 1>),
+}
+
+param matrix: Matrix<2, 3> = Matrix<2, 3>(
+    value: Fixed<7>(value: 1.0),
+);
 ```
-type Vec3<D: Dim, F: Type = Unframed> {
+
+Bare names and products such as `N` or `M * N` are intentionally ambiguous in
+source syntax. The compiler resolves them only after it knows the corresponding
+parameter kind.
+
+Generic parameters of every kind can have defaults:
+
+```gcl
+index Component = { X, Y, Z };
+type Unframed { Unframed }
+
+type Vec3<
+    D: Dim,
+    I: Index = Component,
+    F: Type = Unframed,
+    N: Nat = 3,
+> {
     Vec3(x: D, y: D, z: D),
 }
 
-// These are equivalent:
-param pos: Vec3<Length> = ...;
-param pos: Vec3<Length, Unframed> = ...;
+// The omitted arguments are Component, Unframed, and 3.
+param pos: Vec3<Length> = Vec3<Length>(x: 1.0 m, y: 2.0 m, z: 3.0 m);
 ```
+
+Defaulted parameters must form a trailing suffix, and each default may refer
+only to parameters declared earlier in the list. Arguments may be omitted only
+from that trailing defaulted portion. If every parameter has a default, type
+and constructor names without an angle-bracket list apply all of them.
+
+`Nat` and `Index` remain distinct kinds. A Nat literal is not accepted for an
+`Index` generic parameter, and a named index is not accepted for a `Nat`
+parameter. Nat syntax in an indexed type such as `D[3]` is a separate index-
+position construct.
 
 ### Generic Parameter Unification
 
@@ -922,7 +969,12 @@ node transposed: Dimensionless[3, 2] = for j: range(3), i: range(2) { @mat[i, j]
 
 Two nat ranges are equal if and only if their sizes are equal.
 
-`Nat` expressions support addition. Expressions are normalized to a canonical linear form (`c + a1*x1 + ...`) and equality is decided by comparing coefficients. Subtraction is not supported -- instead, express the larger side with addition.
+`Nat` expressions support addition and multiplication, with `*` binding more
+tightly than `+`. Expressions are normalized to canonical polynomial form and
+equality is decided structurally. Subtraction is not supported: expressing
+`N - 1` safely would require proving `N >= 1`. Instead, express the larger side
+with addition, for example use `D[N + 1]` for an input and `D[N]` for its
+smaller output.
 
 Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values.
 

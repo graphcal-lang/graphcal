@@ -325,6 +325,38 @@ mod tests {
     }
 
     #[test]
+    fn sort_aware_nat_generic_arguments_produce_no_diagnostics() {
+        let source = "pub type Fixed<N: Nat> { Fixed(value: Dimensionless) }\n\
+                      param x: Fixed<3> = Fixed<3>(value: 1.0);";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn nat_subtraction_produces_targeted_parse_diagnostic() {
+        let diagnostics = produce_diagnostics("param x: Dimensionless[N - 1];", "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::P022"
+            )
+        }));
+    }
+
+    #[test]
+    fn function_generic_arguments_produce_a_diagnostic() {
+        let diagnostics = produce_diagnostics("node x: Dimensionless = sqrt<3>(4.0);", "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .message
+                .contains("function `sqrt` does not accept generic arguments")
+        }));
+    }
+
+    #[test]
     fn unknown_ref_produces_diagnostic() {
         let source = "node x: Dimensionless = @nonexistent;";
         let diags = produce_diagnostics(source, "test.gcl");

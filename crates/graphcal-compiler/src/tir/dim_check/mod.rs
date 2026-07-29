@@ -213,6 +213,15 @@ impl std::ops::Deref for InferredStructType {
     }
 }
 
+/// A generic argument inferred at a constructor or type-application site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InferredGenericArg {
+    Dim(Dimension),
+    Index(InferredIndex),
+    Nat(crate::nat::NatPolyForm),
+    Type(InferredType),
+}
+
 /// The inferred type of an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
@@ -243,8 +252,8 @@ pub enum InferredType {
     /// This is used for named-index loop variables and `Index` generic
     /// arguments. It is intentionally not a Graphcal value type.
     NamedIndex(InferredIndex),
-    /// A struct type, optionally with concrete type arguments for generic structs.
-    Struct(InferredStructType, Vec<Self>),
+    /// A struct type with sort-aware generic arguments.
+    Struct(InferredStructType, Vec<InferredGenericArg>),
     Indexed {
         element: Box<Self>,
         index: InferredIndex,
@@ -1466,8 +1475,22 @@ fn check_type_expr_for_generic_arg_constraints(
         TypeExprKind::Indexed { base, .. } => {
             check_type_expr_for_generic_arg_constraints(base, src)
         }
-        TypeExprKind::TypeApplication { type_args, .. }
-        | TypeExprKind::DatetimeApplication { type_args } => {
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            for arg in generic_args {
+                if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
+                    if let Some(bound) = type_expr.constraints.first() {
+                        return Err(GraphcalError::GenericTypeArgDomainConstraint {
+                            src: src.clone(),
+                            span: bound.span.into(),
+                        });
+                    }
+                    // Recurse so nested generics are checked too.
+                    check_type_expr_for_generic_arg_constraints(type_expr, src)?;
+                }
+            }
+            Ok(())
+        }
+        TypeExprKind::DatetimeApplication { type_args } => {
             for arg in type_args {
                 if let Some(bound) = arg.constraints.first() {
                     return Err(GraphcalError::GenericTypeArgDomainConstraint {
@@ -1475,7 +1498,6 @@ fn check_type_expr_for_generic_arg_constraints(
                         span: bound.span.into(),
                     });
                 }
-                // Recurse so nested generics are checked too.
                 check_type_expr_for_generic_arg_constraints(arg, src)?;
             }
             Ok(())

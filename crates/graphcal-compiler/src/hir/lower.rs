@@ -22,8 +22,8 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 
 use super::types::{
-    BuiltinType, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericParamDef, GenericParamId,
-    GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
+    BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
+    GenericParamDef, GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
 };
 
 /// Errors produced while lowering syntax type expressions into HIR.
@@ -52,6 +52,24 @@ pub enum HirLowerError {
     /// A natural-number expression referenced a name that is not a generic parameter.
     #[error("unknown generic parameter `{name}`")]
     UnknownGenericParam { name: GenericParamName, span: Span },
+    /// An application supplied the wrong number of generic arguments.
+    #[error("`{target}` expects {expected} generic argument(s), got {got}")]
+    WrongGenericArgCount {
+        target: String,
+        expected: String,
+        got: usize,
+        span: Span,
+    },
+    /// A generic argument's source category does not satisfy its declared sort.
+    #[error(
+        "generic parameter `{parameter}` expects an argument of sort `{expected}`, got {actual}"
+    )]
+    GenericArgumentSortMismatch {
+        parameter: GenericParamName,
+        expected: GenericConstraint,
+        actual: &'static str,
+        span: Span,
+    },
     /// A generic parameter list declared the same name twice.
     #[error("duplicate generic parameter `{name}`")]
     DuplicateGenericParam {
@@ -151,22 +169,6 @@ impl GenericScope {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Build a generic scope from syntax generic parameter definitions.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`HirLowerError::DuplicateGenericParam`] if the list contains
-    /// the same leaf name twice.
-    fn from_params(
-        owner: &GenericParamOwner,
-        params: &[ast::GenericParam],
-    ) -> Result<Self, HirLowerError> {
-        params.iter().try_fold(Self::new(), |mut scope, param| {
-            scope.insert(owner, param)?;
-            Ok(scope)
-        })
     }
 
     /// Insert one syntax generic parameter into this scope.
@@ -269,8 +271,8 @@ impl<'a> TypeLoweringContext<'a> {
 /// Lower syntax generic parameter declarations into HIR definitions and return
 /// the lexical scope they introduce.
 ///
-/// Defaults are lowered after the full parameter scope is built, so a default
-/// may refer to another parameter in the same list.
+/// Defaults are lowered before their own parameter enters scope, so they may
+/// refer only to parameters declared earlier in the same list.
 ///
 /// # Errors
 ///
@@ -282,11 +284,9 @@ pub fn lower_generic_params(
     module_owner: &DagId,
     resolver: &ModuleResolver,
 ) -> Result<(GenericScope, Vec<GenericParamDef>), HirLowerError> {
-    let scope = GenericScope::from_params(owner, params)?;
-    let ctx = TypeLoweringContext::new(module_owner, resolver, &scope);
-    let defs = params
-        .iter()
-        .map(|param| {
+    params.iter().try_fold(
+        (GenericScope::new(), Vec::new()),
+        |(mut scope, mut defs), param| {
             let id = Spanned::new(
                 GenericParamId::new(owner.clone(), param.name.value.clone()),
                 param.name.span,
@@ -294,16 +294,25 @@ pub fn lower_generic_params(
             let default = param
                 .default
                 .as_ref()
-                .map(|default| lower_type_expr(default, ctx))
+                .map(|default| {
+                    let ctx = TypeLoweringContext::new(module_owner, resolver, &scope);
+                    lower_generic_arg_for_constraint(
+                        default,
+                        param.constraint,
+                        &param.name.value,
+                        ctx,
+                    )
+                })
                 .transpose()?;
-            Ok(GenericParamDef {
+            scope.insert(owner, param)?;
+            defs.push(GenericParamDef {
                 id,
                 constraint: param.constraint,
                 default,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok((scope, defs))
+            });
+            Ok((scope, defs))
+        },
+    )
 }
 
 /// Lower a syntax type expression into a HIR type expression.
@@ -332,24 +341,263 @@ pub(crate) fn lower_type_expr(
                 .map(|index| lower_index_expr(index, ctx))
                 .collect::<Result<Vec<_>, _>>()?,
         },
-        ast::TypeExprKind::TypeApplication { name, type_args } => TypeExprKind::TypeApplication {
-            name: Spanned::new(
-                ctx.resolver
-                    .resolve_struct_type_path(ctx.owner, &name.value)
-                    .map_err(|source| HirLowerError::ModuleResolve {
-                        source,
-                        span: name.span,
-                    })?,
-                name.span,
-            ),
-            type_args: type_args
-                .iter()
-                .map(|arg| lower_type_expr(arg, ctx))
-                .collect::<Result<Vec<_>, _>>()?,
-        },
+        ast::TypeExprKind::TypeApplication { name, generic_args } => {
+            let resolved_name = ctx
+                .resolver
+                .resolve_struct_type_path(ctx.owner, &name.value)
+                .map_err(|source| HirLowerError::ModuleResolve {
+                    source,
+                    span: name.span,
+                })?;
+            let params = ctx
+                .resolver
+                .struct_type_generic_params(&resolved_name)
+                .map_err(|source| HirLowerError::ModuleResolve {
+                    source,
+                    span: name.span,
+                })?;
+            let generic_args = lower_generic_args(
+                resolved_name.as_str(),
+                params,
+                generic_args,
+                type_ann.span,
+                ctx,
+            )?;
+            TypeExprKind::TypeApplication {
+                name: Spanned::new(resolved_name, name.span),
+                generic_args,
+            }
+        }
     };
 
     Ok(TypeExpr::new(kind, type_ann.span))
+}
+
+pub(crate) fn lower_generic_args(
+    target: &str,
+    params: &[crate::syntax::module_resolve::GenericParamSignature],
+    args: &[ast::GenericArg],
+    span: Span,
+    ctx: TypeLoweringContext<'_>,
+) -> Result<Vec<GenericArg>, HirLowerError> {
+    check_generic_arg_count(target, params, args.len(), span)?;
+    params
+        .iter()
+        .zip(args)
+        .map(|(param, arg)| {
+            lower_generic_arg_for_constraint(arg, param.constraint, &param.name, ctx)
+        })
+        .collect()
+}
+
+fn check_generic_arg_count(
+    target: &str,
+    params: &[crate::syntax::module_resolve::GenericParamSignature],
+    got: usize,
+    span: Span,
+) -> Result<(), HirLowerError> {
+    let required = params
+        .iter()
+        .rposition(|param| !param.has_default)
+        .map_or(0, |index| index.saturating_add(1));
+    if got < required || got > params.len() {
+        let expected = if required == params.len() {
+            params.len().to_string()
+        } else {
+            format!("{required}..{}", params.len())
+        };
+        return Err(HirLowerError::WrongGenericArgCount {
+            target: target.to_string(),
+            expected,
+            got,
+            span,
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn lower_generic_arg_for_constraint(
+    arg: &ast::GenericArg,
+    constraint: GenericConstraint,
+    parameter: &GenericParamName,
+    ctx: TypeLoweringContext<'_>,
+) -> Result<GenericArg, HirLowerError> {
+    match constraint {
+        GenericConstraint::Dim => {
+            let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
+            match type_expr.kind {
+                TypeExprKind::Builtin(BuiltinType::Dimensionless) => {
+                    Ok(GenericArg::Dim(DimArg::Dimensionless(type_expr.span)))
+                }
+                TypeExprKind::DimExpr(dim_expr) => Ok(GenericArg::Dim(DimArg::Expr(dim_expr))),
+                _ => Err(generic_arg_sort_mismatch(
+                    parameter,
+                    constraint,
+                    "non-dimension type argument",
+                    arg.span(),
+                )),
+            }
+        }
+        GenericConstraint::Index => {
+            let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
+            match type_expr.kind {
+                TypeExprKind::Index(index) => Ok(GenericArg::Index(index)),
+                _ => Err(generic_arg_sort_mismatch(
+                    parameter,
+                    constraint,
+                    "non-index type argument",
+                    arg.span(),
+                )),
+            }
+        }
+        GenericConstraint::Nat => match arg {
+            ast::GenericArg::Nat(nat) => lower_nat_expr(nat, ctx).map(GenericArg::Nat),
+            ast::GenericArg::Ambiguous(ambiguous) => {
+                if let Some(actual) = non_nat_sort_for_ambiguous_arg(ambiguous, ctx) {
+                    return Err(generic_arg_sort_mismatch(
+                        parameter,
+                        constraint,
+                        actual,
+                        ambiguous.span(),
+                    ));
+                }
+                let nat = ambiguous_generic_arg_as_nat(ambiguous);
+                lower_nat_expr(&nat, ctx).map(GenericArg::Nat)
+            }
+            ast::GenericArg::Type(_) => Err(generic_arg_sort_mismatch(
+                parameter,
+                constraint,
+                "type argument",
+                arg.span(),
+            )),
+        },
+        GenericConstraint::Type => {
+            let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
+            let invalid_sort = match &type_expr.kind {
+                TypeExprKind::Index(_) => Some("Index argument"),
+                TypeExprKind::Indexed { .. } => Some("indexed declaration type"),
+                _ => None,
+            };
+            invalid_sort.map_or(Ok(GenericArg::Type(type_expr)), |actual| {
+                Err(generic_arg_sort_mismatch(
+                    parameter,
+                    constraint,
+                    actual,
+                    arg.span(),
+                ))
+            })
+        }
+    }
+}
+
+fn lower_generic_arg_as_type(
+    arg: &ast::GenericArg,
+    parameter: &GenericParamName,
+    constraint: GenericConstraint,
+    ctx: TypeLoweringContext<'_>,
+) -> Result<TypeExpr, HirLowerError> {
+    match arg {
+        ast::GenericArg::Type(type_expr) => lower_type_expr(type_expr, ctx),
+        ast::GenericArg::Ambiguous(ambiguous) => {
+            lower_type_expr(&ambiguous_generic_arg_as_type(ambiguous), ctx)
+        }
+        ast::GenericArg::Nat(_) => Err(generic_arg_sort_mismatch(
+            parameter,
+            constraint,
+            "Nat argument",
+            arg.span(),
+        )),
+    }
+}
+
+fn non_nat_sort_for_ambiguous_arg(
+    arg: &ast::AmbiguousGenericArg,
+    ctx: TypeLoweringContext<'_>,
+) -> Option<&'static str> {
+    match arg {
+        ast::AmbiguousGenericArg::Name(ident) => {
+            if ctx.generic_scope.get_atom(&ident.name).is_some() {
+                return None;
+            }
+            let path = NamePath::local(ident.name.clone());
+            if ctx.resolver.resolve_index_path(ctx.owner, &path).is_ok() {
+                return Some("Index argument");
+            }
+            if ctx
+                .resolver
+                .resolve_struct_type_path(ctx.owner, &path)
+                .is_ok()
+            {
+                return Some("Type argument");
+            }
+            if ctx
+                .resolver
+                .resolve_dimension_path(ctx.owner, &path)
+                .is_ok()
+                || ctx.resolve_prelude_dimension_path(&path).is_some()
+            {
+                return Some("Dim argument");
+            }
+            None
+        }
+        ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => non_nat_sort_for_ambiguous_arg(lhs, ctx)
+            .or_else(|| non_nat_sort_for_ambiguous_arg(rhs, ctx)),
+    }
+}
+
+fn generic_arg_sort_mismatch(
+    parameter: &GenericParamName,
+    expected: GenericConstraint,
+    actual: &'static str,
+    span: Span,
+) -> HirLowerError {
+    HirLowerError::GenericArgumentSortMismatch {
+        parameter: parameter.clone(),
+        expected,
+        actual,
+        span,
+    }
+}
+
+pub(crate) fn ambiguous_generic_arg_as_nat(arg: &ast::AmbiguousGenericArg) -> ast::NatExpr {
+    match arg {
+        ast::AmbiguousGenericArg::Name(ident) => ast::NatExpr::Var(ident.clone()),
+        ast::AmbiguousGenericArg::Mul(lhs, rhs, span) => ast::NatExpr::Mul(
+            Box::new(ambiguous_generic_arg_as_nat(lhs)),
+            Box::new(ambiguous_generic_arg_as_nat(rhs)),
+            *span,
+        ),
+    }
+}
+
+pub(crate) fn ambiguous_generic_arg_as_type(arg: &ast::AmbiguousGenericArg) -> ast::TypeExpr {
+    let mut terms = Vec::new();
+    collect_ambiguous_dim_terms(arg, &mut terms);
+    ast::TypeExpr {
+        kind: ast::TypeExprKind::DimExpr(ast::DimExpr {
+            terms,
+            span: arg.span(),
+        }),
+        constraints: Vec::new(),
+        span: arg.span(),
+    }
+}
+
+fn collect_ambiguous_dim_terms(arg: &ast::AmbiguousGenericArg, terms: &mut Vec<ast::DimExprItem>) {
+    match arg {
+        ast::AmbiguousGenericArg::Name(ident) => terms.push(ast::DimExprItem {
+            op: ast::MulDivOp::Mul,
+            term: ast::DimTerm {
+                name: Spanned::new(NamePath::local(ident.name.clone()), ident.span),
+                power: None,
+                span: ident.span,
+            },
+        }),
+        ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            collect_ambiguous_dim_terms(lhs, terms);
+            collect_ambiguous_dim_terms(rhs, terms);
+        }
+    }
 }
 
 fn lower_datetime_application(
@@ -464,9 +712,28 @@ fn lower_single_term_nominal_type(
 
     match resolve_optional(ctx.resolver.resolve_struct_type_path(ctx.owner, path)) {
         LookupCandidate::Found(struct_type) => {
-            return Ok(NominalTypeLookup::Found(TypeExprKind::Struct(
-                Spanned::new(struct_type, item.term.name.span),
-            )));
+            let generic_params = ctx
+                .resolver
+                .struct_type_generic_params(&struct_type)
+                .map_err(|source| HirLowerError::ModuleResolve {
+                    source,
+                    span: item.term.name.span,
+                })?;
+            let kind = if generic_params.is_empty() {
+                TypeExprKind::Struct(Spanned::new(struct_type, item.term.name.span))
+            } else {
+                check_generic_arg_count(
+                    struct_type.as_str(),
+                    generic_params,
+                    0,
+                    item.term.name.span,
+                )?;
+                TypeExprKind::TypeApplication {
+                    name: Spanned::new(struct_type, item.term.name.span),
+                    generic_args: Vec::new(),
+                }
+            };
+            return Ok(NominalTypeLookup::Found(kind));
         }
         LookupCandidate::Absent => {}
         LookupCandidate::Error(source) => {
@@ -772,17 +1039,14 @@ mod tests {
         assert_eq!(index.value.owner(), &lib_id);
         assert_eq!(index.value.as_str(), "Phase");
 
-        let TypeExprKind::TypeApplication { name, type_args } = base.kind else {
+        let TypeExprKind::TypeApplication { name, generic_args } = base.kind else {
             panic!("expected type application, got {base:?}");
         };
         assert_eq!(name.value.owner(), &lib_id);
         assert_eq!(name.value.as_str(), "Vec3");
 
-        let [arg] = type_args.as_slice() else {
-            panic!("expected one type argument, got {type_args:?}");
-        };
-        let TypeExprKind::DimExpr(dim_expr) = &arg.kind else {
-            panic!("expected dimension type argument, got {arg:?}");
+        let [GenericArg::Dim(DimArg::Expr(dim_expr))] = generic_args.as_slice() else {
+            panic!("expected one dimension argument, got {generic_args:?}");
         };
         let [term] = dim_expr.terms.as_slice() else {
             panic!("expected one dimension term, got {dim_expr:?}");

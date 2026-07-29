@@ -1,5 +1,5 @@
 use graphcal_compiler::syntax::ast::{
-    DimExpr, DimTerm, DomainBound, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
+    DimExpr, DimTerm, DomainBound, GenericArg, MulDivOp, TypeExpr, TypeExprKind, UnitExpr,
 };
 use pretty::RcDoc;
 
@@ -34,12 +34,12 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                 .append(RcDoc::intersperse(idx_docs, RcDoc::text(", ")))
                 .append(RcDoc::text("]"))
         }
-        TypeExprKind::TypeApplication { name, type_args } => {
+        TypeExprKind::TypeApplication { name, generic_args } => {
             let mut doc = RcDoc::text(name.value.display_path());
-            if !type_args.is_empty() {
-                let arg_docs: Vec<RcDoc<'static>> = type_args
+            if !generic_args.is_empty() {
+                let arg_docs: Vec<RcDoc<'static>> = generic_args
                     .iter()
-                    .map(|a| format_type_expr_inline(fmt, a))
+                    .map(|arg| format_generic_arg_inline(fmt, arg))
                     .collect();
                 doc = doc
                     .append(RcDoc::text("<"))
@@ -64,6 +64,15 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
         base
     } else {
         base.append(format_domain_constraints(fmt, &te.constraints))
+    }
+}
+
+/// Format one unresolved generic argument at either a type or call site.
+pub fn format_generic_arg_inline(fmt: &mut Formatter<'_>, arg: &GenericArg) -> RcDoc<'static> {
+    match arg {
+        GenericArg::Type(type_expr) => format_type_expr_inline(fmt, type_expr),
+        GenericArg::Nat(nat_expr) => RcDoc::text(nat_expr.to_string()),
+        GenericArg::Ambiguous(ambiguous) => RcDoc::text(ambiguous.to_string()),
     }
 }
 

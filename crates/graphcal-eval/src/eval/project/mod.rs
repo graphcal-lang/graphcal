@@ -439,7 +439,7 @@ fn rewrite_decl_exprs(
 /// Otherwise, falls back to direct registry resolution.
 pub(super) fn resolve_field_declared_type(
     field: &graphcal_compiler::registry::types::StructField,
-    generic_sub: &HashMap<&str, &DeclaredType>,
+    generic_sub: &HashMap<&str, DeclaredType>,
     registry: &Registry,
 ) -> Option<DeclaredType> {
     // Check if the field type is a bare generic param reference (e.g., `D`)
@@ -455,7 +455,7 @@ pub(super) fn resolve_field_declared_type(
             .map(graphcal_compiler::syntax::names::NameAtom::as_str)
         && let Some(concrete) = generic_sub.get(name)
     {
-        return Some((*concrete).clone());
+        return Some(concrete.clone());
     }
     // Non-generic: resolve directly from the registry. Overflow in dimension
     // arithmetic is treated as "no declared type info" here — the value will

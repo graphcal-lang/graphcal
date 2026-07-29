@@ -6,14 +6,15 @@ use miette::NamedSource;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::nat::{Monomial, NatPolyForm};
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::Registry;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::GenericParamName;
+use crate::tir::dim_check::InferredGenericArg;
 
-use super::{ResolvedDimTerm, ResolvedIndex, ResolvedTypeExpr};
+use super::{ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex, ResolvedTypeExpr};
 
 // ---------------------------------------------------------------------------
 // Conversion to DeclaredType
@@ -54,12 +55,12 @@ pub fn resolved_to_declared_type(
             vec![],
         )),
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name, generic_args, ..
         } => {
-            let mut declared_args = Vec::with_capacity(type_args.len());
-            for arg in type_args {
-                declared_args.push(resolved_type_arg_to_declared_type(arg, src)?);
-            }
+            let declared_args = generic_args
+                .iter()
+                .map(|arg| resolved_generic_arg_to_declared(arg, src))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(DeclaredType::Struct(
                 StructTypeRef::from_resolved(name.clone()),
                 declared_args,
@@ -129,13 +130,38 @@ pub fn resolved_to_declared_type(
     }
 }
 
-fn resolved_type_arg_to_declared_type(
-    resolved: &ResolvedTypeExpr,
+fn resolved_generic_arg_to_declared(
+    resolved: &ResolvedGenericArg,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
+) -> Result<DeclaredGenericArg, GraphcalError> {
     match resolved {
-        ResolvedTypeExpr::IndexArg(index) => resolved_index_to_declared_arg(index, src),
-        _ => resolved_to_declared_type(resolved, src),
+        ResolvedGenericArg::Dim(ResolvedDimArg::Dimensionless) => {
+            Ok(DeclaredGenericArg::Dim(Dimension::dimensionless()))
+        }
+        ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(dim)) => {
+            Ok(DeclaredGenericArg::Dim(dim.clone()))
+        }
+        ResolvedGenericArg::Dim(ResolvedDimArg::GenericParam(name, span)) => {
+            Err(GraphcalError::EvalError {
+                message: format!("generic dimension parameter `{name}` is not bound"),
+                src: src.clone(),
+                span: (*span).into(),
+            })
+        }
+        ResolvedGenericArg::Dim(ResolvedDimArg::Expr { span, .. }) => {
+            Err(GraphcalError::EvalError {
+                message: "generic dimension expression is not concrete".to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            })
+        }
+        ResolvedGenericArg::Index(index) => {
+            resolved_index_to_declared_ref(index, src).map(DeclaredGenericArg::Index)
+        }
+        ResolvedGenericArg::Nat(form, _) => Ok(DeclaredGenericArg::Nat(form.clone())),
+        ResolvedGenericArg::Type(type_expr) => {
+            resolved_to_declared_type(type_expr, src).map(DeclaredGenericArg::Type)
+        }
     }
 }
 
@@ -164,29 +190,24 @@ const fn resolved_index_span(index: &ResolvedIndex) -> Span {
     }
 }
 
-fn resolved_index_to_declared_arg(
+fn resolved_index_to_declared_ref(
     index: &ResolvedIndex,
     src: &NamedSource<Arc<String>>,
-) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
-    let reference = match index {
-        ResolvedIndex::Concrete(name, _) => IndexTypeRef::from_resolved(name.clone()),
+) -> Result<IndexTypeRef, GraphcalError> {
+    match index {
+        ResolvedIndex::Concrete(name, _) => Ok(IndexTypeRef::from_resolved(name.clone())),
         ResolvedIndex::NatExpr(form, span) => IndexTypeRef::from_nat_range_form(form.clone())
             .map_err(|err| GraphcalError::EvalError {
                 message: err.to_string(),
                 src: src.clone(),
                 span: (*span).into(),
-            })?,
-        ResolvedIndex::GenericParam(name, span) => {
-            return Err(GraphcalError::EvalError {
-                message: format!("generic index parameter `{name}` is not bound"),
-                src: src.clone(),
-                span: (*span).into(),
-            });
-        }
-    };
-    Ok(crate::registry::declared_type::DeclaredType::IndexArg(
-        reference,
-    ))
+            }),
+        ResolvedIndex::GenericParam(name, span) => Err(GraphcalError::EvalError {
+            message: format!("generic index parameter `{name}` is not bound"),
+            src: src.clone(),
+            span: (*span).into(),
+        }),
+    }
 }
 
 fn resolved_index_to_inferred(
@@ -251,21 +272,147 @@ pub(in crate::tir::typed) fn unify_nat_poly_form(
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {
+    solve_nat_poly_form(
+        form,
+        target,
+        nat_sub,
+        NatUnificationSite::Index(actual_idx),
+        src,
+        span,
+    )
+}
+
+fn unify_nat_generic_arg(
+    expected: &NatPolyForm,
+    actual: &NatPolyForm,
+    nat_sub: &mut HashMap<GenericParamName, u64>,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    solve_nat_poly_form(
+        expected,
+        actual.constant(),
+        nat_sub,
+        NatUnificationSite::GenericArgument(actual),
+        src,
+        span,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum NatUnificationSite<'a> {
+    Index(&'a IndexName),
+    GenericArgument(&'a NatPolyForm),
+}
+
+impl NatUnificationSite<'_> {
+    fn mismatch(
+        self,
+        form: &NatPolyForm,
+        src: &NamedSource<Arc<String>>,
+        span: Span,
+    ) -> GraphcalError {
+        match self {
+            Self::Index(actual_idx) => GraphcalError::IndexMismatch {
+                expected: IndexName::expect_valid(format!("range({})", form.format())),
+                found: actual_idx.clone(),
+                src: src.clone(),
+                span: span.into(),
+            },
+            Self::GenericArgument(actual) => GraphcalError::EvalError {
+                message: format!(
+                    "generic Nat argument mismatch: expected `{}`, found `{}`",
+                    form.format(),
+                    actual.format()
+                ),
+                src: src.clone(),
+                span: span.into(),
+            },
+        }
+    }
+
+    fn reduced_mismatch(
+        self,
+        form: &NatPolyForm,
+        nat_sub: &HashMap<GenericParamName, u64>,
+        src: &NamedSource<Arc<String>>,
+        span: Span,
+    ) -> GraphcalError {
+        let Self::Index(actual_idx) = self else {
+            return self.mismatch(form, src, span);
+        };
+        let expected = match form.evaluate(nat_sub) {
+            Some(value) => match crate::registry::types::NatRangeIndex::try_from_u64(value) {
+                Ok(index) => index.display_name(),
+                Err(err) => {
+                    return GraphcalError::EvalError {
+                        message: err.to_string(),
+                        src: src.clone(),
+                        span: span.into(),
+                    };
+                }
+            },
+            None => IndexName::expect_valid(format!("range({})", form.format())),
+        };
+        GraphcalError::IndexMismatch {
+            expected,
+            found: actual_idx.clone(),
+            src: src.clone(),
+            span: span.into(),
+        }
+    }
+
+    fn binding_conflict(
+        self,
+        form: &NatPolyForm,
+        previous: u64,
+        src: &NamedSource<Arc<String>>,
+        span: Span,
+    ) -> GraphcalError {
+        let Self::Index(actual_idx) = self else {
+            return self.mismatch(form, src, span);
+        };
+        match crate::registry::types::NatRangeIndex::try_from_u64(previous) {
+            Ok(index) => GraphcalError::IndexMismatch {
+                expected: index.display_name(),
+                found: actual_idx.clone(),
+                src: src.clone(),
+                span: span.into(),
+            },
+            Err(err) => GraphcalError::EvalError {
+                message: err.to_string(),
+                src: src.clone(),
+                span: span.into(),
+            },
+        }
+    }
+
+    const fn inference_source(self) -> &'static str {
+        match self {
+            Self::Index(_) => "a single index",
+            Self::GenericArgument(_) => "a single generic argument",
+        }
+    }
+}
+
+fn solve_nat_poly_form(
+    form: &NatPolyForm,
+    target: u64,
+    nat_sub: &mut HashMap<GenericParamName, u64>,
+    site: NatUnificationSite<'_>,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
     // Substitute already-bound variables in each monomial, collecting
     // a reduced polynomial in only unbound variables + a constant part.
     let mut reduced_constant: u64 = 0;
     // (reduced_monomial, coefficient) pairs for terms with unbound variables
     let mut reduced_terms: BTreeMap<Monomial, u64> = BTreeMap::new();
 
-    // Shared "this form cannot match the actual index" error, used both for
-    // genuine mismatches and for arithmetic overflow during reduction (an
-    // overflowing form cannot match any concrete index size).
-    let form_mismatch = || GraphcalError::IndexMismatch {
-        expected: IndexName::expect_valid(format!("range({})", form.format())),
-        found: actual_idx.clone(),
-        src: src.clone(),
-        span: span.into(),
-    };
+    // Shared mismatch error, used both for genuine mismatches and for
+    // arithmetic overflow during reduction. Generic arguments stay typed as
+    // Nat forms instead of fabricating an index name for this diagnostic.
+    let form_mismatch = || site.mismatch(form, src, span);
 
     for (mono, coeff) in &form.terms {
         let (remaining_mono, factor) = mono.substitute(nat_sub).ok_or_else(form_mismatch)?;
@@ -285,22 +432,7 @@ pub(in crate::tir::typed) fn unify_nat_poly_form(
     if reduced_terms.is_empty() {
         // All variables bound — check equality
         if reduced_constant != target {
-            let expected = match form.evaluate(nat_sub) {
-                Some(n) => crate::registry::types::NatRangeIndex::try_from_u64(n)
-                    .map_err(|err| GraphcalError::EvalError {
-                        message: err.to_string(),
-                        src: src.clone(),
-                        span: span.into(),
-                    })?
-                    .display_name(),
-                None => IndexName::expect_valid(format!("range({})", form.format())),
-            };
-            return Err(GraphcalError::IndexMismatch {
-                expected,
-                found: actual_idx.clone(),
-                src: src.clone(),
-                span: span.into(),
-            });
+            return Err(site.reduced_mismatch(form, nat_sub, src, span));
         }
         return Ok(());
     }
@@ -335,19 +467,7 @@ pub(in crate::tir::typed) fn unify_nat_poly_form(
             }
             let value = remainder / total_coeff;
             bind_or_check(nat_sub, var, value, |prev, _| {
-                match crate::registry::types::NatRangeIndex::try_from_u64(*prev) {
-                    Ok(index) => GraphcalError::IndexMismatch {
-                        expected: index.display_name(),
-                        found: actual_idx.clone(),
-                        src: src.clone(),
-                        span: span.into(),
-                    },
-                    Err(err) => GraphcalError::EvalError {
-                        message: err.to_string(),
-                        src: src.clone(),
-                        span: span.into(),
-                    },
-                }
+                site.binding_conflict(form, *prev, src, span)
             })?;
             return Ok(());
         }
@@ -355,9 +475,10 @@ pub(in crate::tir::typed) fn unify_nat_poly_form(
 
     // Multiple unbound variables or non-linear — ambiguous
     let var_names: Vec<&str> = unbound_vars.iter().map(GenericParamName::as_str).collect();
+    let source = site.inference_source();
     Err(GraphcalError::EvalError {
         message: format!(
-            "cannot infer Nat parameters [{}] from a single index — \
+            "cannot infer Nat parameters [{}] from {source} — \
              provide more arguments or use explicit type annotations",
             var_names.join(", ")
         ),
@@ -599,10 +720,8 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name, generic_args, ..
         } => {
-            // Unify the struct identity AND its type arguments: skipping the
-            // args would let `Vec3<Length>` silently unify with `Vec3<Mass>`.
             let InferredType::Struct(actual_name, actual_args) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: name.as_str().to_string(),
@@ -621,12 +740,12 @@ pub fn unify_resolved_type(
                     span: span.into(),
                 });
             }
-            if type_args.len() != actual_args.len() {
+            if generic_args.len() != actual_args.len() {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: format!(
                         "{} with {} generic argument(s)",
                         name.as_str(),
-                        type_args.len()
+                        generic_args.len()
                     ),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
                     help: "generic struct argument count must match exactly".to_string(),
@@ -634,11 +753,8 @@ pub fn unify_resolved_type(
                     span: span.into(),
                 });
             }
-            // Recursively unify each declared type argument against the
-            // actual one now that both sides are known to carry the same
-            // number of arguments.
-            for (declared_arg, actual_arg) in type_args.iter().zip(actual_args) {
-                unify_resolved_type(
+            for (declared_arg, actual_arg) in generic_args.iter().zip(actual_args) {
+                unify_resolved_generic_arg(
                     declared_arg,
                     actual_arg,
                     dim_sub,
@@ -694,9 +810,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::GenericTypeParam(gp, gp_span) => Err(GraphcalError::EvalError {
-            message: format!(
-                "cannot infer unconstrained generic type parameter `{gp}` in this position yet"
-            ),
+            message: format!("cannot infer `Type` generic parameter `{gp}` in this position yet"),
             src: src.clone(),
             span: (*gp_span).into(),
         }),
@@ -796,6 +910,95 @@ pub fn unify_resolved_type(
     }
 }
 
+fn resolved_dim_arg_as_type(arg: &ResolvedDimArg) -> ResolvedTypeExpr {
+    match arg {
+        ResolvedDimArg::Dimensionless => ResolvedTypeExpr::Dimensionless,
+        ResolvedDimArg::Concrete(dim) => ResolvedTypeExpr::Quantity(dim.clone()),
+        ResolvedDimArg::GenericParam(name, span) => {
+            ResolvedTypeExpr::GenericDimParam(name.clone(), *span)
+        }
+        ResolvedDimArg::Expr { terms, span } => ResolvedTypeExpr::GenericDimExpr {
+            terms: terms.clone(),
+            span: *span,
+        },
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "generic-argument unification shares all substitution maps with type unification"
+)]
+fn unify_resolved_generic_arg(
+    expected: &ResolvedGenericArg,
+    actual: &InferredGenericArg,
+    dim_sub: &mut HashMap<GenericParamName, Dimension>,
+    index_sub: &mut HashMap<GenericParamName, IndexTypeRef>,
+    nat_sub: &mut HashMap<GenericParamName, u64>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), GraphcalError> {
+    match (expected, actual) {
+        (ResolvedGenericArg::Dim(expected), InferredGenericArg::Dim(actual)) => {
+            unify_resolved_type(
+                &resolved_dim_arg_as_type(expected),
+                &crate::tir::dim_check::InferredType::Quantity(actual.clone()),
+                dim_sub,
+                index_sub,
+                nat_sub,
+                registry,
+                src,
+                span,
+            )
+        }
+        (ResolvedGenericArg::Index(expected), InferredGenericArg::Index(actual)) => {
+            unify_resolved_type(
+                &ResolvedTypeExpr::IndexArg(expected.clone()),
+                &crate::tir::dim_check::InferredType::NamedIndex(actual.clone()),
+                dim_sub,
+                index_sub,
+                nat_sub,
+                registry,
+                src,
+                span,
+            )
+        }
+        (ResolvedGenericArg::Nat(expected, _), InferredGenericArg::Nat(actual)) => {
+            if actual.is_constant() {
+                return unify_nat_generic_arg(expected, actual, nat_sub, src, span);
+            }
+            let equal = expected == actual
+                || expected
+                    .evaluate(nat_sub)
+                    .zip(actual.evaluate(nat_sub))
+                    .is_some_and(|(expected, actual)| expected == actual);
+            if equal {
+                Ok(())
+            } else {
+                Err(GraphcalError::EvalError {
+                    message: format!(
+                        "generic Nat argument mismatch: expected `{}`, found `{}`",
+                        expected.format(),
+                        actual.format()
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                })
+            }
+        }
+        (ResolvedGenericArg::Type(expected), InferredGenericArg::Type(actual)) => {
+            unify_resolved_type(
+                expected, actual, dim_sub, index_sub, nat_sub, registry, src, span,
+            )
+        }
+        _ => Err(GraphcalError::EvalError {
+            message: "generic argument sort mismatch".to_string(),
+            src: src.clone(),
+            span: span.into(),
+        }),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Substitution
 // ---------------------------------------------------------------------------
@@ -814,9 +1017,96 @@ pub fn substitute_resolved_type(
     substitute_resolved_type_with_types(resolved, dim_sub, index_sub, nat_sub, &no_type_sub, src)
 }
 
+pub fn substitute_resolved_generic_arg(
+    resolved: &ResolvedGenericArg,
+    dim_sub: &HashMap<GenericParamName, Dimension>,
+    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
+    nat_sub: &HashMap<GenericParamName, u64>,
+    type_sub: &HashMap<GenericParamName, crate::tir::dim_check::InferredType>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredGenericArg, GraphcalError> {
+    match resolved {
+        ResolvedGenericArg::Dim(dim) => {
+            let inferred = substitute_resolved_type_with_types(
+                &resolved_dim_arg_as_type(dim),
+                dim_sub,
+                index_sub,
+                nat_sub,
+                type_sub,
+                src,
+            )?;
+            match inferred {
+                crate::tir::dim_check::InferredType::Quantity(dimension) => {
+                    Ok(InferredGenericArg::Dim(dimension))
+                }
+                _ => Err(GraphcalError::InternalError {
+                    message: "dimension generic argument substituted to a non-dimension type"
+                        .to_string(),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                }),
+            }
+        }
+        ResolvedGenericArg::Index(index) => {
+            let inferred = match index {
+                ResolvedIndex::Concrete(name, _) => {
+                    crate::tir::dim_check::InferredIndex::from_resolved(name.clone())
+                }
+                ResolvedIndex::GenericParam(name, span) => {
+                    crate::tir::dim_check::InferredIndex::from_ref(
+                        index_sub
+                            .get(name)
+                            .cloned()
+                            .ok_or_else(|| GraphcalError::EvalError {
+                                message: format!("generic index `{name}` is not bound"),
+                                src: src.clone(),
+                                span: (*span).into(),
+                            })?,
+                    )
+                }
+                ResolvedIndex::NatExpr(form, span) => {
+                    let value = form
+                        .evaluate(nat_sub)
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!(
+                                "generic Nat index `{}` is not concrete",
+                                form.format()
+                            ),
+                            src: src.clone(),
+                            span: (*span).into(),
+                        })?;
+                    crate::tir::dim_check::InferredIndex::from_nat_range_form(
+                        NatPolyForm::from_constant(value),
+                    )
+                    .map_err(|err| GraphcalError::EvalError {
+                        message: err.to_string(),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    })?
+                }
+            };
+            Ok(InferredGenericArg::Index(inferred))
+        }
+        ResolvedGenericArg::Nat(form, span) => {
+            let value = form
+                .evaluate(nat_sub)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!("generic Nat argument `{}` is not concrete", form.format()),
+                    src: src.clone(),
+                    span: (*span).into(),
+                })?;
+            Ok(InferredGenericArg::Nat(NatPolyForm::from_constant(value)))
+        }
+        ResolvedGenericArg::Type(type_expr) => substitute_resolved_type_with_types(
+            type_expr, dim_sub, index_sub, nat_sub, type_sub, src,
+        )
+        .map(InferredGenericArg::Type),
+    }
+}
+
 /// Like [`substitute_resolved_type`], but with generic *type* parameters.
 ///
-/// Unconstrained generic type parameters are substituted from `type_sub`
+/// `Type`-sorted generic parameters are substituted from `type_sub`
 /// (used by HIR constructor-call inference, which binds them from
 /// call-site arguments).
 #[expect(
@@ -847,14 +1137,14 @@ pub fn substitute_resolved_type_with_types(
             vec![],
         )),
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name, generic_args, ..
         } => {
-            let mut inferred_args = Vec::with_capacity(type_args.len());
-            for arg in type_args {
-                inferred_args.push(substitute_resolved_type_with_types(
-                    arg, dim_sub, index_sub, nat_sub, type_sub, src,
-                )?);
-            }
+            let inferred_args = generic_args
+                .iter()
+                .map(|arg| {
+                    substitute_resolved_generic_arg(arg, dim_sub, index_sub, nat_sub, type_sub, src)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(InferredType::Struct(
                 crate::tir::dim_check::InferredStructType::from_resolved(name.clone()),
                 inferred_args,

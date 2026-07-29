@@ -250,6 +250,20 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
+    #[error("Nat subtraction is not supported")]
+    #[diagnostic(
+        code(graphcal::P022),
+        help(
+            "express the larger size additively instead, for example use `D[N + 1]` for the input and `D[N]` for the smaller output"
+        )
+    )]
+    NatSubtractionUnsupported {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("`-` is not part of the Nat polynomial algebra")]
+        span: SourceSpan,
+    },
+
     #[error("duplicate `{field}` in {context}")]
     #[diagnostic(
         code(graphcal::P018),
@@ -330,6 +344,7 @@ impl ParseError {
             | Self::InlineDagCallMissingProjection { src, .. }
             | Self::TooDeeplyNested { src, .. }
             | Self::ZeroExponent { src, .. }
+            | Self::NatSubtractionUnsupported { src, .. }
             | Self::UnitReferenceTooDeep { src, .. }
             | Self::DuplicatePlotField { src, .. }
             | Self::MissingPlotEncoding { src, .. }
@@ -338,6 +353,7 @@ impl ParseError {
     }
 }
 
+#[derive(Clone)]
 pub struct Parser<'src> {
     lexer: Lexer<'src>,
     source: Arc<String>,
@@ -427,6 +443,13 @@ impl<'src> Parser<'src> {
             expected: expected.to_string(),
             src: self.named_source(),
             span: Span::new(self.lexer.source_len(), 0).into(),
+        }
+    }
+
+    fn nat_subtraction_unsupported(&self, span: Span) -> ParseError {
+        ParseError::NatSubtractionUnsupported {
+            src: self.named_source(),
+            span: span.into(),
         }
     }
 

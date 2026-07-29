@@ -51,8 +51,8 @@ pub enum TypeGenericConstraint {
     Index,
     /// `N: Nat` — the generic stands for a natural number (type-level).
     Nat,
-    /// `F: Type` — unconstrained phantom type parameter.
-    Unconstrained,
+    /// `F: Type` — the generic stands for a value type.
+    Type,
 }
 
 impl From<GenericConstraint> for TypeGenericConstraint {
@@ -61,7 +61,7 @@ impl From<GenericConstraint> for TypeGenericConstraint {
             GenericConstraint::Dim => Self::Dim,
             GenericConstraint::Index => Self::Index,
             GenericConstraint::Nat => Self::Nat,
-            GenericConstraint::Type => Self::Unconstrained,
+            GenericConstraint::Type => Self::Type,
         }
     }
 }
@@ -71,8 +71,9 @@ impl From<GenericConstraint> for TypeGenericConstraint {
 pub struct TypeGenericParam {
     pub name: GenericParamName,
     pub(crate) constraint: TypeGenericConstraint,
-    /// Optional default type expression, e.g. `F: Type = Unframed`.
-    pub(crate) default: Option<crate::desugar::desugared_ast::TypeExpr>,
+    /// Optional unresolved generic argument, e.g. `F: Type = Unframed` or
+    /// `N: Nat = 3`. It is sorted against `constraint` at the HIR boundary.
+    pub(crate) default: Option<crate::desugar::desugared_ast::GenericArg>,
 }
 
 /// A registered type definition: either a required type stub or a tagged union.

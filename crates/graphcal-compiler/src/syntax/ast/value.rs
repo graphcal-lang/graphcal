@@ -390,12 +390,15 @@ pub enum TypeExprKind<P: Phase = Raw> {
         base: Box<TypeExpr<P>>,
         indexes: Vec<IndexExpr>,
     },
-    /// A user-defined generic type application like `Vec3<Length, ECI>`.
+    /// A user-defined generic type application like `Vec3<Length, ECI>` or
+    /// `FixedVec<3>`.
     /// Built-in parameterized types (currently only `Datetime<...>`) have their
-    /// own variants instead — see [`Self::DatetimeApplication`].
+    /// own variants instead — see [`Self::DatetimeApplication`]. Generic
+    /// arguments remain syntax-level and unsorted until the referenced type's
+    /// parameter constraints are known.
     TypeApplication {
         name: Spanned<NamePath>,
-        type_args: Vec<TypeExpr<P>>,
+        generic_args: Vec<GenericArg<P>>,
     },
 }
 
@@ -546,7 +549,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// same AST shape; semantic categorization/resolution happens later.
     FnCall {
         callee: IdentPath,
-        type_args: Vec<GenericArg<P>>,
+        generic_args: Vec<GenericArg<P>>,
         args: Vec<Expr<P>>,
     },
     /// Conditional: `if cond { then_expr } else { else_expr }`
@@ -955,16 +958,78 @@ mod nat_expr_display_tests {
     }
 }
 
-/// A generic argument at a call site (turbofish syntax).
+/// A generic argument whose source shape is valid as either a dimension/type
+/// expression or a Nat expression.
 ///
-/// `eye<3>()` has one `GenericArg::Nat(NatExpr::Literal(3, ..))`.
-/// `some_fn<Length>()` has one `GenericArg::Type(TypeExpr { kind: DimExpr(..), .. })`.
+/// Bare names (`N`) and products of bare names (`M * N`) cannot be sorted until
+/// the referenced declaration's [`GenericConstraint`](super::GenericConstraint)
+/// is known. Keeping that ambiguity explicit prevents casing or spelling from
+/// leaking into semantic dispatch.
+#[derive(Debug, Clone)]
+pub enum AmbiguousGenericArg {
+    /// A bare type-level name.
+    Name(Ident),
+    /// A product of ambiguous arguments.
+    Mul(Box<Self>, Box<Self>, Span),
+}
+
+impl AmbiguousGenericArg {
+    /// Get the source span.
+    #[must_use]
+    pub(crate) const fn span(&self) -> Span {
+        match self {
+            Self::Name(ident) => ident.span,
+            Self::Mul(_, _, span) => *span,
+        }
+    }
+
+    fn fmt_with_min_precedence(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        min_precedence: u8,
+    ) -> std::fmt::Result {
+        let precedence = match self {
+            Self::Name(_) => 2,
+            Self::Mul(..) => 1,
+        };
+        let needs_parens = precedence < min_precedence;
+        if needs_parens {
+            f.write_str("(")?;
+        }
+        match self {
+            Self::Name(ident) => f.write_str(&ident.name)?,
+            Self::Mul(lhs, rhs, _) => {
+                lhs.fmt_with_min_precedence(f, precedence)?;
+                f.write_str(" * ")?;
+                rhs.fmt_with_min_precedence(f, precedence)?;
+            }
+        }
+        if needs_parens {
+            f.write_str(")")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for AmbiguousGenericArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fmt_with_min_precedence(f, 0)
+    }
+}
+
+/// An unresolved generic argument shared by type and constructor applications.
+///
+/// Arguments that are syntactically unambiguous retain their source category.
+/// Bare names and name-only products use [`Self::Ambiguous`] until HIR lowering
+/// can resolve them against the declaration's generic-parameter sort.
 #[derive(Debug, Clone)]
 pub enum GenericArg<P: Phase = Raw> {
-    /// A type expression (for Dim or Index generic params): `Length`, `Maneuver`
+    /// An unambiguously type-shaped expression, such as `D[I]` or `D / Time`.
     Type(TypeExpr<P>),
-    /// A nat expression (for Nat generic params): `3`, `N + 1`
+    /// An unambiguously Nat-shaped expression, such as `3` or `N + 1`.
     Nat(NatExpr),
+    /// A bare name or name-only product that may denote either sort.
+    Ambiguous(AmbiguousGenericArg),
 }
 
 impl<P: Phase> GenericArg<P> {
@@ -974,6 +1039,7 @@ impl<P: Phase> GenericArg<P> {
         match self {
             Self::Type(te) => te.span,
             Self::Nat(ne) => ne.span(),
+            Self::Ambiguous(arg) => arg.span(),
         }
     }
 }

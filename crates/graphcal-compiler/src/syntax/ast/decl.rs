@@ -2,7 +2,7 @@ use crate::syntax::ast::common::{
     Attribute, BindableVisibility, ImportKind, ModulePath, Visibility,
 };
 use crate::syntax::ast::value::{
-    DimExpr, Expr, MapEntryKey, MultiDeclSharedAxes, ParamBinding, TypeExpr, UnitExpr,
+    DimExpr, Expr, GenericArg, MapEntryKey, MultiDeclSharedAxes, ParamBinding, TypeExpr, UnitExpr,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
@@ -710,8 +710,9 @@ pub struct IndexDecl<P: Phase = Raw> {
 pub struct GenericParam<P: Phase = Raw> {
     pub name: Spanned<GenericParamName>,
     pub constraint: GenericConstraint,
-    /// Optional default type, e.g. `F: Type = Unframed`.
-    pub default: Option<TypeExpr<P>>,
+    /// Optional sort-aware default, e.g. `F: Type = Unframed` or `N: Nat = 3`.
+    /// The syntax remains unresolved until it is checked against `constraint`.
+    pub default: Option<GenericArg<P>>,
 }
 
 /// Constraint on a generic parameter.
@@ -723,6 +724,17 @@ pub enum GenericConstraint {
     Index,
     /// `N: Nat` -- the generic stands for a natural number (type-level).
     Nat,
-    /// `F: Type` -- the generic stands for any type (unconstrained phantom parameter).
+    /// `F: Type` -- the generic stands for a value type.
     Type,
+}
+
+impl std::fmt::Display for GenericConstraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Dim => "Dim",
+            Self::Index => "Index",
+            Self::Nat => "Nat",
+            Self::Type => "Type",
+        })
+    }
 }

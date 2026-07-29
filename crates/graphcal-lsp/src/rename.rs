@@ -119,6 +119,10 @@ fn key_with_new_name(key: &SymbolKey, new_name: &str) -> SymbolKey {
             owner: owner.clone(),
             field_name: new_name.to_string(),
         },
+        SymbolKey::GenericParam { owner, .. } => SymbolKey::GenericParam {
+            owner: owner.clone(),
+            name: new_name.to_string(),
+        },
         SymbolKey::ExprScoped { kind, offset, .. } => SymbolKey::ExprScoped {
             kind: *kind,
             offset: *offset,
@@ -258,6 +262,22 @@ mod tests {
         // Should have 2 edits: the definition and the @x reference.
         assert_eq!(file_edits.len(), 2);
         assert!(file_edits.iter().all(|e| e.new_text == "velocity"));
+    }
+
+    #[test]
+    fn rename_generic_parameter_edits_defaults_and_payload_types() {
+        let source = "type Sized<N: Nat, M: Nat = N + 1> {\n\
+                      Sized(values: Dimensionless[N]),\n\
+                      }";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let offset = source.find("N: Nat").unwrap();
+
+        let result = rename(&analysis, &uri, offset, "Size").unwrap().unwrap();
+        let edits = result.changes.unwrap();
+        let file_edits = edits.get(&uri).unwrap();
+        assert_eq!(file_edits.len(), 3);
+        assert!(file_edits.iter().all(|edit| edit.new_text == "Size"));
     }
 
     #[test]

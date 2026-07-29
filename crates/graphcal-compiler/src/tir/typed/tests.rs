@@ -527,13 +527,13 @@ pub type Wrap<I: Index> {
         .find_map(|(key, ty)| (key.field.as_str() == "boxed").then_some(ty))
         .expect("Wrap.boxed field type");
 
-    let ResolvedTypeExpr::GenericStruct { type_args, .. } = boxed_field else {
+    let ResolvedTypeExpr::GenericStruct { generic_args, .. } = boxed_field else {
         panic!("expected generic Box<I>, got {boxed_field:?}");
     };
     assert!(
-        matches!(&type_args[0], ResolvedTypeExpr::IndexArg(ResolvedIndex::GenericParam(name, _)) if name.as_str() == "I"),
+        matches!(&generic_args[0], ResolvedGenericArg::Index(ResolvedIndex::GenericParam(name, _)) if name.as_str() == "I"),
         "generic argument should bind to the index parameter, got {:?}",
-        type_args[0]
+        generic_args[0]
     );
 }
 
@@ -545,17 +545,19 @@ fn type_resolve_generics() {
     let pos_type = &tir.root().resolved_decl_types[&ScopedName::local("pos_eci")];
     match pos_type {
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name, generic_args, ..
         } => {
             assert_eq!(name.as_str(), "Vec3");
-            assert_eq!(type_args.len(), 2);
+            assert_eq!(generic_args.len(), 2);
             assert_eq!(
-                type_args[0],
-                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
-                    "Length".to_string()
+                generic_args[0],
+                ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
+                    BaseDimId::Prelude("Length".to_string())
                 )))
             );
-            assert!(matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci"));
+            assert!(
+                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedTypeExpr::Struct(n, _)) if n.as_str() == "Eci")
+            );
         }
         other => panic!("expected GenericStruct, got {other:?}"),
     }
@@ -575,17 +577,19 @@ fn type_resolve_default_type_params() {
     let pos3_eci = &tir.root().resolved_decl_types[&ScopedName::local("pos3_eci")];
     match pos3_eci {
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name, generic_args, ..
         } => {
             assert_eq!(name.as_str(), "Pos3");
-            assert_eq!(type_args.len(), 2);
+            assert_eq!(generic_args.len(), 2);
             assert_eq!(
-                type_args[0],
-                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
-                    "Length".to_string()
+                generic_args[0],
+                ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
+                    BaseDimId::Prelude("Length".to_string())
                 )))
             );
-            assert!(matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Eci"));
+            assert!(
+                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedTypeExpr::Struct(n, _)) if n.as_str() == "Eci")
+            );
         }
         other => panic!("expected GenericStruct, got {other:?}"),
     }
@@ -594,20 +598,20 @@ fn type_resolve_default_type_params() {
     let pos3_default = &tir.root().resolved_decl_types[&ScopedName::local("pos3_default")];
     match pos3_default {
         ResolvedTypeExpr::GenericStruct {
-            name, type_args, ..
+            name, generic_args, ..
         } => {
             assert_eq!(name.as_str(), "Pos3");
-            assert_eq!(type_args.len(), 2);
+            assert_eq!(generic_args.len(), 2);
             assert_eq!(
-                type_args[0],
-                ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
-                    "Length".to_string()
+                generic_args[0],
+                ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
+                    BaseDimId::Prelude("Length".to_string())
                 )))
             );
             assert!(
-                matches!(&type_args[1], ResolvedTypeExpr::Struct(n, _) if n.as_str() == "Unframed"),
+                matches!(&generic_args[1], ResolvedGenericArg::Type(ResolvedTypeExpr::Struct(n, _)) if n.as_str() == "Unframed"),
                 "expected Struct(Unframed), got {:?}",
-                type_args[1]
+                generic_args[1]
             );
         }
         other => panic!("expected GenericStruct, got {other:?}"),

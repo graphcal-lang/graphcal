@@ -35,15 +35,16 @@
 //! meaning-changing edit.
 
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, DagDecl, DeclKind, Declaration,
-    DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr, ExprKind, FieldDecl,
-    FieldInit, FigureDecl, File, ForBinding, ForBindingIndex, GenericArg, GenericParam, Ident,
-    IdentPath, ImportDecl, ImportItem, ImportKind, IncludeDecl, IndexArg, IndexDecl, IndexDeclKind,
-    IndexExpr, LayerDecl, MapEntry, MapEntryKey, MarkSpec, MatchArm, MatchPattern, ModulePath,
-    MultiDataRow, MultiDecl, MultiDeclSharedAxes, MultiDeclSlice, MultiDeclSlot, MultiHeaderCell,
-    MultiSlotAxis, MultiSlotColumnSpan, NatExpr, ParamBinding, ParamDecl, PatternBinding, PlotDecl,
-    PlotField, RawDeclSugar, RawExprSugar, TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr,
-    TypeExprKind, UnionMember, UnitDecl, UnitDef, UnitExpr, UnitExprItem, UnresolvedRef, ValueDecl,
+    AmbiguousGenericArg, AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, DagDecl,
+    DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr,
+    ExprKind, FieldDecl, FieldInit, FigureDecl, File, ForBinding, ForBindingIndex, GenericArg,
+    GenericParam, Ident, IdentPath, ImportDecl, ImportItem, ImportKind, IncludeDecl, IndexArg,
+    IndexDecl, IndexDeclKind, IndexExpr, LayerDecl, MapEntry, MapEntryKey, MarkSpec, MatchArm,
+    MatchPattern, ModulePath, MultiDataRow, MultiDecl, MultiDeclSharedAxes, MultiDeclSlice,
+    MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, NatExpr, ParamBinding,
+    ParamDecl, PatternBinding, PlotDecl, PlotField, RawDeclSugar, RawExprSugar, TableIndexSpec,
+    TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef, UnitExpr,
+    UnitExprItem, UnresolvedRef, ValueDecl,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
@@ -1180,15 +1181,16 @@ impl FormatEquivalent for TypeExprKind {
                 };
                 base.format_equivalent(other_base) && indexes.format_equivalent(other_indexes)
             }
-            Self::TypeApplication { name, type_args } => {
+            Self::TypeApplication { name, generic_args } => {
                 let Self::TypeApplication {
                     name: other_name,
-                    type_args: other_type_args,
+                    generic_args: other_generic_args,
                 } = other
                 else {
                     return false;
                 };
-                name.format_equivalent(other_name) && type_args.format_equivalent(other_type_args)
+                name.format_equivalent(other_name)
+                    && generic_args.format_equivalent(other_generic_args)
             }
         }
     }
@@ -1449,6 +1451,25 @@ impl FormatEquivalent for NatExpr {
     }
 }
 
+impl FormatEquivalent for AmbiguousGenericArg {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        match self {
+            Self::Name(ident) => {
+                let Self::Name(other_ident) = other else {
+                    return false;
+                };
+                ident.format_equivalent(other_ident)
+            }
+            Self::Mul(lhs, rhs, _span) => {
+                let Self::Mul(other_lhs, other_rhs, _other_span) = other else {
+                    return false;
+                };
+                lhs.format_equivalent(other_lhs) && rhs.format_equivalent(other_rhs)
+            }
+        }
+    }
+}
+
 impl FormatEquivalent for GenericArg {
     fn format_equivalent(&self, other: &Self) -> bool {
         match self {
@@ -1463,6 +1484,12 @@ impl FormatEquivalent for GenericArg {
                     return false;
                 };
                 nat.format_equivalent(other_nat)
+            }
+            Self::Ambiguous(arg) => {
+                let Self::Ambiguous(other_arg) = other else {
+                    return false;
+                };
+                arg.format_equivalent(other_arg)
             }
         }
     }
@@ -1702,19 +1729,19 @@ impl FormatEquivalent for ExprKind {
             }
             Self::FnCall {
                 callee,
-                type_args,
+                generic_args,
                 args,
             } => {
                 let Self::FnCall {
                     callee: other_callee,
-                    type_args: other_type_args,
+                    generic_args: other_generic_args,
                     args: other_args,
                 } = other
                 else {
                     return false;
                 };
                 callee.format_equivalent(other_callee)
-                    && type_args.format_equivalent(other_type_args)
+                    && generic_args.format_equivalent(other_generic_args)
                     && args.format_equivalent(other_args)
             }
             Self::If {
