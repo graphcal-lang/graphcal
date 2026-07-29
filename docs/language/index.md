@@ -61,7 +61,7 @@ The language has a layered type system:
 
     ---
 
-    Finite indexes, range indexes, `for`, `scan`, `unfold`.
+    Named, coordinate, and `Fin(N)` indexes; `for`, `scan`, and `unfold`.
 
     [:octicons-arrow-right-24: Indexes](indexes.md)
 

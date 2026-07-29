@@ -801,12 +801,13 @@ a canonical `ResolvedName<Ns>`.
 
 Index type references are split by semantic kind. Declared indexes use
 `TypeNameRef<namespace::Index>` and have a canonical `ResolvedName<Index>`.
-Compiler-generated Nat ranges use `NatRangeIndexRef`: concrete ranges carry a
-validated non-zero `NatRangeIndex`, while symbolic generic ranges carry a
-normalized `NatPolyForm` from `nat.rs`. Nat ranges intentionally do not have fake
-resolved names or registry-key strings; callers that need declared index
-ownership use `declared_resolved()`, and callers that need Nat range semantics
-use `nat_range_ref()` / `nat_range()` / `nat_range_form()`.
+Compiler-generated structural indexes use `FiniteIndexRef`: concrete `Fin(N)`
+forms carry a validated non-zero `FiniteIndex`, while symbolic generic forms
+carry a normalized `NatPolyForm` from `nat.rs`. Finite indexes intentionally do
+not have fake resolved names or registry-key strings; callers that need declared
+index ownership use `declared_resolved()`, and callers that need finite-index
+semantics use `finite_index_ref()` / `finite_index()` /
+`finite_index_form()`.
 
 ## 4. Declarations, Visibility, and Evaluation
 
@@ -970,7 +971,7 @@ just lint
 | `ModulePathKey`                  | `loader.rs`                            | Keep module paths structured instead of separator-joined            |
 | `RuntimeDeclKey`                 | `crates/graphcal-eval/src/decl_key.rs` | Prevent runtime value collisions across DAG owners                  |
 | `TypeNameRef` identity carriers  | `registry/declared_type.rs`            | Preserve declared index/struct owners through runtime/public values |
-| Nat range identity carriers      | `nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic Nat ranges typed, not fake resolved names    |
+| Finite-index identity carriers   | `nat.rs`, `registry/declared_type.rs` | Keep concrete/symbolic `Fin` axes typed, not fake resolved names    |
 | Trait-based I/O                  | `graphcal-io`                          | Deterministic tests and editor integration                          |
 | Package identifier newtypes      | `graphcal-package`                     | Keep package/alias/instance/Git identities typed                    |
 | Visitor pattern                  | `syntax/visitor.rs`                    | Centralized AST traversal                                           |

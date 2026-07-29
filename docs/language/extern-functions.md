@@ -110,8 +110,8 @@ Index variables follow the same explicit discipline as dimension
 variables:
 
 - An array's index position must name one of the declared `Index` binders
-  — concrete indexes (`Velocity[Maneuver]`) and Nat lengths (`D[3]`)
-  cannot cross the plugin boundary. Like dimension variables, index
+  — concrete declared indexes (`Velocity[Maneuver]`) and structural indexes
+  (`D[Fin(3)]`) cannot cross the plugin boundary. Like dimension variables, index
   variables are parametric: the plugin sees each array only as a dense
   buffer of SI values in index order, never the index's identity.
 - Two parameters sharing an index variable must be passed arrays over the
