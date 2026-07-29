@@ -580,14 +580,18 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 body: Box::new((*body).into()),
             },
             ExprKind::Unfold {
+                axis,
                 init,
-                prev_name,
-                curr_name,
+                prev_state_name,
+                prev_index_name,
+                index_name,
                 body,
             } => Self::Unfold {
+                axis,
                 init: Box::new((*init).into()),
-                prev_name,
-                curr_name,
+                prev_state_name,
+                prev_index_name,
+                index_name,
                 body: Box::new((*body).into()),
             },
             ExprKind::Match { scrutinee, arms } => Self::Match {

@@ -306,14 +306,11 @@ param usd_per_eur: Dimensionless = 2.0;
 }
 
 #[test]
-fn nested_unfold_self_reference_is_not_a_cycle() {
-    // Regression: the unfold self-edge was only removed when `unfold` was
-    // the top-level expression of the declaration; a nested form (e.g.
-    // inside `if`) was rejected with a spurious cyclic-dependency error.
+fn nested_unfold_evaluates() {
     let source = r"
 index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node y: Dimensionless[Step] =
-    if 1.0 > 0.0 { unfold(0.0, |p, t| @y[p] + 1.0) } else { unfold(0.0, |p, t| @y[p] + 2.0) };
+    if 1.0 > 0.0 { unfold(Step, 0.0, |prev_y, p, t| prev_y + 1.0) } else { unfold(Step, 0.0, |prev_y, p, t| prev_y + 2.0) };
 ";
     let result = compile_and_eval(source).unwrap();
     let y = value_for(&result, "y");

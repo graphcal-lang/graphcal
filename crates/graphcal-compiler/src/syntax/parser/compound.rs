@@ -2,7 +2,8 @@ use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, IdentPath, MatchArm, MatchPattern, NatExpr,
     PatternBinding,
 };
-use crate::syntax::span::Span;
+use crate::syntax::names::NamePath;
+use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::FieldName;
 
@@ -236,16 +237,18 @@ impl Parser<'_> {
                 span: start_span.merge(end_span),
             });
         }
-        // Named index
+        self.parse_named_index_path().map(ForBindingIndex::Named)
+    }
+
+    /// Parse a named index path such as `Step` or `module.Step`.
+    fn parse_named_index_path(&mut self) -> Result<Spanned<NamePath>, ParseError> {
         let first = self.parse_any_ident()?;
         let mut segments = vec![first];
         while self.lexer.peek() == Some(&Token::Dot) {
             self.lexer.next_token();
             segments.push(self.parse_any_ident()?);
         }
-        Ok(ForBindingIndex::Named(Self::index_name_path_from_segments(
-            &segments,
-        )))
+        Ok(Self::index_name_path_from_segments(&segments))
     }
 
     /// Parse a nat expression: supports literals, identifiers, addition, and multiplication.
@@ -343,26 +346,33 @@ impl Parser<'_> {
 
     // --- Unfold expression ---
 
-    /// Parse an unfold expression: `unfold(init, |prev_i, i| body)` → `ExprKind::Unfold`
+    /// Parse an unfold expression:
+    /// `unfold(axis, init, |prev_state, prev_i, i| body)` → `ExprKind::Unfold`.
     ///
     /// The `unfold` keyword has already been consumed; `keyword_span` is its span.
     pub(super) fn parse_unfold(&mut self, keyword_span: Span) -> Result<Expr, ParseError> {
         self.expect(Token::LParen)?;
+        let axis = self.parse_named_index_path()?;
+        self.expect(Token::Comma)?;
         let init = self.parse_expr()?;
         self.expect(Token::Comma)?;
         self.expect(Token::Pipe)?;
-        let prev_name = self.parse_any_ident()?.into_spanned();
+        let prev_state_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Comma)?;
-        let curr_name = self.parse_any_ident()?.into_spanned();
+        let prev_index_name = self.parse_any_ident()?.into_spanned();
+        self.expect(Token::Comma)?;
+        let index_name = self.parse_any_ident()?.into_spanned();
         self.expect(Token::Pipe)?;
         let body = self.parse_expr()?;
         let (_, end_span) = self.expect(Token::RParen)?;
         let span = keyword_span.merge(end_span);
         Ok(Expr::new(
             ExprKind::Unfold {
+                axis,
                 init: Box::new(init),
-                prev_name,
-                curr_name,
+                prev_state_name,
+                prev_index_name,
+                index_name,
                 body: Box::new(body),
             },
             span,
@@ -690,17 +700,21 @@ node x: Dimensionless = match @r {
 
     #[test]
     fn parse_unfold_expression() {
-        let source = "node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| @x[prev_t] * 2.0);";
+        let source = "node x: Dimensionless[TimeStep] = unfold(TimeStep, 1.0, |prev_x, prev_t, t| prev_x * 2.0);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Unfold {
-                    prev_name,
-                    curr_name,
+                    axis,
+                    prev_state_name,
+                    prev_index_name,
+                    index_name,
                     ..
                 } => {
-                    assert_eq!(prev_name.value.as_str(), "prev_t");
-                    assert_eq!(curr_name.value.as_str(), "t");
+                    assert_eq!(axis.value.to_string(), "TimeStep");
+                    assert_eq!(prev_state_name.value.as_str(), "prev_x");
+                    assert_eq!(prev_index_name.value.as_str(), "prev_t");
+                    assert_eq!(index_name.value.as_str(), "t");
                 }
                 other => panic!("expected Unfold, got {other:?}"),
             },

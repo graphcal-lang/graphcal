@@ -343,14 +343,15 @@ fn infer_hir_type_inner(
             src,
         )?,
         hir::ExprKind::Unfold {
+            recurrence,
             init,
-            prev,
-            curr,
             body,
         } => infer_hir_unfold(
+            &recurrence.axis,
             init,
-            prev,
-            curr,
+            &recurrence.previous_state,
+            &recurrence.previous_index,
+            &recurrence.current_index,
             body,
             owner_decl_name,
             declared_types,
@@ -3153,9 +3154,11 @@ fn infer_hir_scan(
 
 #[expect(clippy::too_many_arguments, reason = "unfold expression context")]
 fn infer_hir_unfold(
+    axis: &crate::syntax::span::Spanned<crate::syntax::index_name::ResolvedIndexName>,
     init: &hir::Expr,
-    prev: &hir::LocalDef,
-    curr: &hir::LocalDef,
+    prev_state: &hir::LocalDef,
+    prev_index: &hir::LocalDef,
+    current_index: &hir::LocalDef,
     body: &hir::Expr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -3177,26 +3180,17 @@ fn infer_hir_unfold(
         builtin_fns,
         src,
     )?;
-    let owner_coordinate_index = owner_decl_name.and_then(|name| {
-        let resolved = dag.resolved_decl_types.get(&ScopedName::local(name))?;
-        let crate::tir::typed::ResolvedTypeExpr::Indexed { indexes, .. } = resolved else {
-            return None;
-        };
-        let crate::tir::typed::ResolvedIndex::Concrete(index, _) = indexes.first()? else {
-            return None;
-        };
-        let idx_def = dag.semantic.collection_refs.index_defs.get(index)?;
-        idx_def
-            .is_coordinate()
-            .then(|| (InferredIndex::from_resolved(index.clone()), idx_def))
-    });
-    let (index, idx_def) = owner_coordinate_index.ok_or_else(|| GraphcalError::EvalError {
-        message:
-            "unfold expression must appear in a declaration with a concrete coordinate-indexed type"
-                .to_string(),
-        src: src.clone(),
-        span: body.span.into(),
-    })?;
+    let index = InferredIndex::from_resolved(axis.value.clone());
+    let idx_def = dag
+        .semantic
+        .collection_refs
+        .index_defs
+        .get(&axis.value)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("missing resolved unfold axis `{}`", axis.value),
+            src: src.clone(),
+            span: axis.span.into(),
+        })?;
     let dimension = match &idx_def.kind {
         crate::registry::types::IndexKind::Coordinate(data) => data.dimension.clone(),
         crate::registry::types::IndexKind::RequiredCoordinate { dimension } => dimension.clone(),
@@ -3204,31 +3198,24 @@ fn infer_hir_unfold(
             return Err(GraphcalError::EvalError {
                 message: format!("unfold requires a coordinate index, got `{}`", index.name()),
                 src: src.clone(),
-                span: body.span.into(),
+                span: axis.span.into(),
             });
         }
     };
-    let scan_locals = local_types.child(vec![
-        (
-            prev.id,
-            InferredType::CoordinateIndexLabel {
-                index: index.clone(),
-                dimension: dimension.clone(),
-            },
-        ),
-        (
-            curr.id,
-            InferredType::CoordinateIndexLabel {
-                index: index.clone(),
-                dimension,
-            },
-        ),
+    let coordinate_type = InferredType::CoordinateIndexLabel {
+        index: index.clone(),
+        dimension,
+    };
+    let unfold_locals = local_types.child(vec![
+        (prev_state.id, init_type.clone()),
+        (prev_index.id, coordinate_type.clone()),
+        (current_index.id, coordinate_type),
     ]);
     let body_type = infer_hir_type(
         body,
         owner_decl_name,
         declared_types,
-        &scan_locals,
+        &unfold_locals,
         dag,
         tir,
         registry,
@@ -3239,7 +3226,7 @@ fn infer_hir_unfold(
         return Err(GraphcalError::DimensionMismatch {
             expected: format_inferred_type(&init_type, registry),
             found: format_inferred_type(&body_type, registry),
-            help: "time scan body must return the same type as the init value".to_string(),
+            help: "unfold body must return the same type as the previous state".to_string(),
             src: src.clone(),
             span: body.span.into(),
         });

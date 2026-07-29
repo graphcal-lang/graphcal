@@ -468,8 +468,12 @@ fn resolve_unfold_self_edge_excluded() {
     // The unfold body references @x[prev_t], which creates a self-reference.
     // extract_all_refs should exclude this self-edge from runtime_deps.
     let source = r"
-        index TimeStep = { First, Second, Third };
-        node x: Dimensionless[TimeStep] = unfold(1.0, |prev_t, t| @x[prev_t] * 2.0);
+        index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+        node x: Dimensionless[TimeStep] = unfold(
+            TimeStep,
+            1.0,
+            |prev_x, prev_t, t| @x[prev_t] * 2.0
+        );
     ";
     let tir = compile_to_tir(source).unwrap();
     let deps = &tir.root().semantic.dependencies;
@@ -482,8 +486,12 @@ fn resolve_unfold_self_edge_excluded() {
 #[test]
 fn resolve_unfold_init_self_edge_retained() {
     let source = r"
-        index TimeStep = { First, Second, Third };
-        node x: Dimensionless[TimeStep] = unfold(sum(@x), |prev_t, t| @x[prev_t] * 2.0);
+        index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+        node x: Dimensionless[TimeStep] = unfold(
+            TimeStep,
+            sum(@x),
+            |prev_x, prev_t, t| @x[prev_t] * 2.0
+        );
     ";
     let tir = compile_to_tir(source).unwrap();
     let deps = &tir.root().semantic.dependencies;

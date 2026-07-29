@@ -516,9 +516,8 @@ pub enum ExprKind {
         body: Box<Expr>,
     },
     Unfold {
+        recurrence: Box<UnfoldRecurrence>,
         init: Box<Expr>,
-        prev: LocalDef,
-        curr: LocalDef,
         body: Box<Expr>,
     },
     Match {
@@ -531,6 +530,18 @@ pub enum ExprKind {
         args: Vec<ParamBinding>,
         output: Spanned<ResolvedDeclName>,
     },
+}
+
+/// Resolved axis and lexical bindings for an `unfold` recurrence.
+///
+/// Boxed as one semantic unit inside [`ExprKind::Unfold`] to keep expression
+/// variants compact while preserving the role of every binding.
+#[derive(Debug, Clone)]
+pub struct UnfoldRecurrence {
+    pub axis: Spanned<ResolvedIndexName>,
+    pub previous_state: LocalDef,
+    pub previous_index: LocalDef,
+    pub current_index: LocalDef,
 }
 
 /// Canonical declaration dependencies observed in one HIR expression tree.
@@ -1197,21 +1208,38 @@ impl<'a> ExprLowerer<'a> {
                 }
             }
             ast::ExprKind::Unfold {
+                axis,
                 init,
-                prev_name,
-                curr_name,
+                prev_state_name,
+                prev_index_name,
+                index_name,
                 body,
             } => {
+                let resolved_axis = self
+                    .ctx
+                    .resolver
+                    .resolve_index_path(self.ctx.owner, &axis.value)
+                    .map_err(|source| ExprLowerError::ModuleResolve {
+                        source,
+                        span: axis.span,
+                    })?;
                 let init = Box::new(self.lower_expr(init));
-                let prev = self.allocate_local(prev_name.value.clone(), prev_name.span)?;
-                let curr = self.allocate_local(curr_name.value.clone(), curr_name.span)?;
-                self.push_scope(vec![prev.clone(), curr.clone()])?;
+                let prev_state =
+                    self.allocate_local(prev_state_name.value.clone(), prev_state_name.span)?;
+                let prev_index =
+                    self.allocate_local(prev_index_name.value.clone(), prev_index_name.span)?;
+                let index = self.allocate_local(index_name.value.clone(), index_name.span)?;
+                self.push_scope(vec![prev_state.clone(), prev_index.clone(), index.clone()])?;
                 let body = Box::new(self.lower_expr(body));
                 self.pop_scope();
                 ExprKind::Unfold {
+                    recurrence: Box::new(UnfoldRecurrence {
+                        axis: Spanned::new(resolved_axis, axis.span),
+                        previous_state: prev_state,
+                        previous_index: prev_index,
+                        current_index: index,
+                    }),
                     init,
-                    prev,
-                    curr,
                     body,
                 }
             }
