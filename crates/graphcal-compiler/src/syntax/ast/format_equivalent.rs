@@ -857,13 +857,11 @@ impl FormatEquivalent for AssertBody {
                 actual,
                 expected,
                 tolerance,
-                is_relative,
             } => {
                 let Self::Tolerance {
                     actual: other_actual,
                     expected: other_expected,
                     tolerance: other_tolerance,
-                    is_relative: other_is_relative,
                 } = other
                 else {
                     return false;
@@ -871,7 +869,6 @@ impl FormatEquivalent for AssertBody {
                 actual.format_equivalent(other_actual)
                     && expected.format_equivalent(other_expected)
                     && tolerance.format_equivalent(other_tolerance)
-                    && is_relative.format_equivalent(other_is_relative)
             }
         }
     }

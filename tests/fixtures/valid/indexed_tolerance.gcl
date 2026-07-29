@@ -22,8 +22,9 @@ assert unindexed_tol = @actual ~= @expected +/- 0.6 m;
 // Per-key tolerance over the same axes.
 assert per_key = @actual ~= @expected +/- @per_key_tol;
 
-// Relative tolerance, unindexed.
-assert relative = @actual ~= @expected +/- 25%;
+// Relative behavior expressed as per-key absolute tolerances.
+node relative_tol: Length[Case] = for case: Case { abs(@expected[case]) * 0.25 };
+assert relative = @actual ~= @expected +/- @relative_tol;
 
 // Unindexed expected value broadcast against indexed actual.
 assert near_unindexed = @actual ~= 1.5 m +/- 1.0 m;

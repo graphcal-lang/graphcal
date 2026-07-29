@@ -791,7 +791,6 @@ pub fn evaluate_assert_with_expected_fail(
                     actual,
                     expected,
                     tolerance,
-                    is_relative,
                 } => {
                     let operands = eval_tolerance_operands(
                         actual,
@@ -805,12 +804,7 @@ pub fn evaluate_assert_with_expected_fail(
                         Ok(operands) => operands,
                         Err(result) => return result,
                     };
-                    match eval_tolerance_tree(
-                        &actual_val,
-                        &expected_val,
-                        &tolerance_val,
-                        *is_relative,
-                    ) {
+                    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
                         Ok((tree, _)) => tree,
                         Err(message) => return AssertResult::Error { message },
                     }
@@ -1106,16 +1100,7 @@ fn evaluate_assert_body(
             actual,
             expected,
             tolerance,
-            is_relative,
-        } => evaluate_tolerance_assert(
-            actual,
-            expected,
-            tolerance,
-            *is_relative,
-            values,
-            local_values,
-            ctx,
-        ),
+        } => evaluate_tolerance_assert(actual, expected, tolerance, values, local_values, ctx),
     }
 }
 
@@ -1129,7 +1114,6 @@ fn evaluate_tolerance_assert(
     actual: &graphcal_compiler::hir::Expr,
     expected: &graphcal_compiler::hir::Expr,
     tolerance: &graphcal_compiler::hir::Expr,
-    is_relative: bool,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
@@ -1139,7 +1123,7 @@ fn evaluate_tolerance_assert(
             Ok(operands) => operands,
             Err(result) => return result,
         };
-    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val, is_relative) {
+    match eval_tolerance_tree(&actual_val, &expected_val, &tolerance_val) {
         Err(message) => AssertResult::Error { message },
         Ok((_, failures)) if failures.is_empty() => AssertResult::Pass,
         Ok((_, failures)) => AssertResult::Fail {
@@ -1185,18 +1169,10 @@ fn eval_tolerance_tree(
     actual: &RuntimeValue,
     expected: &RuntimeValue,
     tolerance: &RuntimeValue,
-    is_relative: bool,
 ) -> Result<(RuntimeValue, Vec<ToleranceFailure>), String> {
     let mut failures = Vec::new();
     let mut path = Vec::new();
-    let tree = tolerance_tree_inner(
-        actual,
-        expected,
-        tolerance,
-        is_relative,
-        &mut path,
-        &mut failures,
-    )?;
+    let tree = tolerance_tree_inner(actual, expected, tolerance, &mut path, &mut failures)?;
     Ok((tree, failures))
 }
 
@@ -1204,7 +1180,6 @@ fn tolerance_tree_inner(
     actual: &RuntimeValue,
     expected: &RuntimeValue,
     tolerance: &RuntimeValue,
-    is_relative: bool,
     path: &mut Vec<(IndexTypeRef, IndexEntryKey)>,
     failures: &mut Vec<ToleranceFailure>,
 ) -> Result<RuntimeValue, String> {
@@ -1223,7 +1198,6 @@ fn tolerance_tree_inner(
                     actual_entry,
                     expected_entry,
                     tolerance_entry,
-                    is_relative,
                     path,
                     failures,
                 );
@@ -1239,20 +1213,8 @@ fn tolerance_tree_inner(
 
     let actual_val = tolerance_quantity_operand(actual, "actual")?;
     let expected_val = tolerance_quantity_operand(expected, "expected")?;
-    let tolerance_val = match tolerance {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "tolerance values are small integers"
-        )]
-        RuntimeValue::Int(i) => *i as f64,
-        other => tolerance_quantity_operand(other, "tolerance")?,
-    };
-
-    let tol_display = if is_relative {
-        format!("{tolerance_val}%")
-    } else {
-        format!("{tolerance_val}")
-    };
+    let tolerance_val = tolerance_quantity_operand(tolerance, "tolerance")?;
+    let tol_display = format!("{tolerance_val}");
 
     // A negative tolerance makes the assertion unsatisfiable (even an
     // exact match fails). Statically-known negatives are rejected at
@@ -1262,13 +1224,7 @@ fn tolerance_tree_inner(
     }
 
     let delta = (actual_val - expected_val).abs();
-    let limit = if is_relative {
-        expected_val.abs() * tolerance_val / 100.0
-    } else {
-        tolerance_val
-    };
-
-    let ok = delta <= limit;
+    let ok = delta <= tolerance_val;
     if !ok {
         failures.push(ToleranceFailure {
             path: path.clone(),

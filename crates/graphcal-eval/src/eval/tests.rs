@@ -199,14 +199,15 @@ fn indexed_tolerance_reports_failing_keys_with_detail() {
 }
 
 #[test]
-fn indexed_tolerance_per_key_and_relative_pass() {
+fn indexed_tolerance_per_key_and_explicit_relative_pass() {
     let result = compile_and_eval(
         "index Case = { A, B };\n\
          node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
          node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
          node tol: Dimensionless[Case] = { Case.A: 0.01, Case.B: 0.6 };\n\
+         node relative_tol: Dimensionless[Case] = for case: Case { abs(@expected[case]) * 0.25 };\n\
          assert per_key = @actual ~= @expected +/- @tol;\n\
-         assert relative = @actual ~= @expected +/- 25 %;",
+         assert relative = @actual ~= @expected +/- @relative_tol;",
     )
     .unwrap();
     for (name, result, _) in &result.assertions {
@@ -460,17 +461,17 @@ fn assert_negative_runtime_tolerance_errors() {
 }
 
 #[test]
-fn assert_negative_runtime_relative_tolerance_errors() {
+fn assert_negative_runtime_tolerance_expression_errors() {
     let result = compile_and_eval(
         "param x: Dimensionless = 1.0;\n\
-         param tol: Dimensionless = -5.0;\n\
-         assert exact = @x ~= 1.0 +/- @tol %;",
+         param rate: Dimensionless = -0.05;\n\
+         assert exact = @x ~= 1.0 +/- abs(1.0) * @rate;",
     )
     .unwrap();
     match &result.assertions[0].1 {
         super::types::AssertResult::Error { message } => {
             assert!(
-                message.contains("tolerance must be non-negative") && message.contains('%'),
+                message.contains("tolerance must be non-negative"),
                 "unexpected message: {message}"
             );
         }

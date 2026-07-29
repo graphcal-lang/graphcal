@@ -562,7 +562,7 @@ assert_decl
 
 assert_body
    = expr                                                 (* exact assertion *)
-   | expr, "~=", expr, "+/-", unary_expr, [ "%" ];       (* tolerance assertion *)
+   | expr, "~=", expr, "+/-", expr;                      (* absolute-tolerance assertion *)
 
 (* --- plot --- *)
 (* Plot declarations produce Vega-Lite chart specifications.

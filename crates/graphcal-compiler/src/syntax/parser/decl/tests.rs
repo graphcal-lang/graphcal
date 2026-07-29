@@ -1,8 +1,8 @@
 use crate::dimension::Rational;
 use crate::syntax::ast::{
-    AttributeArg, BindableVisibility, DeclKind, ExprKind, GenericConstraint, ImportItemNamespace,
-    ImportKind, IndexDeclKind, MulDivOp, TypeDecl, TypeDeclBody, TypeExprKind, UnionMember,
-    UnitConstness, Visibility,
+    AssertBody, AttributeArg, BinOp, BindableVisibility, DeclKind, ExprKind, GenericConstraint,
+    ImportItemNamespace, ImportKind, IndexDeclKind, MulDivOp, TypeDecl, TypeDeclBody, TypeExprKind,
+    UnionMember, UnitConstness, Visibility,
 };
 use crate::syntax::parser::Parser;
 
@@ -39,6 +39,46 @@ fn parse_param_with_type() {
         }
         _ => panic!("expected param"),
     }
+}
+
+#[test]
+fn parse_assert_tolerance_accepts_full_expression() {
+    let file = Parser::new("assert close = @actual ~= @expected +/- abs(@expected) * 0.05;")
+        .parse_file()
+        .unwrap();
+    let DeclKind::Assert(assertion) = &file.declarations[0].kind else {
+        panic!("expected assert");
+    };
+    let AssertBody::Tolerance { tolerance, .. } = &assertion.body else {
+        panic!("expected tolerance assertion");
+    };
+    assert!(matches!(
+        tolerance.kind,
+        ExprKind::BinOp { op: BinOp::Mul, .. }
+    ));
+}
+
+#[test]
+fn parse_assert_tolerance_percent_is_only_modulo() {
+    let file = Parser::new("assert modulo = @actual ~= @expected +/- 5 % 2;")
+        .parse_file()
+        .unwrap();
+    let DeclKind::Assert(assertion) = &file.declarations[0].kind else {
+        panic!("expected assert");
+    };
+    let AssertBody::Tolerance { tolerance, .. } = &assertion.body else {
+        panic!("expected tolerance assertion");
+    };
+    assert!(matches!(
+        tolerance.kind,
+        ExprKind::BinOp { op: BinOp::Mod, .. }
+    ));
+
+    assert!(
+        Parser::new("assert old = @actual ~= @expected +/- 5 %;")
+            .parse_file()
+            .is_err()
+    );
 }
 
 #[test]

@@ -628,7 +628,6 @@ fn check_hir_assert_body(
             actual,
             expected,
             tolerance,
-            is_relative,
         } => {
             let actual_type = ctx.infer_hir(actual)?;
             let expected_type = ctx.infer_hir(expected)?;
@@ -668,32 +667,13 @@ fn check_hir_assert_body(
                 });
             }
 
-            let tolerance_ok = if *is_relative {
-                tolerance_elem.is_int_like()
-                    || tolerance_elem
-                        .quantity_dimension()
-                        .is_some_and(Dimension::is_dimensionless)
-            } else {
-                let tolerance_dim = expect_quantity(tolerance_elem, registry, src, tolerance.span)?;
-                tolerance_dim == actual_dim
-            };
-            if !tolerance_ok {
-                let (expected_str, help_str) = if *is_relative {
-                    (
-                        "Dimensionless".to_string(),
-                        "relative tolerance (%) must be dimensionless".to_string(),
-                    )
-                } else {
-                    (
-                        registry.dimensions.format_dimension(&actual_dim),
-                        "absolute tolerance must have the same dimension as actual/expected"
-                            .to_string(),
-                    )
-                };
+            let tolerance_dim = expect_quantity(tolerance_elem, registry, src, tolerance.span)?;
+            if tolerance_dim != actual_dim {
                 return Err(GraphcalError::DimensionMismatch {
-                    expected: expected_str,
+                    expected: registry.dimensions.format_dimension(&actual_dim),
                     found: format_inferred_type(&tolerance_type, registry),
-                    help: help_str,
+                    help: "absolute tolerance must have the same dimension as actual/expected"
+                        .to_string(),
                     src: src.clone(),
                     span: tolerance.span.into(),
                 });

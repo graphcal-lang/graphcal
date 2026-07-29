@@ -105,46 +105,21 @@ assert mass_check = @computed_mass ~= @expected_mass +/- @mass_tolerance;
 assert velocity_ok = @v_final ~= 3000.0 m/s +/- 10.0 m/s;
 ```
 
-#### Relative Tolerance
+#### Expressing Relative Tolerance
 
-Append `%` after the tolerance value to use relative (percentage) tolerance:
+Tolerance assertions have absolute semantics only. Express a relative
+percentage by calculating its absolute tolerance explicitly:
 
-```
-assert name = <actual> ~= <expected> +/- <tolerance> %;
-```
-
-The dimension rules change for relative tolerance:
-
-- `actual` and `expected` must have the **same dimension**.
-- `tolerance` must be **dimensionless** (or an integer literal), and
-  **non-negative** (same rule as absolute tolerance).
-
-The check passes when `abs(actual - expected) <= abs(expected) * tolerance / 100`.
-
-**The `%` is not a unit.** The `%` in tolerance assertions is special syntax,
-not a built-in unit. It is only valid immediately after the tolerance expression
-in a `~= ... +/-` context. You cannot write `5 %` as a unit literal elsewhere
-in the language.
-
-This means there is no ambiguity in expressions like:
-
-```
-assert rate_check = @rate ~= 0.20 +/- 10 %;
-```
-
-This always means "within 10% of 0.20" (i.e., the range \[0.18, 0.22\]),
-because `%` is parsed as part of the tolerance syntax, not as a unit on the
-number `10`.
-
-Examples:
-
-```
-assert efficiency = @eta ~= 0.85 +/- 5 %;
+```gcl
+assert efficiency = @eta ~= 0.85 +/- abs(0.85) * 0.05;
 // Passes if eta is within [0.8075, 0.8925]
 
-assert velocity_approx = @velocity ~= 49.5 m/s +/- 5 %;
+assert velocity_approx = @velocity ~= 49.5 m/s +/- abs(49.5 m/s) * 0.05;
 // Passes if velocity is within [47.025, 51.975] m/s
 ```
+
+The expression after `+/-` is a full ordinary expression. `%` is exclusively
+the binary modulo operator; it has no assertion-specific trailing form.
 
 #### Indexed Tolerance Assertions
 
@@ -168,8 +143,11 @@ assert close = @actual ~= @expected +/- 0.1 m;
 // Per-key tolerance over the same axes:
 assert per_key = @actual ~= @expected +/- @tol;
 
-// Relative tolerance works the same way (unindexed or indexed, dimensionless):
-assert relative = @actual ~= @expected +/- 25 %;
+// Derive per-key relative tolerances explicitly as absolute quantities:
+node relative_tol: Length[Case] = for case: Case {
+    abs(@expected[case]) * 0.25
+};
+assert relative = @actual ~= @expected +/- @relative_tol;
 ```
 
 Each failing key is reported with its own actual/expected/delta detail.

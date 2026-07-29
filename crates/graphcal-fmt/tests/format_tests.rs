@@ -492,12 +492,12 @@ fn format_assert_tolerance() {
 }
 
 #[test]
-fn format_assert_tolerance_relative() {
-    let source = "param x: Dimensionless = 1.0;\nassert check = @x ~= 1.0 +/- 5 %;\n";
+fn format_assert_tolerance_full_expression() {
+    let source = "param x: Dimensionless = 1.0;\nassert check = @x ~= 1.0 +/- abs(1.0) * 0.05;\n";
     let formatted = format_source(source).unwrap();
     assert!(
-        formatted.contains("assert check = @x ~= 1.0 +/- 5%;"),
-        "Assert relative tolerance formatting incorrect: {formatted}"
+        formatted.contains("assert check = @x ~= 1.0 +/- abs(1.0) * 0.05;"),
+        "full tolerance expression formatting is not round-trippable: {formatted}"
     );
 }
 

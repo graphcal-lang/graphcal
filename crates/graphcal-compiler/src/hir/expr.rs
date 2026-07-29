@@ -241,7 +241,6 @@ fn lower_assert_body_tolerant(
             actual,
             expected,
             tolerance,
-            is_relative,
         } => {
             let (actual, mut diagnostics) = lower_expr_tolerant(actual, ctx);
             let (expected, expected_diags) = lower_expr_tolerant(expected, ctx);
@@ -253,7 +252,6 @@ fn lower_assert_body_tolerant(
                     actual: Box::new(actual),
                     expected: Box::new(expected),
                     tolerance: Box::new(tolerance),
-                    is_relative: *is_relative,
                 },
                 diagnostics,
             )
@@ -883,7 +881,6 @@ pub enum AssertBody {
         actual: Box<Expr>,
         expected: Box<Expr>,
         tolerance: Box<Expr>,
-        is_relative: bool,
     },
 }
 

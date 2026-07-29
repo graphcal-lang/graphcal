@@ -341,12 +341,10 @@ impl From<AssertBody<Raw>> for AssertBody<Desugared> {
                 actual,
                 expected,
                 tolerance,
-                is_relative,
             } => Self::Tolerance {
                 actual: Box::new((*actual).into()),
                 expected: Box::new((*expected).into()),
                 tolerance: Box::new((*tolerance).into()),
-                is_relative,
             },
         }
     }

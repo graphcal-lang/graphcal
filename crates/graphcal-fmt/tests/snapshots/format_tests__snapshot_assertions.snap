@@ -1,6 +1,6 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 624
+assertion_line: 676
 expression: formatted
 ---
 // assertions.gcl -- Assertion feature tests
@@ -16,5 +16,5 @@ assert velocity_in_range = @velocity < @max_velocity;
 // Tolerance assertion (absolute, should pass)
 assert mass_approx = @mass ~= 100.1 kg +/- 1.0 kg;
 
-// Tolerance assertion (relative, should pass)
-assert velocity_approx = @velocity ~= 49.5 m/s +/- 5%;
+// Relative behavior expressed as an absolute tolerance expression (should pass)
+assert velocity_approx = @velocity ~= 49.5 m/s +/- abs(49.5 m/s) * 0.05;

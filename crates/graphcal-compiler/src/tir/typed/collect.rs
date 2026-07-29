@@ -602,7 +602,6 @@ fn collect_resolved_collection_refs_from_assert_body(
             actual,
             expected,
             tolerance,
-            is_relative: _,
         } => {
             collect_resolved_collection_refs_from_expr(actual, ctx, src, refs)?;
             collect_resolved_collection_refs_from_expr(expected, ctx, src, refs)?;
@@ -805,7 +804,6 @@ fn collect_resolved_constructor_refs_from_assert_body(
             actual,
             expected,
             tolerance,
-            is_relative: _,
         } => {
             collect_resolved_constructor_refs_from_expr(actual, ctx, src, refs)?;
             collect_resolved_constructor_refs_from_expr(expected, ctx, src, refs)?;
@@ -954,7 +952,6 @@ fn collect_resolved_inline_dag_refs_from_assert_body(
             actual,
             expected,
             tolerance,
-            is_relative: _,
         } => {
             collect_resolved_inline_dag_refs_from_expr(actual, refs);
             collect_resolved_inline_dag_refs_from_expr(expected, refs);
