@@ -8,7 +8,7 @@ use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::GenericParamName;
 
 use super::{ParseError, Parser};
@@ -662,6 +662,13 @@ impl Parser<'_> {
     /// [`GenericArg::Ambiguous`]; other type shapes are unambiguously
     /// [`GenericArg::Type`]. Forms involving a literal or `+` are parsed as Nat.
     fn parse_generic_arg(&mut self) -> Result<GenericArg, ParseError> {
+        self.reject_obsolete_structural_range()?;
+        if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
+            && self.lexer.peek_second() == Some(&Token::LParen)
+        {
+            return self.parse_index_expr().map(GenericArg::Index);
+        }
+
         if self.lexer.peek() != Some(&Token::Number) {
             let mut type_candidate = self.clone();
             if let Ok(type_expr) = type_candidate.parse_type_expr()
@@ -721,13 +728,25 @@ impl Parser<'_> {
     /// Supports names, literals, addition, and multiplication with correct precedence:
     /// `*` binds tighter than `+`, so `M + N * P` parses as `M + (N * P)`.
     ///
-    /// - `Phase` / `module.Phase` → `IndexExpr::Name` (named index or generic param path)
-    /// - `3` → `IndexExpr::NatExpr(NatExpr::Literal(..))` (desugars to `range(3)`)
-    /// - `N + 1` → `IndexExpr::NatExpr` (compound Nat expression)
-    /// - `M * N` → `IndexExpr::NatExpr` (multiplication)
-    /// - `M * N + 1` → `IndexExpr::NatExpr` (mixed arithmetic)
+    /// - `Phase` / `module.Phase` → `IndexExpr::Name`
+    /// - `Fin(N + 1)` → `IndexExpr::Finite`
+    /// - bare Nat syntax is retained as `IndexExpr::BareNat` for a targeted
+    ///   semantic sort diagnostic.
     fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
-        // Parse the first multiplicative term
+        self.reject_obsolete_structural_range()?;
+        if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
+            && self.lexer.peek_second() == Some(&Token::LParen)
+        {
+            let (_, start_span) = self.advance()?;
+            self.expect(Token::LParen)?;
+            let cardinality = self.parse_nat_expr()?;
+            let (_, end_span) = self.expect(Token::RParen)?;
+            return Ok(IndexExpr::Finite {
+                cardinality,
+                span: start_span.merge(end_span),
+            });
+        }
+
         let first_atom = self.parse_index_expr_atom()?;
 
         // Check if this is followed by an operator (* or +)
@@ -742,7 +761,7 @@ impl Parser<'_> {
             // path names a concrete index or an in-scope generic parameter.
             return match first_atom {
                 IndexExprAtom::Path(path) => Ok(IndexExpr::Name(path.into_spanned_name_path())),
-                IndexExprAtom::Nat(nat_expr) => Ok(IndexExpr::NatExpr(nat_expr)),
+                IndexExprAtom::Nat(nat_expr) => Ok(IndexExpr::BareNat(nat_expr)),
             };
         }
 
@@ -764,7 +783,7 @@ impl Parser<'_> {
         if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
             return Err(self.nat_subtraction_unsupported(span));
         }
-        Ok(IndexExpr::NatExpr(lhs))
+        Ok(IndexExpr::BareNat(lhs))
     }
 
     /// Parse a multiplicative term in index position: `atom * atom * ...`
@@ -957,6 +976,40 @@ mod tests {
         assert!(matches!(
             &generic_args[2],
             GenericArg::Nat(NatExpr::Literal(3, _))
+        ));
+    }
+
+    #[test]
+    fn explicit_finite_index_has_typed_generic_and_index_syntax() {
+        let source = "param wrapped: Tensor<Fin(N + 1)>;\nparam values: Dimensionless[Fin(N * 2)];";
+        let file = Parser::new(source).parse_file().unwrap();
+
+        let DeclKind::Param(wrapped) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        let TypeExprKind::TypeApplication { generic_args, .. } = &wrapped.type_ann.kind else {
+            panic!("expected type application");
+        };
+        assert!(matches!(
+            &generic_args[0],
+            GenericArg::Index(IndexExpr::Finite {
+                cardinality: NatExpr::Add(_, _, _),
+                ..
+            })
+        ));
+
+        let DeclKind::Param(values) = &file.declarations[1].kind else {
+            panic!("expected param");
+        };
+        let TypeExprKind::Indexed { indexes, .. } = &values.type_ann.kind else {
+            panic!("expected indexed type");
+        };
+        assert!(matches!(
+            &indexes[0],
+            IndexExpr::Finite {
+                cardinality: NatExpr::Mul(_, _, _),
+                ..
+            }
         ));
     }
 

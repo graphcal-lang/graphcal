@@ -2,7 +2,10 @@
 
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
-use crate::cursor_context::{CompletionContext, determine_completion_context};
+use crate::cursor_context::{
+    CompletionContext, CoordinateIndexCompletionContext, determine_completion_context,
+    determine_coordinate_index_completion_context,
+};
 use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory, SymbolKey};
 
@@ -15,8 +18,9 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
     "layer", "import", "include",
 ];
 
-/// Built-in type keywords available in type annotation position.
-const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime"];
+/// Built-ins available while editing a type annotation. `Fin` is offered for
+/// nested Index positions such as `T[Fin(N)]`.
+const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime", "Fin"];
 
 /// Iterate over all visible definitions: local (from symbol table) and imported.
 fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = &DefinitionInfo> {
@@ -38,8 +42,16 @@ pub fn completion(
     source: &str,
     offset: usize,
 ) -> Option<Vec<CompletionItem>> {
-    let context = determine_completion_context(source, offset);
+    if let Some(context) = determine_coordinate_index_completion_context(source, offset) {
+        let keywords = match context {
+            CoordinateIndexCompletionContext::Constructor => &["range", "linspace"][..],
+            CoordinateIndexCompletionContext::StepLabel => &["step"][..],
+            CoordinateIndexCompletionContext::PointsLabel => &["points"][..],
+        };
+        return Some(keyword_items(keywords));
+    }
 
+    let context = determine_completion_context(source, offset);
     let items = match context {
         CompletionContext::GraphRef => complete_graph_refs(analysis, offset),
         CompletionContext::TypeAnnotation => complete_types(analysis),
@@ -231,6 +243,51 @@ mod tests {
                 "missing top-level keyword: {required}"
             );
         }
+    }
+
+    #[test]
+    fn index_positions_offer_fin_constructor() {
+        let source = "param values: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };\n";
+        let uri = tower_lsp::lsp_types::Url::parse("file:///tmp/completion-fin.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        for offset in [source.find("Fin").unwrap(), source.rfind("Fin").unwrap()] {
+            let items = completion(&analysis, source, offset).unwrap_or_default();
+            assert!(
+                items.iter().any(|item| item.label == "Fin"),
+                "Index position should offer the explicit Fin constructor: {items:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn coordinate_index_positions_offer_contextual_constructor_words() {
+        let source = "index ByStep = range(0.0, 1.0, step: 0.5);\nindex ByCount = linspace(0.0, 1.0, points: 3);\n";
+        let uri =
+            tower_lsp::lsp_types::Url::parse("file:///tmp/completion-coordinate.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+
+        let constructors =
+            completion(&analysis, source, source.find("range").unwrap()).unwrap_or_default();
+        assert!(constructors.iter().any(|item| item.label == "range"));
+        assert!(constructors.iter().any(|item| item.label == "linspace"));
+
+        let step = completion(&analysis, source, source.find("step").unwrap()).unwrap_or_default();
+        assert_eq!(
+            step.iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["step"]
+        );
+
+        let points =
+            completion(&analysis, source, source.find("points").unwrap()).unwrap_or_default();
+        assert_eq!(
+            points
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["points"]
+        );
     }
 
     #[test]

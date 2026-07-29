@@ -861,13 +861,13 @@ node result: Dimensionless = @total;  // 35.0
 
 #### Kind matching
 
-Named indexes can only be bound to named indexes, and range indexes can
-only be bound to range indexes. Binding a named index to a range or
-vice versa is a compile error.
+Named indexes can only be bound to named indexes, and coordinate indexes can
+only be bound to coordinate indexes. Binding one category to the other is a
+compile error.
 
-#### Dimension matching for range indexes
+#### Dimension matching for coordinate indexes
 
-When binding a required range index, the concrete range index must have
+When binding a required coordinate index, the concrete coordinate index must have
 the **same dimension**:
 
 ```graphcal
@@ -875,10 +875,10 @@ the **same dimension**:
 pub(bind) index Step: Time;   // requires dimension Time
 
 // main.gcl
-index MyStep = linspace(0.0 s, 10.0 s, step: 1.0 s);     // OK
+index MyStep = range(0.0 s, 10.0 s, step: 1.0 s);     // OK
 include lib(Step: MyStep);
 
-index DistStep = linspace(0.0 m, 100.0 m, step: 10.0 m); // dimension is Length
+index DistStep = range(0.0 m, 100.0 m, step: 10.0 m); // dimension is Length
 include lib(Step: DistStep);                              // ERROR: dimension mismatch
 ```
 
@@ -908,8 +908,8 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 - All required indexes must be provided by bindings.
 - Index binding values must be the name of a concrete index in the
   importer's scope.
-- Named indexes can only be bound to named indexes; range indexes can
-  only be bound to range indexes. Range index dimensions must match.
+- Named indexes can only be bound to named indexes; coordinate indexes can
+  only be bound to coordinate indexes. Coordinate-index dimensions must match.
 - Dimension mismatches are caught by the dimension checker after
   merging.
 

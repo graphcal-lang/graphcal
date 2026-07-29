@@ -14,15 +14,15 @@ use crate::registry::types::Registry;
 
 /// Look up the canonical index definition for an inferred index identity.
 ///
-/// Concrete Nat ranges come from the registry; declared indexes come from the
+/// Concrete finite structurals come from the registry; declared indexes come from the
 /// DAG's semantic collection refs.
 fn index_def_for_inferred<'a>(
     index: &InferredIndex,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     registry: &'a Registry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
-    if let Some(nat_range) = index.concrete_nat_range() {
-        return registry.indexes.get_nat_range(nat_range);
+    if let Some(finite_index) = index.concrete_finite_index() {
+        return registry.indexes.get_finite_index(finite_index);
     }
     let resolved = index.declared_resolved()?;
     dag.map(|dag| &dag.semantic.collection_refs)

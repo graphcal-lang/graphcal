@@ -1713,6 +1713,15 @@ mod tests {
     }
 
     fn test_indexed(index_name: IndexName, entries: IndexMap<IndexVariantName, Value>) -> Value {
+        let entries = entries
+            .into_iter()
+            .map(|(variant, value)| {
+                (
+                    graphcal_compiler::syntax::index_name::IndexEntryKey::named(variant),
+                    value,
+                )
+            })
+            .collect();
         Value::indexed_with_owner(test_owner(), index_name, entries)
     }
 

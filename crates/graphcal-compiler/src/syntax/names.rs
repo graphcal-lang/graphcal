@@ -13,8 +13,9 @@
 //!
 //! - [`NameAtom`] is a single non-empty path segment. It rejects `.` so a leaf
 //!   name cannot accidentally carry a qualified path. It is the storage type for
-//!   semantic names and also permits compiler-generated leaf names such as range
-//!   variants (`#0`, `#1`, ...).
+//!   semantic names and also permits generated display leaves at diagnostic
+//!   boundaries. Structured index-entry positions remain typed values rather
+//!   than `NameAtom`s.
 //! - [`NameNamespace`] is implemented by zero-sized marker types owned by the
 //!   relevant domain module. It gives [`NameDef`] and [`ResolvedName`] their
 //!   type-level namespace without adding runtime data.
@@ -49,9 +50,8 @@ pub enum NameAtomError {
 /// A single name segment with no path separators.
 ///
 /// `NameAtom` deliberately models only the leaf/segment invariant. It does not
-/// attempt to encode the full lexer grammar because some internal names, such
-/// as synthetic range variants (`#0`, `#1`, ...), are not source identifiers but
-/// still must never contain `.`.
+/// attempt to encode the full lexer grammar because resolver-owned and wire
+/// names may be broader than source identifiers while still excluding `.`.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NameAtom(String);
 

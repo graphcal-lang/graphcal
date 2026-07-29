@@ -22,7 +22,7 @@
 use graphcal_compiler::registry::declared_type::IndexTypeRef;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::ast::EncodingChannel;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
 use super::types::{PlotFieldValue, epoch_to_rfc3339};
 
@@ -38,14 +38,14 @@ enum PlotDatum {
 #[derive(Debug, Clone)]
 struct PlotAxis {
     index: IndexTypeRef,
-    variants: Vec<IndexVariantName>,
+    entry_keys: Vec<IndexEntryKey>,
 }
 
 impl PlotAxis {
     /// Two axes are the same when they are the same index with the same
-    /// variant sequence.
+    /// entry-key sequence.
     fn matches(&self, other: &Self) -> bool {
-        self.index.matches_ref(&other.index) && self.variants == other.variants
+        self.index.matches_ref(&other.index) && self.entry_keys == other.entry_keys
     }
 }
 
@@ -94,9 +94,9 @@ fn plot_datum_from_leaf(rv: &RuntimeValue) -> Result<PlotDatum, String> {
     match rv {
         RuntimeValue::Quantity(v) => Ok(PlotDatum::Number(*v)),
         RuntimeValue::Int(i) => Ok(PlotDatum::Number(*i as f64)),
-        // A range-index loop variable surfacing as a value
+        // A coordinate-index loop variable surfacing as a value
         // (e.g. `x: for t: T { t }`) is numeric data (#839).
-        RuntimeValue::RangeLabel { value, .. } => Ok(PlotDatum::Number(*value)),
+        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotDatum::Number(*value)),
         RuntimeValue::Bool(b) => Ok(PlotDatum::Label(b.to_string())),
         RuntimeValue::Label { variant, .. } => Ok(PlotDatum::Label(variant.to_string())),
         RuntimeValue::Datetime(epoch) => Ok(PlotDatum::Datetime(epoch_to_rfc3339(epoch))),
@@ -120,7 +120,7 @@ pub(super) fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData
         });
     };
 
-    let variants: Vec<IndexVariantName> = entries.keys().cloned().collect();
+    let entry_keys: Vec<IndexEntryKey> = entries.keys().cloned().collect();
     let mut inner_axes: Option<Vec<PlotAxis>> = None;
     let mut values = Vec::new();
     for entry in entries.values() {
@@ -146,7 +146,7 @@ pub(super) fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData
 
     let mut axes = vec![PlotAxis {
         index: index_name.clone(),
-        variants,
+        entry_keys,
     }];
     axes.extend(inner_axes.unwrap_or_default());
     Ok(ChannelData { axes, values })
@@ -224,7 +224,7 @@ pub(super) fn align_encoding_channels(
     }
 
     // Cross product of the row axes, row-major (last axis fastest).
-    let row_count: usize = row_axes.iter().map(|a| a.variants.len()).product();
+    let row_count: usize = row_axes.iter().map(|a| a.entry_keys.len()).product();
     let mut result = Vec::with_capacity(mapped.len());
     for (channel, data, positions) in mapped {
         let mut values = Vec::with_capacity(row_count);
@@ -233,7 +233,7 @@ pub(super) fn align_encoding_channels(
             let mut digits = vec![0usize; row_axes.len()];
             let mut rest = row;
             for (i, axis) in row_axes.iter().enumerate().rev() {
-                let axis_len = axis.variants.len();
+                let axis_len = axis.entry_keys.len();
                 digits[i] = rest
                     .checked_rem(axis_len)
                     .ok_or_else(|| "plot axis must contain at least one variant".to_string())?;
@@ -245,7 +245,7 @@ pub(super) fn align_encoding_channels(
             let mut idx = 0usize;
             for (axis, pos) in data.axes.iter().zip(&positions) {
                 idx = idx
-                    .checked_mul(axis.variants.len())
+                    .checked_mul(axis.entry_keys.len())
                     .and_then(|base| base.checked_add(digits[*pos]))
                     .ok_or_else(|| "plot row index overflowed usize".to_string())?;
             }
@@ -262,7 +262,7 @@ pub(super) fn align_encoding_channels(
 mod tests {
     use super::*;
     use graphcal_compiler::dag_id::DagId;
-    use graphcal_compiler::syntax::index_name::IndexName;
+    use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
     use indexmap::IndexMap;
 
     fn indexed(index: &str, entries: Vec<(&str, RuntimeValue)>) -> RuntimeValue {
@@ -271,7 +271,7 @@ mod tests {
             IndexName::expect_valid(index),
             entries
                 .into_iter()
-                .map(|(k, v)| (IndexVariantName::expect_valid(k), v))
+                .map(|(k, v)| (IndexEntryKey::named(IndexVariantName::expect_valid(k)), v))
                 .collect::<IndexMap<_, _>>(),
         )
     }

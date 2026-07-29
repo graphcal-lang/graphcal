@@ -899,34 +899,34 @@ fn nat_leq_zero_leq_anything() {
 }
 
 // -----------------------------------------------------------------------
-// NatRangeIndexIdentity typed-reference tests
+// FiniteIndexIdentity typed-reference tests
 // -----------------------------------------------------------------------
 
 #[test]
-fn nat_range_identity_concrete_to_index_type_ref() -> Result<(), Box<dyn std::error::Error>> {
+fn finite_index_identity_concrete_to_index_type_ref() -> Result<(), Box<dyn std::error::Error>> {
     let reference = NatPolyForm::from_constant(3)
-        .to_nat_range_identity()?
+        .to_finite_index_identity()?
         .to_index_type_ref()?;
     assert_eq!(
         reference
-            .nat_range()
-            .map(crate::registry::types::NatRangeIndex::size_u64),
+            .finite_index()
+            .map(crate::registry::types::FiniteIndex::size_u64),
         Some(3)
     );
-    assert_eq!(reference.display_name().as_str(), "range(3)");
+    assert_eq!(reference.display_name().as_str(), "Fin(3)");
     Ok(())
 }
 
 #[test]
-fn nat_range_identity_symbolic_to_display_only_index_type_ref()
+fn finite_index_identity_symbolic_to_display_only_index_type_ref()
 -> Result<(), Box<dyn std::error::Error>> {
     let reference = NatPolyForm::from_var(GenericParamName::expect_valid("N"))
         .add(&NatPolyForm::from_constant(1))
         .unwrap()
-        .to_nat_range_identity()?
+        .to_finite_index_identity()?
         .to_index_type_ref()?;
-    assert_eq!(reference.nat_range(), None);
-    assert_eq!(reference.display_name().as_str(), "range(N + 1)");
+    assert_eq!(reference.finite_index(), None);
+    assert_eq!(reference.display_name().as_str(), "Fin(N + 1)");
     Ok(())
 }
 
@@ -1057,7 +1057,7 @@ fn nat_unify_substituted_term_overflow_errors() {
         &form,
         4,
         &mut nat_sub,
-        &IndexName::expect_valid("range(4)"),
+        &IndexName::expect_valid("Fin(4)"),
         &src,
         Span::new(0, 0),
     );

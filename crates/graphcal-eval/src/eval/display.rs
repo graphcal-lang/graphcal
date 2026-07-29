@@ -1,12 +1,12 @@
 //! Display unit resolution: attaching human-readable unit labels to computed values,
-//! formatting range steps, and converting unit expressions to strings.
+//! formatting coordinate labels, and converting unit expressions to strings.
 
 use graphcal_compiler::hir::ExprKind;
 use graphcal_compiler::hir::expr::{ConstRef, IndexArg, MapEntry, MapEntryKey, MatchPattern};
 use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::tir::typed::ResolvedConstructorTarget;
 use indexmap::IndexMap;
 
@@ -308,23 +308,43 @@ pub(super) fn extract_flat_display_unit(
     }
 }
 
-/// Format a range index step value for display, e.g. `"0 s"`, `"0.25 s"`.
-pub(super) fn format_range_step(
+fn format_coordinate_impl(
     idx_def: &graphcal_compiler::registry::types::IndexDef,
-    step_index: usize,
+    position: usize,
+    exact: bool,
 ) -> String {
-    idx_def.range_data().map_or_else(
-        || format!("#{step_index}"),
+    idx_def.coordinate_data().map_or_else(
+        || format!("#{position}"),
         |data| {
-            let si_value = data.step_value(step_index);
+            let si_value = data.coordinate_value(position);
             let display_value = si_value / data.display_scale;
-            let formatted = format_number(display_value);
+            let formatted = if exact {
+                display_value.to_string()
+            } else {
+                format_number(display_value)
+            };
             match &data.display_label {
                 Some(label) => format!("{formatted} {label}"),
                 None => formatted,
             }
         },
     )
+}
+
+/// Format a coordinate-index value for display, e.g. `"0 s"`, `"0.25 s"`.
+pub(super) fn format_coordinate(
+    idx_def: &graphcal_compiler::registry::types::IndexDef,
+    position: usize,
+) -> String {
+    format_coordinate_impl(idx_def, position, false)
+}
+
+/// Format with enough binary64 precision to distinguish every coordinate.
+pub(super) fn format_coordinate_exact(
+    idx_def: &graphcal_compiler::registry::types::IndexDef,
+    position: usize,
+) -> String {
+    format_coordinate_impl(idx_def, position, true)
 }
 
 /// Set display unit on a quantity value. No-op for non-quantity values.
@@ -353,15 +373,17 @@ fn set_quantity_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
 /// For a single-axis map (`keys.len() == 1`), returns the entry matching `keys[0]`.
 /// For multi-axis maps, drills into nested `Value::Indexed` using each key in turn.
 fn walk_indexed_keys<'a>(
-    entries: &'a mut IndexMap<IndexVariantName, Value>,
+    entries: &'a mut IndexMap<IndexEntryKey, Value>,
     keys: &[MapEntryKey],
 ) -> Option<&'a mut Value> {
     let (first, rest) = keys.split_first()?;
-    let variant = match first {
-        MapEntryKey::IndexVariant(resolved) => resolved.variant.variant(),
-        MapEntryKey::NatRangeVariant { variant, .. } => &variant.value,
+    let entry_key = match first {
+        MapEntryKey::IndexVariant(resolved) => {
+            IndexEntryKey::named(resolved.variant.variant().clone())
+        }
+        MapEntryKey::FinitePosition { position, .. } => IndexEntryKey::position(position.value),
     };
-    let value = entries.get_mut(variant)?;
+    let value = entries.get_mut(&entry_key)?;
     if rest.is_empty() {
         Some(value)
     } else if let Value::Indexed { entries: inner, .. } = value {

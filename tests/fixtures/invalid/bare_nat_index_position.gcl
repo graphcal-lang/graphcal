@@ -1,0 +1,2 @@
+// Nat values are not implicitly converted to structural indexes.
+param values: Dimensionless[3];

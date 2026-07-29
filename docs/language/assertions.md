@@ -300,30 +300,29 @@ index Phase = { Launch, Cruise };
 assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };
 ```
 
-#### Nat Range Axes (`#N` Keys)
+#### Structural Finite Axes (`#N` Keys)
 
-Assertions indexed by Nat range axes (`for i: range(N) { ... }`) use `#N`
-keys, matching the `#N` slice-label syntax that `table` expressions use for
-range axes:
+Assertions indexed by `Fin(N)` axes use positional `#N` keys, matching the
+slice-label syntax used by `table` expressions:
 
 ```
 #[expected_fail(#1)]
-assert steps_ok = for i: range(3) { @residual[i] < @tolerance };
+assert steps_ok = for i: Fin(3) { @residual[i] < @tolerance };
 ```
 
 In multi-axis tuple keys, each component uses its axis's key form — named
-axes use `Index.Variant`, range axes use `#N` — in assertion axis order:
+axes use `Index.Variant`, while `Fin` axes use `#N` — in assertion axis order:
 
 ```
 index Mode = { Normal, Boost };
 
 #[expected_fail((Mode.Boost, #2))]
-assert grid_ok = for m: Mode, i: range(4) { @value[m, i] < @limit };
+assert grid_ok = for m: Mode, i: Fin(4) { @value[m, i] < @limit };
 ```
 
-The step must be in bounds for the axis: `#N` on a `range(size)` axis
-requires `N < size` (A016). A bare integer (`#[expected_fail(1)]`) is a
-parse error — range keys are always written with the `#` prefix.
+The position must be in bounds: `#N` on a `Fin(size)` axis requires
+`N < size` (A016). A bare integer (`#[expected_fail(1)]`) is a parse error;
+positional keys always include the `#` prefix.
 
 ### `#[lazy]`
 
@@ -388,4 +387,4 @@ node ratio: Dimensionless = @limit / 2.0;
 | A013 | `#[expected_fail(...)]` key has the wrong index shape |
 | A014 | `#[expected_fail(...)]` key uses the wrong assertion index |
 | A015 | Literal tolerance in `~=` assertion is negative |
-| A016 | `#[expected_fail(...)]` range key is outside the indexed assertion range |
+| A016 | `#[expected_fail(...)]` Fin position is outside the indexed assertion axis |

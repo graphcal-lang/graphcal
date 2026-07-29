@@ -1084,21 +1084,21 @@ param bad: Dimensionless = @x[Stage.First];";
 }
 
 #[test]
-fn check_nat_range_constant_index_out_of_bounds() {
+fn check_finite_index_constant_index_out_of_bounds() {
     let source = "\
-param v: Dimensionless[3] = table[3] { 1.0; 2.0; 3.0; };
+param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[5];";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("index 5 out of bounds for range(3)")),
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("index 5 out of bounds for Fin(3)")),
         "got: {err:?}"
     );
 }
 
 #[test]
-fn check_nat_range_constant_index_negative() {
+fn check_finite_index_constant_index_negative() {
     let source = "\
-param v: Dimensionless[3] = table[3] { 1.0; 2.0; 3.0; };
+param v: Dimensionless[Fin(3)] = table[Fin(3)] { 1.0; 2.0; 3.0; };
 node bad: Dimensionless = @v[0 - 1];";
     let err = check(source).unwrap_err();
     assert!(
@@ -1419,28 +1419,28 @@ Stage.Second: 2.0,
 
 #[test]
 fn fin_same_size_indexing() {
-    // i : Fin(3) indexing into D[3] — 3 <= 3 — safe
+    // i : Fin(3) indexing into D[Fin(3)] — 3 <= 3 — safe
     let source = "\
-param v: Dimensionless[3] = for i: range(3) { 1.0 };
-node w: Dimensionless[3] = for i: range(3) { @v[i] };";
+param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
+node w: Dimensionless[Fin(3)] = for i: Fin(3) { @v[i] };";
     check(source).unwrap();
 }
 
 #[test]
 fn fin_smaller_bound_indexing() {
-    // i : Fin(3) indexing into D[5] — 3 <= 5 — safe
+    // i : Fin(3) indexing into D[Fin(5)] — 3 <= 5 — safe
     let source = "\
-param v: Dimensionless[5] = for i: range(5) { 1.0 };
-node w: Dimensionless[3] = for i: range(3) { @v[i] };";
+param v: Dimensionless[Fin(5)] = for i: Fin(5) { 1.0 };
+node w: Dimensionless[Fin(3)] = for i: Fin(3) { @v[i] };";
     check(source).unwrap();
 }
 
 #[test]
 fn fin_out_of_bounds() {
-    // i : Fin(5) indexing into D[3] — 5 > 3 — compile error
+    // i : Fin(5) indexing into D[Fin(3)] — 5 > 3 — compile error
     let source = "\
-param v: Dimensionless[3] = for i: range(3) { 1.0 };
-node w: Dimensionless[5] = for i: range(5) { @v[i] };";
+param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
+node w: Dimensionless[Fin(5)] = for i: Fin(5) { @v[i] };";
     let err = check(source).unwrap_err();
     let msg = format!("{err:?}");
     assert!(
@@ -1453,12 +1453,12 @@ node w: Dimensionless[5] = for i: range(5) { @v[i] };";
 fn quantity_local_cannot_index_named_indexed_value() {
     let source = "\
 pub index Phase = { A };
-pub index TimeStep = linspace(0.0 s, 1.0 s, step: 1.0 s);
+pub index TimeStep = range(0.0 s, 1.0 s, step: 1.0 s);
 param v: Dimensionless[Phase] = { Phase.A: 1.0 };
 node w: Dimensionless[TimeStep] = for t: TimeStep { @v[t] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("range-index loop variable cannot index into non-range index `Phase`")),
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("coordinate-index loop variable cannot index into non-coordinate index `Phase`")),
         "got: {err:?}"
     );
 }
@@ -1466,8 +1466,8 @@ node w: Dimensionless[TimeStep] = for t: TimeStep { @v[t] };";
 #[test]
 fn range_loop_var_cannot_index_different_range_indexed_value() {
     let source = "\
-pub index TimeGrid = linspace(0.0 s, 2.0 s, step: 1.0 s);
-pub index LenGrid = linspace(0.0 m, 2.0 m, step: 1.0 m);
+pub index TimeGrid = range(0.0 s, 2.0 s, step: 1.0 s);
+pub index LenGrid = range(0.0 m, 2.0 m, step: 1.0 m);
 param v: Dimensionless[LenGrid] = for x: LenGrid { 1.0 };
 node w: Dimensionless[TimeGrid] = for t: TimeGrid { @v[t] };";
     let err = check(source).unwrap_err();
@@ -1480,7 +1480,7 @@ node w: Dimensionless[TimeGrid] = for t: TimeGrid { @v[t] };";
 #[test]
 fn unfold_init_self_reference_is_cycle() {
     let source = "\
-index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node y: Dimensionless[Step] = unfold(sum(@y), |p, t| @y[p] + 1.0);";
     let err = check(source).unwrap_err();
     assert!(
@@ -1492,8 +1492,8 @@ node y: Dimensionless[Step] = unfold(sum(@y), |p, t| @y[p] + 1.0);";
 #[test]
 fn negation_rejects_fin_index_variable() {
     let source = "\
-param v: Dimensionless[3] = for i: range(3) { 1.0 };
-node w: Dimensionless[3] = for i: range(3) { @v[-i] };";
+param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
+node w: Dimensionless[Fin(3)] = for i: Fin(3) { @v[-i] };";
     let err = check(source).unwrap_err();
     assert!(
         matches!(&err, GraphcalError::DimensionMismatch { found, .. } if found.contains("Fin")),
@@ -1527,7 +1527,7 @@ node total: Dimensionless = sum(@flags);";
 #[test]
 fn aggregation_rejects_int_elements() {
     let source = "\
-param counts: Int[3] = for i: range(3) { i };
+param counts: Int[Fin(3)] = for i: Fin(3) { i };
 node total: Int = sum(@counts);";
     let err = check(source).unwrap_err();
     assert!(
@@ -1540,7 +1540,7 @@ node total: Int = sum(@counts);";
 fn fin_comparison_same_range() {
     // i : Fin(3), j : Fin(3) — i == j is valid
     let source = "\
-node m: Dimensionless[3, 3] = for i: range(3), j: range(3) {
+node m: Dimensionless[Fin(3), Fin(3)] = for i: Fin(3), j: Fin(3) {
     if i == j { 1.0 } else { 0.0 }
 };";
     check(source).unwrap();
@@ -1550,9 +1550,9 @@ node m: Dimensionless[3, 3] = for i: range(3), j: range(3) {
 fn fin_arithmetic_with_int() {
     // Fin(N) * Dimensionless -> error (Fin is not Quantity)
     // Fin(N) + Fin(M) -> Int (arithmetic), then Int * Dimensionless -> error
-    // to_float(i) -> Dimensionless (via Int coercion)
+    // to_float(i) -> Dimensionless (Fin is an Int-compatible refinement)
     let source = "\
-node v: Dimensionless[3] = for i: range(3) { to_float(i) };";
+node v: Dimensionless[Fin(3)] = for i: Fin(3) { to_float(i) };";
     check(source).unwrap();
 }
 

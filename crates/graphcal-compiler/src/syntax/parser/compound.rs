@@ -3,7 +3,7 @@ use crate::syntax::ast::{
     PatternBinding,
 };
 use crate::syntax::span::Span;
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::FieldName;
 
 use super::{ParseError, Parser};
@@ -124,7 +124,7 @@ impl Parser<'_> {
 
     // --- For comprehension ---
 
-    /// Parse a for comprehension: `for m: Maneuver, i: range(3) { expr }`
+    /// Parse a for comprehension: `for m: Maneuver, i: Fin(3) { expr }`
     pub(super) fn parse_for_comp(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::For)?;
         let mut bindings = Vec::new();
@@ -192,24 +192,49 @@ impl Parser<'_> {
         ))
     }
 
-    /// Parse a for binding index: either a named index (`Maneuver`) or `range(N)`.
+    pub(super) fn reject_obsolete_structural_range(&mut self) -> Result<(), ParseError> {
+        if let Some((Token::ContextualKeyword(ContextualKeyword::Range), start_span)) =
+            self.lexer.peek_with_span()
+            && self.lexer.peek_second() == Some(&Token::LParen)
+        {
+            self.lexer.next_token();
+            self.expect(Token::LParen)?;
+            let cardinality = self.parse_nat_expr()?;
+            let (_, end_span) = self.expect(Token::RParen)?;
+            return Err(ParseError::ObsoleteStructuralRange {
+                cardinality: cardinality.to_string(),
+                src: self.named_source(),
+                span: start_span.merge(end_span).into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Parse a for binding index: either a named index (`Maneuver`) or `Fin(N)`.
     fn parse_for_binding_index(&mut self) -> Result<ForBindingIndex, ParseError> {
-        // Check if next token is the identifier "range"
-        if let Some((Token::Ident, span)) = self.lexer.peek_with_span() {
-            let text = self.lexer.slice_at(span);
-            if text == "range" {
-                let range_start = span;
-                self.lexer.next_token(); // consume "range"
-                self.expect(Token::LParen)?;
-                // Parse the nat expression inside range(...)
-                let nat_expr = self.parse_nat_expr()?;
-                let (_, rparen_span) = self.expect(Token::RParen)?;
-                let range_span = range_start.merge(rparen_span);
-                return Ok(ForBindingIndex::Range {
-                    arg: nat_expr,
-                    span: range_span,
-                });
-            }
+        self.reject_obsolete_structural_range()?;
+        if self.lexer.peek() == Some(&Token::Number) {
+            let (_, span) = self.advance()?;
+            let expression = self.lexer.slice_at(span).to_string();
+            return Err(ParseError::ExpectedIndexFoundNat {
+                suggestion: format!("Fin({expression})"),
+                expression,
+                src: self.named_source(),
+                span: span.into(),
+            });
+        }
+        if let Some((Token::ContextualKeyword(ContextualKeyword::Fin), start_span)) =
+            self.lexer.peek_with_span()
+            && self.lexer.peek_second() == Some(&Token::LParen)
+        {
+            self.lexer.next_token();
+            self.expect(Token::LParen)?;
+            let cardinality = self.parse_nat_expr()?;
+            let (_, end_span) = self.expect(Token::RParen)?;
+            return Ok(ForBindingIndex::Finite {
+                cardinality,
+                span: start_span.merge(end_span),
+            });
         }
         // Named index
         let first = self.parse_any_ident()?;
@@ -494,11 +519,57 @@ node x: Dimensionless = match @r {
 
     #[test]
     fn nat_subtraction_in_range_binding_has_targeted_error() {
-        let source = "node x: Dimensionless[N] = for i: range(N - 1) { 1.0 };";
+        let source = "node x: Dimensionless[Fin(N)] = for i: range(N - 1) { 1.0 };";
         let error = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(
             error,
             ParseError::NatSubtractionUnsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn bare_nat_for_binding_suggests_fin() {
+        let source = "node x: Dimensionless[Fin(3)] = for i: 3 { 1.0 };";
+        let error = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(error, ParseError::ExpectedIndexFoundNat { .. }),
+            "unexpected error: {error:?}"
+        );
+        assert!(error.to_string().contains("expected Index, found Nat `3`"));
+    }
+
+    #[test]
+    fn structural_range_is_obsolete_in_every_index_position() {
+        for source in [
+            "param x: Dimensionless[range(3)];",
+            "param x: Holder<range(3)>;",
+            "node x: Dimensionless[Fin(3)] = for i: range(3) { 1.0 };",
+            "param x: Dimensionless[Fin(3)] = table[range(3)] { 1.0; 2.0; 3.0; };",
+        ] {
+            let error = Parser::new(source).parse_file().unwrap_err();
+            assert!(
+                matches!(error, ParseError::ObsoleteStructuralRange { .. }),
+                "unexpected error for `{source}`: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_finite_for_comprehension() {
+        let source = "node x: Dimensionless[Fin(N + 1)] = for i: Fin(N + 1) { 1.0 };";
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Node(node) = &file.declarations[0].kind else {
+            panic!("expected node");
+        };
+        let ExprKind::ForComp { bindings, .. } = &node.value.kind else {
+            panic!("expected for comprehension");
+        };
+        assert!(matches!(
+            &bindings[0].index,
+            ForBindingIndex::Finite {
+                cardinality: crate::syntax::ast::NatExpr::Add(_, _, _),
+                ..
+            }
         ));
     }
 

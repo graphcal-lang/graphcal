@@ -347,6 +347,34 @@ mod tests {
     }
 
     #[test]
+    fn bare_nat_table_axis_suggests_fin() {
+        let diagnostics = produce_diagnostics(
+            "param x: Dimensionless[Fin(2)] = table[2] { 1.0; 2.0; };",
+            "test.gcl",
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::P023"
+            ) && diagnostic.message.contains("Fin(2)")
+        }));
+    }
+
+    #[test]
+    fn structural_range_binding_suggests_fin() {
+        let diagnostics = produce_diagnostics(
+            "node x: Dimensionless[Fin(2)] = for i: range(2) { 1.0 };",
+            "test.gcl",
+        );
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::P024"
+            )
+        }));
+    }
+
+    #[test]
     fn function_generic_arguments_produce_a_diagnostic() {
         let diagnostics = produce_diagnostics("node x: Dimensionless = sqrt<3>(4.0);", "test.gcl");
         assert!(diagnostics.iter().any(|diagnostic| {

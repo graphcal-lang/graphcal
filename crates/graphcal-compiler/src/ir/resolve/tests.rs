@@ -802,7 +802,7 @@ fn resolve_pub_union_type_with_private_payload_type_fires_v003() {
 
 #[test]
 fn resolve_pub_bind_index_with_private_dim_fires_v003() {
-    // A required range index carries a dim constraint that participates
+    // A required coordinate index carries a dimension constraint that participates
     // in A9 case 1.
     let source = r"
         dim Rate = Time^-1;

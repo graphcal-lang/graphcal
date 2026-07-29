@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::num::NonZeroUsize;
 
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
 use crate::dimension::{BaseDimId, Dimension, Rational, RationalError};
@@ -18,7 +17,8 @@ use crate::syntax::type_name::{ConstructorName, StructTypeName};
 pub use super::dag::DagRegistry;
 pub use super::dimension_registry::{DimensionRegistry, RegistryBuildError};
 pub use super::index::{
-    IndexDef, IndexKind, IndexRegistry, NatRangeIndex, NatRangeIndexError, RangeIndexData,
+    CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexCardinality,
+    IndexCardinalityError, IndexDef, IndexKind, IndexRegistry, MAX_INDEX_CARDINALITY,
 };
 pub use super::type_def::{
     StructField, TypeDef, TypeDefKind, TypeGenericConstraint, TypeGenericParam, TypeRegistry,
@@ -64,7 +64,7 @@ pub struct RegistryBuilder {
     types: HashMap<StructTypeName, TypeDef>,
     ctors: HashMap<ConstructorName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
-    nat_ranges: HashMap<NatRangeIndex, IndexDef>,
+    finite_indexes: HashMap<FiniteIndex, IndexDef>,
     dags: HashMap<DeclName, DagDecl>,
     /// Base dimensions whose real-world units are affine (offset) scales,
     /// e.g. Temperature (°C, °F). User unit definitions on these dimensions
@@ -100,7 +100,7 @@ impl RegistryBuilder {
             },
             indexes: IndexRegistry {
                 indexes: self.indexes,
-                nat_ranges: self.nat_ranges,
+                finite_indexes: self.finite_indexes,
             },
             dags: DagRegistry { dags: self.dags },
         })
@@ -171,8 +171,10 @@ impl RegistryBuilder {
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
         }
-        for (index, def) in &parent.indexes.nat_ranges {
-            self.nat_ranges.entry(*index).or_insert_with(|| def.clone());
+        for (index, def) in &parent.indexes.finite_indexes {
+            self.finite_indexes
+                .entry(*index)
+                .or_insert_with(|| def.clone());
         }
         for (name, decl) in &parent.dags.dags {
             self.dags
@@ -310,22 +312,18 @@ impl RegistryBuilder {
         self.indexes.insert(def.name.clone(), def);
     }
 
-    /// Ensure a typed Nat range index of the given size is registered.
+    /// Ensure that a concrete structural `Fin(N)` definition exists.
     ///
     /// If the index already exists, this is a no-op.
-    ///
-    /// `size` is `NonZeroUsize` because empty indexes are not representable.
-    /// AST-level `u64` literals must be checked at the boundary before
-    /// reaching this entry point.
-    pub(crate) fn ensure_nat_range_index(&mut self, size: NonZeroUsize) -> NatRangeIndex {
-        let nat_range = NatRangeIndex::new(size);
-        self.nat_ranges
-            .entry(nat_range)
+    pub fn ensure_finite_index(&mut self, cardinality: IndexCardinality) -> FiniteIndex {
+        let finite_index = FiniteIndex::new(cardinality);
+        self.finite_indexes
+            .entry(finite_index)
             .or_insert_with(|| IndexDef {
-                name: nat_range.display_name(),
-                kind: IndexKind::NatRange { size },
+                name: finite_index.display_name(),
+                kind: IndexKind::Finite { cardinality },
             });
-        nat_range
+        finite_index
     }
 
     // -- Read methods (needed during mid-build reads in ir.rs) --
@@ -361,10 +359,10 @@ impl RegistryBuilder {
         self.indexes.get(name)
     }
 
-    /// Look up a compiler-generated Nat range index by typed identity.
+    /// Look up a compiler-generated structural index by typed identity.
     #[must_use]
-    pub fn get_nat_range(&self, index: NatRangeIndex) -> Option<&IndexDef> {
-        self.nat_ranges.get(&index)
+    pub fn get_finite_index(&self, index: FiniteIndex) -> Option<&IndexDef> {
+        self.finite_indexes.get(&index)
     }
 
     /// Get the base dimension names map (for display purposes).
@@ -718,8 +716,15 @@ mod tests {
         let r = b.try_build().unwrap();
         let def = r.indexes.get_index("Maneuver").unwrap();
         assert_eq!(def.name.as_str(), "Maneuver");
-        let variants = def.variants();
-        let variant_strs: Vec<&str> = variants.iter().map(IndexVariantName::as_str).collect();
+        let entry_keys = def.entry_keys();
+        let variant_strs: Vec<&str> = entry_keys
+            .iter()
+            .map(|key| {
+                key.as_named()
+                    .expect("named index must have named keys")
+                    .as_str()
+            })
+            .collect();
         assert_eq!(variant_strs, vec!["Departure", "Correction", "Insertion"]);
         assert!(r.indexes.get_index("NonExistent").is_none());
     }

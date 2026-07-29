@@ -576,7 +576,7 @@ fn merge_dep_dag_tirs(
 ///    DAG's `<self>` is its file of definition, regardless of where the
 ///    include sits).
 /// 2. Compile the body to IR with imported names/values set up.
-/// 3. Merge the body's registry into the importer's; validate range-index
+/// 3. Merge the body's registry into the importer's; validate coordinate-index
 ///    dimension matching (file include only — inline DAGs share the
 ///    file's registry).
 /// 4. Run `check_include_reconciles_overrides` (A8/V005) and
@@ -804,23 +804,23 @@ fn process_deferred_dag_includes(
             })
         })?;
 
-        // ---- 3. Validate range-index dimension matching (file include
+        // ---- 3. Validate coordinate-index dimension matching (file include
         // only — inline DAGs share the file's registry, so there are no
-        // separate dep-side range indexes to reconcile). --------------------
+        // separate dep-side coordinate indexes to reconcile). --------------------
         if matches!(deferred.source, DeferredDagSource::File { .. }) {
             for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
                 if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name.as_str())
-                    && let graphcal_compiler::registry::types::IndexKind::RequiredRange {
+                    && let graphcal_compiler::registry::types::IndexKind::RequiredCoordinate {
                         dimension: dep_dim,
                     } = &dep_idx_def.kind
                     && let Some(imp_idx_def) = builder.get_index(importer_idx_name.as_str())
-                    && let graphcal_compiler::registry::types::IndexKind::Range(
-                        graphcal_compiler::registry::types::RangeIndexData {
+                    && let graphcal_compiler::registry::types::IndexKind::Coordinate(
+                        graphcal_compiler::registry::types::CoordinateIndexData {
                             dimension: imp_dim,
                             ..
                         },
                     )
-                    | graphcal_compiler::registry::types::IndexKind::RequiredRange {
+                    | graphcal_compiler::registry::types::IndexKind::RequiredCoordinate {
                         dimension: imp_dim,
                     } = &imp_idx_def.kind
                     && dep_dim != imp_dim
@@ -1271,7 +1271,7 @@ fn merge_registry_into_builder_filtered(
     // dependency's module registry only; pulling an unbound `pub(bind)` index
     // into the importer would incorrectly make the importer a library even if
     // it only needs a qualified type from the dependency.
-    for idx_def in dep_registry.indexes.all_indexes() {
+    for idx_def in dep_registry.indexes.declared_indexes() {
         if pub_names.is_some() && idx_def.is_required() {
             continue;
         }
@@ -1281,6 +1281,11 @@ fn merge_registry_into_builder_filtered(
             }
             builder.register_index(idx_def.clone());
         }
+    }
+    // Structural indexes have no module visibility or alias. Preserve their
+    // typed identities so imported indexed types and values can resolve them.
+    for finite_index in dep_registry.indexes.finite_indexes() {
+        builder.ensure_finite_index(finite_index.cardinality());
     }
 
     // Import struct types — skip bound types (they are replaced by the importer's type).
@@ -1598,10 +1603,16 @@ fn collect_type_expr_names(
                     graphcal_compiler::syntax::ast::GenericArg::Type(type_expr) => {
                         collect_type_expr_names(type_expr, refs);
                     }
+                    graphcal_compiler::syntax::ast::GenericArg::Index(IndexExpr::Name(path)) => {
+                        refs.push(path.value.display_path());
+                    }
+                    graphcal_compiler::syntax::ast::GenericArg::Index(
+                        IndexExpr::Finite { .. } | IndexExpr::BareNat(_),
+                    )
+                    | graphcal_compiler::syntax::ast::GenericArg::Nat(_) => {}
                     graphcal_compiler::syntax::ast::GenericArg::Ambiguous(ambiguous) => {
                         collect_ambiguous_generic_names(ambiguous, refs);
                     }
-                    graphcal_compiler::syntax::ast::GenericArg::Nat(_) => {}
                 }
             }
         }

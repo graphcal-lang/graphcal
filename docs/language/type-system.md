@@ -24,8 +24,8 @@ that exist implicitly in graphcal source:
   parameter. Each argument is checked against that parameter's kind (`Dim`,
   `Type`, `Index`, or `Nat`).
 - `Iᵢ` ranges over finite, ordered **index axes**. An axis can come from an
-  `index` declaration or from a positive type-level natural-number range such
-  as the `3` in `T[3]`.
+  `index` declaration or from an explicit structural index such as `Fin(3)` in
+  `T[Fin(3)]`.
 
 `Quantity(D)` and `Datetime(S)` use parentheses only as semantic notation; they
 are not constructor calls or literal source syntax. `A<G₁, ..., Gₙ>` and
@@ -54,7 +54,7 @@ Int      : Type
 Bool     : Type
 Datetime : TimeScale -> Type
 A        : K₁ × ... × Kₙ -> Type     for generic kinds Kᵢ declared by A
-range    : positive Nat -> Index
+Fin      : Nat -> Index               with the validity obligation N > 0
 _[_]     : Type × one-or-more Index axes -> DeclType
 ```
 
@@ -106,7 +106,7 @@ The `for` comprehension expands a single declaration into multiple DAG nodes. Ea
 Graphcal keeps three declaration universes exclusive inside one scope:
 
 - **Type universe**: algebraic types and dimensions.
-- **Index universe**: named and range indexes.
+- **Index universe**: named and coordinate index declarations.
 - **Value universe**: `param`, `node`, `const node`, `assert`, plot, figure,
   layer, and `dag` declarations.
 
@@ -395,7 +395,8 @@ Domain constraints are useful for:
 
 ## Indexes and Indexed Types
 
-An index declares a finite, ordered set of labels usable as collection axes in `T[I]`. Two flavors exist.
+An index declares a finite, ordered collection axis usable in `T[I]`. Graphcal
+has named, coordinate, and structural finite indexes.
 
 ### Named Index
 
@@ -426,31 +427,47 @@ NOT automatically an index. The `index` keyword explicitly marks an
 enumeration as usable in `T[I]`, preventing accidental use of marker types as
 collection axes.
 
-### Range Index
+### Coordinate Index
 
-A range index is a finite sequence of quantity values in a specific dimension:
+A coordinate index is a finite sequence of quantity values in one dimension:
 
 ```
-index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);
+index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);
+index Samples = linspace(0.0 s, 100.0 s, points: 1001);
 ```
 
-Range index labels are quantity values, not algebraic-type constructors. The loop
-variable in `for t: TimeStep { ... }` has semantic type `Quantity(Time)`,
-written `Time` in source; it can be used in arithmetic and for indexing.
+`range` makes the exact increment authoritative; `linspace` makes the exact
+point count authoritative. Their arguments are static and finite. A coordinate
+loop variable has semantic type `Quantity(D)` and can participate in arithmetic
+and indexing.
 
-### Named vs Range Index Capabilities
+### Structural Finite Index
 
-| Capability | Named index (`Maneuver`) | Range index (`TimeStep`) |
-|-----------|--------------------------|--------------------------|
-| Loop variable type | index case variable (not a ValueType) | `Quantity(D)` (Primitive) |
-| Indexing: `@x[m]` | Yes | Yes |
-| Map literal key | Yes | No (range labels are implicit) |
-| Equality comparison | No; use `match` | Yes (as Quantity) |
-| Pattern matching | Yes (qualified: `Maneuver.X => ...`) | No |
-| Arithmetic | No (not a quantity) | Yes |
-| Pass to DAG param | No | Yes (as quantity) |
+`Fin(N)` constructs an anonymous positional axis explicitly:
 
-Range-index loop variables are quantity values. Named-index loop variables are index case variables: they can select an indexed entry and drive exhaustive `match`, but they are not values.
+```
+param vector: Dimensionless[Fin(3)] = for i: Fin(3) { 0.0 };
+```
+
+Its loop variable has the bounded integer type `Fin(N)`, which is accepted in
+`Int` operations while retaining its bound for static index checks. The Nat `N`
+and Index `Fin(N)` remain distinct sorts, so a bare `D[3]` is invalid.
+
+### Index Capabilities
+
+| Capability | Named (`Maneuver`) | Coordinate (`TimeStep`) | Finite (`Fin(3)`) |
+|-----------|----------------------|--------------------------|-------------------|
+| Loop variable type | index case variable | `Quantity(D)` | `Fin(3)` (bounded integer) |
+| Indexing: `@x[i]` | Yes | Yes | Yes |
+| Explicit map key | Yes | No | No |
+| Equality comparison | No; use `match` | Yes | Yes |
+| Pattern matching | Yes (qualified label) | No | No |
+| Arithmetic | No | Yes (quantity) | Yes (integer) |
+| Pass to DAG param | No | Yes (as quantity) | Yes (as `Int`) |
+
+Coordinate-index loop variables are quantity values. Named-index loop variables
+are index case variables: they can select an indexed entry and drive exhaustive
+`match`, but they are not values.
 
 ### Construction of Indexed Values
 
@@ -799,7 +816,8 @@ for v1: Index1, v2: Index2 { body_expr }
 
 - `var` is bound to each label of the index in turn.
 - For named indexes, the loop variable is an index case variable. It is valid in index access (`@x[var]`) and named-index `match`, but not as a ValueType value.
-- For range indexes, the loop variable has `Quantity(D)` type.
+- For coordinate indexes, the loop variable has `Quantity(D)` type.
+- For `Fin(N)`, the loop variable has bounded integer type `Fin(N)`; ordinary integer operations widen their results to `Int`.
 - `body_expr` is evaluated for each binding; its type is `T`.
 - The result type is `T[IndexName]` (or `T[Index1, Index2]` for multiple bindings).
 
@@ -869,7 +887,7 @@ are legal and how the parameter may be used in the declaration.
 | `Dim` | `<D: Dim>` | Any dimension, such as `Length` or `Length / Time` | Quantity field types and dimension expressions such as `D^2` |
 | `Type` | `<T: Type>` | Any `ValueType`, such as `Bool`, `Length`, or `Vec3<Length, Eci>` | A payload field type, or a phantom/tag parameter if unused in any payload |
 | `Index` | `<I: Index>` | A finite ordered index axis | An axis in an indexed type such as `D[I]` |
-| `Nat` | `<N: Nat>` | A non-negative natural number used in type-level size arithmetic | A Nat-range axis such as `D[N]`, subject to the non-empty-axis rule |
+| `Nat` | `<N: Nat>` | A non-negative natural number used in type-level size arithmetic | A finite cardinality such as `D[Fin(N)]`, subject to the non-empty-axis rule |
 
 These kinds are not themselves `ValueType`s. For example, `Index` denotes the
 domain of collection axes; it does not mean an index label is a first-class
@@ -934,10 +952,9 @@ only to parameters declared earlier in the list. Arguments may be omitted only
 from that trailing defaulted portion. If every parameter has a default, type
 and constructor names without an angle-bracket list apply all of them.
 
-`Nat` and `Index` remain distinct kinds. A Nat literal is not accepted for an
-`Index` generic parameter, and a named index is not accepted for a `Nat`
-parameter. Nat syntax in an indexed type such as `D[3]` is a separate index-
-position construct.
+`Nat` and `Index` are distinct sorts. A bare Nat is never lifted into an Index:
+use `Fin(3)` for an `Index` argument and `3` for a `Nat` argument. Accordingly,
+`D[3]` is rejected with a suggestion to write `D[Fin(3)]`.
 
 ### Generic Parameter Unification
 
@@ -955,28 +972,28 @@ If a generic variable appears multiple times, all occurrences must unify to the 
 
 Generic dimension parameters can appear in compound dimension expressions in type definitions.
 
-### Nat Range Indexes
+### Structural Finite Indexes
 
-Integer literals in index position create anonymous **nat range** indexes:
+`Fin(N)` explicitly constructs an Index with integer positions `0` through
+`N - 1`:
 
 ```
-// A 3-element vector (internally uses range(3))
-param v: Dimensionless[3] = for i: range(3) { 1.0 };
-
-param mat: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
-node transposed: Dimensionless[3, 2] = for j: range(3), i: range(2) { @mat[i, j] };
+param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
+param mat: Dimensionless[Fin(2), Fin(3)] =
+    for i: Fin(2), j: Fin(3) { 1.0 };
+node transposed: Dimensionless[Fin(3), Fin(2)] =
+    for j: Fin(3), i: Fin(2) { @mat[i, j] };
 ```
 
-Two nat ranges are equal if and only if their sizes are equal.
+Two finite structural indexes are equal exactly when their normalized
+cardinality expressions are equal. Nat expressions support addition and
+multiplication, with `*` binding more tightly than `+`; subtraction is not
+supported. Express the larger side additively, for example use
+`D[Fin(N + 1)]` for an input and `D[Fin(N)]` for its smaller output.
 
-`Nat` expressions support addition and multiplication, with `*` binding more
-tightly than `+`. Expressions are normalized to canonical polynomial form and
-equality is decided structurally. Subtraction is not supported: expressing
-`N - 1` safely would require proving `N >= 1`. Instead, express the larger side
-with addition, for example use `D[N + 1]` for an input and `D[N]` for its
-smaller output.
-
-Loop variables from `for i: range(N)` have type `Int` and can be used to index into nat-range-indexed values.
+`Fin(0)` is invalid. Loop variables from `for i: Fin(N)` have bounded integer
+type `Fin(N)` and can index values carrying that finite axis. They are accepted
+where an `Int` is required; arithmetic results are ordinary `Int` values.
 
 ## Type Equivalence
 
@@ -991,7 +1008,10 @@ Two types are equivalent if:
   nominal declaration; they do not create separate structural type identities.
 - **Indexed**: Same element type, same indexes in the same order. `T[I, J]` and `T[J, I]` are different types.
 
-There is no subtyping. `Length` is not assignable to `Dimensionless`, and `Vec3<Length, ECI>` is not assignable to `Vec3<Length, Unframed>` even if both have the same fields.
+There is no general subtyping. `Length` is not assignable to `Dimensionless`,
+and `Vec3<Length, ECI>` is not assignable to `Vec3<Length, Unframed>` even if
+both have the same fields. The bounded `Fin(N)` loop-local type is the explicit
+integer-refinement exception: it is accepted where `Int` is required.
 
 Named index labels do not participate in value type equivalence. They are index positions and patterns, not ValueTypes. Use `match` over a named-index loop variable for case analysis.
 
@@ -1007,14 +1027,14 @@ Named index labels do not participate in value type equivalence. They are index 
 | Algebraic constructor | No | No | No | No | Construction and match patterns |
 | Named index label | No | No | No | No | Index positions and match patterns |
 | Indexed value | DeclType | Yes | Yes | Yes | Via `for` |
-| Range index label | Quantity(D) | Yes | Yes (as quantity) | Yes (as quantity) | Indexing, arithmetic |
-| Nat-range label | Int | Yes | Yes (as Int) | Yes (as Int) | Indexing, arithmetic |
+| Coordinate index label | Quantity(D) | Yes | Yes (as quantity) | Yes (as quantity) | Indexing, arithmetic |
+| `Fin` position | `Fin(N)` integer refinement | Yes | Yes (as `Int`) | Yes (as `Int`) | Indexing, arithmetic |
 | Function | No | No | No | No | Calling only |
 | Dimension | No; inhabits `Dim` | No | As generic `<D: Dim>` | As generic | In quantity type syntax |
 | Time scale | No; inhabits semantic `TimeScale` | No | No | No | In `Datetime<TT>`-style type syntax |
 | Unit | No (compile-time) | No | No | No | In literals and conversion targets |
 | Index axis | No; inhabits `Index` | No | As generic `<I: Index>` | As generic | In indexed type syntax |
-| Natural number | No; inhabits `Nat` | No | As generic `<N: Nat>` | As generic | In Nat expressions and axes |
+| Natural number | No; inhabits `Nat` | No | As generic `<N: Nat>` | As generic | In Nat expressions and `Fin(N)` cardinalities |
 
 Named index labels use qualified syntax (`Maneuver.Departure`) while algebraic
 constructors use bare or module-qualified syntax (`Nominal` or

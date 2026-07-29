@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+expected Index, found Nat `3`
+    Diagnostic severity: error
+Begin snippet for bare_nat_table_axis.gcl starting at line 1, column 1
+
+snippet line 1: // Table axes require an explicit Index constructor.
+snippet line 2: param values: Dimensionless[Fin(3)] = table[3] { 1.0; 2.0; 3.0; };
+    label at line 2, column 45: Nat is not implicitly converted to Index
+diagnostic help: write `Fin(3)` for an explicit finite structural index
+diagnostic code: graphcal::P023

@@ -48,7 +48,7 @@ use crate::syntax::ast::{
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
@@ -101,6 +101,7 @@ format_equivalent_via_eq!(
     UnitName,
     IndexName,
     IndexVariantName,
+    IndexEntryKey,
     FieldName,
     ConstructorName,
     StructTypeName,
@@ -242,15 +243,15 @@ impl FormatEquivalent for AttributeArg {
                 };
                 segments.format_equivalent(other_segments)
             }
-            Self::RangeStep { step, span: _ } => {
-                let Self::RangeStep {
-                    step: other_step,
+            Self::FinitePosition { position, span: _ } => {
+                let Self::FinitePosition {
+                    position: other_position,
                     span: _,
                 } = other
                 else {
                     return false;
                 };
-                step == other_step
+                position == other_position
             }
             Self::Group { elements, span: _ } => {
                 let Self::Group {
@@ -721,9 +722,22 @@ impl FormatEquivalent for IndexDeclKind {
                     && end.format_equivalent(other_end)
                     && step.format_equivalent(other_step)
             }
+            Self::Linspace { start, end, points } => {
+                let Self::Linspace {
+                    start: other_start,
+                    end: other_end,
+                    points: other_points,
+                } = other
+                else {
+                    return false;
+                };
+                start.format_equivalent(other_start)
+                    && end.format_equivalent(other_end)
+                    && points.format_equivalent(other_points)
+            }
             Self::RequiredNamed => matches!(other, Self::RequiredNamed),
-            Self::RequiredRange { dimension } => {
-                let Self::RequiredRange {
+            Self::RequiredCoordinate { dimension } => {
+                let Self::RequiredCoordinate {
                     dimension: other_dimension,
                 } = other
                 else {
@@ -1223,8 +1237,21 @@ impl FormatEquivalent for IndexExpr {
                 };
                 name.format_equivalent(other_name)
             }
-            Self::NatExpr(nat) => {
-                let Self::NatExpr(other_nat) = other else {
+            Self::Finite {
+                cardinality,
+                span: _,
+            } => {
+                let Self::Finite {
+                    cardinality: other_cardinality,
+                    span: _,
+                } = other
+                else {
+                    return false;
+                };
+                cardinality.format_equivalent(other_cardinality)
+            }
+            Self::BareNat(nat) => {
+                let Self::BareNat(other_nat) = other else {
                     return false;
                 };
                 nat.format_equivalent(other_nat)
@@ -1339,11 +1366,18 @@ impl FormatEquivalent for TableIndexSpec {
                 };
                 name.format_equivalent(other_name)
             }
-            Self::NatRange(size, _span) => {
-                let Self::NatRange(other_size, _other_span) = other else {
+            Self::Finite {
+                cardinality,
+                span: _,
+            } => {
+                let Self::Finite {
+                    cardinality: other_cardinality,
+                    span: _,
+                } = other
+                else {
                     return false;
                 };
-                size.format_equivalent(other_size)
+                cardinality.format_equivalent(other_cardinality)
             }
         }
     }
@@ -1406,15 +1440,18 @@ impl FormatEquivalent for ForBindingIndex {
                 };
                 name.format_equivalent(other_name)
             }
-            Self::Range { arg, span: _ } => {
-                let Self::Range {
-                    arg: other_arg,
+            Self::Finite {
+                cardinality,
+                span: _,
+            } => {
+                let Self::Finite {
+                    cardinality: other_cardinality,
                     span: _,
                 } = other
                 else {
                     return false;
                 };
-                arg.format_equivalent(other_arg)
+                cardinality.format_equivalent(other_cardinality)
             }
         }
     }
@@ -1478,6 +1515,12 @@ impl FormatEquivalent for GenericArg {
                     return false;
                 };
                 type_expr.format_equivalent(other_type_expr)
+            }
+            Self::Index(index) => {
+                let Self::Index(other_index) = other else {
+                    return false;
+                };
+                index.format_equivalent(other_index)
             }
             Self::Nat(nat) => {
                 let Self::Nat(other_nat) = other else {

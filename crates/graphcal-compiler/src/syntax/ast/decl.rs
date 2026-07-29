@@ -2,11 +2,12 @@ use crate::syntax::ast::common::{
     Attribute, BindableVisibility, ImportKind, ModulePath, Visibility,
 };
 use crate::syntax::ast::value::{
-    DimExpr, Expr, GenericArg, MapEntryKey, MultiDeclSharedAxes, ParamBinding, TypeExpr, UnitExpr,
+    DimExpr, Expr, GenericArg, MapEntryKey, MultiDeclSharedAxes, NatExpr, ParamBinding, TypeExpr,
+    UnitExpr,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 use crate::syntax::phase::{Phase, Raw};
@@ -534,7 +535,7 @@ impl MultiHeaderCell {
 /// One data row of a multi-decl body: label + value per column.
 #[derive(Debug, Clone)]
 pub struct MultiDataRow<P: Phase = Raw> {
-    pub label: Spanned<IndexVariantName>,
+    pub label: Spanned<IndexEntryKey>,
     pub values: Vec<Expr<P>>,
 }
 
@@ -643,11 +644,8 @@ pub enum TypeDeclBody<P: Phase = Raw> {
 ///
 /// Forms:
 /// - Unit: `Coast` — `payload` is `None`.
-/// - Record-payload (parens): `Impulsive(delta_v: Velocity)` —
-///   `payload` is `Some(vec![…])`.
-/// - Record-payload (braces): `LowThrust { thrust: Force, duration: Time }`
-///   — `payload` is `Some(vec![…])`. The brace/paren choice is purely
-///   surface syntax; both produce the same AST.
+/// - Record payload: `Impulsive(delta_v: Velocity)` — `payload` is
+///   `Some(vec![…])`. Constructor payloads use parentheses exclusively.
 #[derive(Debug, Clone)]
 pub struct UnionMember<P: Phase = Raw> {
     /// The constructor's name. Lives in the constructor namespace —
@@ -665,39 +663,47 @@ pub struct FieldDecl<P: Phase = Raw> {
     pub type_ann: TypeExpr<P>,
 }
 
-///// The kind of an index declaration.
+/// The kind of an index declaration.
 #[derive(Debug, Clone)]
 pub enum IndexDeclKind<P: Phase = Raw> {
     /// Named variants: `{ Departure, Correction, Insertion }`
     Named {
         variants: Vec<Spanned<IndexVariantName>>,
     },
-    /// Numeric range: `linspace(start, end, step: step)`
+    /// Coordinate range with an exact increment and endpoint:
+    /// `range(start, end, step: delta)`.
     Range {
         start: Box<Expr<P>>,
         end: Box<Expr<P>>,
         step: Box<Expr<P>>,
     },
+    /// Linearly spaced coordinate index with an exact point count and endpoints:
+    /// `linspace(start, end, points: count)`.
+    Linspace {
+        start: Box<Expr<P>>,
+        end: Box<Expr<P>>,
+        points: NatExpr,
+    },
     /// Required named index (no variants): `index Foo;`
     ///
     /// Must be bound via parameterized import.
     RequiredNamed,
-    /// Required range index with dimension constraint: `index Foo: Time;`
+    /// Required coordinate index with a dimension constraint: `index Foo: Time;`
     ///
     /// Must be bound via parameterized import.
-    RequiredRange { dimension: DimExpr },
+    RequiredCoordinate { dimension: DimExpr },
 }
 
 impl<P: Phase> IndexDeclKind<P> {
     /// Returns `true` for required index declarations that must be bound via import.
     #[must_use]
     pub const fn is_required(&self) -> bool {
-        matches!(self, Self::RequiredNamed | Self::RequiredRange { .. })
+        matches!(self, Self::RequiredNamed | Self::RequiredCoordinate { .. })
     }
 }
 
 /// Index declaration: `index Maneuver = { Departure, Correction, Insertion };`
-/// or `index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);`
+/// or `index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);`
 #[derive(Debug, Clone)]
 pub struct IndexDecl<P: Phase = Raw> {
     pub visibility: BindableVisibility,

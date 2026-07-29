@@ -9,15 +9,16 @@ use miette::NamedSource;
 use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexName};
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::span::Span;
 use crate::syntax::type_name::StructTypeName;
 
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::Registry;
-use crate::tir::typed::{NatPolyForm, NatRangeIndexIdentity};
+use crate::tir::typed::{FiniteIndexIdentity, NatPolyForm};
 
 pub(crate) use helpers::{expect_quantity, format_inferred_type};
 
@@ -40,9 +41,9 @@ pub use crate::registry::declared_type::DeclaredType;
 
 /// Index identity carried by inferred collection/label types.
 ///
-/// Declared indexes compare by owner-qualified [`IndexTypeRef`]. Nat-range
-/// indexes additionally carry their normalized Nat form so generic ranges such
-/// as `range(N + 1)` are not encoded in or compared through synthetic strings.
+/// Declared indexes compare by owner-qualified [`IndexTypeRef`]. Structural
+/// finite indexes additionally carry their normalized Nat form so generic axes
+/// such as `Fin(N + 1)` are not encoded in or compared through synthetic strings.
 #[derive(Debug, Clone, Eq)]
 pub struct InferredIndex {
     reference: IndexTypeRef,
@@ -66,28 +67,28 @@ impl InferredIndex {
         Self { reference }
     }
 
-    /// Create an inferred Nat range index from a validated Nat-range identity.
+    /// Create an inferred finite structural index from a validated finite-index identity.
     ///
     /// # Errors
     ///
     /// Returns an error if the identity cannot be converted to an index type reference.
-    fn from_nat_range_identity(
-        identity: &NatRangeIndexIdentity,
-    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
+    fn from_finite_index_identity(
+        identity: &FiniteIndexIdentity,
+    ) -> Result<Self, crate::registry::types::FiniteIndexError> {
         Ok(Self {
             reference: identity.to_index_type_ref()?,
         })
     }
 
-    /// Create an inferred Nat range index from a normalized Nat form.
+    /// Create an inferred finite structural index from a normalized Nat form.
     ///
     /// # Errors
     ///
-    /// Returns an error when the form is a concrete invalid Nat range size.
-    pub(crate) fn from_nat_range_form(
+    /// Returns an error when the form is a concrete invalid finite structural size.
+    pub(crate) fn from_finite_index_form(
         form: NatPolyForm,
-    ) -> Result<Self, crate::registry::types::NatRangeIndexError> {
-        Self::from_nat_range_identity(&NatRangeIndexIdentity::try_from_form(form)?)
+    ) -> Result<Self, crate::registry::types::FiniteIndexError> {
+        Self::from_finite_index_identity(&FiniteIndexIdentity::try_from_form(form)?)
     }
 
     #[must_use]
@@ -106,13 +107,13 @@ impl InferredIndex {
     }
 
     #[must_use]
-    const fn concrete_nat_range(&self) -> Option<crate::registry::types::NatRangeIndex> {
-        self.reference.nat_range()
+    const fn concrete_finite_index(&self) -> Option<crate::registry::types::FiniteIndex> {
+        self.reference.finite_index()
     }
 
     #[must_use]
-    pub(crate) fn nat_range_form(&self) -> Option<NatPolyForm> {
-        self.reference.nat_range_form()
+    pub(crate) fn finite_index_form(&self) -> Option<NatPolyForm> {
+        self.reference.finite_index_form()
     }
 
     #[must_use]
@@ -226,32 +227,35 @@ pub enum InferredGenericArg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
     Quantity(Dimension),
-    /// A quantity value produced by iterating a declared range index.
+    /// A quantity produced by iterating a declared coordinate index.
     ///
-    /// Range labels can participate in quantity arithmetic, but retain the
-    /// originating index identity so `@series[t]` can prove that `t` belongs
-    /// to the same range axis as `series` instead of reading positionally.
-    RangeIndexLabel {
+    /// Coordinate labels participate in quantity arithmetic while retaining
+    /// their originating index identity for type-safe indexed access.
+    CoordinateIndexLabel {
         index: InferredIndex,
         dimension: Dimension,
     },
     Bool,
     Int,
-    /// A bounded natural number `Fin(N)`: the type of loop variables over `range(N)`.
+    /// A bounded natural number `Fin(N)`: the type of loop variables over `Fin(N)`.
     ///
     /// A value of type `Fin(N)` satisfies `0 <= value < N`. This enables compile-time
     /// bounds checking: `v[i]` is valid when `i : Fin(N)` and `v : T[M]` with `N <= M`.
     ///
     /// `Fin(N)` is not a user-declarable type — it only arises as the type of loop
-    /// variables in `for i: range(N) { ... }`.
+    /// variables in `for i: Fin(N) { ... }`.
     Fin(NatPolyForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
-    /// A named index identity in an index-only position.
+    /// A named-index case bound by a `for` comprehension.
     ///
-    /// This is used for named-index loop variables and `Index` generic
-    /// arguments. It is intentionally not a Graphcal value type.
-    NamedIndex(InferredIndex),
+    /// It can drive index access and exhaustive label matching but is not a
+    /// Graphcal value type.
+    NamedIndexCase(InferredIndex),
+    /// An index identity carried only while checking an `Index`-sorted generic
+    /// argument. This may be a declared or structural finite index and is not a
+    /// Graphcal value type.
+    IndexArg(InferredIndex),
     /// A struct type with sort-aware generic arguments.
     Struct(InferredStructType, Vec<InferredGenericArg>),
     Indexed {
@@ -270,7 +274,9 @@ impl InferredType {
     #[must_use]
     const fn quantity_dimension(&self) -> Option<&Dimension> {
         match self {
-            Self::Quantity(dimension) | Self::RangeIndexLabel { dimension, .. } => Some(dimension),
+            Self::Quantity(dimension) | Self::CoordinateIndexLabel { dimension, .. } => {
+                Some(dimension)
+            }
             _ => None,
         }
     }
@@ -368,6 +374,33 @@ impl DimCheckContext<'_> {
             self.src,
         )
     }
+}
+
+fn validate_decl_finite_index_obligations(
+    ctx: &DimCheckContext<'_>,
+    name: &ScopedName,
+    type_ann_span: Span,
+) -> Result<(), GraphcalError> {
+    let declared = ctx
+        .declared_types
+        .get(name)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("no declared type recorded for `{name}`"),
+            src: ctx.src.clone(),
+            span: type_ann_span.into(),
+        })?;
+    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
+        message: format!("semantic DAG missing while validating `{name}`"),
+        src: ctx.src.clone(),
+        span: type_ann_span.into(),
+    })?;
+    infer::hir::validate_finite_index_obligations(
+        &InferredType::from(declared),
+        dag,
+        ctx.registry,
+        ctx.src,
+        type_ann_span,
+    )
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
@@ -751,9 +784,9 @@ fn expected_fail_key_span(key: &ExpectedFailKey) -> crate::syntax::span::Span {
 
 fn expected_fail_key_signature(
     key: &ExpectedFailKey,
-) -> Vec<(Option<IndexTypeRef>, IndexVariantName)> {
+) -> Vec<(Option<IndexTypeRef>, IndexEntryKey)> {
     key.iter()
-        .map(|part| (part.named_index().cloned(), part.variant()))
+        .map(|part| (part.named_index().cloned(), part.entry_key()))
         .collect()
 }
 
@@ -783,8 +816,8 @@ fn validate_expected_fail_key(
                     });
                 }
             }
-            ExpectedFailKeyPart::RangeStep { step, span } => {
-                let Some(range) = expected_axis.type_ref().nat_range_ref() else {
+            ExpectedFailKeyPart::FinitePosition { position, span } => {
+                let Some(finite) = expected_axis.type_ref().finite_index_ref() else {
                     return Err(GraphcalError::ExpectedFailKeyIndexMismatch {
                         expected: expected_axis.name().to_string(),
                         found: part.display(),
@@ -792,15 +825,13 @@ fn validate_expected_fail_key(
                         span: (*span).into(),
                     });
                 };
-                // Bound-check `#N` against a statically known range size.
-                // Symbolic sizes are checked nowhere earlier; an out-of-range
-                // step there can never match at runtime, which surfaces as an
-                // "unexpected pass" — acceptable for the symbolic case.
-                if let Some(concrete) = range.concrete_index()
-                    && *step >= concrete.size_u64()
+                // Bound-check `#N` against a statically known Fin cardinality.
+                // Symbolic cardinalities are checked after substitution.
+                if let Some(concrete) = finite.concrete_index()
+                    && *position >= concrete.size_u64()
                 {
-                    return Err(GraphcalError::ExpectedFailRangeStepOutOfBounds {
-                        step: *step,
+                    return Err(GraphcalError::ExpectedFailFinitePositionOutOfBounds {
+                        position: *position,
                         size: concrete.size_u64(),
                         src: src.clone(),
                         span: (*span).into(),
@@ -922,17 +953,20 @@ fn check_dimensions_dag(
     // dependency file's spans, so each is checked against its own source (#868).
     for entry in &dag.consts {
         let entry_ctx = ctx.for_body(entry.src.resolve(src));
+        validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
         check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.nodes {
         let entry_ctx = ctx.for_body(entry.src.resolve(src));
+        validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
         check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.params {
+        let entry_ctx = ctx.for_body(entry.src.resolve(src));
+        validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
         let Some(_value_expr) = entry.default_expr.as_ref() else {
             continue;
         };
-        let entry_ctx = ctx.for_body(entry.src.resolve(src));
         check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
 

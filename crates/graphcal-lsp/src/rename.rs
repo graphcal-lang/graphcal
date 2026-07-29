@@ -267,7 +267,7 @@ mod tests {
     #[test]
     fn rename_generic_parameter_edits_defaults_and_payload_types() {
         let source = "type Sized<N: Nat, M: Nat = N + 1> {\n\
-                      Sized(values: Dimensionless[N]),\n\
+                      Sized(values: Dimensionless[Fin(N)]),\n\
                       }";
         let analysis = analysis_from_source(source);
         let uri = Url::parse("file:///test.gcl").unwrap();
@@ -402,7 +402,9 @@ mod tests {
         let uri = Url::parse("file:///test.gcl").unwrap();
         let offset = source.find("x:").unwrap();
 
-        for name in ["scan", "unfold", "linspace", "step"] {
+        for name in [
+            "scan", "unfold", "range", "linspace", "step", "points", "Fin",
+        ] {
             let edit = rename(&analysis, &uri, offset, name)
                 .unwrap_or_else(|error| panic!("rename to `{name}` failed: {error}"))
                 .expect("rename should produce a workspace edit");
@@ -594,7 +596,9 @@ param enabled: Bool[Component, Mode]
         assert!(is_valid_identifier("x"));
         assert!(is_valid_identifier("velocity"));
         assert!(is_valid_identifier("my_var_2"));
-        for contextual_keyword in ["scan", "unfold", "linspace", "step"] {
+        for contextual_keyword in [
+            "scan", "unfold", "range", "linspace", "step", "points", "Fin",
+        ] {
             assert!(is_valid_identifier(contextual_keyword));
         }
         assert!(!is_valid_identifier(""));

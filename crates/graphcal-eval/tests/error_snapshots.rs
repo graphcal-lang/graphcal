@@ -243,6 +243,34 @@ fn error_not_a_struct() {
 }
 
 #[test]
+fn error_bare_nat_index_position() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_nat_index_position.gcl");
+    let rendered = render_error(source, "bare_nat_index_position.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bare_nat_for_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_nat_for_binding.gcl");
+    let rendered = render_error(source, "bare_nat_for_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_bare_nat_table_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_nat_table_axis.gcl");
+    let rendered = render_error(source, "bare_nat_table_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_obsolete_structural_range() {
+    let source = include_str!("../../../tests/fixtures/invalid/obsolete_structural_range.gcl");
+    let rendered = render_error(source, "obsolete_structural_range.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_index() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_index.gcl");
     let rendered = render_error(source, "unknown_index.gcl");
@@ -278,10 +306,11 @@ fn error_index_mismatch() {
 }
 
 #[test]
-fn error_nat_range_constant_index_out_of_bounds() {
-    let source =
-        include_str!("../../../tests/fixtures/invalid/nat_range_constant_index_out_of_bounds.gcl");
-    let rendered = render_error(source, "nat_range_constant_index_out_of_bounds.gcl");
+fn error_finite_index_constant_index_out_of_bounds() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/finite_index_constant_index_out_of_bounds.gcl"
+    );
+    let rendered = render_error(source, "finite_index_constant_index_out_of_bounds.gcl");
     insta::assert_snapshot!(rendered);
 }
 
@@ -429,18 +458,20 @@ fn error_indexed_tolerance_axis_mismatch() {
 }
 
 #[test]
-fn error_expected_fail_range_step_out_of_bounds() {
-    let source =
-        include_str!("../../../tests/fixtures/invalid/expected_fail_range_step_out_of_bounds.gcl");
-    let rendered = render_error(source, "expected_fail_range_step_out_of_bounds.gcl");
+fn error_expected_fail_finite_position_out_of_bounds() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/expected_fail_finite_position_out_of_bounds.gcl"
+    );
+    let rendered = render_error(source, "expected_fail_finite_position_out_of_bounds.gcl");
     insta::assert_snapshot!(rendered);
 }
 
 #[test]
-fn error_expected_fail_range_key_on_named_axis() {
-    let source =
-        include_str!("../../../tests/fixtures/invalid/expected_fail_range_key_on_named_axis.gcl");
-    let rendered = render_error(source, "expected_fail_range_key_on_named_axis.gcl");
+fn error_expected_fail_finite_position_on_named_axis() {
+    let source = include_str!(
+        "../../../tests/fixtures/invalid/expected_fail_finite_position_on_named_axis.gcl"
+    );
+    let rendered = render_error(source, "expected_fail_finite_position_on_named_axis.gcl");
     insta::assert_snapshot!(rendered);
 }
 

@@ -21,10 +21,15 @@ in index access, map/table keys, expected-fail keys, include index bindings, and
 `match` patterns over named-index loop variables.
 
 !!! note "No empty indexes"
-    A finite index must declare **at least one variant** — `index Empty = {};` is rejected by the parser. The same goes for `linspace` ranges (`start > end`, `step <= 0`, non-finite bounds, and zero-step cardinalities are invalid) and nat ranges (`range(0)` is invalid). This is a deliberate design choice (issue #580): with no empty case ever reachable, aggregation builtins never face the "what is `mean` of nothing?" question, indexed values always have at least one element, and there are no NaN traps to remember. Model the absence at the boundary (e.g., guard with a separate `Bool` flag or split the dag) rather than collapsing the index to zero variants.
+    Every index has at least one element. A named index must declare a label,
+    `Fin(0)` is invalid, and coordinate constructors must produce at least one
+    coordinate. This keeps aggregations total and indexed values nonempty.
 
 !!! note "Contextual syntax names"
-    `scan` and `unfold` select recurrence syntax only as bare call heads followed by `(`. `linspace` and `step` are special only in a range-index declaration. Outside those positions, all four spellings are ordinary identifiers: they may name declarations, imports, path segments, fields, units, types, indexes, or local bindings. In particular, `plugin.scan(...)` is an ordinary qualified function call.
+    `scan` and `unfold` select recurrence syntax only as bare call heads followed
+    by `(`. `range`, `linspace`, `step`, and `points` are special only in
+    coordinate-index declarations; `Fin` is special only in Index positions.
+    Elsewhere these spellings remain ordinary identifiers.
 
 ## Indexed Values
 
@@ -56,10 +61,11 @@ node doubled: Velocity[Maneuver] = for m: Maneuver {
 };
 ```
 
-For nat range indexes, you can also use integer expressions as index arguments:
+For structural `Fin` indexes, use integer expressions as index arguments:
 
 ```
-node shifted: Dimensionless[3] = for i: range(3) { @v[i + 1] };
+param v: Dimensionless[Fin(4)] = for i: Fin(4) { 1.0 };
+node shifted: Dimensionless[Fin(3)] = for i: Fin(3) { @v[i + 1] };
 ```
 
 ## `for` Comprehensions
@@ -144,9 +150,9 @@ Access elements with multiple index arguments:
 node launch_dep: Mass = @spacecraft_mass[Phase.Launch, Maneuver.Departure];
 ```
 
-## Mixed Label and Range Indexes
+## Mixed Label and Coordinate Indexes
 
-Values can be indexed by a combination of label indexes and range indexes. This is useful when you have categorical axes (e.g., maneuver types) combined with continuous axes (e.g., time steps).
+Values can combine categorical label axes with coordinate axes such as time.
 
 ### Construction via `for` Comprehension
 
@@ -154,7 +160,7 @@ The most common way to create a mixed-index value is with a multi-binding `for` 
 
 ```
 index Maneuver = { Departure, Correction, Insertion };
-index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
+index TimeStep = range(0.0 s, 1.0 s, step: 0.5 s);
 
 node accel: Acceleration[Maneuver] = {
     Maneuver.Departure: 10.0 m/s^2,
@@ -169,7 +175,8 @@ node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
 
 ### Construction via Map Literal with `for` Values
 
-You can also use a map literal where the keys are label index variants and each value is a `for` comprehension over a range index:
+You can also use a map literal where each named-label entry contains a
+comprehension over a coordinate index:
 
 ```
 node v: Velocity[Maneuver, TimeStep] = {
@@ -179,7 +186,7 @@ node v: Velocity[Maneuver, TimeStep] = {
 };
 ```
 
-### Mixed-Index Element Access
+### Mixed-Axis Element Access
 
 Access elements by providing both a label and a range variable:
 
@@ -254,35 +261,38 @@ param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
 };
 ```
 
-Each `[SliceLabel]` section contains its own header row and data rows. Named slice labels use `Index.Variant` syntax (or `module.Index.Variant` when the index is imported); Nat range slice labels use `#N`.
+Each `[SliceLabel]` section contains its own header row and data rows. Named
+slice labels use `Index.Variant` syntax (or `module.Index.Variant` when the
+index is imported); `Fin` slice labels use `#N`.
 
-### Nat Range Tables
+### Finite-Index Tables
 
-`table[...]` also accepts integer literals to produce positional matrix literals backed by Nat range indexes. When an axis is a Nat range, its labels are implicit `#0, #1, ...` and are omitted in the body:
+Use explicit `Fin(N)` axes for positional vectors and matrices. Their labels are
+`#0, #1, ...` and are omitted from ordinary rows and columns:
 
 ```
-// 1D Nat range
-param v: Dimensionless[3] = table[3] {
+// 1D Fin axis
+param v: Dimensionless[Fin(3)] = table[Fin(3)] {
     1.0;
     2.0;
     3.0;
 };
 
-// 2D, both axes Nat range
-param m: Dimensionless[2, 3] = table[2, 3] {
+// 2D, both axes finite
+param m: Dimensionless[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
     1.0, 2.0, 3.0;
     4.0, 5.0, 6.0;
 };
 
-// 2D, mixed: named columns, Nat range rows
-param mixed: Dimensionless[2, Maneuver] = table[2, Maneuver] {
+// 2D, mixed: named columns, finite rows
+param mixed: Dimensionless[Fin(2), Maneuver] = table[Fin(2), Maneuver] {
     : Departure, Correction;
     1.0, 2.0;
     3.0, 4.0;
 };
 
-// 3D with a Nat range slice axis
-param m3d: Dimensionless[2, Phase, Maneuver] = table[2, Phase, Maneuver] {
+// 3D with a finite slice axis
+param m3d: Dimensionless[Fin(2), Phase, Maneuver] = table[Fin(2), Phase, Maneuver] {
     [#0]
     : Departure, Correction;
     Launch: 1.0, 2.0;
@@ -295,7 +305,10 @@ param m3d: Dimensionless[2, Phase, Maneuver] = table[2, Phase, Maneuver] {
 };
 ```
 
-Slice labels (all but the last two axes) always require an explicit marker -- `[Index.Variant]` for named axes or `[#N]` for Nat range axes.
+Slice labels (all but the last two axes) always require an explicit marker:
+`[Index.Variant]` for named axes or `[#N]` for `Fin` axes. The same conventions
+apply to multi-declaration shared axes: a `Fin` row axis has unlabeled rows, and
+a `Fin` slice axis uses `[#N]` sections.
 
 The `table` expression is pure syntax sugar -- it desugars to a map literal at parse time.
 
@@ -371,95 +384,135 @@ Slice labels must qualify each shared axis in the declared order (`Phase.Launch`
 Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. Axis and qualified header/slice references participate in navigation and rename as well. The formatter preserves the multi-decl surface form while canonicalizing alignment and retaining every required axis qualifier. Cell-level inlay hints (projecting slot names into the header row of the source) remain future work.
 
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
-- Attributes (`#[…]`) and visibility annotations (`pub` / `pub(bind)`) are not allowed on a multi-declaration or its slots.
+- Attributes (`#[…]`) are not allowed on a multi-declaration. Visibility is
+  written per slot and follows the ordinary declaration rules (`pub node` is
+  valid; `pub param` and `pub(bind) node` are not).
 
-## Range Indexes
+## Coordinate Indexes
 
-Range indexes generate labels from numeric stepping:
+Coordinate indexes carry statically known quantity coordinates. Bounds and
+spacing must be finite, compile-time quantities with the same dimension.
+Runtime inputs and integer (`Int`) values are not accepted.
+
+### Exact-Step `range`
+
+Use `range` when the increment is authoritative:
 
 ```
-index TimeStep = linspace(0.0 s, 1.0 s, step: 0.5 s);
+index TimeStep = range(0.0 s, 1.0 s, step: 0.25 s);
+index Countdown = range(1.0 s, -1.0 s, step: -0.5 s);
 ```
 
-This creates an index with elements at `0.0 s`, `0.5 s`, and `1.0 s`.
+The step must be nonzero and point from `start` toward `end`. It must land on
+the endpoint exactly within floating-point validation tolerance; Graphcal does
+**not** clip or overshoot. For example,
+`range(0.0 s, 1.0 s, step: 0.6 s)` is rejected. Interior coordinates are derived
+directly from `start + position * step`, avoiding cumulative drift, and the
+validated final coordinate preserves the declared endpoint.
 
-If `step` does not land exactly on `end`, Graphcal includes only values that do not overshoot the end. For example, `linspace(0.0 s, 1.0 s, step: 0.6 s)` has labels `0.0 s` and `0.6 s`, not `1.2 s`.
+### Count-Based `linspace`
 
-## Nat Range Indexes
+Use `linspace` when the number of points is authoritative:
 
-Integer literals in index position create anonymous **nat range** indexes. These are useful for vectors, matrices, and other fixed-size numeric arrays:
+```
+index Samples = linspace(0.0 s, 1.0 s, points: 5);
+```
+
+This produces exactly five coordinates and preserves both declared endpoints.
+`points` must be a static positive `Nat`. A singleton is valid only when the
+endpoints are identical:
+
+```
+index Origin = linspace(0.0 m, 0.0 m, points: 1);
+```
+
+Both constructors support ascending and descending coordinates. Concrete index
+cardinalities are limited to 1,000,000 elements to prevent accidental massive
+allocations.
+
+## Structural Finite Indexes
+
+`Fin(N)` is an explicit structural index with integer positions `0` through
+`N - 1`. It is distinct from the `Nat` value `N`: Graphcal never converts a
+bare Nat into an Index implicitly.
 
 ```
 // A 3-element vector
-param v: Dimensionless[3] = for i: range(3) { 1.0 };
+param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
 
-// A 2x3 matrix
-param m: Dimensionless[2, 3] = for i: range(2), j: range(3) { 1.0 };
+// A 2-by-3 matrix
+param m: Dimensionless[Fin(2), Fin(3)] =
+    for i: Fin(2), j: Fin(3) { 1.0 };
 ```
 
-The integer `3` in `Dimensionless[3]` internally creates an anonymous index `range(3)` with elements `{0, 1, 2}`. Nat range sizes must be at least 1.
+Write `Fin(N)` in every Index position, including indexed types, `for`
+bindings, tables, and Index-sorted generic arguments. Obsolete forms such as
+`Dimensionless[3]`, `for i: range(3)`, and `table[3]` are rejected with a
+`Fin(3)` suggestion. `Fin(0)` and cardinalities above the practical limit are
+invalid.
 
-### Iterating over Nat Ranges
+### Generic Sorts Stay Distinct
 
-Use `for i: range(N)` to iterate over a nat range index:
-
-```
-node doubled: Dimensionless[3] = for i: range(3) { @v[i] * 2.0 };
-```
-
-The loop variable `i` has type `Int` and can be used to index into nat-range-indexed values.
-
-### Nat Parameters in DAG Blocks
-
-DAG blocks can work with nat range indexed values. Two nat ranges are equal if and only if their sizes are equal -- `range(3)` and `range(4)` are different indexes.
-
-### Nat Arithmetic (Addition)
-
-`Nat` expressions support addition, enabling size relationships:
+A `Nat` argument remains a Nat, while `Fin(...)` is an Index argument:
 
 ```
-param v4: Dimensionless[4] = for i: range(4) { 1.0 };
-node v3: Dimensionless[3] = for i: range(3) { @v4[i] };
+type Vector<N: Nat, D: Dim> {
+    Vector(values: D[Fin(N)]),
+}
+
+type IndexedVector<I: Index, D: Dim> {
+    IndexedVector(values: D[I]),
+}
+
+param a: Vector<3, Dimensionless>;
+param b: IndexedVector<Fin(3), Dimensionless>;
 ```
 
-`Nat` expressions are normalized to a canonical form and compared structurally. Subtraction is not supported -- instead, express the larger side with addition (e.g., `D[N + 1]` instead of `D[N - 1]`).
+Consequently, `Vector<Fin(3), Dimensionless>` and
+`IndexedVector<3, Dimensionless>` are sort errors rather than implicit
+conversions.
 
-### Nat Arithmetic (Multiplication)
+### Nat Arithmetic and Iteration
 
-`Nat` expressions also support multiplication. Multiplication binds tighter than addition, so `M + N * P` is parsed as `M + (N * P)`. Mixed expressions are normalized to canonical polynomial form.
+The cardinality inside `Fin(...)` may use Nat addition and multiplication, such
+as `Fin(N + 1)` or `Fin(Rows * Cols)`. Multiplication binds more tightly than
+addition. Nat expressions are normalized to canonical polynomial form.
+Subtraction is deliberately unsupported; express the larger side additively,
+for example use `D[Fin(N + 1)]` for an input and `D[Fin(N)]` for a smaller
+output.
 
-### Expression-Based Indexing
-
-Index arguments can be arbitrary integer expressions, not just loop variables. This enables patterns like finite differences where you need to access adjacent elements:
+A `Fin(N)` loop variable has the bounded integer type `Fin(N)` and evaluates
+with an integer representation at runtime. It can index the corresponding
+value:
 
 ```
-// Finite differences: values[i + 1] - values[i]
-param values: Velocity[4] = for i: range(4) { 1.0 m/s };
-node diffs: Velocity[3] = for i: range(3) { @values[i + 1] - @values[i] };
+node doubled: Dimensionless[Fin(3)] =
+    for i: Fin(3) { @v[i] * 2.0 };
 ```
 
-The compiler statically verifies bounds when possible. Constant integer
-expressions such as `@values[5]` or `@values[0 - 1]` are rejected by
-`graphcal check` when the target nat-range size is known.
+Integer index expressions are allowed and statically bounds-checked when
+possible:
 
-Expression-based indexing supports:
+```
+param values: Velocity[Fin(4)] = for i: Fin(4) { 1.0 m/s };
+node diffs: Velocity[Fin(3)] =
+    for i: Fin(3) { @values[i + 1] - @values[i] };
+```
 
-- **Addition with literals**: `v[i + 1]`, `v[i + 2]` -- bounds are checked at compile time
-- **Arbitrary integer expressions**: `v[some_expr]` -- evaluated at runtime
-
-### Composing Nat Ranges with Named Indexes
-
-Nat range indexes compose freely with named indexes:
+`Fin` axes compose with named indexes:
 
 ```
 index Phase = { Launch, Cruise };
-
-node data: Dimensionless[3, Phase] = for i: range(3), p: Phase { 1.0 };
+node data: Dimensionless[Fin(3), Phase] =
+    for i: Fin(3), p: Phase { 1.0 };
 ```
 
 ## Required Indexes
 
-An index can be declared **without** specifying its variants or range values. These are **required indexes** — they must be bound via a [parameterized import](multi-file.md#index-bindings) when the file is used as a library.
+An index can be declared **without** specifying its labels or coordinates. These
+are **required indexes** — they must be bound via a
+[parameterized import](multi-file.md#index-bindings) when the file is used as a
+library.
 
 ### Required Named Index
 
@@ -473,13 +526,15 @@ Required indexes form the library's bindable interface and must carry
 `pub(bind)` (see [Visibility and Bindability](multi-file.md#visibility-and-bindability)).
 Omitting the annotation — or writing plain `pub` — is error `V002`.
 
-### Required Range Index
+### Required Coordinate Index
 
 ```
 pub(bind) index Step: Time;
 ```
 
-This declares a range index `Step` constrained to have dimension `Time`. The importer must bind it to a concrete range index with the same dimension.
+This declares a coordinate index `Step` constrained to dimension `Time`. The
+importer must bind it to a concrete `range` or `linspace` index with the same
+dimension.
 
 ### Using Required Indexes
 
@@ -496,7 +551,7 @@ The file cannot be evaluated standalone. It must be imported with a binding that
 
 ## `unfold` (Recurrence Relations)
 
-`unfold` computes values over a range index where each value depends on the previous:
+`unfold` computes values over a coordinate index where each value depends on the previous:
 
 ```
 node x: Dimensionless[TimeStep] = unfold(@x0, |prev_t, t| @x[prev_t] * (1.0 + @rate * (t - prev_t)));

@@ -28,11 +28,11 @@ use crate::syntax::ast::{
     TableIndexSpec, TypeExpr, Visibility,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::super::{ParseError, Parser};
 
@@ -233,6 +233,7 @@ impl Parser<'_> {
         self.expect(Token::LBrace)?;
 
         let slice_axis_specs = &shared_axes[..shared_axes.len() - 1];
+        let row_axis_spec = &shared_axes[shared_axes.len() - 1];
 
         // Collect: per slice, (slice_prefix_keys, header_cells, row_values).
         // For single-shared-axis multi-decls, there is exactly one slice with
@@ -241,7 +242,7 @@ impl Parser<'_> {
 
         if slice_axis_specs.is_empty() {
             // v1/v2 shape: one body with no slice labels.
-            let slice = self.parse_multi_slice_body(&[], &slot_axes, &slots)?;
+            let slice = self.parse_multi_slice_body(&[], row_axis_spec, &slot_axes, &slots)?;
             slices.push(slice);
         } else {
             // v3 shape: one or more `[slice_labels] header; rows;` sections.
@@ -249,7 +250,8 @@ impl Parser<'_> {
                 self.lexer.next_token(); // consume `[`
                 let slice_prefix = self.parse_slice_labels(slice_axis_specs)?;
                 self.expect(Token::RBracket)?;
-                let slice = self.parse_multi_slice_body(&slice_prefix, &slot_axes, &slots)?;
+                let slice =
+                    self.parse_multi_slice_body(&slice_prefix, row_axis_spec, &slot_axes, &slots)?;
                 slices.push(slice);
             }
             if slices.is_empty() {
@@ -405,10 +407,10 @@ impl Parser<'_> {
                             label_axis.span,
                         ),
                         additional_index_spans: vec![axis.span],
-                        variant,
+                        variant: Spanned::new(IndexEntryKey::named(variant.value), variant.span),
                     });
                 }
-                TableIndexSpec::NatRange(n, sp) => {
+                TableIndexSpec::Finite { cardinality, span } => {
                     let (_, hash_span) = self.expect(Token::Hash)?;
                     let (_, num_span) = self.expect(Token::Number)?;
                     let text = self.lexer.slice_at(num_span).replace('_', "");
@@ -417,10 +419,10 @@ impl Parser<'_> {
                         src: self.named_source(),
                         span: num_span.into(),
                     })?;
-                    if value >= *n {
+                    if value >= *cardinality {
                         return Err(ParseError::InvalidNumber {
                             reason: format!(
-                                "slice index #{value} out of range for axis of size {n}"
+                                "slice index #{value} out of range for Fin({cardinality})"
                             ),
                             src: self.named_source(),
                             span: num_span.into(),
@@ -428,9 +430,9 @@ impl Parser<'_> {
                     }
                     let variant_span = hash_span.merge(num_span);
                     keys.push(MapEntryKey {
-                        index: Spanned::new(MapEntryIndex::NatRange(*n), *sp),
+                        index: Spanned::new(MapEntryIndex::Finite(*cardinality), *span),
                         additional_index_spans: Vec::new(),
-                        variant: Spanned::new(IndexVariantName::range_step(value), variant_span),
+                        variant: Spanned::new(IndexEntryKey::position(value), variant_span),
                     });
                 }
             }
@@ -445,6 +447,7 @@ impl Parser<'_> {
     fn parse_multi_slice_body(
         &mut self,
         prefix_keys: &[MapEntryKey],
+        row_axis: &TableIndexSpec,
         slot_axes: &[SlotAxis],
         slots: &[SlotHeader],
     ) -> Result<MultiSlice, ParseError> {
@@ -452,14 +455,38 @@ impl Parser<'_> {
         let column_layout = build_column_layout(slot_axes, &header_cells, header_span, slots)
             .map_err(|e| e.into_parse_error(&self.named_source()))?;
 
-        let mut row_values: Vec<(Spanned<IndexVariantName>, Vec<Expr>, Span)> = Vec::new();
+        let mut row_values: Vec<(Spanned<IndexEntryKey>, Vec<Expr>, Span)> = Vec::new();
         while self.lexer.peek() != Some(&Token::RBrace)
             && self.lexer.peek() != Some(&Token::LBracket)
         {
-            let label = self.parse_any_ident()?;
-            let label_span = label.span;
-            let row_label = label.into_spanned::<IndexVariantName>();
-            self.expect(Token::Colon)?;
+            let (row_label, label_span) = match row_axis {
+                TableIndexSpec::Named(_) => {
+                    let label = self.parse_any_ident()?;
+                    let label_span = label.span;
+                    let named_label = label.into_spanned::<IndexVariantName>();
+                    self.expect(Token::Colon)?;
+                    (
+                        Spanned::new(IndexEntryKey::named(named_label.value), named_label.span),
+                        label_span,
+                    )
+                }
+                TableIndexSpec::Finite { .. } => {
+                    let label_span = self
+                        .lexer
+                        .peek_with_span()
+                        .map_or(header_span, |(_, span)| span);
+                    let position =
+                        u64::try_from(row_values.len()).map_err(|_| ParseError::InvalidNumber {
+                            reason: "finite table row position does not fit u64".to_string(),
+                            src: self.named_source(),
+                            span: label_span.into(),
+                        })?;
+                    (
+                        Spanned::new(IndexEntryKey::position(position), label_span),
+                        label_span,
+                    )
+                }
+            };
             let mut values = Vec::with_capacity(header_cells.len());
             loop {
                 let value = self.parse_expr()?;
@@ -478,12 +505,23 @@ impl Parser<'_> {
                 return Err(ParseError::MultiDeclRowArity {
                     expected_count: header_cells.len(),
                     got: values.len(),
-                    row_label: row_label.value.as_str().to_string(),
+                    row_label: row_label.value.to_string(),
                     src: self.named_source(),
                     span: row_span.into(),
                 });
             }
             row_values.push((row_label, values, row_span));
+        }
+
+        if let TableIndexSpec::Finite { cardinality, .. } = row_axis
+            && u64::try_from(row_values.len()) != Ok(*cardinality)
+        {
+            return Err(ParseError::TableRowLengthMismatch {
+                expected: usize::try_from(*cardinality).unwrap_or(usize::MAX),
+                got: row_values.len(),
+                src: self.named_source(),
+                span: header_span.into(),
+            });
         }
 
         Ok(MultiSlice {
@@ -529,23 +567,42 @@ impl Parser<'_> {
     /// so the multi-decl parser can stop at the opening paren of the slot tuple
     /// without also advancing past a comma. Named axes retain their full path.
     fn parse_table_index_spec_for_multi(&mut self) -> Result<TableIndexSpec, ParseError> {
+        self.reject_obsolete_structural_range()?;
+        if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
+            && self.lexer.peek_second() == Some(&Token::LParen)
+        {
+            let (_, start_span) = self.advance()?;
+            self.expect(Token::LParen)?;
+            let (_, cardinality_span) = self.expect(Token::Number)?;
+            let text = self.lexer.slice_at(cardinality_span).replace('_', "");
+            let cardinality = text.parse().map_err(|_| ParseError::InvalidNumber {
+                reason: "table Fin cardinality must be a non-negative integer literal".to_string(),
+                src: self.named_source(),
+                span: cardinality_span.into(),
+            })?;
+            let (_, end_span) = self.expect(Token::RParen)?;
+            return Ok(TableIndexSpec::Finite {
+                cardinality,
+                span: start_span.merge(end_span),
+            });
+        }
         match self.lexer.peek() {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
-                let text = self.lexer.slice_at(span).replace('_', "");
-                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                    reason: "expected non-negative integer in table index position".to_string(),
+                let expression = self.lexer.slice_at(span).to_string();
+                Err(ParseError::ExpectedIndexFoundNat {
+                    suggestion: format!("Fin({expression})"),
+                    expression,
                     src: self.named_source(),
                     span: span.into(),
-                })?;
-                Ok(TableIndexSpec::NatRange(value, span))
+                })
             }
             Some(token) if token.is_identifier() => Ok(TableIndexSpec::Named(
                 self.parse_ident_path()?.into_spanned_name_path(),
             )),
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("index name or integer literal", &tok.to_string(), span))
+                Err(self.unexpected_token("index name or `Fin(N)`", &tok.to_string(), span))
             }
         }
     }
@@ -553,7 +610,7 @@ impl Parser<'_> {
     /// Parse a slot tuple: `( slot_axes { , slot_axes } [,] )`.
     ///
     /// Each entry is either `_` (no extra axis) or an identifier path naming
-    /// the slot's extra axis. Nat-range extras are not supported in v1.
+    /// the slot's extra axis. finite-index extras are not supported in v1.
     fn parse_slot_tuple(&mut self) -> Result<(Vec<SlotAxis>, Span), ParseError> {
         let (_, lparen_span) = self.expect(Token::LParen)?;
         let mut entries = Vec::new();
@@ -660,6 +717,33 @@ mod tests {
             DeclKind::Node(node) => node.visibility,
             other => panic!("expected Node, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn multi_decl_supports_finite_shared_row_axis() {
+        let source = r"
+param x: Dimensionless[Fin(2)],
+param y: Dimensionless[Fin(2)]
+  = table[Fin(2), (_, _)] {
+      : _, _;
+      1.0, 2.0;
+      3.0, 4.0;
+  };
+";
+        let file = Parser::new(source).parse_file().unwrap();
+        let multi = sole_multi_decl(&file);
+        assert!(multi.shared_axes.row_axis().is_finite_index());
+        assert_eq!(
+            multi.slices[0]
+                .rows
+                .iter()
+                .map(|row| row.label.value.clone())
+                .collect::<Vec<_>>(),
+            vec![IndexEntryKey::Position(0), IndexEntryKey::Position(1)]
+        );
+
+        let expanded = expand_multi_decl(multi);
+        assert_eq!(expanded.len(), 2);
     }
 
     #[test]
@@ -1143,7 +1227,7 @@ pub(super) struct MultiSlice {
     pub prefix_keys: Vec<MapEntryKey>,
     pub header_cells: Vec<HeaderCell>,
     pub column_layout: Vec<SlotColumnSpan>,
-    pub row_values: Vec<(Spanned<IndexVariantName>, Vec<Expr>, Span)>,
+    pub row_values: Vec<(Spanned<IndexEntryKey>, Vec<Expr>, Span)>,
 }
 
 /// Where each slot's cells live within the parsed header row.

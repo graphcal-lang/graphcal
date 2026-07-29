@@ -9,7 +9,7 @@ use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
@@ -57,17 +57,17 @@ pub enum Value {
         /// Fields in definition order.
         fields: IndexMap<FieldName, Self>,
     },
-    /// An indexed collection: maps variant names to values.
+    /// An indexed collection keyed by named labels or typed positions.
     Indexed {
         /// The index type identity, including a canonical owner when available.
         index_name: IndexTypeRef,
-        /// Entries in declaration order, keyed by semantic variant leaves.
-        entries: IndexMap<IndexVariantName, Self>,
-        /// Optional display labels for entry keys (for example, range-index step values).
+        /// Entries in declaration order.
+        entries: IndexMap<IndexEntryKey, Self>,
+        /// Optional display labels for entry keys (for example, coordinate values).
         ///
         /// These are presentation strings only. Semantic consumers must continue to
         /// use `entries` keys rather than parsing these labels.
-        entry_display_names: Option<IndexMap<IndexVariantName, String>>,
+        entry_display_names: Option<IndexMap<IndexEntryKey, String>>,
     },
     /// A datetime instant.
     Datetime {
@@ -164,8 +164,8 @@ fn value_field_maps_equal(
 }
 
 fn value_entry_maps_equal(
-    lhs: &IndexMap<IndexVariantName, Value>,
-    rhs: &IndexMap<IndexVariantName, Value>,
+    lhs: &IndexMap<IndexEntryKey, Value>,
+    rhs: &IndexMap<IndexEntryKey, Value>,
 ) -> bool {
     lhs.len() == rhs.len()
         && lhs
@@ -213,7 +213,7 @@ impl Value {
     pub fn indexed_with_owner(
         owner: DagId,
         index_name: IndexName,
-        entries: IndexMap<IndexVariantName, Self>,
+        entries: IndexMap<IndexEntryKey, Self>,
     ) -> Self {
         Self::Indexed {
             index_name: IndexTypeRef::with_owner(owner, index_name),
@@ -224,19 +224,19 @@ impl Value {
 
     /// Display label for an indexed entry key.
     ///
-    /// This is an I/O helper: it renders optional range-index labels and falls
-    /// back to the semantic variant leaf. Core logic should use `entries` keys.
+    /// This is an I/O helper: it renders optional coordinate-index labels and falls
+    /// back to the typed key's boundary rendering. Core logic uses `entries` keys.
     #[must_use]
-    pub fn indexed_entry_display_name(&self, variant: &IndexVariantName) -> String {
+    pub fn indexed_entry_display_name(&self, key: &IndexEntryKey) -> String {
         match self {
             Self::Indexed {
                 entry_display_names: Some(display_names),
                 ..
             } => display_names
-                .get(variant)
+                .get(key)
                 .cloned()
-                .unwrap_or_else(|| variant.as_str().to_string()),
-            _ => variant.as_str().to_string(),
+                .unwrap_or_else(|| key.to_string()),
+            _ => key.to_string(),
         }
     }
 

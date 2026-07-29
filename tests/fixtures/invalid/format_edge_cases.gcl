@@ -20,7 +20,7 @@ index Phase = { Launch, Coast, Burn, Insertion, Deorbit };
 
 index Maneuver = { Departure, Midcourse1, Midcourse2, Correction, Insertion };
 
-index Step = linspace(0.0 s, 10.0 s, step: 1.0 s);
+index Step = range(0.0 s, 10.0 s, step: 1.0 s);
 
 const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
 const node r_earth: Length = 6371.0 km;

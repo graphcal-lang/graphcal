@@ -1,7 +1,7 @@
 //! Runtime evaluation: converting TIR execution results to Values,
 //! running execution plans, and checking asserts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -9,7 +9,7 @@ use miette::NamedSource;
 
 use graphcal_compiler::dimension::Dimension;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
+use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 
@@ -27,7 +27,9 @@ use graphcal_compiler::registry::declared_type::{
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::Registry;
 
-use super::display::{attach_display_units, extract_flat_display_unit, format_range_step};
+use super::display::{
+    attach_display_units, extract_flat_display_unit, format_coordinate, format_coordinate_exact,
+};
 use super::project::resolve_field_declared_type;
 use super::types::{
     AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
@@ -130,18 +132,42 @@ pub(super) fn runtime_to_value(
                 Some(DeclaredType::Indexed { element, .. }) => Some(element.as_ref()),
                 _ => None,
             };
-            // For range indexes, keep semantic #N keys in the public value and
-            // carry formatted step labels as presentation metadata. This keeps
-            // display strings at I/O boundaries instead of fabricating variant
-            // leaves like `0.5 s`.
+            // Coordinate indexes retain typed positions in the public value;
+            // formatted coordinates are presentation-only metadata.
             let idx_def = index_name
                 .declared_name()
                 .and_then(|name| registry.indexes.get_index(name.as_str()));
-            let entry_display_names = idx_def.filter(|def| def.is_range()).map(|def| {
-                entries
+            let entry_display_names = idx_def.filter(|def| def.is_coordinate()).map(|def| {
+                let labels = entries
                     .keys()
                     .enumerate()
-                    .map(|(i, variant)| (variant.clone(), format_range_step(def, i)))
+                    .map(|(position, key)| {
+                        (key.clone(), position, format_coordinate(def, position))
+                    })
+                    .collect::<Vec<_>>();
+                let mut seen = HashSet::new();
+                let duplicates = labels
+                    .iter()
+                    .filter_map(|(_, _, label)| {
+                        (!seen.insert(label.clone())).then_some(label.clone())
+                    })
+                    .collect::<HashSet<_>>();
+                let mut used_display_names = HashSet::new();
+                labels
+                    .into_iter()
+                    .map(|(key, position, label)| {
+                        let candidate = if duplicates.contains(&label) {
+                            format_coordinate_exact(def, position)
+                        } else {
+                            label
+                        };
+                        let display = if used_display_names.insert(candidate.clone()) {
+                            candidate
+                        } else {
+                            format!("{candidate} [#{position}]")
+                        };
+                        (key, display)
+                    })
                     .collect()
             });
             let converted_entries = entries
@@ -157,8 +183,8 @@ pub(super) fn runtime_to_value(
                 entry_display_names,
             }
         }
-        RuntimeValue::RangeLabel { value, .. } => {
-            // RangeLabel is an intermediate value used during range-index
+        RuntimeValue::CoordinateLabel { value, .. } => {
+            // CoordinateLabel is an intermediate value used during coordinate-index
             // iteration, but it can surface in final output when a body
             // returns its loop variable (e.g. `for i: Step { i }`). Expose it
             // as a plain quantity, consistent with `expect_quantity` which
@@ -812,7 +838,7 @@ pub fn evaluate_assert_with_expected_fail(
 }
 
 fn expected_fail_key_matches_path(
-    path: &[(IndexTypeRef, IndexVariantName)],
+    path: &[(IndexTypeRef, IndexEntryKey)],
     key: &ExpectedFailKey,
 ) -> bool {
     path.len() == key.len()
@@ -831,9 +857,9 @@ fn expected_fail_key_matches_path(
 /// For nested indexed values (multi-index), recurse.
 fn invert_indexed_variants(
     index_name: &IndexTypeRef,
-    entries: IndexMap<IndexVariantName, RuntimeValue>,
+    entries: IndexMap<IndexEntryKey, RuntimeValue>,
     keys: &[ExpectedFailKey],
-) -> (IndexTypeRef, IndexMap<IndexVariantName, RuntimeValue>) {
+) -> (IndexTypeRef, IndexMap<IndexEntryKey, RuntimeValue>) {
     let inverted_entries = entries
         .into_iter()
         .map(|(variant, value)| {
@@ -888,8 +914,15 @@ fn invert_indexed_variants(
 /// Each path is a slice of index/variant pairs from outermost to innermost.
 /// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
 /// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
+fn format_indexed_path_part(index: &IndexTypeRef, key: &IndexEntryKey) -> String {
+    match key {
+        IndexEntryKey::Named(variant) => format!("{}.{variant}", index.display_name()),
+        IndexEntryKey::Position(_) => key.to_string(),
+    }
+}
+
 fn format_indexed_paths(
-    paths: &[&[(IndexTypeRef, IndexVariantName)]],
+    paths: &[&[(IndexTypeRef, IndexEntryKey)]],
     is_multi_index: bool,
 ) -> String {
     let formatted: Vec<String> = if is_multi_index {
@@ -899,7 +932,7 @@ fn format_indexed_paths(
                 format!(
                     "({})",
                     p.iter()
-                        .map(|(idx, var)| format!("{}.{var}", idx.display_name()))
+                        .map(|(index, key)| format_indexed_path_part(index, key))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
@@ -908,7 +941,7 @@ fn format_indexed_paths(
     } else {
         paths
             .iter()
-            .map(|p| format!("{}.{}", p[0].0.display_name(), p[0].1))
+            .map(|p| format_indexed_path_part(&p[0].0, &p[0].1))
             .collect()
     };
     formatted.join(", ")
@@ -927,7 +960,7 @@ fn format_indexed_paths(
 /// failing path as either "unexpected pass" or "unexpected fail".
 fn check_indexed_assert_with_expected_fail(
     index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
     keys: &[ExpectedFailKey],
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
@@ -986,7 +1019,7 @@ fn check_indexed_assert_with_expected_fail(
 ///   `failed at (Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`
 fn check_indexed_assert(
     index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> AssertResult {
     match collect_failing_paths(index_name, entries) {
         Ok(paths) if paths.is_empty() => AssertResult::Pass,
@@ -1012,8 +1045,8 @@ fn check_indexed_assert(
 /// For example, `vec![(IndexTypeRef::with_owner(owner, IndexName::expect_valid("Phase")), VariantName::new("Launch")), ...]` for a 2D failure.
 fn collect_failing_paths(
     index_name: &IndexTypeRef,
-    entries: &IndexMap<IndexVariantName, RuntimeValue>,
-) -> Result<Vec<Vec<(IndexTypeRef, IndexVariantName)>>, String> {
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+) -> Result<Vec<Vec<(IndexTypeRef, IndexEntryKey)>>, String> {
     let mut paths = Vec::new();
     for (variant, value) in entries {
         let key = (index_name.clone(), variant.clone());
@@ -1139,7 +1172,7 @@ fn eval_tolerance_operands(
 struct ToleranceFailure {
     /// Index path from outermost to innermost axis; empty for an unindexed
     /// assertion.
-    path: Vec<(IndexTypeRef, IndexVariantName)>,
+    path: Vec<(IndexTypeRef, IndexEntryKey)>,
     /// `actual X, expected Y +/- T, off by D`.
     detail: String,
 }
@@ -1172,7 +1205,7 @@ fn tolerance_tree_inner(
     expected: &RuntimeValue,
     tolerance: &RuntimeValue,
     is_relative: bool,
-    path: &mut Vec<(IndexTypeRef, IndexVariantName)>,
+    path: &mut Vec<(IndexTypeRef, IndexEntryKey)>,
     failures: &mut Vec<ToleranceFailure>,
 ) -> Result<RuntimeValue, String> {
     if let RuntimeValue::Indexed {
@@ -1254,7 +1287,7 @@ fn tolerance_tree_inner(
 fn tolerance_entry_or_broadcast<'a>(
     operand: &'a RuntimeValue,
     axis: &IndexTypeRef,
-    variant: &IndexVariantName,
+    variant: &IndexEntryKey,
 ) -> Result<&'a RuntimeValue, String> {
     match operand {
         RuntimeValue::Indexed {
@@ -1270,8 +1303,8 @@ fn tolerance_entry_or_broadcast<'a>(
             }
             entries.get(variant).ok_or_else(|| {
                 format!(
-                    "tolerance assertion operand is missing entry `{}.{variant}`",
-                    index_name.display_name()
+                    "tolerance assertion operand is missing entry `{}`",
+                    format_indexed_path_part(index_name, variant)
                 )
             })
         }
@@ -1572,6 +1605,6 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, Stri
         RuntimeValue::Datetime(epoch) => Ok(PlotFieldValue::Datetime(
             super::types::epoch_to_rfc3339(epoch),
         )),
-        RuntimeValue::RangeLabel { value, .. } => Ok(PlotFieldValue::Number(*value)),
+        RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotFieldValue::Number(*value)),
     }
 }

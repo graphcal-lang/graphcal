@@ -45,9 +45,11 @@ fn parse_param_with_type() {
 fn contextual_keywords_are_identifiers_outside_special_contexts() {
     let sources = [
         "param scan: Dimensionless = 1.0; node unfold: Dimensionless = scan;",
+        "param range: Dimensionless = 1.0; node points: Dimensionless = range;",
         "dim linspace = Dimensionless; unit step: Dimensionless = 1.0 linspace;",
-        "index scan = { unfold, linspace, step };",
+        "index scan = { unfold, range, linspace, step, points, Fin };",
         "import scan.unfold.{linspace as step};",
+        "import range.points.{Fin as step};",
         "type scan<unfold: Type> { scan(step: unfold) }",
         "param value: scan<unfold>[linspace];",
         "node value: Dimensionless = 1.0 scan.step;",
@@ -752,20 +754,39 @@ fn parse_index_named_trailing_comma() {
 }
 
 #[test]
-fn linspace_index_requires_step_label() {
-    let source = "index TimeStep = linspace(0.0 s, 1.0 s, scan: 0.1 s);";
+fn range_index_requires_step_label() {
+    let source = "index TimeStep = range(0.0 s, 1.0 s, scan: 0.1 s);";
     assert!(Parser::new(source).parse_file().is_err());
 }
 
 #[test]
-fn parse_index_linspace_decl() {
-    let source = "index TimeStep = linspace(0.0 s, 100.0 s, step: 0.1 s);";
+fn linspace_index_requires_points_label() {
+    let source = "index Samples = linspace(0.0 s, 1.0 s, step: 11);";
+    assert!(Parser::new(source).parse_file().is_err());
+}
+
+#[test]
+fn parse_index_range_decl() {
+    let source = "index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);";
     let file = Parser::new(source).parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     match &file.declarations[0].kind {
         DeclKind::Index(idx) => {
             assert_eq!(idx.name.value.as_str(), "TimeStep");
             assert!(matches!(idx.kind, IndexDeclKind::Range { .. }));
+        }
+        _ => panic!("expected index declaration"),
+    }
+}
+
+#[test]
+fn parse_index_linspace_decl() {
+    let source = "index Samples = linspace(0.0 s, 100.0 s, points: 11);";
+    let file = Parser::new(source).parse_file().unwrap();
+    match &file.declarations[0].kind {
+        DeclKind::Index(idx) => {
+            assert_eq!(idx.name.value.as_str(), "Samples");
+            assert!(matches!(idx.kind, IndexDeclKind::Linspace { .. }));
         }
         _ => panic!("expected index declaration"),
     }
@@ -1265,11 +1286,11 @@ fn parse_required_range_simple() {
         DeclKind::Index(idx) => {
             assert_eq!(idx.name.value.as_str(), "Foo");
             match &idx.kind {
-                IndexDeclKind::RequiredRange { dimension } => {
+                IndexDeclKind::RequiredCoordinate { dimension } => {
                     assert_eq!(dimension.terms.len(), 1);
                     assert_eq!(dimension.terms[0].term.name.value.leaf().as_str(), "Time");
                 }
-                other => panic!("expected required range, got {other:?}"),
+                other => panic!("expected required coordinate index, got {other:?}"),
             }
         }
         other => panic!("expected index declaration, got {other:?}"),
@@ -1340,7 +1361,7 @@ fn parse_required_range_compound_dim() {
         DeclKind::Index(idx) => {
             assert_eq!(idx.name.value.as_str(), "Foo");
             match &idx.kind {
-                IndexDeclKind::RequiredRange { dimension } => {
+                IndexDeclKind::RequiredCoordinate { dimension } => {
                     assert_eq!(dimension.terms.len(), 3);
                     assert_eq!(dimension.terms[0].term.name.value.leaf().as_str(), "Mass");
                     assert_eq!(dimension.terms[1].term.name.value.leaf().as_str(), "Length");
@@ -1348,7 +1369,7 @@ fn parse_required_range_compound_dim() {
                     assert_eq!(dimension.terms[2].term.power, Some(Rational::from(2)));
                     assert_eq!(dimension.terms[2].op, MulDivOp::Div);
                 }
-                other => panic!("expected required range, got {other:?}"),
+                other => panic!("expected required coordinate index, got {other:?}"),
             }
         }
         other => panic!("expected index declaration, got {other:?}"),

@@ -52,7 +52,7 @@ use crate::syntax::ast::{
 };
 #[cfg(test)]
 use crate::syntax::ast::{DeclKind, Declaration};
-use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Raw};
@@ -131,7 +131,9 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
 
     let row_index_name = match &row_index_spec {
         TableIndexSpec::Named(s) => Spanned::new(MapEntryIndex::Named(s.value.clone()), s.span),
-        TableIndexSpec::NatRange(n, sp) => Spanned::new(MapEntryIndex::NatRange(*n), *sp),
+        TableIndexSpec::Finite { cardinality, span } => {
+            Spanned::new(MapEntryIndex::Finite(*cardinality), *span)
+        }
     };
 
     let mut out: Vec<ExpandedSlotDecl> = Vec::with_capacity(multi.slots.len());
@@ -191,7 +193,10 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                                     column_axis.span,
                                 ),
                                 additional_index_spans: vec![extra_axis.span],
-                                variant: col_variant.clone(),
+                                variant: Spanned::new(
+                                    IndexEntryKey::named(col_variant.value.clone()),
+                                    col_variant.span,
+                                ),
                             };
                             slot_entries.push(MapEntry {
                                 keys: multi_entry_keys(

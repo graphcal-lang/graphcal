@@ -1,2 +1,2 @@
-// error: linspace step must be positive
-index TimeStep = linspace(0.0 s, 1.0 s, step: -0.1 s);
+// Error: negative step cannot traverse ascending bounds.
+index TimeStep = range(0.0 s, 1.0 s, step: -0.1 s);

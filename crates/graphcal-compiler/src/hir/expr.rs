@@ -29,7 +29,7 @@ use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
@@ -78,6 +78,9 @@ pub enum ExprLowerError {
     /// A map literal entry unexpectedly had no keys after syntax lowering.
     #[error("map literal entry has no keys")]
     EmptyMapEntry { span: Span },
+    /// A syntax map key paired a named axis with a position or a Fin axis with a name.
+    #[error("map entry key category does not match its index category")]
+    InvalidMapEntryKey { span: Span },
     /// A map literal used a key variant that is not declared by its index.
     #[error("extra variant `{variant_name}` in map literal for index `{index_name}`")]
     ExtraMapVariant {
@@ -909,10 +912,7 @@ pub struct MapEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MapEntryKey {
     IndexVariant(IndexVariantRef),
-    NatRangeVariant {
-        size: u64,
-        variant: Spanned<IndexVariantName>,
-    },
+    FinitePosition { size: u64, position: Spanned<u64> },
 }
 
 /// A resolved for-comprehension binding.
@@ -926,7 +926,7 @@ pub struct ForBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForBindingIndex {
     Named(Spanned<ResolvedIndexName>),
-    Range { arg: NatExpr, span: Span },
+    Finite { cardinality: NatExpr, span: Span },
 }
 
 /// A resolved index-access argument.
@@ -1707,12 +1707,15 @@ impl<'a> ExprLowerer<'a> {
         key: &ast::MapEntryKey,
         map_span: Span,
     ) -> Result<MapEntryKey, ExprLowerError> {
-        match &key.index.value {
-            crate::syntax::ast::MapEntryIndex::Named(index_path) => {
+        match (&key.index.value, &key.variant.value) {
+            (
+                crate::syntax::ast::MapEntryIndex::Named(index_path),
+                IndexEntryKey::Named(variant_name),
+            ) => {
                 let variant = self
                     .resolve_index_variant_parts(
                         index_path,
-                        &key.variant.value,
+                        variant_name,
                         key.index.span,
                         key.variant.span,
                     )
@@ -1734,10 +1737,19 @@ impl<'a> ExprLowerer<'a> {
                     variant_span: key.variant.span,
                 }))
             }
-            crate::syntax::ast::MapEntryIndex::NatRange(size) => Ok(MapEntryKey::NatRangeVariant {
+            (
+                crate::syntax::ast::MapEntryIndex::Finite(size),
+                IndexEntryKey::Position(position),
+            ) => Ok(MapEntryKey::FinitePosition {
                 size: *size,
-                variant: key.variant.clone(),
+                position: Spanned::new(*position, key.variant.span),
             }),
+            (crate::syntax::ast::MapEntryIndex::Named(_), IndexEntryKey::Position(_))
+            | (crate::syntax::ast::MapEntryIndex::Finite(_), IndexEntryKey::Named(_)) => {
+                Err(ExprLowerError::InvalidMapEntryKey {
+                    span: key.variant.span,
+                })
+            }
         }
     }
 
@@ -1758,8 +1770,8 @@ impl<'a> ExprLowerer<'a> {
                     })?;
                 ForBindingIndex::Named(Spanned::new(resolved, index.span))
             }
-            ast::ForBindingIndex::Range { arg, span } => ForBindingIndex::Range {
-                arg: lower_nat_expr(arg, self.ctx.type_context())?,
+            ast::ForBindingIndex::Finite { cardinality, span } => ForBindingIndex::Finite {
+                cardinality: lower_nat_expr(cardinality, self.ctx.type_context())?,
                 span: *span,
             },
         };

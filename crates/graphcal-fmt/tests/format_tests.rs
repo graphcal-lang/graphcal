@@ -122,6 +122,9 @@ fn preserves_blank_line_between_declarations() {
 fn contextual_keyword_identifiers_round_trip() {
     let source = "\
 import scan.unfold.{linspace as step};
+dim range = Dimensionless;
+unit points: Dimensionless = 1.0 range;
+index Fin = { only };
 type scan<unfold: Type> { scan(step: unfold) }
 param step: scan<unfold>[linspace];
 node unfold: Dimensionless = plugin.scan(1.0);
@@ -130,7 +133,9 @@ node unfold: Dimensionless = plugin.scan(1.0);
     graphcal_compiler::syntax::parser::Parser::new(&formatted)
         .parse_file()
         .expect("formatted contextual identifiers should parse");
-    for spelling in ["scan", "unfold", "linspace", "step"] {
+    for spelling in [
+        "scan", "unfold", "range", "linspace", "step", "points", "Fin",
+    ] {
         assert!(formatted.contains(spelling));
     }
 }
@@ -145,6 +150,41 @@ param value:Matrix<2,3> =Matrix<2,3>(value:1.0);\n";
     graphcal_compiler::syntax::parser::Parser::new(&formatted)
         .parse_file()
         .expect("formatted Nat generics should parse");
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn explicit_finite_index_generic_argument_round_trips() {
+    let source = "param value: IndexedVector<Fin(N+1),Dimensionless>;\n";
+    let formatted = format_source(source).expect("Fin generic argument should format");
+    assert_eq!(
+        formatted,
+        "param value: IndexedVector<Fin(N + 1), Dimensionless>;\n"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn multi_decl_finite_slice_and_row_axes_round_trip() {
+    let source = r"
+param x: Dimensionless[Fin(2), Fin(2)],
+param y: Dimensionless[Fin(2), Fin(2)]
+  = table[Fin(2), Fin(2), (_, _)] {
+      [#0]
+      : _, _;
+      1.0, 2.0;
+      3.0, 4.0;
+
+      [#1]
+      : _, _;
+      5.0, 6.0;
+      7.0, 8.0;
+  };
+";
+    let formatted = format_source(source).expect("finite multi-decl axes should format");
+    assert!(formatted.contains("[#0]"));
+    assert!(!formatted.contains("Fin(2).#0"));
+    assert!(!formatted.contains("#0:"));
     assert_eq!(format_source(&formatted).unwrap(), formatted);
 }
 

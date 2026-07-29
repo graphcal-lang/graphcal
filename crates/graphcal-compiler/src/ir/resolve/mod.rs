@@ -572,7 +572,7 @@ fn validate_attributes(
                                 segments.first()
                             }
                             AttributeArg::Path { .. }
-                            | AttributeArg::RangeStep { .. }
+                            | AttributeArg::FinitePosition { .. }
                             | AttributeArg::Group { .. } => {
                                 return Err(GraphcalError::EvalError {
                                     message:
@@ -830,7 +830,7 @@ fn validate_private_in_public(
                 ("type", t.name.value.to_string())
             }
             DeclKind::Index(idx) => {
-                if let IndexDeclKind::RequiredRange { dimension } = &idx.kind {
+                if let IndexDeclKind::RequiredCoordinate { dimension } = &idx.kind {
                     collect_dim_refs(dimension, &mut refs);
                 }
                 ("index", idx.name.value.to_string())
@@ -865,10 +865,16 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names:
                     crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
                         collect_type_refs(type_expr, refs);
                     }
+                    crate::desugar::desugared_ast::GenericArg::Index(IndexExpr::Name(path)) => {
+                        refs.push((path.value.clone(), path.span));
+                    }
+                    crate::desugar::desugared_ast::GenericArg::Index(
+                        IndexExpr::Finite { .. } | IndexExpr::BareNat(_),
+                    )
+                    | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
                     crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
                         collect_ambiguous_generic_refs(ambiguous, refs);
                     }
-                    crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
                 }
             }
         }

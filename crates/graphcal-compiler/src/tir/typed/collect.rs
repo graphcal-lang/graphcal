@@ -513,7 +513,7 @@ fn collect_resolved_collection_refs_from_expr_inner(
                                 refs,
                             )?;
                         }
-                        hir::expr::MapEntryKey::NatRangeVariant { .. } => {}
+                        hir::expr::MapEntryKey::FinitePosition { .. } => {}
                     }
                 }
                 collect_resolved_collection_refs_from_expr(&entry.value, ctx, src, refs)?;
@@ -526,7 +526,7 @@ fn collect_resolved_collection_refs_from_expr_inner(
                     hir::expr::ForBindingIndex::Named(index) => {
                         record_resolved_collection_index(&index.value, ctx, src, index.span, refs)?;
                     }
-                    hir::expr::ForBindingIndex::Range { .. } => {}
+                    hir::expr::ForBindingIndex::Finite { .. } => {}
                 }
             }
             collect_resolved_collection_refs_from_expr(body, ctx, src, refs)
@@ -1139,12 +1139,12 @@ pub(super) fn resolve_expected_fail_keys(
                                             resolved, span,
                                         ))
                                     }
-                                    crate::registry::resolve_types::ExpectedFailKeyPart::RangeStep {
-                                        step,
+                                    crate::registry::resolve_types::ExpectedFailKeyPart::FinitePosition {
+                                        position,
                                         span,
                                     } => Ok(
-                                        crate::registry::resolve_types::ExpectedFailKeyPart::RangeStep {
-                                            step,
+                                        crate::registry::resolve_types::ExpectedFailKeyPart::FinitePosition {
+                                            position,
                                             span,
                                         },
                                     ),

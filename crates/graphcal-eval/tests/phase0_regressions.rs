@@ -128,30 +128,22 @@ node price: Money = 1.0 EUR;
 }
 
 #[test]
-fn linspace_step_count_does_not_overshoot_end() {
+fn range_step_must_land_on_endpoint() {
     let source = r"
-pub index T = linspace(0.0 s, 1.0 s, step: 0.6 s);
+pub index T = range(0.0 s, 1.0 s, step: 0.6 s);
 node x: Dimensionless[T] = for t: T { t / 1.0 s };
 ";
-    let result = compile_and_eval(source).unwrap_or_else(|err| {
-        panic!("BUG: linspace step count produced entries beyond end: unexpected error: {err}")
-    });
-    match value_for(&result, "x") {
-        Value::Indexed { entries, .. } => assert_eq!(
-            entries.len(),
-            2,
-            "BUG: linspace step count produced entries beyond end: expected 0.0 and 0.6 only, got {entries:?}",
-        ),
-        other => panic!(
-            "BUG: linspace step count produced entries beyond end: expected indexed value, got {other:?}"
-        ),
-    }
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(
+        error.to_string().contains("does not land on endpoint"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
 fn infinite_range_bounds_are_diagnostic_not_panic() {
     let source = r"
-index T = linspace(0.0, 1e999, step: 1.0);
+index T = range(0.0, 1e999, step: 1.0);
 node x: Dimensionless[T] = for t: T { 1.0 };
 ";
     let result = panic::catch_unwind(|| compile_and_eval(source).is_err());
@@ -168,15 +160,15 @@ node x: Dimensionless[T] = for t: T { 1.0 };
 }
 
 #[test]
-fn range_zero_is_rejected() {
+fn finite_zero_is_rejected() {
     let source = r"
-node s: Dimensionless = sum(for i: range(0) { 1.0 });
-node m: Dimensionless = minimum(for i: range(0) { 1.0 });
+node s: Dimensionless = sum(for i: Fin(0) { 1.0 });
+node m: Dimensionless = minimum(for i: Fin(0) { 1.0 });
 ";
     let result = compile_and_eval(source);
     assert!(
         result.is_err(),
-        "BUG: range(0) accepted despite the no-empty-index invariant: {result:?}",
+        "BUG: Fin(0) accepted despite the no-empty-index invariant: {result:?}",
     );
 }
 
@@ -319,7 +311,7 @@ fn nested_unfold_self_reference_is_not_a_cycle() {
     // the top-level expression of the declaration; a nested form (e.g.
     // inside `if`) was rejected with a spurious cyclic-dependency error.
     let source = r"
-index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node y: Dimensionless[Step] =
     if 1.0 > 0.0 { unfold(0.0, |p, t| @y[p] + 1.0) } else { unfold(0.0, |p, t| @y[p] + 2.0) };
 ";

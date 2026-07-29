@@ -49,6 +49,9 @@ pub enum HirLowerError {
         expected: &'static str,
         span: Span,
     },
+    /// A Nat was supplied where an explicit Index is required.
+    #[error("expected Index, found Nat `{expression}`; write `Fin({expression})`")]
+    ExpectedIndexFoundNat { expression: String, span: Span },
     /// A natural-number expression referenced a name that is not a generic parameter.
     #[error("unknown generic parameter `{name}`")]
     UnknownGenericParam { name: GenericParamName, span: Span },
@@ -438,18 +441,25 @@ pub(crate) fn lower_generic_arg_for_constraint(
                 )),
             }
         }
-        GenericConstraint::Index => {
-            let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
-            match type_expr.kind {
-                TypeExprKind::Index(index) => Ok(GenericArg::Index(index)),
-                _ => Err(generic_arg_sort_mismatch(
-                    parameter,
-                    constraint,
-                    "non-index type argument",
-                    arg.span(),
-                )),
+        GenericConstraint::Index => match arg {
+            ast::GenericArg::Index(index) => lower_index_expr(index, ctx).map(GenericArg::Index),
+            ast::GenericArg::Nat(nat) => Err(HirLowerError::ExpectedIndexFoundNat {
+                expression: nat.to_string(),
+                span: nat.span(),
+            }),
+            ast::GenericArg::Type(_) | ast::GenericArg::Ambiguous(_) => {
+                let type_expr = lower_generic_arg_as_type(arg, parameter, constraint, ctx)?;
+                match type_expr.kind {
+                    TypeExprKind::Index(index) => Ok(GenericArg::Index(index)),
+                    _ => Err(generic_arg_sort_mismatch(
+                        parameter,
+                        constraint,
+                        "non-index type argument",
+                        arg.span(),
+                    )),
+                }
             }
-        }
+        },
         GenericConstraint::Nat => match arg {
             ast::GenericArg::Nat(nat) => lower_nat_expr(nat, ctx).map(GenericArg::Nat),
             ast::GenericArg::Ambiguous(ambiguous) => {
@@ -468,6 +478,12 @@ pub(crate) fn lower_generic_arg_for_constraint(
                 parameter,
                 constraint,
                 "type argument",
+                arg.span(),
+            )),
+            ast::GenericArg::Index(_) => Err(generic_arg_sort_mismatch(
+                parameter,
+                constraint,
+                "Index argument",
                 arg.span(),
             )),
         },
@@ -501,6 +517,12 @@ fn lower_generic_arg_as_type(
         ast::GenericArg::Ambiguous(ambiguous) => {
             lower_type_expr(&ambiguous_generic_arg_as_type(ambiguous), ctx)
         }
+        ast::GenericArg::Index(_) => Err(generic_arg_sort_mismatch(
+            parameter,
+            constraint,
+            "Index argument",
+            arg.span(),
+        )),
         ast::GenericArg::Nat(_) => Err(generic_arg_sort_mismatch(
             parameter,
             constraint,
@@ -825,7 +847,13 @@ fn lower_index_expr(
 ) -> Result<IndexRef, HirLowerError> {
     match index {
         ast::IndexExpr::Name(path) => lower_index_expr_name(path, ctx),
-        ast::IndexExpr::NatExpr(nat_expr) => Ok(IndexRef::NatExpr(lower_nat_expr(nat_expr, ctx)?)),
+        ast::IndexExpr::Finite { cardinality, .. } => {
+            lower_nat_expr(cardinality, ctx).map(IndexRef::Finite)
+        }
+        ast::IndexExpr::BareNat(nat_expr) => Err(HirLowerError::ExpectedIndexFoundNat {
+            expression: nat_expr.to_string(),
+            span: nat_expr.span(),
+        }),
     }
 }
 
@@ -838,14 +866,15 @@ fn lower_index_expr_name(
     {
         return match binding.constraint {
             GenericConstraint::Index => Ok(IndexRef::GenericParam(binding.spanned_id(path.span))),
-            GenericConstraint::Nat => Ok(IndexRef::NatExpr(NatExpr::Param(
-                binding.spanned_id(path.span),
-            ))),
+            GenericConstraint::Nat => Err(HirLowerError::ExpectedIndexFoundNat {
+                expression: atom.to_string(),
+                span: path.span,
+            }),
             GenericConstraint::Dim | GenericConstraint::Type => {
                 Err(HirLowerError::GenericConstraintMismatch {
                     name: GenericParamName::from_atom(atom.clone()),
                     actual: binding.constraint,
-                    expected: "Index or Nat",
+                    expected: "Index",
                     span: path.span,
                 })
             }
@@ -1062,7 +1091,7 @@ mod tests {
     fn lowers_generic_scope_references_to_lexical_ids() {
         let owner_id = DagId::root_in_package("test", "main");
         let file = desugared_source(
-            "type Series<D: Dim, I: Index, N: Nat, F: Type> { Series(value: F, samples: D[I, N]) }",
+            "type Series<D: Dim, I: Index, N: Nat, F: Type> { Series(value: F, samples: D[I, Fin(N)]) }",
         );
         let mut resolver = ModuleResolver::default();
         resolver
@@ -1118,10 +1147,10 @@ mod tests {
 
         let [
             IndexRef::GenericParam(index_param),
-            IndexRef::NatExpr(NatExpr::Param(nat_param)),
+            IndexRef::Finite(NatExpr::Param(nat_param)),
         ] = indexes.as_slice()
         else {
-            panic!("expected generic index and nat params, got {indexes:?}");
+            panic!("expected generic index and Fin(N), got {indexes:?}");
         };
         assert_eq!(index_param.value.name.as_str(), "I");
         assert_eq!(nat_param.value.name.as_str(), "N");

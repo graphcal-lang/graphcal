@@ -4,63 +4,140 @@ use std::num::NonZeroUsize;
 use thiserror::Error;
 
 use crate::dimension::Dimension;
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
+
+/// Largest concrete index that Graphcal will materialize eagerly.
+///
+/// Index variants and indexed values are currently allocated eagerly. Keeping
+/// this bound in the semantic cardinality type prevents an otherwise valid
+/// source literal from turning into an unbounded allocation request.
+pub const MAX_INDEX_CARDINALITY: usize = 1_000_000;
+
+/// Validated, non-empty cardinality for an eagerly materialized index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IndexCardinality(NonZeroUsize);
+
+impl IndexCardinality {
+    /// Validate a source/runtime cardinality before any allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero, values that do not fit the target, or values
+    /// above Graphcal's practical eager-allocation limit.
+    pub fn try_from_u64(value: u64) -> Result<Self, IndexCardinalityError> {
+        if value == 0 {
+            return Err(IndexCardinalityError::Empty);
+        }
+        let value =
+            usize::try_from(value).map_err(|_| IndexCardinalityError::DoesNotFitUsize { value })?;
+        if value > MAX_INDEX_CARDINALITY {
+            return Err(IndexCardinalityError::TooLarge {
+                value,
+                maximum: MAX_INDEX_CARDINALITY,
+            });
+        }
+        let value = NonZeroUsize::new(value).ok_or(IndexCardinalityError::Empty)?;
+        Ok(Self(value))
+    }
+
+    /// Return the validated cardinality.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0.get()
+    }
+
+    /// Return the validated non-zero cardinality.
+    #[must_use]
+    pub const fn non_zero(self) -> NonZeroUsize {
+        self.0
+    }
+}
+
+/// Failure to validate a concrete index cardinality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum IndexCardinalityError {
+    #[error("indexes must contain at least one element")]
+    Empty,
+    #[error("index cardinality {value} does not fit in usize on this target")]
+    DoesNotFitUsize { value: u64 },
+    #[error("index cardinality {value} exceeds the practical limit of {maximum} elements")]
+    TooLarge { value: usize, maximum: usize },
+}
+
+/// Direct coordinate-generation rule for a concrete coordinate index.
+#[derive(Debug, Clone, Copy)]
+pub enum CoordinateSpacing {
+    /// Exact increment supplied by `range(..., step: ...)`.
+    Step { step: f64 },
+    /// Exact count supplied by `linspace(..., points: ...)`.
+    Linspace,
+}
 
 #[derive(Debug, Clone)]
-pub struct RangeIndexData {
+pub struct CoordinateIndexData {
     pub start: f64,
     pub end: f64,
-    pub step: f64,
-    /// Validated number of inclusive range steps.
-    pub(crate) step_count: NonZeroUsize,
+    pub spacing: CoordinateSpacing,
+    /// Validated number of coordinate points.
+    pub(crate) cardinality: IndexCardinality,
     pub dimension: Dimension,
-    /// Display unit label (e.g., `"s"`) for formatting step values.
+    /// Display unit label (e.g., `"s"`) for formatting coordinate values.
     pub display_label: Option<String>,
     /// Scale factor from SI to display unit: `display_value = si_value / scale`.
     pub display_scale: f64,
 }
 
-impl RangeIndexData {
-    /// Returns the SI value at step `i`.
+impl CoordinateIndexData {
+    /// Returns the SI coordinate at position `i`, computed directly rather than
+    /// by cumulative addition.
     #[must_use]
     #[expect(
         clippy::cast_precision_loss,
-        reason = "range step indices are small enough for exact f64 representation"
+        reason = "validated index cardinalities are far below f64's exact integer range"
     )]
-    pub fn step_value(&self, i: usize) -> f64 {
-        (i as f64).mul_add(self.step, self.start)
+    pub fn coordinate_value(&self, i: usize) -> f64 {
+        match self.spacing {
+            CoordinateSpacing::Step { .. } if i == self.cardinality.get() - 1 => self.end,
+            CoordinateSpacing::Step { step } => (i as f64).mul_add(step, self.start),
+            CoordinateSpacing::Linspace => match (i, self.cardinality.get()) {
+                (0, _) => self.start,
+                (position, count) if position + 1 == count => self.end,
+                (position, count) => {
+                    let t = position as f64 / (count - 1) as f64;
+                    (1.0 - t).mul_add(self.start, t * self.end)
+                }
+            },
+        }
     }
 
-    /// Returns the number of steps in this range.
+    /// Returns the number of coordinates in this index.
     #[must_use]
-    const fn step_count(&self) -> usize {
-        self.step_count.get()
+    const fn cardinality(&self) -> usize {
+        self.cardinality.get()
     }
 }
 
-/// The kind of an index: either named variants or a numeric range.
+const fn index_position_key(position: usize) -> IndexEntryKey {
+    IndexEntryKey::position(position as u64)
+}
+
+/// Closed semantic categories of indexes.
 #[derive(Debug, Clone)]
 pub enum IndexKind {
     /// A named label set, e.g. `index Maneuver = { Departure, Correction, Insertion };`
     Named { variants: Vec<IndexVariantName> },
-    /// A numeric range, e.g. `index T = linspace(0.0 s, 100.0 s, step: 0.1 s);`
-    Range(RangeIndexData),
+    /// A coordinate index created by `range(..., step: ...)` or
+    /// `linspace(..., points: ...)`.
+    Coordinate(CoordinateIndexData),
     /// Required named index (no variants): must be bound via parameterized import.
     RequiredNamed,
-    /// Required range index with dimension constraint: must be bound via parameterized import.
-    RequiredRange { dimension: Dimension },
-    /// A Nat-parameterized range: `range(N)` with elements `{0, 1, ..., N-1}`.
-    ///
-    /// Created synthetically for integer literals in index position (e.g., `D[3]`).
-    NatRange {
-        /// The non-zero size of the range (number of elements). Stored as
-        /// `usize` because it bounds in-memory variant tables; AST-level Nat
-        /// literals are converted at the registry boundary.
-        size: NonZeroUsize,
-    },
+    /// Required coordinate index with a dimension constraint.
+    RequiredCoordinate { dimension: Dimension },
+    /// A structural finite index `Fin(N)` with labels `0` through `N - 1`.
+    Finite { cardinality: IndexCardinality },
 }
 
-/// A declared index with its ordered variants.
+/// A concrete or required index with its ordered elements.
 #[derive(Debug, Clone)]
 pub struct IndexDef {
     pub name: IndexName,
@@ -68,55 +145,54 @@ pub struct IndexDef {
 }
 
 impl IndexDef {
-    /// Returns the ordered variant names for this index.
+    /// Returns typed entry keys in index order.
     ///
-    /// For named indexes, returns the declared variants.
-    /// For range indexes, generates synthetic names like `"#0"`, `"#1"`, etc.
-    /// For nat range indexes, generates synthetic names like `"#0"`, `"#1"`, etc.
-    /// For required indexes, returns an empty vec (no variants until bound).
+    /// Named indexes carry declared labels; coordinate and finite indexes carry
+    /// numeric positions. Required indexes have no entries until bound.
     #[must_use]
-    pub fn variants(&self) -> Vec<IndexVariantName> {
+    pub fn entry_keys(&self) -> Vec<IndexEntryKey> {
         match &self.kind {
-            IndexKind::Named { variants } => variants.clone(),
-            IndexKind::Range(data) => {
-                let count = data.step_count();
-                (0..count).map(IndexVariantName::range_step).collect()
+            IndexKind::Named { variants } => {
+                variants.iter().cloned().map(IndexEntryKey::named).collect()
             }
-            IndexKind::NatRange { size } => {
-                (0..size.get()).map(IndexVariantName::range_step).collect()
+            IndexKind::Coordinate(data) => {
+                (0..data.cardinality()).map(index_position_key).collect()
             }
-            IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => vec![],
+            IndexKind::Finite { cardinality } => {
+                (0..cardinality.get()).map(index_position_key).collect()
+            }
+            IndexKind::RequiredNamed | IndexKind::RequiredCoordinate { .. } => vec![],
         }
     }
 
-    /// Returns the number of steps/variants in this index.
+    /// Returns the number of positions in this index.
     ///
     /// Returns 0 for required indexes (no variants until bound).
     #[must_use]
-    pub const fn step_count(&self) -> usize {
+    pub const fn cardinality(&self) -> usize {
         match &self.kind {
             IndexKind::Named { variants } => variants.len(),
-            IndexKind::Range(data) => data.step_count(),
-            IndexKind::NatRange { size } => size.get(),
-            IndexKind::RequiredNamed | IndexKind::RequiredRange { .. } => 0,
+            IndexKind::Coordinate(data) => data.cardinality(),
+            IndexKind::Finite { cardinality } => cardinality.get(),
+            IndexKind::RequiredNamed | IndexKind::RequiredCoordinate { .. } => 0,
         }
     }
 
-    /// Returns the range data if this is a concrete range index.
+    /// Returns coordinate data if this is a concrete coordinate index.
     #[must_use]
-    pub const fn range_data(&self) -> Option<&RangeIndexData> {
+    pub const fn coordinate_data(&self) -> Option<&CoordinateIndexData> {
         match &self.kind {
-            IndexKind::Range(data) => Some(data),
+            IndexKind::Coordinate(data) => Some(data),
             _ => None,
         }
     }
 
-    /// Returns true if this is a range index (concrete or required, not nat range).
+    /// Returns true if this is a coordinate index (concrete or required).
     #[must_use]
-    pub const fn is_range(&self) -> bool {
+    pub const fn is_coordinate(&self) -> bool {
         matches!(
             self.kind,
-            IndexKind::Range(_) | IndexKind::RequiredRange { .. }
+            IndexKind::Coordinate(_) | IndexKind::RequiredCoordinate { .. }
         )
     }
 
@@ -129,17 +205,17 @@ impl IndexDef {
         )
     }
 
-    /// Returns true if this is a nat range index.
+    /// Returns true if this is a structural `Fin(N)` index.
     #[must_use]
-    pub(crate) const fn is_nat_range(&self) -> bool {
-        matches!(self.kind, IndexKind::NatRange { .. })
+    pub(crate) const fn is_finite_index(&self) -> bool {
+        matches!(self.kind, IndexKind::Finite { .. })
     }
 
-    /// Returns the nat range size, if this is a nat range index.
+    /// Returns the cardinality of a concrete structural `Fin(N)` index.
     #[must_use]
-    pub(crate) const fn nat_range_size(&self) -> Option<u64> {
+    pub(crate) const fn finite_index_size(&self) -> Option<u64> {
         match &self.kind {
-            IndexKind::NatRange { size } => Some(size.get() as u64),
+            IndexKind::Finite { cardinality } => Some(cardinality.get() as u64),
             _ => None,
         }
     }
@@ -149,85 +225,84 @@ impl IndexDef {
     pub const fn is_required(&self) -> bool {
         matches!(
             self.kind,
-            IndexKind::RequiredNamed | IndexKind::RequiredRange { .. }
+            IndexKind::RequiredNamed | IndexKind::RequiredCoordinate { .. }
         )
     }
 }
 
 // ---------------------------------------------------------------------------
-// Nat range helpers
+// Finite structural indexes
 // ---------------------------------------------------------------------------
 
-/// Error returned when an AST/runtime Nat range size cannot become a concrete index.
+/// Error returned when `Fin(N)` cannot become a concrete structural index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum NatRangeIndexError {
-    /// Empty Nat ranges are deliberately not representable.
-    #[error("range(0) is not allowed; indexes must contain at least one element")]
+pub enum FiniteIndexError {
+    #[error("Fin(0) is not allowed; indexes must contain at least one element")]
     Empty,
-    /// The source-level `u64` size does not fit in this target's in-memory index size.
-    #[error("nat range size {size} does not fit in usize on this target")]
+    #[error("Fin cardinality {size} does not fit in usize on this target")]
     DoesNotFitUsize { size: u64 },
+    #[error("Fin cardinality {size} exceeds the practical limit of {maximum} elements")]
+    TooLarge { size: usize, maximum: usize },
 }
 
-/// Typed identity for a concrete compiler-generated Nat range index.
-///
-/// The core carries this non-zero size directly; display names are derived only
-/// for diagnostics and compatibility with APIs that still need an [`IndexName`].
+/// Typed identity for a concrete compiler-generated structural `Fin(N)` index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NatRangeIndex {
-    size: NonZeroUsize,
+pub struct FiniteIndex {
+    cardinality: IndexCardinality,
 }
 
-impl NatRangeIndex {
-    /// Create an identity for a non-empty Nat range index.
+impl FiniteIndex {
+    /// Create an identity from an already validated cardinality.
     #[must_use]
-    pub(crate) const fn new(size: NonZeroUsize) -> Self {
-        Self { size }
+    pub(crate) const fn new(cardinality: IndexCardinality) -> Self {
+        Self { cardinality }
     }
 
-    /// Try to create an identity from an AST/runtime `u64` size.
+    /// Try to create an identity from an AST/runtime Nat cardinality.
     ///
     /// # Errors
     ///
-    /// Returns an error when `size` is zero or cannot fit in `usize` on this target.
-    pub fn try_from_u64(size: u64) -> Result<Self, NatRangeIndexError> {
-        if size == 0 {
-            return Err(NatRangeIndexError::Empty);
-        }
-        let size =
-            usize::try_from(size).map_err(|_| NatRangeIndexError::DoesNotFitUsize { size })?;
-        let size = NonZeroUsize::new(size).ok_or(NatRangeIndexError::Empty)?;
-        Ok(Self::new(size))
+    /// Returns an error for zero, an unrepresentable value, or a value above
+    /// the practical eager-allocation limit.
+    pub fn try_from_u64(size: u64) -> Result<Self, FiniteIndexError> {
+        IndexCardinality::try_from_u64(size)
+            .map(Self::new)
+            .map_err(|error| match error {
+                IndexCardinalityError::Empty => FiniteIndexError::Empty,
+                IndexCardinalityError::DoesNotFitUsize { value } => {
+                    FiniteIndexError::DoesNotFitUsize { size: value }
+                }
+                IndexCardinalityError::TooLarge { value, maximum } => FiniteIndexError::TooLarge {
+                    size: value,
+                    maximum,
+                },
+            })
     }
 
-    /// Return the non-zero in-memory size.
+    /// Return the validated cardinality.
     #[must_use]
-    pub const fn size(self) -> NonZeroUsize {
-        self.size
+    pub const fn cardinality(self) -> IndexCardinality {
+        self.cardinality
     }
 
-    /// Return the size as a `u64` for Nat-expression comparisons and display.
+    /// Return the cardinality as a `u64` for Nat-expression comparisons and display.
     #[must_use]
-    #[expect(
-        clippy::expect_used,
-        reason = "Graphcal currently supports targets where usize fits in u64"
-    )]
-    pub(crate) fn size_u64(self) -> u64 {
-        u64::try_from(self.size.get()).expect("usize fits in u64 on supported targets")
+    pub(crate) const fn size_u64(self) -> u64 {
+        self.cardinality.get() as u64
     }
 
-    /// Render this identity for diagnostics as source-level `range(N)` syntax.
+    /// Render this identity at a source/diagnostic boundary.
     #[must_use]
     pub fn display_name(self) -> IndexName {
-        IndexName::expect_valid(format!("range({})", self.size_u64()))
+        IndexName::expect_valid(format!("Fin({})", self.size_u64()))
     }
 }
 
-/// Index registry: maps declared index names and typed Nat-range identities to `IndexDef`.
+/// Index registry: maps declared names and typed structural identities to definitions.
 #[derive(Debug, Clone)]
 pub struct IndexRegistry {
     pub(crate) indexes: HashMap<IndexName, IndexDef>,
-    pub(crate) nat_ranges: HashMap<NatRangeIndex, IndexDef>,
+    pub(crate) finite_indexes: HashMap<FiniteIndex, IndexDef>,
 }
 
 impl IndexRegistry {
@@ -237,14 +312,54 @@ impl IndexRegistry {
         self.indexes.get(name)
     }
 
-    /// Look up a compiler-generated Nat range index by typed identity.
+    /// Look up a compiler-generated structural index by typed identity.
     #[must_use]
-    pub fn get_nat_range(&self, index: NatRangeIndex) -> Option<&IndexDef> {
-        self.nat_ranges.get(&index)
+    pub fn get_finite_index(&self, index: FiniteIndex) -> Option<&IndexDef> {
+        self.finite_indexes.get(&index)
     }
 
-    /// Iterate over all index definitions.
-    pub fn all_indexes(&self) -> impl Iterator<Item = &IndexDef> {
-        self.indexes.values().chain(self.nat_ranges.values())
+    /// Iterate over declared index definitions.
+    pub fn declared_indexes(&self) -> impl Iterator<Item = &IndexDef> {
+        self.indexes.values()
+    }
+
+    /// Iterate over compiler-generated structural index identities.
+    pub fn finite_indexes(&self) -> impl Iterator<Item = FiniteIndex> + '_ {
+        self.finite_indexes.keys().copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finite_and_coordinate_entry_keys_are_typed_positions() {
+        let cardinality = IndexCardinality::try_from_u64(3).unwrap();
+        for kind in [
+            IndexKind::Finite { cardinality },
+            IndexKind::Coordinate(CoordinateIndexData {
+                start: 0.0,
+                end: 2.0,
+                spacing: CoordinateSpacing::Step { step: 1.0 },
+                cardinality,
+                dimension: Dimension::dimensionless(),
+                display_label: None,
+                display_scale: 1.0,
+            }),
+        ] {
+            let definition = IndexDef {
+                name: IndexName::expect_valid("Axis"),
+                kind,
+            };
+            assert_eq!(
+                definition.entry_keys(),
+                vec![
+                    IndexEntryKey::Position(0),
+                    IndexEntryKey::Position(1),
+                    IndexEntryKey::Position(2),
+                ]
+            );
+        }
     }
 }

@@ -78,10 +78,16 @@ pub(crate) enum LexicalToken {
     Scan,
     #[token("unfold")]
     Unfold,
+    #[token("range")]
+    Range,
     #[token("linspace")]
     Linspace,
     #[token("step")]
     Step,
+    #[token("points")]
+    Points,
+    #[token("Fin")]
+    Fin,
     #[token("pub")]
     Pub,
 
@@ -219,10 +225,15 @@ impl LexicalToken {
             Self::Unfold => {
                 LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Unfold))
             }
+            Self::Range => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Range)),
             Self::Linspace => {
                 LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Linspace))
             }
             Self::Step => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Step)),
+            Self::Points => {
+                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Points))
+            }
+            Self::Fin => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Fin)),
             Self::Pub => LexicalItem::Syntax(Token::Pub),
             Self::StringLiteral => LexicalItem::Syntax(Token::StringLiteral),
             Self::Plus => LexicalItem::Syntax(Token::Plus),
@@ -275,8 +286,11 @@ impl LexicalToken {
 pub enum ContextualKeyword {
     Scan,
     Unfold,
+    Range,
     Linspace,
     Step,
+    Points,
+    Fin,
 }
 
 impl std::fmt::Display for ContextualKeyword {
@@ -284,8 +298,11 @@ impl std::fmt::Display for ContextualKeyword {
         match self {
             Self::Scan => write!(f, "scan"),
             Self::Unfold => write!(f, "unfold"),
+            Self::Range => write!(f, "range"),
             Self::Linspace => write!(f, "linspace"),
             Self::Step => write!(f, "step"),
+            Self::Points => write!(f, "points"),
+            Self::Fin => write!(f, "Fin"),
         }
     }
 }
@@ -701,8 +718,11 @@ mod tests {
         for (spelling, keyword) in [
             ("scan", ContextualKeyword::Scan),
             ("unfold", ContextualKeyword::Unfold),
+            ("range", ContextualKeyword::Range),
             ("linspace", ContextualKeyword::Linspace),
             ("step", ContextualKeyword::Step),
+            ("points", ContextualKeyword::Points),
+            ("Fin", ContextualKeyword::Fin),
         ] {
             let token = Token::ContextualKeyword(keyword);
             assert_single_token(spelling, token);
@@ -717,7 +737,10 @@ mod tests {
             "baseline",
             "scanner",
             "unfolder",
+            "ranged",
             "stepped",
+            "pointset",
+            "Finite",
             "indexed",
             "indexing",
             "linspaced",

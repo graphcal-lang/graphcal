@@ -91,7 +91,7 @@ pub fn resolved_to_declared_type(
                             index: IndexTypeRef::from_resolved(name.clone()),
                         };
                     }
-                    ResolvedIndex::NatExpr(form, span) => {
+                    ResolvedIndex::Finite(form, span) => {
                         if !form.is_constant() {
                             return Err(GraphcalError::EvalError {
                                 message: format!(
@@ -102,8 +102,8 @@ pub fn resolved_to_declared_type(
                                 span: (*span).into(),
                             });
                         }
-                        let nat_range =
-                            crate::registry::types::NatRangeIndex::try_from_u64(form.constant())
+                        let finite_index =
+                            crate::registry::types::FiniteIndex::try_from_u64(form.constant())
                                 .map_err(|err| GraphcalError::EvalError {
                                     message: err.to_string(),
                                     src: src.clone(),
@@ -111,7 +111,7 @@ pub fn resolved_to_declared_type(
                                 })?;
                         result = DeclaredType::Indexed {
                             element: Box::new(result),
-                            index: IndexTypeRef::from_nat_range(nat_range),
+                            index: IndexTypeRef::from_finite_index(finite_index),
                         };
                     }
                     ResolvedIndex::GenericParam(name, span) => {
@@ -186,7 +186,7 @@ const fn resolved_index_span(index: &ResolvedIndex) -> Span {
     match index {
         ResolvedIndex::Concrete(_, span)
         | ResolvedIndex::GenericParam(_, span)
-        | ResolvedIndex::NatExpr(_, span) => *span,
+        | ResolvedIndex::Finite(_, span) => *span,
     }
 }
 
@@ -196,7 +196,7 @@ fn resolved_index_to_declared_ref(
 ) -> Result<IndexTypeRef, GraphcalError> {
     match index {
         ResolvedIndex::Concrete(name, _) => Ok(IndexTypeRef::from_resolved(name.clone())),
-        ResolvedIndex::NatExpr(form, span) => IndexTypeRef::from_nat_range_form(form.clone())
+        ResolvedIndex::Finite(form, span) => IndexTypeRef::from_finite_index_form(form.clone())
             .map_err(|err| GraphcalError::EvalError {
                 message: err.to_string(),
                 src: src.clone(),
@@ -216,7 +216,7 @@ fn resolved_index_to_inferred(
 ) -> Result<crate::tir::dim_check::InferredIndex, GraphcalError> {
     let reference = match index {
         ResolvedIndex::Concrete(name, _) => IndexTypeRef::from_resolved(name.clone()),
-        ResolvedIndex::NatExpr(form, span) => IndexTypeRef::from_nat_range_form(form.clone())
+        ResolvedIndex::Finite(form, span) => IndexTypeRef::from_finite_index_form(form.clone())
             .map_err(|err| GraphcalError::EvalError {
                 message: err.to_string(),
                 src: src.clone(),
@@ -240,7 +240,7 @@ fn resolved_index_matches_inferred(
     match expected {
         ResolvedIndex::Concrete(name, _) => actual.matches_resolved(name),
         ResolvedIndex::GenericParam(_, _) => false,
-        ResolvedIndex::NatExpr(form, _) => actual.nat_range_form().as_ref() == Some(form),
+        ResolvedIndex::Finite(form, _) => actual.finite_index_form().as_ref() == Some(form),
     }
 }
 
@@ -248,8 +248,8 @@ fn resolved_index_display_name(index: &ResolvedIndex) -> IndexName {
     match index {
         ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name(),
         ResolvedIndex::GenericParam(name, _) => IndexName::from_atom(name.atom().clone()),
-        ResolvedIndex::NatExpr(form, _) => {
-            IndexName::expect_valid(format!("range({})", form.format()))
+        ResolvedIndex::Finite(form, _) => {
+            IndexName::expect_valid(format!("Fin({})", form.format()))
         }
     }
 }
@@ -314,7 +314,7 @@ impl NatUnificationSite<'_> {
     ) -> GraphcalError {
         match self {
             Self::Index(actual_idx) => GraphcalError::IndexMismatch {
-                expected: IndexName::expect_valid(format!("range({})", form.format())),
+                expected: IndexName::expect_valid(format!("Fin({})", form.format())),
                 found: actual_idx.clone(),
                 src: src.clone(),
                 span: span.into(),
@@ -342,7 +342,7 @@ impl NatUnificationSite<'_> {
             return self.mismatch(form, src, span);
         };
         let expected = match form.evaluate(nat_sub) {
-            Some(value) => match crate::registry::types::NatRangeIndex::try_from_u64(value) {
+            Some(value) => match crate::registry::types::FiniteIndex::try_from_u64(value) {
                 Ok(index) => index.display_name(),
                 Err(err) => {
                     return GraphcalError::EvalError {
@@ -352,7 +352,7 @@ impl NatUnificationSite<'_> {
                     };
                 }
             },
-            None => IndexName::expect_valid(format!("range({})", form.format())),
+            None => IndexName::expect_valid(format!("Fin({})", form.format())),
         };
         GraphcalError::IndexMismatch {
             expected,
@@ -372,7 +372,7 @@ impl NatUnificationSite<'_> {
         let Self::Index(actual_idx) = self else {
             return self.mismatch(form, src, span);
         };
-        match crate::registry::types::NatRangeIndex::try_from_u64(previous) {
+        match crate::registry::types::FiniteIndex::try_from_u64(previous) {
             Ok(index) => GraphcalError::IndexMismatch {
                 expected: index.display_name(),
                 found: actual_idx.clone(),
@@ -592,15 +592,15 @@ pub fn unify_resolved_type(
                             });
                         }
                     }
-                    ResolvedIndex::NatExpr(form, _) => {
-                        // Extract the concrete nat value from the typed actual Nat-range identity.
+                    ResolvedIndex::Finite(form, _) => {
+                        // Extract the concrete nat value from the typed actual finite-index identity.
                         let actual_nat = actual_idx
-                            .nat_range_form()
+                            .finite_index_form()
                             .filter(NatPolyForm::is_constant)
                             .map(|actual_form| actual_form.constant())
                             .ok_or_else(|| GraphcalError::IndexMismatch {
                                 expected: IndexName::expect_valid(format!(
-                                    "range({})",
+                                    "Fin({})",
                                     form.format()
                                 )),
                                 found: actual_idx.name(),
@@ -671,7 +671,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::IndexArg(expected_index) => {
-            let InferredType::NamedIndex(actual_index) = actual else {
+            let InferredType::IndexArg(actual_index) = actual else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: format!("index {}", expected_index.format_for_diagnostic()),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
@@ -954,7 +954,7 @@ fn unify_resolved_generic_arg(
         (ResolvedGenericArg::Index(expected), InferredGenericArg::Index(actual)) => {
             unify_resolved_type(
                 &ResolvedTypeExpr::IndexArg(expected.clone()),
-                &crate::tir::dim_check::InferredType::NamedIndex(actual.clone()),
+                &crate::tir::dim_check::InferredType::IndexArg(actual.clone()),
                 dim_sub,
                 index_sub,
                 nat_sub,
@@ -1064,18 +1064,18 @@ pub fn substitute_resolved_generic_arg(
                             })?,
                     )
                 }
-                ResolvedIndex::NatExpr(form, span) => {
+                ResolvedIndex::Finite(form, span) => {
                     let value = form
                         .evaluate(nat_sub)
                         .ok_or_else(|| GraphcalError::EvalError {
                             message: format!(
-                                "generic Nat index `{}` is not concrete",
+                                "generic finite index `Fin({})` is not concrete",
                                 form.format()
                             ),
                             src: src.clone(),
                             span: (*span).into(),
                         })?;
-                    crate::tir::dim_check::InferredIndex::from_nat_range_form(
+                    crate::tir::dim_check::InferredIndex::from_finite_index_form(
                         NatPolyForm::from_constant(value),
                     )
                     .map_err(|err| GraphcalError::EvalError {
@@ -1129,7 +1129,7 @@ pub fn substitute_resolved_type_with_types(
         ResolvedTypeExpr::Int => Ok(InferredType::Int),
         ResolvedTypeExpr::Datetime(scale) => Ok(InferredType::Datetime(*scale)),
         ResolvedTypeExpr::IndexArg(index) => {
-            resolved_index_to_inferred(index, src).map(InferredType::NamedIndex)
+            resolved_index_to_inferred(index, src).map(InferredType::IndexArg)
         }
         ResolvedTypeExpr::Quantity(dim) => Ok(InferredType::Quantity(dim.clone())),
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
@@ -1235,7 +1235,7 @@ pub fn substitute_resolved_type_with_types(
                                 })?,
                         )
                     }
-                    ResolvedIndex::NatExpr(form, span) => {
+                    ResolvedIndex::Finite(form, span) => {
                         let n = form.evaluate(nat_sub).ok_or_else(|| {
                             let vars = form.variables();
                             let unbound: Vec<&str> = vars
@@ -1252,7 +1252,7 @@ pub fn substitute_resolved_type_with_types(
                                 span: (*span).into(),
                             }
                         })?;
-                        crate::tir::dim_check::InferredIndex::from_nat_range_form(
+                        crate::tir::dim_check::InferredIndex::from_finite_index_form(
                             NatPolyForm::from_constant(n),
                         )
                         .map_err(|err| GraphcalError::EvalError {

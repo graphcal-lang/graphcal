@@ -8,7 +8,7 @@ use crate::syntax::type_name::StructTypeNameNamespace;
 
 use crate::nat::NatPolyForm;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{DimensionRegistry, NatRangeIndex, NatRangeIndexError};
+use crate::registry::types::{DimensionRegistry, FiniteIndex, FiniteIndexError};
 
 /// A type-level reference to a named compiler entity.
 ///
@@ -105,34 +105,33 @@ impl<Ns: NameNamespace> std::fmt::Display for TypeNameRef<Ns> {
     }
 }
 
-/// Type-level reference to a compiler-generated Nat range index.
+/// Type-level reference to a compiler-generated structural `Fin(N)` index.
 ///
-/// Concrete Nat ranges carry a validated in-memory size. Symbolic Nat ranges
-/// carry the normalized type-level arithmetic form directly; no fake resolved
-/// name or parseable display string is used as semantic identity.
+/// Concrete forms carry validated cardinalities; symbolic forms carry the
+/// normalized Nat expression directly.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum NatRangeIndexRef {
-    Concrete(NatRangeIndex),
+pub enum FiniteIndexRef {
+    Concrete(FiniteIndex),
     Symbolic(NatPolyForm),
 }
 
-impl NatRangeIndexRef {
-    /// Create a Nat range reference from a normalized Nat form.
+impl FiniteIndexRef {
+    /// Create a finite structural reference from a normalized Nat form.
     ///
     /// # Errors
     ///
-    /// Returns an error when the form is a concrete invalid Nat range size.
-    fn from_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
+    /// Returns an error when the form is a concrete invalid finite structural size.
+    fn from_form(form: NatPolyForm) -> Result<Self, FiniteIndexError> {
         if form.is_constant() {
-            NatRangeIndex::try_from_u64(form.constant()).map(Self::Concrete)
+            FiniteIndex::try_from_u64(form.constant()).map(Self::Concrete)
         } else {
             Ok(Self::Symbolic(form))
         }
     }
 
-    /// Return the concrete Nat range identity, if this reference is concrete.
+    /// Return the concrete finite structural identity, if this reference is concrete.
     #[must_use]
-    pub(crate) const fn concrete_index(&self) -> Option<NatRangeIndex> {
+    pub(crate) const fn concrete_index(&self) -> Option<FiniteIndex> {
         match self {
             Self::Concrete(index) => Some(*index),
             Self::Symbolic(_) => None,
@@ -148,16 +147,16 @@ impl NatRangeIndexRef {
         }
     }
 
-    /// Render this Nat range as a source-like display name for diagnostics.
+    /// Render this finite structural as a source-like display name for diagnostics.
     #[must_use]
     fn display_name(&self) -> IndexName {
         match self {
             Self::Concrete(index) => index.display_name(),
-            Self::Symbolic(form) => NameDef::expect_valid(format!("range({})", form.format())),
+            Self::Symbolic(form) => NameDef::expect_valid(format!("Fin({})", form.format())),
         }
     }
 
-    /// Compare Nat range references by typed identity.
+    /// Compare finite structural references by typed identity.
     #[must_use]
     fn matches_ref(&self, other: &Self) -> bool {
         match (self, other) {
@@ -170,12 +169,12 @@ impl NatRangeIndexRef {
 
 /// Type-level reference to an index definition.
 ///
-/// Declared indexes are owner-qualified names. Compiler-generated `range(N)`
-/// axes are typed Nat-range identities and do not have declared resolved names.
+/// Declared indexes are owner-qualified names. Compiler-generated `Fin(N)`
+/// axes are typed structural identities and have no declared resolved names.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum IndexTypeRef {
     Declared(TypeNameRef<IndexNameNamespace>),
-    NatRange(NatRangeIndexRef),
+    Finite(FiniteIndexRef),
 }
 
 impl IndexTypeRef {
@@ -198,25 +197,25 @@ impl IndexTypeRef {
         Self::Declared(TypeNameRef::with_display_leaf(name, resolved))
     }
 
-    /// Create a concrete compiler-generated Nat range reference.
+    /// Create a concrete compiler-generated finite structural reference.
     #[must_use]
-    pub const fn from_nat_range(index: NatRangeIndex) -> Self {
-        Self::NatRange(NatRangeIndexRef::Concrete(index))
+    pub const fn from_finite_index(index: FiniteIndex) -> Self {
+        Self::Finite(FiniteIndexRef::Concrete(index))
     }
 
-    /// Create a Nat range reference from a normalized Nat form.
+    /// Create a finite structural reference from a normalized Nat form.
     ///
     /// # Errors
     ///
-    /// Returns an error when the form is a concrete invalid Nat range size.
-    pub(crate) fn from_nat_range_form(form: NatPolyForm) -> Result<Self, NatRangeIndexError> {
-        NatRangeIndexRef::from_form(form).map(Self::NatRange)
+    /// Returns an error when the form is a concrete invalid finite structural size.
+    pub(crate) fn from_finite_index_form(form: NatPolyForm) -> Result<Self, FiniteIndexError> {
+        FiniteIndexRef::from_form(form).map(Self::Finite)
     }
 
-    /// Wrap an already validated Nat range reference.
+    /// Wrap an already validated finite structural reference.
     #[must_use]
-    pub const fn from_nat_range_ref(reference: NatRangeIndexRef) -> Self {
-        Self::NatRange(reference)
+    pub const fn from_finite_index_ref(reference: FiniteIndexRef) -> Self {
+        Self::Finite(reference)
     }
 
     /// The declared leaf name, when this is a declared index.
@@ -224,7 +223,7 @@ impl IndexTypeRef {
     pub const fn declared_name(&self) -> Option<&IndexName> {
         match self {
             Self::Declared(reference) => Some(reference.name()),
-            Self::NatRange(_) => None,
+            Self::Finite(_) => None,
         }
     }
 
@@ -233,32 +232,32 @@ impl IndexTypeRef {
     pub const fn declared_resolved(&self) -> Option<&ResolvedIndexName> {
         match self {
             Self::Declared(reference) => Some(reference.resolved()),
-            Self::NatRange(_) => None,
+            Self::Finite(_) => None,
         }
     }
 
-    /// Return the Nat range reference, when this is a compiler-generated Nat range.
+    /// Return the finite structural reference, when this is a compiler-generated finite structural.
     #[must_use]
-    pub(crate) const fn nat_range_ref(&self) -> Option<&NatRangeIndexRef> {
+    pub(crate) const fn finite_index_ref(&self) -> Option<&FiniteIndexRef> {
         match self {
             Self::Declared(_) => None,
-            Self::NatRange(reference) => Some(reference),
+            Self::Finite(reference) => Some(reference),
         }
     }
 
-    /// Return the typed concrete Nat range identity, if this reference has one.
+    /// Return the typed concrete finite structural identity, if this reference has one.
     #[must_use]
-    pub const fn nat_range(&self) -> Option<NatRangeIndex> {
+    pub const fn finite_index(&self) -> Option<FiniteIndex> {
         match self {
-            Self::NatRange(reference) => reference.concrete_index(),
+            Self::Finite(reference) => reference.concrete_index(),
             Self::Declared(_) => None,
         }
     }
 
-    /// Return the normalized Nat form, when this is a Nat range reference.
+    /// Return the normalized Nat form, when this is a finite structural reference.
     #[must_use]
-    pub(crate) fn nat_range_form(&self) -> Option<NatPolyForm> {
-        self.nat_range_ref().map(NatRangeIndexRef::form)
+    pub(crate) fn finite_index_form(&self) -> Option<NatPolyForm> {
+        self.finite_index_ref().map(FiniteIndexRef::form)
     }
 
     /// Render a display-only leaf name for diagnostics and formatting.
@@ -266,7 +265,7 @@ impl IndexTypeRef {
     pub fn display_name(&self) -> IndexName {
         match self {
             Self::Declared(reference) => reference.to_unowned_name(),
-            Self::NatRange(reference) => reference.display_name(),
+            Self::Finite(reference) => reference.display_name(),
         }
     }
 
@@ -275,7 +274,7 @@ impl IndexTypeRef {
     pub fn matches_ref(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Declared(lhs), Self::Declared(rhs)) => lhs.matches_ref(rhs),
-            (Self::NatRange(lhs), Self::NatRange(rhs)) => lhs.matches_ref(rhs),
+            (Self::Finite(lhs), Self::Finite(rhs)) => lhs.matches_ref(rhs),
             _ => false,
         }
     }

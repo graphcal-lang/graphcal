@@ -3,7 +3,7 @@
 //! These tests focus on areas that matter most to engineering users:
 //! - Correctness of numeric evaluation (arithmetic, conversions)
 //! - Display/formatting of output values
-//! - Range index step count precision
+//! - Coordinate-index cardinality and endpoint precision
 //! - Unit conversion accuracy
 #![cfg(test)]
 #![expect(
@@ -164,44 +164,185 @@ proptest! {
 }
 
 // ============================================================================
-// BUG 2: format_step_number for range index labels
-//
-// `format_step_number` uses `value as i64` for values where
-// `value.fract() == 0.0 && value.abs() < 1e15`. However:
-// - Negative zero: (-0.0).fract() == 0.0, and (-0.0 as i64) == 0, which is
-//   technically correct but inconsistent (displays as "0" not "-0")
-// - Values between 1e15 and i64::MAX: the condition `value.abs() < 1e15`
-//   prevents overflow, but the boundary is conservative
-// - NaN: NaN.fract() returns NaN, which is != 0.0, so it falls through to
-//   the float format path — but NaN shouldn't reach this function normally
+// Coordinate-index construction and binary64 endpoint behavior
 // ============================================================================
 
-// These are tested indirectly through range index display. The format_step_number
-// function is private, so we test it through the public API.
-
 #[test]
-fn range_index_step_count_precision() {
-    // A range where (end - start) / step doesn't divide evenly in floating point
-    // range(0.0 s, 1.0 s, step: 0.3 s) should give steps at 0.0, 0.3, 0.6, 0.9
-    // That's (1.0 - 0.0) / 0.3 = 3.333... → round to 3, + 1 = 4 steps
+fn range_index_rejects_step_that_misses_endpoint() {
     let source = r#"
-pub index TimeIdx = linspace(0.0 s, 1.0 s, step: 0.3 s);
+pub index TimeIdx = range(0.0 s, 1.0 s, step: 0.3 s);
 param x0: Dimensionless = 1.0;
 node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 "#;
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(
+        error.to_string().contains("does not land on endpoint"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn range_rejects_tiny_endpoint_misses_relative_to_the_coordinate_scale() {
+    compile_and_eval("index Tiny = range(0.0, 2e-16, step: 1e-16);")
+        .expect("an exactly divisible tiny range should be valid");
+
+    for source in [
+        "index Tiny = range(0.0, 1e-16, step: 1.0);",
+        "index Tiny = range(0.0, 1.5e-16, step: 1e-16);",
+    ] {
+        let error = compile_and_eval(source).unwrap_err();
+        assert!(
+            error.to_string().contains("does not land on endpoint"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn linspace_uses_exact_point_count_and_endpoints() {
+    let source = r#"
+pub index TimeIdx = linspace(0.0 s, 1.0 s, points: 4);
+node x: Time[TimeIdx] = for t: TimeIdx { t };
+"#;
     let result = compile_and_eval(source).unwrap();
     let x = find_entry(&result, "x");
-    match &x {
-        Value::Indexed { entries, .. } => {
-            // Expected: 4 entries (0.0, 0.3, 0.6, 0.9)
-            assert_eq!(
-                entries.len(),
-                4,
-                "range(0, 1, step: 0.3) should have 4 steps but has {}",
-                entries.len()
-            );
-        }
-        _ => panic!("expected indexed value"),
+    let Value::Indexed { entries, .. } = &x else {
+        panic!("expected indexed value")
+    };
+    let values = entries
+        .iter()
+        .map(|(_, value)| match value {
+            Value::Quantity { si_value, .. } => *si_value,
+            other => panic!("expected quantity, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(values.len(), 4);
+    assert_eq!(values[0].to_bits(), 0.0_f64.to_bits());
+    assert_eq!(values[3].to_bits(), 1.0_f64.to_bits());
+}
+
+#[test]
+fn range_preserves_declared_endpoint_after_binary64_interval_validation() {
+    let source = r#"
+index Tenths = range(0.0 s, 0.3 s, step: 0.1 s);
+node coordinates: Time[Tenths] = for t: Tenths { t };
+"#;
+    let result = compile_and_eval(source).unwrap();
+    let Value::Indexed { entries, .. } = find_entry(&result, "coordinates") else {
+        panic!("expected indexed value")
+    };
+    let last = entries.last().expect("range is nonempty").1;
+    let Value::Quantity { si_value, .. } = last else {
+        panic!("expected quantity")
+    };
+    assert_eq!(si_value.to_bits(), 0.3_f64.to_bits());
+}
+
+#[test]
+fn coordinate_display_names_remain_unique_when_rounded_labels_collide() {
+    let source = r#"
+index Tiny = range(1.0, 1.0000002, step: 0.0000001);
+node values: Dimensionless[Tiny] = for t: Tiny { t };
+"#;
+    let Value::Indexed {
+        entry_display_names: Some(display_names),
+        ..
+    } = find_entry(&compile_and_eval(source).unwrap(), "values")
+    else {
+        panic!("expected coordinate-indexed value with display names")
+    };
+    assert_eq!(display_names.len(), 3);
+    assert_eq!(
+        display_names
+            .values()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn descending_range_and_linspace_are_monotone_with_exact_endpoints() {
+    let source = r#"
+pub index ByStep = range(1.0 s, -1.0 s, step: -0.5 s);
+pub index ByCount = linspace(1.0 s, -1.0 s, points: 5);
+node stepped: Time[ByStep] = for t: ByStep { t };
+node spaced: Time[ByCount] = for t: ByCount { t };
+"#;
+    let result = compile_and_eval(source).unwrap();
+    for name in ["stepped", "spaced"] {
+        let value = find_entry(&result, name);
+        let Value::Indexed { entries, .. } = value else {
+            panic!("expected indexed value")
+        };
+        let coordinates = entries
+            .iter()
+            .map(|(_, value)| match value {
+                Value::Quantity { si_value, .. } => *si_value,
+                other => panic!("expected quantity, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        let expected = [1.0_f64, 0.5, 0.0, -0.5, -1.0];
+        assert_eq!(coordinates.len(), expected.len());
+        assert!(
+            coordinates
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| actual.to_bits() == expected.to_bits()),
+            "unexpected coordinates: {coordinates:?}"
+        );
+    }
+}
+
+#[test]
+fn coordinate_constructors_enforce_direction_and_count_rules() {
+    for (source, expected) in [
+        (
+            "index I = range(0.0, 1.0, step: 0.0);",
+            "step must be nonzero",
+        ),
+        (
+            "index I = range(0.0, 1.0, step: -0.5);",
+            "moves away from endpoint",
+        ),
+        (
+            "index I = linspace(0.0, 1.0, points: 1);",
+            "one point requires identical start and end",
+        ),
+        (
+            "index I = linspace(0.0, 1.0, points: 0);",
+            "at least one point",
+        ),
+        (
+            "index I = linspace(0.0, 1.0, points: 1000001);",
+            "exceeds the practical limit",
+        ),
+        (
+            "index I = range(0.0, 1000000.0, step: 1.0);",
+            "exceeds the practical limit",
+        ),
+    ] {
+        let error = compile_and_eval(source).unwrap_err();
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected error for `{source}`: {error}"
+        );
+    }
+
+    compile_and_eval("index I = linspace(2.0, 2.0, points: 1);").unwrap();
+}
+
+#[test]
+fn coordinate_constructors_require_static_finite_quantities() {
+    for source in [
+        "param end: Dimensionless = 1.0; index I = range(0.0, @end, step: 0.1);",
+        "param count: Int = 3; index I = linspace(0.0, 1.0, points: @count);",
+        "index I = range(0, 2, step: 1);",
+    ] {
+        assert!(
+            compile_and_eval(source).is_err(),
+            "invalid coordinate constructor was accepted: {source}"
+        );
     }
 }
 
@@ -209,7 +350,7 @@ node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 fn range_index_step_count_exact_division() {
     // range(0.0 s, 1.0 s, step: 0.25 s) = 5 steps: 0.0, 0.25, 0.5, 0.75, 1.0
     let source = r#"
-pub index TimeIdx = linspace(0.0 s, 1.0 s, step: 0.25 s);
+pub index TimeIdx = range(0.0 s, 1.0 s, step: 0.25 s);
 param x0: Dimensionless = 1.0;
 node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 "#;
@@ -229,7 +370,7 @@ fn range_index_floating_point_step_accumulation() {
     // This is tricky because 0.1 is not exactly representable in f64
     // (1.0 - 0.0) / 0.1 = 9.999...96 or 10.000...04 depending on rounding
     let source = r#"
-pub index TimeIdx = linspace(0.0 s, 1.0 s, step: 0.1 s);
+pub index TimeIdx = range(0.0 s, 1.0 s, step: 0.1 s);
 param x0: Dimensionless = 1.0;
 node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 "#;
@@ -251,11 +392,11 @@ node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 #[test]
 fn for_comp_returning_range_loop_variable_yields_quantities() {
     // Regression: the loop variable of a `for` over a range index is bound to
-    // an internal RangeLabel value. Returning it directly used to hit
-    // `unreachable!("RangeLabel should not appear in final values")` when
+    // an internal CoordinateLabel value. Returning it directly used to hit
+    // `unreachable!("CoordinateLabel should not appear in final values")` when
     // converting the result to a public value. It must surface as a quantity.
     let source = r#"
-index Step = linspace(0.0 s, 2.0 s, step: 1.0 s);
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node t: Time[Step] = for i: Step { i };
 "#;
     let result = compile_and_eval(source).unwrap();

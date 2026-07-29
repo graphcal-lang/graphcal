@@ -254,13 +254,42 @@ pub enum ParseError {
     #[diagnostic(
         code(graphcal::P022),
         help(
-            "express the larger size additively instead, for example use `D[N + 1]` for the input and `D[N]` for the smaller output"
+            "express the larger size additively instead, for example use `D[Fin(N + 1)]` for the input and `D[Fin(N)]` for the smaller output"
         )
     )]
     NatSubtractionUnsupported {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("`-` is not part of the Nat polynomial algebra")]
+        span: SourceSpan,
+    },
+
+    #[error("expected Index, found Nat `{expression}`")]
+    #[diagnostic(
+        code(graphcal::P023),
+        help("write `{suggestion}` for an explicit finite structural index")
+    )]
+    ExpectedIndexFoundNat {
+        expression: String,
+        suggestion: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("Nat is not implicitly converted to Index")]
+        span: SourceSpan,
+    },
+
+    #[error("`range(N)` is no longer a structural index constructor")]
+    #[diagnostic(
+        code(graphcal::P024),
+        help(
+            "write `Fin({cardinality})`; `range` is reserved for coordinate indexes with an explicit `step:`"
+        )
+    )]
+    ObsoleteStructuralRange {
+        cardinality: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("use `Fin(...)` here")]
         span: SourceSpan,
     },
 
@@ -345,6 +374,8 @@ impl ParseError {
             | Self::TooDeeplyNested { src, .. }
             | Self::ZeroExponent { src, .. }
             | Self::NatSubtractionUnsupported { src, .. }
+            | Self::ExpectedIndexFoundNat { src, .. }
+            | Self::ObsoleteStructuralRange { src, .. }
             | Self::UnitReferenceTooDeep { src, .. }
             | Self::DuplicatePlotField { src, .. }
             | Self::MissingPlotEncoding { src, .. }

@@ -6,9 +6,16 @@ use thiserror::Error;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::FnName;
-use crate::syntax::index_name::{IndexName, IndexVariantName};
+use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::type_name::{FieldName, StructTypeName};
+
+fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
+    keys.iter()
+        .map(|key| format!("\"{key}\""))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]
@@ -799,7 +806,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::I001),
         help(
-            "declare with `index Name = {{ Variant1, Variant2, ... }};` or `index Name = linspace(start, end, step: step);`"
+            "declare a named or coordinate index, or write `Fin(N)` explicitly for a structural axis; coordinate constructors are `range(start, end, step: delta)` and `linspace(start, end, points: N)`"
         )
     )]
     UnknownIndex {
@@ -821,28 +828,34 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("missing variant(s) {missing:?} in map literal for index `{index_name}`")]
+    #[error(
+        "missing variant(s) [{}] in map literal for index `{index_name}`",
+        format_index_entry_keys(missing)
+    )]
     #[diagnostic(
         code(graphcal::I003),
         help("map literals must cover all variants of the index")
     )]
     MissingVariants {
         index_name: IndexName,
-        missing: Vec<IndexVariantName>,
+        missing: Vec<IndexEntryKey>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("incomplete map literal")]
         span: SourceSpan,
     },
 
-    #[error("extra variant(s) {extra:?} in map literal for index `{index_name}`")]
+    #[error(
+        "extra variant(s) [{}] in map literal for index `{index_name}`",
+        format_index_entry_keys(extra)
+    )]
     #[diagnostic(
         code(graphcal::I004),
         help("only variants declared in the index are allowed")
     )]
     ExtraVariants {
         index_name: IndexName,
-        extra: Vec<IndexVariantName>,
+        extra: Vec<IndexEntryKey>,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unexpected variants")]
@@ -956,32 +969,42 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error(
-        "range index `{name}`: start, end, and step must have the same dimension (found {start_dim}, {end_dim}, {step_dim})"
-    )]
+    #[error("coordinate index `{name}`: {message}")]
     #[diagnostic(
         code(graphcal::I006),
-        help("all three values in range(start, end, step: step) must share the same dimension")
+        help("coordinate constructor arguments must have exactly the same dimension")
     )]
-    RangeIndexDimensionMismatch {
+    CoordinateIndexDimensionMismatch {
         name: IndexName,
-        start_dim: String,
-        end_dim: String,
-        step_dim: String,
+        message: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("dimension mismatch")]
         span: SourceSpan,
     },
 
-    #[error("range index `{name}`: {message}")]
-    #[diagnostic(code(graphcal::I007))]
-    RangeIndexInvalid {
+    #[error("coordinate index `{name}`: {message}")]
+    #[diagnostic(code(graphcal::I007), help("{help}"))]
+    CoordinateIndexInvalid {
         name: IndexName,
         message: String,
+        help: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("invalid range")]
+        #[label("invalid coordinate index")]
+        span: SourceSpan,
+    },
+
+    #[error("expected Index, found Nat `{expression}`")]
+    #[diagnostic(
+        code(graphcal::I008),
+        help("write `Fin({expression})` for an explicit finite structural index")
+    )]
+    ExpectedIndexFoundNat {
+        expression: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("Nat is not implicitly converted to Index")]
         span: SourceSpan,
     },
 
@@ -1093,7 +1116,7 @@ pub enum GraphcalError {
     },
 
     #[error(
-        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, `#N` (range axes), or grouped variants"
+        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, `#N` (Fin axes), or grouped variants"
     )]
     #[diagnostic(code(graphcal::A009))]
     ExpectedFailInvalidArg {
@@ -1119,7 +1142,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A011),
         help(
-            "use `#[expected_fail(Index.Variant, ...)]` (qualified `module.Index.Variant` also works) to specify which variants are expected to fail; for Nat range axes use `#[expected_fail(#N, ...)]`"
+            "use `#[expected_fail(Index.Variant, ...)]` (qualified `module.Index.Variant` also works) to specify which variants are expected to fail; for finite structural axes use `#[expected_fail(#N, ...)]`"
         )
     )]
     ExpectedFailAllOnIndexed {
@@ -1168,19 +1191,19 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("`#[expected_fail(...)]` range step `#{step}` is out of bounds")]
+    #[error("`#[expected_fail(...)]` finite-index position `#{position}` is out of bounds")]
     #[diagnostic(
         code(graphcal::A016),
         help(
-            "range steps in expected-fail keys must satisfy `0 <= N < size` for a `range(size)` axis"
+            "finite-index positions in expected-fail keys must satisfy `0 <= N < size` for a `Fin(size)` axis"
         )
     )]
-    ExpectedFailRangeStepOutOfBounds {
-        step: u64,
+    ExpectedFailFinitePositionOutOfBounds {
+        position: u64,
         size: u64,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("step #{step} on an axis of size {size}")]
+        #[label("position #{position} on an axis of size {size}")]
         span: SourceSpan,
     },
 
@@ -1392,7 +1415,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M018),
         help(
-            "named indexes (`cat`) can only be bound to named indexes; range indexes can only be bound to range indexes"
+            "named indexes can only be bound to named indexes; coordinate indexes can only be bound to coordinate indexes"
         )
     )]
     IndexKindMismatch {
@@ -1411,7 +1434,7 @@ pub enum GraphcalError {
     )]
     #[diagnostic(
         code(graphcal::I009),
-        help("range index bindings must have matching dimensions")
+        help("coordinate-index bindings must have matching dimensions")
     )]
     IndexBindingDimensionMismatch {
         dep_index: String,
@@ -1878,8 +1901,9 @@ impl GraphcalError {
             | Self::DuplicateModuleName { src, .. }
             | Self::UnknownModule { src, .. }
             | Self::QualifiedNameNotFound { src, .. }
-            | Self::RangeIndexDimensionMismatch { src, .. }
-            | Self::RangeIndexInvalid { src, .. }
+            | Self::CoordinateIndexDimensionMismatch { src, .. }
+            | Self::CoordinateIndexInvalid { src, .. }
+            | Self::ExpectedIndexFoundNat { src, .. }
             | Self::GraphRefToAssert { src, .. }
             | Self::AssertBodyNotBool { src, .. }
             | Self::AssumedAssertionFailed { src, .. }
@@ -1894,7 +1918,7 @@ impl GraphcalError {
             | Self::ExpectedFailDuplicateKey { src, .. }
             | Self::ExpectedFailKeyShapeMismatch { src, .. }
             | Self::ExpectedFailKeyIndexMismatch { src, .. }
-            | Self::ExpectedFailRangeStepOutOfBounds { src, .. }
+            | Self::ExpectedFailFinitePositionOutOfBounds { src, .. }
             | Self::NegativeTolerance { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::RequiredParamNotProvided { src, .. }

@@ -1,12 +1,42 @@
 use crate::syntax::ast::{Expr, ExprKind, MapEntry, MapEntryIndex, MapEntryKey, TableIndexSpec};
-use crate::syntax::index_name::IndexVariantName;
+use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
-use crate::syntax::token::Token;
+use crate::syntax::token::{ContextualKeyword, Token};
 
 use super::{ParseError, Parser};
+
+enum TableColumnKeys {
+    Named(Vec<Spanned<IndexEntryKey>>),
+    Finite { cardinality: u64, span: Span },
+}
+
+impl TableColumnKeys {
+    fn expected_len(&self) -> usize {
+        match self {
+            Self::Named(keys) => keys.len(),
+            Self::Finite { cardinality, .. } => usize::try_from(*cardinality).unwrap_or(usize::MAX),
+        }
+    }
+
+    fn matches_len(&self, actual: usize) -> bool {
+        match self {
+            Self::Named(keys) => keys.len() == actual,
+            Self::Finite { cardinality, .. } => u64::try_from(actual) == Ok(*cardinality),
+        }
+    }
+
+    fn key_at(&self, position: usize) -> Option<Spanned<IndexEntryKey>> {
+        match self {
+            Self::Named(keys) => keys.get(position).cloned(),
+            Self::Finite { span, .. } => u64::try_from(position)
+                .ok()
+                .map(|position| Spanned::new(IndexEntryKey::position(position), *span)),
+        }
+    }
+}
 
 fn table_entry_keys(
     mut prefix: Vec<MapEntryKey>,
@@ -28,8 +58,8 @@ impl Parser<'_> {
 
     /// Parse a table expression: `table[Index1, Index2] { ... }`
     ///
-    /// Each index is either a named identifier path or an integer literal that
-    /// desugars to a `range(N)` index with synthetic variants `#0..#N-1`.
+    /// Each axis is either a named index path or an explicit `Fin(N)` with a
+    /// concrete Nat cardinality.
     pub(super) fn parse_table_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, start_span) = self.expect(Token::Table)?;
 
@@ -73,26 +103,44 @@ impl Parser<'_> {
         ))
     }
 
-    /// Parse a single index spec in `table[...]`: either an identifier path or
-    /// an integer literal (for `range(N)` Nat indexes).
+    /// Parse one table axis: a named index path or concrete `Fin(N)`.
     fn parse_table_index_spec(&mut self) -> Result<TableIndexSpec, ParseError> {
+        self.reject_obsolete_structural_range()?;
+        if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
+            && self.lexer.peek_second() == Some(&Token::LParen)
+        {
+            let (_, start_span) = self.advance()?;
+            self.expect(Token::LParen)?;
+            let (_, cardinality_span) = self.expect(Token::Number)?;
+            let text = self.lexer.slice_at(cardinality_span).replace('_', "");
+            let cardinality = text.parse().map_err(|_| ParseError::InvalidNumber {
+                reason: "table Fin cardinality must be a non-negative integer literal".to_string(),
+                src: self.named_source(),
+                span: cardinality_span.into(),
+            })?;
+            let (_, end_span) = self.expect(Token::RParen)?;
+            return Ok(TableIndexSpec::Finite {
+                cardinality,
+                span: start_span.merge(end_span),
+            });
+        }
         match self.lexer.peek() {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
-                let text = self.lexer.slice_at(span).replace('_', "");
-                let value: u64 = text.parse().map_err(|_| ParseError::InvalidNumber {
-                    reason: "expected non-negative integer in table index position".to_string(),
+                let expression = self.lexer.slice_at(span).to_string();
+                Err(ParseError::ExpectedIndexFoundNat {
+                    suggestion: format!("Fin({expression})"),
+                    expression,
                     src: self.named_source(),
                     span: span.into(),
-                })?;
-                Ok(TableIndexSpec::NatRange(value, span))
+                })
             }
             Some(token) if token.is_identifier() => Ok(TableIndexSpec::Named(
                 self.parse_ident_path()?.into_spanned_name_path(),
             )),
             _ => {
                 let (tok, span) = self.advance()?;
-                Err(self.unexpected_token("index name or integer literal", &tok.to_string(), span))
+                Err(self.unexpected_token("index name or `Fin(N)`", &tok.to_string(), span))
             }
         }
     }
@@ -105,24 +153,29 @@ impl Parser<'_> {
         Spanned::new(MapEntryIndex::Named(index.value), index.span)
     }
 
-    /// Build the typed map-entry index used for entries on a `NatRange` axis.
-    const fn nat_range_index_spanned(size: u64, span: Span) -> Spanned<MapEntryIndex> {
-        Spanned::new(MapEntryIndex::NatRange(size), span)
+    /// Build the typed map-entry index used for entries on a `Finite` axis.
+    const fn finite_index_index_spanned(size: u64, span: Span) -> Spanned<MapEntryIndex> {
+        Spanned::new(MapEntryIndex::Finite(size), span)
     }
 
-    /// Synthetic variant name `#i` for a `NatRange` axis.
-    fn nat_range_variant_spanned(i: u64, span: Span) -> Spanned<IndexVariantName> {
-        Spanned::new(IndexVariantName::range_step(i), span)
+    fn named_entry_key_spanned(variant: Spanned<IndexVariantName>) -> Spanned<IndexEntryKey> {
+        Spanned::new(IndexEntryKey::named(variant.value), variant.span)
+    }
+
+    const fn finite_position_spanned(position: u64, span: Span) -> Spanned<IndexEntryKey> {
+        Spanned::new(IndexEntryKey::position(position), span)
     }
 
     /// Parse a 1D table body.
     ///
     /// Named index: `Label: expr; ...`
-    /// `NatRange` index: `expr; ...` (no labels, exactly N rows)
+    /// `Finite` index: `expr; ...` (no labels, exactly N rows)
     fn parse_table_1d(&mut self, indexes: &[TableIndexSpec]) -> Result<Vec<MapEntry>, ParseError> {
         match &indexes[0] {
             TableIndexSpec::Named(name) => self.parse_table_1d_named(name),
-            TableIndexSpec::NatRange(n, span) => self.parse_table_1d_nat(*n, *span),
+            TableIndexSpec::Finite { cardinality, span } => {
+                self.parse_table_1d_finite(*cardinality, *span)
+            }
         }
     }
 
@@ -140,7 +193,9 @@ impl Parser<'_> {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned(index),
                     additional_index_spans: Vec::new(),
-                    variant: label.into_spanned::<IndexVariantName>(),
+                    variant: Self::named_entry_key_spanned(
+                        label.into_spanned::<IndexVariantName>(),
+                    ),
                 }),
                 value,
             });
@@ -148,8 +203,8 @@ impl Parser<'_> {
         Ok(entries)
     }
 
-    fn parse_table_1d_nat(&mut self, n: u64, span: Span) -> Result<Vec<MapEntry>, ParseError> {
-        let index = Self::nat_range_index_spanned(n, span);
+    fn parse_table_1d_finite(&mut self, n: u64, span: Span) -> Result<Vec<MapEntry>, ParseError> {
+        let index = Self::finite_index_index_spanned(n, span);
         let mut entries = Vec::new();
         let start_offset = span.offset();
         while self.lexer.peek() != Some(&Token::RBrace) {
@@ -160,7 +215,7 @@ impl Parser<'_> {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: index.clone(),
                     additional_index_spans: Vec::new(),
-                    variant: Self::nat_range_variant_spanned(i, value.span),
+                    variant: Self::finite_position_spanned(i, value.span),
                 }),
                 value,
             });
@@ -185,7 +240,7 @@ impl Parser<'_> {
     /// `prefix_keys` are prepended to every entry (from slice labels in 3D+).
     #[expect(
         clippy::too_many_lines,
-        reason = "branches over Named/NatRange axis combinations"
+        reason = "branches over Named/Finite axis combinations"
     )]
     fn parse_table_single(
         &mut self,
@@ -199,23 +254,29 @@ impl Parser<'_> {
         // Build the row/column index name used for emitted keys.
         let row_index_template: Spanned<MapEntryIndex> = match row_spec {
             TableIndexSpec::Named(s) => Self::named_index_spanned(s),
-            TableIndexSpec::NatRange(n, sp) => Self::nat_range_index_spanned(*n, *sp),
+            TableIndexSpec::Finite { cardinality, span } => {
+                Self::finite_index_index_spanned(*cardinality, *span)
+            }
         };
         let col_index_template: Spanned<MapEntryIndex> = match col_spec {
             TableIndexSpec::Named(s) => Self::named_index_spanned(s),
-            TableIndexSpec::NatRange(n, sp) => Self::nat_range_index_spanned(*n, *sp),
+            TableIndexSpec::Finite { cardinality, span } => {
+                Self::finite_index_index_spanned(*cardinality, *span)
+            }
         };
 
         // Parse the column header row.
         // - Named column axis: requires `: ColLabel1, ColLabel2, ...;`
-        // - NatRange column axis: no header; auto-generate `#0..#(n-1)` labels.
-        let col_labels: Vec<Spanned<IndexVariantName>> = match col_spec {
+        // - Finite column axis: no header; auto-generate `#0..#(n-1)` labels.
+        let col_labels = match col_spec {
             TableIndexSpec::Named(_) => {
                 self.expect(Token::Colon)?;
                 let mut labels = Vec::new();
                 loop {
                     let label = self.parse_any_ident()?;
-                    labels.push(label.into_spanned::<IndexVariantName>());
+                    labels.push(Self::named_entry_key_spanned(
+                        label.into_spanned::<IndexVariantName>(),
+                    ));
                     if self.lexer.peek() == Some(&Token::Comma) {
                         self.lexer.next_token();
                     } else {
@@ -223,11 +284,12 @@ impl Parser<'_> {
                     }
                 }
                 self.expect(Token::Semicolon)?;
-                labels
+                TableColumnKeys::Named(labels)
             }
-            TableIndexSpec::NatRange(n, sp) => (0..*n)
-                .map(|i| Self::nat_range_variant_spanned(i, *sp))
-                .collect(),
+            TableIndexSpec::Finite { cardinality, span } => TableColumnKeys::Finite {
+                cardinality: *cardinality,
+                span: *span,
+            },
         };
 
         // Parse data rows.
@@ -241,16 +303,17 @@ impl Parser<'_> {
                 TableIndexSpec::Named(_) => {
                     let row_label_ident = self.parse_any_ident()?;
                     let span = row_label_ident.span;
-                    let label = row_label_ident.into_spanned::<IndexVariantName>();
+                    let label = Self::named_entry_key_spanned(
+                        row_label_ident.into_spanned::<IndexVariantName>(),
+                    );
                     self.expect(Token::Colon)?;
                     (label, span)
                 }
-                TableIndexSpec::NatRange(_, sp) => {
-                    // A row index beyond the range size is reported by the
-                    // row-length mismatch logic below; the row is still
-                    // parsed here.
-                    let label = Self::nat_range_variant_spanned(row_index_counter, *sp);
-                    let span = self.lexer.peek_with_span().map_or(*sp, |(_, s)| s);
+                TableIndexSpec::Finite { span, .. } => {
+                    // A row beyond the finite cardinality is reported by the
+                    // row-length mismatch logic below; the row is still parsed.
+                    let label = Self::finite_position_spanned(row_index_counter, *span);
+                    let span = self.lexer.peek_with_span().map_or(*span, |(_, s)| s);
                     (label, span)
                 }
             };
@@ -273,9 +336,9 @@ impl Parser<'_> {
             let row_span = row_label_span.merge(row_end_span);
             self.expect(Token::Semicolon)?;
 
-            if row_values.len() != col_labels.len() {
+            if !col_labels.matches_len(row_values.len()) {
                 return Err(ParseError::TableRowLengthMismatch {
-                    expected: col_labels.len(),
+                    expected: col_labels.expected_len(),
                     got: row_values.len(),
                     src: self.named_source(),
                     span: row_span.into(),
@@ -291,7 +354,13 @@ impl Parser<'_> {
                 let column_key = MapEntryKey {
                     index: col_index_template.clone(),
                     additional_index_spans: Vec::new(),
-                    variant: col_labels[col_idx].clone(),
+                    variant: col_labels.key_at(col_idx).ok_or_else(|| {
+                        ParseError::InvalidNumber {
+                            reason: "table column position does not fit in u64".to_string(),
+                            src: self.named_source(),
+                            span: value.span.into(),
+                        }
+                    })?,
                 };
                 entries.push(MapEntry {
                     keys: table_entry_keys(prefix_keys.to_vec(), row_key, column_key),
@@ -301,15 +370,15 @@ impl Parser<'_> {
             row_index_counter += 1;
         }
 
-        // For NatRange row axis, validate row count.
-        if let TableIndexSpec::NatRange(n, sp) = row_spec
-            && row_index_counter != *n
+        // For Finite row axis, validate row count.
+        if let TableIndexSpec::Finite { cardinality, span } = row_spec
+            && row_index_counter != *cardinality
         {
             return Err(ParseError::TableRowLengthMismatch {
-                expected: usize::try_from(*n).unwrap_or(usize::MAX),
+                expected: usize::try_from(*cardinality).unwrap_or(usize::MAX),
                 got: usize::try_from(row_index_counter).unwrap_or(usize::MAX),
                 src: self.named_source(),
-                span: (*sp).into(),
+                span: (*span).into(),
             });
         }
 
@@ -318,7 +387,7 @@ impl Parser<'_> {
 
     /// Parse a 3D+ table with slice sections: `[SliceLabel1, ...] header; rows; ...`
     ///
-    /// Slice labels are `Index.Variant` for named axes, or `#N` for `NatRange` axes.
+    /// Slice labels are `Index.Variant` for named axes, or `#N` for `Finite` axes.
     fn parse_table_sliced(
         &mut self,
         indexes: &[TableIndexSpec],
@@ -349,10 +418,10 @@ impl Parser<'_> {
                         prefix_keys.push(MapEntryKey {
                             index: Spanned::new(MapEntryIndex::Named(index.value), index.span),
                             additional_index_spans: vec![axis.span],
-                            variant,
+                            variant: Self::named_entry_key_spanned(variant),
                         });
                     }
-                    TableIndexSpec::NatRange(n, sp) => {
+                    TableIndexSpec::Finite { cardinality, span } => {
                         let (_, hash_span) = self.expect(Token::Hash)?;
                         let (_, num_span) = self.expect(Token::Number)?;
                         let text = self.lexer.slice_at(num_span).replace('_', "");
@@ -361,10 +430,10 @@ impl Parser<'_> {
                             src: self.named_source(),
                             span: num_span.into(),
                         })?;
-                        if value >= *n {
+                        if value >= *cardinality {
                             return Err(ParseError::InvalidNumber {
                                 reason: format!(
-                                    "slice index #{value} out of range for axis of size {n}"
+                                    "slice index #{value} out of range for Fin({cardinality})"
                                 ),
                                 src: self.named_source(),
                                 span: num_span.into(),
@@ -372,12 +441,9 @@ impl Parser<'_> {
                         }
                         let variant_span = hash_span.merge(num_span);
                         prefix_keys.push(MapEntryKey {
-                            index: Self::nat_range_index_spanned(*n, *sp),
+                            index: Self::finite_index_index_spanned(*cardinality, *span),
                             additional_index_spans: Vec::new(),
-                            variant: Spanned::new(
-                                IndexVariantName::range_step(value),
-                                variant_span,
-                            ),
+                            variant: Self::finite_position_spanned(value, variant_span),
                         });
                     }
                 }
@@ -409,7 +475,7 @@ impl Parser<'_> {
             keys: NonEmpty::singleton(MapEntryKey {
                 index: Self::named_index_spanned_owned(first_index),
                 additional_index_spans: Vec::new(),
-                variant: first_variant,
+                variant: Self::named_entry_key_spanned(first_variant),
             }),
             value,
         }];
@@ -426,7 +492,7 @@ impl Parser<'_> {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     additional_index_spans: Vec::new(),
-                    variant,
+                    variant: Self::named_entry_key_spanned(variant),
                 }),
                 value,
             });
@@ -453,7 +519,7 @@ impl Parser<'_> {
             let first_key = MapEntryKey {
                 index: Self::named_index_spanned_owned(index),
                 additional_index_spans: Vec::new(),
-                variant,
+                variant: Self::named_entry_key_spanned(variant),
             };
             let mut rest_keys = Vec::new();
             while self.lexer.peek() == Some(&Token::Comma) {
@@ -462,7 +528,7 @@ impl Parser<'_> {
                 rest_keys.push(MapEntryKey {
                     index: Self::named_index_spanned_owned(index),
                     additional_index_spans: Vec::new(),
-                    variant,
+                    variant: Self::named_entry_key_spanned(variant),
                 });
             }
             self.expect(Token::RParen)?;
@@ -498,9 +564,9 @@ mod tests {
                 ExprKind::MapLiteral { entries } => {
                     assert_eq!(entries.len(), 2);
                     assert_eq!(entries[0].keys[0].index.value.to_string(), "Maneuver");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "Departure");
                     assert_eq!(entries[1].keys[0].index.value.to_string(), "Maneuver");
-                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
+                    assert_eq!(entries[1].keys[0].variant.value.to_string(), "Correction");
                 }
                 other => panic!("expected MapLiteral, got {other:?}"),
             },
@@ -511,14 +577,14 @@ mod tests {
     fn named_index_name(spec: &TableIndexSpec) -> &str {
         match spec {
             TableIndexSpec::Named(s) => s.value.leaf().as_str(),
-            TableIndexSpec::NatRange(..) => panic!("expected Named spec"),
+            TableIndexSpec::Finite { .. } => panic!("expected Named spec"),
         }
     }
 
-    fn nat_range_size(spec: &TableIndexSpec) -> u64 {
+    fn finite_index_size(spec: &TableIndexSpec) -> u64 {
         match spec {
-            TableIndexSpec::NatRange(n, _) => *n,
-            TableIndexSpec::Named(_) => panic!("expected NatRange spec"),
+            TableIndexSpec::Finite { cardinality, .. } => *cardinality,
+            TableIndexSpec::Named(_) => panic!("expected Finite spec"),
         }
     }
 
@@ -541,9 +607,9 @@ mod tests {
                     assert_eq!(entries.len(), 3);
                     assert_eq!(entries[0].keys.len(), 1);
                     assert_eq!(entries[0].keys[0].index.value.to_string(), "Maneuver");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "Correction");
-                    assert_eq!(entries[2].keys[0].variant.value.as_str(), "Insertion");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "Departure");
+                    assert_eq!(entries[1].keys[0].variant.value.to_string(), "Correction");
+                    assert_eq!(entries[2].keys[0].variant.value.to_string(), "Insertion");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
@@ -552,8 +618,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_table_1d_nat() {
-        let source = r"param v: Dimensionless[3] = table[3] {
+    fn parse_table_1d_finite() {
+        let source = r"param v: Dimensionless[Fin(3)] = table[Fin(3)] {
         1.0;
         2.0;
         3.0;
@@ -566,17 +632,30 @@ mod tests {
                     entries,
                 }) => {
                     assert_eq!(indexes.len(), 1);
-                    assert_eq!(nat_range_size(&indexes[0]), 3);
+                    assert_eq!(finite_index_size(&indexes[0]), 3);
                     assert_eq!(entries.len(), 3);
-                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(3)");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
-                    assert_eq!(entries[1].keys[0].variant.value.as_str(), "#1");
-                    assert_eq!(entries[2].keys[0].variant.value.as_str(), "#2");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Fin(3)");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "#0");
+                    assert_eq!(entries[1].keys[0].variant.value.to_string(), "#1");
+                    assert_eq!(entries[2].keys[0].variant.value.to_string(), "#2");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn table_rejects_bare_nat_axis_with_fin_suggestion() {
+        let source = "param v: Dimensionless[Fin(3)] = table[3] { 1.0; 2.0; 3.0; };";
+        let error = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ParseError::ExpectedIndexFoundNat { ref expression, .. } if expression == "3"
+            ),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[test]
@@ -600,12 +679,12 @@ mod tests {
                     assert_eq!(entries.len(), 9);
                     assert_eq!(entries[0].keys.len(), 2);
                     assert_eq!(entries[0].keys[0].index.value.to_string(), "Phase");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "Launch");
                     assert_eq!(entries[0].keys[1].index.value.to_string(), "Maneuver");
-                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[1].keys[1].variant.value.as_str(), "Correction");
-                    assert_eq!(entries[8].keys[0].variant.value.as_str(), "Arrival");
-                    assert_eq!(entries[8].keys[1].variant.value.as_str(), "Insertion");
+                    assert_eq!(entries[0].keys[1].variant.value.to_string(), "Departure");
+                    assert_eq!(entries[1].keys[1].variant.value.to_string(), "Correction");
+                    assert_eq!(entries[8].keys[0].variant.value.to_string(), "Arrival");
+                    assert_eq!(entries[8].keys[1].variant.value.to_string(), "Insertion");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
@@ -639,8 +718,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_table_2d_all_nat() {
-        let source = r"param m: Dimensionless[2, 3] = table[2, 3] {
+    fn parse_table_2d_all_finite() {
+        let source = r"param m: Dimensionless[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
         1.0, 2.0, 3.0;
         4.0, 5.0, 6.0;
     };";
@@ -652,15 +731,15 @@ mod tests {
                     entries,
                 }) => {
                     assert_eq!(indexes.len(), 2);
-                    assert_eq!(nat_range_size(&indexes[0]), 2);
-                    assert_eq!(nat_range_size(&indexes[1]), 3);
+                    assert_eq!(finite_index_size(&indexes[0]), 2);
+                    assert_eq!(finite_index_size(&indexes[1]), 3);
                     assert_eq!(entries.len(), 6);
-                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(2)");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
-                    assert_eq!(entries[0].keys[1].index.value.to_string(), "range(3)");
-                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "#0");
-                    assert_eq!(entries[5].keys[0].variant.value.as_str(), "#1");
-                    assert_eq!(entries[5].keys[1].variant.value.as_str(), "#2");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Fin(2)");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "#0");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "Fin(3)");
+                    assert_eq!(entries[0].keys[1].variant.value.to_string(), "#0");
+                    assert_eq!(entries[5].keys[0].variant.value.to_string(), "#1");
+                    assert_eq!(entries[5].keys[1].variant.value.to_string(), "#2");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
@@ -669,8 +748,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_table_2d_nat_cols() {
-        let source = r"param m: Dimensionless[Phase, 3] = table[Phase, 3] {
+    fn parse_table_2d_finite_cols() {
+        let source = r"param m: Dimensionless[Phase, Fin(3)] = table[Phase, Fin(3)] {
         Launch: 1.0, 2.0, 3.0;
         Cruise: 4.0, 5.0, 6.0;
     };";
@@ -683,13 +762,13 @@ mod tests {
                 }) => {
                     assert_eq!(indexes.len(), 2);
                     assert_eq!(named_index_name(&indexes[0]), "Phase");
-                    assert_eq!(nat_range_size(&indexes[1]), 3);
+                    assert_eq!(finite_index_size(&indexes[1]), 3);
                     assert_eq!(entries.len(), 6);
                     assert_eq!(entries[0].keys[0].index.value.to_string(), "Phase");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "Launch");
-                    assert_eq!(entries[0].keys[1].index.value.to_string(), "range(3)");
-                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "#0");
-                    assert_eq!(entries[2].keys[1].variant.value.as_str(), "#2");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "Launch");
+                    assert_eq!(entries[0].keys[1].index.value.to_string(), "Fin(3)");
+                    assert_eq!(entries[0].keys[1].variant.value.to_string(), "#0");
+                    assert_eq!(entries[2].keys[1].variant.value.to_string(), "#2");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
@@ -698,8 +777,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_table_2d_nat_rows() {
-        let source = r"param m: Dimensionless[2, Maneuver] = table[2, Maneuver] {
+    fn parse_table_2d_finite_rows() {
+        let source = r"param m: Dimensionless[Fin(2), Maneuver] = table[Fin(2), Maneuver] {
         : Departure, Correction;
         1.0, 2.0;
         3.0, 4.0;
@@ -712,15 +791,15 @@ mod tests {
                     entries,
                 }) => {
                     assert_eq!(indexes.len(), 2);
-                    assert_eq!(nat_range_size(&indexes[0]), 2);
+                    assert_eq!(finite_index_size(&indexes[0]), 2);
                     assert_eq!(named_index_name(&indexes[1]), "Maneuver");
                     assert_eq!(entries.len(), 4);
-                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(2)");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Fin(2)");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "#0");
                     assert_eq!(entries[0].keys[1].index.value.to_string(), "Maneuver");
-                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[3].keys[0].variant.value.as_str(), "#1");
-                    assert_eq!(entries[3].keys[1].variant.value.as_str(), "Correction");
+                    assert_eq!(entries[0].keys[1].variant.value.to_string(), "Departure");
+                    assert_eq!(entries[3].keys[0].variant.value.to_string(), "#1");
+                    assert_eq!(entries[3].keys[1].variant.value.to_string(), "Correction");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
@@ -755,14 +834,14 @@ mod tests {
                     assert_eq!(entries.len(), 8);
                     assert_eq!(entries[0].keys.len(), 3);
                     assert_eq!(entries[0].keys[0].index.value.to_string(), "Time");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "T1");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "T1");
                     assert_eq!(entries[0].keys[1].index.value.to_string(), "Phase");
-                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Launch");
+                    assert_eq!(entries[0].keys[1].variant.value.to_string(), "Launch");
                     assert_eq!(entries[0].keys[2].index.value.to_string(), "Maneuver");
-                    assert_eq!(entries[0].keys[2].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[4].keys[0].variant.value.as_str(), "T2");
-                    assert_eq!(entries[4].keys[1].variant.value.as_str(), "Launch");
-                    assert_eq!(entries[4].keys[2].variant.value.as_str(), "Departure");
+                    assert_eq!(entries[0].keys[2].variant.value.to_string(), "Departure");
+                    assert_eq!(entries[4].keys[0].variant.value.to_string(), "T2");
+                    assert_eq!(entries[4].keys[1].variant.value.to_string(), "Launch");
+                    assert_eq!(entries[4].keys[2].variant.value.to_string(), "Departure");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
@@ -816,7 +895,7 @@ mod tests {
                     };
                     assert_eq!(axis.value.display_path(), "mission.Time");
                     assert_eq!(entries[0].keys[0].index.value.to_string(), "mission.Time");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "T1");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "T1");
                     assert_eq!(entries[0].keys[0].additional_index_spans, vec![axis.span]);
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
@@ -892,8 +971,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_table_3d_nat_slice() {
-        let source = r"param m: Dimensionless[2, Phase, Maneuver] = table[2, Phase, Maneuver] {
+    fn parse_table_3d_finite_slice() {
+        let source = r"param m: Dimensionless[Fin(2), Phase, Maneuver] = table[Fin(2), Phase, Maneuver] {
         [#0]
         : Departure, Correction;
         Launch: 1.0, 2.0;
@@ -912,20 +991,30 @@ mod tests {
                     entries,
                 }) => {
                     assert_eq!(indexes.len(), 3);
-                    assert_eq!(nat_range_size(&indexes[0]), 2);
+                    assert_eq!(finite_index_size(&indexes[0]), 2);
                     assert_eq!(named_index_name(&indexes[1]), "Phase");
                     assert_eq!(named_index_name(&indexes[2]), "Maneuver");
                     assert_eq!(entries.len(), 8);
-                    assert_eq!(entries[0].keys[0].index.value.to_string(), "range(2)");
-                    assert_eq!(entries[0].keys[0].variant.value.as_str(), "#0");
-                    assert_eq!(entries[0].keys[1].variant.value.as_str(), "Launch");
-                    assert_eq!(entries[0].keys[2].variant.value.as_str(), "Departure");
-                    assert_eq!(entries[4].keys[0].variant.value.as_str(), "#1");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "Fin(2)");
+                    assert_eq!(entries[0].keys[0].variant.value.to_string(), "#0");
+                    assert_eq!(entries[0].keys[1].variant.value.to_string(), "Launch");
+                    assert_eq!(entries[0].keys[2].variant.value.to_string(), "Departure");
+                    assert_eq!(entries[4].keys[0].variant.value.to_string(), "#1");
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
             },
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn huge_finite_column_cardinality_is_rejected_without_materializing_keys() {
+        let source = "param m: Dimensionless[Fin(1), Fin(18446744073709551615)] = table[Fin(1), Fin(18446744073709551615)] { 1.0; };";
+        let error = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(error, ParseError::TableRowLengthMismatch { got: 1, .. }),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[test]

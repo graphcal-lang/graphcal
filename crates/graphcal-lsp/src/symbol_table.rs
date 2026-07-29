@@ -536,8 +536,8 @@ impl<'a> HirRefCollector<'a> {
                             Self::reference(table, index.span, key);
                             format!("loop variable over {}", index.value.as_str())
                         }
-                        hir::expr::ForBindingIndex::Range { arg, .. } => {
-                            format!("loop variable over range({})", nat_expr_label(arg))
+                        hir::expr::ForBindingIndex::Finite { cardinality, .. } => {
+                            format!("loop variable over Fin({})", nat_expr_label(cardinality))
                         }
                     };
                     self.define_local(
@@ -730,7 +730,7 @@ impl<'a> HirRefCollector<'a> {
     fn walk_generic_arg(&self, arg: &hir::GenericArg, table: &mut SymbolTable) {
         match arg {
             hir::GenericArg::Dim(hir::DimArg::Dimensionless(_))
-            | hir::GenericArg::Index(hir::IndexRef::GenericParam(_) | hir::IndexRef::NatExpr(_))
+            | hir::GenericArg::Index(hir::IndexRef::GenericParam(_) | hir::IndexRef::Finite(_))
             | hir::GenericArg::Nat(_) => {}
             hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
                 for item in &dim_expr.terms {
@@ -1243,7 +1243,7 @@ fn collect_attribute_refs(
                         });
                     }
                     AttributeArg::Path { .. }
-                    | AttributeArg::RangeStep { .. }
+                    | AttributeArg::FinitePosition { .. }
                     | AttributeArg::Group { .. } => {}
                 }
             }
@@ -1516,10 +1516,12 @@ fn collect_index_decl(
                 );
             }
         }
-        IndexDeclKind::RequiredRange { dimension } => {
+        IndexDeclKind::RequiredCoordinate { dimension } => {
             collect_dim_expr_refs(dimension, table);
         }
-        IndexDeclKind::Range { .. } | IndexDeclKind::RequiredNamed => {}
+        IndexDeclKind::Range { .. }
+        | IndexDeclKind::Linspace { .. }
+        | IndexDeclKind::RequiredNamed => {}
     }
 }
 
@@ -1793,8 +1795,12 @@ fn collect_type_expr_refs_in_scope(
                             ),
                         });
                     }
-                    graphcal_compiler::desugar::desugared_ast::IndexExpr::NatExpr(expr) => {
-                        collect_nat_generic_param_refs(expr, generic_scope, table);
+                    graphcal_compiler::desugar::desugared_ast::IndexExpr::Finite {
+                        cardinality,
+                        ..
+                    }
+                    | graphcal_compiler::desugar::desugared_ast::IndexExpr::BareNat(cardinality) => {
+                        collect_nat_generic_param_refs(cardinality, generic_scope, table);
                     }
                 }
             }
@@ -1832,6 +1838,18 @@ fn collect_generic_arg_refs(
         graphcal_compiler::syntax::ast::GenericArg::Type(type_expr) => {
             collect_type_expr_refs_in_scope(type_expr, generic_scope, table);
         }
+        graphcal_compiler::syntax::ast::GenericArg::Index(index) => match index {
+            graphcal_compiler::syntax::ast::IndexExpr::Name(path) => {
+                table.references.push(ReferenceInfo {
+                    span: path.span,
+                    target: symbol_key_for_path_in_generic_scope(&path.value, generic_scope),
+                });
+            }
+            graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. }
+            | graphcal_compiler::syntax::ast::IndexExpr::BareNat(cardinality) => {
+                collect_nat_generic_param_refs(cardinality, generic_scope, table);
+            }
+        },
         graphcal_compiler::syntax::ast::GenericArg::Nat(expr) => {
             collect_nat_generic_param_refs(expr, generic_scope, table);
         }
@@ -2003,7 +2021,7 @@ fn format_type_with_constraints(
             .map(|i| match i {
                 ResolvedIndex::Concrete(name, _) => name.as_str().to_string(),
                 ResolvedIndex::GenericParam(name, _) => name.to_string(),
-                ResolvedIndex::NatExpr(form, _) => form.format(),
+                ResolvedIndex::Finite(form, _) => format!("Fin({})", form.format()),
             })
             .collect();
         format!("{base_str}{constraint_str}[{}]", idx_strs.join(", "))
@@ -2140,23 +2158,32 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                                 .collect();
                             def_mut.type_description = Some(format!("{{ {} }}", vs.join(", ")));
                         }
-                        IndexKind::Range(data) => {
-                            def_mut.type_description = Some(format!(
-                                "range({}, {}, step: {})",
-                                data.start, data.end, data.step
-                            ));
+                        IndexKind::Coordinate(data) => {
+                            def_mut.type_description = Some(match data.spacing {
+                                graphcal_compiler::registry::types::CoordinateSpacing::Step {
+                                    step,
+                                } => format!("range({}, {}, step: {step})", data.start, data.end),
+                                graphcal_compiler::registry::types::CoordinateSpacing::Linspace => {
+                                    format!(
+                                        "linspace({}, {}, points: {})",
+                                        data.start,
+                                        data.end,
+                                        idx_def.cardinality()
+                                    )
+                                }
+                            });
                         }
                         IndexKind::RequiredNamed => {
                             def_mut.type_description = Some("(required)".to_string());
                         }
-                        IndexKind::RequiredRange { dimension } => {
+                        IndexKind::RequiredCoordinate { dimension } => {
                             def_mut.type_description = Some(format!(
                                 "(required, dim: {})",
                                 registry.dimensions.format_dimension(dimension)
                             ));
                         }
-                        IndexKind::NatRange { size } => {
-                            def_mut.type_description = Some(format!("range({size})"));
+                        IndexKind::Finite { cardinality } => {
+                            def_mut.type_description = Some(format!("Fin({})", cardinality.get()));
                         }
                     }
                 }

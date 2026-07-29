@@ -16,7 +16,7 @@ use miette::NamedSource;
 ///
 /// - No args → `ExpectedFail::All`
 /// - `Path` args (e.g. `Index.Variant` or `module.Index.Variant`) → `ExpectedFail::Variants` with single-index keys
-/// - `RangeStep` args (e.g. `#2`, for Nat range axes) → `ExpectedFail::Variants` with single-index keys
+/// - `FinitePosition` args (e.g. `#2`, for finite structural axes) → `ExpectedFail::Variants` with single-index keys
 /// - `Group` args (e.g. `(Mode.Boost, Phase.Launch)`, `(Mode.Boost, #2)`) → `ExpectedFail::Variants` with multi-index keys
 pub fn parse_expected_fail_args(
     args: &[AttributeArg],
@@ -32,10 +32,12 @@ pub fn parse_expected_fail_args(
             AttributeArg::Path { segments, span } => {
                 expected_fail_key_part_from_segments(segments, *span, src).map(|part| vec![part])
             }
-            AttributeArg::RangeStep { step, span } => Ok(vec![ExpectedFailKeyPart::RangeStep {
-                step: *step,
-                span: *span,
-            }]),
+            AttributeArg::FinitePosition { position, span } => {
+                Ok(vec![ExpectedFailKeyPart::FinitePosition {
+                    position: *position,
+                    span: *span,
+                }])
+            }
             AttributeArg::Group { elements, span } => {
                 let key: Result<ParsedExpectedFailKey, GraphcalError> = elements
                     .iter()
@@ -44,9 +46,9 @@ pub fn parse_expected_fail_args(
                             segments,
                             span: elem_span,
                         } => expected_fail_key_part_from_segments(segments, *elem_span, src),
-                        AttributeArg::RangeStep { step, span } => {
-                            Ok(ExpectedFailKeyPart::RangeStep {
-                                step: *step,
+                        AttributeArg::FinitePosition { position, span } => {
+                            Ok(ExpectedFailKeyPart::FinitePosition {
+                                position: *position,
                                 span: *span,
                             })
                         }

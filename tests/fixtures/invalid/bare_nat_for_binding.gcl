@@ -1,0 +1,2 @@
+// Error: a bare Nat is not an Index; use Fin(3).
+node values: Dimensionless[Fin(3)] = for i: 3 { 1.0 };
