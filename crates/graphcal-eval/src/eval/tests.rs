@@ -4595,6 +4595,206 @@ node out_b: Length = @doubler(v: @dist).result[Region.B];
     assert!((b - 6.0).abs() < 1e-10, "expected 6.0, got {b}");
 }
 
+// ---- Typed Int and Datetime domain constraints (#958) ----
+
+#[test]
+fn datetime_domain_constraints_accept_inclusive_same_scale_bounds() {
+    let result = compile_and_eval(
+        r#"
+const node TT_START: Datetime<TT> = epoch<TT>("2024-01-01T00:00:00");
+const node TT_END: Datetime<TT> = epoch<TT>("2024-12-31T23:59:59");
+param utc: Datetime(
+    min: datetime("2024-01-01T00:00:00Z"),
+    max: datetime("2024-12-31T23:59:59Z"),
+) = datetime("2024-06-01T00:00:00Z") -> "Asia/Tokyo";
+param tt_at_min: Datetime<TT>(min: @TT_START, max: @TT_END) = @TT_START;
+param tt_at_max: Datetime<TT>(min: @TT_START, max: @TT_END) = @TT_END;
+param converted_bound: Datetime<TT>(
+    min: to_tt(datetime("2024-01-01T00:00:00Z")),
+) = epoch<TT>("2024-06-01T00:00:00");
+"#,
+    )
+    .unwrap();
+
+    for name in ["utc", "tt_at_min", "tt_at_max", "converted_bound"] {
+        let (_, value, _) = result
+            .all
+            .iter()
+            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .unwrap_or_else(|| panic!("{name} not found"));
+        assert!(value.is_ok(), "{name} failed: {value:?}");
+    }
+}
+
+#[test]
+fn every_supported_datetime_scale_accepts_matching_domain_bounds() {
+    use std::fmt::Write as _;
+
+    let source = graphcal_compiler::registry::time_scale::TimeScale::ALL
+        .iter()
+        .fold(String::new(), |mut source, scale| {
+            let name = scale.to_string().to_ascii_lowercase();
+            writeln!(
+                source,
+                "param {name}: Datetime<{scale}>(\
+                 min: epoch<{scale}>(\"2024-01-01T00:00:00\"), \
+                 max: epoch<{scale}>(\"2024-12-31T23:59:59\")) = \
+                 epoch<{scale}>(\"2024-06-01T00:00:00\");"
+            )
+            .unwrap();
+            source
+        });
+    let result = compile_and_eval(&source).unwrap();
+    for scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
+        let name = scale.to_string().to_ascii_lowercase();
+        let (_, value, _) = result
+            .all
+            .iter()
+            .find(|(candidate, _, _)| candidate.to_string() == name)
+            .unwrap_or_else(|| panic!("{name} not found"));
+        assert!(value.is_ok(), "{name} failed: {value:?}");
+    }
+}
+
+#[test]
+fn indexed_datetime_domain_constraint_reports_the_first_violating_entry() {
+    let result = compile_and_eval(
+        r#"
+pub(bind) index Event = { Early, OnTime };
+param schedule: Datetime(
+    min: datetime("2024-01-01T00:00:00Z"),
+    max: datetime("2024-12-31T23:59:59Z"),
+)[Event] = {
+    Event.Early: datetime("2023-12-31T23:59:59Z"),
+    Event.OnTime: datetime("2024-06-01T00:00:00Z"),
+};
+"#,
+    )
+    .unwrap();
+    let (_, schedule, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "schedule")
+        .expect("schedule not found");
+    let NodeError::EvalFailed { message } = schedule.as_ref().unwrap_err() else {
+        panic!("expected EvalFailed, got {schedule:?}");
+    };
+    assert!(
+        message.contains("Early") && message.contains("below minimum"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn datetime_struct_field_constraint_is_enforced_at_construction() {
+    let result = compile_and_eval(
+        r#"
+type EventSpec {
+    EventSpec(at: Datetime<TT>(
+        min: epoch<TT>("2024-01-01T00:00:00"),
+        max: epoch<TT>("2024-12-31T23:59:59"),
+    )),
+}
+node BAD: EventSpec = EventSpec(at: epoch<TT>("2025-01-01T00:00:00"));
+"#,
+    )
+    .unwrap();
+    let (_, bad, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "BAD")
+        .expect("BAD not found");
+    let NodeError::EvalFailed { message } = bad.as_ref().unwrap_err() else {
+        panic!("expected EvalFailed, got {bad:?}");
+    };
+    assert!(
+        message.contains("EventSpec.at") && message.contains("above maximum"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn datetime_struct_field_bound_requires_the_field_scale() {
+    let error = compile_and_eval(
+        r#"
+type EventSpec {
+    EventSpec(at: Datetime<TT>(min: datetime("2024-01-01T00:00:00Z"))),
+}
+node event: EventSpec = EventSpec(at: epoch<TT>("2024-06-01T00:00:00"));
+"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::DatetimeDomainBoundTypeMismatch { .. })
+    ));
+}
+
+#[test]
+fn indexed_datetime_struct_field_constraint_is_element_wise() {
+    let result = compile_and_eval(
+        r#"
+index Slot = { First, Second };
+type Schedule {
+    Schedule(events: Datetime(
+        min: datetime("2024-01-01T00:00:00Z"),
+        max: datetime("2024-12-31T23:59:59Z"),
+    )[Slot]),
+}
+node BAD: Schedule = Schedule(events: {
+    Slot.First: datetime("2024-06-01T00:00:00Z"),
+    Slot.Second: datetime("2025-01-01T00:00:00Z"),
+});
+"#,
+    )
+    .unwrap();
+    let (_, bad, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "BAD")
+        .expect("BAD not found");
+    let NodeError::EvalFailed { message } = bad.as_ref().unwrap_err() else {
+        panic!("expected EvalFailed, got {bad:?}");
+    };
+    assert!(
+        message.contains("Schedule.events")
+            && message.contains("Second")
+            && message.contains("above maximum"),
+        "message = {message}"
+    );
+}
+
+#[test]
+fn domain_bounds_reject_runtime_graph_references() {
+    let error = compile_to_tir(
+        r#"
+param start: Datetime = datetime("2024-01-01T00:00:00Z");
+param event: Datetime(min: @start) = datetime("2024-06-01T00:00:00Z");
+"#,
+        "test.gcl",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::GraphRefInConst { .. })
+    ));
+}
+
+#[test]
+fn int_domain_constraints_preserve_i64_extremes() {
+    let result = compile_and_eval(
+        "param minimum: Int(\
+         min: -9223372036854775807 - 1, \
+         max: 9223372036854775807) = -9223372036854775807 - 1;\n\
+         param maximum: Int(\
+         min: -9223372036854775807 - 1, \
+         max: 9223372036854775807) = 9223372036854775807;",
+    )
+    .unwrap();
+    assert_eq!(find_int_value(&result, "minimum"), i64::MIN);
+    assert_eq!(find_int_value(&result, "maximum"), i64::MAX);
+}
+
 // ---- Domain constraints on struct/union member fields (#450 Pos 1+2) ----
 
 #[test]

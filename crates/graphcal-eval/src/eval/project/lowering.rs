@@ -130,10 +130,10 @@ pub(in crate::eval::project) fn lower_and_finalize(
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
     graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
 
-    // Resolve domain constraints at compile time so malformed bounds (C003 min
-    // > max, C004 wrong target) surface under `graphcal check` instead of only
-    // at `eval`. C004 alone is a pure type check (handled in `dim_check`); C003
-    // additionally requires evaluating the bound expressions, which depends on
+    // Resolve domain constraints at compile time so malformed bounds (such as
+    // C003 min > max) surface under `graphcal check` instead of only at `eval`.
+    // Target-family, Int, and datetime-scale checks are pure type checks handled
+    // in `dim_check`; ordering requires evaluated bound expressions and therefore
     // const values, so we evaluate consts here too. The resulting plan is
     // discarded — `exec_plan::compile` recomputes both as part of its run.
     {

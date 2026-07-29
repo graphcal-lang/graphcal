@@ -20,11 +20,10 @@ use graphcal_compiler::registry::builtins::BuiltinFunction;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, TypeDef};
-use graphcal_compiler::tir::typed::{
-    DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, StructFieldConstraintKey,
-};
+use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, StructFieldConstraintKey};
 
 use crate::decl_key::RuntimeDeclKey;
+use crate::domain_check::ResolvedDomainConstraint;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 pub use hir_eval::{HirLocalValueMap, eval_hir_expr};

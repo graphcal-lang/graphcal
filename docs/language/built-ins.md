@@ -154,6 +154,23 @@ All calendar extractors use the input's declared time scale. For example,
 has a different UTC coordinate. A display timezone applied with `->` remains
 formatting metadata and does not change extractor results.
 
+#### Datetime Domain Constraints
+
+`Datetime<S>` supports inclusive `min:` and `max:` constraints. Bounds are
+compile-time constants and must have exactly the constrained time scale:
+
+```graphcal
+param event: Datetime<TT>(
+    min: epoch<TT>("2025-01-01T00:00:00"),
+    max: epoch<TT>("2025-12-31T23:59:59"),
+) = epoch<TT>("2025-06-01T12:00:00");
+```
+
+Cross-scale bounds require an explicit conversion such as
+`to_tt(datetime("...Z"))`. Constraints apply element-wise to indexed datetime
+values and to constrained algebraic payload fields. See
+[Type System — Domain Constraints](type-system.md#domain-constraints).
+
 #### Timezone Display
 
 The `->` operator can display a datetime in a specific timezone without changing the underlying value:

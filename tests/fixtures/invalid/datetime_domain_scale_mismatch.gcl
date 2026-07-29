@@ -1,0 +1,4 @@
+// Datetime bounds must have exactly the constrained time scale.
+param event: Datetime<TT>(
+    min: datetime("2024-01-01T00:00:00Z"),
+) = epoch<TT>("2024-06-01T00:00:00");

@@ -1,0 +1,16 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+domain constraint on `event`: min (2025-01-01T00:00:00 TT) exceeds max (2024-01-01T00:00:00 TT)
+    Diagnostic severity: error
+Begin snippet for datetime_domain_min_exceeds_max.gcl starting at line 2, column 1
+
+snippet line 2: param event: Datetime<TT>(
+snippet line 3:     min: epoch<TT>("2025-01-01T00:00:00"),
+    label starting at line 3, column 5: min > max
+snippet line 4:     max: epoch<TT>("2024-01-01T00:00:00"),
+    label ending at line 4, column 41: min > max
+snippet line 5: ) = epoch<TT>("2024-06-01T00:00:00");
+diagnostic help: the min bound must be less than or equal to the max bound
+diagnostic code: graphcal::C003

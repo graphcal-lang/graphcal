@@ -690,6 +690,51 @@ fn error_domain_invalid_key() {
     insta::assert_snapshot!(rendered);
 }
 
+#[test]
+fn error_datetime_domain_scale_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_domain_scale_mismatch.gcl");
+    let rendered = render_error(source, "datetime_domain_scale_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_min_exceeds_max() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_domain_min_exceeds_max.gcl");
+    let rendered = render_error(source, "datetime_domain_min_exceeds_max.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_const_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/datetime_domain_const_violation.gcl");
+    let rendered = render_error(source, "datetime_domain_const_violation.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_runtime_bound() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_domain_runtime_bound.gcl");
+    let rendered = render_error(source, "datetime_domain_runtime_bound.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_domain_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/datetime_domain_violation.gcl");
+    let rendered = render_node_error(source, "datetime_domain_violation.gcl", "event");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_domain_bound_type_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/int_domain_bound_type_mismatch.gcl");
+    let rendered = render_error(source, "int_domain_bound_type_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 // --- Struct/union member field domain constraint errors (#450 Pos 1+2) ---
 
 #[test]

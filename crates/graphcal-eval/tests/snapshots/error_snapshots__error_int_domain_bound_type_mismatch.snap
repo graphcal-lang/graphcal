@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+domain bound type mismatch on Int `count`: min bound has type Dimensionless
+    Diagnostic severity: error
+Begin snippet for int_domain_bound_type_mismatch.gcl starting at line 1, column 1
+
+snippet line 1: // Int domain bounds must remain exactly representable as Int.
+snippet line 2: param count: Int(min: 0.0, max: 10.0) = 5;
+    label at line 2, columns 18 to 25: Int bound must have type Int
+diagnostic help: Int domain bounds must be Int so their full range is preserved exactly
+diagnostic code: graphcal::C005

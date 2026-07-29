@@ -750,7 +750,7 @@ DagTIR
   source_order
   assert_names, assumes_map, expected_fail
   resolved_decl_types
-  domain_constraints
+  semantic.domain_bounds  // checked, unevaluated HIR bound expressions
   imported_values
   imported_decl_types
   imported_value_sources
@@ -784,8 +784,11 @@ ExecPlan
 ```
 
 It contains no parser or IR registry-building work; it is ready for evaluation.
-`RuntimeDeclKey` lives in `graphcal-eval/src/decl_key.rs` and keeps runtime
-maps keyed by canonical declaration identity.
+`ResolvedDomainConstraint` lives in `graphcal-eval/src/domain_check.rs` and has
+separate quantity (`f64`), integer (`i64`), and same-scale datetime instant
+representations, so constraint families cannot mix after resolution.
+`RuntimeDeclKey` lives in `graphcal-eval/src/decl_key.rs` and keeps runtime maps
+keyed by canonical declaration identity.
 
 ### 3.9 Runtime Values
 

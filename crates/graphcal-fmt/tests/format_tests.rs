@@ -165,6 +165,17 @@ fn epoch_static_time_scale_argument_round_trips() {
 }
 
 #[test]
+fn datetime_domain_constraints_round_trip() {
+    let source = "param event:Datetime<TT>(min:epoch<TT>(\"2024-01-01T00:00:00\"),max:epoch<TT>(\"2024-12-31T23:59:59\"))=epoch<TT>(\"2024-06-01T00:00:00\");\n";
+    let formatted = format_source(source).expect("datetime domain should format");
+    assert!(formatted.contains("Datetime<TT>("));
+    assert!(formatted.contains("min: epoch<TT>(\"2024-01-01T00:00:00\")"));
+    assert!(formatted.contains("max: epoch<TT>("));
+    assert!(formatted.contains("\"2024-12-31T23:59:59\""));
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn explicit_finite_index_generic_argument_round_trips() {
     let source = "param value: IndexedVector<Fin(N+1),Dimensionless>;\n";
     let formatted = format_source(source).expect("Fin generic argument should format");

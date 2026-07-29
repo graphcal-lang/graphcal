@@ -1,0 +1,17 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+domain violation: `EVENT` value 2025-01-01T00:00:00 UTC is above maximum (2024-12-31T23:59:59 UTC)
+    Diagnostic severity: error
+Begin snippet for datetime_domain_const_violation.gcl starting at line 1, column 1
+
+snippet line 1: // Const datetime domain violations are rejected during compilation.
+snippet line 2: const node EVENT: Datetime(
+    label starting at line 2, column 1: value out of declared domain
+snippet line 3:     min: datetime("2024-01-01T00:00:00Z"),
+snippet line 4:     max: datetime("2024-12-31T23:59:59Z"),
+snippet line 5: ) = datetime("2025-01-01T00:00:00Z");
+    label ending at line 5, column 37: value out of declared domain
+diagnostic help: the value must satisfy the domain constraints declared on the type
+diagnostic code: graphcal::C001

@@ -1,0 +1,18 @@
+// Datetime domain constraints use inclusive, same-scale compile-time bounds.
+const node TT_START: Datetime<TT> = epoch<TT>("2024-01-01T00:00:00");
+const node TT_END: Datetime<TT> = epoch<TT>("2024-12-31T23:59:59");
+
+param civil_event: Datetime(min: datetime("2024-01-01T00:00:00Z"), max: datetime(
+    "2024-12-31T23:59:59Z"
+)) = datetime("2024-06-01T12:00:00Z");
+
+pub(bind) index Milestone = { Start, End };
+param scientific_events: Datetime<TT>(min: @TT_START, max: @TT_END)[Milestone] = {
+    Milestone.Start: @TT_START,
+    Milestone.End: @TT_END,
+};
+
+type Observation {
+    Observation(at: Datetime<TT>(min: @TT_START, max: @TT_END)),
+}
+node observation: Observation = Observation(at: epoch<TT>("2024-07-01T00:00:00"));
