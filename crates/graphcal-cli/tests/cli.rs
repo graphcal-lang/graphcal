@@ -2818,6 +2818,32 @@ fn eval_datetime_timezone() {
 }
 
 #[test]
+fn check_datetime_rejects_dst_gaps_and_folds() {
+    let cases = [
+        (
+            "invalid/datetime_dst_gap.gcl",
+            "graphcal::D024",
+            "does not exist",
+        ),
+        (
+            "invalid/datetime_dst_fold.gcl",
+            "graphcal::D025",
+            "occurs twice",
+        ),
+    ];
+    for (path, code, message) in cases {
+        let output = graphcal_bin()
+            .args(["check", &fixture(path)])
+            .output()
+            .expect("failed to run graphcal");
+        assert!(!output.status.success(), "{path} should fail checking");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(code), "missing {code}: {stderr}");
+        assert!(stderr.contains(message), "missing `{message}`: {stderr}");
+    }
+}
+
+#[test]
 fn eval_datetime_timezone_non_datetime_error() {
     let output = graphcal_bin()
         .args([

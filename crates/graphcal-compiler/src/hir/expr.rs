@@ -27,6 +27,7 @@ use crate::builtin::{BuiltinConst, BuiltinFnName};
 use crate::dag_id::DagId;
 use crate::datetime_literal::{
     CivilDateTimeLiteral, DatetimeLiteralExpectation, OffsetDateTimeLiteral,
+    ResolveZonedDateTimeLiteralError, ZonedDateTimeLiteral,
 };
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
@@ -140,6 +141,33 @@ pub enum ExprLowerError {
     #[error("invalid datetime literal: {reason}")]
     InvalidDatetimeLiteral {
         expectation: DatetimeLiteralExpectation,
+        reason: String,
+        span: Span,
+    },
+    /// A timezone transition skips the requested local civil datetime.
+    #[error("local civil datetime `{datetime}` does not exist in timezone `{time_zone}`")]
+    NonexistentCivilDateTime {
+        datetime: CivilDateTimeLiteral,
+        time_zone: IanaTimeZoneId,
+        before: jiff::tz::Offset,
+        after: jiff::tz::Offset,
+        datetime_span: Span,
+        time_zone_span: Span,
+    },
+    /// A timezone transition repeats the requested local civil datetime.
+    #[error("local civil datetime `{datetime}` occurs twice in timezone `{time_zone}`")]
+    RepeatedCivilDateTime {
+        datetime: CivilDateTimeLiteral,
+        time_zone: IanaTimeZoneId,
+        before: jiff::tz::Offset,
+        after: jiff::tz::Offset,
+        datetime_span: Span,
+        time_zone_span: Span,
+    },
+    /// A validated timezone disappeared from the explicit registry.
+    #[error("validated timezone `{time_zone}` could not be loaded: {reason}")]
+    TimeZoneRegistryInvariant {
+        time_zone: IanaTimeZoneId,
         reason: String,
         span: Span,
     },
@@ -490,6 +518,8 @@ pub enum ExprKind {
     OffsetDateTimeLiteral(OffsetDateTimeLiteral),
     /// An offset/scale-free civil coordinate parsed during HIR lowering.
     CivilDateTimeLiteral(CivilDateTimeLiteral),
+    /// A civil coordinate and timezone resolved to one unambiguous instant.
+    ZonedDateTimeLiteral(ZonedDateTimeLiteral),
     /// An IANA timezone literal validated and canonicalized during HIR lowering.
     IanaTimeZoneLiteral(IanaTimeZoneId),
     TypeSystemRef(Spanned<TypeSystemRef>),
@@ -614,6 +644,7 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
         | ExprKind::StringLiteral(_)
         | ExprKind::OffsetDateTimeLiteral(_)
         | ExprKind::CivilDateTimeLiteral(_)
+        | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::LocalRef(_)
@@ -812,6 +843,7 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
         | ExprKind::StringLiteral(_)
         | ExprKind::OffsetDateTimeLiteral(_)
         | ExprKind::CivilDateTimeLiteral(_)
+        | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
@@ -1668,47 +1700,133 @@ impl<'a> ExprLowerer<'a> {
         function_ref: &FunctionRef,
         args: &[ast::Expr],
     ) -> Result<Vec<Expr>, ExprLowerError> {
-        args.iter()
-            .enumerate()
-            .map(
-                |(index, arg)| match (function_ref, index, args.len(), &arg.kind) {
-                    (
-                        FunctionRef::Builtin(BuiltinFnName::Datetime),
-                        0,
-                        1,
-                        ast::ExprKind::StringLiteral(source),
-                    ) => Self::lower_offset_datetime_literal(source, arg.span),
-                    (
-                        FunctionRef::Builtin(BuiltinFnName::Datetime),
-                        0,
-                        2,
-                        ast::ExprKind::StringLiteral(source),
-                    ) => Self::lower_civil_datetime_literal(
-                        source,
-                        DatetimeLiteralExpectation::ZonedCivilDateTime,
-                        arg.span,
-                    ),
-                    (
-                        FunctionRef::Builtin(BuiltinFnName::Datetime),
-                        1,
-                        2,
-                        ast::ExprKind::StringLiteral(timezone),
-                    ) => self
-                        .lower_iana_time_zone_id(timezone, arg.span)
-                        .map(|timezone| {
-                            Expr::new(ExprKind::IanaTimeZoneLiteral(timezone), arg.span)
-                        }),
-                    (FunctionRef::Epoch { scale }, 0, 1, ast::ExprKind::StringLiteral(source)) => {
-                        Self::lower_civil_datetime_literal(
+        match (function_ref, args) {
+            (FunctionRef::Builtin(BuiltinFnName::Datetime), [datetime, time_zone]) => {
+                self.lower_zoned_datetime_args(datetime, time_zone)
+            }
+            _ => args
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, arg)| match (function_ref, index, args.len(), &arg.kind) {
+                        (
+                            FunctionRef::Builtin(BuiltinFnName::Datetime),
+                            0,
+                            1,
+                            ast::ExprKind::StringLiteral(source),
+                        ) => Self::lower_offset_datetime_literal(source, arg.span),
+                        (
+                            FunctionRef::Epoch { scale },
+                            0,
+                            1,
+                            ast::ExprKind::StringLiteral(source),
+                        ) => Self::lower_civil_datetime_literal(
                             source,
                             DatetimeLiteralExpectation::Epoch(scale.value),
                             arg.span,
+                        ),
+                        _ => Ok(self.lower_expr(arg)),
+                    },
+                )
+                .collect(),
+        }
+    }
+
+    fn lower_zoned_datetime_args(
+        &mut self,
+        datetime_arg: &ast::Expr,
+        time_zone_arg: &ast::Expr,
+    ) -> Result<Vec<Expr>, ExprLowerError> {
+        let datetime = match &datetime_arg.kind {
+            ast::ExprKind::StringLiteral(source) => Self::lower_civil_datetime_literal(
+                source,
+                DatetimeLiteralExpectation::ZonedCivilDateTime,
+                datetime_arg.span,
+            )?,
+            _ => self.lower_expr(datetime_arg),
+        };
+        let time_zone = match &time_zone_arg.kind {
+            ast::ExprKind::StringLiteral(source) => self
+                .lower_iana_time_zone_id(source, time_zone_arg.span)
+                .map(|time_zone| {
+                    Expr::new(ExprKind::IanaTimeZoneLiteral(time_zone), time_zone_arg.span)
+                })?,
+            _ => self.lower_expr(time_zone_arg),
+        };
+
+        let resolution_inputs = match (&datetime.kind, &time_zone.kind) {
+            (
+                ExprKind::CivilDateTimeLiteral(datetime),
+                ExprKind::IanaTimeZoneLiteral(time_zone),
+            ) => Some((*datetime, time_zone.clone())),
+            _ => None,
+        };
+        let datetime = match resolution_inputs {
+            Some((datetime, time_zone_id)) => {
+                ZonedDateTimeLiteral::resolve(datetime, time_zone_id, self.ctx.time_zones)
+                    .map(|resolved| {
+                        Expr::new(ExprKind::ZonedDateTimeLiteral(resolved), datetime_arg.span)
+                    })
+                    .map_err(|error| {
+                        Self::lower_zoned_datetime_error(
+                            error,
+                            datetime_arg.span,
+                            time_zone_arg.span,
                         )
-                    }
-                    _ => Ok(self.lower_expr(arg)),
-                },
-            )
-            .collect()
+                    })?
+            }
+            None => datetime,
+        };
+        Ok(vec![datetime, time_zone])
+    }
+
+    fn lower_zoned_datetime_error(
+        error: ResolveZonedDateTimeLiteralError,
+        datetime_span: Span,
+        time_zone_span: Span,
+    ) -> ExprLowerError {
+        match error {
+            ResolveZonedDateTimeLiteralError::Nonexistent {
+                datetime,
+                time_zone,
+                before,
+                after,
+            } => ExprLowerError::NonexistentCivilDateTime {
+                datetime,
+                time_zone,
+                before,
+                after,
+                datetime_span,
+                time_zone_span,
+            },
+            ResolveZonedDateTimeLiteralError::Repeated {
+                datetime,
+                time_zone,
+                before,
+                after,
+            } => ExprLowerError::RepeatedCivilDateTime {
+                datetime,
+                time_zone,
+                before,
+                after,
+                datetime_span,
+                time_zone_span,
+            },
+            ResolveZonedDateTimeLiteralError::TimeZoneRegistryInvariant { time_zone, source } => {
+                ExprLowerError::TimeZoneRegistryInvariant {
+                    time_zone,
+                    reason: source.to_string(),
+                    span: time_zone_span,
+                }
+            }
+            error @ ResolveZonedDateTimeLiteralError::OutOfRange { .. } => {
+                ExprLowerError::InvalidDatetimeLiteral {
+                    expectation: DatetimeLiteralExpectation::ZonedCivilDateTime,
+                    reason: error.to_string(),
+                    span: datetime_span,
+                }
+            }
+        }
     }
 
     fn lower_offset_datetime_literal(source: &str, span: Span) -> Result<Expr, ExprLowerError> {
@@ -2302,6 +2420,47 @@ mod tests {
         };
         assert_eq!(constructor.owner(), &lib_id);
         assert_eq!(constructor.as_str(), "Impulsive");
+    }
+
+    #[test]
+    fn lowers_unambiguous_timezone_datetime_to_resolved_hir() {
+        let owner = DagId::root_in_package("test", "main");
+        let file = desugared_source(
+            "node t: Datetime = datetime(\"2024-07-15T17:30:00\", \"America/New_York\");",
+        );
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(owner.clone(), &file.declarations)
+            .unwrap();
+        let scope = GenericScope::new();
+
+        let expr = lower_expr(
+            node_value(&file, "t"),
+            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        )
+        .unwrap();
+
+        let ExprKind::FnCall { args, .. } = expr.kind else {
+            panic!("expected function call, got {expr:?}");
+        };
+        let [
+            Expr {
+                kind: ExprKind::ZonedDateTimeLiteral(datetime),
+                ..
+            },
+            Expr {
+                kind: ExprKind::IanaTimeZoneLiteral(time_zone),
+                ..
+            },
+        ] = args.as_slice()
+        else {
+            panic!("expected resolved datetime and timezone arguments, got {args:?}");
+        };
+        assert_eq!(datetime.time_zone(), time_zone);
+        assert_eq!(
+            datetime.timestamp(),
+            "2024-07-15T21:30:00Z".parse::<jiff::Timestamp>().unwrap()
+        );
     }
 
     #[test]

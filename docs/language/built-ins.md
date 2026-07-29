@@ -107,8 +107,12 @@ Each constructor has exactly one interpretation source:
 
 Datetime literals are parsed during checking. Invalid calendar dates and
 missing or contradictory interpretation sources are compile errors, not
-runtime failures. The obsolete positional form `epoch("...", TT)` is rejected;
-write `epoch<TT>("...")`.
+runtime failures. Local civil times are also resolved against Graphcal's
+bundled tzdb during checking: nonexistent times in DST gaps and repeated times
+in DST folds are rejected rather than shifted or selected silently. To choose a
+specific instant, use one-argument `datetime` with an explicit numeric offset.
+The obsolete positional form `epoch("...", TT)` is rejected; write
+`epoch<TT>("...")`.
 
 #### Time Scale Conversions
 

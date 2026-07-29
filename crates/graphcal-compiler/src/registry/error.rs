@@ -4,6 +4,8 @@ use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::builtin::BuiltinFnName;
+use crate::datetime_literal::CivilDateTimeLiteral;
+use crate::registry::time_zone::IanaTimeZoneId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::FnName;
@@ -1594,6 +1596,46 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("local civil datetime `{datetime}` does not exist in timezone `{time_zone}`")]
+    #[diagnostic(
+        code(graphcal::D024),
+        help(
+            "the timezone offset jumps from {before} to {after} across this gap; choose an existing local time or use one-argument `datetime` with an explicit offset"
+        )
+    )]
+    NonexistentCivilDateTime {
+        datetime: CivilDateTimeLiteral,
+        time_zone: IanaTimeZoneId,
+        before: jiff::tz::Offset,
+        after: jiff::tz::Offset,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this local time is skipped")]
+        datetime_span: SourceSpan,
+        #[label("gap occurs in this timezone")]
+        time_zone_span: SourceSpan,
+    },
+
+    #[error("local civil datetime `{datetime}` occurs twice in timezone `{time_zone}`")]
+    #[diagnostic(
+        code(graphcal::D025),
+        help(
+            "the repeated time can use offset {before} or {after}; use one-argument `datetime` with an explicit offset to select an instant"
+        )
+    )]
+    RepeatedCivilDateTime {
+        datetime: CivilDateTimeLiteral,
+        time_zone: IanaTimeZoneId,
+        before: jiff::tz::Offset,
+        after: jiff::tz::Offset,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this local time is repeated")]
+        datetime_span: SourceSpan,
+        #[label("fold occurs in this timezone")]
+        time_zone_span: SourceSpan,
+    },
+
     #[error("domain violation: `{name}` value {value} is {violation}")]
     #[diagnostic(
         code(graphcal::C001),
@@ -2044,6 +2086,8 @@ impl GraphcalError {
             | Self::EpochTimeScaleArgumentCount { src, .. }
             | Self::InvalidEpochTimeScaleArgument { src, .. }
             | Self::UnsupportedEpochTimeScale { src, .. }
+            | Self::NonexistentCivilDateTime { src, .. }
+            | Self::RepeatedCivilDateTime { src, .. }
             | Self::DomainViolation { src, .. }
             | Self::DomainDimensionMismatch { src, .. }
             | Self::DomainMinExceedsMax { src, .. }

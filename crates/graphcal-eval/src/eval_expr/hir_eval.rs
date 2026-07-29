@@ -71,6 +71,7 @@ fn eval_hir_expr_inner(
         hir::ExprKind::StringLiteral(_)
         | hir::ExprKind::OffsetDateTimeLiteral(_)
         | hir::ExprKind::CivilDateTimeLiteral(_)
+        | hir::ExprKind::ZonedDateTimeLiteral(_)
         | hir::ExprKind::IanaTimeZoneLiteral(_) => Err(ctx.eval_error(
             "unexpected contextual literal in evaluation context",
             expr.span,
@@ -472,14 +473,9 @@ fn eval_hir_fn_call(
                 epoch.to_time_scale(scale.to_hifitime()),
             ))
         }
-        EvalBuiltinRule::DatetimeConstructor(kind) => eval_hir_datetime_constructor(
-            kind,
-            epoch_scale,
-            expr.span,
-            args,
-            ctx.src,
-            &ctx.registry.time_zones,
-        ),
+        EvalBuiltinRule::DatetimeConstructor(kind) => {
+            eval_hir_datetime_constructor(kind, epoch_scale, expr.span, args, ctx.src)
+        }
         EvalBuiltinRule::DatetimeExtract(kind) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
@@ -657,7 +653,6 @@ fn eval_hir_datetime_constructor(
     span: Span,
     args: &[hir::Expr],
     src: &NamedSource<Arc<String>>,
-    time_zones: &graphcal_compiler::registry::time_zone::TimeZoneRegistry,
 ) -> Result<RuntimeValue, GraphcalError> {
     match kind {
         DatetimeConstructorFn::Datetime => {
@@ -680,12 +675,12 @@ fn eval_hir_datetime_constructor(
                             span: arg.span.into(),
                         });
                     };
-                    Ok(super::functions::datetime_from_offset(*datetime))
+                    super::functions::datetime_from_offset(*datetime)
                 }
                 [datetime_arg, timezone_arg] => {
-                    let hir::ExprKind::CivilDateTimeLiteral(datetime) = &datetime_arg.kind else {
+                    let hir::ExprKind::ZonedDateTimeLiteral(datetime) = &datetime_arg.kind else {
                         return Err(GraphcalError::InternalError {
-                            message: "datetime() received an unparsed civil literal".to_string(),
+                            message: "datetime() received an unresolved zoned literal".to_string(),
                             src: src.clone(),
                             span: datetime_arg.span.into(),
                         });
@@ -699,7 +694,15 @@ fn eval_hir_datetime_constructor(
                             span: timezone_arg.span.into(),
                         });
                     };
-                    super::functions::datetime_with_timezone(*datetime, time_zone_id, time_zones)
+                    if datetime.time_zone() != time_zone_id {
+                        return Err(GraphcalError::InternalError {
+                            message: "resolved datetime timezone does not match its argument"
+                                .to_string(),
+                            src: src.clone(),
+                            span: timezone_arg.span.into(),
+                        });
+                    }
+                    super::functions::datetime_from_zoned(datetime)
                 }
                 _ => {
                     return Err(GraphcalError::InternalError {
@@ -708,12 +711,7 @@ fn eval_hir_datetime_constructor(
                         span: span.into(),
                     });
                 }
-            }
-            .map_err(|error| GraphcalError::InternalError {
-                message: format!("validated datetime literal failed evaluation: {error}"),
-                src: src.clone(),
-                span: args[0].span.into(),
-            })?;
+            };
             Ok(RuntimeValue::Datetime(epoch))
         }
         DatetimeConstructorFn::Epoch => {

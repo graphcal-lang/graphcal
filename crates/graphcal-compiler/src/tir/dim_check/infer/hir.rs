@@ -130,6 +130,7 @@ fn infer_hir_type_inner(
         hir::ExprKind::StringLiteral(_)
         | hir::ExprKind::OffsetDateTimeLiteral(_)
         | hir::ExprKind::CivilDateTimeLiteral(_)
+        | hir::ExprKind::ZonedDateTimeLiteral(_)
         | hir::ExprKind::IanaTimeZoneLiteral(_) => {
             return Err(GraphcalError::DimensionMismatch {
                 expected: "a numeric or boolean expression".to_string(),
@@ -1192,7 +1193,7 @@ fn infer_hir_datetime_constructor(
             }
             let first_is_valid = match args.len() {
                 1 => matches!(args[0].kind, hir::ExprKind::OffsetDateTimeLiteral(_)),
-                2 => matches!(args[0].kind, hir::ExprKind::CivilDateTimeLiteral(_)),
+                2 => matches!(args[0].kind, hir::ExprKind::ZonedDateTimeLiteral(_)),
                 _ => false,
             };
             if !first_is_valid {
@@ -1231,6 +1232,27 @@ fn infer_hir_datetime_constructor(
                     help: "datetime() second argument must be an IANA timezone literal".to_string(),
                     src: src.clone(),
                     span: args[1].span.into(),
+                });
+            }
+            let resolved_timezone_matches_argument = match args {
+                [
+                    hir::Expr {
+                        kind: hir::ExprKind::ZonedDateTimeLiteral(datetime),
+                        ..
+                    },
+                    hir::Expr {
+                        kind: hir::ExprKind::IanaTimeZoneLiteral(time_zone),
+                        ..
+                    },
+                ] => datetime.time_zone() == time_zone,
+                _ => true,
+            };
+            if !resolved_timezone_matches_argument {
+                return Err(GraphcalError::InternalError {
+                    message: "resolved datetime timezone does not match its source argument"
+                        .to_string(),
+                    src: src.clone(),
+                    span: span.into(),
                 });
             }
             Ok(InferredType::Datetime(

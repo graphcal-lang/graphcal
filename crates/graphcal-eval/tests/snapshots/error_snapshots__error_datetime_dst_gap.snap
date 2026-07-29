@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+local civil datetime `2024-03-10T02:30:00` does not exist in timezone `America/New_York`
+    Diagnostic severity: error
+Begin snippet for datetime_dst_gap.gcl starting at line 1, column 1
+
+snippet line 1: // Error: New York skips 02:30 when daylight saving time starts
+snippet line 2: param gap: Datetime = datetime("2024-03-10T02:30:00", "America/New_York");
+    label at line 2, columns 32 to 52: this local time is skipped
+    label at line 2, columns 55 to 72: gap occurs in this timezone
+diagnostic help: the timezone offset jumps from -05 to -04 across this gap; choose an existing local time or use one-argument `datetime` with an explicit offset
+diagnostic code: graphcal::D024

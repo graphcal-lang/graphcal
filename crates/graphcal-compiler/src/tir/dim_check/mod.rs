@@ -585,6 +585,7 @@ fn check_ineffective_conversions_inner(
         | ExprKind::StringLiteral(_)
         | ExprKind::OffsetDateTimeLiteral(_)
         | ExprKind::CivilDateTimeLiteral(_)
+        | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
         | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)

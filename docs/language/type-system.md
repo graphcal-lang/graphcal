@@ -206,6 +206,10 @@ separate. `datetime("...")` requires an explicit `Z` or numeric UTC offset;
 and `epoch<S>("...")` accepts only offset/zone/scale-free calendar coordinates
 whose interpretation comes from static `S`. All literal forms are parsed while
 the program is checked, so their static and runtime scales cannot disagree.
+Timezone-based civil coordinates must identify exactly one instant in the
+bundled tzdb: nonexistent DST-gap times and repeated DST-fold times are check
+errors. Use one-argument `datetime` with an explicit numeric offset when the
+source must select a particular instant.
 
 Named civil timezones use quoted contextual `TimezoneLiteral`s. A timezone
 literal is not a first-class `String` value: checking validates and

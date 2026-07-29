@@ -113,6 +113,53 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::NonexistentCivilDateTime {
+            datetime,
+            time_zone,
+            before,
+            after,
+            datetime_span,
+            time_zone_span,
+        } => {
+            return GraphcalError::NonexistentCivilDateTime {
+                datetime: *datetime,
+                time_zone: time_zone.clone(),
+                before: *before,
+                after: *after,
+                src: src.clone(),
+                datetime_span: (*datetime_span).into(),
+                time_zone_span: (*time_zone_span).into(),
+            };
+        }
+        hir::ExprLowerError::RepeatedCivilDateTime {
+            datetime,
+            time_zone,
+            before,
+            after,
+            datetime_span,
+            time_zone_span,
+        } => {
+            return GraphcalError::RepeatedCivilDateTime {
+                datetime: *datetime,
+                time_zone: time_zone.clone(),
+                before: *before,
+                after: *after,
+                src: src.clone(),
+                datetime_span: (*datetime_span).into(),
+                time_zone_span: (*time_zone_span).into(),
+            };
+        }
+        hir::ExprLowerError::TimeZoneRegistryInvariant {
+            time_zone,
+            reason,
+            span,
+        } => {
+            return GraphcalError::InternalError {
+                message: format!("validated timezone `{time_zone}` could not be loaded: {reason}"),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::EpochTimeScaleArgumentCount { got, span } => {
             return GraphcalError::EpochTimeScaleArgumentCount {
                 got: *got,
@@ -207,7 +254,10 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::EpochTimeScaleArgumentCount { span, .. }
         | hir::ExprLowerError::InvalidEpochTimeScaleArgument { span }
         | hir::ExprLowerError::UnsupportedEpochTimeScale { span, .. }
-        | hir::ExprLowerError::InvalidDatetimeLiteral { span, .. } => *span,
+        | hir::ExprLowerError::InvalidDatetimeLiteral { span, .. }
+        | hir::ExprLowerError::TimeZoneRegistryInvariant { span, .. } => *span,
+        hir::ExprLowerError::NonexistentCivilDateTime { datetime_span, .. }
+        | hir::ExprLowerError::RepeatedCivilDateTime { datetime_span, .. } => *datetime_span,
         hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
