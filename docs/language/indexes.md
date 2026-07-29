@@ -533,7 +533,7 @@ pub(bind) index Phase;
 This declares a named index `Phase` with no variants. A file importing this library must bind it to a concrete named index.
 
 Required indexes form the library's bindable interface and must carry
-`pub(bind)` (see [Visibility and Bindability](multi-file.md#visibility-and-bindability)).
+`pub(bind)` (see [Visibility, Bindability, and Input Ports](multi-file.md#visibility-bindability-and-input-ports)).
 Omitting the annotation — or writing plain `pub` — is error `V002`.
 
 ### Required Coordinate Index

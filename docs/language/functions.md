@@ -125,8 +125,9 @@ node distances: Length[Region] = for r: Region {
 The thing immediately after `@` may be a DAG in scope by its leaf name or a
 module-qualified DAG path such as `@module.dag(args).out`. The projection after
 the call is still mandatory; `@dag(args)` and `@module.dag(args)` are rejected
-because a DAG instance without an output projection is not a node.
-The projected output must be a public node.
+because a DAG instance without an output projection is not a graph value. The
+projection may name an explicitly exported node or a param input port. A param
+projection returns its effective bound/default value.
 
 ## Import vs Include
 
@@ -136,7 +137,8 @@ The `import` and `include` keywords serve different purposes:
   `type`, `index`, `const node`, `dag`, `assert`. Importing runtime items
   (`param`, non-`const` `node`) is an error (M020).
 - **`include`** instantiates a DAG, optionally with parameter bindings,
-  and exposes its outputs as runtime nodes in the enclosing graph.
+  and exposes selected values in the enclosing graph. Selectable values include
+  explicit node exports and effective param values.
 
 ```
 // constants.gcl

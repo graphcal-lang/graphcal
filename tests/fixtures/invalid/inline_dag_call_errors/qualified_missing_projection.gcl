@@ -1,6 +1,6 @@
 // Error fixture: qualified `@module.dag(args)` with no `.<out>` projection
-// is rejected for the same reason as the bare form — `@` requires a *node*,
-// and an instantiated DAG without projection is not a node. The reason has
+// is rejected for the same reason as the bare form — `@` requires a graph
+// value, and an instantiated DAG without projection is not one. The reason has
 // nothing to do with how many identifiers appear after `@`.
 import lib;
 

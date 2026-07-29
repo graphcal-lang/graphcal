@@ -3514,6 +3514,27 @@ fn inline_dag_basic_selective() {
 }
 
 #[test]
+fn inline_dag_include_selects_effective_param_value() {
+    let source = "\
+dag default_dag {
+    param x: Dimensionless = 1.0;
+}
+
+dag bound_dag {
+    param x: Dimensionless = 1.0;
+}
+
+include default_dag().{ x as default_x };
+include bound_dag(x: 2.0).{ x as bound_x };
+node sum: Dimensionless = @default_x + @bound_x;
+";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "default_x") - 1.0).abs() < 1e-10);
+    assert!((find_value(&result, "bound_x") - 2.0).abs() < 1e-10);
+    assert!((find_value(&result, "sum") - 3.0).abs() < 1e-10);
+}
+
+#[test]
 #[expect(
     clippy::literal_string_with_formatting_args,
     reason = "Graphcal source uses `{result}` as a brace-list selector, not a format arg"
@@ -3582,6 +3603,21 @@ node doubled: Length = @scale(factor: 2.0, v: @src).result;
 }
 
 #[test]
+fn eval_inline_dag_call_projects_effective_param_value() {
+    let source = "\
+dag config {
+    param factor: Dimensionless = 2.0;
+}
+
+node default_factor: Dimensionless = @config().factor;
+node bound_factor: Dimensionless = @config(factor: 3.0).factor;
+";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "default_factor") - 2.0).abs() < 1e-10);
+    assert!((find_value(&result, "bound_factor") - 3.0).abs() < 1e-10);
+}
+
+#[test]
 fn eval_inline_dag_call_chains_through_body_nodes() {
     // An inline call where the dag body has an intermediate node; tests that
     // earlier nodes are evaluated and visible to later ones.
@@ -3631,6 +3667,8 @@ fn eval_qualified_inline_dag_call_imports_parent_const_with_alias() {
         (earth_half - 3_185_500.0).abs() < 1e-10,
         "expected 3185500.0, got {earth_half}"
     );
+    assert!((find_value(&result, "default_factor") - 1.0).abs() < 1e-10);
+    assert!((find_value(&result, "bound_factor") - 0.5).abs() < 1e-10);
 }
 
 #[test]

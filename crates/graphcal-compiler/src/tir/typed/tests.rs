@@ -417,7 +417,7 @@ fn compile_inline_dag_bodies_test(
         let dag_id = parent_dag_id.child(name.as_str());
         let mut compiled_dag =
             type_resolve_single_with_modules(dag_body_ir, &dag_id, src, &resolver, &module_types)?;
-        compiled_dag.populate_pub_nodes(&body);
+        compiled_dag.populate_projectable_outputs(&body);
         tir.dags.insert(dag_id, compiled_dag);
     }
     Ok(())

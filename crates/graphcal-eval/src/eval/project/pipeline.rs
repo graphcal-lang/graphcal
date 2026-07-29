@@ -304,7 +304,7 @@ fn store_compiled_file_artifact(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    pub_names: HashSet<DeclName>,
+    external_surface: ExternalDeclSurface,
     evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) -> Result<(), CompileError> {
     let const_values = crate::exec_plan::eval_consts_from_tir(&compiled.tir, file_src)?;
@@ -322,7 +322,7 @@ fn store_compiled_file_artifact(
             declared_types: compiled.declared_types,
             assertions: HashMap::new(),
             registry: compiled.tir.registry,
-            pub_names,
+            external_surface,
             resolved_dynamic_unit_scales: HashMap::new(),
             dag_tirs,
             extern_functions,
@@ -336,7 +336,7 @@ fn evaluate_and_store_file(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    pub_names: HashSet<DeclName>,
+    external_surface: ExternalDeclSurface,
     evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<(), CompileError> {
@@ -392,7 +392,7 @@ fn evaluate_and_store_file(
                 .map(|(name, result, span)| (name, (result, span)))
                 .collect(),
             registry: compiled.tir.registry,
-            pub_names,
+            external_surface,
             resolved_dynamic_unit_scales,
             dag_tirs,
             extern_functions,
@@ -454,12 +454,12 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
 
         if !is_root && is_library {
             let file_src = &project.files[file_dag_id].named_source;
-            let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
+            let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
             store_compiled_file_artifact(
                 compiled,
                 file_dag_id,
                 file_src,
-                pub_names,
+                external_surface,
                 &mut evaluated_files,
             )?;
             continue;
@@ -587,12 +587,12 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
         }
 
         let file_src = &project.files[file_dag_id].named_source;
-        let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
+        let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
         evaluate_and_store_file(
             compiled,
             file_dag_id,
             file_src,
-            pub_names,
+            external_surface,
             &mut evaluated_files,
             host_fns,
         )?;
@@ -844,24 +844,24 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
         // while still retaining compile-time artifacts for downstream imports.
         if tir_requires_runtime_inputs(&compiled.tir) {
             let file_src = &project.files[file_dag_id].named_source;
-            let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
+            let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
             store_compiled_file_artifact(
                 compiled,
                 file_dag_id,
                 file_src,
-                pub_names,
+                external_surface,
                 &mut evaluated_files,
             )?;
             continue;
         }
 
         let file_src = &project.files[file_dag_id].named_source;
-        let pub_names = extract_pub_names(&project.files[file_dag_id].ast);
+        let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
         evaluate_and_store_file(
             compiled,
             file_dag_id,
             file_src,
-            pub_names,
+            external_surface,
             &mut evaluated_files,
             host_fns,
         )?;

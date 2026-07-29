@@ -172,7 +172,7 @@ fn compile_inline_dag_bodies_test(
             &resolver,
             &module_types,
         )?;
-        compiled_dag.populate_pub_nodes(&body);
+        compiled_dag.populate_projectable_outputs(&body);
         tir.dags.insert(dag_id, compiled_dag);
     }
     Ok(())
@@ -1878,6 +1878,27 @@ fn inline_dag_call_basic_returns_output_type() {
     assert_eq!(
         types[&ScopedName::local("doubled")],
         DeclaredType::Quantity(length)
+    );
+}
+
+#[test]
+fn inline_dag_call_can_project_defaulted_or_bound_param() {
+    let source = "\
+dag config {
+    param factor: Dimensionless = 2.0;
+}
+
+node default_factor: Dimensionless = @config().factor;
+node bound_factor: Dimensionless = @config(factor: 3.0).factor;
+";
+    let types = check(source).unwrap();
+    assert_eq!(
+        types[&ScopedName::local("default_factor")],
+        DeclaredType::Quantity(Dimension::dimensionless())
+    );
+    assert_eq!(
+        types[&ScopedName::local("bound_factor")],
+        DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
 

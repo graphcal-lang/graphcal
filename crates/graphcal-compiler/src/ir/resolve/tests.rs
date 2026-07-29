@@ -496,9 +496,9 @@ fn resolve_unfold_init_self_edge_retained() {
 // --- Visibility tests ---
 
 #[test]
-fn resolve_required_param_is_implicitly_bindable() {
-    // Post-A5: `param` never carries `pub`; a bare required param is
-    // implicitly visible + bindable at the include site.
+fn resolve_required_param_is_an_annotation_free_input_port() {
+    // `param` never carries `pub`; the declaration kind directly creates a
+    // named input port, and omitting the default makes that port required.
     let source = r"
         param x: Dimensionless;
     ";
@@ -625,23 +625,37 @@ fn resolve_private_in_public_index_in_type() {
 }
 
 #[test]
-fn resolve_pub_names_collected() {
+fn resolve_external_surface_keeps_explicit_exports_and_input_ports_distinct() {
     let source = r"
         pub dim Speed = Length / Time;
         pub dim GravityAccel = Length / Time^2;
         pub const node g0: GravityAccel = 9.80665 m/s^2;
-        node speed: Speed = 10.0 m/s;
+        param input_speed: Speed = 10.0 m/s;
+        node speed: Speed = @input_speed;
     ";
     let resolved = parse_and_resolve(source).unwrap();
-    assert!(resolved.pub_names.contains("Speed"));
-    assert!(resolved.pub_names.contains("GravityAccel"));
-    assert!(resolved.pub_names.contains("g0"));
-    assert!(!resolved.pub_names.contains("speed"));
+    for name in ["Speed", "GravityAccel", "g0"] {
+        assert!(
+            resolved
+                .external_surface
+                .is_explicit_export(&DeclName::expect_valid(name))
+        );
+    }
+    let input = DeclName::expect_valid("input_speed");
+    assert!(resolved.external_surface.is_input_port(&input));
+    assert!(resolved.external_surface.is_externally_nameable(&input));
+    assert!(resolved.external_surface.can_select_output(&input));
+    assert!(!resolved.external_surface.is_explicit_export(&input));
+    assert!(
+        !resolved
+            .external_surface
+            .is_externally_nameable(&DeclName::expect_valid("speed"))
+    );
 }
 
 #[test]
 fn resolve_param_default_with_pub_bind_variant_literal_ok() {
-    // A10(a): `param` is implicitly bindable, so a variant literal of a
+    // A10(a): `param` is an input port, so a variant literal of a
     // `pub(bind)` index in a param default is allowed — V005 at the
     // include site will ensure the importer re-binds the param when it
     // rebinds the index.
@@ -734,8 +748,8 @@ fn resolve_node_with_plain_pub_variant_literal_ok() {
 
 #[test]
 fn resolve_param_with_private_dim_fires_v003() {
-    // `param` is implicitly visible (A5 §4.0), so a private dim in a
-    // param's signature is V003 (A9 case 1).
+    // A param signature is externally nameable as an input port, so a private
+    // dimension in that signature is V003 (A9 case 1).
     let source = r"
         dim Speed = Length / Time;
         param speed: Speed = 10.0 m/s;

@@ -28,6 +28,7 @@ use crate::registry::dimension_registry::DimensionResolveError;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
+use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
@@ -375,15 +376,9 @@ pub struct IR {
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
     pub(crate) extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
-    /// Names of declarations marked `pub` (or `pub(bind)`) in the file.
-    ///
-    /// Carried through from the resolver so downstream stages — most
-    /// notably `preprocess_dag_body_self_imports` — can enforce
-    /// visibility on `import <self>.{...}` items: a dag inside a file
-    /// can only reach the file's `pub`-marked top-level declarations,
-    /// matching the rules for cross-file imports. Implicit visibility
-    /// (params are visible by default) is already baked in.
-    pub pub_names: HashSet<DeclName>,
+    /// Explicit exports and annotation-free `param` input ports, kept in
+    /// distinct roles for downstream boundary checks.
+    pub external_surface: ExternalDeclSurface,
 }
 
 /// Runtime source of an imported value visible inside a DAG body.
@@ -980,7 +975,7 @@ fn build_ir_from_resolved(
         imported_values,
         imported_decl_types,
         imported_value_sources,
-        pub_names: resolved.pub_names,
+        external_surface: resolved.external_surface,
         plugin_imports: ast
             .declarations
             .iter()
@@ -1018,10 +1013,9 @@ pub struct UnfrozenIR {
     imported_decl_types: HashMap<ScopedName, DeclaredType>,
     // Key-lookup only, order irrelevant.
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
-    // Names of declarations marked `pub`/`pub(bind)` (plus implicit-pub
-    // params). Used by `preprocess_dag_body_self_imports` to enforce
-    // visibility on dag-body `import <self>.{...}` items.
-    pub_names: HashSet<DeclName>,
+    // Explicit exports and named `param` input ports used by downstream
+    // import/include boundary checks.
+    external_surface: ExternalDeclSurface,
     /// Plugin-import declarations, awaiting signature resolution against the
     /// frozen registry in [`UnfrozenIR::freeze`].
     plugin_imports: Vec<crate::desugar::desugared_ast::PluginImportDecl>,
@@ -1305,7 +1299,7 @@ impl UnfrozenIR {
             imported_values: self.imported_values,
             imported_decl_types: self.imported_decl_types,
             imported_value_sources: self.imported_value_sources,
-            pub_names: self.pub_names,
+            external_surface: self.external_surface,
         })
     }
 

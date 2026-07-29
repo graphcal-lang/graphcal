@@ -18,8 +18,8 @@ use crate::registry::prelude::{
     PRELUDE_BUILTIN_TYPE_NAMES, PRELUDE_DIMENSION_NAMES, PRELUDE_UNIT_NAMES,
 };
 use crate::registry::resolve_types::{
-    ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry, ResolvedLayerEntry,
-    ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
+    ExternalDeclSurface, ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry,
+    ResolvedLayerEntry, ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
 };
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -262,7 +262,7 @@ struct CollectedDeclarations {
     layers: Vec<ResolvedLayerEntry>,
     source_order: Vec<(DeclName, DeclCategory)>,
     assert_names: HashSet<DeclName>,
-    pub_names: HashSet<DeclName>,
+    external_surface: ExternalDeclSurface,
 }
 
 /// Collect all local declarations and check for duplicates.
@@ -291,44 +291,82 @@ fn collect_local_declarations(
     check_exclusive_universe_collisions(file, src, names)?;
     check_value_namespace_collisions(file, src, names)?;
 
-    // Collect names of all visible declarations. Explicit `pub`/`pub(bind)`
-    // declarations contribute; params are implicitly visible+bindable under
-    // A5 and always contribute.
-    let mut pub_names: HashSet<DeclName> = HashSet::new();
+    // Classify the externally addressable surface without treating `param`
+    // input ports as ordinary exports. Explicit `pub`/`pub(bind)` declarations
+    // are exports; the `param` kind itself declares a named input port.
+    let mut external_surface = ExternalDeclSurface::default();
     for decl in &file.declarations {
-        let is_visible = match &decl.kind {
-            DeclKind::Param(_) => true,
-            DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
-            DeclKind::BaseDimension(d) => d.visibility.is_public(),
-            DeclKind::Dimension(d) => d.visibility.is_public(),
-            DeclKind::Unit(d) => d.visibility.is_public(),
-            DeclKind::Type(d) => d.visibility.is_public(),
-            DeclKind::Index(d) => d.visibility.is_public(),
-            DeclKind::Import(d) => d.visibility.is_public(),
-            DeclKind::Include(d) => d.visibility.is_public(),
-            DeclKind::Dag(d) => d.visibility.is_public(),
-            DeclKind::Assert(d) => d.visibility.is_public(),
-            DeclKind::Plot(d) => d.visibility.is_public(),
-            DeclKind::Figure(d) => d.visibility.is_public(),
-            DeclKind::Layer(d) => d.visibility.is_public(),
-            // Plugin imports carry no visibility (extern functions are only
-            // callable through their own alias); sugar is desugared away.
-            DeclKind::PluginImport(_) | DeclKind::Sugar(_) => false,
-        };
-        if !is_visible {
-            continue;
-        }
         let Some((name, _)) = decl.kind.name_and_span() else {
             continue;
         };
-        pub_names.insert(DeclName::expect_valid(name));
+        let name = DeclName::expect_valid(name);
+        match &decl.kind {
+            DeclKind::Param(_) => {
+                external_surface.insert_input_port(name);
+            }
+            DeclKind::Node(d) | DeclKind::ConstNode(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::BaseDimension(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Dimension(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Unit(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Type(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Index(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Import(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Include(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Dag(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Assert(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Plot(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Figure(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Layer(d) if d.visibility.is_public() => {
+                external_surface.insert_explicit_export(name);
+            }
+            DeclKind::Node(_)
+            | DeclKind::ConstNode(_)
+            | DeclKind::BaseDimension(_)
+            | DeclKind::Dimension(_)
+            | DeclKind::Unit(_)
+            | DeclKind::Type(_)
+            | DeclKind::Index(_)
+            | DeclKind::Import(_)
+            | DeclKind::Include(_)
+            | DeclKind::Dag(_)
+            | DeclKind::Assert(_)
+            | DeclKind::Plot(_)
+            | DeclKind::Figure(_)
+            | DeclKind::Layer(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Sugar(_) => {}
+        }
     }
 
     // Validate: required `index`, `type`, `dim` must be `pub(bind)` (V002).
     //
-    // Required `param` is excluded from this check: per axiom A5 §4.0,
-    // `param` is implicitly V=visible + B=bindable and never carries a
-    // visibility annotation. The parser rejects `pub`/`pub(bind)` on
+    // Required `param` is excluded from this check: `param` directly declares
+    // an input port, whose missing default makes it required. Input ports never
+    // carry visibility annotations; the parser rejects `pub`/`pub(bind)` on
     // `param`.
     for decl in &file.declarations {
         match &decl.kind {
@@ -494,7 +532,7 @@ fn collect_local_declarations(
         layers,
         source_order,
         assert_names,
-        pub_names,
+        external_surface,
     })
 }
 
@@ -698,12 +736,12 @@ fn validate_attributes(
     })
 }
 
-/// Validate that every visible declaration names only visible type-system
-/// symbols in its written signature (V003 / A9 case 1).
+/// Validate that every external signature names only exported type-system
+/// symbols (V003 / A9 case 1).
 ///
-/// A declaration's signature is checked when the declaration is visible
-/// at the library boundary: either explicitly `pub` / `pub(bind)`, or
-/// implicitly visible (`param`, per A5 §4.0).
+/// A declaration's signature is checked when it belongs to the external
+/// boundary: either as an explicit `pub` / `pub(bind)` export or as a named
+/// `param` input port.
 ///
 /// Built-in type-system items (prelude dimensions like `Length`, and
 /// built-in types `Bool`, `Int`, `Dimensionless`, `Datetime`) are
@@ -715,7 +753,7 @@ fn validate_attributes(
 fn validate_private_in_public(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    pub_names: &HashSet<DeclName>,
+    external_surface: &ExternalDeclSurface,
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::IndexDeclKind;
 
@@ -748,8 +786,9 @@ fn validate_private_in_public(
             let Some(ref_name) = ref_path.as_bare() else {
                 continue;
             };
+            let ref_decl_name = DeclName::from_atom(ref_name.clone());
             if local_type_names.contains_key(ref_name.as_str())
-                && !pub_names.contains(ref_name.as_str())
+                && !external_surface.is_explicit_export(&ref_decl_name)
             {
                 return Err(GraphcalError::PrivateInPublic {
                     pub_kind: pub_kind.to_string(),
@@ -766,9 +805,9 @@ fn validate_private_in_public(
     };
 
     for decl in &file.declarations {
-        // `param` is always visible (A5 §4.0); other kinds only when
-        // explicitly marked `pub` / `pub(bind)`.
-        let is_visible = match &decl.kind {
+        // Every `param` signature is an external input-port signature; other
+        // kinds participate only when explicitly exported with `pub` / `pub(bind)`.
+        let has_external_signature = match &decl.kind {
             DeclKind::Param(_) => true,
             DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
             DeclKind::BaseDimension(d) => d.visibility.is_public(),
@@ -787,7 +826,7 @@ fn validate_private_in_public(
             // callable through their own alias); sugar is desugared away.
             DeclKind::PluginImport(_) | DeclKind::Sugar(_) => false,
         };
-        if !is_visible {
+        if !has_external_signature {
             continue;
         }
 
@@ -1066,8 +1105,8 @@ pub(crate) fn resolve_with_imports(
     // Validate attributes and build assumes_map / expected_fail_map
     let validated = validate_attributes(file, src, &all_assert_names)?;
 
-    // Validate private-in-public: pub declarations must not reference private type-system items
-    validate_private_in_public(file, src, &local.pub_names)?;
+    // Validate external signatures: exports and input ports must not reference private type-system items.
+    validate_private_in_public(file, src, &local.external_surface)?;
 
     Ok(ResolvedFile {
         consts: all_consts,
@@ -1082,7 +1121,7 @@ pub(crate) fn resolve_with_imports(
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
         hidden_plots: validated.hidden_plots,
-        pub_names: local.pub_names,
+        external_surface: local.external_surface,
     })
 }
 
@@ -1137,8 +1176,8 @@ pub(crate) fn resolve_with_imported_values(
     // Validate attributes and build assumes_map / expected_fail_map
     let validated = validate_attributes(file, src, &all_assert_names)?;
 
-    // Validate private-in-public: pub declarations must not reference private type-system items
-    validate_private_in_public(file, src, &local.pub_names)?;
+    // Validate external signatures: exports and input ports must not reference private type-system items.
+    validate_private_in_public(file, src, &local.external_surface)?;
 
     Ok(ResolvedFile {
         consts: local.consts,
@@ -1153,6 +1192,6 @@ pub(crate) fn resolve_with_imported_values(
         assumes_map: validated.assumes_map,
         expected_fail: validated.expected_fail_map,
         hidden_plots: validated.hidden_plots,
-        pub_names: local.pub_names,
+        external_surface: local.external_surface,
     })
 }

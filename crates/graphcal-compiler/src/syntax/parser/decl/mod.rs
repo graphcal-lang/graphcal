@@ -162,12 +162,10 @@ impl Parser<'_> {
         // Optional `pub` or `pub(bind)` visibility modifier.
         let (visibility, visibility_span) = self.parse_visibility_prefix()?;
 
-        // Reject `pub` / `pub(bind)` on `param` at parse time. The spec
-        // (visibility-bindability axioms §4.0) says `param` is
-        // annotation-free: it is inherently visible + bindable, and any
-        // annotation conveys no information. Catching this here keeps
-        // the grammar surface itself compliant without deferring to the
-        // resolver.
+        // Reject `pub` / `pub(bind)` on `param` at parse time. The `param`
+        // declaration kind itself creates a named input port, so export and
+        // bindability annotations do not apply. Catching this here keeps the
+        // grammar surface compliant without deferring to the resolver.
         let found = match visibility {
             BindableVisibility::Private => None,
             BindableVisibility::Public => Some("`pub`"),
@@ -178,7 +176,7 @@ impl Parser<'_> {
             && let Some(vis_span) = visibility_span
         {
             return Err(self.unexpected_token(
-                "no visibility annotation (params are always visible and bindable)",
+                "no visibility annotation (`param` declares a named input port)",
                 found,
                 vis_span,
             ));
@@ -199,7 +197,7 @@ impl Parser<'_> {
         }
 
         // Reject `pub(bind)` on `node` / `const node`. Nodes are computed
-        // values, not a bindable surface; `param` already plays that role.
+        // values, not input ports; `param` already declares that role.
         // `pub` on `node` is legal and controls projection visibility from
         // inline-dag call sites.
         let is_node_decl = match self.lexer.peek() {
@@ -212,7 +210,7 @@ impl Parser<'_> {
             && let Some(vis_span) = visibility_span
         {
             return Err(self.unexpected_token(
-                "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a bindable input)",
+                "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a named input port)",
                 "`pub(bind)`",
                 vis_span,
             ));

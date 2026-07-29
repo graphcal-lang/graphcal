@@ -73,18 +73,18 @@ impl Parser<'_> {
         };
         match (kind, visibility) {
             (SlotKind::Param, BindableVisibility::Public) => Err(self.unexpected_token(
-                "no visibility annotation (params are always visible and bindable)",
+                "no visibility annotation (`param` declares a named input port)",
                 "`pub`",
                 vis_span,
             )),
             (SlotKind::Param, BindableVisibility::PublicBind) => Err(self.unexpected_token(
-                "no visibility annotation (params are always visible and bindable)",
+                "no visibility annotation (`param` declares a named input port)",
                 "`pub(bind)`",
                 vis_span,
             )),
             (SlotKind::Node | SlotKind::ConstNode, BindableVisibility::PublicBind) => {
                 Err(self.unexpected_token(
-                    "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a bindable input)",
+                    "`pub` (nodes are computed values — `pub(bind)` is not meaningful; use `param` to declare a named input port)",
                     "`pub(bind)`",
                     vis_span,
                 ))

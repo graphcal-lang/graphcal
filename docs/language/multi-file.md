@@ -275,15 +275,18 @@ pub include nasa.rocket.compute_thrust(orbit: @o).{ thrust };
 ### Inline-DAG call expression
 
 Inside an expression, `@dag(args).out` is sugar for an anonymous
-`include ... as <synthetic>; @<synthetic>.out`. What `@` enforces is
-that the post-`@` expression must denote a *node* — and `dag(args).out`
-does, because `out` is a node belonging to the DAG instance `dag(args)`.
+`include ... as <synthetic>; @<synthetic>.out`. The projection must name an
+externally projectable value in the DAG: either an explicitly exported node or
+a param input port. Projecting a param reads its effective call binding or,
+when omitted, its default.
 
 ```graphcal
 dag mission {
     import nasa.rocket.{compute_thrust, type Orbit};
     param o: Orbit;
     node t: Force = @compute_thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
+    node effective_mass: Mass =
+        @compute_thrust(orbit: @o, dry_mass: 800.0 kg).dry_mass;
 }
 ```
 
@@ -321,19 +324,18 @@ param o: Orbit;
 node t: Force = @rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
 ```
 
-The semantics are identical to the bare form — `compute_thrust(args).thrust`
-is still a node, and prefixing the path with the in-scope module alias
-just adds a qualifier. The "post-`@` expression must denote a node"
-rule is unchanged; it has nothing to do with how many segments appear
-before the `(`.
+The semantics are identical to the bare form: prefixing the path with the
+in-scope module alias only adds a qualifier. The projected member must still be
+an explicitly exported node or a param input port, independent of how many path
+segments appear before the `(`.
 
-The projected output must be a public node of the called DAG. For
-module-qualified calls, the called DAG itself must also be public.
+For module-qualified calls, the called DAG itself must also be explicitly
+exported.
 
 What *is* still rejected is dropping the projection: `@dag(args)` and
-`@module.dag(args)` (without the trailing `.<out>`) are both parse
-errors. A DAG instance with no projection is not a node, and that's
-the property `@` requires.
+`@module.dag(args)` (without the trailing `.<out>`) are both parse errors. A
+DAG instance with no projection is not a graph value, which is what `@`
+requires.
 
 ## Inline DAGs as Modules
 
@@ -625,40 +627,73 @@ The standard library itself is still being designed; references in
 user code are rejected with a "stdlib not yet available" diagnostic
 unless the project opts into the experimental stdlib explicitly.
 
-## Visibility and Bindability
+## Visibility, Bindability, and Input Ports
 
-Graphcal's visibility system uses a **two-axis split**:
+Graphcal keeps two external boundary roles distinct:
 
-- **Visibility** (`pub`): whether a declaration is visible across the
-  include / import boundary.
-- **Bindability** (`pub(bind)`): whether importers may *override* it
-  via an include or import binding. Bindability implies visibility.
+- An **export** is an ordinary declaration made visible across an
+  include/import boundary with `pub` or `pub(bind)`.
+- An **input port** is declared with `param`. It is not an ordinary declaration
+  carrying an implicit `pub` marker: its input-port role is tracked separately.
+  The port is both bindable and externally readable/projectable, so callers can
+  observe its effective bound/default value.
 
-| Annotation   | Visible? | Bindable? | Use for                                                                 |
-|--------------|:--------:|:---------:|-------------------------------------------------------------------------|
-| (none)       | no       | no        | internal helpers, private values                                        |
-| `pub`        | yes      | no        | constants, derived dims / units / types consumers read but don't rewire |
-| `pub(bind)`  | yes      | yes       | the library's bindable interface: required indexes / types / dims       |
+For ordinary declarations, visibility and bindability form a **two-axis split**:
 
-`param` is a special case (axiom A5): `param` declarations never
-carry an annotation. Required `param` is implicitly part of the
-bindable interface, and defaulted `param` is implicitly
-bindable-with-default. Writing `pub param` or `pub(bind) param` is a
-parse error.
+- **Visibility** (`pub`): whether the declaration is exported across the
+  include/import boundary.
+- **Bindability** (`pub(bind)`): whether an importer may *override* it with an
+  include binding. Bindability implies export visibility.
+
+| Annotation   | Exported? | Bindable? | Use for                                                                 |
+|--------------|:---------:|:---------:|-------------------------------------------------------------------------|
+| (none)       | no        | no        | internal helpers, private values                                        |
+| `pub`        | yes       | no        | constants, derived dims / units / types consumers read but don't rewire |
+| `pub(bind)`  | yes       | yes       | required indexes / types / dims                                         |
+
+`param` is outside that annotation matrix. The declaration kind directly
+creates a named DAG input port:
+
+- `param x: T;` is a required input port;
+- `param x: T = expr;` is an input port with a default;
+- every param in a callable DAG belongs to its named include/call signature;
+- the effective value of a callable-DAG param may also be selected or projected;
+- params in the entry DAG belong to the `--set` / `--input` surface.
+
+Because `pub` would add no state to an input port, both annotated spellings are
+parse errors:
 
 ```graphcal
-pub param dry_mass: Mass = 1200.0 kg;   // parse error — drop the `pub`
-param dry_mass: Mass = 1200.0 kg;       // OK
+pub param dry_mass: Mass = 1200.0 kg;   // parse error
+pub(bind) param dry_mass: Mass;         // parse error
+param dry_mass: Mass = 1200.0 kg;       // OK: defaulted input port
 ```
 
-### Private by default
-
-Declarations without an annotation are private:
+A param remains readable as an output. Selection returns its supplied value, or
+its default when the caller omits the binding:
 
 ```graphcal
-param dry_mass: Mass = 1200.0 kg;       // visible/bindable because `param` is special
-param internal: Mass = 500.0 kg;        // also bindable; use naming/module boundaries
-                                        // to separate public inputs from internals
+include external_dag().{ x as default_x };
+include external_dag(x: 1.0).{ x as bound_x };
+
+node projected: Dimensionless = @external_dag().x;
+```
+
+Selecting or re-exporting that effective value does not preserve the input-port
+role transitively: an intermediate DAG that wants its own callers to bind `x`
+must declare its own `param x` and forward it in the nested binding.
+
+### Internal values are private by default
+
+Use `node` for an internal computed value and `const node` for an internal fixed
+value. Do not use a specially named `param`: every param is part of the DAG's
+input signature. Internal parameterization belongs behind a private DAG or
+module boundary.
+
+```graphcal
+param dry_mass: Mass = 1200.0 kg;             // named input port
+const node structure_mass: Mass = 500.0 kg;   // private fixed value
+node wet_mass: Mass = @dry_mass + @structure_mass; // private computed value
 ```
 
 Importing a private non-`param` item produces error `V001`:
@@ -687,8 +722,8 @@ pub(bind) type Element;
 pub(bind) dim Distance;
 ```
 
-Required `param` is excluded from V002 (annotation-free; implicitly
-bindable).
+Required `param` is excluded from V002 because `param` directly declares an
+annotation-free input port; requiredness is represented by the missing default.
 
 ### Private-in-public (`V003`)
 
@@ -900,10 +935,12 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 
 ### Validation
 
-- Binding names must be `param` or `index` declarations in the included
-  module.
+- A value binding name must identify a `param` input port in the included
+  module; index/type/dim bindings target declarations explicitly marked
+  `pub(bind)`.
 - Binding a `node`, `const node`, or unknown name is a compile error.
-- All required params must be provided by bindings, `--set`, or
+- Required input ports of an included/called DAG must be provided by bindings;
+  required input ports of the entry DAG must be provided by `--set` or
   `--input`.
 - All required indexes must be provided by bindings.
 - Index binding values must be the name of a concrete index in the

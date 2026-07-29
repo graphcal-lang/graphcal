@@ -1962,7 +1962,7 @@ fn eval_hir_inline_dag_call(
     dag_values.get(&output_key).cloned().ok_or_else(|| {
         ctx.internal_error(
             format!(
-                "dag `{}` has no node `{}` after evaluation (should have been caught by dim-check)",
+                "dag `{}` has no projected value `{}` after evaluation (should have been caught by dim-check)",
                 target.value,
                 output.value.as_str()
             ),

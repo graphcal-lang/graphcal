@@ -53,7 +53,7 @@ pub(in crate::eval::project) enum IncludeVisibilityBoundary {
 }
 
 impl IncludeVisibilityBoundary {
-    const fn requires_public_outputs(self) -> bool {
+    const fn crosses_module_boundary(self) -> bool {
         matches!(self, Self::CrossModule)
     }
 }
@@ -87,7 +87,7 @@ impl DepDeclIndex<'_> {
     }
 }
 
-fn ensure_include_item_visible(
+fn ensure_include_item_selectable(
     file: &graphcal_compiler::desugar::desugared_ast::File,
     name: &str,
     namespace: ImportItemNamespace,
@@ -97,7 +97,9 @@ fn ensure_include_item_visible(
     span: Span,
 ) -> Result<(), CompileError> {
     let presence = file_import_item_presence(file, name, namespace);
-    if presence.is_public() || (!boundary.requires_public_outputs() && presence.is_present()) {
+    if presence.can_select_output()
+        || (!boundary.crosses_module_boundary() && presence.is_present())
+    {
         return Ok(());
     }
     match presence {
@@ -113,7 +115,7 @@ fn ensure_include_item_visible(
             src: file_src.clone(),
             span: span.into(),
         })),
-        ImportItemPresence::Public => Ok(()),
+        ImportItemPresence::ExplicitExport | ImportItemPresence::InputPort => Ok(()),
     }
 }
 
@@ -140,11 +142,11 @@ fn include_value_decl(
     match &decl.kind {
         DeclKind::Param(p) => Some((p.name.value.to_string(), false)),
         DeclKind::ConstNode(c)
-            if !boundary.requires_public_outputs() || c.visibility.is_public() =>
+            if !boundary.crosses_module_boundary() || c.visibility.is_public() =>
         {
             Some((c.name.value.to_string(), true))
         }
-        DeclKind::Node(n) if !boundary.requires_public_outputs() || n.visibility.is_public() => {
+        DeclKind::Node(n) if !boundary.crosses_module_boundary() || n.visibility.is_public() => {
             Some((n.name.value.to_string(), false))
         }
         _ => None,
@@ -549,7 +551,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
 
-                ensure_include_item_visible(
+                ensure_include_item_selectable(
                     &dep_loaded.ast,
                     orig_name,
                     import_item.namespace,
@@ -642,7 +644,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 ctx.extra_registry_builders
                     .push(super::ModuleRegistryImport {
                         registry: &dep_eval.registry,
-                        pub_names: &dep_eval.pub_names,
+                        external_surface: &dep_eval.external_surface,
                         unit_alias: prefix.clone(),
                         resolved_dynamic_scales: &dep_eval.resolved_dynamic_unit_scales,
                         import_span: include_decl.path.span(),
@@ -779,7 +781,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
 
-                ensure_include_item_visible(
+                ensure_include_item_selectable(
                     &dag_body,
                     orig_name,
                     import_item.namespace,
@@ -983,8 +985,9 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 let orig_name = &import_item.name.name;
                 let local_name = import_item.local_name().to_string();
 
-                // Visibility check: the item must be declared `pub` in the source file.
-                if !file_exports_import_item(&dep_loaded.ast, orig_name, import_item.namespace) {
+                // Boundary check: an ordinary item must be exported; a param is
+                // nameable through its distinct input-port role.
+                if !file_exposes_import_item(&dep_loaded.ast, orig_name, import_item.namespace) {
                     let exists =
                         file_has_import_item(&dep_loaded.ast, orig_name, import_item.namespace);
                     if exists {
@@ -1186,7 +1189,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
             ctx.extra_registry_builders
                 .push(super::ModuleRegistryImport {
                     registry: &dep.registry,
-                    pub_names: &dep.pub_names,
+                    external_surface: &dep.external_surface,
                     unit_alias: module_name.clone(),
                     resolved_dynamic_scales: &dep.resolved_dynamic_unit_scales,
                     import_span,
@@ -1369,8 +1372,8 @@ pub(in crate::eval::project) fn import_module_values(
     let mut const_keys: Vec<&DeclName> = dep.const_values.keys().collect();
     const_keys.sort();
     for name in const_keys {
-        // Only import pub items.
-        if !dep.pub_names.contains(name.as_str()) {
+        // Consts cross the boundary only as explicit exports.
+        if !dep.external_surface.is_explicit_export(name) {
             continue;
         }
         let rv = &dep.const_values[name];
@@ -1393,8 +1396,8 @@ pub(in crate::eval::project) fn import_module_values(
     let mut value_keys: Vec<&DeclName> = dep.values.keys().collect();
     value_keys.sort();
     for name in value_keys {
-        // Only import pub items.
-        if !dep.pub_names.contains(name.as_str()) {
+        // Runtime values may be explicit node exports or named param inputs.
+        if !dep.external_surface.can_select_output(name) {
             continue;
         }
         let rv = &dep.values[name];
@@ -1426,7 +1429,7 @@ mod tests {
             registry: graphcal_compiler::registry::types::RegistryBuilder::new()
                 .try_build()
                 .unwrap(),
-            pub_names: HashSet::new(),
+            external_surface: ExternalDeclSurface::default(),
             resolved_dynamic_unit_scales: HashMap::new(),
             dag_tirs: HashMap::new(),
             extern_functions: HashMap::new(),
@@ -1440,7 +1443,8 @@ mod tests {
             DeclName::expect_valid("g0"),
             RuntimeValue::Quantity(9.80665),
         );
-        dep.pub_names.insert(DeclName::expect_valid("g0"));
+        dep.external_surface
+            .insert_explicit_export(DeclName::expect_valid("g0"));
 
         let src = NamedSource::new("test.gcl", Arc::new(String::new()));
         let mut imported_names = ImportedValueNames::default();
@@ -1474,7 +1478,8 @@ mod tests {
             DeclName::expect_valid("runtime"),
             RuntimeValue::Quantity(1.0),
         );
-        dep.pub_names.insert(DeclName::expect_valid("runtime"));
+        dep.external_surface
+            .insert_explicit_export(DeclName::expect_valid("runtime"));
 
         let import_item = graphcal_compiler::desugar::desugared_ast::ImportItem {
             name: graphcal_compiler::desugar::desugared_ast::Ident {

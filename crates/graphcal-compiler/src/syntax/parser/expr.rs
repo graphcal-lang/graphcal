@@ -606,7 +606,7 @@ impl Parser<'_> {
         };
         let args = self.parse_import_param_bindings()?;
         // The `.<out>` projection is mandatory: an instantiated DAG without
-        // projection is not a node, and `@` requires a node. Surface a
+        // projection is not a graph value. Surface a
         // dedicated diagnostic instead of the generic "expected `.`".
         match self.lexer.peek_with_span() {
             Some((Token::Dot, _)) => {
@@ -1675,7 +1675,7 @@ mod tests {
     fn parse_at_with_field_access_parses_as_field_chain() {
         // `@instance.field` is valid: `instance` is a single in-scope ident
         // (typically an include's instance alias), and `.field` is postfix
-        // field access producing the instance's projected output node.
+        // field access producing the instance's projected output value.
         let file = Parser::new("node x: Dimensionless = @stage.delta_v;")
             .parse_file()
             .unwrap();
@@ -1744,10 +1744,9 @@ mod tests {
 
     #[test]
     fn parse_inline_dag_ref_qualified_accepted() {
-        // `@<module>.<dag>(args).<out>` projects a node from a DAG brought
-        // into scope via `import path as module` (or `import path;`). What
-        // `@` enforces is that the post-`@` expression denotes a node — and
-        // `module.dag(args).out` does, so the form is well-formed.
+        // `@<module>.<dag>(args).<out>` projects a graph value from a DAG
+        // brought into scope via `import path as module` (or `import path;`).
+        // The value may be an explicit node export or a param input port.
         let file = Parser::new("node y: Length = @geom.clamp(x: @p).result;")
             .parse_file()
             .expect("qualified inline DAG call should parse");
@@ -1830,8 +1829,8 @@ mod tests {
 
     #[test]
     fn parse_inline_dag_ref_no_projection_rejected() {
-        // `@dag(args)` (no `.<out>` projection) is rejected: a DAG instance
-        // without projection is not a node, and `@` requires a node.
+        // `@dag(args)` (no `.<out>` projection) is rejected because an
+        // unprojected DAG instance is not a graph value.
         let result = Parser::new("node y: Length = @dag(x: @p);").parse_file();
         assert!(
             result.is_err(),

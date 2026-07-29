@@ -700,7 +700,9 @@ IR = UnfrozenIR::freeze(registry, owner, resolver, src)
   imported_values
   imported_decl_types
   imported_value_sources
-  pub_names
+  external_surface: ExternalDeclSurface
+    explicit_exports  // declarations carrying `pub` / `pub(bind)`
+    input_ports       // bindable and projectable annotation-free params
 ```
 
 There are no dependency maps on `IR`: the owner-qualified dependency graph is
@@ -752,7 +754,7 @@ DagTIR
   imported_values
   imported_decl_types
   imported_value_sources
-  pub_nodes
+  projectable_outputs  // explicit node exports + param input ports
 ```
 
 `TIR::root()` and `TIR::root_mut()` access the file root. `TIR::lookup_call_target`
@@ -813,11 +815,13 @@ semantics use `finite_index_ref()` / `finite_index()` /
 
 ## 4. Declarations, Visibility, and Evaluation
 
-All declarations are private unless made visible. `pub` means visible at a
-module/include boundary. `pub(bind)` means visible and bindable. Required
-`dim`, `type`, and `index` declarations must be `pub(bind)`. `param`
-declarations do not take a visibility modifier; required params are implicitly
-bindable.
+Ordinary declarations are private unless explicitly exported. `pub` means
+exported at a module/include boundary, and `pub(bind)` means exported and
+bindable. Required `dim`, `type`, and `index` declarations must be `pub(bind)`.
+A `param` is separate from that visibility matrix: the declaration kind itself
+creates an annotation-free named input port. A missing default makes the input
+port required. Its effective value is projectable like an exported value, but
+its role remains distinct from declarations carrying an explicit `pub` marker.
 
 | Category          | Main syntax                                | Evaluation phase                                | Reference rules                     |
 | ----------------- | ------------------------------------------ | ----------------------------------------------- | ----------------------------------- |

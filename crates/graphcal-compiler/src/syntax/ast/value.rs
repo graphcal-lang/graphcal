@@ -633,13 +633,11 @@ pub enum ExprKind<P: Phase = Raw> {
     /// `include <path>(args) as <synthetic>; @<synthetic>.out`. Preserved as
     /// a distinct AST variant so source spans survive for diagnostics.
     ///
-    /// The post-`@` expression as a whole must denote a *node* — that is the
-    /// invariant `@` enforces. `@dag(args).out` is well-formed because
-    /// `dag(args).out` projects an output node from a fresh DAG instance, and
-    /// likewise `@module.dag(args).out` projects an output node from a DAG
-    /// brought into scope via `import module.{dag};` or `import path as
-    /// module;`. Bare `@dag(args)` (no projection) is rejected — a DAG
-    /// instance with no projection is not a node.
+    /// The post-`@` expression as a whole must denote a graph value.
+    /// `@dag(args).out` may project an explicitly exported node or the
+    /// effective bound/default value of a param input port. The qualified
+    /// `@module.dag(args).out` form has the same rule. Bare `@dag(args)` is
+    /// rejected because an unprojected DAG instance is not a graph value.
     InlineDagRef {
         /// Path to the DAG being invoked. Single-segment for same-file calls
         /// (`@dag(args).out`), multi-segment for cross-file qualified calls
@@ -649,7 +647,7 @@ pub enum ExprKind<P: Phase = Raw> {
         path: ModulePath,
         /// Param/index bindings, same shape as `include` bindings.
         args: Vec<ParamBinding<P>>,
-        /// Projected output node name (after the closing paren `.`).
+        /// Projected output value name (after the closing paren `.`).
         output: Spanned<DeclName>,
     },
     /// Unresolved reference produced by the parser.

@@ -1642,9 +1642,9 @@ fn collect_dag_decl(
         None,
         visibility,
     );
-    // Register the dag's body params and nodes as `Qualified` members so that
-    // inline-call projections (`@dag(...)::out`) and future goto-def on dag
-    // params can resolve to their definitions inside the dag body.
+    // Register the DAG body's value declarations as qualified members so
+    // inline-call projections (`@dag(...).out`), including projectable param
+    // input ports, resolve to their definitions inside the DAG body.
     let dag_name = d.name.value.to_string();
     for body_decl in &d.body {
         let (member_name, member_span, category) = match &body_decl.kind {

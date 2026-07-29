@@ -12,7 +12,7 @@ Every top-level declaration belongs to one of four kinds:
 
 | Kind | Keyword | Semantics | In DAG? |
 |------|---------|-----------|---------|
-| Parameter | `param` | User-supplied input, optionally with a default value | Yes |
+| Parameter | `param` | Named DAG input port, optionally with a default value | Yes |
 | Node | `node` | Computed value derived from other values | Yes |
 | Constant | `const node` | Compile-time immutable value | No |
 | Assertion | `assert` | Post-evaluation boolean check | No |
@@ -24,7 +24,26 @@ param dry_mass: Mass = 1200.0 kg;  // optional param (has default)
 param fuel_mass: Mass;              // required param (no default)
 ```
 
-Parameters are the inputs to your computation graph. A param with a default value (`= expr`) can be overridden at runtime via `--set` or `--input`; params not overridden keep their defaults. A param without a default value is **required** — it must be provided via `--set`, `--input`, or a parameterized import binding. Evaluating a file with an unsatisfied required param is a compile error.
+A `param` declares a named input port in the computation graph; it is not an
+ordinary private declaration that becomes implicitly public. The declaration
+kind itself supplies the external-input role, so params never take `pub` or
+`pub(bind)`:
+
+- A param in the entry DAG can be supplied with `--set` or `--input`.
+- A param in a callable DAG can be supplied by name in an `include` binding or
+  inline DAG call.
+- Its effective value is also externally readable: callers may select it from
+  an `include` or project it from an inline call. The result is the supplied
+  binding, or the default when no binding was supplied.
+- A param with a default (`= expr`) keeps that value when the caller does not
+  supply the port.
+- A param without a default is **required**. Leaving a required port unsatisfied
+  is a compile error.
+
+Use a private `node` for an internal computed value or a private `const node`
+for an internal fixed value. If a sub-computation needs internal
+parameterization, put it behind a private DAG or module boundary rather than
+using an "internal param" naming convention.
 
 Parameters (and nodes) can carry **domain constraints** that declare valid value ranges, checked at runtime:
 
