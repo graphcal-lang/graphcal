@@ -17,7 +17,7 @@ use graphcal_compiler::syntax::names::ResolvedName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
 use graphcal_compiler::registry::builtins::BuiltinFunction;
-use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef, StructTypeRef};
+use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, TypeDef};
 use graphcal_compiler::tir::typed::{
@@ -35,20 +35,12 @@ pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
 /// Bundles built-in constants, built-in functions, the type/unit registry,
-/// and source information for diagnostics, plus optional unfold context
-/// for evaluating `unfold(...)` expressions inline.
+/// and source information for diagnostics.
 pub struct EvalContext<'a> {
     pub builtin_consts: &'a HashMap<&'a str, f64>,
     pub builtin_fns: &'a HashMap<&'a str, BuiltinFunction>,
     pub registry: &'a Registry,
     pub src: &'a NamedSource<Arc<String>>,
-    /// When set, enables inline evaluation of `ExprKind::Unfold` expressions.
-    /// Contains the name of the node being evaluated and the declared types map.
-    #[expect(
-        dead_code,
-        reason = "legacy owner context is removed by the expression-local cleanup in #1010"
-    )]
-    pub unfold_context: Option<UnfoldContext<'a>>,
     /// The enclosing file's full TIR.
     ///
     /// Used by [`eval_inline_dag_call`] to reach the file's flat per-DAG body
@@ -76,23 +68,6 @@ pub struct EvalContext<'a> {
     /// extern calls in those positions, so hitting an extern call with
     /// `None` here surfaces as an evaluation error naming the function.
     pub host_fns: Option<&'a crate::host_fns::HostFunctionRegistry>,
-}
-
-/// Context required to evaluate an `unfold(...)` expression inline.
-///
-/// Provides the self-referencing runtime key and declared type needed
-/// to look up the coordinate index for iterative evaluation.
-pub struct UnfoldContext<'a> {
-    #[expect(
-        dead_code,
-        reason = "legacy owner context is removed by the expression-local cleanup in #1010"
-    )]
-    pub self_key: RuntimeDeclKey,
-    #[expect(
-        dead_code,
-        reason = "legacy owner context is removed by the expression-local cleanup in #1010"
-    )]
-    pub self_declared_type: &'a DeclaredType,
 }
 
 pub fn index_ref_matches_resolved(

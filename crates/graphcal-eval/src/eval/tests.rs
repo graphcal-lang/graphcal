@@ -32,13 +32,11 @@ fn run_mutated_tir_values(
 ) -> crate::eval_expr::RuntimeValueMap {
     let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
     let plan = crate::exec_plan::compile(tir, &src).unwrap();
-    let declared_types = tir.build_declared_types(&src).unwrap();
     let builtin_consts = graphcal_compiler::registry::builtins::builtin_constants();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     super::runtime::run_eval_loop(
         &plan,
         tir,
-        &declared_types,
         &src,
         builtin_consts,
         builtin_fns,
@@ -894,6 +892,20 @@ node distance: Length[Step] = unfold(
         .map(|value| value.si_value().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(distances, [1.0, 3.0, 5.0]);
+}
+
+#[test]
+fn eval_nested_unfold_uses_its_expression_axis_under_scalar_owner() {
+    let source = r"
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+node total: Dimensionless = sum(unfold(
+    Step,
+    1.0,
+    |prev_value, prev_t, t| prev_value + 1.0
+));
+";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "total") - 6.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -1956,7 +1968,6 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         builtin_fns,
         registry: &tir.registry,
         src,
-        unfold_context: None,
         tir: &tir,
         current_dag: Some(tir.root()),
         root_values: Some(&values),
@@ -2022,7 +2033,6 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         builtin_fns,
         registry: &tir.registry,
         src,
-        unfold_context: None,
         tir: &tir,
         current_dag: Some(tir.root()),
         root_values: Some(&values),
@@ -2797,7 +2807,7 @@ fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() 
 }
 
 #[test]
-fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes() {
+fn eval_unfold_uses_resolved_explicit_range_index_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_range_index_project(
         "import collide.b as b;\n\
          import collide.a as a;\n\
@@ -2890,7 +2900,6 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         builtin_fns,
         registry: &tir.registry,
         src,
-        unfold_context: None,
         tir: &tir,
         current_dag: Some(tir.root()),
         root_values: Some(&values),
@@ -2957,7 +2966,6 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         builtin_fns,
         registry: &tir.registry,
         src,
-        unfold_context: None,
         tir: &tir,
         current_dag: Some(tir.root()),
         root_values: Some(&values),
