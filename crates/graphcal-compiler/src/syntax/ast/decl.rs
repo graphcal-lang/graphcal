@@ -140,10 +140,8 @@ pub enum AssertBody<P: Phase = Raw> {
         actual: Box<Expr<P>>,
         /// The expected value expression (right of `~=`).
         expected: Box<Expr<P>>,
-        /// The tolerance expression (right of `+/-`).
+        /// The absolute tolerance expression (right of `+/-`).
         tolerance: Box<Expr<P>>,
-        /// Whether the tolerance is relative (`%`).
-        is_relative: bool,
     },
 }
 

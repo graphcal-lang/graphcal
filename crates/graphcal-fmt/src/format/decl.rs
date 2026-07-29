@@ -755,19 +755,13 @@ fn format_assert_decl(fmt: &mut Formatter<'_>, d: &AssertDecl) -> RcDoc<'static>
             actual,
             expected,
             tolerance,
-            is_relative,
-        } => {
-            let mut doc = RcDoc::text(format!("assert {} = ", d.name.value))
-                .append(format_expr(fmt, actual))
-                .append(RcDoc::text(" ~= "))
-                .append(format_expr(fmt, expected))
-                .append(RcDoc::text(" +/- "))
-                .append(format_expr(fmt, tolerance));
-            if *is_relative {
-                doc = doc.append(RcDoc::text("%"));
-            }
-            doc.append(RcDoc::text(";"))
-        }
+        } => RcDoc::text(format!("assert {} = ", d.name.value))
+            .append(format_expr(fmt, actual))
+            .append(RcDoc::text(" ~= "))
+            .append(format_expr(fmt, expected))
+            .append(RcDoc::text(" +/- "))
+            .append(format_expr(fmt, tolerance))
+            .append(RcDoc::text(";")),
     }
 }
 

@@ -496,13 +496,6 @@ fn error_negative_tolerance() {
 }
 
 #[test]
-fn error_negative_tolerance_relative() {
-    let source = include_str!("../../../tests/fixtures/invalid/negative_tolerance_relative.gcl");
-    let rendered = render_error(source, "negative_tolerance_relative.gcl");
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
 fn error_assumes_unknown_assert() {
     let source = include_str!("../../../tests/fixtures/invalid/assumes_unknown_assert.gcl");
     let rendered = render_error(source, "assumes_unknown_assert.gcl");

@@ -89,23 +89,15 @@ impl Parser<'_> {
         let first_expr = self.parse_expr()?;
 
         let body = if self.lexer.peek() == Some(&Token::TildeEq) {
-            // Tolerance syntax: actual ~= expected +/- tolerance [%]
+            // Tolerance syntax: all three operands are full expressions.
             self.lexer.next_token(); // consume ~=
             let expected = self.parse_expr()?;
             self.expect(Token::PlusMinus)?;
-            // Parse tolerance as a unary expr (not full expr) so `%` isn't consumed as modulo
-            let tolerance = self.parse_unary()?;
-            let is_relative = if self.lexer.peek() == Some(&Token::Percent) {
-                self.lexer.next_token(); // consume %
-                true
-            } else {
-                false
-            };
+            let tolerance = self.parse_expr()?;
             AssertBody::Tolerance {
                 actual: Box::new(first_expr),
                 expected: Box::new(expected),
                 tolerance: Box::new(tolerance),
-                is_relative,
             }
         } else {
             AssertBody::Expr(first_expr)
