@@ -141,7 +141,8 @@ node meeting_ny: Datetime = @meeting -> "America/New_York";
 
 ### Aggregation Functions (Indexed Values)
 
-These functions operate on `for` comprehensions or indexed values:
+These functions operate on rank-one `for` comprehensions or indexed values.
+`D` is a quantity dimension; `T` may be any non-indexed value type.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -149,7 +150,11 @@ These functions operate on `for` comprehensions or indexed values:
 | `maximum(values)` | `D[I] -> D` | Maximum element |
 | `minimum(values)` | `D[I] -> D` | Minimum element |
 | `mean(values)` | `D[I] -> D` | Arithmetic mean |
-| `count(values)` | `D[I] -> Dimensionless` | Number of elements |
+| `count(values)` | `T[I] -> Int` | Exact number of elements |
+
+Convert a count explicitly when quantity arithmetic needs a dimensionless
+scalar: `sum(@values) / to_float(count(@values))`. Direct multi-axis aggregation
+is rejected; reduce one selected axis at a time with an explicit `for`.
 
 ## Prelude Base Dimensions
 

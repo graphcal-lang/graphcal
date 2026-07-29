@@ -749,6 +749,9 @@ fn eval_indexed_json_output() {
 
     // total_dv is a quantity node
     assert!(json["node"]["total_dv"]["si_value"].as_f64().is_some());
+
+    // count preserves discrete cardinality as an integer, not a quantity object
+    assert_eq!(json["node"]["n_maneuvers"].as_i64(), Some(3));
 }
 
 #[test]

@@ -44,6 +44,7 @@ fn run_mutated_tir_values(
         builtin_fns,
         &crate::host_fns::demo_registry(),
     )
+    .unwrap()
     .values
 }
 
@@ -168,7 +169,8 @@ fn eval_assertions_use_hir_body_after_syntax_mutation() {
         &declared_types,
         &src,
         &crate::host_fns::demo_registry(),
-    );
+    )
+    .unwrap();
 
     assert!(matches!(
         result.assertions.as_slice(),
@@ -830,7 +832,7 @@ fn eval_indexed_milestone() {
     assert!((find_value(&result, "mean_dv") - 1470.0).abs() < 0.01);
 
     // n_maneuvers: 3
-    assert!((find_value(&result, "n_maneuvers") - 3.0).abs() < f64::EPSILON);
+    assert_eq!(find_int_value(&result, "n_maneuvers"), 3);
 
     // departure_dv: 2460
     assert!((find_value(&result, "departure_dv") - 2460.0).abs() < 0.01);
@@ -844,6 +846,17 @@ fn eval_indexed_milestone() {
 
     // total_check (generic function): same as total_dv
     assert!((find_value(&result, "total_check") - 4410.0).abs() < 0.01);
+}
+
+#[test]
+fn count_returns_int_for_non_quantity_indexed_values() {
+    let source = r"
+index Case = { First, Second, Third };
+node flags: Bool[Case] = for case: Case { true };
+node n: Int = count(@flags);
+";
+    let result = compile_and_eval(source).unwrap();
+    assert_eq!(find_int_value(&result, "n"), 3);
 }
 
 #[test]

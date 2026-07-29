@@ -280,6 +280,15 @@ impl InferredType {
             _ => None,
         }
     }
+
+    /// Number of index axes carried by this type.
+    #[must_use]
+    fn indexed_rank(&self) -> usize {
+        match self {
+            Self::Indexed { element, .. } => element.indexed_rank().saturating_add(1),
+            _ => 0,
+        }
+    }
 }
 
 /// Per-DAG context bundle threaded through the dimension-check passes.

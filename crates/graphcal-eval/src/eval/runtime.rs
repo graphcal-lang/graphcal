@@ -235,7 +235,9 @@ fn declared_type_for_runtime_key<'a>(
 /// Unfold expressions are handled inline by `eval_expr` via `EvalContext`.
 /// Domain constraints are checked after successful evaluation.
 ///
-/// Returns all computed values and any per-node errors.
+/// Returns all computed values and any per-node errors. Internal invariant
+/// violations are returned immediately rather than being fault-isolated as
+/// ordinary user evaluation failures.
 pub(super) fn run_eval_loop(
     plan: &crate::exec_plan::ExecPlan,
     tir: &graphcal_compiler::tir::typed::TIR,
@@ -244,7 +246,7 @@ pub(super) fn run_eval_loop(
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
-) -> EvalLoopResult {
+) -> Result<EvalLoopResult, GraphcalError> {
     let empty_hir_locals = HirLocalValueMap::root();
 
     let mut values: RuntimeValueMap = HashMap::new();
@@ -282,13 +284,11 @@ pub(super) fn run_eval_loop(
         let Some(self_declared_type) =
             declared_type_for_runtime_key(tir.root(), declared_types, name)
         else {
-            errors.insert(
-                name.clone(),
-                NodeError::EvalFailed {
-                    message: format!("declared type map missing runtime key `{name}`"),
-                },
-            );
-            continue;
+            return Err(GraphcalError::InternalError {
+                message: format!("declared type map missing runtime key `{name}`"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            });
         };
 
         // Build eval context with unfold support for this node.
@@ -338,13 +338,14 @@ pub(super) fn run_eval_loop(
                 }
                 values.insert(name.clone(), val);
             }
-            Err(e) => {
-                errors.insert(name.clone(), eval_failed_node_error(&e));
+            Err(error @ GraphcalError::InternalError { .. }) => return Err(error),
+            Err(error) => {
+                errors.insert(name.clone(), eval_failed_node_error(&error));
             }
         }
     }
 
-    EvalLoopResult { values, errors }
+    Ok(EvalLoopResult { values, errors })
 }
 
 /// Convert a runtime `GraphcalError` into a per-node `EvalFailed` error,
@@ -409,14 +410,15 @@ pub(super) fn export_dynamic_unit_scales(
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes
 /// still evaluate, and dependent nodes receive a `DependencyFailed` error.
+/// Internal invariant violations abort evaluation as `X001`.
 pub(super) fn evaluate_plan(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
-) -> EvalResult {
-    evaluate_plan_with_values(tir, plan, declared_types, src, host_fns).0
+) -> Result<EvalResult, GraphcalError> {
+    evaluate_plan_with_values(tir, plan, declared_types, src, host_fns).map(|(result, _)| result)
 }
 
 /// Like [`evaluate_plan`], but also returns the raw runtime-value map so
@@ -432,7 +434,7 @@ pub(super) fn evaluate_plan_with_values(
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
-) -> (EvalResult, RuntimeValueMap) {
+) -> Result<(EvalResult, RuntimeValueMap), GraphcalError> {
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
@@ -445,7 +447,7 @@ pub(super) fn evaluate_plan_with_values(
         builtin_consts,
         builtin_fns,
         host_fns,
-    );
+    )?;
 
     let ctx = EvalContext {
         builtin_consts,
@@ -679,7 +681,7 @@ pub(super) fn evaluate_plan_with_values(
         base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
         domain_constraints,
     };
-    (result, values)
+    Ok((result, values))
 }
 
 /// If any declaration referenced by an assertion body failed to evaluate,

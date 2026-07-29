@@ -1,0 +1,6 @@
+// Aggregations currently accept exactly one axis.
+index Row = { A, B };
+index Column = { X, Y, Z };
+
+node matrix: Bool[Row, Column] = for row: Row, column: Column { true };
+node invalid_count: Int = count(@matrix);

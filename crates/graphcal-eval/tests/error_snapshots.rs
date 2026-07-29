@@ -110,6 +110,13 @@ fn error_wrong_arity() {
 }
 
 #[test]
+fn error_count_multi_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/count_multi_axis.gcl");
+    let rendered = render_error(source, "count_multi_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_dim_mismatch_add() {
     let source = include_str!("../../../tests/fixtures/invalid/dim_mismatch_add.gcl");
     let rendered = render_error(source, "dim_mismatch_add.gcl");

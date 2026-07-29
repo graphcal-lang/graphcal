@@ -50,17 +50,21 @@ This produces a new indexed value with each element doubled.
 
 ## Aggregations
 
-Reduce an indexed quantity to a single quantity:
+Reduce a rank-one indexed quantity to a single quantity. `count` works with any
+non-indexed element type and returns `Int`:
 
 ```
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node max_dv: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node min_dv: Velocity = minimum(for m: Maneuver { @delta_v[m] });
 node mean_dv: Velocity = mean(for m: Maneuver { @delta_v[m] });
-node n_maneuvers: Dimensionless = count(for m: Maneuver { @delta_v[m] });
+node n_maneuvers: Int = count(for m: Maneuver { @delta_v[m] });
+node normalized: Velocity = @total_dv / to_float(@n_maneuvers);
 ```
 
 Available aggregation functions: `sum`, `maximum`, `minimum`, `mean`, `count`.
+Use `to_float` explicitly when a scalar quantity calculation needs an integer
+count. Direct multi-axis aggregation is not yet defined.
 
 ## Scan (Cumulative Fold)
 
@@ -93,6 +97,7 @@ node double_dv: Velocity[Maneuver] = for m: Maneuver {
 
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node max_dv: Velocity = maximum(for m: Maneuver { @delta_v[m] });
+node n_maneuvers: Int = count(@delta_v);
 node cumulative_dv: Velocity[Maneuver] = scan(@delta_v, 0.0 m/s, |acc, val| acc + val);
 node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 ```
