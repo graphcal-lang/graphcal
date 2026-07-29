@@ -14,6 +14,8 @@ use crate::syntax::dimension::{DimName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
 
+use super::time_zone::TimeZoneRegistry;
+
 pub use super::dag::DagRegistry;
 pub use super::dimension_registry::{DimensionRegistry, RegistryBuildError};
 pub use super::index::{
@@ -43,6 +45,8 @@ pub struct Registry {
     pub units: UnitRegistry,
     pub types: TypeRegistry,
     pub indexes: IndexRegistry,
+    /// Reproducible IANA timezone lookup backed by the bundled, pinned tzdb.
+    pub time_zones: TimeZoneRegistry,
     pub(crate) dags: DagRegistry,
 }
 
@@ -102,6 +106,7 @@ impl RegistryBuilder {
                 indexes: self.indexes,
                 finite_indexes: self.finite_indexes,
             },
+            time_zones: TimeZoneRegistry::bundled(),
             dags: DagRegistry { dags: self.dags },
         })
     }

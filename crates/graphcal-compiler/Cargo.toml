@@ -13,7 +13,8 @@ categories.workspace = true
 [dependencies]
 hifitime.workspace = true
 indexmap.workspace = true
-jiff.workspace = true
+jiff = { workspace = true, features = ["tzdb-bundle-always"] }
+jiff-tzdb = "=0.1.8"
 logos.workspace = true
 miette.workspace = true
 petgraph.workspace = true

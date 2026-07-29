@@ -2001,9 +2001,10 @@ fn infer_hir_display_timezone(
             span: inner.span.into(),
         });
     }
-    if jiff::tz::TimeZone::get(timezone).is_err() {
+    if registry.time_zones.get(timezone).is_err() {
         return Err(GraphcalError::InvalidTimezone {
             timezone: timezone.to_string(),
+            tzdb_version: registry.time_zones.version().unwrap_or("unknown"),
             src: src.clone(),
             span: expr.span.into(),
         });

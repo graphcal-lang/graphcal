@@ -139,6 +139,13 @@ The `->` operator can display a datetime in a specific timezone without changing
 node meeting_ny: Datetime = @meeting -> "America/New_York";
 ```
 
+Timezone construction, validation, and display all use the same IANA timezone
+database bundled with the Graphcal toolchain. Graphcal never consults the
+host's zoneinfo installation, so a given Graphcal release resolves timezone
+rules identically across supported platforms. Invalid-timezone diagnostics
+report the bundled IANA tzdb release; updating those rules is an explicit
+Graphcal dependency update.
+
 ### Aggregation Functions (Indexed Values)
 
 These functions operate on rank-one `for` comprehensions or indexed values.

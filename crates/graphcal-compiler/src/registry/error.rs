@@ -1530,11 +1530,12 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::D007),
         help(
-            "use a valid IANA timezone name like \"UTC\", \"America/New_York\", or \"Asia/Tokyo\""
+            "use a name present in Graphcal's bundled IANA tzdb {tzdb_version}, such as \"UTC\", \"America/New_York\", or \"Asia/Tokyo\""
         )
     )]
     InvalidTimezone {
         timezone: String,
+        tzdb_version: &'static str,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not a recognized IANA timezone")]
