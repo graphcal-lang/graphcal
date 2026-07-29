@@ -843,8 +843,9 @@ struct LoweredDagExpressions {
 /// HIR-level body policies that replaced the retired syntax-AST scope checks.
 ///
 /// Walks every lowered body of one DAG and enforces:
-/// - const bodies must not `@`-reference runtime declarations (E020-style
-///   [`GraphcalError::GraphRefInConst`]) or use runtime units in literals / conversion targets;
+/// - const bodies and every domain bound must not `@`-reference runtime
+///   declarations (E020-style [`GraphcalError::GraphRefInConst`]) or use runtime
+///   units in literals / conversion targets;
 /// - no body may `@`-reference an assert declaration
 ///   ([`GraphcalError::GraphRefToAssert`]);
 /// - A10(c) / V004: bodies of non-bindable kinds owned by this module must
@@ -866,24 +867,28 @@ fn check_hir_body_policies(
     for (key, expr) in &semantic.expressions.consts {
         checker.check_expr(expr, true, local(key))?;
     }
-    for (key, bounds) in &semantic.domain_bounds {
-        if semantic.expressions.consts.contains_key(key) {
-            for bound in bounds {
-                checker.check_expr(&bound.value, true, local(key))?;
-            }
-        }
-        // Domain bounds are evaluated without a host function registry, so
-        // extern calls are rejected in all of them (const and runtime alike).
+    let check_domain_bounds = |bounds: &[ResolvedDomainBound],
+                               check_pub_bind_literals: bool|
+     -> Result<(), GraphcalError> {
         for bound in bounds {
-            if let Some((ext, span)) = hir::find_extern_call(&bound.value) {
+            checker.check_expr(&bound.value, true, check_pub_bind_literals)?;
+            // Domain bounds are evaluated without a host function registry.
+            if let Some((external, span)) = hir::find_extern_call(&bound.value) {
                 return Err(GraphcalError::ExternCallNotAllowed {
-                    name: ext.to_string(),
+                    name: external.to_string(),
                     context: "domain bound".to_string(),
                     src: src.clone(),
                     span: span.into(),
                 });
             }
         }
+        Ok(())
+    };
+    for (key, bounds) in &semantic.domain_bounds {
+        check_domain_bounds(bounds, local(key))?;
+    }
+    for bounds in semantic.type_defs.field_bounds.values() {
+        check_domain_bounds(bounds, false)?;
     }
     // Dynamic unit scales resolve in contexts that carry no host function
     // registry (including dependency export); reject extern calls there.

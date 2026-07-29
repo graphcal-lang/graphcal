@@ -308,7 +308,11 @@ Type expressions can carry **domain constraints** that declare valid value range
 param bus_mass: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;
 param thrust: Force(min: 0.01 N) = 0.5 N;           // min only
 param efficiency: Dimensionless(max: 1.0) = 0.85;    // max only
-param count: Int(min: 1, max: 100) = 10;             // Int constraints
+param count: Int(min: 1, max: 100) = 10;             // exact Int constraints
+param launch: Datetime(
+    min: datetime("2025-01-01T00:00:00Z"),
+    max: datetime("2025-12-31T23:59:59Z"),
+) = datetime("2025-06-01T12:00:00Z");
 ```
 
 ### Syntax
@@ -322,9 +326,11 @@ T(max: expr)                      // upper bound only
 T(min: expr, max: expr)[I]        // constrained indexed type (element-wise)
 ```
 
-Here `T` must be a quantity type or `Int`, and `I` is an index axis. Both
-`min` and `max` are optional — you can specify one or both. Each bound
-expression must evaluate to a value compatible with `T`.
+Here `T` must be a quantity type, `Int`, or `Datetime<S>`, and `I` is an
+index axis. Both `min` and `max` are optional—you can specify one or both.
+Bounds are inclusive compile-time constant expressions. Each bound must have
+the type required by `T`; in particular, `Int` bounds are exactly `Int`, and
+datetime bounds are exactly the target `Datetime<S>` scale.
 
 ### Supported Types
 
@@ -332,11 +338,15 @@ Domain constraints are valid on:
 
 - **Quantity types** (including `Dimensionless`): `Mass(min: ...)`,
   `Velocity(max: ...)`, `Dimensionless(min: 0.0, max: 1.0)`, etc.
-- **`Int`**: `Int(min: 1, max: 100)`
+- **`Int`**: `Int(min: 1, max: 100)`. Bounds stay as `i64`; a
+  `Dimensionless` quantity is not implicitly converted into an integer bound.
+- **`Datetime<S>`**: `Datetime<TT>(min: epoch<TT>("..."), max: ...)`.
+  Bare `Datetime` is `Datetime<UTC>`, so its bounds use offset-aware
+  `datetime("...Z")` values.
 
-Domain constraints are **not** valid on `Bool`, `Datetime`, or any algebraic
-type, regardless of its constructor count. Attempting to use constraints on
-these types is a compile error.
+Domain constraints are **not** valid on `Bool` or any algebraic type,
+regardless of its constructor count. Attempting to use constraints on these
+types is a compile error.
 
 ### Indexed Types
 
@@ -351,6 +361,26 @@ param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
 ```
 
 Each entry in the indexed value is independently checked against the constraint bounds.
+This includes indexed `Int` and `Datetime<S>` values.
+
+### Datetime Constraints
+
+Datetime bounds use the constrained value's declared time scale:
+
+```graphcal
+const node TT_START: Datetime<TT> = epoch<TT>("2025-01-01T00:00:00");
+
+param observation: Datetime<TT>(
+    min: @TT_START,
+    max: epoch<TT>("2025-12-31T23:59:59"),
+) = epoch<TT>("2025-06-01T12:00:00");
+```
+
+A bound on `Datetime<TT>` must itself be `Datetime<TT>`. A UTC bound is
+rejected even when it denotes a comparable physical instant; write an explicit
+conversion such as `to_tt(datetime("...Z"))`. `min` and `max` are inclusive,
+and `min > max` is rejected during compilation. Display-only timezone metadata
+from `-> "Area/Location"` does not affect comparison or constraint checking.
 
 ### Constructor Payload Field Constraints
 
@@ -362,6 +392,9 @@ type SatelliteSpec {
     SatelliteSpec(
         mass: Mass(min: 100.0 kg, max: 2000.0 kg),
         altitude: Length(min: 200.0 km),
+        commissioned: Datetime(
+            min: datetime("2025-01-01T00:00:00Z"),
+        ),
     ),
 }
 
@@ -394,9 +427,15 @@ pub type SignedLength { SignedLength(value: Length(min: 0.0 m)) }
 
 Domain constraints on `param` and `node` declarations are checked at
 **runtime** after evaluation: a violation produces a per-node error and
-downstream nodes receive a `DependencyFailed`. Constraints on `const node`
-declarations and on constructor payload fields constructed inside a `const`
-are checked at compile time, since the values are known statically.
+downstream nodes receive a `DependencyFailed`. Constraints apply element-wise
+to indexed values and at construction time to constrained payload fields.
+Constraints on `const node` declarations and on constructor payload fields
+constructed inside a `const` are checked at compile time, since the values are
+known statically.
+
+All bound expressions are compile-time constants, regardless of whether the
+constrained declaration is a `param`, `node`, or `const node`. Bounds may read
+`const node` values, but may not read params or runtime nodes.
 
 ### Compile-Time Validation
 
@@ -406,7 +445,11 @@ constraint sits (top-level declaration or constructor payload field):
 - **Invalid target type**: Constraint on an unsupported type (e.g., `Bool(min: 0)`)
 - **Invalid key**: Unknown constraint key (e.g., `Mass(step: 10)` — only `min` and `max` are valid)
 - **Min exceeds max**: When both bounds are specified and `min > max`
-- **Dimension mismatch**: When the bound's dimension doesn't match the type's dimension (e.g., `Mass(min: 1.0 m)`)
+- **Dimension/type mismatch**: When a quantity bound has the wrong dimension,
+  or an `Int` bound is not exactly `Int`
+- **Datetime time-scale mismatch**: A bound is not exactly the target
+  `Datetime<S>`; cross-scale bounds require an explicit conversion
+- **Non-constant bound**: A bound references a param or runtime node
 - **Generic type-arg constraint**: A constraint placed on a `TypeApplication` argument like `Vec3<Length(min: 0.0 m)>`
 
 ### Use Cases

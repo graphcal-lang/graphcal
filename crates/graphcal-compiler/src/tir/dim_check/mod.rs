@@ -1002,21 +1002,24 @@ fn check_dimensions_dag(
 enum ExpectedBound {
     /// Bound must be `Quantity(d)`. `Int` is also accepted when `d` is dimensionless.
     Quantity(Dimension),
-    /// Bound must be unitless: `Int`, or `Quantity` with the dimensionless dimension.
+    /// Bound must be exactly `Int`, preserving the full `i64` range.
     Int,
+    /// Bound must be a datetime in exactly this declared time scale.
+    Datetime(crate::registry::time_scale::TimeScale),
 }
 
 /// Check that domain constraint bound expressions have the correct type.
 ///
 /// For each param/node with `(min: ..., max: ...)` constraints whose target type
-/// is `Quantity(d)`, `Dimensionless`, or `Int`, infers the type of each bound
+/// is a quantity, `Int`, or `Datetime<S>`, infers the type of each bound
 /// expression using the regular type checker and verifies it matches:
 /// - `Quantity(d)` target: bound must be `Quantity(d)` (or `Int` if `d` is dimensionless).
 /// - `Dimensionless` target: bound must be `Quantity(dimensionless)` or `Int`.
-/// - `Int` target: bound must be `Int` or `Quantity(dimensionless)` — units forbidden.
+/// - `Int` target: bound must be exactly `Int`.
+/// - `Datetime<S>` target: bound must be exactly `Datetime<S>`.
 ///
-/// Other targets (e.g., `Bool`) are skipped here and handled by
-/// `validate_constraint_target` in `exec_plan` (which raises `InvalidDomainTarget`).
+/// Other targets (e.g., `Bool`) are rejected by
+/// [`check_domain_constraint_targets_dag`] before this bound check runs.
 fn check_domain_constraint_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -1053,6 +1056,9 @@ fn check_domain_constraint_dimensions_dag(
                 ExpectedBound::Quantity(Dimension::dimensionless())
             }
             Some(crate::tir::typed::ResolvedTypeExpr::Int) => ExpectedBound::Int,
+            Some(crate::tir::typed::ResolvedTypeExpr::Datetime(scale)) => {
+                ExpectedBound::Datetime(*scale)
+            }
             _ => continue,
         };
 
@@ -1082,55 +1088,15 @@ fn check_one_bound(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    match expected {
-        ExpectedBound::Quantity(target_dim) => {
-            let ok = match inferred {
-                InferredType::Int => target_dim.is_dimensionless(),
-                other => other.quantity_dimension() == Some(target_dim),
-            };
-            if ok {
-                return Ok(());
-            }
-            let bound_dim_str = inferred.quantity_dimension().map_or_else(
-                || format_inferred_type(inferred, registry),
-                |d| registry.dimensions.format_dimension(d),
-            );
-            Err(GraphcalError::DomainDimensionMismatch {
-                name: name.to_string(),
-                type_dim: registry.dimensions.format_dimension(target_dim),
-                bound_name: bound.kind.to_string(),
-                bound_dim: bound_dim_str,
-                src: src.clone(),
-                span: bound.span.into(),
-            })
-        }
-        ExpectedBound::Int => {
-            let ok = match inferred {
-                InferredType::Int => true,
-                other => other
-                    .quantity_dimension()
-                    .is_some_and(Dimension::is_dimensionless),
-            };
-            if ok {
-                return Ok(());
-            }
-            Err(GraphcalError::IntDomainBoundNotUnitless {
-                name: name.to_string(),
-                bound_name: bound.kind.to_string(),
-                bound_type: format_inferred_type(inferred, registry),
-                src: src.clone(),
-                span: bound.span.into(),
-            })
-        }
-    }
+    check_one_bound_with_display_name(&name.to_string(), bound, inferred, expected, registry, src)
 }
 
 /// Reject domain constraints on base types that don't accept them.
 ///
-/// Bool, Datetime, Label, and struct/generic types cannot carry numeric
-/// `(min: …, max: …)` bounds. The check is a pure function of the resolved
-/// declaration type — independent of any bound expression's value — so it
-/// belongs in compile-time validation rather than runtime resolution.
+/// Bool, Label, and algebraic types cannot carry `(min: …, max: …)` bounds.
+/// The check is a pure function of the resolved declaration type—independent
+/// of any bound expression's value—so it belongs in compile-time validation
+/// rather than runtime resolution.
 fn check_domain_constraint_targets_dag(
     dag: &crate::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
@@ -1149,31 +1115,40 @@ fn check_domain_constraint_targets_dag(
         let Some(resolved) = dag.resolved_decl_types.get(name) else {
             continue;
         };
-        let type_kind = match strip_indexed(resolved) {
-            crate::tir::typed::ResolvedTypeExpr::Bool => "Bool".to_string(),
-            crate::tir::typed::ResolvedTypeExpr::Datetime(_) => "Datetime".to_string(),
-            crate::tir::typed::ResolvedTypeExpr::IndexArg(index) => {
-                format!("index {}", index.format_for_diagnostic())
-            }
-            crate::tir::typed::ResolvedTypeExpr::Struct(struct_name, _)
-            | crate::tir::typed::ResolvedTypeExpr::GenericStruct {
-                name: struct_name, ..
-            } => format!("struct `{}`", struct_name.as_str()),
-            crate::tir::typed::ResolvedTypeExpr::Quantity(_)
-            | crate::tir::typed::ResolvedTypeExpr::Dimensionless
-            | crate::tir::typed::ResolvedTypeExpr::Int
-            | crate::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
-            | crate::tir::typed::ResolvedTypeExpr::GenericTypeParam(_, _)
-            | crate::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. }
-            | crate::tir::typed::ResolvedTypeExpr::Indexed { .. } => continue,
-        };
-        return Err(GraphcalError::InvalidDomainTarget {
-            type_kind,
-            src: src.clone(),
-            span: decl_span.into(),
-        });
+        if let Some(type_kind) = invalid_domain_target_kind(resolved) {
+            return Err(GraphcalError::InvalidDomainTarget {
+                type_kind,
+                src: src.clone(),
+                span: decl_span.into(),
+            });
+        }
     }
     Ok(())
+}
+
+fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) -> Option<String> {
+    use crate::tir::typed::ResolvedTypeExpr;
+
+    match resolved {
+        ResolvedTypeExpr::Indexed { base, .. } => invalid_domain_target_kind(base),
+        ResolvedTypeExpr::Bool => Some("Bool".to_string()),
+        ResolvedTypeExpr::IndexArg(index) => {
+            Some(format!("index {}", index.format_for_diagnostic()))
+        }
+        ResolvedTypeExpr::Struct(struct_name, _)
+        | ResolvedTypeExpr::GenericStruct {
+            name: struct_name, ..
+        } => Some(format!("struct `{}`", struct_name.as_str())),
+        ResolvedTypeExpr::GenericTypeParam(param, _) => {
+            Some(format!("generic Type parameter `{param}`"))
+        }
+        ResolvedTypeExpr::Quantity(_)
+        | ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Int
+        | ResolvedTypeExpr::Datetime(_)
+        | ResolvedTypeExpr::GenericDimParam(_, _)
+        | ResolvedTypeExpr::GenericDimExpr { .. } => None,
+    }
 }
 
 /// Extract `DomainBound`s from a `TypeExpr`, handling indexed types.
@@ -1192,102 +1167,61 @@ fn extract_domain_bounds(
     &[]
 }
 
-/// Reject domain constraints on struct/union fields whose target type
-/// cannot carry numeric `(min: …, max: …)` bounds (Bool, Datetime, Label,
-/// nested struct/union). Mirrors [`check_domain_constraint_targets_dag`]
-/// for top-level decls.
-///
-/// Scans every `TypeDef` in the file's registry. Generic-param fields are
-/// skipped (we don't know their concrete type at definition time).
+/// Reject constraints on struct/union fields outside the explicitly
+/// constrainable value families. This mirrors
+/// [`check_domain_constraint_targets_dag`] using the field's resolved semantic
+/// type rather than reclassifying source names.
 fn check_field_domain_constraint_targets(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for type_def in tir.registry.types.all_types() {
-        // Iterate over every variant's payload fields — the n-variant
-        // model puts payload fields on the union's members.
-        let members: &[crate::registry::types::UnionMemberDef] =
-            type_def.union_members().unwrap_or(&[]);
-        for field in members.iter().flat_map(|m| m.fields.iter()) {
-            if extract_domain_bounds(&field.type_ann).is_empty() {
+    let mut seen = std::collections::HashSet::new();
+    for (id, dag) in &tir.dags {
+        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
+            continue;
+        }
+        for (key, bounds) in &dag.semantic.type_defs.field_bounds {
+            if !seen.insert(key) {
                 continue;
             }
-            let kind = field_constraint_target_kind(&field.type_ann, &tir.registry);
-            if let Some(type_kind) = kind {
-                return Err(GraphcalError::InvalidDomainTarget {
-                    type_kind,
-                    src: src.clone(),
-                    span: field.type_ann.span.into(),
-                });
-            }
+            let Some(resolved) = dag.semantic.type_defs.field_type(key) else {
+                continue;
+            };
+            let Some(type_kind) = invalid_domain_target_kind(resolved) else {
+                continue;
+            };
+            let span = field_type_annotation(dag, key).map_or_else(
+                || {
+                    bounds
+                        .first()
+                        .map_or_else(|| Span::new(0, 0), |bound| bound.span)
+                },
+                |field| field.type_ann.span,
+            );
+            return Err(GraphcalError::InvalidDomainTarget {
+                type_kind,
+                src: src.clone(),
+                span: span.into(),
+            });
         }
     }
     Ok(())
 }
 
-/// Classify a field's `TypeExpr` as either constraint-compatible (returns
-/// `None`) or constraint-incompatible (returns `Some(kind_str)` describing
-/// why it's incompatible). Strips an outer `Indexed` wrapper before
-/// classifying — a `Velocity(min: 0)[Maneuver]` field is constraint-
-/// compatible because the base `Velocity` is quantity.
-fn field_constraint_target_kind(
-    type_ann: &crate::desugar::desugared_ast::TypeExpr,
-    registry: &Registry,
-) -> Option<String> {
-    use crate::desugar::desugared_ast::TypeExprKind;
-    let base = match &type_ann.kind {
-        TypeExprKind::Indexed { base, .. } => base.as_ref(),
-        _ => type_ann,
-    };
-    match &base.kind {
-        TypeExprKind::Bool => Some("Bool".to_string()),
-        TypeExprKind::Datetime | TypeExprKind::DatetimeApplication { .. } => {
-            Some("Datetime".to_string())
-        }
-        TypeExprKind::TypeApplication { name, .. } => {
-            Some(format!("struct `{}`", name.value.display_path()))
-        }
-        // The outer `Indexed` wrapper was stripped above; a nested indexed
-        // type at this depth is unusual but constraint-compatible (the base
-        // dim is what carries the constraint).
-        TypeExprKind::Dimensionless | TypeExprKind::Int | TypeExprKind::Indexed { .. } => None,
-        TypeExprKind::DimExpr(dim_expr) => {
-            // A bare single-name DimExpr could be a struct, an index name, or a
-            // dimension. The registry distinguishes them: dim → constraint-
-            // compatible quantity; struct → reject; index → reject as an index.
-            if dim_expr.terms.len() == 1
-                && dim_expr.terms[0].term.power.is_none()
-                && let Some(item) = dim_expr.terms.first()
-            {
-                let Some(name) = item
-                    .term
-                    .name
-                    .value
-                    .as_bare()
-                    .map(super::super::syntax::names::NameAtom::as_str)
-                else {
-                    // Qualified type-level references are rejected by type
-                    // resolution; skip this compatibility classifier here.
-                    return None;
-                };
-                if registry.dimensions.get_dimension(name).is_some() {
-                    None
-                } else if registry.types.get_type(name).is_some() {
-                    Some(format!("struct `{name}`"))
-                } else if registry.indexes.get_index(name).is_some() {
-                    Some(format!("index `{name}`"))
-                } else {
-                    // Generic dim param or unknown name — skip; an unknown name
-                    // would already error in type resolution.
-                    None
-                }
-            } else {
-                // Compound dim expression like `Length / Time` → constraint-
-                // compatible quantity.
-                None
-            }
-        }
-    }
+fn field_type_annotation<'a>(
+    dag: &'a crate::tir::typed::DagTIR,
+    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
+) -> Option<&'a crate::registry::types::StructField> {
+    dag.semantic
+        .type_defs
+        .struct_types
+        .get(&key.owning_type)?
+        .union_members()?
+        .iter()
+        .find(|member| member.name == key.constructor)?
+        .fields
+        .iter()
+        .find(|field| field.name == key.field)
 }
 
 /// Check that domain bound expressions on struct/union fields have the
@@ -1325,7 +1259,13 @@ fn check_field_domain_constraint_dimensions(
             }) else {
                 continue;
             };
-            let Some(expected) = field_expected_bound(&field.type_ann, registry, src)? else {
+            let Some(expected) = dag
+                .semantic
+                .type_defs
+                .field_type(key)
+                .map(strip_indexed)
+                .and_then(expected_bound_from_resolved)
+            else {
                 continue;
             };
             // For a single-variant collision (record-shape) the display
@@ -1362,35 +1302,21 @@ fn check_field_domain_constraint_dimensions(
     Ok(())
 }
 
-/// Compute the [`ExpectedBound`] for a struct field's `TypeExpr`. Returns
-/// `Ok(None)` when the field's base type isn't `Quantity`/`Dimensionless`/`Int`
-/// (in which case the target check has already rejected it, or it's a
-/// generic param to be checked at instantiation), and `Err` if dimension
-/// arithmetic overflows.
-fn field_expected_bound(
-    type_ann: &crate::desugar::desugared_ast::TypeExpr,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Option<ExpectedBound>, GraphcalError> {
-    use crate::desugar::desugared_ast::TypeExprKind;
-    let base = match &type_ann.kind {
-        TypeExprKind::Indexed { base, .. } => base.as_ref(),
-        _ => type_ann,
-    };
-    match &base.kind {
-        TypeExprKind::Dimensionless => {
-            Ok(Some(ExpectedBound::Quantity(Dimension::dimensionless())))
+fn expected_bound_from_resolved(
+    resolved: &crate::tir::typed::ResolvedTypeExpr,
+) -> Option<ExpectedBound> {
+    match resolved {
+        crate::tir::typed::ResolvedTypeExpr::Quantity(dimension) => {
+            Some(ExpectedBound::Quantity(dimension.clone()))
         }
-        TypeExprKind::Int => Ok(Some(ExpectedBound::Int)),
-        TypeExprKind::DimExpr(_) => Ok(registry
-            .dimensions
-            .resolve_type_expr(base)
-            .map_err(|_| GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: base.span.into(),
-            })?
-            .map(ExpectedBound::Quantity)),
-        _ => Ok(None),
+        crate::tir::typed::ResolvedTypeExpr::Dimensionless => {
+            Some(ExpectedBound::Quantity(Dimension::dimensionless()))
+        }
+        crate::tir::typed::ResolvedTypeExpr::Int => Some(ExpectedBound::Int),
+        crate::tir::typed::ResolvedTypeExpr::Datetime(scale) => {
+            Some(ExpectedBound::Datetime(*scale))
+        }
+        _ => None,
     }
 }
 
@@ -1428,17 +1354,25 @@ fn check_one_bound_with_display_name(
             })
         }
         ExpectedBound::Int => {
-            let ok = match inferred {
-                InferredType::Int => true,
-                other => other
-                    .quantity_dimension()
-                    .is_some_and(Dimension::is_dimensionless),
-            };
-            if ok {
+            if matches!(inferred, InferredType::Int) {
                 return Ok(());
             }
-            Err(GraphcalError::IntDomainBoundNotUnitless {
+            Err(GraphcalError::IntDomainBoundTypeMismatch {
                 name: display_name.to_string(),
+                bound_name: bound.kind.to_string(),
+                bound_type: format_inferred_type(inferred, registry),
+                src: src.clone(),
+                span: bound.span.into(),
+            })
+        }
+        ExpectedBound::Datetime(target_scale) => {
+            if matches!(inferred, InferredType::Datetime(bound_scale) if bound_scale == target_scale)
+            {
+                return Ok(());
+            }
+            Err(GraphcalError::DatetimeDomainBoundTypeMismatch {
+                name: display_name.to_string(),
+                target_type: format_inferred_type(&InferredType::Datetime(*target_scale), registry),
                 bound_name: bound.kind.to_string(),
                 bound_type: format_inferred_type(inferred, registry),
                 src: src.clone(),

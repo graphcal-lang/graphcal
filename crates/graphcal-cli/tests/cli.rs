@@ -2703,6 +2703,41 @@ fn eval_datetime_epoch() {
 }
 
 #[test]
+fn eval_datetime_domain_constraints() {
+    let output = graphcal_bin()
+        .args(["eval", &fixture("valid/datetime_domain.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        output.status.success(),
+        "datetime domains should evaluate.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(stdout.contains("civil_event"), "stdout: {stdout}");
+    assert!(stdout.contains("scientific_events"), "stdout: {stdout}");
+    assert!(stdout.contains("observation"), "stdout: {stdout}");
+}
+
+#[test]
+fn check_datetime_domain_scale_mismatch() {
+    let output = graphcal_bin()
+        .args([
+            "check",
+            &fixture("invalid/datetime_domain_scale_mismatch.gcl"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("graphcal::C007"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("target is Datetime<TT>"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
 fn eval_datetime_scale_mismatch_error() {
     let output = graphcal_bin()
         .args(["eval", &fixture("invalid/datetime_scale_mismatch.gcl")])

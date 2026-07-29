@@ -1687,7 +1687,7 @@ pub enum GraphcalError {
     #[error("domain constraints are not valid on `{type_kind}` types")]
     #[diagnostic(
         code(graphcal::C004),
-        help("domain constraints (min/max) are only valid on quantity and Int types")
+        help("domain constraints (min/max) are only valid on quantity, Int, and Datetime types")
     )]
     InvalidDomainTarget {
         type_kind: String,
@@ -1697,20 +1697,18 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error(
-        "domain bound on Int `{name}` must be unitless: {bound_name} bound has type {bound_type}"
-    )]
+    #[error("domain bound type mismatch on Int `{name}`: {bound_name} bound has type {bound_type}")]
     #[diagnostic(
         code(graphcal::C005),
-        help("Int values are unitless; their domain bounds must be Int or dimensionless")
+        help("Int domain bounds must be Int so their full range is preserved exactly")
     )]
-    IntDomainBoundNotUnitless {
+    IntDomainBoundTypeMismatch {
         name: String,
         bound_name: String,
         bound_type: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("Int bound is not unitless")]
+        #[label("Int bound must have type Int")]
         span: SourceSpan,
     },
 
@@ -1725,6 +1723,26 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("constraint not allowed here")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "datetime domain bound type mismatch on `{name}`: target is {target_type}, but {bound_name} bound is {bound_type}"
+    )]
+    #[diagnostic(
+        code(graphcal::C007),
+        help(
+            "datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion"
+        )
+    )]
+    DatetimeDomainBoundTypeMismatch {
+        name: String,
+        target_type: String,
+        bound_name: String,
+        bound_type: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("datetime bound has the wrong time scale or value type")]
         span: SourceSpan,
     },
 
@@ -2092,8 +2110,9 @@ impl GraphcalError {
             | Self::DomainDimensionMismatch { src, .. }
             | Self::DomainMinExceedsMax { src, .. }
             | Self::InvalidDomainTarget { src, .. }
-            | Self::IntDomainBoundNotUnitless { src, .. }
+            | Self::IntDomainBoundTypeMismatch { src, .. }
             | Self::GenericTypeArgDomainConstraint { src, .. }
+            | Self::DatetimeDomainBoundTypeMismatch { src, .. }
             | Self::ImportPrivateItem { src, .. }
             | Self::RequiredItemMustBeBindable { src, .. }
             | Self::PrivateInPublic { src, .. }

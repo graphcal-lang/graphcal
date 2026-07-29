@@ -17,13 +17,17 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
 use crate::decl_key::RuntimeDeclKey;
+use crate::domain_check::{
+    ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
+    ResolvedDomainConstraint,
+};
 use crate::eval_expr::{
     EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
 };
 use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{
-    DagTIR, ResolvedDagDependencies, ResolvedDomainConstraint, StructFieldConstraintKey, TIR,
+    DagTIR, ResolvedDagDependencies, StructFieldConstraintKey, TIR,
 };
 
 /// An assert body entry for execution.
@@ -480,10 +484,10 @@ fn runtime_eval_order_resolved(
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
-/// Evaluates each constraint bound expression using const values and builtins
-/// to obtain SI min/max quantities, validates that the target type accepts
-/// constraints, and checks min <= max. Bound dimensions are validated earlier
-/// in `dim_check::check_dimensions_tir`.
+/// Evaluates each compile-time bound expression using const values and builtins,
+/// selects the target's quantity, integer, or datetime representation, and
+/// checks `min <= max`. Bound types and target compatibility are validated
+/// earlier in `dim_check::check_dimensions_tir`.
 ///
 /// For const declarations, the resolved constraint is also checked against the
 /// already-evaluated const value at compile time, raising `DomainViolation`
@@ -534,19 +538,19 @@ pub fn resolve_domain_constraints(
             continue;
         };
 
-        // Validate that the base type supports constraints.
-        // (Bound dimensions are validated in `dim_check::check_dimensions_tir`.)
-        let resolved = tir.root().resolved_decl_types.get(name);
-        let base_resolved = resolved.map(strip_indexed);
-        validate_constraint_target(&name.to_string(), base_resolved, decl_span, src)?;
-
+        let target = resolve_constraint_target(
+            &name.to_string(),
+            tir.root().resolved_decl_types.get(name).map(strip_indexed),
+            decl_span,
+            src,
+        )?;
         let resolved_constraint = resolve_constraint_from_bounds(
             domain_bounds,
             &name.to_string(),
+            target,
             &visible_const_values,
             &ctx,
             src,
-            |kind| format!("domain constraint `{kind}` must evaluate to a quantity value"),
         )?;
 
         // For const declarations, validate the (already-known) value at compile time.
@@ -571,85 +575,184 @@ pub fn resolve_domain_constraints(
     Ok(constraints)
 }
 
-/// Evaluate a declaration's or field's stored HIR domain bounds to a
-/// [`ResolvedDomainConstraint`], validating `min <= max`.
+#[derive(Debug, Clone, Copy)]
+enum ConstraintTarget {
+    Quantity,
+    Int,
+    Datetime(graphcal_compiler::registry::time_scale::TimeScale),
+}
+
+/// Evaluate a declaration's or field's stored HIR domain bounds into the
+/// representation selected by its constrained value family.
 fn resolve_constraint_from_bounds(
+    bounds: &[graphcal_compiler::tir::typed::ResolvedDomainBound],
+    display_name: &str,
+    target: ConstraintTarget,
+    values: &RuntimeValueMap,
+    ctx: &EvalContext<'_>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<ResolvedDomainConstraint, GraphcalError> {
+    match target {
+        ConstraintTarget::Quantity => evaluate_domain_bounds(
+            bounds,
+            display_name,
+            values,
+            ctx,
+            src,
+            |value, bound| match value {
+                RuntimeValue::Quantity(value) => Ok(*value),
+                RuntimeValue::Int(value) => exact_domain_int_bound(*value, src, bound.value.span),
+                other => Err(domain_bound_value_error(
+                    display_name,
+                    bound,
+                    "a quantity",
+                    other,
+                    src,
+                )),
+            },
+            |expr, value| format_quantity_bound_display(expr, *value),
+        )
+        .map(ResolvedDomainConstraint::quantity),
+        ConstraintTarget::Int => evaluate_domain_bounds(
+            bounds,
+            display_name,
+            values,
+            ctx,
+            src,
+            |value, bound| match value {
+                RuntimeValue::Int(value) => Ok(*value),
+                other => Err(domain_bound_value_error(
+                    display_name,
+                    bound,
+                    "Int",
+                    other,
+                    src,
+                )),
+            },
+            |_expr, value| value.to_string(),
+        )
+        .map(ResolvedDomainConstraint::int),
+        ConstraintTarget::Datetime(scale) => {
+            let evaluated = evaluate_domain_bounds(
+                bounds,
+                display_name,
+                values,
+                ctx,
+                src,
+                |value, bound| match value {
+                    RuntimeValue::Datetime(epoch) if epoch.time_scale == scale.to_hifitime() => {
+                        Ok(*epoch)
+                    }
+                    other => Err(domain_bound_value_error(
+                        display_name,
+                        bound,
+                        &format!("Datetime<{scale}>"),
+                        other,
+                        src,
+                    )),
+                },
+                |_expr, epoch| epoch.to_string(),
+            )?;
+            ResolvedDomainConstraint::datetime(scale, evaluated).map_err(|error| {
+                GraphcalError::InternalError {
+                    message: format!(
+                        "datetime domain bounds on `{display_name}` violated their checked scale invariant: {error}"
+                    ),
+                    src: src.clone(),
+                    span: bounds
+                        .first()
+                        .map_or_else(|| Span::new(0, 0), |bound| bound.span)
+                        .into(),
+                }
+            })
+        }
+    }
+}
+
+fn evaluate_domain_bounds<T: PartialOrd>(
     bounds: &[graphcal_compiler::tir::typed::ResolvedDomainBound],
     display_name: &str,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
     src: &NamedSource<Arc<String>>,
-    quantity_err_msg: impl Fn(graphcal_compiler::syntax::ast::DomainBoundKind) -> String,
-) -> Result<ResolvedDomainConstraint, GraphcalError> {
+    convert: impl Fn(
+        &RuntimeValue,
+        &graphcal_compiler::tir::typed::ResolvedDomainBound,
+    ) -> Result<T, GraphcalError>,
+    format_display: impl Fn(&graphcal_compiler::hir::Expr, &T) -> String,
+) -> Result<EvaluatedDomainBounds<T>, GraphcalError> {
+    let Some(first) = bounds.first() else {
+        return Err(GraphcalError::InternalError {
+            message: format!("domain constraint on `{display_name}` has no bounds"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        });
+    };
     let empty_locals = HirLocalValueMap::root();
-    let mut min_val: Option<f64> = None;
-    let mut max_val: Option<f64> = None;
-    let mut min_display: Option<String> = None;
-    let mut max_display: Option<String> = None;
-    let mut constraint_span = bounds[0].span;
-
-    for bound in bounds {
-        let rv = eval_hir_expr(&bound.value, values, &empty_locals, ctx)?;
-        let si_value = match &rv {
-            RuntimeValue::Quantity(v) => *v,
-            RuntimeValue::Int(i) => exact_domain_int_bound(*i, src, bound.value.span)?,
-            _ => {
-                return Err(GraphcalError::EvalError {
-                    message: quantity_err_msg(bound.kind),
-                    src: src.clone(),
-                    span: bound.value.span.into(),
-                });
-            }
-        };
-
-        let display_text = format_bound_display(&bound.value, si_value);
-        constraint_span = constraint_span.merge(bound.span);
-
-        match bound.kind {
-            graphcal_compiler::syntax::ast::DomainBoundKind::Min => {
-                min_val = Some(si_value);
-                min_display = Some(display_text);
-            }
-            graphcal_compiler::syntax::ast::DomainBoundKind::Max => {
-                max_val = Some(si_value);
-                max_display = Some(display_text);
-            }
-        }
-    }
-
-    if let (Some(min), Some(max)) = (min_val, max_val)
-        && min > max
+    let evaluated = bounds
+        .iter()
+        .map(|bound| {
+            let runtime_value = eval_hir_expr(&bound.value, values, &empty_locals, ctx)?;
+            let value = convert(&runtime_value, bound)?;
+            let display = format_display(&bound.value, &value);
+            Ok((bound.kind, EvaluatedDomainBound::new(value, display)))
+        })
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    let constraint_span = bounds
+        .iter()
+        .skip(1)
+        .fold(first.span, |span, bound| span.merge(bound.span));
+    let (min, max) =
+        evaluated
+            .into_iter()
+            .fold((None, None), |(min, max), (kind, bound)| match kind {
+                graphcal_compiler::syntax::ast::DomainBoundKind::Min => (Some(bound), max),
+                graphcal_compiler::syntax::ast::DomainBoundKind::Max => (min, Some(bound)),
+            });
+    if let (Some(min), Some(max)) = (&min, &max)
+        && min.value() > max.value()
     {
         return Err(GraphcalError::DomainMinExceedsMax {
             name: display_name.to_string(),
-            min: min_display.unwrap_or_else(|| format!("{min}")),
-            max: max_display.unwrap_or_else(|| format!("{max}")),
+            min: min.display().to_string(),
+            max: max.display().to_string(),
             src: src.clone(),
             span: constraint_span.into(),
         });
     }
+    Ok(EvaluatedDomainBounds::new(min, max))
+}
 
-    Ok(ResolvedDomainConstraint {
-        min: min_val,
-        max: max_val,
-        min_display,
-        max_display,
-        span: constraint_span,
-    })
+fn domain_bound_value_error(
+    display_name: &str,
+    bound: &graphcal_compiler::tir::typed::ResolvedDomainBound,
+    expected: &str,
+    actual: &RuntimeValue,
+    src: &NamedSource<Arc<String>>,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: format!(
+            "{} domain bound on `{display_name}` must evaluate to {expected}, got {}",
+            bound.kind,
+            actual.kind()
+        ),
+        src: src.clone(),
+        span: bound.value.span.into(),
+    }
 }
 
 /// Resolve domain constraints declared on struct/union member fields.
 ///
 /// Field bounds are stored as HIR in each DAG's semantic type defs
 /// (`ResolvedTypeDefs.field_bounds`); this evaluates each constrained field's
-/// `min`/`max` bounds to SI quantities, validates `min ≤ max`, and stores the
-/// result keyed by the owning struct type, constructor, and field name —
+/// typed `min`/`max` bounds, validates `min ≤ max`, and stores the result keyed
+/// by the owning struct type, constructor, and field name —
 /// under both the owner-qualified identity and the root-owned display leaf so
 /// runtime lookups for boundary-created synthetic owners still hit.
 ///
-/// Bound dimensions and target compatibility are validated earlier in
-/// `dim_check::check_field_domain_constraint_*`. This pass focuses on the
-/// runtime-relevant pieces: bound evaluation, `min ≤ max`, and storage.
+/// Bound types and target compatibility are validated earlier by the compiler's
+/// field-domain checks. This pass focuses on the runtime-relevant pieces: bound
+/// evaluation, `min ≤ max`, and storage.
 pub fn resolve_struct_field_constraints(
     tir: &TIR,
     const_values: &RuntimeValueMap,
@@ -689,17 +792,22 @@ pub fn resolve_struct_field_constraints(
             // Display name uses the constructor's leaf while semantic identity
             // remains the owning union type.
             let display_name = format!("{}.{}", key.constructor, key.field);
+            let bound_span = bounds
+                .first()
+                .map_or_else(|| Span::new(0, 0), |bound| bound.span);
+            let target = resolve_constraint_target(
+                &display_name,
+                dag.semantic.type_defs.field_type(key).map(strip_indexed),
+                bound_span,
+                src,
+            )?;
             let constraint = resolve_constraint_from_bounds(
                 bounds,
                 &display_name,
+                target,
                 &visible_const_values,
                 &ctx,
                 src,
-                |kind| {
-                    format!(
-                        "domain constraint `{kind}` on field `{display_name}` must evaluate to a quantity value"
-                    )
-                },
             )?;
             // Store under both the owner-qualified identity and the
             // root-owned display leaf so runtime lookups for
@@ -865,6 +973,7 @@ fn format_runtime_value(rv: &RuntimeValue) -> String {
     match rv {
         RuntimeValue::Quantity(v) => graphcal_compiler::registry::format::format_number(*v),
         RuntimeValue::Int(i) => format!("{i}"),
+        RuntimeValue::Datetime(epoch) => epoch.to_string(),
         RuntimeValue::Indexed { entries, .. } => {
             // Show the first violating entry's value if recoverable; otherwise summary.
             let parts: Vec<String> = entries
@@ -889,59 +998,57 @@ fn strip_indexed(
     }
 }
 
-/// Validate that the resolved type supports domain constraints.
-fn validate_constraint_target(
-    _name: &str,
+/// Resolve the typed constraint family selected by a declaration or field type.
+fn resolve_constraint_target(
+    name: &str,
     base_resolved: Option<&graphcal_compiler::tir::typed::ResolvedTypeExpr>,
     decl_span: Span,
     src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+) -> Result<ConstraintTarget, GraphcalError> {
+    use graphcal_compiler::tir::typed::ResolvedTypeExpr;
+
     let Some(resolved) = base_resolved else {
-        return Ok(()); // No resolved type — skip validation (will be caught elsewhere)
+        return Err(GraphcalError::InternalError {
+            message: format!("domain constraint target `{name}` has no resolved type"),
+            src: src.clone(),
+            span: decl_span.into(),
+        });
     };
     match resolved {
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Quantity(_)
-        | graphcal_compiler::tir::typed::ResolvedTypeExpr::Dimensionless
-        | graphcal_compiler::tir::typed::ResolvedTypeExpr::Int => Ok(()),
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Bool => {
-            Err(GraphcalError::InvalidDomainTarget {
-                type_kind: "Bool".to_string(),
-                src: src.clone(),
-                span: decl_span.into(),
-            })
-        }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Datetime(_) => {
-            Err(GraphcalError::InvalidDomainTarget {
-                type_kind: "Datetime".to_string(),
-                src: src.clone(),
-                span: decl_span.into(),
-            })
-        }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::IndexArg(idx) => {
-            Err(GraphcalError::InvalidDomainTarget {
-                type_kind: format!("index {}", idx.format_for_diagnostic()),
-                src: src.clone(),
-                span: decl_span.into(),
-            })
-        }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Struct(name_s, _)
-        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericStruct { name: name_s, .. } => {
-            Err(GraphcalError::InvalidDomainTarget {
-                type_kind: format!("struct `{}`", name_s.as_str()),
-                src: src.clone(),
-                span: decl_span.into(),
-            })
-        }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
-        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericTypeParam(_, _)
-        | graphcal_compiler::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. } => {
-            // Generic types in function signatures — constraints don't apply here
-            Ok(())
-        }
-        graphcal_compiler::tir::typed::ResolvedTypeExpr::Indexed { .. } => {
-            // Already stripped, shouldn't reach here
-            Ok(())
-        }
+        ResolvedTypeExpr::Quantity(_)
+        | ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::GenericDimParam(_, _)
+        | ResolvedTypeExpr::GenericDimExpr { .. } => Ok(ConstraintTarget::Quantity),
+        ResolvedTypeExpr::Int => Ok(ConstraintTarget::Int),
+        ResolvedTypeExpr::Datetime(scale) => Ok(ConstraintTarget::Datetime(*scale)),
+        ResolvedTypeExpr::Bool => Err(GraphcalError::InvalidDomainTarget {
+            type_kind: "Bool".to_string(),
+            src: src.clone(),
+            span: decl_span.into(),
+        }),
+        ResolvedTypeExpr::IndexArg(index) => Err(GraphcalError::InvalidDomainTarget {
+            type_kind: format!("index {}", index.format_for_diagnostic()),
+            src: src.clone(),
+            span: decl_span.into(),
+        }),
+        ResolvedTypeExpr::Struct(struct_name, _)
+        | ResolvedTypeExpr::GenericStruct {
+            name: struct_name, ..
+        } => Err(GraphcalError::InvalidDomainTarget {
+            type_kind: format!("struct `{}`", struct_name.as_str()),
+            src: src.clone(),
+            span: decl_span.into(),
+        }),
+        ResolvedTypeExpr::GenericTypeParam(param, _) => Err(GraphcalError::InvalidDomainTarget {
+            type_kind: format!("generic Type parameter `{param}`"),
+            src: src.clone(),
+            span: decl_span.into(),
+        }),
+        ResolvedTypeExpr::Indexed { .. } => Err(GraphcalError::InternalError {
+            message: format!("domain constraint target `{name}` was not reduced to its base type"),
+            src: src.clone(),
+            span: decl_span.into(),
+        }),
     }
 }
 
@@ -974,7 +1081,7 @@ fn exact_domain_int_bound(
     }
 }
 
-fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
+fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {
     use graphcal_compiler::hir::ExprKind;
     match &expr.kind {
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
@@ -989,7 +1096,7 @@ fn format_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> S
             op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
             operand,
         } => {
-            format!("-{}", format_bound_display(operand, -si_value))
+            format!("-{}", format_quantity_bound_display(operand, -si_value))
         }
         // Fallback: display the already-evaluated SI value.
         _ => graphcal_compiler::registry::format::format_number(si_value),
@@ -1246,5 +1353,57 @@ mod tests {
             matches!(err, GraphcalError::DomainViolation { .. }),
             "got: {err:?}"
         );
+    }
+
+    #[test]
+    fn const_domain_int_preserves_full_range_bounds() {
+        compile_source(
+            "const node MIN_I: Int(\
+             min: -9223372036854775807 - 1, \
+             max: 9223372036854775807) = -9223372036854775807 - 1;",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn const_datetime_domain_bounds_are_inclusive() {
+        compile_source(
+            r#"
+const node START: Datetime<TT> = epoch<TT>("2024-01-01T00:00:00");
+const node EVENT: Datetime<TT>(
+    min: @START,
+    max: epoch<TT>("2024-12-31T23:59:59"),
+) = @START;
+"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn const_datetime_domain_violation_is_rejected() {
+        let error = compile_source(
+            r#"
+const node EVENT: Datetime(
+    min: datetime("2024-01-01T00:00:00Z"),
+    max: datetime("2024-12-31T23:59:59Z"),
+) = datetime("2025-01-01T00:00:00Z");
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(error, GraphcalError::DomainViolation { .. }));
+    }
+
+    #[test]
+    fn datetime_domain_min_exceeds_max_is_rejected() {
+        let error = compile_source(
+            r#"
+const node EVENT: Datetime<TT>(
+    min: epoch<TT>("2025-01-01T00:00:00"),
+    max: epoch<TT>("2024-01-01T00:00:00"),
+) = epoch<TT>("2024-06-01T00:00:00");
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(error, GraphcalError::DomainMinExceedsMax { .. }));
     }
 }

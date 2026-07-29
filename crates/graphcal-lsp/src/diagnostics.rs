@@ -332,6 +332,38 @@ mod tests {
     }
 
     #[test]
+    fn datetime_domain_constraints_accept_matching_scales() {
+        let source = r#"
+param event: Datetime<TT>(
+    min: epoch<TT>("2024-01-01T00:00:00"),
+    max: epoch<TT>("2024-12-31T23:59:59"),
+) = epoch<TT>("2024-06-01T00:00:00");
+"#;
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(
+            diagnostics.is_empty(),
+            "unexpected diagnostics: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn datetime_domain_scale_mismatch_has_a_specific_diagnostic() {
+        let source = r#"
+param event: Datetime<TT>(
+    min: datetime("2024-01-01T00:00:00Z"),
+) = epoch<TT>("2024-06-01T00:00:00");
+"#;
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert!(diagnostics.iter().any(|diagnostic| {
+            matches!(
+                &diagnostic.code,
+                Some(NumberOrString::String(code)) if code == "graphcal::C007"
+            ) && diagnostic.message.contains("target is Datetime<TT>")
+                && diagnostic.message.contains("min bound is Datetime")
+        }));
+    }
+
+    #[test]
     fn invalid_datetime_literal_is_reported_during_checking() {
         let source = "node bad: Datetime = datetime(\"2024-11-05T12:00:00 TT\");";
         let diagnostics = produce_diagnostics(source, "test.gcl");

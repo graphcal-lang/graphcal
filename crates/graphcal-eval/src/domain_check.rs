@@ -1,10 +1,153 @@
-//! Pure runtime-value checks against resolved domain constraints.
+//! Typed domain constraints and pure runtime-value checks.
 //!
 //! Used both at compile time (validating const values in `exec_plan`) and at
 //! evaluation time (validating param/node values in `eval::runtime`).
 
-use crate::eval_expr::RuntimeValue;
-use graphcal_compiler::tir::typed::ResolvedDomainConstraint;
+use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::registry::time_scale::TimeScale;
+
+/// One evaluated inclusive domain bound plus its user-facing diagnostic text.
+#[derive(Debug, Clone)]
+pub struct ResolvedDomainBound<T> {
+    value: T,
+    display: String,
+}
+
+impl<T> ResolvedDomainBound<T> {
+    pub const fn new(value: T, display: String) -> Self {
+        Self { value, display }
+    }
+
+    pub const fn value(&self) -> &T {
+        &self.value
+    }
+
+    pub fn display(&self) -> &str {
+        &self.display
+    }
+
+    fn try_map<U, E>(
+        self,
+        map: impl FnOnce(T) -> Result<U, E>,
+    ) -> Result<ResolvedDomainBound<U>, E> {
+        Ok(ResolvedDomainBound {
+            value: map(self.value)?,
+            display: self.display,
+        })
+    }
+}
+
+/// Evaluated inclusive lower and upper bounds for one constraint family.
+#[derive(Debug, Clone)]
+pub struct ResolvedDomainBounds<T> {
+    min: Option<ResolvedDomainBound<T>>,
+    max: Option<ResolvedDomainBound<T>>,
+}
+
+impl<T> ResolvedDomainBounds<T> {
+    pub const fn new(
+        min: Option<ResolvedDomainBound<T>>,
+        max: Option<ResolvedDomainBound<T>>,
+    ) -> Self {
+        Self { min, max }
+    }
+
+    pub const fn min(&self) -> Option<&ResolvedDomainBound<T>> {
+        self.min.as_ref()
+    }
+
+    pub const fn max(&self) -> Option<&ResolvedDomainBound<T>> {
+        self.max.as_ref()
+    }
+}
+
+/// A canonical physical instant admitted only from an epoch in the target scale.
+///
+/// Storing TAI duration makes ordering independent of hifitime's display scale,
+/// while the private constructor prevents a cross-scale bound from entering a
+/// datetime constraint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct DomainInstant(hifitime::Duration);
+
+impl DomainInstant {
+    fn from_epoch(
+        epoch: hifitime::Epoch,
+        expected_scale: TimeScale,
+    ) -> Result<Self, DomainInstantError> {
+        if epoch.time_scale != expected_scale.to_hifitime() {
+            return Err(DomainInstantError::ScaleMismatch {
+                expected: expected_scale,
+                actual: epoch.time_scale,
+            });
+        }
+        Ok(Self(epoch.to_tai_duration()))
+    }
+}
+
+/// Failure to canonicalize a datetime value for a same-scale domain constraint.
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum DomainInstantError {
+    #[error("expected time scale {expected}, got {actual:?}")]
+    ScaleMismatch {
+        expected: TimeScale,
+        actual: hifitime::TimeScale,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum ResolvedDomainConstraintKind {
+    Quantity(ResolvedDomainBounds<f64>),
+    Int(ResolvedDomainBounds<i64>),
+    Datetime {
+        scale: TimeScale,
+        bounds: ResolvedDomainBounds<DomainInstant>,
+    },
+}
+
+/// An evaluated domain constraint whose bound representation matches its value family.
+///
+/// The private variant carrier prevents quantity, integer, and datetime bounds
+/// from being mixed after constraint resolution. Integer bounds remain `i64`
+/// throughout and datetime bounds are canonicalized only after their declared
+/// scale has been verified.
+#[derive(Debug, Clone)]
+pub struct ResolvedDomainConstraint {
+    kind: ResolvedDomainConstraintKind,
+}
+
+impl ResolvedDomainConstraint {
+    pub const fn quantity(bounds: ResolvedDomainBounds<f64>) -> Self {
+        Self {
+            kind: ResolvedDomainConstraintKind::Quantity(bounds),
+        }
+    }
+
+    pub const fn int(bounds: ResolvedDomainBounds<i64>) -> Self {
+        Self {
+            kind: ResolvedDomainConstraintKind::Int(bounds),
+        }
+    }
+
+    pub fn datetime(
+        scale: TimeScale,
+        bounds: ResolvedDomainBounds<hifitime::Epoch>,
+    ) -> Result<Self, DomainInstantError> {
+        let min = bounds
+            .min
+            .map(|bound| bound.try_map(|epoch| DomainInstant::from_epoch(epoch, scale)))
+            .transpose()?;
+        let max = bounds
+            .max
+            .map(|bound| bound.try_map(|epoch| DomainInstant::from_epoch(epoch, scale)))
+            .transpose()?;
+        Ok(Self {
+            kind: ResolvedDomainConstraintKind::Datetime {
+                scale,
+                bounds: ResolvedDomainBounds::new(min, max),
+            },
+        })
+    }
+}
 
 /// A domain-constraint violation with a human-readable message.
 ///
@@ -32,71 +175,75 @@ impl DomainViolation {
 ///
 /// # Errors
 ///
-/// Returns [`DomainViolation`] when any quantity sub-value falls outside the
-/// declared bounds.
+/// Returns [`DomainViolation`] when any scalar sub-value falls outside the
+/// declared bounds or when an internal value/constraint family invariant is
+/// violated.
 pub fn check_domain_constraint(
-    rv: &RuntimeValue,
+    value: &RuntimeValue,
     constraint: &ResolvedDomainConstraint,
 ) -> Result<(), DomainViolation> {
-    match rv {
-        RuntimeValue::Quantity(si_value) => check_quantity_constraint(*si_value, constraint),
-        RuntimeValue::Int(i) => check_int_constraint(*i, constraint),
-        RuntimeValue::Indexed { entries, .. } => {
-            for (variant, entry_rv) in entries {
-                if let Err(violation) = check_domain_constraint(entry_rv, constraint) {
-                    return Err(DomainViolation::new(format!(
-                        "at {variant}: {}",
-                        violation.message
-                    )));
-                }
+    match value {
+        RuntimeValue::Indexed { entries, .. } => entries.iter().try_for_each(|(variant, entry)| {
+            check_domain_constraint(entry, constraint).map_err(|violation| {
+                DomainViolation::new(format!("at {variant}: {}", violation.message))
+            })
+        }),
+        RuntimeValue::Quantity(value) => match &constraint.kind {
+            ResolvedDomainConstraintKind::Quantity(bounds) => check_bounds(value, bounds),
+            other => Err(constraint_kind_mismatch("Quantity", other)),
+        },
+        RuntimeValue::Int(value) => match &constraint.kind {
+            ResolvedDomainConstraintKind::Int(bounds) => check_bounds(value, bounds),
+            other => Err(constraint_kind_mismatch("Int", other)),
+        },
+        RuntimeValue::Datetime(epoch) => match &constraint.kind {
+            ResolvedDomainConstraintKind::Datetime { scale, bounds } => {
+                let instant = DomainInstant::from_epoch(*epoch, *scale).map_err(|error| {
+                    DomainViolation::new(format!("has incompatible datetime domain: {error}"))
+                })?;
+                check_bounds(&instant, bounds)
             }
-            Ok(())
-        }
-        // Bool, Label, Struct, Datetime, CoordinateLabel: no constraint checking
-        _ => Ok(()),
+            other => Err(constraint_kind_mismatch("Datetime", other)),
+        },
+        other => Err(constraint_kind_mismatch(
+            &other.kind().to_string(),
+            &constraint.kind,
+        )),
     }
 }
 
-const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
-
-fn check_int_constraint(
-    value: i64,
-    constraint: &ResolvedDomainConstraint,
-) -> Result<(), DomainViolation> {
-    if (constraint.min.is_some() || constraint.max.is_some())
-        && value.unsigned_abs() > MAX_EXACT_F64_INT
-    {
-        return Err(DomainViolation::new(format!(
-            "integer {value} is too large for exact domain-bound comparison"
-        )));
-    }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "integer magnitude is checked to be exactly representable before casting"
-    )]
-    let quantity = value as f64;
-    check_quantity_constraint(quantity, constraint)
+fn constraint_kind_mismatch(
+    value_kind: &str,
+    constraint: &ResolvedDomainConstraintKind,
+) -> DomainViolation {
+    let constraint_kind = match constraint {
+        ResolvedDomainConstraintKind::Quantity(_) => "Quantity",
+        ResolvedDomainConstraintKind::Int(_) => "Int",
+        ResolvedDomainConstraintKind::Datetime { .. } => "Datetime",
+    };
+    DomainViolation::new(format!(
+        "internal domain kind mismatch: {value_kind} value with {constraint_kind} bounds"
+    ))
 }
 
-/// Check a quantity SI value against min/max bounds.
-fn check_quantity_constraint(
-    si_value: f64,
-    constraint: &ResolvedDomainConstraint,
+fn check_bounds<T: PartialOrd>(
+    value: &T,
+    bounds: &ResolvedDomainBounds<T>,
 ) -> Result<(), DomainViolation> {
-    if let Some(min) = constraint.min
-        && si_value < min
+    if let Some(min) = bounds.min()
+        && value < min.value()
     {
-        let min_display = constraint.min_display.as_deref().unwrap_or("?");
         return Err(DomainViolation::new(format!(
-            "below minimum ({min_display})"
+            "below minimum ({})",
+            min.display()
         )));
     }
-    if let Some(max) = constraint.max
-        && si_value > max
+    if let Some(max) = bounds.max()
+        && value > max.value()
     {
-        let max_display = constraint.max_display.as_deref().unwrap_or("?");
         return Err(DomainViolation::new(format!(
-            "above maximum ({max_display})"
+            "above maximum ({})",
+            max.display()
         )));
     }
     Ok(())
@@ -105,28 +252,31 @@ fn check_quantity_constraint(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphcal_compiler::syntax::span::Span;
 
-    fn max_constraint(max: f64) -> ResolvedDomainConstraint {
-        ResolvedDomainConstraint {
-            min: None,
-            max: Some(max),
-            min_display: None,
-            max_display: Some(max.to_string()),
-            span: Span::new(0, 0),
-        }
+    fn int_constraint(min: i64, max: i64) -> ResolvedDomainConstraint {
+        ResolvedDomainConstraint::int(ResolvedDomainBounds::new(
+            Some(ResolvedDomainBound::new(min, min.to_string())),
+            Some(ResolvedDomainBound::new(max, max.to_string())),
+        ))
     }
 
     #[test]
-    fn rejects_int_too_large_for_exact_domain_comparison() {
-        let err = check_domain_constraint(
-            &RuntimeValue::Int((1_i64 << f64::MANTISSA_DIGITS) + 1),
-            &max_constraint(f64::MAX),
-        )
-        .unwrap_err();
-        assert!(
-            err.message
-                .contains("too large for exact domain-bound comparison")
+    fn full_range_integer_bounds_are_compared_without_float_conversion() {
+        let constraint = int_constraint(i64::MIN, i64::MAX);
+        check_domain_constraint(&RuntimeValue::Int(i64::MIN), &constraint).unwrap();
+        check_domain_constraint(&RuntimeValue::Int(i64::MAX), &constraint).unwrap();
+    }
+
+    #[test]
+    fn datetime_constraint_constructor_rejects_a_cross_scale_epoch() {
+        let tt_epoch =
+            hifitime::Epoch::maybe_from_gregorian(2024, 1, 1, 0, 0, 0, 0, hifitime::TimeScale::TT)
+                .unwrap();
+        let bounds = ResolvedDomainBounds::new(
+            Some(ResolvedDomainBound::new(tt_epoch, tt_epoch.to_string())),
+            None,
         );
+        let error = ResolvedDomainConstraint::datetime(TimeScale::UTC, bounds).unwrap_err();
+        assert!(matches!(error, DomainInstantError::ScaleMismatch { .. }));
     }
 }

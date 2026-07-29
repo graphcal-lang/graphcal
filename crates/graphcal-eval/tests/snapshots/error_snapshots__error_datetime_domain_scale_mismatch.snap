@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+datetime domain bound type mismatch on `event`: target is Datetime<TT>, but min bound is Datetime
+    Diagnostic severity: error
+Begin snippet for datetime_domain_scale_mismatch.gcl starting at line 2, column 1
+
+snippet line 2: param event: Datetime<TT>(
+snippet line 3:     min: datetime("2024-01-01T00:00:00Z"),
+    label at line 3, columns 5 to 41: datetime bound has the wrong time scale or value type
+snippet line 4: ) = epoch<TT>("2024-06-01T00:00:00");
+diagnostic help: datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion
+diagnostic code: graphcal::C007

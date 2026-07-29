@@ -1859,6 +1859,35 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hints_evaluate_valid_datetime_domain_constraints() {
+        let text = "node event: Datetime<TT>(\
+                    min: epoch<TT>(\"2024-01-01T00:00:00\"), \
+                    max: epoch<TT>(\"2024-12-31T23:59:59\")) = \
+                    epoch<TT>(\"2024-06-01T12:00:00\");\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+        let hints = crate::inlay_hints::inlay_hints(
+            &analysis,
+            Range::new(
+                tower_lsp::lsp_types::Position::new(0, 0),
+                tower_lsp::lsp_types::Position::new(u32::MAX, u32::MAX),
+            ),
+        )
+        .expect("expected datetime domain inlay hint");
+        assert!(hints.iter().any(|hint| {
+            matches!(
+                &hint.label,
+                tower_lsp::lsp_types::InlayHintLabel::String(label)
+                    if label.contains("2024-06-01T12:00:00 TT")
+            )
+        }));
+    }
+
+    #[test]
     fn format_indexed() {
         let symbols = empty_symbols();
         let mut entries = IndexMap::new();

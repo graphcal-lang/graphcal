@@ -1852,7 +1852,7 @@ Maneuver.Correction: 0.5 m / s,
 }
 
 // -----------------------------------------------------------------------
-// Int domain bound must be unitless (#439)
+// Int domain bounds must remain exact Int values (#439, #958)
 // -----------------------------------------------------------------------
 
 #[test]
@@ -1862,9 +1862,13 @@ fn int_domain_bound_int_literal_accepted() {
 }
 
 #[test]
-fn int_domain_bound_dimensionless_quantity_accepted() {
+fn int_domain_bound_dimensionless_quantity_rejected() {
     let source = "param n: Int(min: 0.0, max: 100.0) = 5;";
-    check(source).unwrap();
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
+        "got: {err:?}"
+    );
 }
 
 #[test]
@@ -1872,7 +1876,7 @@ fn int_domain_bound_with_unit_rejected() {
     let source = "param n: Int(min: 1.0 kg, max: 10.0 kg) = 5;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::IntDomainBoundNotUnitless { .. }),
+        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
         "got: {err:?}"
     );
 }
@@ -1883,9 +1887,60 @@ fn int_domain_bound_arithmetic_with_unit_rejected() {
     let source = "param n: Int(min: 1.0 m / 1.0 s) = 5;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::IntDomainBoundNotUnitless { .. }),
+        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
         "got: {err:?}"
     );
+}
+
+// -----------------------------------------------------------------------
+// Datetime domain bound types (#958)
+// -----------------------------------------------------------------------
+
+#[test]
+fn datetime_domain_bounds_accept_the_exact_target_scale() {
+    let source = r#"
+param utc: Datetime(
+    min: datetime("2024-01-01T00:00:00Z"),
+    max: datetime("2024-12-31T23:59:59Z"),
+) = datetime("2024-06-01T00:00:00Z");
+param tt: Datetime<TT>(
+    min: epoch<TT>("2024-01-01T00:00:00"),
+    max: epoch<TT>("2024-12-31T23:59:59"),
+) = epoch<TT>("2024-06-01T00:00:00");
+"#;
+    check(source).unwrap();
+}
+
+#[test]
+fn datetime_domain_bound_rejects_a_different_scale() {
+    let source = r#"
+param event: Datetime<TT>(min: datetime("2024-01-01T00:00:00Z")) =
+    epoch<TT>("2024-06-01T00:00:00");
+"#;
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::DatetimeDomainBoundTypeMismatch { .. }
+    ));
+}
+
+#[test]
+fn datetime_domain_bound_accepts_an_explicit_scale_conversion() {
+    let source = r#"
+param event: Datetime<TT>(min: to_tt(datetime("2024-01-01T00:00:00Z"))) =
+    epoch<TT>("2024-06-01T00:00:00");
+"#;
+    check(source).unwrap();
+}
+
+#[test]
+fn datetime_domain_bound_rejects_a_non_datetime_value() {
+    let source = r#"param event: Datetime(min: 0) = datetime("2024-01-01T00:00:00Z");"#;
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::DatetimeDomainBoundTypeMismatch { .. }
+    ));
 }
 
 // -----------------------------------------------------------------------
@@ -1908,7 +1963,7 @@ fn const_domain_bound_int_with_unit_rejected() {
     let source = "const node MAX_N: Int(min: 1.0 kg) = 5;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::IntDomainBoundNotUnitless { .. }),
+        matches!(err, GraphcalError::IntDomainBoundTypeMismatch { .. }),
         "got: {err:?}"
     );
 }

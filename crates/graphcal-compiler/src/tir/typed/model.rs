@@ -542,28 +542,6 @@ impl<'a> ModuleTypeContext<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Resolved domain constraints
-// ---------------------------------------------------------------------------
-
-/// A resolved domain constraint with evaluated SI-unit bounds.
-///
-/// Produced during module-aware TIR construction by evaluating the bound expressions
-/// in `DomainBound` to concrete f64 values (in SI units).
-#[derive(Debug, Clone)]
-pub struct ResolvedDomainConstraint {
-    /// Minimum bound in SI units, or `None` if no `min:` was specified.
-    pub min: Option<f64>,
-    /// Maximum bound in SI units, or `None` if no `max:` was specified.
-    pub max: Option<f64>,
-    /// Original min expression text for diagnostics (e.g., `"100 kg"`).
-    pub min_display: Option<String>,
-    /// Original max expression text for diagnostics (e.g., `"2000 kg"`).
-    pub max_display: Option<String>,
-    /// Span covering the entire constraint clause for error reporting.
-    pub span: Span,
-}
-
 /// Owner-qualified key for a domain constraint declared on a struct/union field.
 ///
 /// The owning type carries a canonical owner when module-aware type resolution
@@ -682,6 +660,14 @@ pub struct ResolvedTypeDefs {
     /// Generic parameter defaults resolved in the owning type's generic scope.
     pub(crate) generic_defaults:
         HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericArg>,
+}
+
+impl ResolvedTypeDefs {
+    /// Return a field annotation resolved in its owning type's generic scope.
+    #[must_use]
+    pub fn field_type(&self, key: &ResolvedStructFieldTypeKey) -> Option<&ResolvedTypeExpr> {
+        self.field_types.get(key)
+    }
 }
 
 /// A `min:`/`max:` domain bound with its expression lowered to HIR.

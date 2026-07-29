@@ -612,10 +612,8 @@ pub struct EvalResult {
     pub base_dim_symbols:
         std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
-    pub(crate) domain_constraints: std::collections::HashMap<
-        ScopedName,
-        graphcal_compiler::tir::typed::ResolvedDomainConstraint,
-    >,
+    pub(crate) domain_constraints:
+        std::collections::HashMap<ScopedName, crate::domain_check::ResolvedDomainConstraint>,
 }
 
 impl EvalResult {

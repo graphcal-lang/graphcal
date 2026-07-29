@@ -670,8 +670,9 @@ datetime_type
    as `Datetime<TT>` use the dedicated built-in datetime type, not a
    user-defined generic type application. *)
 
-(* Domain constraints restrict the valid value range of a type:
-   Mass(min: 100 kg, max: 2000 kg) *)
+(* Domain constraints restrict the valid value range of a quantity, Int, or
+   Datetime<S>: Mass(min: 100 kg), Int(max: 100),
+   Datetime<TT>(min: epoch<TT>("2025-01-01T00:00:00")) *)
 type_constraints
    = "(", type_constraint, { ",", type_constraint }, [ "," ], ")";
 

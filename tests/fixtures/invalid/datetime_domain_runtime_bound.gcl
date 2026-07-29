@@ -1,0 +1,3 @@
+// Domain bounds are compile-time constants and cannot read params or nodes.
+param start: Datetime = datetime("2024-01-01T00:00:00Z");
+param event: Datetime(min: @start) = datetime("2024-06-01T00:00:00Z");
