@@ -859,15 +859,19 @@ The `|acc, val| body` is special syntax, not a function value.
 ### Unfold
 
 ```
-unfold(init, |prev, curr| body)
+unfold(index, init, |prev_state, prev_i, i| body)
 ```
 
-- `init` must have type `T`.
-- `prev` and `curr` are bound to the iteration context.
+- `index` is an explicit reference to a coordinate index `I`, not a value expression.
+- `init` must have type `T` and becomes the result at the first coordinate.
+- `prev_state` is bound to type `T`.
+- `prev_i` and `i` are bound to consecutive coordinate labels from `I`.
 - `body` must have type `T`.
-- The result type is `T[I]` where `I` is the index from context.
+- The result type is `T[I]`.
 
-The `|prev, curr| body` is special syntax, not a function value.
+For coordinates `i₀, i₁, …`, `result[i₀] = init` and each later value is
+`body(result[iₖ₋₁], iₖ₋₁, iₖ)`. The
+`|prev_state, prev_i, i| body` form is special syntax, not a function value.
 
 ## DAG Blocks
 

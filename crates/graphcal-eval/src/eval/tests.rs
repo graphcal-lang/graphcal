@@ -876,6 +876,27 @@ node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
 }
 
 #[test]
+fn eval_unfold_passes_previous_state_and_coordinates() {
+    let source = r"
+index Step = range(0.0 s, 2.0 s, step: 1.0 s);
+node distance: Length[Step] = unfold(
+    Step,
+    1.0 m,
+    |prev_distance, prev_t, t| prev_distance + (2.0 m/s) * (t - prev_t)
+);
+";
+    let result = compile_and_eval(source).unwrap();
+    let Value::Indexed { entries, .. } = find_entry(&result, "distance") else {
+        panic!("expected indexed unfold result");
+    };
+    let distances = entries
+        .values()
+        .map(|value| value.si_value().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(distances, [1.0, 3.0, 5.0]);
+}
+
+#[test]
 fn eval_scan_supports_heterogeneous_accumulator() {
     let source = r"
 index Flag = { A, B, C };
@@ -2780,7 +2801,7 @@ fn eval_unfold_uses_resolved_declared_range_index_owner_with_same_leaf_indexes()
     let (_dir, root) = write_same_leaf_range_index_project(
         "import collide.b as b;\n\
          import collide.a as a;\n\
-         node y: Dimensionless[a.Step] = unfold(0.0, |prev_t, t| @y[prev_t] + 1.0);\n",
+         node y: Dimensionless[a.Step] = unfold(a.Step, 0.0, |prev_y, prev_t, t| prev_y + 1.0);\n",
     );
 
     let (_tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();

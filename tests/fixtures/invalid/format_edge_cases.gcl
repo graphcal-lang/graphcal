@@ -131,8 +131,9 @@ node cumulative_priority: Dimensionless[Phase] = scan(@phase_priority, 0.0, |acc
 // Unfold with complex body
 const node decay_rate: Frequency = 0.5 Hz;
 node decay: Dimensionless[Step] = unfold(
+    Step,
     100.0,
-    |prev_t, t| @decay[prev_t] * (1.0 - @decay_rate * (t - prev_t))
+    |prev_decay, prev_t, t| prev_decay * (1.0 - @decay_rate * (t - prev_t))
 );
 
 // DAG for complex result computation

@@ -5,4 +5,8 @@ pub index Step = range(0.0 s, 1.0 s, step: 0.25 s);
 param k: Frequency = 2.0 Hz;
 param y0: Dimensionless = 10.0;
 
-node y: Dimensionless[Step] = unfold(@y0, |prev_t, t| @y[prev_t] * (1.0 - @k * (t - prev_t)));
+node y: Dimensionless[Step] = unfold(
+    Step,
+    @y0,
+    |prev_y, prev_t, t| prev_y * (1.0 - @k * (t - prev_t))
+);

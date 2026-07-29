@@ -561,13 +561,30 @@ The file cannot be evaluated standalone. It must be imported with a binding that
 
 ## `unfold` (Recurrence Relations)
 
-`unfold` computes values over a coordinate index where each value depends on the previous:
+`unfold` computes values over an explicit coordinate index where each value
+depends on the previous state:
 
 ```
-node x: Dimensionless[TimeStep] = unfold(@x0, |prev_t, t| @x[prev_t] * (1.0 + @rate * (t - prev_t)));
+node x: Dimensionless[TimeStep] = unfold(
+    TimeStep,
+    @x0,
+    |prev_x, prev_t, t| prev_x * (1.0 + @rate * (t - prev_t))
+);
 ```
 
-This is useful for time-stepping simulations and discrete dynamic systems.
+The first coordinate receives `@x0`. At every later coordinate, the body
+receives the previous value, the previous coordinate, and the current
+coordinate. The axis belongs to the expression, so `unfold` can be nested or
+consumed immediately:
+
+```
+node total: Dimensionless = sum(
+    unfold(TimeStep, @x0, |prev_x, prev_t, t| prev_x + @rate * (t - prev_t))
+);
+```
+
+Use the `prev_x` binding directly when computing the next step. This is useful
+for time-stepping simulations and discrete dynamic systems.
 
 ## Aggregation Over Any Index
 
