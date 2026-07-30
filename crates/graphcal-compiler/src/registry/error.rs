@@ -579,6 +579,19 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("incompatible indexed shape for `{function}()`: expected {expected}, found {found}")]
+    #[diagnostic(code(graphcal::D022), help("{help}"))]
+    LinearAlgebraShapeMismatch {
+        function: BuiltinFnName,
+        expected: String,
+        found: String,
+        help: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("found {found}")]
+        span: SourceSpan,
+    },
+
     #[error("comparison operators require unindexed operands, found {found}")]
     #[diagnostic(
         code(graphcal::D019),
@@ -2034,6 +2047,7 @@ impl GraphcalError {
             | Self::DimensionOverflow { src, .. }
             | Self::DimensionMismatch { src, .. }
             | Self::IndexedShapeMismatch { src, .. }
+            | Self::LinearAlgebraShapeMismatch { src, .. }
             | Self::IndexedComparisonOperand { src, .. }
             | Self::MultiAxisAggregation { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }

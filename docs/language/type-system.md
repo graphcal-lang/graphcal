@@ -253,6 +253,13 @@ scan        : T[I] × U × (U × T -> U) -> U[I]
 unfold      : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]
 sum, maximum, minimum, mean : Quantity(D)[I] -> Quantity(D)
 count       : T[I] -> Int
+dot         : Quantity(D1)[I] × Quantity(D2)[I] -> Quantity(D1 × D2)
+matmul      : Quantity(D1)[I, J] × Quantity(D2)[J, K] -> Quantity(D1 × D2)[I, K]
+transpose   : Quantity(D)[I, J] -> Quantity(D)[J, I]
+trace       : Quantity(D)[I, I] -> Quantity(D)
+norm        : Quantity(D)[I] -> Quantity(D)
+cross       : Quantity(D1)[I₃] × Quantity(D2)[I₃] -> Quantity(D1 × D2)[I₃]
+outer       : Quantity(D1)[I] × Quantity(D2)[J] -> Quantity(D1 × D2)[I, J]
 ```
 
 As everywhere on this page, the arrows are semantic notation, not function
@@ -262,7 +269,9 @@ closure positions in `scan` and `unfold` are special syntax, not function
 values; `unfold`'s first argument is an explicit reference to a coordinate
 index over dimension `D`. Map and table literals must be total and are
 normalized to index order, element access must supply every axis, and
-aggregations reduce exactly one axis.
+aggregations reduce exactly one axis. Linear-algebra contractions require the
+same typed axis at each paired position; `I₃` denotes an axis with exactly
+three entries.
 
 Term-level names are bound by `param` (a named DAG input port), `node` (a
 computed value), and `const node` (a compile-time value); a

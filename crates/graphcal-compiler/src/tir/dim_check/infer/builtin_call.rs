@@ -5,7 +5,7 @@
 //! the ordinary quantity dimension-signature registry, or does it need a custom
 //! type rule here?
 
-use crate::builtin::BuiltinFnName;
+use crate::builtin::{BuiltinFnName, LinearAlgebraFn};
 use crate::registry::time_scale::TimeScale;
 
 /// How HIR type inference should check a built-in function call.
@@ -15,6 +15,8 @@ pub(super) enum BuiltinTypeRule {
     RegistrySignature,
     /// One-argument reductions over indexed values.
     CollectionAggregation(AggregationFn),
+    /// Shape-aware operations over rank-one and rank-two indexed quantities.
+    LinearAlgebra(LinearAlgebraFn),
     /// Type-category conversions between `Int` and dimensionless quantity values.
     TypeConversion(TypeConversionFn),
     /// Datetime time-scale conversion to the carried target scale.
@@ -81,6 +83,9 @@ pub(super) enum DatetimeConstructorFn {
 /// Classify a built-in for the type-inference call path.
 #[must_use]
 pub(super) const fn type_rule_for_builtin(name: BuiltinFnName) -> BuiltinTypeRule {
+    if let Some(function) = name.linear_algebra() {
+        return BuiltinTypeRule::LinearAlgebra(function);
+    }
     match name {
         BuiltinFnName::Sum => BuiltinTypeRule::CollectionAggregation(AggregationFn::Sum),
         BuiltinFnName::Minimum => BuiltinTypeRule::CollectionAggregation(AggregationFn::Minimum),
@@ -137,6 +142,7 @@ mod tests {
                     name.as_str()
                 ),
                 BuiltinTypeRule::CollectionAggregation(_)
+                | BuiltinTypeRule::LinearAlgebra(_)
                 | BuiltinTypeRule::TypeConversion(_)
                 | BuiltinTypeRule::TimeScaleConversion(_)
                 | BuiltinTypeRule::DatetimeConstructor(_)

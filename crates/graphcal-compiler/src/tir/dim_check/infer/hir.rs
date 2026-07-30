@@ -37,6 +37,7 @@ use super::super::{
 use super::builtin_call::{
     AggregationFn, BuiltinTypeRule, DatetimeConstructorFn, TypeConversionFn, type_rule_for_builtin,
 };
+use super::linear_algebra::{LinearAlgebraTypeError, infer_linear_algebra_type};
 
 type HirLocalTypes<'a> = hir::LocalEnv<'a, InferredType>;
 
@@ -580,6 +581,105 @@ fn infer_arg(
 }
 
 #[expect(clippy::too_many_arguments, reason = "function-call context")]
+fn infer_hir_linear_algebra_call(
+    function: crate::builtin::LinearAlgebraFn,
+    callee_span: Span,
+    args: &[hir::Expr],
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    local_types: &HirLocalTypes<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    let name = function.builtin_name();
+    if args.len() != function.arity() {
+        return Err(GraphcalError::WrongArity {
+            name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
+            expected: function.arity(),
+            got: args.len(),
+            src: src.clone(),
+            span: callee_span.into(),
+        });
+    }
+    let argument_types = args
+        .iter()
+        .map(|arg| {
+            infer_arg(
+                arg,
+                declared_types,
+                local_types,
+                dag,
+                tir,
+                registry,
+                builtin_fns,
+                src,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    infer_linear_algebra_type(function, &argument_types, |index| {
+        super::index_def_for_inferred(index, Some(dag), registry)
+            .map(crate::registry::types::IndexDef::cardinality)
+    })
+    .map_err(|error| match error {
+        LinearAlgebraTypeError::WrongArity { expected, found } => GraphcalError::WrongArity {
+            name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
+            expected,
+            got: found,
+            src: src.clone(),
+            span: callee_span.into(),
+        },
+        LinearAlgebraTypeError::ExpectedIndexedQuantity { argument, rank } => {
+            GraphcalError::DimensionMismatch {
+                expected: format!("rank-{rank} indexed quantity"),
+                found: format_inferred_type(&argument_types[argument], registry),
+                help: format!(
+                    "{}() requires argument {} to be a rank-{rank} indexed quantity",
+                    name.as_str(),
+                    argument.saturating_add(1)
+                ),
+                src: src.clone(),
+                span: args[argument].span.into(),
+            }
+        }
+        LinearAlgebraTypeError::AxisMismatch {
+            argument,
+            expected,
+            found,
+        } => GraphcalError::LinearAlgebraShapeMismatch {
+            function: name,
+            expected: expected.to_string(),
+            found: found.to_string(),
+            help: "linear-algebra contractions match axes by typed identity; use the same declared index (or the same Fin(N) structural index) at both contracted positions"
+                .to_string(),
+            src: src.clone(),
+            span: args[argument].span.into(),
+        },
+        LinearAlgebraTypeError::CardinalityMismatch {
+            argument,
+            expected,
+            found,
+        } => GraphcalError::LinearAlgebraShapeMismatch {
+            function: name,
+            expected: format!("an axis with exactly {expected} entries"),
+            found: found.map_or_else(
+                || "an axis whose cardinality is not concrete".to_string(),
+                |cardinality| format!("an axis with {cardinality} entries"),
+            ),
+            help: format!("{}() is defined only for three-component vectors", name.as_str()),
+            src: src.clone(),
+            span: args[argument].span.into(),
+        },
+        LinearAlgebraTypeError::DimensionOverflow => GraphcalError::DimensionOverflow {
+            src: src.clone(),
+            span: callee_span.into(),
+        },
+    })
+}
+
+#[expect(clippy::too_many_arguments, reason = "function-call context")]
 fn infer_hir_fn_call(
     callee: &crate::syntax::span::Spanned<FunctionRef>,
     args: &[hir::Expr],
@@ -670,6 +770,18 @@ fn infer_hir_fn_call(
                 ),
             }
         }
+        BuiltinTypeRule::LinearAlgebra(function) => infer_hir_linear_algebra_call(
+            function,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        ),
         BuiltinTypeRule::TypeConversion(kind) => infer_hir_type_conversion(
             kind,
             callee.span,

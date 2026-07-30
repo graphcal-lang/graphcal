@@ -132,6 +132,7 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
+- [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
@@ -179,6 +180,7 @@ Note: `eval_expr/builtin_call.rs`, `eval_expr/arithmetic.rs`, `eval_expr/aggrega
 
 - [ ] `crates/graphcal-eval/src/decl_key.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/numeric.rs`
+- [ ] `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/conversions.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/datetime.rs`
 - [ ] `crates/graphcal-eval/src/lib.rs`

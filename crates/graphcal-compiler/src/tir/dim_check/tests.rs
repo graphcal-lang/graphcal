@@ -656,6 +656,59 @@ fn reduction_functions_have_fixed_arity() {
 }
 
 #[test]
+fn check_linear_algebra_preserves_axes_and_dimensions() {
+    let source = "\
+param a: Length[Fin(2), Fin(3)] = for i: Fin(2), j: Fin(3) { 1.0 m };
+param b: Time[Fin(3), Fin(4)] = for i: Fin(3), j: Fin(4) { 1.0 s };
+node product: Length * Time[Fin(2), Fin(4)] = matmul(@a, @b);
+node transposed: Length[Fin(3), Fin(2)] = transpose(@a);";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_linear_algebra_rejects_distinct_contraction_axes() {
+    let source = "\
+pub index Left = { L1, L2 };
+pub index Right = { R1, R2 };
+param a: Dimensionless[Left] = for i: Left { 1.0 };
+param b: Dimensionless[Right] = for i: Right { 1.0 };
+node result: Dimensionless = dot(@a, @b);";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::LinearAlgebraShapeMismatch { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn check_cross_requires_three_component_axis() {
+    let source = "\
+param a: Dimensionless[Fin(2)] = for i: Fin(2) { 1.0 };
+param b: Dimensionless[Fin(2)] = for i: Fin(2) { 2.0 };
+node result: Dimensionless[Fin(2)] = cross(@a, @b);";
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::LinearAlgebraShapeMismatch { .. }
+    ));
+}
+
+#[test]
+fn check_linear_algebra_rejects_non_quantity_elements() {
+    let source = "\
+param flags: Bool[Fin(2)] = for i: Fin(2) { true };
+node result: Dimensionless = norm(@flags);";
+    let error = check(source).unwrap_err();
+    assert!(matches!(error, GraphcalError::DimensionMismatch { .. }));
+}
+
+#[test]
+fn linear_algebra_functions_have_fixed_arity() {
+    let error = check("node x: Dimensionless = dot(1.0);").unwrap_err();
+    assert!(matches!(error, GraphcalError::WrongArity { .. }));
+}
+
+#[test]
 fn check_scan() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };

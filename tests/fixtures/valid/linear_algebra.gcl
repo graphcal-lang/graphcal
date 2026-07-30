@@ -1,0 +1,63 @@
+// Built-in linear algebra preserves typed axes and physical dimensions.
+param a: Length[Fin(3)] = table[Fin(3)] {
+    1.0 m;
+    2.0 m;
+    3.0 m;
+};
+param b: Dimensionless[Fin(3)] = table[Fin(3)] {
+    4.0;
+    5.0;
+    6.0;
+};
+
+param A: Length[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
+    1.0 m, 2.0 m, 3.0 m;
+    4.0 m, 5.0 m, 6.0 m;
+};
+param B: Dimensionless[Fin(3), Fin(2)] = table[Fin(3), Fin(2)] {
+     7.0,  8.0;
+     9.0, 10.0;
+    11.0, 12.0;
+};
+param square: Length[Fin(2), Fin(2)] = table[Fin(2), Fin(2)] {
+    1.0 m, 2.0 m;
+    3.0 m, 4.0 m;
+};
+
+node dot_ab: Length = dot(@a, @b);
+node product: Length[Fin(2), Fin(2)] = matmul(@A, @B);
+node A_t: Length[Fin(3), Fin(2)] = transpose(@A);
+node square_trace: Length = trace(@square);
+node a_norm: Length = norm(@a);
+
+param x_axis: Dimensionless[Fin(3)] = table[Fin(3)] {
+    1.0;
+    0.0;
+    0.0;
+};
+param y_axis: Length[Fin(3)] = table[Fin(3)] {
+    0.0 m;
+    1.0 m;
+    0.0 m;
+};
+node z_axis: Length[Fin(3)] = cross(@x_axis, @y_axis);
+
+param u: Length[Fin(2)] = table[Fin(2)] {
+    1.0 m;
+    2.0 m;
+};
+param v: Time[Fin(3)] = table[Fin(3)] {
+    3.0 s;
+    4.0 s;
+    5.0 s;
+};
+node uv: Length * Time[Fin(2), Fin(3)] = outer(@u, @v);
+
+assert dot_result = @dot_ab == 32.0 m;
+assert matmul_00 = @product[0, 0] == 58.0 m;
+assert matmul_11 = @product[1, 1] == 154.0 m;
+assert transpose_20 = @A_t[2, 0] == 3.0 m;
+assert trace_result = @square_trace == 5.0 m;
+assert norm_result = @a_norm ~= 3.7416573867739413 m +/- 1.0e-12 m;
+assert cross_z = @z_axis[2] == 1.0 m;
+assert outer_12 = @uv[1, 2] == 10.0 m * s;
