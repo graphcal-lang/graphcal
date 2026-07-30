@@ -666,6 +666,17 @@ node transposed: Length[Fin(3), Fin(2)] = transpose(@a);";
 }
 
 #[test]
+fn check_algorithmic_linear_algebra_dimensions() {
+    let source = "\
+param a: Length[Fin(2), Fin(2)] = for i: Fin(2), j: Fin(2) { 1.0 m };
+param b: Area[Fin(2)] = for i: Fin(2) { 1.0 m^2 };
+node solution: Length[Fin(2)] = solve(@a, @b);
+node inverse_a: Length^-1[Fin(2), Fin(2)] = inverse(@a);
+node determinant_a: Area = det(@a);";
+    check(source).unwrap();
+}
+
+#[test]
 fn check_linear_algebra_rejects_distinct_contraction_axes() {
     let source = "\
 pub index Left = { L1, L2 };

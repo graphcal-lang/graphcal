@@ -260,6 +260,9 @@ trace       : Quantity(D)[I, I] -> Quantity(D)
 norm        : Quantity(D)[I] -> Quantity(D)
 cross       : Quantity(D1)[I₃] × Quantity(D2)[I₃] -> Quantity(D1 × D2)[I₃]
 outer       : Quantity(D1)[I] × Quantity(D2)[J] -> Quantity(D1 × D2)[I, J]
+solve       : Quantity(D1)[I, I] × Quantity(D2)[I] -> Quantity(D2 / D1)[I]
+inverse     : Quantity(D)[I, I] -> Quantity(D⁻¹)[I, I]
+det         : Quantity(D)[I, I] -> Quantity(D^|I|)
 ```
 
 As everywhere on this page, the arrows are semantic notation, not function

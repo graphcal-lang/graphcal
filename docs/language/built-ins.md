@@ -235,6 +235,9 @@ match by their declaration identity.
 | `norm(v)` | `D[I] -> D` | Euclidean vector norm |
 | `cross(a, b)` | `(D1[I], D2[I]) -> (D1 * D2)[I]` | Three-component cross product; `I` must have exactly three entries |
 | `outer(a, b)` | `(D1[I], D2[J]) -> (D1 * D2)[I, J]` | Outer product |
+| `solve(a, b)` | `(D1[I, I], D2[I]) -> (D2 / D1)[I]` | Solve the square system `a * x = b` |
+| `inverse(a)` | `D[I, I] -> D^-1[I, I]` | Matrix inverse |
+| `det(a)` | `D[I, I] -> D^\|I\|` | Determinant; the axis cardinality becomes the dimension exponent |
 
 ```graphcal
 param A: Length[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
@@ -254,6 +257,13 @@ node A_t: Length[Fin(3), Fin(2)] = transpose(@A);
 There is no implicit axis selection or broadcasting. For example, `matmul`
 always contracts the second axis of its first argument with the first axis of
 its second argument. Distinct named axes with equal cardinality are rejected.
+
+`solve` and `inverse` use scaled partial-pivoting LU, reject singular or
+numerically ill-conditioned matrices, and verify the residual before returning
+a result. These failures are explicit evaluation errors; they never return
+`NaN` or infinity. `det` remains defined for singular matrices and returns
+zero. Because a determinant's physical dimension is `D` raised to the matrix
+order, `det` requires a concrete axis cardinality.
 
 ## Prelude Base Dimensions
 
