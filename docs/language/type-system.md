@@ -225,9 +225,11 @@ Dimensions, algebraic types, and named or coordinate indexes may be declared
 *required* — `pub(bind) dim D;`, `pub(bind) type T;`, `pub(bind) index X;`,
 `pub(bind) index C: Time;` — introducing an abstract member of the
 corresponding universe with no definition. A required entity is used like a
-concrete one inside its library and is bound to a concrete entity by name in
-an `include` binding, the same binding surface that supplies `param` values:
-the include boundary is where both term-level and type-level arguments cross.
+concrete one inside its library or local `dag` block and is bound to a concrete
+entity by name in an `include` binding, the same binding surface that supplies
+`param` values: the include boundary is where both term-level and type-level
+arguments cross. This explicit required-entity pattern provides dimension- and
+axis-polymorphic reusable DAGs without implicit generic inference.
 Units and time scales have no required form. See
 [Visibility, Bindability, and Input Ports](multi-file.md#visibility-bindability-and-input-ports).
 

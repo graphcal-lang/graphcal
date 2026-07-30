@@ -233,12 +233,18 @@ fn compile_inline_dag_modules<'a>(
             evaluated_files,
             module_resolver,
         )?;
+        // The shared module registry contains file/dependency registries, but
+        // an inline DAG owns type-system declarations in its body (including
+        // required `pub(bind)` dimensions, types, and indexes). Add that local
+        // registry under the child DAG identity before resolving its annotations.
+        let mut dag_module_types = module_types.clone();
+        dag_module_types.insert_registry(&loaded_dag.dag_id, &dag_ir.registry);
         let mut compiled_dag = graphcal_compiler::tir::typed::type_resolve_single_with_modules(
             dag_ir,
             &loaded_dag.dag_id,
             file_src,
             module_resolver,
-            module_types,
+            &dag_module_types,
         )?;
         compiled_dag.populate_projectable_outputs(&loaded_dag.body);
         tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);

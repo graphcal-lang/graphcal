@@ -556,7 +556,9 @@ include_param_binding
 (* --- dag --- *)
 (* DAG blocks define reusable, parameterized computation. They
    contain the same declarations as a file (params, nodes, imports,
-   etc.) and are instantiated via `include`. *)
+   etc.) and are instantiated via `include`. Required `pub(bind)` dim,
+   type, and index declarations inside the body are explicit type-level
+   input ports supplied by the include binding list. *)
 dag_decl
    = "dag", IDENT, "{", { declaration }, "}";
 

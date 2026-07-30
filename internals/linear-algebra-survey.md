@@ -187,14 +187,27 @@ tests cover shape validation and row-major conversion.
 Record-shaped results still allow only concrete-dimension fields; a
 dimension-generic `Vec3`-like record result remains a separate extension.
 
-### 4.4 No reusable abstractions to package linear algebra as a library
+### 4.4 Reusable linear-algebra DAGs — addressed with type-level ports
 
-`dag` blocks take no generic parameters (`dag_decl = "dag", IDENT, "{" …`
-in `grammar.ebnf`) — no `<N: Nat>`, `<D: Dim>`, or `<I: Index>`. A user
-cannot write `cross` or `solve3` once and reuse it across dimensions; every
-dimension/size instantiation is spelled out by hand. `pub(bind) index`
-gives per-file axis genericity for named axes in multi-file projects, but
-nothing covers `Dim`-generic math.
+Graphcal already has an explicit abstraction mechanism that better matches its
+no-inference policy than generic DAG headers: required `pub(bind)` dimensions,
+types, and indexes inside a `dag`. They are type-level input ports supplied by
+name at each `include`, alongside ordinary value params. A single body can
+therefore use `ElementDim[Axis]`, dimension algebra such as `ElementDim^2`, and
+linear-algebra builtins, then be instantiated over unrelated dimensions and
+axes with fully checked substitutions.
+
+Inline-DAG module resolution now registers body-local type-system declarations
+under the child DAG identity, fixing required indexes (and other local type
+members) that previously resolved syntactically but were absent from the
+module-aware type registry. `tests/fixtures/valid/linear_algebra_reusable_dag.gcl`
+instantiates one magnitude DAG over both `Length[SpatialAxis]` and
+`Time[Samples]` and verifies both results.
+
+A separate `<N: Nat>` DAG-generic system with symbolic size arithmetic remains
+issue #354. It is not needed for ordinary size polymorphism here: a required
+`Index` carries its concrete cardinality and identity explicitly at each
+instantiation.
 
 ### 4.5 Ergonomics and standard-library gaps
 

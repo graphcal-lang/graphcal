@@ -27,6 +27,52 @@ dag orbital_velocity {
 The body uses the same `param` / `node` / `const node` / `@`-sigil syntax
 as the file's top-level declarations.
 
+### Type-Level Inputs for Reusable Math
+
+A DAG can expose required dimensions, types, or indexes as explicit
+**type-level input ports**. Declare them inside the block with `pub(bind)` and
+bind each one by name at the `include` site:
+
+```gcl
+dag magnitude {
+    pub(bind) dim ElementDim;
+    pub(bind) index Axis;
+
+    param values: ElementDim[Axis];
+    pub node squared: ElementDim^2 = dot(@values, @values);
+    pub node result: ElementDim = sqrt(@squared);
+}
+
+pub index SpatialAxis = { X, Y, Z };
+param displacement: Length[SpatialAxis] = {
+    SpatialAxis.X: 3.0 m,
+    SpatialAxis.Y: 4.0 m,
+    SpatialAxis.Z: 12.0 m,
+};
+
+include magnitude(
+    ElementDim: Length,
+    Axis: SpatialAxis,
+    values: @displacement,
+) as displacement_magnitude;
+
+assert magnitude_is_13m = @displacement_magnitude.result == 13.0 m;
+```
+
+This is Graphcal's explicit alternative to inferred DAG generics. The same DAG
+can be included again with another dimension and another named axis; every
+instantiation is checked after substituting its type-level bindings. Required
+`type T;` and coordinate-index forms work the same way. A bound index used by a
+projectable `param` must itself be visible across the include boundary, hence
+`pub index SpatialAxis` above.
+
+Cardinality is carried by the bound `Index`, so most size-polymorphic array
+algorithms do not need a separate natural-number parameter. General
+`Nat`-generic DAG declarations and size arithmetic remain outside this model.
+
+Type-level bindings belong to `include`; expression-form `@dag(args).out`
+invocation supplies value parameters only.
+
 ### Multi-Output DAGs
 
 A single `dag` can expose multiple outputs:
