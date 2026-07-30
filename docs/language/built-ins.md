@@ -29,10 +29,10 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 | `cbrt(x)` | `D -> D^(1/3)` | Cube root (dimension divided by 3) |
 | `abs(x)` | `D -> D` | Absolute value |
 | `sign(x)` | `D -> Dimensionless` | Sign of value (-1.0, 0.0, or 1.0) |
-| `round(x)` | `D -> D` | Round to nearest integer |
-| `trunc(x)` | `D -> D` | Truncate toward zero |
-| `floor(x)` | `D -> D` | Round toward negative infinity |
-| `ceil(x)` | `D -> D` | Round toward positive infinity |
+| `round(x)` | `Dimensionless -> Dimensionless` | Round to nearest integer |
+| `trunc(x)` | `Dimensionless -> Dimensionless` | Truncate toward zero |
+| `floor(x)` | `Dimensionless -> Dimensionless` | Round toward negative infinity |
+| `ceil(x)` | `Dimensionless -> Dimensionless` | Round toward positive infinity |
 | `clamp(x, min, max)` | `(D, D, D) -> D` | Clamp value to range |
 | `hypot(a, b)` | `(D, D) -> D` | Hypotenuse (sqrt(a^2 + b^2)) |
 | `exp(x)` | `Dimensionless -> Dimensionless` | Exponential (e^x) |
@@ -42,6 +42,17 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 | `log(x, base)` | `(Dimensionless, Dimensionless) -> Dimensionless` | Logarithm with arbitrary base |
 | `log2(x)` | `Dimensionless -> Dimensionless` | Base-2 logarithm |
 | `log10(x)` | `Dimensionless -> Dimensionless` | Base-10 logarithm |
+
+The rounding functions (`round`, `trunc`, `floor`, `ceil`) reject dimensioned
+arguments: "round to an integer" has no unit-independent meaning for a physical
+quantity -- an integer number of meters is not an integer number of
+centimeters. To round a quantity, divide by an explicit granularity, round the
+dimensionless ratio, and scale back:
+
+```graphcal
+// Round down to whole centimeters.
+node whole_cm: Length = floor(@x / 1.0 cm) * 1.0 cm;
+```
 
 ### Trigonometric Functions
 

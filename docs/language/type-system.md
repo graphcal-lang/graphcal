@@ -711,7 +711,13 @@ Built-in math functions have specific dimension constraints:
 | `exp(x)`, `ln(x)`, `log10(x)` | `Dimensionless` | `Dimensionless` |
 | `abs(x)` | Any `D` | `D` |
 | `least(a, b)`, `greatest(a, b)` | Both same `D` | `D` |
-| `floor(x)`, `ceil(x)`, `round(x)`, `trunc(x)` | Any `D` | `D` |
+| `floor(x)`, `ceil(x)`, `round(x)`, `trunc(x)` | `Dimensionless` | `Dimensionless` |
+
+Rounding functions accept only `Dimensionless` arguments: "round to an
+integer" has no unit-independent meaning for a dimensioned quantity. To round
+a quantity, divide by an explicit granularity, e.g.
+`floor(@x / 1.0 cm) * 1.0 cm` -- see
+[Built-in Reference](built-ins.md#math-functions).
 
 ## Unit Conversion
 

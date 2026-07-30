@@ -3,6 +3,9 @@
 // Rounding behavior at half-values and across the sign boundary differs by
 // language; pin Graphcal's choices so a libm or backend swap can't silently
 // change them. Also exercises sqrt/cbrt/hypot dimension halving/cubing.
+// Rounding functions accept only Dimensionless arguments ("round to an
+// integer" has no unit-independent meaning for a dimensioned quantity);
+// quantities are rounded via an explicit granularity, pinned below.
 const node round_half_pos: Dimensionless = round(2.5);
 const node round_half_neg: Dimensionless = round(-2.5);
 const node round_under: Dimensionless = round(2.4);
@@ -22,6 +25,12 @@ const node to_int_neg: Int = to_int(-3.7);
 
 // abs preserves the dimension.
 const node abs_neg_len: Length = abs(-5.0 m);
+
+// Rounding a quantity to an explicit granularity: whole centimeters, down.
+// 75.3 cm / 1.0 cm is Dimensionless 75.3; floor gives 75; scaling back by
+// 1.0 cm yields 0.75 m.
+const node whole_cm_down: Length = floor(75.3 cm / 1.0 cm) * 1.0 cm;
+assert whole_cm_granularity = @whole_cm_down == 0.75 m;
 
 // hypot: dimension preserved, sqrt(3^2 + 4^2) = 5.
 const node hyp_3_4: Length = hypot(3.0 m, 4.0 m);
