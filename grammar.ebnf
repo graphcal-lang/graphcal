@@ -278,9 +278,9 @@ multi_data_row
 
 (* --- dimension --- *)
 (* Three forms:
-   1. Base dimension:     base dim Length;
-   2. Required dimension: dim D;                       (must be bound via include)
-   3. Derived dimension:  dim Velocity = Length / Time; *)
+   1. Base dimension:     base dim Information;
+   2. Required dimension: dim D;                     (must be bound via include)
+   3. Derived dimension:  dim Jerk = Length / Time^3; *)
 dimension_decl
    = "base", "dim", IDENT, ";"
    | "dim", IDENT, ";"
@@ -288,8 +288,8 @@ dimension_decl
 
 (* --- unit --- *)
 (* Three forms:
-   1. Base unit (no body):     base unit m: Length;
-   2. Const unit:              const unit km: Length = 1000 m;
+   1. Base unit (no body):     base unit bit: Information;
+   2. Const unit:              const unit kbit: Information = 1000 bit;
    3. Runtime unit:            unit EUR: Money = (@rate) USD;
    The no-body form requires the `base` prefix; plain `unit X: Dim;`
    is a parse error. `const node` bodies may only use prelude/base/const
@@ -391,7 +391,7 @@ generic_constraint
 (* --- index --- *)
 (* Five forms of index declaration:
    1. Named (categorical):  index Maneuver = { Departure, Correction, Insertion };
-   2. Exact increment:      index Time = range(0.0 s, 1.0 s, step: 0.1 s);
+   2. Exact increment:      index TimeStep = range(0.0 s, 1.0 s, step: 0.1 s);
    3. Exact point count:    index Samples = linspace(0.0 s, 1.0 s, points: 11);
    4. Required named:       index Foo;
    5. Required coordinate:  index Foo: Time;
