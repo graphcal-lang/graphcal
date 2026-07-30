@@ -48,7 +48,7 @@ I : Index      I is a finite, ordered index axis
 N : Nat        N is a type-level natural number
 ```
 
-The built-in and user-declared type constructors have these kind-level
+The built-in and user-declared type-level formers have these kind-level
 signatures. The arrows are not graphcal function types:
 
 ```text
@@ -58,12 +58,20 @@ Bool     : Type
 Datetime : TimeScale -> Type
 A        : K₁ × ... × Kₙ -> Type     for generic kinds Kᵢ declared by A
 Fin      : Nat -> Index               with the validity obligation N > 0
-_[_]     : Type × one-or-more Index axes -> DeclType
+range    : Quantity(D) × Quantity(D) × Quantity(D) -> Index   (start, end, step:)
+linspace : Quantity(D) × Quantity(D) × Nat -> Index           (start, end, points:)
+_(min: _, max: _) : Quantity(D) | Int | Datetime(S) -> ConstrainedType
+_[_]     : ConstrainedType × one-or-more Index axes -> DeclType
 ```
 
 Thus `Type` is the kind whose inhabitants are single-value types; this page
 uses **ValueType** for those inhabitants. `Index` is the kind whose inhabitants
-are axes, not labels or indexed collections.
+are axes, not labels or indexed collections. `range` and `linspace` are legal
+only on the right-hand side of an `index` declaration, while `Fin(N)` may be
+written inline in any Index position. Every ValueType is a ConstrainedType
+with no bounds, so plain `T[I]` is the common indexed form; both
+ConstrainedType and DeclType are defined in
+[Entity Stratification](#entity-stratification).
 
 ## Entity Stratification
 
@@ -112,6 +120,12 @@ ValueType. `TimeScale` is the one kind with neither generic parameters nor
 user declarations: its nine inhabitants are closed and appear only in
 `Datetime<S>` type syntax and static `epoch<S>` arguments.
 
+The formers that connect these layers — from `Quantity : Dim -> Type` down to
+`_[_] : ConstrainedType × Index axes -> DeclType` — are listed with kind-level
+arrow signatures in
+[Type-Level Domains and Notation](#type-level-domains-and-notation); their
+term-level counterparts appear in [The Term Level](#the-term-level).
+
 Entities that live *outside* this tower — units, labels, constructors,
 functions, declarations, modules — are cataloged in
 [Declarations and the Entities They Introduce](#declarations-and-the-entities-they-introduce)
@@ -123,8 +137,15 @@ below.
 These entities exist only while the program is checked. None of them is a
 value, and each is classified by a kind rather than by a type.
 
-**Dimensions** (`D : Dim`) form an algebra over base dimensions: closed under
-`*`, `/`, and rational powers `^(p/q)`, with `Dimensionless` as the identity.
+**Dimensions** (`D : Dim`) form an algebra over base dimensions, with
+`Dimensionless` as the identity:
+
+```text
+_ * _    : Dim × Dim -> Dim
+_ / _    : Dim × Dim -> Dim
+_ ^(p/q) : Dim -> Dim                for each non-zero rational p/q
+```
+
 A dimension's canonical form is a product of base dimensions with rational
 exponents; named derived dimensions such as `Velocity` are transparent
 aliases. See [Dimension Algebra](#dimension-algebra).
@@ -134,11 +155,17 @@ semantic notation only: there is no source-level `TimeScale` kind and no
 time-scale variable.
 
 **Nats** (`N : Nat`) are type-level natural numbers: literals, `Nat` generic
-parameters, and polynomial `+`/`*` expressions over them. There is no
-subtraction; express the larger side additively (`Fin(N + 1)` input,
-`Fin(N)` output). Nat expressions are normalized, and two Nats are equal
-exactly when their normal forms coincide. Nats appear in exactly two roles:
-`Fin(N)` cardinalities and `Nat` generic arguments.
+parameters, and polynomial expressions over them:
+
+```text
+_ + _ : Nat × Nat -> Nat
+_ * _ : Nat × Nat -> Nat
+```
+
+There is no subtraction; express the larger side additively (`Fin(N + 1)`
+input, `Fin(N)` output). Nat expressions are normalized, and two Nats are
+equal exactly when their normal forms coincide. Nats appear in exactly two
+roles: `Fin(N)` cardinalities and `Nat` generic arguments.
 
 **Index axes** (`I : Index`) come in three concrete forms, each carrying an
 intrinsic element order:
@@ -148,6 +175,11 @@ intrinsic element order:
 | Named `X` | `index X = { ℓ₁, ..., ℓₖ };` | labels `X.ℓᵢ` | label declaration order |
 | Coordinate `C` | `index C = range(...);` or `linspace(...)` | `Quantity(D)` coordinates | coordinate order from start toward end |
 | Structural `Fin(N)` | written in place in Index positions | integer positions `0 ... N-1` | ascending position |
+
+The index formers `range`, `linspace`, and `Fin` carry the kind-level arrow
+signatures listed in
+[Type-Level Domains and Notation](#type-level-domains-and-notation); a named
+index has no former — its label set is the declaration itself.
 
 `Fin(0)` is invalid and a cardinality beyond the compiler's practical limit is
 rejected, so every axis is finite and non-empty. The elements of an axis are
@@ -207,6 +239,30 @@ total map with one value per label tuple of its axes. Two pieces of display
 metadata ride on values without affecting their types: a quantity's **unit**
 and a datetime's **timezone**. Both select rendering only — magnitudes are
 stored in SI base units, instants in their time scale.
+
+The structural value formers and eliminators have these signatures, where
+`ℓᵢ` is a label of axis `Iᵢ` and `U` an accumulator ValueType:
+
+```text
+Cᵢ          : DT₁ × ... × DTₖ -> A                value former, one per constructor of A
+map / table : T at each label tuple -> T[I₁, ..., Iₘ]
+for         : T at each label tuple -> T[I₁, ..., Iₘ]
+_[_]        : T[I₁, ..., Iₘ] × ℓ₁ × ... × ℓₘ -> T
+_.fᵢ        : A -> DTᵢ                            single-constructor A only
+scan        : T[I] × U × (U × T -> U) -> U[I]
+unfold      : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]
+sum, maximum, minimum, mean : Quantity(D)[I] -> Quantity(D)
+count       : T[I] -> Int
+```
+
+As everywhere on this page, the arrows are semantic notation, not function
+types. Constructor calls always spell field names (`Cᵢ(f₁: v₁, ...)`), and a
+constructor of a generic `A` produces the applied `A<G₁, ..., Gₙ>`. The
+closure positions in `scan` and `unfold` are special syntax, not function
+values; `unfold`'s first argument is an explicit reference to a coordinate
+index over dimension `D`. Map and table literals must be total and are
+normalized to index order, element access must supply every axis, and
+aggregations reduce exactly one axis.
 
 Term-level names are bound by `param` (a named DAG input port), `node` (a
 computed value), and `const node` (a compile-time value); a
@@ -471,6 +527,17 @@ type ManeuverKind {
     Coast,
 }
 ```
+
+In value-former signature notation, this declaration introduces:
+
+```text
+Impulsive : Velocity -> ManeuverKind
+LowThrust : Force × Time -> ManeuverKind
+Coast     : ManeuverKind
+```
+
+The arrows are semantic notation: construction always spells field names, as
+in `Impulsive(delta_v: 3.1 km/s)`, and a constructor is not a function value.
 
 Field access is rejected when a type has multiple constructors because no
 single payload shape is guaranteed. Destructure the value through `match`
@@ -1127,6 +1194,8 @@ for v1: Index1, v2: Index2 { body_expr }
 scan(source, init, |acc, item| body)
 ```
 
+In signature notation, `scan : T[I] × U × (U × T -> U) -> U[I]`:
+
 - `source` must be an indexed type `T[I]`.
 - `init` must have type `U` (the accumulator type).
 - `acc` is bound to type `U`; `item` is bound to type `T`.
@@ -1140,6 +1209,10 @@ The `|acc, item| body` is special syntax, not a function value.
 ```
 unfold(index, init, |prev_state, prev_i, i| body)
 ```
+
+In signature notation,
+`unfold : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]` for a
+coordinate index `I` over dimension `D`:
 
 - `index` is an explicit reference to a coordinate index `I`, not a value expression.
 - `init` must have type `T` and becomes the result at the first coordinate.
