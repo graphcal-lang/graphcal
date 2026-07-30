@@ -463,14 +463,20 @@ Domain constraints are useful for:
 ## Indexes and Indexed Types
 
 An index declares a finite, ordered collection axis usable in `T[I]`. Graphcal
-has named, coordinate, and structural finite indexes.
+has named, coordinate, and structural finite indexes. Each kind carries an
+intrinsic **index order**: a named index is ordered by label declaration
+order, a coordinate index by its coordinate sequence from `start` toward
+`end`, and `Fin(N)` by ascending position. Indexed values never carry an
+order of their own — every construction is normalized to the index order, and
+order-sensitive consumers (`scan`, rendered output, extern-function buffers)
+follow it.
 
 ### Named Index
 
-A named index declares a finite set of labels usable as a collection axis. The `index` keyword declares:
+A named index declares a finite, ordered set of labels usable as a collection axis. The `index` keyword declares:
 
 1. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
-2. A closed set of **index labels**: `Maneuver.Departure` identifies one position on that axis.
+2. An ordered, closed set of **index labels**: `Maneuver.Departure` identifies one position on that axis. The label declaration order is the axis's index order, so reordering the labels of an `index` declaration is a semantic change for order-sensitive consumers such as `scan`.
 
 ```
 index Maneuver = { Departure, Correction, Insertion };
@@ -566,6 +572,10 @@ param delta_v_budget: Velocity[Phase, Maneuver] = {
 
 Single-axis map literals use bare keys (`Maneuver.Departure: ...`); multi-axis map literals use tuple keys (`(Phase.Launch, Maneuver.Departure): ...`).
 
+Map (and `table`) literal entry order is not significant: the constructed
+value is normalized to the index order, so a literal that lists
+`Maneuver.Insertion` first is identical to one written in declaration order.
+
 **`for` comprehension** (one value per label):
 
 ```
@@ -618,6 +628,10 @@ scan(
     |acc, item| acc + item,
 )   // Velocity[Maneuver] -> Velocity[Maneuver]
 ```
+
+`scan` folds in the index order — label declaration order for a named axis
+such as `Maneuver`. Each output element is the accumulated result up to and
+including that position.
 
 ### No Implicit Broadcasting
 

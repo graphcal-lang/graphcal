@@ -80,6 +80,11 @@ This produces:
 - `Correction`: 2.58 km/s (2.46 + 0.12)
 - `Insertion`: 4.41 km/s (2.58 + 1.83)
 
+The accumulation follows the order in which the labels were declared in
+`index Maneuver = { Departure, Correction, Insertion };` — not the order in
+which a map literal happens to list its entries. Declare labels in a
+meaningful sequence when you plan to `scan` over the axis.
+
 ## Complete Example
 
 ```

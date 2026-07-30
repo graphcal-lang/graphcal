@@ -1151,6 +1151,22 @@ node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
 }
 
 #[test]
+fn eval_scan_order_follows_label_declaration_order() {
+    let source = r"
+index Phase = { B, A };
+node x: Dimensionless[Phase] = { Phase.A: 1.0, Phase.B: 10.0 };
+node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
+";
+    let result = compile_and_eval(source).unwrap();
+    let x = find_entry(&result, "x");
+    let y = find_entry(&result, "y");
+    let x_vals = indexed_si_values(&x);
+    let y_vals = indexed_si_values(&y);
+    assert_eq!(x_vals, [("B", 10.0), ("A", 1.0)]);
+    assert_eq!(y_vals, [("B", 10.0), ("A", 11.0)]);
+}
+
+#[test]
 fn eval_unfold_passes_previous_state_and_coordinates() {
     let source = r"
 index Step = range(0.0 s, 2.0 s, step: 1.0 s);
