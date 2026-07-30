@@ -188,39 +188,13 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
             signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
-    // Rounding and sign functions (passthrough dimension)
+    // Absolute value and sign accept any dimension: both commute with unit
+    // rescaling, so their results do not depend on the unit the argument was
+    // written in.
     m.insert(
         "abs",
         BuiltinFunction {
             eval: |a| a[0].abs(),
-            signature: FunctionSignature::passthrough("x"),
-        },
-    );
-    m.insert(
-        "floor",
-        BuiltinFunction {
-            eval: |a| a[0].floor(),
-            signature: FunctionSignature::passthrough("x"),
-        },
-    );
-    m.insert(
-        "ceil",
-        BuiltinFunction {
-            eval: |a| a[0].ceil(),
-            signature: FunctionSignature::passthrough("x"),
-        },
-    );
-    m.insert(
-        "round",
-        BuiltinFunction {
-            eval: |a| a[0].round(),
-            signature: FunctionSignature::passthrough("x"),
-        },
-    );
-    m.insert(
-        "trunc",
-        BuiltinFunction {
-            eval: |a| a[0].trunc(),
             signature: FunctionSignature::passthrough("x"),
         },
     );
@@ -233,6 +207,39 @@ static BUILTIN_FUNCTIONS: LazyLock<HashMap<&'static str, BuiltinFunction>> = Laz
                 Some(std::cmp::Ordering::Equal) | None => 0.0,
             },
             signature: FunctionSignature::free_to_fixed("x", dimensionless()),
+        },
+    );
+    // Rounding functions are dimensionless-only: "round to an integer" does
+    // not commute with unit rescaling, so on a dimensioned quantity the result
+    // would depend on the internal base-unit normalization (ceil of 20.0 cm
+    // would be 1 m). Rounding a quantity requires an explicit granularity:
+    // floor(x / 1.0 cm) * 1.0 cm.
+    m.insert(
+        "floor",
+        BuiltinFunction {
+            eval: |a| a[0].floor(),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "ceil",
+        BuiltinFunction {
+            eval: |a| a[0].ceil(),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "round",
+        BuiltinFunction {
+            eval: |a| a[0].round(),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
+        },
+    );
+    m.insert(
+        "trunc",
+        BuiltinFunction {
+            eval: |a| a[0].trunc(),
+            signature: FunctionSignature::all_dimensionless(&["x"]),
         },
     );
     // Multi-argument same-dimension functions

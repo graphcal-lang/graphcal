@@ -1,0 +1,5 @@
+// error: rounding functions require Dimensionless arguments; "round to an
+// integer" has no unit-independent meaning for a dimensioned quantity.
+// Round to an explicit granularity instead: floor(@len / 1.0 cm) * 1.0 cm.
+param len: Length = 20.0 cm;
+node bad: Length = floor(@len);

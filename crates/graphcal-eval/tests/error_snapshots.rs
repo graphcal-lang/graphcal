@@ -138,6 +138,14 @@ fn error_exp_requires_dimensionless() {
 }
 
 #[test]
+fn error_rounding_requires_dimensionless() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/rounding_requires_dimensionless.gcl");
+    let rendered = render_error(source, "rounding_requires_dimensionless.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_unit() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_unit.gcl");
     let rendered = render_error(source, "unknown_unit.gcl");
