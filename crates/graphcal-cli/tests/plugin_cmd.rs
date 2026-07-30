@@ -48,12 +48,12 @@ fn twice_manifest_function() -> ManifestFunction {
             name: "xs".to_string(),
             kind: ManifestValueKind::Array {
                 element: element.clone(),
-                index: "I".to_string(),
+                indexes: vec!["I".to_string()],
             },
         }],
         result: ManifestValueKind::Array {
             element,
-            index: "I".to_string(),
+            indexes: vec!["I".to_string()],
         },
     }
 }
@@ -164,7 +164,7 @@ fn plugin_test_reports_identity_and_import_block() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("sha256: "), "{stdout}");
-    assert!(stdout.contains("abi: version 3, 3 function(s)"), "{stdout}");
+    assert!(stdout.contains("abi: version 4, 3 function(s)"), "{stdout}");
     assert!(stdout.contains("as kernels {"), "{stdout}");
     assert!(
         stdout.contains("fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"),

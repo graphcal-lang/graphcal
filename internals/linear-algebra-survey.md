@@ -168,21 +168,24 @@ fixture demonstrates all three operations, and
 `tests/fixtures/runtime_error/linear_algebra_singular.gcl` locks in explicit
 singularity failure.
 
-### 4.3 The plugin boundary stops at rank 1
+### 4.3 Multi-axis plugin arrays — addressed with ABI v4
 
-The WASM plugin ABI would be the natural home for numeric kernels, but
-today:
+Extern signatures and the WASM boundary now carry quantity arrays of any
+non-zero rank: `A: D[I, J]` is legal, each array value carries ordered shape
+metadata, and flattened values use explicit row-major order. ABI v4 lowers an
+array parameter to a pointer followed by one `i32` extent per axis. The SDK
+exposes borrowed `ArrayView` inputs and validated owned `Array` results, while
+the host/evaluator preserve every concrete typed axis and its keys.
 
-- Multi-axis arrays cannot cross — `A: D[I, J]` is not a legal extern
-  parameter ("array elements are quantities in this phase;
-  `Bool[I]`/`Int[I]` and multi-axis arrays are not supported"). No plugin
-  can implement `solve` or `inverse`.
-- Result arrays must reuse an index variable bound by some parameter — a
-  plugin can never invent its output length. (This is fine for `solve`:
-  `x` shares `b`'s axis. It rules out factorizations whose output shapes
-  differ from inputs unless those axes appear in the signature.)
-- Record-shaped results allow only concrete-dimension fields — a
-  dimension-generic `Vec3`-like result cannot cross yet.
+Result axes still must reuse index variables bound by parameters, so plugins
+cannot invent dynamic extents. They can reorder or repeat bound axes; for
+example `matrix_transpose<D, I, J>(D[I, J]) -> D[J, I]` returns the reversed
+shape and rebuilt Graphcal axes. `tests/fixtures/valid/plugin_extern.gcl`
+demonstrates that path, and the ABI, macro, CLI, evaluator, and real-WASM host
+tests cover shape validation and row-major conversion.
+
+Record-shaped results still allow only concrete-dimension fields; a
+dimension-generic `Vec3`-like record result remains a separate extension.
 
 ### 4.4 No reusable abstractions to package linear algebra as a library
 

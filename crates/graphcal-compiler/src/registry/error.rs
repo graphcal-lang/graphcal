@@ -242,7 +242,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::P001),
         help(
-            "extern signatures support Bool, Int, quantity types, arrays of quantities over a declared index variable, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare quantity parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter"
+            "extern signatures support Bool, Int, quantity types, arrays of quantities over one or more declared index variables, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare quantity parameter or bare array element before compound uses, and every result axis must reuse an index variable that indexes some parameter"
         )
     )]
     InvalidExternSignature {

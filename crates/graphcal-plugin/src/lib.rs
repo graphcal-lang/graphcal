@@ -37,11 +37,11 @@
 //!   the raw ABI (`f64`s in SI base units) and the declared value kinds —
 //!   `Bool` parameters arrive in the body as `bool`, `Int` parameters as
 //!   `i64`, and quantity parameters as `f64` SI values;
-//! - for functions with array parameters or results (`xs: D[I]`), the
-//!   buffer-protocol plumbing: the body sees `&[f64]` slices and returns a
-//!   `Vec<f64>`, while the generated wasm wrapper and the
-//!   `graphcal_alloc`/`graphcal_free` exports move the dense SI buffers
-//!   across the boundary;
+//! - for functions with array parameters or results (`xs: D[I, J]`), the
+//!   buffer-protocol plumbing: the body sees shaped [`ArrayView`] values and
+//!   returns validated [`Array`] values, while the generated wasm wrapper and
+//!   the `graphcal_alloc`/`graphcal_free` exports move row-major SI buffers and
+//!   ordered extents across the boundary;
 //! - a panic hook that forwards panic messages through the host's
 //!   `graphcal::fail` import, so a `panic!` in plugin code surfaces as a
 //!   readable per-node diagnostic instead of an anonymous trap.
@@ -141,6 +141,163 @@
 /// manifest section. Use **one `plugin!` block per plugin**; helper
 /// functions can live anywhere in the crate and be called from the bodies.
 pub use graphcal_plugin_macros::plugin;
+
+/// Borrowed dense array parameter passed to a plugin body.
+///
+/// Values are row-major SI quantities; `shape()` lists axis extents in the
+/// declaration's order. Index identities remain host-side and never cross the
+/// plugin boundary.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrayView<'a> {
+    shape: &'a [usize],
+    values: &'a [f64],
+}
+
+impl<'a> ArrayView<'a> {
+    /// Build a borrowed array view after validating its shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArrayShapeError`] when the shape is invalid or does not match
+    /// `values.len()`.
+    pub fn new(shape: &'a [usize], values: &'a [f64]) -> Result<Self, ArrayShapeError> {
+        validate_array_shape(shape, values.len())?;
+        Ok(Self { shape, values })
+    }
+
+    /// Ordered row-major shape.
+    #[must_use]
+    pub const fn shape(self) -> &'a [usize] {
+        self.shape
+    }
+
+    /// Flattened row-major SI values.
+    #[must_use]
+    pub const fn values(self) -> &'a [f64] {
+        self.values
+    }
+
+    /// Number of axes.
+    #[must_use]
+    pub const fn rank(self) -> usize {
+        self.shape.len()
+    }
+
+    /// Number of flattened elements.
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.values.len()
+    }
+
+    /// Arrays crossing the plugin boundary are never empty.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        false
+    }
+
+    /// Iterate flattened row-major values.
+    pub fn iter(self) -> std::slice::Iter<'a, f64> {
+        self.values.iter()
+    }
+}
+
+/// Owned dense array returned by a plugin body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Array {
+    shape: Vec<usize>,
+    values: Vec<f64>,
+}
+
+fn validate_array_shape(shape: &[usize], values: usize) -> Result<(), ArrayShapeError> {
+    if shape.is_empty() {
+        return Err(ArrayShapeError::NoAxes);
+    }
+    if shape.contains(&0) {
+        return Err(ArrayShapeError::EmptyAxis);
+    }
+    let expected = shape.iter().try_fold(1_usize, |size, extent| {
+        size.checked_mul(*extent).ok_or(ArrayShapeError::Overflow)
+    })?;
+    if expected == values {
+        Ok(())
+    } else {
+        Err(ArrayShapeError::ElementCount {
+            expected,
+            found: values,
+        })
+    }
+}
+
+impl Array {
+    /// Build an array after validating a non-empty shape and its element count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArrayShapeError`] for an empty/zero axis, cardinality
+    /// overflow, or a value count that differs from the shape product.
+    pub fn new(shape: Vec<usize>, values: Vec<f64>) -> Result<Self, ArrayShapeError> {
+        validate_array_shape(&shape, values.len())?;
+        Ok(Self { shape, values })
+    }
+
+    /// Convenience constructor for a non-empty rank-one result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ArrayShapeError::EmptyAxis`] when `values` is empty.
+    pub fn vector(values: Vec<f64>) -> Result<Self, ArrayShapeError> {
+        if values.is_empty() {
+            return Err(ArrayShapeError::EmptyAxis);
+        }
+        Self::new(vec![values.len()], values)
+    }
+
+    /// Ordered row-major shape.
+    #[must_use]
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    /// Flattened row-major SI values.
+    #[must_use]
+    pub fn values(&self) -> &[f64] {
+        &self.values
+    }
+
+    /// Consume the array into its shape and flattened values.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<usize>, Vec<f64>) {
+        (self.shape, self.values)
+    }
+}
+
+/// Invalid shape supplied for a plugin array result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArrayShapeError {
+    /// Arrays require one or more axes.
+    NoAxes,
+    /// Graphcal indexes are non-empty.
+    EmptyAxis,
+    /// The product of axis extents overflowed `usize`.
+    Overflow,
+    /// Shape cardinality and flattened value count differ.
+    ElementCount { expected: usize, found: usize },
+}
+
+impl std::fmt::Display for ArrayShapeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoAxes => f.write_str("an array must have at least one axis"),
+            Self::EmptyAxis => f.write_str("array axes must be non-empty"),
+            Self::Overflow => f.write_str("array shape cardinality overflowed usize"),
+            Self::ElementCount { expected, found } => {
+                write!(f, "array shape requires {expected} elements, found {found}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ArrayShapeError {}
 
 /// Report a plugin failure with `format!` syntax and abort the call.
 ///
@@ -379,34 +536,121 @@ pub mod __rt {
         unsafe { std::slice::from_raw_parts(ptr, len as usize) }
     }
 
-    /// Write an array result through the host-allocated out-pointer.
-    ///
-    /// The result length is fixed by the signature (the input array bound to
-    /// the result's index variable); a body returning any other length is a
-    /// plugin bug reported through `fail` rather than truncated or padded.
+    /// Compute a shape's flattened length in the 32-bit core-Wasm ABI.
+    #[must_use]
+    pub fn shape_len_u32(shape: &[usize], param: &str) -> u32 {
+        let length = shape
+            .iter()
+            .try_fold(1_usize, |size, extent| size.checked_mul(*extent));
+        match length.and_then(|length| u32::try_from(length).ok()) {
+            Some(length) if length > 0 => length,
+            Some(_) | None => {
+                crate::fail!("parameter `{param}`: invalid or oversized array shape {shape:?}")
+            }
+        }
+    }
+
+    /// Decode one host-written array parameter with its ordered shape.
     ///
     /// # Safety
     ///
-    /// `out` must point at `expected_len` writable `f64` slots (the host
-    /// allocates exactly that many for the result buffer).
+    /// `ptr` must point at `len` initialized `f64`s that stay live for the
+    /// call. `shape` must also stay live and its product must equal `len`.
+    #[must_use]
+    #[expect(
+        unsafe_code,
+        reason = "viewing host-written plugin memory is inherently raw"
+    )]
+    pub unsafe fn array_view_from_abi<'call>(
+        ptr: *const f64,
+        len: u32,
+        shape: &'call [usize],
+        param: &str,
+    ) -> crate::ArrayView<'call> {
+        let expected = shape
+            .iter()
+            .try_fold(1_usize, |size, extent| size.checked_mul(*extent));
+        if expected != Some(len as usize) {
+            crate::fail!("parameter `{param}`: shape {shape:?} does not contain {len} elements");
+        }
+        // SAFETY: forwarded from the caller after shape cardinality validation.
+        let values = unsafe { slice_from_abi(ptr, len) };
+        crate::ArrayView { shape, values }
+    }
+
+    /// Write an array result through the host-allocated out-pointer.
+    ///
+    /// The result shape is fixed by the signature's input-bound axes; a body
+    /// returning any other shape is a plugin bug reported through `fail`
+    /// rather than reinterpreted, truncated, or padded.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point at the product of `expected_shape` writable `f64`
+    /// slots allocated by the host.
     #[expect(unsafe_code, reason = "writing through the host-allocated out-pointer")]
     pub unsafe fn write_array_result(
-        values: &[f64],
+        array: &crate::Array,
         out: *mut f64,
-        expected_len: u32,
+        expected_shape: &[usize],
         function: &str,
     ) {
+        if array.shape() != expected_shape {
+            crate::fail!(
+                "{function}: result shape {:?} does not match the signature-bound shape \
+                 {expected_shape:?}",
+                array.shape()
+            );
+        }
+        // SAFETY: the host allocated the product of `expected_shape` f64
+        // slots, and `Array::new` guarantees that product equals values.len().
+        unsafe {
+            std::ptr::copy_nonoverlapping(array.values().as_ptr(), out, array.values().len());
+        }
+    }
+
+    /// Write fixed-layout record slots through a host-allocated out-pointer.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point at `expected_len` writable `f64` slots.
+    #[expect(unsafe_code, reason = "writing through the host-allocated out-pointer")]
+    pub unsafe fn write_slots(values: &[f64], out: *mut f64, expected_len: u32, function: &str) {
         if values.len() != expected_len as usize {
             crate::fail!(
-                "{function}: the result array has {} element(s), expected {expected_len} (the \
-                 length of the input array bound to the result's index variable)",
+                "{function}: result has {} slot(s), expected {expected_len}",
                 values.len()
             );
         }
-        // SAFETY: the host allocated `expected_len` f64 slots at `out`, and
-        // the length was checked above.
+        // SAFETY: checked against the host-allocated slot count above.
         unsafe {
             std::ptr::copy_nonoverlapping(values.as_ptr(), out, values.len());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arrays_validate_rank_extents_and_cardinality() {
+        assert_eq!(
+            Array::new(Vec::new(), Vec::new()),
+            Err(ArrayShapeError::NoAxes)
+        );
+        assert_eq!(
+            Array::new(vec![2, 0], Vec::new()),
+            Err(ArrayShapeError::EmptyAxis)
+        );
+        assert_eq!(
+            Array::new(vec![2, 3], vec![0.0; 5]),
+            Err(ArrayShapeError::ElementCount {
+                expected: 6,
+                found: 5,
+            })
+        );
+        let array = Array::new(vec![2, 3], vec![0.0; 6]).unwrap();
+        assert_eq!(array.shape(), [2, 3]);
     }
 }

@@ -720,8 +720,13 @@ fn build_extern_fn_signatures(
             ExternValueKind::Bool => "Bool".to_string(),
             ExternValueKind::Int => "Int".to_string(),
             ExternValueKind::Quantity(monomial) => format_monomial(monomial),
-            ExternValueKind::Indexed { element, index } => {
-                format!("{}[{index}]", format_monomial(element))
+            ExternValueKind::Indexed { element, indexes } => {
+                let indexes = indexes
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{}[{indexes}]", format_monomial(element))
             }
             ExternValueKind::Struct(_) => function
                 .result_struct
@@ -858,8 +863,13 @@ fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
         ValueKind::Bool => Ok("Bool".to_string()),
         ValueKind::Int => Ok("Int".to_string()),
         ValueKind::Quantity(monomial) => monomial_display(monomial),
-        ValueKind::Indexed { element, index } => {
-            Ok(format!("{}[{index}]", monomial_display(element)?))
+        ValueKind::Indexed { element, indexes } => {
+            let indexes = indexes
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            Ok(format!("{}[{indexes}]", monomial_display(element)?))
         }
         // Builtins never declare struct results; extern hovers render the
         // nominal type through their own path above.

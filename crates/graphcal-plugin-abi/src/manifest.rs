@@ -65,7 +65,7 @@ pub struct ManifestParam {
 /// The kind of a parameter or result value.
 ///
 /// JSON encoding is externally tagged: `{"quantity": {…}}`, `"bool"`, `"int"`,
-/// `{"array": {"element": {…}, "index": "I"}}`,
+/// `{"array": {"element": {…}, "indexes": ["I", "J"]}}`,
 /// `{"struct": {"fields": [{"name": "root", "kind": {"quantity": {}}}]}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -76,14 +76,14 @@ pub enum ManifestValueKind {
     Bool,
     /// An integer value (crosses the ABI as an exactly-representable `f64`).
     Int,
-    /// An array of quantities over an index variable (crosses the ABI as a
-    /// dense `f64` buffer in index order).
+    /// An array of quantities over one or more index variables (crosses the
+    /// ABI as a dense row-major `f64` buffer plus one extent per axis).
     Array {
         /// The element dimension monomial.
         element: ManifestMonomial,
-        /// The index variable, matching an entry in
-        /// [`ManifestFunction::index_vars`].
-        index: String,
+        /// Index variables in row-major axis order, each matching an entry in
+        /// [`ManifestFunction::index_vars`]. Never empty after validation.
+        indexes: Vec<String>,
     },
     /// A record described by its flattened field layout (result-only;
     /// crosses the ABI as one `f64` slot per field, in declaration order).
@@ -330,8 +330,13 @@ fn validate_kind(
 ) -> Result<(), ManifestValidationError> {
     let monomial = match kind {
         ManifestValueKind::Quantity(monomial) => monomial,
-        ManifestValueKind::Array { element, index } => {
-            if index.is_empty() {
+        ManifestValueKind::Array { element, indexes } => {
+            if indexes.is_empty() {
+                return Err(ManifestValidationError::EmptyArrayAxes {
+                    function: function.name.clone(),
+                });
+            }
+            if indexes.iter().any(String::is_empty) {
                 return Err(ManifestValidationError::EmptyName {
                     function: Some(function.name.clone()),
                     role: NameRole::IndexVar,
@@ -551,6 +556,12 @@ pub enum ManifestValidationError {
         /// The repeated variable.
         var: String,
     },
+    /// An array kind declares no axes.
+    #[error("function `{function}` declares an array with no axes")]
+    EmptyArrayAxes {
+        /// The declaring function.
+        function: String,
+    },
     /// A struct result declares no fields.
     #[error("function `{function}` declares a struct result with no fields")]
     EmptyStruct {
@@ -747,7 +758,7 @@ mod tests {
 
     #[test]
     fn dimensionless_quantity_is_the_empty_monomial() {
-        let json = r#"{"abi_version":3,"functions":[
+        let json = r#"{"abi_version":4,"functions":[
             {"name":"tanh","params":[{"name":"x","kind":{"quantity":{}}}],"result":{"quantity":{}}}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
@@ -764,7 +775,7 @@ mod tests {
 
     #[test]
     fn legacy_v2_quantity_kind_is_rejected() {
-        let json = r#"{"abi_version":3,"functions":[
+        let json = r#"{"abi_version":4,"functions":[
             {"name":"tanh","params":[{"name":"x","kind":{"scalar":{}}}],"result":{"quantity":{}}}
         ]}"#;
         assert!(matches!(
@@ -775,7 +786,7 @@ mod tests {
 
     #[test]
     fn unit_kinds_decode_from_bare_strings() {
-        let json = r#"{"abi_version":3,"functions":[
+        let json = r#"{"abi_version":4,"functions":[
             {"name":"f","params":[{"name":"n","kind":"int"},{"name":"b","kind":"bool"}],"result":"int"}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
@@ -790,12 +801,12 @@ mod tests {
     #[test]
     fn future_abi_version_is_reported_before_shape_errors() {
         // The future shape is unknown; only `abi_version` must be readable.
-        let json = r#"{"abi_version":4,"modules":{"totally":"different"}}"#;
+        let json = r#"{"abi_version":5,"modules":{"totally":"different"}}"#;
         let err = PluginManifest::from_json(json.as_bytes()).unwrap_err();
         assert_eq!(
             err,
             ManifestDecodeError::UnsupportedAbiVersion {
-                found: 4,
+                found: 5,
                 supported: crate::ABI_VERSION,
             }
         );
@@ -803,7 +814,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_are_rejected() {
-        let json = r#"{"abi_version":3,"functions":[],"extra":true}"#;
+        let json = r#"{"abi_version":4,"functions":[],"extra":true}"#;
         assert!(matches!(
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Json { .. }
@@ -812,7 +823,7 @@ mod tests {
 
     #[test]
     fn empty_function_list_is_rejected() {
-        let json = r#"{"abi_version":3,"functions":[]}"#;
+        let json = r#"{"abi_version":4,"functions":[]}"#;
         assert_eq!(
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Invalid(ManifestValidationError::NoFunctions)
@@ -982,7 +993,7 @@ mod tests {
                                 }],
                                 fixed: Vec::new(),
                             },
-                            index: "I".to_string(),
+                            indexes: vec!["I".to_string()],
                         },
                     },
                     ManifestParam {
@@ -998,7 +1009,7 @@ mod tests {
                         }],
                         fixed: Vec::new(),
                     },
-                    index: "I".to_string(),
+                    indexes: vec!["I".to_string()],
                 },
             }],
         }
@@ -1029,11 +1040,27 @@ mod tests {
     }
 
     #[test]
+    fn arrays_without_axes_are_rejected() {
+        let mut manifest = smooth_manifest();
+        manifest.functions[0].result = ManifestValueKind::Array {
+            element: ManifestMonomial::default(),
+            indexes: Vec::new(),
+        };
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::EmptyArrayAxes {
+                function: "smooth".to_string(),
+            })
+        );
+    }
+
+    #[test]
     fn empty_array_index_names_are_rejected() {
         let mut manifest = smooth_manifest();
         manifest.functions[0].result = ManifestValueKind::Array {
             element: ManifestMonomial::default(),
-            index: String::new(),
+            indexes: vec![String::new()],
         };
         let json = manifest.to_json().unwrap();
         assert_eq!(

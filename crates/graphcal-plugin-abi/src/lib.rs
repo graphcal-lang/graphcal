@@ -13,7 +13,7 @@
 //!   module beyond the section layout;
 //! - the protocol constants below.
 //!
-//! # ABI v3 contract
+//! # ABI v4 contract
 //!
 //! A graphcal plugin is a **core WebAssembly module** (not a component) that:
 //!
@@ -24,15 +24,15 @@
 //!   - each quantity, `Int`, or `Bool` parameter is one `f64` (raw SI base
 //!     units for quantities; `Int` parameters arrive as exactly-representable
 //!     integers and `Bool` parameters as `1.0`/`0.0`);
-//!   - each array parameter is an `(i32 ptr, i32 len)` pair: `len` dense
-//!     little-endian `f64` elements in index order, in a host-allocated
-//!     8-byte-aligned buffer inside the plugin's own memory;
+//!   - each rank-`R` array parameter is `(i32 ptr, i32 extent_0, …,
+//!     i32 extent_R-1)`: row-major dense little-endian `f64` elements in a
+//!     host-allocated 8-byte-aligned buffer inside the plugin's own memory;
 //!   - a quantity, `Int`, or `Bool` result is the single `f64` return value;
-//!     an array result turns the return into one trailing `i32 out_ptr`
-//!     parameter (and no return values) — the plugin writes exactly `len` elements there,
-//!     where `len` is the length of the input array bound to the result's
-//!     index variable. Output lengths always come from inputs;
-//! - if any function takes or returns an array, exports its linear memory as
+//!     an array or struct result turns the return into one trailing
+//!     `i32 out_ptr` parameter (and no return values). An array writes exactly
+//!     the product of its result-axis extents (all bound by inputs); a struct
+//!     writes one slot per declared field;
+//! - if any function moves an array or struct result, exports its linear memory as
 //!   `"memory"` plus the allocator pair [`ALLOC_EXPORT`] of type
 //!   `(i32 size) -> i32` (returning 8-byte-aligned pointers) and
 //!   [`FREE_EXPORT`] of type `(i32 ptr, i32 size) -> ()`. The host allocates
@@ -54,9 +54,10 @@
 //!
 //! Dimensions in the manifest are expressed structurally as exponent vectors
 //! over the prelude base dimensions only; user-defined base dimensions never
-//! cross the binary boundary in ABI v3. Array element dimensions reuse the
+//! cross the binary boundary in ABI v4. Array element dimensions reuse the
 //! quantity monomial encoding; index variables are opaque names bound per call
-//! — a plugin never learns the index's identity, only each buffer's length.
+//! — a plugin never learns an index's identity, only each buffer's ordered
+//! shape.
 
 pub mod manifest;
 pub mod section;
@@ -73,11 +74,12 @@ pub use section::{SectionError, embed_manifest};
 ///
 /// Stored in [`PluginManifest::abi_version`]; a manifest with any other
 /// version is rejected at decode time so hosts can report "plugin requires a
-/// newer/older graphcal" instead of a shape error. Version 3 renamed the
-/// quantity manifest kind from `scalar` to `quantity`. Version 2 added array
-/// parameters/results over index variables and the allocator exports that
-/// carry them. Older modules are not accepted; rebuild against the current SDK.
-pub const ABI_VERSION: u32 = 3;
+/// newer/older graphcal" instead of a shape error. Version 4 adds multi-axis
+/// array shapes and carries one extent per axis. Version 3 renamed the quantity
+/// manifest kind from `scalar` to `quantity`; version 2 introduced arrays and
+/// allocator exports. Older modules are not accepted; rebuild against the
+/// current SDK.
+pub const ABI_VERSION: u32 = 4;
 
 /// Name of the wasm custom section holding the JSON-encoded manifest.
 pub const MANIFEST_SECTION: &str = "graphcal-manifest";

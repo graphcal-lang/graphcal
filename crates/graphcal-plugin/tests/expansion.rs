@@ -44,10 +44,33 @@ graphcal_plugin::plugin! {
         (1_i64 << 53) + 1
     }
 
-    /// Array parameters arrive as slices; array results return `Vec`s over
-    /// the same index (issue #25 Phase D).
+    /// Array parameters carry a shape; array results preserve it explicitly.
     fn rescale<D: Dim, I: Index>(xs: D[I], k: Dimensionless) -> D[I] {
-        xs.iter().map(|x| x * k).collect()
+        let values = xs.iter().map(|x| x * k).collect();
+        graphcal_plugin::Array::new(xs.shape().to_vec(), values)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
+    }
+
+    /// Multi-axis arrays can reorder axes and values.
+    fn matrix_transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I] {
+        let [rows, columns] = xs.shape() else {
+            graphcal_plugin::fail!("matrix_transpose requires rank two");
+        };
+        let values = (0..*columns)
+            .flat_map(|column| {
+                (0..*rows).map(move |row| {
+                    let offset = row
+                        .checked_mul(*columns)
+                        .and_then(|offset| offset.checked_add(column))
+                        .unwrap_or_else(|| graphcal_plugin::fail!("matrix offset overflow"));
+                    *xs.values()
+                        .get(offset)
+                        .unwrap_or_else(|| graphcal_plugin::fail!("matrix shape mismatch"))
+                })
+            })
+            .collect();
+        graphcal_plugin::Array::new(vec![*columns, *rows], values)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
     }
 
     /// Arrays can collapse to quantities.
@@ -107,14 +130,27 @@ fn unrepresentable_int_results_are_rejected() {
 }
 
 #[test]
-fn array_kernels_run_natively_with_slices_and_vecs() {
-    assert_eq!(rescale(&[1.0, 2.5, -4.0], 2.0), vec![2.0, 5.0, -8.0]);
-    assert!((total(&[1.0, 2.0, 3.5]) - 6.5).abs() < 1e-12);
+fn array_kernels_run_natively_with_explicit_shapes() {
+    let values = [1.0, 2.5, -4.0];
+    let xs = graphcal_plugin::ArrayView::new(&[3], &values).unwrap();
+    assert_eq!(
+        rescale(xs, 2.0),
+        graphcal_plugin::Array::vector(vec![2.0, 5.0, -8.0]).unwrap()
+    );
+    assert!((total(xs) + 0.5).abs() < 1e-12);
+
+    let matrix = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let matrix = graphcal_plugin::ArrayView::new(&[2, 3], &matrix).unwrap();
+    assert_eq!(
+        matrix_transpose(matrix),
+        graphcal_plugin::Array::new(vec![3, 2], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap()
+    );
 }
 
 #[test]
 fn struct_kernels_return_the_generated_output_type() {
-    let span = span(&[3.0, -1.5, 2.0]);
+    let values = [3.0, -1.5, 2.0];
+    let span = span(graphcal_plugin::ArrayView::new(&[3], &values).unwrap());
     assert_eq!(span, SpanOutput { lo: -1.5, hi: 3.0 });
 }
 
@@ -135,6 +171,7 @@ fn manifest_matches_the_declarations() {
             "is_probability",
             "unrepresentable",
             "rescale",
+            "matrix_transpose",
             "total",
             "span"
         ]
@@ -142,7 +179,7 @@ fn manifest_matches_the_declarations() {
 
     let rescale = &manifest.functions[5];
     assert_eq!(rescale.index_vars, ["I"]);
-    let span = &manifest.functions[7];
+    let span = &manifest.functions[8];
     assert!(matches!(
         &span.result,
         graphcal_plugin_abi::ManifestValueKind::Struct { fields }
@@ -150,11 +187,13 @@ fn manifest_matches_the_declarations() {
     ));
     assert!(matches!(
         &rescale.params[0].kind,
-        graphcal_plugin_abi::ManifestValueKind::Array { index, .. } if index == "I"
+        graphcal_plugin_abi::ManifestValueKind::Array { indexes, .. }
+            if indexes == &["I"]
     ));
     assert!(matches!(
         &rescale.result,
-        graphcal_plugin_abi::ManifestValueKind::Array { index, .. } if index == "I"
+        graphcal_plugin_abi::ManifestValueKind::Array { indexes, .. }
+            if indexes == &["I"]
     ));
 }
 

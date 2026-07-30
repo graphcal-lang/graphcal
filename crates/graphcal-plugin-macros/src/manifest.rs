@@ -65,9 +65,9 @@ fn kind_to_manifest(kind: &KindIr, fallback_span: Span) -> syn::Result<ManifestV
         KindIr::Quantity(monomial) => {
             ManifestValueKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
         }
-        KindIr::Array { element, index } => ManifestValueKind::Array {
+        KindIr::Array { element, indexes } => ManifestValueKind::Array {
             element: monomial_to_manifest(element, fallback_span)?,
-            index: index.to_string(),
+            indexes: indexes.iter().map(ToString::to_string).collect(),
         },
         KindIr::Struct(fields) => ManifestValueKind::Struct {
             fields: fields

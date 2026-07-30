@@ -12,7 +12,7 @@ use graphcal_compiler::dimension::{BaseDimId, Dimension};
 use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_eval::eval::format_number;
-use graphcal_eval::host_fns::HostFnValue;
+use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_host::PluginModule;
 use thiserror::Error;
 
@@ -167,15 +167,16 @@ graphcal_plugin::plugin! {
         x.sqrt()
     }
 
-    /// Each element's share of the total. Array parameters arrive as
-    /// `&[f64]` slices; array results return `Vec<f64>`s over the same
-    /// index (`I`), so the output length always matches the input's.
+    /// Each element's share of the total. Array parameters carry an
+    /// explicit shape and flattened row-major values.
     fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I] {
         let total: f64 = xs.iter().sum();
         if total == 0.0 {
             graphcal_plugin::fail!("share: the elements sum to zero");
         }
-        xs.iter().map(|x| x / total).collect()
+        let values = xs.iter().map(|x| x / total).collect();
+        graphcal_plugin::Array::new(xs.shape().to_vec(), values)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
     }
 }
 
@@ -194,7 +195,12 @@ mod tests {
 
     #[test]
     fn share_normalizes() {
-        assert_eq!(super::share(&[1.0, 3.0]), vec![0.25, 0.75]);
+        let values = [1.0, 3.0];
+        let xs = graphcal_plugin::ArrayView::new(&[2], &values).unwrap();
+        assert_eq!(
+            super::share(xs),
+            graphcal_plugin::Array::vector(vec![0.25, 0.75]).unwrap()
+        );
     }
 }
 "#
@@ -425,9 +431,80 @@ pub enum CallArgError {
     },
 }
 
+fn parse_dense_array(text: &str, rank: usize) -> Result<HostArray, String> {
+    fn flatten(value: &serde_json::Value, rank: usize) -> Result<(Vec<usize>, Vec<f64>), String> {
+        if rank == 0 {
+            return value
+                .as_f64()
+                .map(|value| (Vec::new(), vec![value]))
+                .ok_or_else(|| "array leaves must be JSON numbers".to_string());
+        }
+        let items = value
+            .as_array()
+            .ok_or_else(|| format!("expected {rank} more array level(s)"))?;
+        if items.is_empty() {
+            return Err("array axes cannot be empty".to_string());
+        }
+        let children = items
+            .iter()
+            .map(|item| flatten(item, rank - 1))
+            .collect::<Result<Vec<_>, _>>()?;
+        let first_shape = children
+            .first()
+            .map(|(shape, _)| shape)
+            .ok_or_else(|| "array axes cannot be empty".to_string())?;
+        if children.iter().any(|(shape, _)| shape != first_shape) {
+            return Err("array must be rectangular".to_string());
+        }
+        let mut shape = Vec::with_capacity(rank);
+        shape.push(items.len());
+        shape.extend(first_shape.iter().copied());
+        let values = children
+            .into_iter()
+            .flat_map(|(_, values)| values)
+            .collect();
+        Ok((shape, values))
+    }
+
+    let value: serde_json::Value =
+        serde_json::from_str(text).map_err(|error| format!("invalid JSON array: {error}"))?;
+    let (shape, values) = flatten(&value, rank)?;
+    HostArray::try_new(shape, values).map_err(|error| error.to_string())
+}
+
+fn render_dense_array(shape: &[usize], values: &[f64]) -> Result<String, String> {
+    match shape {
+        [] => Err("array result has no axes".to_string()),
+        [_] => Ok(format!(
+            "[{}]",
+            values
+                .iter()
+                .map(|value| format_number(*value))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        [extent, remaining @ ..] => {
+            let child_len = remaining
+                .iter()
+                .try_fold(1_usize, |size, extent| size.checked_mul(*extent));
+            let Some(child_len) = child_len else {
+                return Err("array result shape cardinality overflowed".to_string());
+            };
+            let chunks = values.chunks_exact(child_len);
+            if !chunks.remainder().is_empty() || chunks.len() != *extent {
+                return Err("array result values do not match its shape".to_string());
+            }
+            let children = chunks
+                .map(|chunk| render_dense_array(remaining, chunk))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(format!("[{}]", children.join(", ")))
+        }
+    }
+}
+
 /// Parse `--call` arguments against the signature's parameter kinds:
 /// quantities as (SI) floats, `Bool` as `true`/`false`, `Int` as an integer,
-/// arrays as bracketed comma-separated (SI) floats (`[1.0,2.5,3]`).
+/// and rank-`R` arrays as rectangular JSON arrays with `R` nesting levels.
 pub fn parse_call_args(
     function: &str,
     signature: &FunctionSignature,
@@ -468,25 +545,9 @@ pub fn parse_call_args(
                     .map_err(|_| invalid("expected a number (in SI base units)")),
                 // Struct parameters never pass signature validation.
                 ValueKind::Struct(_) => Err(invalid("struct parameters are not supported")),
-                ValueKind::Indexed { .. } => {
-                    let inner = text
-                        .strip_prefix('[')
-                        .and_then(|rest| rest.strip_suffix(']'))
-                        .ok_or_else(|| {
-                            invalid("expected a bracketed array like `[1.0,2.5,3]` (SI base units)")
-                        })?;
-                    let elements = inner
-                        .split(',')
-                        .map(|element| element.trim().parse::<f64>())
-                        .collect::<Result<Vec<f64>, _>>()
-                        .map_err(|_| {
-                            invalid("expected a bracketed array like `[1.0,2.5,3]` (SI base units)")
-                        })?;
-                    if elements.is_empty() {
-                        return Err(invalid("arrays cannot be empty (indexes are non-empty)"));
-                    }
-                    Ok(HostFnValue::Buffer(elements))
-                }
+                ValueKind::Indexed { indexes, .. } => parse_dense_array(text, indexes.len())
+                    .map(HostFnValue::Array)
+                    .map_err(|error| invalid(&error)),
             }
         })
         .collect()
@@ -499,8 +560,8 @@ pub fn parse_call_args(
 pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Result<String, String> {
     let abi_f64 = |value: &HostFnValue| match value {
         HostFnValue::F64(raw) => Ok(*raw),
-        HostFnValue::Buffer(_) => {
-            Err("declared a single-value result but returned an array".to_string())
+        HostFnValue::Array(_) | HostFnValue::Record(_) => {
+            Err("declared a single-value result but returned a composite value".to_string())
         }
     };
     match signature.result() {
@@ -535,24 +596,20 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
             })
         }
         ValueKind::Indexed { element, .. } => {
-            let HostFnValue::Buffer(values) = value else {
-                return Err("declared an array result but returned an f64 ABI slot".to_string());
+            let HostFnValue::Array(array) = value else {
+                return Err("declared an array result but returned a non-array value".to_string());
             };
-            let rendered = values
-                .iter()
-                .map(|value| format_number(*value))
-                .collect::<Vec<_>>()
-                .join(", ");
+            let rendered = render_dense_array(array.shape(), array.values())?;
             let dim = render_quantity_result_dimension(element);
-            Ok(dim.map_or_else(
-                || format!("[{rendered}]"),
-                |dim| format!("[{rendered}] [{dim}, SI base units]"),
-            ))
+            Ok(match dim {
+                Some(dim) => format!("{rendered} [{dim}, SI base units]"),
+                None => rendered,
+            })
         }
         ValueKind::Struct(shape) => {
             use graphcal_compiler::function_signature::StructFieldKind;
 
-            let HostFnValue::Buffer(slots) = value else {
+            let HostFnValue::Record(slots) = value else {
                 return Err("declared a struct result but returned an f64 ABI slot".to_string());
             };
             if slots.len() != shape.fields().len() {
@@ -830,6 +887,19 @@ mod tests {
             parse_call_args("step", &step_signature(), &["5".into(), "yes".into()]).unwrap_err(),
             CallArgError::InvalidArgument { .. }
         ));
+    }
+
+    #[test]
+    fn multi_axis_call_arrays_parse_and_render_rectangular_json() {
+        let array = parse_dense_array("[[1, 2, 3], [4, 5, 6]]", 2).unwrap();
+        assert_eq!(array.shape(), [2, 3]);
+        assert_eq!(array.values(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert_eq!(
+            render_dense_array(array.shape(), array.values()).unwrap(),
+            "[[1, 2, 3], [4, 5, 6]]"
+        );
+        assert!(parse_dense_array("[1, 2, 3]", 2).is_err());
+        assert!(parse_dense_array("[[1, 2], [3]]", 2).is_err());
     }
 
     #[test]

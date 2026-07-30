@@ -2,7 +2,7 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-invalid extern function signature: result array is indexed by `I`, which no array parameter uses; a function cannot invent its output length
+invalid extern function signature: result array axis `I` is not used by any array parameter; a function cannot invent its output extent
     Diagnostic severity: error
 Begin snippet for extern_array_unbound_result_index.gcl starting at line 3, column 1
 
@@ -10,5 +10,5 @@ snippet line 3: import plugin "graphcal:demo" as demo {
 snippet line 4:     fn make<D: Dim, I: Index>(x: D) -> D[I];
     label at line 4, columns 5 to 44: invalid signature
 snippet line 5: }
-diagnostic help: extern signatures support Bool, Int, quantity types, arrays of quantities over a declared index variable, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare quantity parameter or bare array element before compound uses, and a result array must reuse an index variable that indexes some parameter
+diagnostic help: extern signatures support Bool, Int, quantity types, arrays of quantities over one or more declared index variables, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare quantity parameter or bare array element before compound uses, and every result axis must reuse an index variable that indexes some parameter
 diagnostic code: graphcal::P001

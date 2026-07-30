@@ -1018,30 +1018,40 @@ fn infer_extern_fn_call(
                     span: arg.span.into(),
                 });
             }
-            ValueKind::Indexed { element, index } => {
-                let InferredType::Indexed {
-                    element: arg_element,
-                    index: arg_index,
-                } = &arg_type
-                else {
+            ValueKind::Indexed { element, indexes } => {
+                let mut current = &arg_type;
+                let mut arg_indexes = Vec::with_capacity(indexes.len());
+                for _ in indexes {
+                    let InferredType::Indexed {
+                        element,
+                        index: arg_index,
+                    } = current
+                    else {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: format!(
+                                "a rank-{} indexed quantity collection",
+                                indexes.len()
+                            ),
+                            found: format_inferred_type(&arg_type, registry),
+                            help: format!(
+                                "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
+                                param.name
+                            ),
+                            src: src.clone(),
+                            span: arg.span.into(),
+                        });
+                    };
+                    arg_indexes.push(arg_index);
+                    current = element;
+                }
+                let Some(arg_dim) = current.quantity_dimension().cloned() else {
                     return Err(GraphcalError::DimensionMismatch {
-                        expected: "an indexed quantity collection".to_string(),
+                        expected: format!("a rank-{} indexed quantity collection", indexes.len()),
                         found: format_inferred_type(&arg_type, registry),
                         help: format!(
-                            "parameter `{}` of `{display_name}` takes an array over index variable `{index}`",
-                            param.name
-                        ),
-                        src: src.clone(),
-                        span: arg.span.into(),
-                    });
-                };
-                let Some(arg_dim) = arg_element.quantity_dimension().cloned() else {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: "an indexed quantity collection".to_string(),
-                        found: format_inferred_type(&arg_type, registry),
-                        help: format!(
-                            "parameter `{}` of `{display_name}` requires every indexed element to be quantity",
-                            param.name
+                            "parameter `{}` of `{display_name}` requires exactly {} axes and quantity elements",
+                            param.name,
+                            indexes.len()
                         ),
                         src: src.clone(),
                         span: arg.span.into(),
@@ -1058,24 +1068,26 @@ fn infer_extern_fn_call(
                     src,
                     arg.span,
                 )?;
-                match index_bindings.entry(index.clone()) {
-                    std::collections::hash_map::Entry::Vacant(slot) => {
-                        slot.insert(arg_index.clone());
-                    }
-                    std::collections::hash_map::Entry::Occupied(bound) => {
-                        if bound.get() != arg_index {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: format!(
-                                    "an array over index `{}` (index variable `{index}` was bound by an earlier argument)",
-                                    bound.get()
-                                ),
-                                found: format_inferred_type(&arg_type, registry),
-                                help: format!(
-                                    "arguments sharing the index variable `{index}` of `{display_name}` must range over the same index"
-                                ),
-                                src: src.clone(),
-                                span: arg.span.into(),
-                            });
+                for (index, arg_index) in indexes.iter().zip(arg_indexes) {
+                    match index_bindings.entry(index.clone()) {
+                        std::collections::hash_map::Entry::Vacant(slot) => {
+                            slot.insert(arg_index.clone());
+                        }
+                        std::collections::hash_map::Entry::Occupied(bound) => {
+                            if bound.get() != arg_index {
+                                return Err(GraphcalError::DimensionMismatch {
+                                    expected: format!(
+                                        "an axis over `{}` (index variable `{index}` was bound by an earlier argument)",
+                                        bound.get()
+                                    ),
+                                    found: format_inferred_type(&arg_type, registry),
+                                    help: format!(
+                                        "axes sharing index variable `{index}` of `{display_name}` must use the same typed index"
+                                    ),
+                                    src: src.clone(),
+                                    span: arg.span.into(),
+                                });
+                            }
                         }
                     }
                 }
@@ -1090,23 +1102,28 @@ fn infer_extern_fn_call(
             eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
                 .map(InferredType::Quantity)
         }
-        ValueKind::Indexed { element, index } => {
+        ValueKind::Indexed { element, indexes } => {
             let dim = eval_result_monomial(&display_name, element, &bindings, src, callee_span)?;
-            let Some(bound) = index_bindings.get(index) else {
-                // try_new guarantees the result index variable indexes some
-                // parameter, so an unbound variable here is a compiler bug.
-                return Err(GraphcalError::InternalError {
-                    message: format!(
-                        "result index variable `{index}` of `{display_name}` was not bound by any argument"
-                    ),
-                    src: src.clone(),
-                    span: callee_span.into(),
-                });
-            };
-            Ok(InferredType::Indexed {
-                element: Box::new(InferredType::Quantity(dim)),
-                index: bound.clone(),
-            })
+            indexes.iter().rev().try_fold(
+                InferredType::Quantity(dim),
+                |element, index| {
+                    let Some(bound) = index_bindings.get(index) else {
+                        // try_new guarantees every result index variable indexes
+                        // some parameter, so this is a compiler bug.
+                        return Err(GraphcalError::InternalError {
+                            message: format!(
+                                "result index variable `{index}` of `{display_name}` was not bound by any argument"
+                            ),
+                            src: src.clone(),
+                            span: callee_span.into(),
+                        });
+                    };
+                    Ok(InferredType::Indexed {
+                        element: Box::new(element),
+                        index: bound.clone(),
+                    })
+                },
+            )
         }
         ValueKind::Struct(_) => {
             // The nominal identity lives on the entry (the shape in the

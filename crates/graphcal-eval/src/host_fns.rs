@@ -8,10 +8,10 @@
 //!
 //! The host ABI carries SI-flat numbers: each value crosses as a
 //! [`HostFnValue`] — one `f64` slot for quantities, `Int`, and `Bool` (using
-//! exactly-representable integers and `1.0`/`0.0` respectively), or a dense
-//! `f64` buffer in index order for arrays. The evaluator does all typed
+//! exactly-representable integers and `1.0`/`0.0` respectively), a shaped
+//! row-major array, or fixed-layout record slots. The evaluator does all typed
 //! interpretation against the declared signature; closures never see
-//! dimensions, units, or index identities beyond buffer lengths.
+//! dimensions, units, or index identities beyond ordered axis extents.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -60,12 +60,73 @@ impl From<&str> for HostFnError {
     }
 }
 
+/// Dense row-major array crossing the host-function boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HostArray {
+    shape: Vec<usize>,
+    values: Vec<f64>,
+}
+
+impl HostArray {
+    /// Build an array whose non-empty shape product equals `values.len()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostFnError`] for invalid axes, cardinality overflow, or a
+    /// mismatched value count.
+    pub fn try_new(shape: Vec<usize>, values: Vec<f64>) -> Result<Self, HostFnError> {
+        if shape.is_empty() || shape.contains(&0) {
+            return Err(HostFnError::new(
+                "array shapes require one or more non-empty axes",
+            ));
+        }
+        let expected = shape.iter().try_fold(1_usize, |size, extent| {
+            size.checked_mul(*extent)
+                .ok_or_else(|| HostFnError::new("array shape cardinality overflowed usize"))
+        })?;
+        if expected != values.len() {
+            return Err(HostFnError::new(format!(
+                "array shape {shape:?} requires {expected} values, found {}",
+                values.len()
+            )));
+        }
+        Ok(Self { shape, values })
+    }
+
+    /// Convenience constructor for a non-empty rank-one array.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostFnError`] when `values` is empty.
+    pub fn vector(values: Vec<f64>) -> Result<Self, HostFnError> {
+        Self::try_new(vec![values.len()], values)
+    }
+
+    /// Ordered row-major shape.
+    #[must_use]
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    /// Flattened row-major values.
+    #[must_use]
+    pub fn values(&self) -> &[f64] {
+        &self.values
+    }
+
+    /// Consume into shape and values.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<usize>, Vec<f64>) {
+        (self.shape, self.values)
+    }
+}
+
 /// One value crossing the host-function boundary, SI-flat in both directions.
 ///
 /// Quantities, `Bool`, and `Int` each cross inside one [`Self::F64`] slot; the
 /// declared signature determines its semantic kind and therefore its encoding
 /// (`1.0`/`0.0` for `Bool`, exactly-representable integers for `Int`). Arrays
-/// cross as dense element buffers in index declaration order. The evaluator
+/// cross as shaped, row-major dense values. The evaluator
 /// converts to and from typed [`RuntimeValue`]s per the declared signature — a
 /// closure returning the wrong shape is reported as a plugin failure, never
 /// reinterpreted.
@@ -75,8 +136,10 @@ impl From<&str> for HostFnError {
 pub enum HostFnValue {
     /// One raw `f64` ABI slot; the function signature supplies its semantic kind.
     F64(f64),
-    /// Dense `f64` ABI slots for an array or flattened record result.
-    Buffer(Vec<f64>),
+    /// Dense row-major array with explicit axis extents.
+    Array(HostArray),
+    /// Flattened fixed-layout record result slots.
+    Record(Vec<f64>),
 }
 
 impl HostFnValue {
@@ -88,8 +151,8 @@ impl HostFnValue {
     fn expect_quantity(&self, position: usize) -> Result<f64, HostFnError> {
         match self {
             Self::F64(value) => Ok(*value),
-            Self::Buffer(_) => Err(HostFnError::new(format!(
-                "argument {position} is an array, expected a quantity"
+            Self::Array(_) | Self::Record(_) => Err(HostFnError::new(format!(
+                "argument {position} is not a single quantity slot"
             ))),
         }
     }
@@ -99,11 +162,11 @@ impl HostFnValue {
     /// # Errors
     ///
     /// Returns a [`HostFnError`] when this value is a quantity.
-    fn expect_buffer(&self, position: usize) -> Result<&[f64], HostFnError> {
+    fn expect_array(&self, position: usize) -> Result<&HostArray, HostFnError> {
         match self {
-            Self::Buffer(values) => Ok(values),
-            Self::F64(_) => Err(HostFnError::new(format!(
-                "argument {position} is a single-value slot, expected an array"
+            Self::Array(array) => Ok(array),
+            Self::F64(_) | Self::Record(_) => Err(HostFnError::new(format!(
+                "argument {position} is not an array"
             ))),
         }
     }
@@ -302,24 +365,58 @@ pub fn demo_registry() -> HostFunctionRegistry {
         },
     );
     registry.register(plugin.clone(), FnName::expect_valid("normalize"), |args| {
-        let xs = args[0].expect_buffer(0)?;
-        let total: f64 = xs.iter().sum();
+        let xs = args[0].expect_array(0)?;
+        let total: f64 = xs.values().iter().sum();
         if total == 0.0 {
             return Err(HostFnError::new(
                 "cannot normalize: the elements sum to zero",
             ));
         }
-        Ok(HostFnValue::Buffer(xs.iter().map(|x| x / total).collect()))
+        Ok(HostFnValue::Array(HostArray::try_new(
+            xs.shape().to_vec(),
+            xs.values().iter().map(|x| x / total).collect(),
+        )?))
     });
+    registry.register(
+        plugin.clone(),
+        FnName::expect_valid("matrix_transpose"),
+        |args| {
+            let matrix = args[0].expect_array(0)?;
+            let [rows, columns] = matrix.shape() else {
+                return Err(HostFnError::new(
+                    "matrix_transpose expects a rank-two array",
+                ));
+            };
+            let values = (0..*columns)
+                .flat_map(|column| {
+                    (0..*rows).map(move |row| {
+                        let offset = row
+                            .checked_mul(*columns)
+                            .and_then(|offset| offset.checked_add(column))
+                            .ok_or_else(|| {
+                                HostFnError::new("matrix_transpose offset overflowed usize")
+                            })?;
+                        matrix.values().get(offset).copied().ok_or_else(|| {
+                            HostFnError::new("matrix_transpose input shape is inconsistent")
+                        })
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(HostFnValue::Array(HostArray::try_new(
+                vec![*columns, *rows],
+                values,
+            )?))
+        },
+    );
     registry.register(plugin, FnName::expect_valid("dv_range"), |args| {
-        let xs = args[0].expect_buffer(0)?;
+        let xs = args[0].expect_array(0)?;
         let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
-        for x in xs {
+        for x in xs.values() {
             min = min.min(*x);
             max = max.max(*x);
         }
         // Struct results cross as one f64 slot per field, in field order.
-        Ok(HostFnValue::Buffer(vec![min, max]))
+        Ok(HostFnValue::Record(vec![min, max]))
     });
     registry
 }
@@ -342,7 +439,14 @@ mod tests {
     #[test]
     fn demo_registry_provides_documented_functions() {
         let registry = demo_registry();
-        for name in ["lerp", "inverse", "geometric_mean", "normalize", "dv_range"] {
+        for name in [
+            "lerp",
+            "inverse",
+            "geometric_mean",
+            "normalize",
+            "matrix_transpose",
+            "dv_range",
+        ] {
             assert!(registry.contains(&key(name)), "missing demo fn `{name}`");
         }
     }
@@ -369,8 +473,12 @@ mod tests {
     fn demo_normalize_divides_by_the_sum() {
         let registry = demo_registry();
         let normalize = registry.get(&key("normalize")).unwrap();
-        let result = normalize(&[HostFnValue::Buffer(vec![1.0, 3.0])]).unwrap();
-        assert_eq!(result, HostFnValue::Buffer(vec![0.25, 0.75]));
+        let input = HostArray::vector(vec![1.0, 3.0]).unwrap();
+        let result = normalize(&[HostFnValue::Array(input)]).unwrap();
+        assert_eq!(
+            result,
+            HostFnValue::Array(HostArray::vector(vec![0.25, 0.75]).unwrap())
+        );
     }
 
     #[test]
@@ -378,11 +486,11 @@ mod tests {
         let registry = demo_registry();
         let lerp = registry.get(&key("lerp")).unwrap();
         let err = lerp(&[
-            HostFnValue::Buffer(vec![1.0]),
+            HostFnValue::Array(HostArray::vector(vec![1.0]).unwrap()),
             HostFnValue::F64(1.0),
             HostFnValue::F64(0.5),
         ])
         .unwrap_err();
-        assert!(err.message.contains("expected a quantity"), "{err}");
+        assert!(err.message.contains("not a single quantity slot"), "{err}");
     }
 }
