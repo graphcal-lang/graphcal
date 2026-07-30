@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::builtin::BuiltinFnName;
+use crate::builtin::{AggregationFn, BuiltinFnName};
 use crate::dimension::{Dimension, Rational};
 use crate::hir::{self, ConstRef, FunctionRef};
 use crate::nat::NatOverflowError;
@@ -35,7 +35,7 @@ use super::super::{
     DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType,
 };
 use super::builtin_call::{
-    AggregationFn, BuiltinTypeRule, DatetimeConstructorFn, TypeConversionFn, type_rule_for_builtin,
+    BuiltinTypeRule, DatetimeConstructorFn, TypeConversionFn, type_rule_for_builtin,
 };
 use super::linear_algebra::{LinearAlgebraTypeError, infer_linear_algebra_type};
 
@@ -620,8 +620,7 @@ fn infer_hir_linear_algebra_call(
         .collect::<Result<Vec<_>, _>>()?;
 
     infer_linear_algebra_type(function, &argument_types, |index| {
-        super::index_def_for_inferred(index, Some(dag), registry)
-            .map(crate::registry::types::IndexDef::cardinality)
+        super::concrete_cardinality_for_inferred(index, Some(dag), registry)
     })
     .map_err(|error| match error {
         LinearAlgebraTypeError::WrongArity { expected, found } => GraphcalError::WrongArity {
@@ -743,7 +742,7 @@ fn infer_hir_fn_call(
                 builtin_fns,
                 src,
             )?;
-            let InferredType::Indexed { element, .. } = &arg_type else {
+            let InferredType::Indexed { element, index } = &arg_type else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "indexed collection".to_string(),
                     found: format_inferred_type(&arg_type, registry),
@@ -761,27 +760,42 @@ fn infer_hir_fn_call(
                     span: args[0].span.into(),
                 });
             }
-            match kind {
-                AggregationFn::Count => Ok(InferredType::Int),
-                AggregationFn::Sum
-                | AggregationFn::Minimum
-                | AggregationFn::Maximum
-                | AggregationFn::Mean => element.quantity_dimension().cloned().map_or_else(
-                    || {
-                        Err(GraphcalError::DimensionMismatch {
-                            expected: "indexed quantity collection".to_string(),
-                            found: format_inferred_type(element, registry),
-                            help: format!(
-                                "{}() requires every indexed element to be quantity",
-                                name.as_str()
-                            ),
-                            src: src.clone(),
-                            span: args[0].span.into(),
-                        })
-                    },
-                    |dimension| Ok(InferredType::Quantity(dimension)),
-                ),
+            if kind == AggregationFn::Count {
+                return Ok(InferredType::Int);
             }
+            let Some(dimension) = element.quantity_dimension().cloned() else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "indexed quantity collection".to_string(),
+                    found: format_inferred_type(element, registry),
+                    help: format!(
+                        "{}() requires every indexed element to be quantity",
+                        name.as_str()
+                    ),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            };
+            if kind != AggregationFn::Product || dimension.is_dimensionless() {
+                return Ok(InferredType::Quantity(dimension));
+            }
+            let cardinality = super::concrete_cardinality_for_inferred(index, Some(dag), registry)
+                .ok_or_else(|| GraphcalError::AggregationCardinalityUnknown {
+                    function: kind.builtin_name(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                })?;
+            let exponent =
+                i32::try_from(cardinality).map_err(|_| GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                })?;
+            dimension
+                .pow(exponent)
+                .map(InferredType::Quantity)
+                .map_err(|_| GraphcalError::DimensionOverflow {
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                })
         }
         BuiltinTypeRule::LinearAlgebra(function) => infer_hir_linear_algebra_call(
             function,

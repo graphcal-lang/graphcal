@@ -5005,6 +5005,22 @@ node out: Length = @with_const(v: @src).result;
 }
 
 #[test]
+fn product_and_rss_support_linear_algebra_ergonomics() {
+    let source = include_str!("../../../../tests/fixtures/valid/linear_algebra_ergonomics.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    assert!((find_value(&result, "box_volume") - 24.0).abs() < 1e-12);
+    assert!((find_value(&result, "budget_sigma") - 5.0).abs() < 1e-12);
+    assert!((find_value(&result, "chained_product") - 720.0).abs() < 1e-12);
+    assert!(
+        result
+            .assertions
+            .iter()
+            .all(|(_, result, _)| matches!(result, super::types::AssertResult::Pass))
+    );
+}
+
+#[test]
 fn dag_local_required_types_enable_reusable_linear_algebra() {
     let source = include_str!("../../../../tests/fixtures/valid/linear_algebra_reusable_dag.gcl");
     let result = compile_and_eval(source).unwrap();

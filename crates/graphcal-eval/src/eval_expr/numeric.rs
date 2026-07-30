@@ -52,6 +52,38 @@ pub(super) fn positive_finite_scale(
     }
 }
 
+/// Compute a root-sum-square with scaled accumulation to avoid intermediate
+/// overflow and underflow.
+pub(super) fn root_sum_square(
+    values: impl IntoIterator<Item = f64>,
+    context: impl Into<String>,
+) -> Result<f64, QuantityValidationError> {
+    let context = context.into();
+    let (scale, sum_squares) =
+        values
+            .into_iter()
+            .try_fold((0.0_f64, 1.0_f64), |(scale, sum_squares), value| {
+                finite_quantity(value, context.clone())?;
+                if value == 0.0 {
+                    return Ok((scale, sum_squares));
+                }
+                let magnitude = value.abs();
+                Ok(if scale < magnitude {
+                    let ratio = scale / magnitude;
+                    (magnitude, (sum_squares * ratio).mul_add(ratio, 1.0))
+                } else {
+                    let ratio = magnitude / scale;
+                    (scale, ratio.mul_add(ratio, sum_squares))
+                })
+            })?;
+    let result = if scale == 0.0 {
+        0.0
+    } else {
+        scale * sum_squares.sqrt()
+    };
+    computed_finite_quantity(result, context)
+}
+
 /// Validate the result of a computation whose non-finite output indicates an error.
 pub(super) fn computed_finite_quantity(
     value: f64,

@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 123
+expression: rendered
+---
+`product()` cannot determine the result dimension without a concrete axis cardinality
+    Diagnostic severity: error
+Begin snippet for product_abstract_axis.gcl starting at line 4, column 1
+
+snippet line 4:     param values: Length[Axis];
+snippet line 5:     pub node result: Length = product(@values);
+    label at line 5, columns 39 to 45: axis cardinality is abstract here
+snippet line 6: }
+diagnostic help: apply product() where the index is concrete, or reduce dimensionless values whose result does not depend on cardinality
+diagnostic code: graphcal::D022

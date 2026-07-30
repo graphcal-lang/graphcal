@@ -5,7 +5,7 @@
 //! evaluated through the ordinary quantity built-in function registry, or does it
 //! need a custom runtime path here?
 
-use graphcal_compiler::builtin::{BuiltinFnName, LinearAlgebraFn};
+use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName, LinearAlgebraFn};
 use graphcal_compiler::registry::time_scale::TimeScale;
 
 /// How HIR evaluation should dispatch a built-in function call.
@@ -29,30 +29,6 @@ pub(super) enum EvalBuiltinRule {
     DatetimeFromNumeric(DatetimeFromFn),
     /// Datetime-to-numeric extractors.
     DatetimeToNumeric(DatetimeToFn),
-}
-
-/// Aggregation functions that can reduce an indexed collection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AggregationFn {
-    Sum,
-    Minimum,
-    Maximum,
-    Mean,
-    Count,
-}
-
-impl AggregationFn {
-    /// Canonical built-in function identity for errors and diagnostics.
-    #[must_use]
-    pub(super) const fn builtin_name(self) -> BuiltinFnName {
-        match self {
-            Self::Sum => BuiltinFnName::Sum,
-            Self::Minimum => BuiltinFnName::Minimum,
-            Self::Maximum => BuiltinFnName::Maximum,
-            Self::Mean => BuiltinFnName::Mean,
-            Self::Count => BuiltinFnName::Count,
-        }
-    }
 }
 
 /// Type conversion functions handled by HIR evaluation.
@@ -104,12 +80,10 @@ pub(super) const fn eval_rule_for_builtin(name: BuiltinFnName) -> EvalBuiltinRul
     if let Some(function) = name.linear_algebra() {
         return EvalBuiltinRule::LinearAlgebra(function);
     }
+    if let Some(function) = name.aggregation() {
+        return EvalBuiltinRule::CollectionAggregation(function);
+    }
     match name {
-        BuiltinFnName::Sum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Sum),
-        BuiltinFnName::Minimum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Minimum),
-        BuiltinFnName::Maximum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Maximum),
-        BuiltinFnName::Mean => EvalBuiltinRule::CollectionAggregation(AggregationFn::Mean),
-        BuiltinFnName::Count => EvalBuiltinRule::CollectionAggregation(AggregationFn::Count),
         BuiltinFnName::ToFloat => EvalBuiltinRule::TypeConversion(TypeConversionFn::ToFloat),
         BuiltinFnName::ToInt => EvalBuiltinRule::TypeConversion(TypeConversionFn::ToInt),
         BuiltinFnName::ToUtc => EvalBuiltinRule::TimeScaleConversion(TimeScale::UTC),

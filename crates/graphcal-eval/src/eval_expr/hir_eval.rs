@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use graphcal_compiler::builtin::BuiltinFnName;
+use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
 use graphcal_compiler::hir::{self, ConstRef, FunctionRef};
 use graphcal_compiler::ir::resolve::DeclCategory;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
@@ -19,8 +19,8 @@ use miette::NamedSource;
 use crate::decl_key::RuntimeDeclKey;
 
 use super::builtin_call::{
-    AggregationFn, DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn,
-    EvalBuiltinRule, TypeConversionFn, eval_rule_for_builtin,
+    DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, EvalBuiltinRule,
+    TypeConversionFn, eval_rule_for_builtin,
 };
 use super::{
     EvalContext, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
@@ -2161,9 +2161,11 @@ mod tests {
 
         for function in [
             AggregationFn::Sum,
+            AggregationFn::Product,
             AggregationFn::Minimum,
             AggregationFn::Maximum,
             AggregationFn::Mean,
+            AggregationFn::RootSumSquare,
             AggregationFn::Count,
         ] {
             let error =

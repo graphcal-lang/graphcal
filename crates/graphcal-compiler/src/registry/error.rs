@@ -623,6 +623,23 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error(
+        "`{function}()` cannot determine the result dimension without a concrete axis cardinality"
+    )]
+    #[diagnostic(
+        code(graphcal::D022),
+        help(
+            "apply product() where the index is concrete, or reduce dimensionless values whose result does not depend on cardinality"
+        )
+    )]
+    AggregationCardinalityUnknown {
+        function: BuiltinFnName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("axis cardinality is abstract here")]
+        span: SourceSpan,
+    },
+
     #[error("type annotation mismatch: declared {declared}, inferred {inferred}")]
     #[diagnostic(
         code(graphcal::D002),
@@ -2050,6 +2067,7 @@ impl GraphcalError {
             | Self::LinearAlgebraShapeMismatch { src, .. }
             | Self::IndexedComparisonOperand { src, .. }
             | Self::MultiAxisAggregation { src, .. }
+            | Self::AggregationCardinalityUnknown { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnknownUnit { src, .. }
             | Self::UnknownDimension { src, .. }

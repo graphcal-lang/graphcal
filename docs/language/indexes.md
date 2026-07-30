@@ -118,20 +118,24 @@ node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
 ## Aggregation Functions
 
 Aggregation functions currently accept exactly one index axis. Numeric
-aggregations require quantity elements and preserve their dimension. `count`
-accepts any non-indexed element type and returns the exact cardinality as `Int`.
+aggregations require quantity elements. Most preserve the element dimension;
+`product` raises it to the concrete axis cardinality. `count` accepts any
+non-indexed element type and returns the exact cardinality as `Int`.
 
 | Function | Description | Result Type |
 |----------|-------------|-------------|
 | `sum(values)` | Sum of all elements | Same dimension as elements |
+| `product(values)` | Product of all elements | Element dimension raised to axis cardinality |
 | `maximum(values)` | Maximum element | Same dimension as elements |
 | `minimum(values)` | Minimum element | Same dimension as elements |
 | `mean(values)` | Arithmetic mean | Same dimension as elements |
+| `rss(values)` | Root sum square | Same dimension as elements |
 | `count(values)` | Number of elements | `Int` |
 
 ```
 node total: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node largest: Velocity = maximum(for m: Maneuver { @delta_v[m] });
+node combined_sigma: Velocity = rss(for m: Maneuver { @delta_v[m] });
 node n: Int = count(for m: Maneuver { @delta_v[m] });
 node normalized: Velocity = sum(@delta_v) / to_float(count(@delta_v));
 ```

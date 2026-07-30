@@ -165,9 +165,26 @@ impl IndexDef {
         }
     }
 
+    /// Returns the validated cardinality when this index is concrete.
+    ///
+    /// Required indexes have no cardinality until a caller binds them.
+    #[must_use]
+    pub fn concrete_cardinality(&self) -> Option<IndexCardinality> {
+        match &self.kind {
+            IndexKind::Named { variants } => {
+                NonZeroUsize::new(variants.len()).map(IndexCardinality)
+            }
+            IndexKind::Coordinate(data) => Some(data.cardinality),
+            IndexKind::Finite { cardinality } => Some(*cardinality),
+            IndexKind::RequiredNamed | IndexKind::RequiredCoordinate { .. } => None,
+        }
+    }
+
     /// Returns the number of positions in this index.
     ///
-    /// Returns 0 for required indexes (no variants until bound).
+    /// Returns 0 for required indexes (no variants until bound). Prefer
+    /// [`Self::concrete_cardinality`] when required and concrete indexes must be
+    /// distinguished semantically.
     #[must_use]
     pub const fn cardinality(&self) -> usize {
         match &self.kind {
@@ -332,6 +349,16 @@ impl IndexRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn required_indexes_have_no_concrete_cardinality() {
+        let definition = IndexDef {
+            name: IndexName::expect_valid("Axis"),
+            kind: IndexKind::RequiredNamed,
+        };
+        assert_eq!(definition.concrete_cardinality(), None);
+        assert_eq!(definition.cardinality(), 0);
+    }
 
     #[test]
     fn finite_and_coordinate_entry_keys_are_typed_positions() {

@@ -1012,15 +1012,7 @@ pub enum PatternBinding {
 /// Returns `true` when a custom type-inference rule, rather than the ordinary
 /// built-in signature registry, owns arity validation.
 const fn builtin_has_type_checker_arity(name: BuiltinFnName) -> bool {
-    name.linear_algebra().is_some()
-        || matches!(
-            name,
-            BuiltinFnName::Sum
-                | BuiltinFnName::Minimum
-                | BuiltinFnName::Maximum
-                | BuiltinFnName::Mean
-                | BuiltinFnName::Count
-        )
+    name.linear_algebra().is_some() || name.aggregation().is_some()
 }
 
 struct ExprLowerer<'a> {
