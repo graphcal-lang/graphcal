@@ -20,6 +20,22 @@ Named labels identify positions on an index axis. They are not values: use them
 in index access, map/table keys, expected-fail keys, include index bindings, and
 `match` patterns over named-index loop variables.
 
+The label list is **ordered**: the sequence in which labels are declared is the
+index order of the axis. Every index kind carries such an intrinsic order —
+label declaration order here, coordinate order for
+[coordinate indexes](#coordinate-indexes), and ascending positions for
+[`Fin(N)`](#structural-finite-indexes). Order-sensitive operations, most
+notably [`scan`](#scan-cumulative-fold), follow this order, and it also
+determines rendering order and the element order of
+[extern-function buffers](extern-functions.md).
+
+!!! warning "Label order is semantic"
+    `{ Departure, Correction, Insertion }` and
+    `{ Insertion, Correction, Departure }` declare *different* indexes:
+    `scan` accumulates in declared label order, so reordering the labels of an
+    `index` declaration changes downstream results. Reorder labels only when
+    the axis order itself should change.
+
 !!! note "No empty indexes"
     Every index has at least one element. A named index must declare a label,
     `Fin(0)` is invalid, and coordinate constructors must produce at least one
@@ -46,6 +62,13 @@ node delta_v: Velocity[Maneuver] = {
 ```
 
 Both `param` and `node` can be indexed.
+
+An indexed value is a **total map**: every label of the index must appear
+exactly once, and the compiler rejects missing or duplicate entries. The
+written order of map entries is presentation only — the constructed value is
+normalized to the index order, so listing `Maneuver.Insertion` first produces
+exactly the same value. Only the `index` declaration determines the order; a
+map or table literal cannot override it.
 
 ## Element Access
 
@@ -133,6 +156,18 @@ Arguments:
 3. A closure `|acc, item| expr` that combines the accumulator with each item
 
 The result is an indexed value where each element is the accumulated result up to and including that element.
+
+The accumulation order is the index order, which is intrinsic to the index —
+never to how a particular value was written:
+
+- **Named index**: label declaration order (`Departure`, then `Correction`,
+  then `Insertion` for the `Maneuver` axis above).
+- **Coordinate index**: coordinate order, from `start` toward `end`
+  (descending when the step is negative).
+- **`Fin(N)`**: ascending positions `#0` through `#(N-1)`.
+
+Because indexed values are normalized to index order, scanning a map literal
+that lists `Maneuver.Insertion` first still accumulates `Departure` first.
 
 ## Multi-Indexed Values
 
