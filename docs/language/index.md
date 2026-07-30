@@ -37,7 +37,8 @@ The language has a layered type system:
 
     ---
 
-    Canonical primitive inventory, type levels, and explicit conversions.
+    The full entity stratification, canonical primitive inventory, and
+    explicit conversions.
 
     [:octicons-arrow-right-24: Type system](type-system.md)
 

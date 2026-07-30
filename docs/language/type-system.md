@@ -4,7 +4,7 @@ icon: material/format-list-bulleted-type
 
 # Type System
 
-This page is the formal reference for Graphcal's type system. It describes the three-level type stratification, the dimension algebra, typing rules for expressions, generics, and type equivalence.
+This page is the formal reference for Graphcal's type system. It describes the complete entity stratification — kinds, type-level entities, the three type levels, and the term level — along with the dimension algebra, typing rules for expressions, generics, and type equivalence.
 
 For introductory material, see the [tutorial](../tutorial/index.md). For specific features, see [Dimensions & Units](dimensions-and-units.md), [Algebraic Data Types](algebraic-data-types.md), [Indexes](indexes.md), and [DAG Blocks](functions.md).
 
@@ -26,6 +26,9 @@ that exist implicitly in graphcal source:
 - `Iᵢ` ranges over finite, ordered **index axes**. An axis can come from an
   `index` declaration or from an explicit structural index such as `Fin(3)` in
   `T[Fin(3)]`.
+- `N` ranges over type-level **natural numbers**, used as `Fin` cardinalities
+  and `Nat` generic arguments. In a generic declaration, `<N: Nat>` introduces
+  a source-level variable over this domain.
 
 `Quantity(D)` and `Datetime(S)` use parentheses only as semantic notation; they
 are not constructor calls or literal source syntax. `A<G₁, ..., Gₙ>` and
@@ -45,7 +48,7 @@ I : Index      I is a finite, ordered index axis
 N : Nat        N is a type-level natural number
 ```
 
-The built-in and user-declared type constructors have these kind-level
+The built-in and user-declared type-level formers have these kind-level
 signatures. The arrows are not graphcal function types:
 
 ```text
@@ -55,22 +58,153 @@ Bool     : Type
 Datetime : TimeScale -> Type
 A        : K₁ × ... × Kₙ -> Type     for generic kinds Kᵢ declared by A
 Fin      : Nat -> Index               with the validity obligation N > 0
-_[_]     : Type × one-or-more Index axes -> DeclType
+range    : Quantity(D) × Quantity(D) × Quantity(D) -> Index   (start, end, step:)
+linspace : Quantity(D) × Quantity(D) × Nat -> Index           (start, end, points:)
+_(min: _, max: _) : Quantity(D) | Int | Datetime(S) -> ConstrainedType
+_[_]     : ConstrainedType × one-or-more Index axes -> DeclType
 ```
 
 Thus `Type` is the kind whose inhabitants are single-value types; this page
 uses **ValueType** for those inhabitants. `Index` is the kind whose inhabitants
-are axes, not labels or indexed collections.
+are axes, not labels or indexed collections. `range` and `linspace` are legal
+only on the right-hand side of an `index` declaration, while `Fin(N)` may be
+written inline in any Index position. Every ValueType is a ConstrainedType
+with no bounds, so plain `T[I]` is the common indexed form; both
+ConstrainedType and DeclType are defined in
+[Entity Stratification](#entity-stratification).
 
-## Type Stratification
+## Entity Stratification
 
-Graphcal's type system is organized into three levels:
+Every entity in a Graphcal program belongs to exactly one layer of one
+universe. The grammar below is the whole picture in one place: the kinds, the
+type-level entities they classify, the three type levels, and the term level
+that inhabits them.
 
 ```text
+Kinds:   Dim | TimeScale | Type | Index | Nat
+
+Level 0: type-level entities, classified by kinds
+  D : Dim        = B | Dimensionless | D * D | D / D | D^(p/q)
+  S : TimeScale  = UTC | TAI | TT | TDB | ET | GPST | GST | BDT | QZSST
+  N : Nat        = 0 | 1 | 2 | ... | N + N | N * N
+  I : Index      = X | C | Fin(N)                                (N >= 1)
+
 Level 1: Primitive = Quantity(D) | Int | Bool | Datetime(S)
+
 Level 2: ValueType (T : Type) = Primitive | A | A<G₁, ..., Gₙ>
-Level 3: DeclType             = ValueType | ValueType[I₁, ..., Iₘ]  (m >= 1)
+         GenericArg         G = D | T | I | N
+
+Level 3: DeclType             = CT | CT[I₁, ..., Iₘ]             (m >= 1)
+         ConstrainedType   CT = T | T(min: b, max: b)
+
+Term level: runtime entities, classified by types
+  v : T                a single value — one DAG node
+  w : T[I₁, ..., Iₘ]   an indexed value — a total map, one v per label tuple
 ```
+
+Additional metavariables in this grammar:
+
+- `B` ranges over **base dimensions**: `base dim` declarations and the
+  prelude's base dimensions (the seven SI base dimensions plus `Angle`).
+- `X` ranges over **named indexes**, each declaring ordered labels
+  `X.ℓ₁, ..., X.ℓₖ`.
+- `C` ranges over **coordinate indexes**: finite ordered `Quantity(D)`
+  coordinate sequences built by `range` or `linspace`.
+- `b` ranges over compile-time constant bound expressions; either bound of a
+  constraint may be omitted.
+
+Every type-level domain also contains the **generic parameters** of its kind
+that are in scope: inside `type Vec3<D: Dim, I: Index, N: Nat, F: Type>`, the
+parameter `D` is a dimension, `I` is an index axis, `N` is a Nat, and `F` is a
+ValueType. `TimeScale` is the one kind with neither generic parameters nor
+user declarations: its nine inhabitants are closed and appear only in
+`Datetime<S>` type syntax and static `epoch<S>` arguments.
+
+The formers that connect these layers — from `Quantity : Dim -> Type` down to
+`_[_] : ConstrainedType × Index axes -> DeclType` — are listed with kind-level
+arrow signatures in
+[Type-Level Domains and Notation](#type-level-domains-and-notation); their
+term-level counterparts appear in [The Term Level](#the-term-level).
+
+Entities that live *outside* this tower — units, labels, constructors,
+functions, declarations, modules — are cataloged in
+[Declarations and the Entities They Introduce](#declarations-and-the-entities-they-introduce)
+and [Built-in, Local, and Boundary Entities](#built-in-local-and-boundary-entities)
+below.
+
+### Level 0: Type-Level Entities
+
+These entities exist only while the program is checked. None of them is a
+value, and each is classified by a kind rather than by a type.
+
+**Dimensions** (`D : Dim`) form an algebra over base dimensions, with
+`Dimensionless` as the identity:
+
+```text
+_ * _    : Dim × Dim -> Dim
+_ / _    : Dim × Dim -> Dim
+_ ^(p/q) : Dim -> Dim                for each non-zero rational p/q
+```
+
+A dimension's canonical form is a product of base dimensions with rational
+exponents; named derived dimensions such as `Velocity` are transparent
+aliases. See [Dimension Algebra](#dimension-algebra).
+
+**Time scales** (`S : TimeScale`) are the closed nine-member set above. `S` is
+semantic notation only: there is no source-level `TimeScale` kind and no
+time-scale variable.
+
+**Nats** (`N : Nat`) are type-level natural numbers: literals, `Nat` generic
+parameters, and polynomial expressions over them:
+
+```text
+_ + _ : Nat × Nat -> Nat
+_ * _ : Nat × Nat -> Nat
+```
+
+There is no subtraction; express the larger side additively (`Fin(N + 1)`
+input, `Fin(N)` output). Nat expressions are normalized, and two Nats are
+equal exactly when their normal forms coincide. Nats appear in exactly two
+roles: `Fin(N)` cardinalities and `Nat` generic arguments.
+
+**Index axes** (`I : Index`) come in three concrete forms, each carrying an
+intrinsic element order:
+
+| Form | Declared by | Elements | Element order |
+|------|-------------|----------|---------------|
+| Named `X` | `index X = { ℓ₁, ..., ℓₖ };` | labels `X.ℓᵢ` | label declaration order |
+| Coordinate `C` | `index C = range(...);` or `linspace(...)` | `Quantity(D)` coordinates | coordinate order from start toward end |
+| Structural `Fin(N)` | written in place in Index positions | integer positions `0 ... N-1` | ascending position |
+
+The index formers `range`, `linspace`, and `Fin` carry the kind-level arrow
+signatures listed in
+[Type-Level Domains and Notation](#type-level-domains-and-notation); a named
+index has no former — its label set is the declaration itself.
+
+`Fin(0)` is invalid and a cardinality beyond the compiler's practical limit is
+rejected, so every axis is finite and non-empty. The elements of an axis are
+entities in their own right with different value-ness (see
+[Index Capabilities](#index-capabilities)): a named-index *label* is never a
+value; a *coordinate* is a quantity value when bound by a loop variable; a
+`Fin` *position* is a bounded integer.
+
+### Levels 1–3: The Type Hierarchy
+
+- **Primitive (Level 1)** — an indivisible atomic datum: a dimensioned
+  quantity, an integer, a boolean, or a datetime in one time scale.
+- **ValueType (Level 2)** — a single logical value: a primitive or an
+  instance of a nominal algebraic type. This is the domain of kind `Type` —
+  what one DAG node stores, one DAG parameter carries, and expressions
+  compute.
+- **ConstrainedType** — a ValueType optionally refined by inclusive
+  `min`/`max` domain constraints. Constraints attach only to quantity, `Int`,
+  and `Datetime<S>` types. See [Domain Constraints](#domain-constraints).
+- **DeclType (Level 3)** — what a type annotation denotes: a constrained
+  type, optionally indexed by one or more axes. Annotations appear on
+  `param`, `node`, and `const node` declarations, DAG parameters, and
+  constructor payload fields. Indexing lifts one ValueType into a total map
+  from label tuples to values; constraints on an indexed annotation apply
+  element-wise.
 
 A bare `A` is a non-generic algebraic type (or a generic type whose arguments
 all have defaults). Every `type` declaration defines this same nominal
@@ -79,13 +213,64 @@ Constructors and their payload fields describe how values of `A` are formed;
 they are not separate types and therefore do not appear as separate cases in
 the `ValueType` definition.
 
-- **Primitive** — An indivisible atomic datum.
-- **ValueType** — A single logical value: either a primitive or an instance of
-  a user-declared algebraic type. This is the type of one value that can be
-  stored in a node, passed through a DAG parameter, or used inside expressions.
-- **DeclType** — What can appear in type annotations of `param`, `node`,
-  `const node`, and DAG parameter/output declarations: either a `ValueType` or
-  a collection of one `ValueType` indexed by one or more axes.
+Generic arguments `G` are kind-checked, never classified by spelling: each
+argument position expects the declared `Dim`, `Type`, `Index`, or `Nat` kind,
+and crossing kinds is an error (`ByNat<Fin(3)>`, `Dimensionless[3]`). The
+`Type` kind contains exactly the ValueTypes: an index axis or an indexed
+DeclType such as `Velocity[Maneuver]` is not a legal `Type` argument.
+
+### Required Entities (Holes)
+
+Dimensions, algebraic types, and named or coordinate indexes may be declared
+*required* — `pub(bind) dim D;`, `pub(bind) type T;`, `pub(bind) index X;`,
+`pub(bind) index C: Time;` — introducing an abstract member of the
+corresponding universe with no definition. A required entity is used like a
+concrete one inside its library and is bound to a concrete entity by name in
+an `include` binding, the same binding surface that supplies `param` values:
+the include boundary is where both term-level and type-level arguments cross.
+Units and time scales have no required form. See
+[Visibility, Bindability, and Input Ports](multi-file.md#visibility-bindability-and-input-ports).
+
+### The Term Level
+
+Values inhabit ValueTypes. A value is a quantity, an integer, a boolean, a
+datetime, or an algebraic value built by a constructor; an indexed value is a
+total map with one value per label tuple of its axes. Two pieces of display
+metadata ride on values without affecting their types: a quantity's **unit**
+and a datetime's **timezone**. Both select rendering only — magnitudes are
+stored in SI base units, instants in their time scale.
+
+The structural value formers and eliminators have these signatures, where
+`ℓᵢ` is a label of axis `Iᵢ` and `U` an accumulator ValueType:
+
+```text
+Cᵢ          : DT₁ × ... × DTₖ -> A                value former, one per constructor of A
+map / table : T at each label tuple -> T[I₁, ..., Iₘ]
+for         : T at each label tuple -> T[I₁, ..., Iₘ]
+_[_]        : T[I₁, ..., Iₘ] × ℓ₁ × ... × ℓₘ -> T
+_.fᵢ        : A -> DTᵢ                            single-constructor A only
+scan        : T[I] × U × (U × T -> U) -> U[I]
+unfold      : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]
+sum, maximum, minimum, mean : Quantity(D)[I] -> Quantity(D)
+count       : T[I] -> Int
+```
+
+As everywhere on this page, the arrows are semantic notation, not function
+types. Constructor calls always spell field names (`Cᵢ(f₁: v₁, ...)`), and a
+constructor of a generic `A` produces the applied `A<G₁, ..., Gₙ>`. The
+closure positions in `scan` and `unfold` are special syntax, not function
+values; `unfold`'s first argument is an explicit reference to a coordinate
+index over dimension `D`. Map and table literals must be total and are
+normalized to index order, element access must supply every axis, and
+aggregations reduce exactly one axis.
+
+Term-level names are bound by `param` (a named DAG input port), `node` (a
+computed value), and `const node` (a compile-time value); a
+multi-declaration binds several such slots from one shared table literal.
+Local names — loop variables, `match` bindings, and `scan`/`unfold` closure
+variables — bind values (or index positions) inside a single expression.
+There are no first-class functions at the term level: built-ins, extern
+functions, and DAG blocks are called or instantiated, never stored.
 
 ### DAG Correspondence
 
@@ -100,6 +285,61 @@ The stratification connects directly to the computation model:
 | `node x: Velocity[Phase, Maneuver]` (2 x 3) | 6 nodes |
 
 The `for` comprehension expands a single declaration into multiple DAG nodes. Each node is independently evaluable (modulo data dependencies), making indexed values naturally parallelizable. This also explains why element-wise arithmetic and comparison on indexed values require explicit `for`: you are defining the computation for each individual DAG node, not operating on the collection as a whole.
+
+### Declarations and the Entities They Introduce
+
+Each declaration form introduces entities into one universe. The
+[name universes](#name-universes) below keep leaf names exclusive per scope;
+this table is the complete inventory of declaration forms:
+
+| Declaration | Introduces | Universe | Classified by |
+|-------------|-----------|----------|---------------|
+| `base dim Length;` | a base dimension | type | `Dim` |
+| `dim Velocity = Length / Time;` | a derived dimension (transparent alias) | type | `Dim` |
+| `base unit m: Length;` | a base unit | unit | its dimension |
+| `const unit km: Length = 1000 m;` | a compile-time-scaled unit | unit | its dimension |
+| `unit EUR: Money = (@rate) USD;` | a runtime-scaled unit | unit | its dimension |
+| `type A<...> { C1(...), C2, ... }` | an algebraic type and its constructors | type; constructors in the constructor namespace | `Type`; constructors form values of `A` |
+| `index X = { ... };` | a named axis and its labels | index; labels qualified under `X.` | `Index` |
+| `index C = range(...);` / `linspace(...);` | a coordinate axis | index | `Index` |
+| `pub(bind) dim D;` / `type T;` / `index X;` / `index C: D;` | a required entity (hole) | type or index | its kind |
+| `param p: DT;` / `param p: DT = expr;` | a named DAG input port | value | its DeclType |
+| `node n: DT = expr;` | a computed graph value | value | its DeclType |
+| `const node k: DT = expr;` | a compile-time value | value | its DeclType |
+| `param a: T[I], node b: U[I] = table[...] { ... };` | several ports/values sharing axes (multi-declaration) | value | per-slot DeclTypes |
+| `assert a = expr;` | a checked assertion | value | body: `Bool`, `Bool[I]`, or `actual ~= expected +/- tolerance` |
+| `plot p = { ... };` | a chart specification | value | — |
+| `figure f = { ... };` / `layer l = { ... };` | plot compositions (tiled / overlaid) | value | — |
+| `dag d { ... }` | a reusable sub-DAG blueprint | value | — (there is no function type) |
+| `import pkg.mod;` / `... as m;` / `....{ items }` | a module alias or the listed items | per item | — |
+| `import plugin "name" as ns { fn ...; }` | extern functions, callable as `ns.fn(...)` | plugin alias | extern signatures over `Dim`/`Index` variables |
+| `include pkg.dag(bindings) ...;` | an embedded DAG instance; selected outputs as nodes | value | outputs' DeclTypes |
+| `<P: Dim>` etc. in a `type` header | a generic parameter | scoped to its declaration | its declared kind |
+
+### Built-in, Local, and Boundary Entities
+
+The remaining entities are built into the language, local to one expression,
+or exist only at construction and rendering boundaries:
+
+| Entity | Comes from | Classified by | Where it appears |
+|--------|-----------|---------------|------------------|
+| Prelude dimensions and units | prelude | `Dim` / their dimension | type syntax; literals and conversion targets |
+| Time scales `UTC` ... `QZSST` | built-in closed set | `TimeScale` (semantic) | `Datetime<S>` type syntax, `epoch<S>` |
+| Built-in constants `PI`, `E`, `TAU` | prelude | `Dimensionless` | expressions, referenced bare |
+| Built-in functions (`sqrt`, `sum`, ...) | prelude | dimension-polymorphic signatures | call position only |
+| `scan` / `unfold` | special syntax forms | their typing rules | expressions; their closures are syntax, not values |
+| Index label `X.ℓ` | named-index declaration | a position on axis `X` — never a value | index access, map/table keys, `match` patterns, `#[expected_fail(...)]` keys, include index bindings |
+| Coordinate | coordinate-index declaration | `Quantity(D)` | via loop variables: indexing and arithmetic |
+| `Fin` position | structural axis | `Fin(N)`, a bounded-integer refinement of `Int` | via loop variables: indexing and integer arithmetic |
+| Constructor | `type` declaration | forms values of its algebraic type | construction calls and `match` patterns |
+| Payload field | constructor declaration | its DeclType | `Ctor(field: expr)` construction, `.field` access, pattern bindings |
+| Loop variable | `for v: I` | by axis kind: index case variable / `Quantity(D)` / `Fin(N)` | the comprehension body |
+| `match` binding | `field: name` in a pattern | the bound field's type | the arm expression |
+| Closure variables | `scan` binders `acc`, `item`; `unfold` binders `prev_state`, `prev_i`, `i` | accumulator / element / coordinate types | the `scan` / `unfold` body |
+| Attributes | `#[...]` before a declaration | closed set: `assumes`, `expected_fail`, `hidden`, `lazy` | declaration metadata |
+| String literals | quoted text | — (there is no `String` ValueType) | `datetime`/`epoch` arguments, timezone display targets, plot properties, plugin paths |
+| Timezone | quoted IANA name | validated against the bundled tzdb | `datetime(..., tz)` construction, `-> "Area/Location"` display |
+| Module / package | directory tree and `import` | — | dot-separated path prefixes |
 
 ## Name Universes
 
@@ -248,10 +488,14 @@ nominal algebraic type declared with `type`. Every body-bearing `type`
 declaration lists one or more constructors. Constructor count does not create
 separate "struct" and "union" type categories.
 
-Constructor payload fields must themselves be ValueTypes — you cannot put an
-indexed type like `Velocity[Maneuver]` inside a constructor's payload. To index
-structured data, index the algebraic type itself:
-`Vec3<Velocity, ECI>[Maneuver]`.
+Constructor payload fields are declared with full DeclTypes: a field may
+carry domain constraints and index axes, as in
+`Budget(dv: Velocity(min: 0.0 m/s)[Maneuver])` or the generic
+`Vector(values: D[Fin(N)])`. What stays ValueType-only is the `Type` generic
+kind: an indexed DeclType such as `Velocity[Maneuver]` cannot be passed as a
+`Type` argument, so `Holder<Velocity[Maneuver]>` is rejected. To parameterize
+structured data over an axis, either index the payload field directly or
+index the algebraic type as a whole: `Vec3<Velocity, ECI>[Maneuver]`.
 
 #### Algebraic Type with One Constructor
 
@@ -284,18 +528,32 @@ type ManeuverKind {
 }
 ```
 
+In value-former signature notation, this declaration introduces:
+
+```text
+Impulsive : Velocity -> ManeuverKind
+LowThrust : Force × Time -> ManeuverKind
+Coast     : ManeuverKind
+```
+
+The arrows are semantic notation: construction always spells field names, as
+in `Impulsive(delta_v: 3.1 km/s)`, and a constructor is not a function value.
+
 Field access is rejected when a type has multiple constructors because no
 single payload shape is guaranteed. Destructure the value through `match`
 instead.
 
 ### Declaration Types (Level 3)
 
-A DeclType is either a ValueType or an indexed collection of ValueTypes. This is what appears in type annotations:
+A DeclType is a possibly-constrained ValueType, optionally indexed by one or
+more axes. This is what type annotations denote — on `param`, `node`, and
+`const node` declarations, DAG parameters, and constructor payload fields:
 
 ```
 param dry_mass: Mass = 1200.0 kg;                         // ValueType
 param delta_v: Velocity[Maneuver] = { ... };              // Indexed ValueType
 node matrix: Dimensionless[Row, Col] = for r, c { ... };  // Multi-indexed ValueType
+type Budget { Budget(dv: Velocity[Maneuver]) }            // Indexed payload field
 ```
 
 `T[I]` is a type constructor that lifts a ValueType into a total map from index labels to values. Multi-indexing `T[I, J]` is a flat product-key map (not nested). Axis order is significant: `T[I, J]` and `T[J, I]` are different types.
@@ -936,6 +1194,8 @@ for v1: Index1, v2: Index2 { body_expr }
 scan(source, init, |acc, item| body)
 ```
 
+In signature notation, `scan : T[I] × U × (U × T -> U) -> U[I]`:
+
 - `source` must be an indexed type `T[I]`.
 - `init` must have type `U` (the accumulator type).
 - `acc` is bound to type `U`; `item` is bound to type `T`.
@@ -949,6 +1209,10 @@ The `|acc, item| body` is special syntax, not a function value.
 ```
 unfold(index, init, |prev_state, prev_i, i| body)
 ```
+
+In signature notation,
+`unfold : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]` for a
+coordinate index `I` over dimension `D`:
 
 - `index` is an explicit reference to a coordinate index `I`, not a value expression.
 - `init` must have type `T` and becomes the result at the first coordinate.
@@ -1145,12 +1409,19 @@ Named index labels do not participate in value type equivalence. They are index 
 | Indexed value | DeclType | Yes | Yes | Yes | Via `for` |
 | Coordinate index label | Quantity(D) | Yes | Yes (as quantity) | Yes (as quantity) | Indexing, arithmetic |
 | `Fin` position | `Fin(N)` integer refinement | Yes | Yes (as `Int`) | Yes (as `Int`) | Indexing, arithmetic |
-| Function | No | No | No | No | Calling only |
+| Built-in constant (`PI`, `E`, `TAU`) | ValueType (`Dimensionless`) | Yes | Yes | Yes | Bare reference, no `@` |
+| Built-in function | No | No | No | No | Calling only |
+| Extern function | No | No | No | No | Qualified calling only (`ns.fn(...)`) |
+| DAG block | No | No | No | No | `include` instantiation and inline `@d(args).out` calls |
+| Module alias | No | No | No | No | Qualification prefix (`m.item`) |
 | Dimension | No; inhabits `Dim` | No | As generic `<D: Dim>` | As generic | In quantity type syntax |
 | Time scale | No; inhabits semantic `TimeScale` | No | No | No | In `Datetime<TT>`-style type syntax |
 | Unit | No (compile-time) | No | No | No | In literals and conversion targets |
+| Timezone | No (display metadata) | No | No | No | In `datetime(...)` arguments and `-> "Area/Location"` targets |
 | Index axis | No; inhabits `Index` | No | As generic `<I: Index>` | As generic | In indexed type syntax |
 | Natural number | No; inhabits `Nat` | No | As generic `<N: Nat>` | As generic | In Nat expressions and `Fin(N)` cardinalities |
+| String literal | No (no `String` type) | No | No | No | Boundary syntax: datetime arguments, timezone targets, plot properties, plugin paths |
+| Attribute | No | No | No | No | Declaration metadata only |
 
 Named index labels use qualified syntax (`Maneuver.Departure`) while algebraic
 constructors use bare or module-qualified syntax (`Nominal` or

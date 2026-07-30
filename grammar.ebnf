@@ -363,10 +363,10 @@ field_list
 field_decl
    = IDENT, ":", type_expr;
 
-(* Semantic constraint: payload field types must be ValueTypes
-   (type_expr_base), not indexed DeclTypes. You cannot put
-   Velocity[Maneuver] inside a payload field. To index structured
-   data, index the type itself: Vec3<Velocity, ECI>[Maneuver]. *)
+(* Payload field types are full DeclTypes (type_expr): a field may
+   carry domain constraints and index axes, e.g. `dv: Velocity[Maneuver]`
+   or `values: D[Fin(N)]`. Generic `Type` arguments, by contrast,
+   exclude indexed DeclTypes. *)
 (* Constructors live in a separate namespace from types — the same
    lexeme may name both. *)
 
