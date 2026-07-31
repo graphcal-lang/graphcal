@@ -763,6 +763,31 @@ node count_true: Int[Flag] = scan(
 }
 
 #[test]
+fn scan_accepts_indexed_accumulator_and_prepends_source_axis() {
+    let source = "\
+index Element = { A, B };
+index Step = { First, Second };
+node input: Dimensionless[Step] = for step: Step { 1.0 };
+node initial: Dimensionless[Element] = for element: Element { 0.0 };
+node state: Dimensionless[Step, Element] = scan(
+    @input,
+    @initial,
+    |previous, item| for element: Element { previous[element] + item }
+);";
+    check(source).unwrap();
+}
+
+#[test]
+fn scan_rejects_multi_axis_source_instead_of_choosing_an_axis_implicitly() {
+    let source = include_str!("../../../../../tests/fixtures/invalid/scan_multi_axis_source.gcl");
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::MultiAxisScanSource { rank: 2, .. }),
+        "got: {err:?}"
+    );
+}
+
+#[test]
 fn check_scan_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
@@ -1710,6 +1735,83 @@ node distance: Length[Step] = unfold(
     |prev_distance, prev_t, t| prev_distance + (2.0 m/s) * (t - prev_t)
 );";
     check(source).unwrap();
+}
+
+#[test]
+fn unfold_accepts_indexed_state_and_prepends_coordinate_axis() {
+    let source = include_str!("../../../../../tests/fixtures/valid/indexed_state_recurrence.gcl");
+    check(source).unwrap();
+}
+
+#[test]
+fn unfold_accepts_matrix_state() {
+    let source = "\
+index Row = { R1, R2 };
+index Column = { C1, C2 };
+index Step = range(0.0 s, 1.0 s, step: 1.0 s);
+node initial: Dimensionless[Row, Column] =
+    for row: Row, column: Column { 1.0 };
+node state: Dimensionless[Step, Row, Column] = unfold(
+    Step,
+    @initial,
+    |previous, previous_t, t| for row: Row, column: Column {
+        previous[row, column] + (t - previous_t) / 1.0 s
+    }
+);";
+    check(source).unwrap();
+}
+
+#[test]
+fn unfold_indexed_state_annotation_mismatch_uses_source_axis_order() {
+    let source = "\
+index Element = { A, B };
+index Step = range(0.0 s, 1.0 s, step: 1.0 s);
+node initial: Dimensionless[Element] = for element: Element { 1.0 };
+node state: Dimensionless[Element, Step] = unfold(
+    Step,
+    @initial,
+    |previous, previous_t, t| for element: Element { previous[element] }
+);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            GraphcalError::DimensionMismatchInAnnotation {
+                declared,
+                inferred,
+                ..
+            } if declared == "Dimensionless[Element, Step]"
+                && inferred == "Dimensionless[Step, Element]"
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn unfold_rejects_indexed_body_with_different_state_axis() {
+    let source = "\
+index Element = { A, B };
+index Other = { A, B };
+index Step = range(0.0 s, 1.0 s, step: 1.0 s);
+node initial: Dimensionless[Element] = for element: Element { 1.0 };
+node state: Dimensionless[Step, Element] = unfold(
+    Step,
+    @initial,
+    |previous, previous_t, t| for other: Other { 1.0 }
+);";
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            GraphcalError::DimensionMismatch {
+                expected,
+                found,
+                ..
+            } if expected == "Dimensionless[Element]"
+                && found == "Dimensionless[Other]"
+        ),
+        "got: {err:?}"
+    );
 }
 
 #[test]

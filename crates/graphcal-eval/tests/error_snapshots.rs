@@ -117,6 +117,13 @@ fn error_count_multi_axis() {
 }
 
 #[test]
+fn error_scan_multi_axis_source() {
+    let source = include_str!("../../../tests/fixtures/invalid/scan_multi_axis_source.gcl");
+    let rendered = render_error(source, "scan_multi_axis_source.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_det_abstract_axis() {
     let source = include_str!("../../../tests/fixtures/invalid/det_abstract_axis.gcl");
     let rendered = render_error(source, "det_abstract_axis.gcl");

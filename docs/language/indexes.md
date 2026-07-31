@@ -161,6 +161,28 @@ Arguments:
 
 The result is an indexed value where each element is the accumulated result up to and including that element.
 
+The source must have exactly one axis. `scan` never chooses an axis implicitly
+from a multi-axis source; use an explicit `for` comprehension to select each
+rank-one series first. The accumulator may itself be indexed. Its axes are
+preserved after the source axis in the result:
+
+```
+index Element = { A, B };
+node increments: Dimensionless[Maneuver] = for maneuver: Maneuver { 1.0 };
+node initial: Dimensionless[Element] = for element: Element { 0.0 };
+node state: Dimensionless[Maneuver, Element] = scan(
+    @increments,
+    @initial,
+    |previous, increment| for element: Element {
+        previous[element] + increment
+    }
+);
+```
+
+The body must return exactly the accumulator type, including every state axis
+and its order. Each iteration reads the complete previous accumulator before
+constructing the next one.
+
 The accumulation order is the index order, which is intrinsic to the index —
 never to how a particular value was written:
 
@@ -627,6 +649,57 @@ Use the `prev_x` binding directly when computing the next step. A reference to
 `@x` in its own initializer is an ordinary dependency cycle, including
 `@x[prev_t]`, `@x[t]`, and future-coordinate forms. This is useful for
 time-stepping simulations and discrete dynamic systems.
+
+### Indexed recurrence state
+
+The state may be indexed over one or more fixed axes. `unfold` prepends its
+coordinate axis to those state axes:
+
+```text
+initial:    T[Element]
+trajectory: T[TimeStep, Element]
+
+initial:    T[Row, Column]
+trajectory: T[TimeStep, Row, Column]
+```
+
+This supports coupled systems where every next component reads the complete
+previous snapshot. For example, the matrix-vector recurrence
+`x(next) = coupling * x(previous)` is:
+
+```
+pub index Element = { A, B };
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+
+param initial: Dimensionless[Element] = {
+    Element.A: 1.0,
+    Element.B: 2.0,
+};
+param coupling: Dimensionless[Element, Element] = {
+    (Element.A, Element.A): 1.0,
+    (Element.A, Element.B): 1.0,
+    (Element.B, Element.A): 1.0,
+    (Element.B, Element.B): 0.0,
+};
+
+node trajectory: Dimensionless[TimeStep, Element] = unfold(
+    TimeStep,
+    @initial,
+    |previous, previous_time, time| for i: Element {
+        sum(for j: Element { @coupling[i, j] * previous[j] })
+    }
+);
+```
+
+All components for one coordinate are constructed from the same frozen
+`previous` value, so loop order cannot turn a simultaneous update into an
+in-place update. The body must return exactly the initial state's element type,
+axes, and axis order. This is ordinary multi-axis syntax, not a nested type such
+as `T[Element][TimeStep]`.
+
+See the complete runnable
+[`indexed_state_recurrence.gcl`](https://github.com/graphcal-lang/graphcal/blob/main/tests/fixtures/valid/indexed_state_recurrence.gcl)
+fixture for indexed `unfold` and `scan` examples.
 
 ## Aggregation Over Any Index
 

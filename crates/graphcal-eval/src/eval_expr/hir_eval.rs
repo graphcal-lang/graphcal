@@ -1768,6 +1768,16 @@ fn eval_hir_scan(
     else {
         return Err(ctx.eval_error("scan source must be an indexed value", source.span));
     };
+    if source_entries
+        .values()
+        .next()
+        .is_some_and(|item| matches!(item, RuntimeValue::Indexed { .. }))
+    {
+        return Err(ctx.internal_error(
+            "multi-axis source reached scan evaluation after rank-one type checking",
+            source.span,
+        ));
+    }
     let mut acc_val = eval_hir_expr(init, values, local_values, ctx)?;
     let mut result_entries = IndexMap::new();
     let mut scan_locals = local_values.child(Vec::new());

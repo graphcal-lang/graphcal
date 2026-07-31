@@ -1,0 +1,10 @@
+// scan requires a rank-one source so it never chooses an axis implicitly.
+index Step = { First, Second };
+index Element = { A, B };
+
+node source: Dimensionless[Step, Element] = for step: Step, element: Element { 1.0 };
+node invalid_scan: Dimensionless[Step] = scan(
+    @source,
+    0.0,
+    |accumulator, row| accumulator + sum(row)
+);

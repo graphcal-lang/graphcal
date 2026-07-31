@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`scan()` requires a rank-one source, found rank-2
+    Diagnostic severity: error
+Begin snippet for scan_multi_axis_source.gcl starting at line 6, column 1
+
+snippet line 6: node invalid_scan: Dimensionless[Step] = scan(
+snippet line 7:     @source,
+    label at line 7, columns 5 to 11: rank-2 source
+snippet line 8:     0.0,
+diagnostic help: scan does not choose an axis implicitly; use an explicit `for` comprehension to select each rank-one series before scanning it
+diagnostic code: graphcal::D026

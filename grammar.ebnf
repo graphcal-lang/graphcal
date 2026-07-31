@@ -1071,7 +1071,8 @@ scan_expr
      expr, ")";
 
 (* scan(source, init, |acc, item| body)
-   Folds over an indexed value, accumulating a result. *)
+   Folds over a rank-one indexed source. The accumulator may itself be
+   indexed; the source axis is prepended to its axes in the result. *)
 unfold_expr
    = "unfold", "(", ident_path, ",", expr, ",",
      "|", IDENT, ",", IDENT, ",", IDENT, "|",
@@ -1079,7 +1080,8 @@ unfold_expr
 
 (* unfold(index, init, |prev_state, prev_i, i| body)
    Generates an indexed value over an explicit coordinate index. The first
-   argument is an index reference, not a value expression. *)
+   argument is an index reference, not a value expression. The state may
+   itself be indexed; the coordinate axis is prepended to its axes. *)
 
 (* ================================================================== *)
 (* 10. Precedence and Associativity Summary                           *)

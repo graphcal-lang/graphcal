@@ -623,6 +623,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("`scan()` requires a rank-one source, found rank-{rank}")]
+    #[diagnostic(
+        code(graphcal::D026),
+        help(
+            "scan does not choose an axis implicitly; use an explicit `for` comprehension to select each rank-one series before scanning it"
+        )
+    )]
+    MultiAxisScanSource {
+        rank: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("rank-{rank} source")]
+        span: SourceSpan,
+    },
+
     #[error(
         "`{function}()` cannot determine the result dimension without a concrete axis cardinality"
     )]
@@ -2067,6 +2082,7 @@ impl GraphcalError {
             | Self::LinearAlgebraShapeMismatch { src, .. }
             | Self::IndexedComparisonOperand { src, .. }
             | Self::MultiAxisAggregation { src, .. }
+            | Self::MultiAxisScanSource { src, .. }
             | Self::AggregationCardinalityUnknown { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnknownUnit { src, .. }
