@@ -2099,41 +2099,28 @@ fn infer_hir_for_comp(
 ) -> Result<InferredType, GraphcalError> {
     let mut inner_locals = local_types.child(Vec::new());
     for binding in bindings {
+        // Every loop variable is a key of its axis. Coordinate arithmetic
+        // goes through coord(), integer use of a Fin key through to_int().
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
                 let index_identity = InferredIndex::from_resolved(index.value.clone());
-                let idx_def = super::index_def_for_inferred(&index_identity, Some(dag), registry)
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index_identity.name(),
-                    src: src.clone(),
-                    span: index.span.into(),
-                })?;
-                match &idx_def.kind {
-                    crate::registry::types::IndexKind::Named { .. }
-                    | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::NamedIndexCase(index_identity)
-                    }
-                    crate::registry::types::IndexKind::Coordinate(data) => {
-                        InferredType::CoordinateIndexLabel {
-                            index: index_identity,
-                            dimension: data.dimension.clone(),
-                        }
-                    }
-                    crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
-                        InferredType::CoordinateIndexLabel {
-                            index: index_identity,
-                            dimension: dimension.clone(),
-                        }
-                    }
-                    crate::registry::types::IndexKind::Finite { cardinality } => {
-                        InferredType::Fin(NatPolyForm::from_constant(cardinality.get() as u64))
-                    }
-                }
+                super::index_def_for_inferred(&index_identity, Some(dag), registry).ok_or_else(
+                    || GraphcalError::UnknownIndex {
+                        name: index_identity.name(),
+                        src: src.clone(),
+                        span: index.span.into(),
+                    },
+                )?;
+                InferredType::Key(index_identity)
             }
-            hir::expr::ForBindingIndex::Finite { cardinality, span } => InferredType::Fin(
-                hir_nat_to_linear_form(cardinality)
-                    .map_err(|err| nat_overflow_error(err, src, *span))?,
-            ),
+            hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+                let form = hir_nat_to_linear_form(cardinality)
+                    .map_err(|err| nat_overflow_error(err, src, *span))?;
+                InferredType::Key(
+                    InferredIndex::from_finite_index_form(form)
+                        .map_err(|err| finite_index_error(err, src, *span))?,
+                )
+            }
         };
         inner_locals.bind(binding.local.id, var_type);
     }
@@ -2222,56 +2209,27 @@ fn infer_hir_index_access(
                     });
                 };
                 match var_type {
-                    InferredType::NamedIndexCase(label_index) => {
-                        if label_index != &index {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: index.name(),
-                                found: label_index.name(),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
-                    }
-                    InferredType::CoordinateIndexLabel {
-                        index: label_index,
-                        dimension: label_dimension,
-                    } => {
-                        let idx_def = super::index_def_for_inferred(&index, Some(dag), registry)
-                            .ok_or_else(|| GraphcalError::UnknownIndex {
-                                name: index.name(),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            })?;
-                        let expected_dimension = match &idx_def.kind {
-                            crate::registry::types::IndexKind::Coordinate(data) => &data.dimension,
-                            crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
-                                dimension
-                            }
-                            _ => {
-                                return Err(GraphcalError::EvalError {
-                                    message: format!(
-                                        "coordinate-index loop variable cannot index into non-coordinate index `{}`",
-                                        index.name()
-                                    ),
-                                    src: src.clone(),
-                                    span: local.span.into(),
-                                });
-                            }
+                    // Loop variables are keys of their axes: accept on axis
+                    // identity, with Fin widening (`N <= M`).
+                    InferredType::Key(key_index) => {
+                        let axis_form = super::index_def_for_inferred(&index, Some(dag), registry)
+                            .map_or_else(
+                                || index.finite_index_form(),
+                                |idx_def| {
+                                    if !idx_def.is_finite_index() {
+                                        return None;
+                                    }
+                                    idx_def.finite_index_size().map(NatPolyForm::from_constant)
+                                },
+                            );
+                        let accepted = match (key_index.finite_index_form(), &axis_form) {
+                            (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
+                            _ => key_index == &index,
                         };
-                        if label_index != &index {
+                        if !accepted {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: index.name(),
-                                found: label_index.name(),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
-                        if label_dimension != expected_dimension {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: registry.dimensions.format_dimension(expected_dimension),
-                                found: registry.dimensions.format_dimension(label_dimension),
-                                help: "coordinate-index loop variable dimension must match the indexed coordinate axis"
-                                    .to_string(),
+                                found: key_index.name(),
                                 src: src.clone(),
                                 span: local.span.into(),
                             });
@@ -2286,55 +2244,6 @@ fn infer_hir_index_access(
                             src: src.clone(),
                             span: local.span.into(),
                         });
-                    }
-                    InferredType::Int => {
-                        let is_finite = index.finite_index_form().is_some()
-                            || super::index_def_for_inferred(&index, Some(dag), registry)
-                                .is_some_and(crate::registry::types::IndexDef::is_finite_index);
-                        if !is_finite {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "Int local cannot index into non-finite-index index `{}`",
-                                    index.name()
-                                ),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
-                    }
-                    InferredType::Fin(fin_bound) => {
-                        let index_form = super::index_def_for_inferred(&index, Some(dag), registry)
-                            .map_or_else(
-                                || index.finite_index_form(),
-                                |idx_def| {
-                                    if !idx_def.is_finite_index() {
-                                        return None;
-                                    }
-                                    idx_def.finite_index_size().map(NatPolyForm::from_constant)
-                                },
-                            );
-                        let Some(index_form) = index_form else {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "Fin({}) local cannot index into non-finite-index index `{}`",
-                                    fin_bound.format(),
-                                    index.name()
-                                ),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        };
-                        if !fin_bound.is_leq(&index_form) {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "index out of bounds: local has type Fin({}) but array has size {}",
-                                    fin_bound.format(),
-                                    index_form.format(),
-                                ),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
                     }
                     _ => {
                         return Err(GraphcalError::EvalError {
@@ -2400,6 +2309,21 @@ fn infer_hir_index_access(
                 };
                 match expr_type {
                     InferredType::Int => {
+                        // Runtime-checked Int indexing was removed: only a
+                        // statically discharged constant selects implicitly;
+                        // a runtime Int goes through the explicit fin_key().
+                        if try_const_int(index_expr).is_none() {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "a runtime Int cannot index `{}` implicitly; write \
+                                     `fin_key({}, ...)` to make the range check explicit",
+                                    index.name(),
+                                    index.name(),
+                                ),
+                                src: src.clone(),
+                                span: index_expr.span.into(),
+                            });
+                        }
                         check_constant_finite_index_index(index_expr, &index_form, src)?;
                     }
                     InferredType::Fin(ref fin_bound) => {
@@ -3781,9 +3705,9 @@ fn infer_hir_unfold(
             src: src.clone(),
             span: axis.span.into(),
         })?;
-    let dimension = match &idx_def.kind {
-        crate::registry::types::IndexKind::Coordinate(data) => data.dimension.clone(),
-        crate::registry::types::IndexKind::RequiredCoordinate { dimension } => dimension.clone(),
+    match &idx_def.kind {
+        crate::registry::types::IndexKind::Coordinate(_)
+        | crate::registry::types::IndexKind::RequiredCoordinate { .. } => {}
         _ => {
             return Err(GraphcalError::EvalError {
                 message: format!("unfold requires a coordinate index, got `{}`", index.name()),
@@ -3791,11 +3715,10 @@ fn infer_hir_unfold(
                 span: axis.span.into(),
             });
         }
-    };
-    let coordinate_type = InferredType::CoordinateIndexLabel {
-        index: index.clone(),
-        dimension,
-    };
+    }
+    // The recurrence coordinate binders are keys of the axis; the coordinate
+    // quantity is extracted with coord().
+    let coordinate_type = InferredType::Key(index.clone());
     let unfold_locals = local_types.child(vec![
         (prev_state.id, init_type.clone()),
         (prev_index.id, coordinate_type.clone()),

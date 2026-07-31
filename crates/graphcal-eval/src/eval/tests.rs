@@ -400,7 +400,7 @@ fn expected_fail_finite_position_passes_when_element_fails() {
     // #816: `#[expected_fail(#N)]` keys bind to finite structural axes positionally.
     let result = compile_and_eval(
         "#[expected_fail(#1)]\n\
-         assert r = for i: Fin(2) { i == 0 };",
+         assert r = for i: Fin(2) { to_int(i) == 0 };",
     )
     .unwrap();
     assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
@@ -412,7 +412,7 @@ fn expected_fail_finite_position_unexpected_pass_fails() {
     // marked expected_fail, and #1 fails without being marked.
     let result = compile_and_eval(
         "#[expected_fail(#0)]\n\
-         assert r = for i: Fin(2) { i == 0 };",
+         assert r = for i: Fin(2) { to_int(i) == 0 };",
     )
     .unwrap();
     match &result.assertions[0].1 {
@@ -434,7 +434,7 @@ fn expected_fail_mixed_named_and_finite_tuple_key() {
          assert m = for m: Mode {\n\
              for i: Fin(2) {\n\
                  match m {\n\
-                     Mode.Boost => if i == 1 { false } else { true },\n\
+                     Mode.Boost => if to_int(i) == 1 { false } else { true },\n\
                      Mode.Cruise => true,\n\
                  }\n\
              }\n\
@@ -1270,7 +1270,7 @@ index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node distance: Length[Step] = unfold(
     Step,
     1.0 m,
-    |prev_distance, prev_t, t| prev_distance + (2.0 m/s) * (t - prev_t)
+    |prev_distance, prev_t, t| prev_distance + (2.0 m/s) * (coord(t) - coord(prev_t))
 );
 ";
     let result = compile_and_eval(source).unwrap();
@@ -3851,7 +3851,7 @@ pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
 include pass_through(
     AxisDim: Time,
     Step: TimeStep,
-    samples: for time: TimeStep { time },
+    samples: for time: TimeStep { coord(time) },
 ) as output;
 ";
 
@@ -3899,7 +3899,7 @@ pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
 include sem.library(
     AxisDim: Time,
     Step: TimeStep,
-    samples: for time: TimeStep { time },
+    samples: for time: TimeStep { coord(time) },
 ) as output;
 ",
             ),

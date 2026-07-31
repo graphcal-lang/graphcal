@@ -1,0 +1,5 @@
+// Named-index loop variables are keys: comparable with == on their axis.
+index Maneuver = { A, B };
+
+node x: Bool[Maneuver] = for m: Maneuver { m == m };
+node y: Bool[Maneuver] = for m: Maneuver { m == Maneuver.A };

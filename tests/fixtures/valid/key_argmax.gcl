@@ -22,7 +22,7 @@ node critical_dv: Velocity = @delta_v[@critical];
 node critical_margin: Dimensionless = @fuel_margin[@critical];
 node critical_is_departure: Bool = @critical == Maneuver.Departure;
 
-node altitude: Length[TimeStep] = for t: TimeStep { 100.0 km + t * 5.0 km/s };
+node altitude: Length[TimeStep] = for t: TimeStep { 100.0 km + coord(t) * 5.0 km/s };
 node peak: Key<TimeStep> = argmax(@altitude);
 node peak_time: Time = coord(@peak);
 node peak_altitude: Length = @altitude[@peak];

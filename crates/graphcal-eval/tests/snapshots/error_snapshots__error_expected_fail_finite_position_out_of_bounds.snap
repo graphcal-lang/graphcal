@@ -9,6 +9,6 @@ Begin snippet for expected_fail_finite_position_out_of_bounds.gcl starting at li
 snippet line 1: // `#N` expected-fail keys are checked against the Fin cardinality.
 snippet line 2: #[expected_fail(#5)]
     label at line 2, columns 17 to 18: position #5 on an axis of size 2
-snippet line 3: assert r = for i: Fin(2) { i == 0 };
+snippet line 3: assert r = for i: Fin(2) { to_int(i) == 0 };
 diagnostic help: finite-index positions in expected-fail keys must satisfy `0 <= N < size` for a `Fin(size)` axis
 diagnostic code: graphcal::A016

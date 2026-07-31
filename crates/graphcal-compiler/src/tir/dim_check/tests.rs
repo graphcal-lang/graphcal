@@ -1692,8 +1692,8 @@ node w: Dimensionless[Fin(5)] = for i: Fin(5) { @v[i] };";
     let err = check(source).unwrap_err();
     let msg = format!("{err:?}");
     assert!(
-        msg.contains("index out of bounds"),
-        "expected bounds error, got: {msg}"
+        msg.contains("IndexMismatch"),
+        "expected an index-identity error, got: {msg}"
     );
 }
 
@@ -1706,7 +1706,7 @@ param v: Dimensionless[Phase] = { Phase.A: 1.0 };
 node w: Dimensionless[TimeStep] = for t: TimeStep { @v[t] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("coordinate-index loop variable cannot index into non-coordinate index `Phase`")),
+        matches!(&err, GraphcalError::IndexMismatch { expected, found, .. } if expected.as_str() == "Phase" && found.as_str() == "TimeStep"),
         "got: {err:?}"
     );
 }
@@ -1732,7 +1732,7 @@ index Step = range(0.0 s, 2.0 s, step: 1.0 s);
 node distance: Length[Step] = unfold(
     Step,
     1.0 m,
-    |prev_distance, prev_t, t| prev_distance + (2.0 m/s) * (t - prev_t)
+    |prev_distance, prev_t, t| prev_distance + (2.0 m/s) * (coord(t) - coord(prev_t))
 );";
     check(source).unwrap();
 }
@@ -1755,7 +1755,7 @@ node state: Dimensionless[Step, Row, Column] = unfold(
     Step,
     @initial,
     |previous, previous_t, t| for row: Row, column: Column {
-        previous[row, column] + (t - previous_t) / 1.0 s
+        previous[row, column] + (coord(t) - coord(previous_t)) / 1.0 s
     }
 );";
     check(source).unwrap();
@@ -1920,11 +1920,9 @@ node m: Dimensionless[Fin(3), Fin(3)] = for i: Fin(3), j: Fin(3) {
 
 #[test]
 fn fin_arithmetic_with_int() {
-    // Fin(N) * Dimensionless -> error (Fin is not Quantity)
-    // Fin(N) + Fin(M) -> Int (arithmetic), then Int * Dimensionless -> error
-    // to_float(i) -> Dimensionless (Fin is an Int-compatible refinement)
+    // A Fin loop variable is a key: integer use goes through to_int().
     let source = "\
-node v: Dimensionless[Fin(3)] = for i: Fin(3) { to_float(i) };";
+node v: Dimensionless[Fin(3)] = for i: Fin(3) { to_float(to_int(i)) };";
     check(source).unwrap();
 }
 

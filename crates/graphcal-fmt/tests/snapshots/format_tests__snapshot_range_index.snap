@@ -16,5 +16,5 @@ param x0: Dimensionless = 1.0;
 node x: Dimensionless[TimeStep] = unfold(
     TimeStep,
     @x0,
-    |prev_x, prev_t, t| prev_x * (1.0 + @rate * (t - prev_t))
+    |prev_x, prev_t, t| prev_x * (1.0 + @rate * (coord(t) - coord(prev_t)))
 );

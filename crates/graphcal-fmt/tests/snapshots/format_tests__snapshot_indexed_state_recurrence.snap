@@ -25,7 +25,7 @@ node trajectory: Dimensionless[TimeStep, Element] = unfold(
         for i: Element { sum(for j: Element { @coupling[i, j] * previous[j] }) }
 );
 
-node input: Dimensionless[TimeStep] = for time: TimeStep { time / 1.0 s };
+node input: Dimensionless[TimeStep] = for time: TimeStep { coord(time) / 1.0 s };
 node scanned_state: Dimensionless[TimeStep, Element] = scan(
     @input,
     @initial,

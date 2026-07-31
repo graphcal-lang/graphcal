@@ -8,5 +8,5 @@ param y0: Dimensionless = 10.0;
 node y: Dimensionless[Step] = unfold(
     Step,
     @y0,
-    |prev_y, prev_t, t| prev_y * (1.0 - @k * (t - prev_t))
+    |prev_y, prev_t, t| prev_y * (1.0 - @k * (coord(t) - coord(prev_t)))
 );
