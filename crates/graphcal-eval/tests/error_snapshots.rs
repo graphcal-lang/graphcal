@@ -117,6 +117,20 @@ fn error_count_multi_axis() {
 }
 
 #[test]
+fn error_det_abstract_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/det_abstract_axis.gcl");
+    let rendered = render_error(source, "det_abstract_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_product_abstract_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/product_abstract_axis.gcl");
+    let rendered = render_error(source, "product_abstract_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_dim_mismatch_add() {
     let source = include_str!("../../../tests/fixtures/invalid/dim_mismatch_add.gcl");
     let rendered = render_error(source, "dim_mismatch_add.gcl");

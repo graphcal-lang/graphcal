@@ -1,5 +1,4 @@
-use super::builtin_call::AggregationFn;
-use graphcal_compiler::builtin::BuiltinFnName;
+use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
 use graphcal_compiler::registry::runtime_value::{RuntimeValue, RuntimeValueError};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;
@@ -53,9 +52,13 @@ pub(super) fn aggregate_indexed_values(
 
     match kind {
         AggregationFn::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
+        AggregationFn::Product => aggregate_product(entries).map(RuntimeValue::Quantity),
         AggregationFn::Minimum => aggregate_minimum(entries).map(RuntimeValue::Quantity),
         AggregationFn::Maximum => aggregate_maximum(entries).map(RuntimeValue::Quantity),
         AggregationFn::Mean => aggregate_mean(entries).map(RuntimeValue::Quantity),
+        AggregationFn::RootSumSquare => {
+            aggregate_root_sum_square(entries).map(RuntimeValue::Quantity)
+        }
         AggregationFn::Count => aggregate_count(entries).map(RuntimeValue::Int),
     }
 }
@@ -73,6 +76,26 @@ fn aggregate_sum(entries: &IndexMap<IndexEntryKey, RuntimeValue>) -> Result<f64,
                 Ok(acc + quantity_entry(value, "sum element")?)
             })?;
     numeric::computed_finite_quantity(total, "sum()").map_err(AggregationError::from)
+}
+
+fn aggregate_product(
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+) -> Result<f64, AggregationError> {
+    entries.values().try_fold(1.0_f64, |product, value| {
+        let value = quantity_entry(value, "product element")?;
+        numeric::computed_finite_quantity(product * value, "product()")
+            .map_err(AggregationError::from)
+    })
+}
+
+fn aggregate_root_sum_square(
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+) -> Result<f64, AggregationError> {
+    let values = entries
+        .values()
+        .map(|value| quantity_entry(value, "rss element"))
+        .collect::<Result<Vec<_>, _>>()?;
+    numeric::root_sum_square(values, "rss()").map_err(AggregationError::from)
 }
 
 fn aggregate_minimum(
@@ -141,9 +164,11 @@ mod tests {
         let entries = IndexMap::new();
         for function in [
             AggregationFn::Sum,
+            AggregationFn::Product,
             AggregationFn::Minimum,
             AggregationFn::Maximum,
             AggregationFn::Mean,
+            AggregationFn::RootSumSquare,
             AggregationFn::Count,
         ] {
             let error = aggregate_indexed_values(function, &entries).unwrap_err();
@@ -154,6 +179,55 @@ mod tests {
             ));
             assert!(error.is_internal_invariant());
         }
+    }
+
+    #[test]
+    fn product_and_rss_evaluate_with_numerical_checks() {
+        let entries = IndexMap::from([
+            (IndexEntryKey::position(0), RuntimeValue::Quantity(3.0)),
+            (IndexEntryKey::position(1), RuntimeValue::Quantity(4.0)),
+        ]);
+        assert!(matches!(
+            aggregate_indexed_values(AggregationFn::Product, &entries),
+            Ok(RuntimeValue::Quantity(12.0))
+        ));
+        assert!(matches!(
+            aggregate_indexed_values(AggregationFn::RootSumSquare, &entries),
+            Ok(RuntimeValue::Quantity(5.0))
+        ));
+
+        let large = IndexMap::from([
+            (IndexEntryKey::position(0), RuntimeValue::Quantity(1.0e308)),
+            (IndexEntryKey::position(1), RuntimeValue::Quantity(1.0e308)),
+        ]);
+        let RuntimeValue::Quantity(rss) =
+            aggregate_indexed_values(AggregationFn::RootSumSquare, &large).unwrap()
+        else {
+            panic!("rss must return a quantity");
+        };
+        assert!(rss.is_finite());
+
+        let small = IndexMap::from([
+            (IndexEntryKey::position(0), RuntimeValue::Quantity(1.0e-300)),
+            (IndexEntryKey::position(1), RuntimeValue::Quantity(1.0e-300)),
+        ]);
+        let RuntimeValue::Quantity(small_rss) =
+            aggregate_indexed_values(AggregationFn::RootSumSquare, &small).unwrap()
+        else {
+            panic!("rss must return a quantity");
+        };
+        assert!(small_rss > 0.0);
+
+        let overflowing_product = IndexMap::from([
+            (IndexEntryKey::position(0), RuntimeValue::Quantity(f64::MAX)),
+            (IndexEntryKey::position(1), RuntimeValue::Quantity(2.0)),
+        ]);
+        assert!(matches!(
+            aggregate_indexed_values(AggregationFn::Product, &overflowing_product),
+            Err(AggregationError::Quantity(
+                numeric::QuantityValidationError::InfiniteResult { .. }
+            ))
+        ));
     }
 
     #[test]

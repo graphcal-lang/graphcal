@@ -588,6 +588,20 @@ node total_dv: Velocity = sum(@dv);";
 }
 
 #[test]
+fn check_product_and_rss_aggregation_dimensions() {
+    let source = "\
+pub index Factor = { A, B, C };
+param lengths: Length[Factor] = {
+    Factor.A: 2.0 m,
+    Factor.B: 3.0 m,
+    Factor.C: 4.0 m,
+};
+node volume: Volume = product(@lengths);
+node root_sum_square: Length = rss(@lengths);";
+    check(source).unwrap();
+}
+
+#[test]
 fn check_count_aggregation_returns_int_for_non_quantity_elements() {
     let source = "\
 pub index Case = { First, Second, Third };

@@ -1,0 +1,6 @@
+// A dimensioned product needs the axis cardinality to compute D^|I|.
+dag abstract_product {
+    pub(bind) index Axis;
+    param values: Length[Axis];
+    pub node result: Length = product(@values);
+}

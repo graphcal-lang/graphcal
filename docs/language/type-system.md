@@ -253,7 +253,8 @@ _[_]        : T[I₁, ..., Iₘ] × ℓ₁ × ... × ℓₘ -> T
 _.fᵢ        : A -> DTᵢ                            single-constructor A only
 scan        : T[I] × U × (U × T -> U) -> U[I]
 unfold      : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]
-sum, maximum, minimum, mean : Quantity(D)[I] -> Quantity(D)
+sum, maximum, minimum, mean, rss : Quantity(D)[I] -> Quantity(D)
+product     : Quantity(D)[I] -> Quantity(D^|I|)
 count       : T[I] -> Int
 dot         : Quantity(D1)[I] × Quantity(D2)[I] -> Quantity(D1 × D2)
 matmul      : Quantity(D1)[I, J] × Quantity(D2)[J, K] -> Quantity(D1 × D2)[I, K]
@@ -885,12 +886,16 @@ rejected with `D021`; select one axis first with an explicit `for`:
 
 ```
 sum(for m: Maneuver { @fuel[m] })        // Mass[Maneuver] -> Mass
+product(for i: Fin(3) { @edge[i] })       // Length[Fin(3)] -> Volume
+rss(for m: Maneuver { @sigma[m] })        // Mass[Maneuver] -> Mass
 maximum(for m: Maneuver { @delta_v[m] }) // Velocity[Maneuver] -> Velocity
 count(for m: Maneuver { @fuel[m] })      // Mass[Maneuver] -> Int
 ```
 
-The quantity reductions require quantity elements. `count` accepts any
-non-indexed element type and preserves cardinality as `Int`.
+The quantity reductions require quantity elements. `product` needs a concrete
+axis cardinality when its elements are dimensioned because that cardinality is
+the result's dimension exponent. `rss` preserves the element dimension.
+`count` accepts any non-indexed element type and preserves cardinality as `Int`.
 
 **Scan** -- ordered accumulation:
 

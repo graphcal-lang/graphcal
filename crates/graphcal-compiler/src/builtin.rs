@@ -123,9 +123,11 @@ define_builtin_names! {
         Inverse => "inverse",
         Det => "det",
         Sum => "sum",
+        Product => "product",
         Minimum => "minimum",
         Maximum => "maximum",
         Mean => "mean",
+        Rss => "rss",
         Count => "count",
         ToFloat => "to_float",
         ToInt => "to_int",
@@ -154,6 +156,79 @@ define_builtin_names! {
         ToJd => "to_jd",
         ToMjd => "to_mjd",
         ToUnix => "to_unix",
+    }
+}
+
+/// Built-in reductions over rank-one indexed collections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AggregationFn {
+    Sum,
+    Product,
+    Minimum,
+    Maximum,
+    Mean,
+    RootSumSquare,
+    Count,
+}
+
+impl AggregationFn {
+    /// Every aggregation, for routing and signature-display tests.
+    pub const ALL: &'static [Self] = &[
+        Self::Sum,
+        Self::Product,
+        Self::Minimum,
+        Self::Maximum,
+        Self::Mean,
+        Self::RootSumSquare,
+        Self::Count,
+    ];
+
+    /// Canonical built-in function identity.
+    #[must_use]
+    pub const fn builtin_name(self) -> BuiltinFnName {
+        match self {
+            Self::Sum => BuiltinFnName::Sum,
+            Self::Product => BuiltinFnName::Product,
+            Self::Minimum => BuiltinFnName::Minimum,
+            Self::Maximum => BuiltinFnName::Maximum,
+            Self::Mean => BuiltinFnName::Mean,
+            Self::RootSumSquare => BuiltinFnName::Rss,
+            Self::Count => BuiltinFnName::Count,
+        }
+    }
+
+    /// Number of runtime arguments.
+    #[must_use]
+    pub const fn arity(self) -> usize {
+        1
+    }
+
+    /// Source-like parameter labels used at LSP/display boundaries.
+    #[must_use]
+    pub const fn parameter_labels(self) -> &'static [&'static str] {
+        match self {
+            Self::Count => &["values: T[I]"],
+            Self::Sum
+            | Self::Product
+            | Self::Minimum
+            | Self::Maximum
+            | Self::Mean
+            | Self::RootSumSquare => &["values: D[I]"],
+        }
+    }
+
+    /// Source-like signature label used at LSP/display boundaries.
+    #[must_use]
+    pub const fn signature(self) -> &'static str {
+        match self {
+            Self::Sum => "fn sum<D: Dim, I: Index>(values: D[I]) -> D",
+            Self::Product => "fn product<D: Dim, I: Index>(values: D[I]) -> D^|I|",
+            Self::Minimum => "fn minimum<D: Dim, I: Index>(values: D[I]) -> D",
+            Self::Maximum => "fn maximum<D: Dim, I: Index>(values: D[I]) -> D",
+            Self::Mean => "fn mean<D: Dim, I: Index>(values: D[I]) -> D",
+            Self::RootSumSquare => "fn rss<D: Dim, I: Index>(values: D[I]) -> D",
+            Self::Count => "fn count<T: Type, I: Index>(values: T[I]) -> Int",
+        }
     }
 }
 
@@ -258,6 +333,21 @@ impl LinearAlgebraFn {
 }
 
 impl BuiltinFnName {
+    /// Classify this built-in as an indexed aggregation.
+    #[must_use]
+    pub const fn aggregation(self) -> Option<AggregationFn> {
+        match self {
+            Self::Sum => Some(AggregationFn::Sum),
+            Self::Product => Some(AggregationFn::Product),
+            Self::Minimum => Some(AggregationFn::Minimum),
+            Self::Maximum => Some(AggregationFn::Maximum),
+            Self::Mean => Some(AggregationFn::Mean),
+            Self::Rss => Some(AggregationFn::RootSumSquare),
+            Self::Count => Some(AggregationFn::Count),
+            _ => None,
+        }
+    }
+
     /// Classify this built-in as a linear-algebra operation.
     #[must_use]
     pub const fn linear_algebra(self) -> Option<LinearAlgebraFn> {
@@ -279,7 +369,21 @@ impl BuiltinFnName {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuiltinFnName, LinearAlgebraFn};
+    use super::{AggregationFn, BuiltinFnName, LinearAlgebraFn};
+
+    #[test]
+    fn aggregation_names_have_one_typed_route() {
+        for function in AggregationFn::ALL {
+            let name = function.builtin_name();
+            assert_eq!(BuiltinFnName::parse(name.as_str()), Some(name));
+            assert_eq!(name.aggregation(), Some(*function));
+        }
+        let classified = BuiltinFnName::ALL
+            .iter()
+            .filter(|name| name.aggregation().is_some())
+            .count();
+        assert_eq!(classified, AggregationFn::ALL.len());
+    }
 
     #[test]
     fn linear_algebra_names_have_one_typed_route() {

@@ -5,7 +5,7 @@
 //! the ordinary quantity dimension-signature registry, or does it need a custom
 //! type rule here?
 
-use crate::builtin::{BuiltinFnName, LinearAlgebraFn};
+use crate::builtin::{AggregationFn, BuiltinFnName, LinearAlgebraFn};
 use crate::registry::time_scale::TimeScale;
 
 /// How HIR type inference should check a built-in function call.
@@ -29,30 +29,6 @@ pub(super) enum BuiltinTypeRule {
     DatetimeFromNumeric,
     /// Datetime-to-numeric extractors such as `to_jd`.
     DatetimeToNumeric,
-}
-
-/// Aggregation functions that can reduce an indexed collection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AggregationFn {
-    Sum,
-    Minimum,
-    Maximum,
-    Mean,
-    Count,
-}
-
-impl AggregationFn {
-    /// Canonical built-in function identity for diagnostics.
-    #[must_use]
-    pub(super) const fn builtin_name(self) -> BuiltinFnName {
-        match self {
-            Self::Sum => BuiltinFnName::Sum,
-            Self::Minimum => BuiltinFnName::Minimum,
-            Self::Maximum => BuiltinFnName::Maximum,
-            Self::Mean => BuiltinFnName::Mean,
-            Self::Count => BuiltinFnName::Count,
-        }
-    }
 }
 
 /// Type conversion functions handled by HIR type inference.
@@ -86,12 +62,10 @@ pub(super) const fn type_rule_for_builtin(name: BuiltinFnName) -> BuiltinTypeRul
     if let Some(function) = name.linear_algebra() {
         return BuiltinTypeRule::LinearAlgebra(function);
     }
+    if let Some(function) = name.aggregation() {
+        return BuiltinTypeRule::CollectionAggregation(function);
+    }
     match name {
-        BuiltinFnName::Sum => BuiltinTypeRule::CollectionAggregation(AggregationFn::Sum),
-        BuiltinFnName::Minimum => BuiltinTypeRule::CollectionAggregation(AggregationFn::Minimum),
-        BuiltinFnName::Maximum => BuiltinTypeRule::CollectionAggregation(AggregationFn::Maximum),
-        BuiltinFnName::Mean => BuiltinTypeRule::CollectionAggregation(AggregationFn::Mean),
-        BuiltinFnName::Count => BuiltinTypeRule::CollectionAggregation(AggregationFn::Count),
         BuiltinFnName::ToFloat => BuiltinTypeRule::TypeConversion(TypeConversionFn::ToFloat),
         BuiltinFnName::ToInt => BuiltinTypeRule::TypeConversion(TypeConversionFn::ToInt),
         BuiltinFnName::ToUtc => BuiltinTypeRule::TimeScaleConversion(TimeScale::UTC),

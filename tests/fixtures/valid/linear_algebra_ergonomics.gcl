@@ -1,0 +1,94 @@
+// Product and root-sum-square reductions cover common engineering chains
+// without hiding axis selection or element-wise behavior.
+pub index Factor = { Width, Height, Depth };
+param edges: Length[Factor] = {
+    Factor.Width: 2.0 m,
+    Factor.Height: 3.0 m,
+    Factor.Depth: 4.0 m,
+};
+node box_volume: Volume = product(@edges);
+param scale_factors: Dimensionless[Factor] = {
+    Factor.Width: 2.0,
+    Factor.Height: 3.0,
+    Factor.Depth: 4.0,
+};
+
+pub index BudgetLine = { Structure, Payload };
+param means: Mass[BudgetLine] = {
+    BudgetLine.Structure: 100.0 kg,
+    BudgetLine.Payload: 50.0 kg,
+};
+param sigmas: Mass[BudgetLine] = {
+    BudgetLine.Structure: 3.0 kg,
+    BudgetLine.Payload: 4.0 kg,
+};
+node budget_mean: Mass = sum(@means);
+node budget_sigma: Mass = rss(@sigmas);
+
+param factors: Dimensionless[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
+    1.0, 2.0, 3.0;
+    4.0, 5.0, 6.0;
+};
+node row_products: Dimensionless[Fin(2)] = for row: Fin(2) {
+    product(for column: Fin(3) { @factors[row, column] })
+};
+node chained_product: Dimensionless = product(@row_products);
+
+dag generic_product {
+    pub(bind) index Axis;
+    param values: Dimensionless[Axis];
+    pub node result: Dimensionless = product(@values);
+}
+include generic_product(Axis: Factor, values: @scale_factors) as reusable_product;
+
+// Frames stay nominal and project-defined; generic wrappers prevent an ECI
+// vector or ECI-to-body attitude from being silently reinterpreted.
+type Eci {
+    Eci,
+}
+type Body {
+    Body,
+}
+type Vec3<D: Dim, Frame: Type> {
+    Vec3(x: D, y: D, z: D),
+}
+type Rotation<From: Type, To: Type> {
+    Rotation(elements: Dimensionless[Fin(3), Fin(3)]),
+}
+type Quaternion<From: Type, To: Type> {
+    Quaternion(w: Dimensionless, x: Dimensionless, y: Dimensionless, z: Dimensionless),
+}
+
+node position: Vec3<Length, Eci> = Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z: 3.0 m);
+node body_from_eci: Rotation<Eci, Body> = Rotation<Eci, Body>(
+    elements: table[Fin(3), Fin(3)] {
+        1.0, 0.0, 0.0;
+        0.0, 1.0, 0.0;
+        0.0, 0.0, 1.0;
+    },
+);
+node body_attitude: Quaternion<Eci, Body> = Quaternion<Eci, Body>(w: 1.0, x: 0.0, y: 0.0, z: 0.0);
+
+node position_components: Length[Fin(3)] = table[Fin(3)] {
+    @position.x;
+    @position.y;
+    @position.z;
+};
+node body_components: Length[Fin(3)] = for row: Fin(3) {
+    dot(for column: Fin(3) { @body_from_eci.elements[row, column] }, @position_components)
+};
+node body_position: Vec3<Length, Body> = Vec3<Length, Body>(
+    x: @body_components[0],
+    y: @body_components[1],
+    z: @body_components[2],
+);
+
+assert volume_result = @box_volume == 24.0 m^3;
+assert mean_result = @budget_mean == 150.0 kg;
+assert rss_result = @budget_sigma == 5.0 kg;
+assert nested_product_result = @chained_product == 720.0;
+assert reusable_product_result = @reusable_product.result == 24.0;
+assert rotation_trace = trace(@body_from_eci.elements) == 3.0;
+assert vector_field = @position.z == 3.0 m;
+assert transformed_frame = @body_position.z == 3.0 m;
+assert quaternion_identity = @body_attitude.w == 1.0;

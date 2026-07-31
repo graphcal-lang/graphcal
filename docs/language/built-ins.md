@@ -210,14 +210,70 @@ These functions operate on rank-one `for` comprehensions or indexed values.
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `sum(values)` | `D[I] -> D` | Sum of all elements |
+| `product(values)` | `D[I] -> D^\|I\|` | Product of all elements; cardinality determines the result dimension |
 | `maximum(values)` | `D[I] -> D` | Maximum element |
 | `minimum(values)` | `D[I] -> D` | Minimum element |
 | `mean(values)` | `D[I] -> D` | Arithmetic mean |
+| `rss(values)` | `D[I] -> D` | Root sum square, computed with scaled accumulation |
 | `count(values)` | `T[I] -> Int` | Exact number of elements |
+
+`product` makes chained reductions explicit without deeply nested binary
+multiplication. A dimensioned product requires a concrete axis cardinality so
+its output exponent is known; a dimensionless product does not. `rss` is the
+unit-safe quadrature operation for uncertainty budgets and Euclidean component
+combinations, and avoids avoidable intermediate overflow/underflow. Keep a
+budget's deterministic means and statistical sigmas as separate values, then
+combine each according to its semantics:
+
+```graphcal
+index BudgetLine = { Structure, Payload };
+param means: Mass[BudgetLine] = {
+    BudgetLine.Structure: 100.0 kg,
+    BudgetLine.Payload: 50.0 kg,
+};
+param sigmas: Mass[BudgetLine] = {
+    BudgetLine.Structure: 3.0 kg,
+    BudgetLine.Payload: 4.0 kg,
+};
+node budget_mean: Mass = sum(@means);   // 150 kg
+node budget_sigma: Mass = rss(@sigmas); // 5 kg
+```
 
 Convert a count explicitly when quantity arithmetic needs a dimensionless
 scalar: `sum(@values) / to_float(count(@values))`. Direct multi-axis aggregation
-is rejected; reduce one selected axis at a time with an explicit `for`.
+is rejected; reduce one selected axis at a time with an explicit `for`, such as
+`product(for row: Row { product(for column: Column { @a[row, column] }) })`.
+
+### Frame-Tagged Vectors and Attitudes
+
+Reference frames are project-specific nominal types, so Graphcal does not
+provide global `Eci`, `Body`, or similarly named frame values. Define the
+frames and wrappers in project vocabulary, then use the array linear-algebra
+built-ins for their numeric kernels:
+
+```graphcal
+type Eci { Eci }
+type Body { Body }
+type Vec3<D: Dim, Frame: Type> { Vec3(x: D, y: D, z: D) }
+type Rotation<From: Type, To: Type> {
+    Rotation(elements: Dimensionless[Fin(3), Fin(3)])
+}
+type Quaternion<From: Type, To: Type> {
+    Quaternion(w: Dimensionless, x: Dimensionless, y: Dimensionless, z: Dimensionless)
+}
+
+node r: Vec3<Length, Eci> = Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z: 3.0 m);
+node q: Quaternion<Eci, Body> =
+    Quaternion<Eci, Body>(w: 1.0, x: 0.0, y: 0.0, z: 0.0);
+```
+
+The phantom `Frame` / `From` / `To` arguments prevent accidental frame
+reinterpretation at type-check time. The
+[`linear_algebra_ergonomics.gcl`](https://github.com/graphcal-lang/graphcal/blob/main/tests/fixtures/valid/linear_algebra_ergonomics.gcl)
+fixture demonstrates an explicit matrix-vector frame transition. Projects can
+package numeric component operations in reusable DAGs with required type-level inputs;
+see
+[DAG Blocks](functions.md#type-level-inputs-for-reusable-math).
 
 ### Linear Algebra (Indexed Quantities)
 

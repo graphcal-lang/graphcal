@@ -226,27 +226,7 @@ fn sum_products(
 }
 
 fn norm(values: &[f64]) -> Result<f64, LinearAlgebraError> {
-    // LAPACK-style scaled sum of squares avoids intermediate overflow and
-    // underflow while preserving the ordinary Euclidean norm.
-    let (scale, sum_squares) = values.iter().copied().filter(|value| *value != 0.0).fold(
-        (0.0_f64, 1.0_f64),
-        |(scale, sum_squares), value| {
-            let magnitude = value.abs();
-            if scale < magnitude {
-                let ratio = scale / magnitude;
-                (magnitude, (sum_squares * ratio).mul_add(ratio, 1.0))
-            } else {
-                let ratio = magnitude / scale;
-                (scale, ratio.mul_add(ratio, sum_squares))
-            }
-        },
-    );
-    let result = if scale == 0.0 {
-        0.0
-    } else {
-        scale * sum_squares.sqrt()
-    };
-    numeric::computed_finite_quantity(result, "norm()").map_err(LinearAlgebraError::from)
+    numeric::root_sum_square(values.iter().copied(), "norm()").map_err(LinearAlgebraError::from)
 }
 
 fn one_argument(

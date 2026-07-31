@@ -25,7 +25,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
-use graphcal_compiler::builtin::LinearAlgebraFn;
+use graphcal_compiler::builtin::{AggregationFn, LinearAlgebraFn};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
 use graphcal_compiler::registry::builtins::builtin_functions;
@@ -790,6 +790,19 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
                 FnSignatureInfo {
                     label,
                     parameters: params,
+                },
+            );
+        }
+        for function in AggregationFn::ALL {
+            sigs.insert(
+                function.builtin_name().as_str().to_string(),
+                FnSignatureInfo {
+                    label: function.signature().to_string(),
+                    parameters: function
+                        .parameter_labels()
+                        .iter()
+                        .map(|parameter| (*parameter).to_string())
+                        .collect(),
                 },
             );
         }
@@ -1707,6 +1720,23 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::*;
+
+    #[test]
+    fn aggregation_signature_help_includes_product_and_rss() {
+        let signatures = build_fn_signatures();
+        assert_eq!(
+            signatures
+                .get("product")
+                .map(|signature| signature.label.as_str()),
+            Some("fn product<D: Dim, I: Index>(values: D[I]) -> D^|I|")
+        );
+        assert_eq!(
+            signatures
+                .get("rss")
+                .map(|signature| signature.label.as_str()),
+            Some("fn rss<D: Dim, I: Index>(values: D[I]) -> D")
+        );
+    }
 
     /// One plugin host shared by every analysis test, mirroring the
     /// Backend's process-wide host (and keeping the module cache warm).

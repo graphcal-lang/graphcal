@@ -11,7 +11,7 @@ builtins over indexed matrices) and
 [#99](https://github.com/graphcal-lang/graphcal/issues/99) (standard-library
 checklist, which lists linear algebra and attitude quaternions). Adjacent:
 [#895](https://github.com/graphcal-lang/graphcal/issues/895) (`rss`
-aggregation) and the closed
+aggregation, addressed by the Section 4.5 follow-up) and the closed
 [#315](https://github.com/graphcal-lang/graphcal/issues/315) (`Fin(N)` loop
 variables, which delivered the static bounds checking that positional
 vector/matrix code relies on).
@@ -29,7 +29,9 @@ quantities with dimension bookkeeping and typed-axis contractions. The data
 model remains indexed values rather than a dedicated matrix type. Native
 scaled-pivoting LU now provides general `solve(A, b)`, `inverse`, and `det`,
 closing the highest-value algorithmic gap without adding unbounded language
-iteration. The WASM plugin escape hatch still cannot accept a matrix argument.
+iteration. WASM ABI v4 carries shaped multi-axis arrays, required type-level DAG
+ports package dimension/axis-polymorphic kernels, and `product`/`rss` cover the
+remaining common reduction ergonomics.
 
 ## 2. Representation
 
@@ -209,15 +211,24 @@ issue #354. It is not needed for ordinary size polymorphism here: a required
 `Index` carries its concrete cardinality and identity explicitly at each
 instantiation.
 
-### 4.5 Ergonomics and standard-library gaps
+### 4.5 Aggregation ergonomics and nominal geometry — addressed
 
-- Chained products are deeply nested comprehensions; there is no
-  pipeline-friendly form.
-- No product aggregation; no `rss` (proposed separately in #895).
-- No built-in `Vec3` / rotation-matrix / quaternion layer. The docs'
-  frame-tagged `Vec3<D, Frame>` is a per-project pattern with hand-rolled
-  component math; attitude quaternions sit unchecked on the #99 stdlib
-  list.
+`product(values)` now reduces an explicit rank-one selection and computes the
+unit-correct result dimension `D^|I|`; nested `product(for …)` expressions make
+chained multi-axis products readable without adding implicit flattening or
+broadcasting. `rss(values)` implements the #895 root-sum-square operation with
+scaled accumulation, preserving the element dimension while avoiding avoidable
+intermediate overflow and underflow. The valid ergonomics fixture includes a
+mean/sigma budget and a nested product chain.
+
+A universal built-in `Vec3`/rotation/quaternion nominal layer would have to
+invent globally meaningful frame names, which conflicts with project-owned
+engineering vocabulary. The documented standard pattern therefore keeps frames
+as project-defined nominal `Type` arguments (`Vec3<D, Frame>`,
+`Rotation<From, To>`, `Quaternion<From, To>`) and delegates numeric kernels to
+the axis-safe array operations. `tests/fixtures/valid/linear_algebra_ergonomics.gcl`
+checks that pattern together with `product` and `rss`; reusable numeric
+component operations can be packaged through Section 4.4's type-level DAG inputs.
 
 ## 5. Design questions a linear-algebra layer must answer
 

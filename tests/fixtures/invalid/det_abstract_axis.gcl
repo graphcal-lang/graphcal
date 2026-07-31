@@ -1,0 +1,6 @@
+// Determinants also need a concrete axis cardinality for the output dimension.
+dag abstract_determinant {
+    pub(bind) index Axis;
+    param matrix: Length[Axis, Axis];
+    pub node result: Dimensionless = det(@matrix);
+}

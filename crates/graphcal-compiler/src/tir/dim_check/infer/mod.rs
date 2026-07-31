@@ -29,3 +29,14 @@ fn index_def_for_inferred<'a>(
     dag.map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.index_defs.get(resolved))
 }
+
+/// Return an inferred axis's cardinality only after it has become concrete.
+fn concrete_cardinality_for_inferred(
+    index: &InferredIndex,
+    dag: Option<&crate::tir::typed::DagTIR>,
+    registry: &Registry,
+) -> Option<usize> {
+    index_def_for_inferred(index, dag, registry)
+        .and_then(crate::registry::types::IndexDef::concrete_cardinality)
+        .map(crate::registry::index::IndexCardinality::get)
+}
