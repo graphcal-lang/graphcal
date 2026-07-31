@@ -772,6 +772,24 @@ fn infer_hir_fn_call(
             if kind == AggregationFn::Count {
                 return Ok(InferredType::Int);
             }
+            if matches!(kind, AggregationFn::Argmin | AggregationFn::Argmax) {
+                // The extremum's identity: a key of the reduced axis. The
+                // element-type requirement below still applies, so check it
+                // before returning.
+                if element.quantity_dimension().is_none() {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "indexed quantity collection".to_string(),
+                        found: format_inferred_type(element, registry),
+                        help: format!(
+                            "{}() requires every indexed element to be quantity",
+                            name.as_str()
+                        ),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                return Ok(InferredType::Key(index.clone()));
+            }
             let Some(dimension) = element.quantity_dimension().cloned() else {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "indexed quantity collection".to_string(),
@@ -1370,6 +1388,22 @@ fn infer_hir_type_conversion(
             Ok(InferredType::Quantity(Dimension::dimensionless()))
         }
         TypeConversionFn::ToInt => {
+            // A `Fin`-axis key exposes its position: the position is the
+            // key's semantic content. Named and coordinate keys stay opaque.
+            if let InferredType::Key(index) = &arg_type {
+                if index.finite_index_form().is_some() {
+                    return Ok(InferredType::Int);
+                }
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<Fin(N)>".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "to_int() extracts positions from Fin-axis keys only; \
+                           named and coordinate keys have no ordinal"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            }
             let dim = expect_quantity(&arg_type, registry, src, args[0].span)?;
             if !dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
@@ -1381,6 +1415,55 @@ fn infer_hir_type_conversion(
                 });
             }
             Ok(InferredType::Int)
+        }
+        TypeConversionFn::Coord => {
+            let InferredType::Key(index) = &arg_type else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<C> for a coordinate axis C".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "coord() extracts the coordinate quantity of a \
+                           coordinate-axis key"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            };
+            if index.finite_index_form().is_some() {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<C> for a coordinate axis C".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "coord() applies to coordinate-axis keys only; named \
+                           keys are opaque and Fin keys expose to_int()"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            }
+            let index_def =
+                super::index_def_for_inferred(index, Some(dag), registry).ok_or_else(|| {
+                    GraphcalError::UnknownIndex {
+                        name: index.name(),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    }
+                })?;
+            match &index_def.kind {
+                crate::registry::types::IndexKind::Coordinate(data) => {
+                    Ok(InferredType::Quantity(data.dimension.clone()))
+                }
+                crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
+                    Ok(InferredType::Quantity(dimension.clone()))
+                }
+                _ => Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<C> for a coordinate axis C".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "coord() applies to coordinate-axis keys only; named \
+                           keys are opaque and Fin keys expose to_int()"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                }),
+            }
         }
     }
 }
@@ -2102,6 +2185,24 @@ fn infer_hir_index_access(
                             idx_def.finite_index_size().map(NatPolyForm::from_constant)
                         },
                     );
+                // A key-typed expression selects by axis identity: exact for
+                // named and coordinate axes, widening (`N <= M`) for Fin.
+                if let InferredType::Key(key_index) = &expr_type {
+                    let accepted = match (key_index.finite_index_form(), &index_form) {
+                        (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
+                        _ => *key_index == index,
+                    };
+                    if !accepted {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index.name(),
+                            found: key_index.name(),
+                            src: src.clone(),
+                            span: index_expr.span.into(),
+                        });
+                    }
+                    current = *element;
+                    continue;
+                }
                 let Some(index_form) = index_form else {
                     return Err(GraphcalError::EvalError {
                         message: format!(

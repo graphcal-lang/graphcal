@@ -194,6 +194,27 @@ fn error_key_match_fin_axis() {
 }
 
 #[test]
+fn error_key_coord_on_named() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_coord_on_named.gcl");
+    let rendered = render_error(source, "key_coord_on_named.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_to_int_on_named() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_to_int_on_named.gcl");
+    let rendered = render_error(source, "key_to_int_on_named.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_index_cross_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_index_cross_axis.gcl");
+    let rendered = render_error(source, "key_index_cross_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_complex_aggregation_unsupported() {
     let source =
         include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");

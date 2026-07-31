@@ -476,12 +476,19 @@ fn eval_hir_fn_call(
         EvalBuiltinRule::CollectionAggregation(kind) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
-            let RuntimeValue::Indexed { entries, .. } = arg_val else {
+            let RuntimeValue::Indexed {
+                index_name,
+                entries,
+            } = arg_val
+            else {
                 return Err(ctx.internal_error(
                     format!("{}() received a non-indexed argument", name.as_str()),
                     args[0].span,
                 ));
             };
+            if matches!(kind, AggregationFn::Argmin | AggregationFn::Argmax) {
+                return eval_hir_extremum_key(kind, &index_name, &entries, expr.span, ctx);
+            }
             eval_hir_aggregation_fn(kind, &entries, expr.span, ctx.src)
         }
         EvalBuiltinRule::LinearAlgebra(function) => {
@@ -588,6 +595,79 @@ fn eval_hir_fn_call(
     }
 }
 
+/// Evaluate `argmin`/`argmax`: find the extremum entry and reify its entry
+/// key as the matching key runtime value for the reduced axis.
+fn eval_hir_extremum_key(
+    kind: AggregationFn,
+    index_name: &IndexTypeRef,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    let entry_key = super::aggregations::extremum_entry_key(kind, entries).map_err(|error| {
+        let message = error.to_string();
+        if error.is_internal_invariant() {
+            ctx.internal_error(message, span)
+        } else {
+            ctx.eval_error(message, span)
+        }
+    })?;
+    runtime_key_for_entry(index_name, &entry_key, span, ctx)
+}
+
+/// Reify an [`IndexEntryKey`] of `index_name` as the key runtime value:
+/// a label for named axes, a coordinate label for coordinate axes, and a
+/// position integer for `Fin` axes.
+fn runtime_key_for_entry(
+    index_name: &IndexTypeRef,
+    entry_key: &IndexEntryKey,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    match entry_key {
+        IndexEntryKey::Named(variant) => Ok(RuntimeValue::Label {
+            index_name: index_name.clone(),
+            variant: variant.clone(),
+        }),
+        IndexEntryKey::Position(position) => {
+            if index_name.finite_index().is_some() {
+                let position = i64::try_from(*position).map_err(|_| {
+                    ctx.internal_error(
+                        format!("key position {position} cannot be represented as Int"),
+                        span,
+                    )
+                })?;
+                return Ok(RuntimeValue::Int(position));
+            }
+            let index_def = index_def_for_ref(index_name, ctx).ok_or_else(|| {
+                ctx.internal_error(
+                    format!("index `{index_name}` has no registered definition"),
+                    span,
+                )
+            })?;
+            match &index_def.kind {
+                IndexKind::Coordinate(data) => {
+                    let position = usize::try_from(*position).map_err(|_| {
+                        ctx.internal_error(
+                            format!("coordinate position {position} exceeds the platform range"),
+                            span,
+                        )
+                    })?;
+                    Ok(RuntimeValue::CoordinateLabel {
+                        index_name: index_name.clone(),
+                        position,
+                        value: data.coordinate_value(position),
+                    })
+                }
+                _ => Err(ctx.internal_error(
+                    format!("position key on non-coordinate, non-finite index `{index_name}`"),
+                    span,
+                )),
+            }
+        }
+    }
+}
+
 fn eval_hir_aggregation_fn(
     kind: AggregationFn,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
@@ -623,6 +703,7 @@ fn eval_hir_conversion_fn(
     let name = match kind {
         TypeConversionFn::ToFloat => BuiltinFnName::ToFloat,
         TypeConversionFn::ToInt => BuiltinFnName::ToInt,
+        TypeConversionFn::Coord => BuiltinFnName::Coord,
     };
     expect_hir_builtin_arity(name, args, 1, span, ctx)?;
     match kind {
@@ -641,6 +722,11 @@ fn eval_hir_conversion_fn(
         }
         TypeConversionFn::ToInt => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            // A Fin-axis key is represented as its position integer: to_int()
+            // on a key is the identity at runtime, checked at the type level.
+            if let RuntimeValue::Int(position) = arg {
+                return Ok(RuntimeValue::Int(position));
+            }
             let f = arg
                 .expect_quantity("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
@@ -657,6 +743,16 @@ fn eval_hir_conversion_fn(
                     .unwrap_or_default();
                     ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
                 })
+        }
+        TypeConversionFn::Coord => {
+            let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let RuntimeValue::CoordinateLabel { value, .. } = arg else {
+                return Err(ctx.internal_error(
+                    "coord() received a non-coordinate-key argument",
+                    args[0].span,
+                ));
+            };
+            Ok(RuntimeValue::Quantity(value))
         }
     }
 }
@@ -1674,6 +1770,10 @@ fn eval_hir_for_comp(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over every index-argument category"
+)]
 fn eval_hir_index_access(
     span: Span,
     inner: &hir::Expr,
@@ -1756,24 +1856,39 @@ fn eval_hir_index_access(
             }
             hir::expr::IndexArg::Expr(index_expr) => {
                 let val = eval_hir_expr(index_expr, values, local_values, ctx)?;
-                let RuntimeValue::Int(n) = val else {
-                    return Err(ctx.eval_error(
-                        "index expression must evaluate to an integer",
-                        index_expr.span,
-                    ));
-                };
-                if n < 0 {
-                    return Err(ctx.eval_error(
-                        format!("index expression evaluated to negative value: {n}"),
-                        index_expr.span,
-                    ));
+                match val {
+                    // A key value selects the entry it names; the checker has
+                    // already proven the axis identity.
+                    RuntimeValue::Label { variant, .. } => IndexEntryKey::named(variant),
+                    RuntimeValue::CoordinateLabel { position, .. } => {
+                        IndexEntryKey::position(u64::try_from(position).map_err(|_| {
+                            ctx.internal_error(
+                                format!("coordinate key position {position} is unrepresentable"),
+                                index_expr.span,
+                            )
+                        })?)
+                    }
+                    RuntimeValue::Int(n) => {
+                        if n < 0 {
+                            return Err(ctx.eval_error(
+                                format!("index expression evaluated to negative value: {n}"),
+                                index_expr.span,
+                            ));
+                        }
+                        IndexEntryKey::position(u64::try_from(n).map_err(|_| {
+                            ctx.eval_error(
+                                format!("index expression is too large: {n}"),
+                                index_expr.span,
+                            )
+                        })?)
+                    }
+                    _ => {
+                        return Err(ctx.eval_error(
+                            "index expression must evaluate to an integer or an index key",
+                            index_expr.span,
+                        ));
+                    }
                 }
-                IndexEntryKey::position(u64::try_from(n).map_err(|_| {
-                    ctx.eval_error(
-                        format!("index expression is too large: {n}"),
-                        index_expr.span,
-                    )
-                })?)
             }
         };
         current = entries

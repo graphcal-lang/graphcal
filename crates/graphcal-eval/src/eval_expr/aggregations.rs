@@ -17,6 +17,10 @@ pub(super) enum AggregationError {
     /// Rank checking should prevent `count()` from seeing nested indexed entries.
     #[error("count() received a multi-axis Indexed value after rank-one type checking")]
     MultiAxisCount,
+    /// `argmin`/`argmax` construct axis keys and are routed through the
+    /// extremum-key evaluation, never through the value-only kernel.
+    #[error("{function}() must be evaluated through extremum-key routing")]
+    ExtremumRouting { function: BuiltinFnName },
     /// A runtime cardinality could not be represented by Graphcal's `Int` type.
     #[error("count() cardinality {count} cannot be represented as Int")]
     CountOutOfRange { count: usize },
@@ -34,7 +38,10 @@ impl AggregationError {
     pub(super) const fn is_internal_invariant(&self) -> bool {
         matches!(
             self,
-            Self::EmptyInput { .. } | Self::MultiAxisCount | Self::CountOutOfRange { .. }
+            Self::EmptyInput { .. }
+                | Self::MultiAxisCount
+                | Self::CountOutOfRange { .. }
+                | Self::ExtremumRouting { .. }
         )
     }
 }
@@ -60,6 +67,49 @@ pub(super) fn aggregate_indexed_values(
             aggregate_root_sum_square(entries).map(RuntimeValue::Quantity)
         }
         AggregationFn::Count => aggregate_count(entries).map(RuntimeValue::Int),
+        AggregationFn::Argmin | AggregationFn::Argmax => Err(AggregationError::ExtremumRouting {
+            function: kind.builtin_name(),
+        }),
+    }
+}
+
+/// Entry key of the extremum element, resolving ties to the first entry in
+/// index order (entries iterate in canonical index order).
+pub(super) fn extremum_entry_key(
+    kind: AggregationFn,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+) -> Result<IndexEntryKey, AggregationError> {
+    if entries.is_empty() {
+        return Err(AggregationError::EmptyInput {
+            function: kind.builtin_name(),
+        });
+    }
+    let context = match kind {
+        AggregationFn::Argmin => "argmin element",
+        AggregationFn::Argmax => "argmax element",
+        _ => {
+            return Err(AggregationError::ExtremumRouting {
+                function: kind.builtin_name(),
+            });
+        }
+    };
+    let mut best: Option<(&IndexEntryKey, f64)> = None;
+    for (key, value) in entries {
+        let quantity = quantity_entry(value, context)?;
+        let better = match (&best, kind) {
+            (None, _) => true,
+            (Some((_, incumbent)), AggregationFn::Argmax) => quantity > *incumbent,
+            (Some((_, incumbent)), _) => quantity < *incumbent,
+        };
+        if better {
+            best = Some((key, quantity));
+        }
+    }
+    match best {
+        Some((key, _)) => Ok(key.clone()),
+        None => Err(AggregationError::EmptyInput {
+            function: kind.builtin_name(),
+        }),
     }
 }
 

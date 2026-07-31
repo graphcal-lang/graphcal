@@ -136,8 +136,11 @@ define_builtin_names! {
         Mean => "mean",
         Rss => "rss",
         Count => "count",
+        Argmin => "argmin",
+        Argmax => "argmax",
         ToFloat => "to_float",
         ToInt => "to_int",
+        Coord => "coord",
         ToUtc => "to_utc",
         ToTai => "to_tai",
         ToTt => "to_tt",
@@ -176,6 +179,8 @@ pub enum AggregationFn {
     Mean,
     RootSumSquare,
     Count,
+    Argmin,
+    Argmax,
 }
 
 impl AggregationFn {
@@ -188,6 +193,8 @@ impl AggregationFn {
         Self::Mean,
         Self::RootSumSquare,
         Self::Count,
+        Self::Argmin,
+        Self::Argmax,
     ];
 
     /// Canonical built-in function identity.
@@ -201,6 +208,8 @@ impl AggregationFn {
             Self::Mean => BuiltinFnName::Mean,
             Self::RootSumSquare => BuiltinFnName::Rss,
             Self::Count => BuiltinFnName::Count,
+            Self::Argmin => BuiltinFnName::Argmin,
+            Self::Argmax => BuiltinFnName::Argmax,
         }
     }
 
@@ -220,7 +229,9 @@ impl AggregationFn {
             | Self::Minimum
             | Self::Maximum
             | Self::Mean
-            | Self::RootSumSquare => &["values: D[I]"],
+            | Self::RootSumSquare
+            | Self::Argmin
+            | Self::Argmax => &["values: D[I]"],
         }
     }
 
@@ -235,6 +246,8 @@ impl AggregationFn {
             Self::Mean => "fn mean<D: Dim, I: Index>(values: D[I]) -> D",
             Self::RootSumSquare => "fn rss<D: Dim, I: Index>(values: D[I]) -> D",
             Self::Count => "fn count<T: Type, I: Index>(values: T[I]) -> Int",
+            Self::Argmin => "fn argmin<D: Dim, I: Index>(values: D[I]) -> Key<I>",
+            Self::Argmax => "fn argmax<D: Dim, I: Index>(values: D[I]) -> Key<I>",
         }
     }
 }
@@ -454,6 +467,8 @@ impl BuiltinFnName {
             Self::Mean => Some(AggregationFn::Mean),
             Self::Rss => Some(AggregationFn::RootSumSquare),
             Self::Count => Some(AggregationFn::Count),
+            Self::Argmin => Some(AggregationFn::Argmin),
+            Self::Argmax => Some(AggregationFn::Argmax),
             _ => None,
         }
     }

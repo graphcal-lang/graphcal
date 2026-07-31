@@ -1,0 +1,5 @@
+// to_int() extracts positions from Fin-axis keys only; exposing a named
+// key's ordinal would couple programs to label declaration order.
+index Maneuver = { Departure, Correction };
+
+node n: Int = to_int(Maneuver.Departure);

@@ -38,6 +38,7 @@ pub(super) enum EvalBuiltinRule {
 pub(super) enum TypeConversionFn {
     ToFloat,
     ToInt,
+    Coord,
 }
 
 /// Datetime constructor functions handled by HIR evaluation.
@@ -91,6 +92,7 @@ pub(super) const fn eval_rule_for_builtin(name: BuiltinFnName) -> EvalBuiltinRul
     match name {
         BuiltinFnName::ToFloat => EvalBuiltinRule::TypeConversion(TypeConversionFn::ToFloat),
         BuiltinFnName::ToInt => EvalBuiltinRule::TypeConversion(TypeConversionFn::ToInt),
+        BuiltinFnName::Coord => EvalBuiltinRule::TypeConversion(TypeConversionFn::Coord),
         BuiltinFnName::ToUtc => EvalBuiltinRule::TimeScaleConversion(TimeScale::UTC),
         BuiltinFnName::ToTai => EvalBuiltinRule::TimeScaleConversion(TimeScale::TAI),
         BuiltinFnName::ToTt => EvalBuiltinRule::TimeScaleConversion(TimeScale::TT),

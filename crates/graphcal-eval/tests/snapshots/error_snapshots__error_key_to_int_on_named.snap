@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Key<Fin(N)>, found Key<Maneuver>
+    Diagnostic severity: error
+Begin snippet for key_to_int_on_named.gcl starting at line 4, column 1
+
+snippet line 4: 
+snippet line 5: node n: Int = to_int(Maneuver.Departure);
+    label at line 5, columns 22 to 39: has dimension Key<Maneuver>
+diagnostic help: to_int() extracts positions from Fin-axis keys only; named and coordinate keys have no ordinal
+diagnostic code: graphcal::D001
