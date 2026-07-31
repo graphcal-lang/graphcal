@@ -1,0 +1,4 @@
+pub dag helper {
+    param x: Dimensionless;
+    pub node result: Dimensionless = @x;
+}

@@ -785,11 +785,9 @@ pub struct TIR {
     /// `root_dag_id`. Inline children and merged dep DAGs are inserted by
     /// the project pipeline.
     pub dags: DagRegistry,
-    /// Maps each `import path as alias` (or `import path`) module alias to
-    /// the dep file's canonical `DagId`. Used by [`TIR::lookup_call_target`]
-    /// to translate user-typed `@alias.dag(args)` references into the
-    /// canonical key under which the dep's DAGs were inserted by
-    /// `merge_dep_dag_tirs`.
+    /// Maps each whole-module import alias to the exact canonical file-root or
+    /// inline-DAG target it binds. Used by [`TIR::lookup_call_target`] for both
+    /// direct `@alias(args)` calls and descendant `@alias.dag(args)` calls.
     pub module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks in this file (and, after `merge_dep_dag_tirs`, its deps),
@@ -865,11 +863,11 @@ impl TIR {
     /// Resolve a user-typed inline-DAG call path to the corresponding
     /// [`DagTIR`] in [`Self::dags`].
     ///
-    /// - Single-segment `[name]` (a same-file call `@name(args)`) → looks
-    ///   up `root_dag_id.child(name)`.
-    /// - Multi-segment `[alias, name, ...]` (a cross-file qualified call
-    ///   `@alias.name(args)`) → translates `alias` via [`Self::module_aliases`]
-    ///   to the dep file's `DagId`, then appends the remaining segments.
+    /// - A path headed by an imported alias resolves from the exact file-root
+    ///   or inline-DAG target bound to that alias. The alias itself is callable;
+    ///   remaining segments descend through child DAGs.
+    /// - A path with no imported-alias head resolves from
+    ///   `root_dag_id.child(name)` for same-file calls.
     ///
     /// Returns `None` when the path doesn't resolve (unknown alias, no
     /// matching DAG, etc.); call sites surface a structured error.
@@ -880,26 +878,27 @@ impl TIR {
     }
 
     /// Build the canonical [`DagId`](crate::dag_id::DagId) that
-    /// `path` refers to under this file's scope (alias-translated for
-    /// multi-segment paths, file-root-scoped for single-segment paths).
-    ///
-    /// Returns `None` when the leading alias of a multi-segment path is
-    /// unknown.
+    /// `path` refers to under this file's scope. An imported alias maps directly
+    /// to its exact target even when it is the path's only segment; otherwise a
+    /// single-segment path names a same-file child DAG.
     #[must_use]
     pub fn resolve_call_path(
         &self,
         path: &crate::syntax::ast::ModulePath,
     ) -> Option<crate::dag_id::DagId> {
-        if path.segments.len() == 1 {
-            return Some(self.root_dag_id.child(path.segments[0].name.as_str()));
+        let head = path.segments[0].name.as_str();
+        match self.module_aliases.get(head) {
+            Some(imported) => Some(
+                path.segments
+                    .iter()
+                    .skip(1)
+                    .fold(imported.clone(), |owner, segment| {
+                        owner.child(segment.name.as_str())
+                    }),
+            ),
+            None if path.segments.len() == 1 => Some(self.root_dag_id.child(head)),
+            None => None,
         }
-        let alias = path.segments[0].name.as_str();
-        let dep_id = self.module_aliases.get(alias)?;
-        let mut id = dep_id.clone();
-        for seg in &path.segments.as_slice()[1..] {
-            id = id.child(seg.name.as_str());
-        }
-        Some(id)
     }
 }
 

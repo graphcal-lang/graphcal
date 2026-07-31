@@ -1039,7 +1039,9 @@ pub enum GraphcalError {
     #[error("unknown module `{name}`")]
     #[diagnostic(
         code(graphcal::M006),
-        help("check that an `import` declaration imports this module")
+        help(
+            "module-qualified references start with a local name introduced by `import`; call an aliased module through that alias, for example `import pkg.module as m; @m(...).out`"
+        )
     )]
     UnknownModule {
         name: String,

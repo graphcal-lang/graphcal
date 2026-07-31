@@ -233,11 +233,12 @@ The projected output after `.` is mandatory. Arguments are evaluated in the
 surrounding scope, so they may reference loop variables from an enclosing
 `for` comprehension or other local binders.
 
-The thing immediately after `@` may be a DAG in scope or a module-qualified
-DAG path such as `@module.dag(args).out`. The mandatory projection makes the
-expression a graph reference. It may name either an explicitly exported node
-or a param input port; projecting a param yields its effective bound/default
-value.
+The thing immediately after `@` may be a local DAG or an imported module alias.
+A file-root or inline-DAG target imported as `module` is invoked directly as
+`@module(args).out`; `@module.dag(args).out` descends to a child DAG. The
+mandatory projection makes the expression a graph reference. It may name either
+an explicitly exported node or a param input port; projecting a param yields its
+effective bound/default value.
 
 See [Multi-File: Inline-DAG Call Expression](./multi-file.md#inline-dag-call-expression)
 for the full semantics.

@@ -371,7 +371,7 @@ this table is the complete inventory of declaration forms:
 | `plot p = { ... };` | a chart specification | value | — |
 | `figure f = { ... };` / `layer l = { ... };` | plot compositions (tiled / overlaid) | value | — |
 | `dag d { ... }` | a reusable sub-DAG blueprint | value | — (there is no function type) |
-| `import pkg.mod;` / `... as m;` / `....{ items }` | a module alias or the listed items | per item | — |
+| `import pkg.mod;` / `... as m;` / `....{ items }` | a callable DAG-module alias or the listed items | module/DAG or per item | — |
 | `import plugin "name" as ns { fn ...; }` | extern functions, callable as `ns.fn(...)` | plugin alias | extern signatures over `Dim`/`Index` variables |
 | `include pkg.dag(bindings) ...;` | an embedded DAG instance; selected outputs as nodes | value | outputs' DeclTypes |
 | `<P: Dim>` etc. in a `type` header | a generic parameter | scoped to its declaration | its declared kind |
@@ -1501,8 +1501,8 @@ Named index labels do not participate in value type equivalence. They are index 
 | Built-in constant (`PI`, `E`, `TAU`) | ValueType (`Dimensionless`) | Yes | Yes | Yes | Bare reference, no `@` |
 | Built-in function | No | No | No | No | Calling only |
 | Extern function | No | No | No | No | Qualified calling only (`ns.fn(...)`) |
-| DAG block | No | No | No | No | `include` instantiation and inline `@d(args).out` calls |
-| Module alias | No | No | No | No | Qualification prefix (`m.item`) |
+| DAG module (file root or inline block) | No | No | No | No | `include` instantiation and inline `@d(args).out` calls |
+| Imported module alias | No | No | No | No | Direct DAG calls (`@m(args).out`) and qualification (`m.item`, `@m.child(args).out`) |
 | Dimension | No; inhabits `Dim` | No | As generic `<D: Dim>` | As generic | In quantity type syntax |
 | Time scale | No; inhabits semantic `TimeScale` | No | No | No | In `Datetime<TT>`-style type syntax |
 | Unit | No (compile-time) | No | No | No | In literals and conversion targets |

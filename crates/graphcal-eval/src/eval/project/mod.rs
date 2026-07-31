@@ -169,13 +169,12 @@ struct EvaluatedFile {
     /// expression references this file's params and cannot be re-evaluated in
     /// the importer's context. Empty when `runtime_available` is `false`.
     resolved_dynamic_unit_scales: HashMap<UnitRef, PositiveFiniteScale>,
-    /// Compiled dag TIRs for each `dag { ... }` declared in this file.
+    /// Compiled TIRs for this file-root DAG and every inline DAG it contains.
     ///
-    /// Keyed by bare dag name. Cloned into downstream importers' `TIR::dags`
-    /// under `"alias::dag_name"` keys so qualified inline calls
-    /// (`@alias.dag(args).out`) resolve through the same machinery as
-    /// same-file inline calls. The internal `::` separator avoids collisions
-    /// with user-visible `.`-separated names.
+    /// Entries retain canonical `DagId` keys when cloned into downstream
+    /// importers. Imported aliases resolve to those identities before TIR, so
+    /// file-root calls (`@alias(args).out`) and child calls
+    /// (`@alias.dag(args).out`) share the same lookup.
     dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
     /// Resolved extern function signatures declared by this file's
     /// `import plugin` blocks. Merged into importers' TIRs alongside
@@ -290,6 +289,23 @@ enum DeferredDagSource {
     },
 }
 
+/// Canonical routing metadata for one module alias in the project pipeline.
+///
+/// `target` identifies the exact file-root or inline DAG module bound to the
+/// alias; it is never collapsed to the containing source file.
+#[derive(Debug, Clone)]
+struct ProjectModuleBinding {
+    target: graphcal_compiler::dag_id::DagId,
+    span: Span,
+    role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole,
+}
+
+impl ProjectModuleBinding {
+    const fn span(&self) -> Span {
+        self.span
+    }
+}
+
 /// Mutable state accumulated while processing import declarations.
 ///
 /// Bundles the various collections that [`compile_single_file_in_project`] builds
@@ -303,7 +319,7 @@ struct ImportContext<'a> {
         graphcal_compiler::dag_id::DagId,
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
-    module_map: HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
+    module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
     /// Registry surfaces of module-imported dependencies, merged into the
     /// importer's registry builder before its own declarations register.
     extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
@@ -357,7 +373,7 @@ pub(in crate::eval::project) enum SelectiveImportResult {
 /// borrowed reference to the original AST.
 fn rewrite_qualified_refs_in_ast<'a>(
     ast: &'a graphcal_compiler::desugar::desugared_ast::File,
-    module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
+    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     imported_names: &ImportedValueNames,
 ) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
     let alias_pairs = collect_qualified_pairs(imported_names);

@@ -646,11 +646,11 @@ pub enum ExprKind<P: Phase = Raw> {
     /// `@module.dag(args).out` form has the same rule. Bare `@dag(args)` is
     /// rejected because an unprojected DAG instance is not a graph value.
     InlineDagRef {
-        /// Path to the DAG being invoked. Single-segment for same-file calls
-        /// (`@dag(args).out`), multi-segment for cross-file qualified calls
-        /// (`@module.dag(args).out`). The leaf segment names the DAG; any
-        /// preceding segments resolve through module aliases brought into
-        /// scope by `import`.
+        /// Path to the DAG module being invoked. The first segment may name a
+        /// local DAG or an imported module alias. An imported alias is itself
+        /// callable (`@module(args).out`) whether it targets a file root or an
+        /// inline DAG; additional segments descend through child DAG modules
+        /// (`@module.child(args).out`).
         path: ModulePath,
         /// Param/index bindings, same shape as `include` bindings.
         args: Vec<ParamBinding<P>>,

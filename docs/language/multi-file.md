@@ -5,11 +5,12 @@ icon: material/file-multiple
 # Multi-File Projects
 
 Graphcal organizes code into **packages**. Every `.gcl` file belongs to
-exactly one package, and every name a DAG uses is reached by an absolute
-path that starts at a package root. The path syntax is the same whether
-the package lives on disk under a manifest or whether it is a single
-file you just created — the only thing that changes between those cases
-is the externally-visible package name.
+exactly one package. An `import` or `include` identifies an outside module by
+an absolute path that starts at a package root; after an import, expressions use
+the local name or `as` alias that the declaration introduced. The absolute path
+syntax is the same whether the package lives on disk under a manifest or whether
+it is a single file you just created — the only thing that changes between those
+cases is the externally-visible package name.
 
 Two declarations bring outside material into a DAG:
 
@@ -90,6 +91,13 @@ The forms differ in what enters scope:
 | `import nasa.rocket.{type Orbit};`                     | `Orbit` only — **not** `rocket`            |
 | `import nasa.rocket.{type Orbit, compute_thrust as ct};` | `Orbit` and `ct` only                    |
 | `import nasa.rocket as nr.{type Orbit};`               | parse error — alias and brace mutually exclusive |
+
+A whole-module name denotes the exact imported DAG module, not merely a prefix
+for its contents. Because file roots and inline DAGs are one abstraction,
+`@rocket(args).out` or `@nr(args).out` invokes that target directly, while
+`@rocket.child(args).out` descends to an exported child DAG. Imported module
+aliases and local DAGs share this callable namespace; if both bind the same
+spelling to different targets, a call is ambiguous and must be renamed.
 
 If you want both the module qualifier *and* an unqualified item, write
 two statements:
@@ -310,32 +318,48 @@ node distances: Length[Region] = for r: Region {
 };
 ```
 
-#### Qualified form: `@module.dag(args).out`
+#### Imported module calls: `@module(args).out`
 
-Inline calls also accept a module-qualified path, mirroring the way a
-DAG comes into scope via `import` without needing a `{dag}` brace list.
-After `import nasa.rocket as rocket;` (or unaliased `import nasa.rocket;`,
-which binds the leaf `rocket` as the module name) you can write:
+Every file root and every inline `dag` block is the same kind of DAG module. A
+whole-module `import` binds its exact target as a reusable module alias, so the
+alias itself is callable whether the target lives in a file or inside another
+DAG:
+
+```graphcal
+// Invoke the imported file-root DAG itself.
+import nasa.rocket as rocket;
+node file_output: Force = @rocket(orbit: @o).thrust;
+
+// Invoke an inline DAG imported by its full module path.
+import nasa.rocket.compute_thrust as thrust;
+node inline_output: Force = @thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
+```
+
+An unaliased import binds the path's leaf (`import nasa.rocket;` binds
+`rocket`). Selective DAG imports are callable by their selected local name in
+the same way:
+
+```graphcal
+import nasa.rocket.{compute_thrust as thrust};
+node t: Force = @thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
+```
+
+The alias can also qualify a child DAG. After importing the file module, the
+same `compute_thrust` DAG can be reached as:
 
 ```graphcal
 import nasa.rocket as rocket;
-
-param o: Orbit;
 node t: Force = @rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
 ```
 
-The semantics are identical to the bare form: prefixing the path with the
-in-scope module alias only adds a qualifier. The projected member must still be
-an explicitly exported node or a param input port, independent of how many path
-segments appear before the `(`.
+The projected member must be an explicitly exported node or a param input port.
+Across a module boundary, every inline DAG traversed by the call path must also
+be explicitly exported; a file root is its package-addressable module.
 
-For module-qualified calls, the called DAG itself must also be explicitly
-exported.
-
-What *is* still rejected is dropping the projection: `@dag(args)` and
-`@module.dag(args)` (without the trailing `.<out>`) are both parse errors. A
-DAG instance with no projection is not a graph value, which is what `@`
-requires.
+What *is* still rejected is dropping the projection: `@dag(args)`,
+`@module(args)`, and `@module.dag(args)` without the trailing `.<out>` are parse
+errors. A DAG instance with no projection is not a graph value, which is what
+`@` requires.
 
 ## Inline DAGs as Modules
 

@@ -168,12 +168,13 @@ node distances: Length[Region] = for r: Region {
 };
 ```
 
-The thing immediately after `@` may be a DAG in scope by its leaf name or a
-module-qualified DAG path such as `@module.dag(args).out`. The projection after
-the call is still mandatory; `@dag(args)` and `@module.dag(args)` are rejected
-because a DAG instance without an output projection is not a graph value. The
-projection may name an explicitly exported node or a param input port. A param
-projection returns its effective bound/default value.
+The thing immediately after `@` may be a local DAG, an imported module alias,
+or a child reached through either one. File-root and inline-DAG modules use the
+same forms: `@module(args).out` invokes the imported target itself, while
+`@module.dag(args).out` invokes its child. The projection remains mandatory; an
+unprojected DAG instance is not a graph value. The projection may name an
+explicitly exported node or a param input port. A param projection returns its
+effective bound/default value.
 
 ## Import vs Include
 

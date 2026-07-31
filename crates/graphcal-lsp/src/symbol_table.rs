@@ -204,7 +204,7 @@ struct HirRefCollector<'a> {
     dag_id: &'a DagId,
     resolver: &'a ModuleResolver,
     time_zones: TimeZoneRegistry,
-    /// Canonical module owner → the alias this file imports it under.
+    /// Canonical DAG module → the whole-module or selective alias that calls it.
     alias_of: HashMap<DagId, String>,
     /// Lexical local definitions of the current body, keyed by HIR identity.
     locals: HashMap<hir::LocalId, SymbolKey>,
@@ -223,6 +223,19 @@ impl<'a> HirRefCollector<'a> {
                 // registers every alias, so lookups succeed either way.
                 alias_of
                     .entry(target.target().clone())
+                    .and_modify(|existing| {
+                        if alias < *existing {
+                            existing.clone_from(&alias);
+                        }
+                    })
+                    .or_insert(alias);
+            }
+        }
+        if let Ok(selected_dags) = resolver.selected_dag_imports(dag_id) {
+            for (local, target) in selected_dags {
+                let alias = local.to_string();
+                alias_of
+                    .entry(target)
                     .and_modify(|existing| {
                         if alias < *existing {
                             existing.clone_from(&alias);
@@ -703,9 +716,14 @@ impl<'a> HirRefCollector<'a> {
                 args,
                 output,
             } => {
-                let dag_key = target.value.parent().map_or_else(
-                    || SymbolKey::TopLevel(target.value.name().to_string()),
-                    |parent| self.name_key(&parent, target.value.name()),
+                let dag_key = self.alias_of.get(&target.value).map_or_else(
+                    || {
+                        target.value.parent().map_or_else(
+                            || SymbolKey::TopLevel(target.value.name().to_string()),
+                            |parent| self.name_key(&parent, target.value.name()),
+                        )
+                    },
+                    |alias| SymbolKey::TopLevel(alias.clone()),
                 );
                 Self::reference(table, target.span, dag_key);
                 Self::reference(

@@ -1160,7 +1160,7 @@ fn collect_imported_definitions(
     // Cache symbol tables per dag_id to avoid re-building for files referenced
     // by multiple import/include declarations.
     let mut table_cache: HashMap<
-        &graphcal_compiler::dag_id::DagId,
+        graphcal_compiler::dag_id::DagId,
         (SymbolTable, Url, Arc<String>),
     > = HashMap::new();
 
@@ -1172,16 +1172,25 @@ fn collect_imported_definitions(
         .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
 
     for (path, kind, dag_id) in imports.chain(includes) {
-        let Some(loaded_file) = project.files.get(dag_id) else {
+        let Ok(resolved_module) = project.resolved_module_target(path, dag_id) else {
+            continue;
+        };
+        let source_file_id = resolved_module.source_file();
+        let Some(loaded_file) = project.files.get(source_file_id) else {
+            continue;
+        };
+        let Some(target_prefix) = module_target_prefix(source_file_id, resolved_module.target())
+        else {
             continue;
         };
 
-        let (imported_table, imported_uri, source) =
-            table_cache.entry(dag_id).or_insert_with(|| {
+        let (imported_table, imported_uri, source) = table_cache
+            .entry(source_file_id.clone())
+            .or_insert_with(|| {
                 let mut table = symbol_table::build_from_ast(
                     &loaded_file.ast,
                     &loaded_file.source,
-                    dag_id,
+                    source_file_id,
                     module_resolver,
                 );
                 if let Some(tir) = tir {
@@ -1249,7 +1258,11 @@ fn collect_imported_definitions(
                     |alias_ident| alias_ident.value.to_string(),
                 );
                 for (key, def) in &imported_table.definitions {
-                    let qualified_key = rekey_module_import(key, &module_name);
+                    let Some(qualified_key) =
+                        rekey_module_target_import(key, &module_name, &target_prefix)
+                    else {
+                        continue;
+                    };
                     insert_imported_def(&mut result, qualified_key, imported_uri, source, def);
                 }
             }
@@ -1338,7 +1351,67 @@ const fn selective_import_allows_category(
     }
 }
 
-/// Re-key an imported-file table entry for a module import (`import lib as m;`).
+/// Return the exact target module's path relative to its loaded source file.
+///
+/// A file-root import has an empty prefix. Importing an inline DAG directly
+/// yields the child segments that must be stripped when the defining file's
+/// symbol table is re-keyed under the local alias.
+fn module_target_prefix(
+    source_file: &graphcal_compiler::dag_id::DagId,
+    target: &graphcal_compiler::dag_id::DagId,
+) -> Option<Vec<String>> {
+    if source_file.package() != target.package()
+        || source_file.segments().len() > target.segments().len()
+        || !source_file
+            .segments()
+            .iter()
+            .zip(target.segments().iter())
+            .all(|(source, target)| source == target)
+    {
+        return None;
+    }
+    Some(
+        target
+            .segments()
+            .iter()
+            .skip(source_file.segments().len())
+            .map(ToString::to_string)
+            .collect(),
+    )
+}
+
+/// Re-key a module import relative to the exact file-root or inline-DAG target.
+fn rekey_module_target_import(
+    key: &SymbolKey,
+    module_name: &str,
+    target_prefix: &[String],
+) -> Option<SymbolKey> {
+    if target_prefix.is_empty() {
+        return Some(rekey_module_import(key, module_name));
+    }
+
+    match key {
+        // The imported inline DAG declaration itself becomes the bare callable
+        // alias (`import lib.helper as h; @h(...).out`).
+        SymbolKey::TopLevel(name) if target_prefix.len() == 1 && name == &target_prefix[0] => {
+            Some(SymbolKey::TopLevel(module_name.to_string()))
+        }
+        // Members under the exact target drop its defining-file prefix and are
+        // rooted at the local alias (`helper.out` → `h.out`).
+        SymbolKey::Qualified { module, name } if module.starts_with(target_prefix) => {
+            let mut rekeyed = Vec::with_capacity(module.len() - target_prefix.len() + 1);
+            rekeyed.push(module_name.to_string());
+            rekeyed.extend(module.iter().skip(target_prefix.len()).cloned());
+            Some(SymbolKey::Qualified {
+                module: rekeyed,
+                name: name.clone(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Re-key an imported-file table entry for a file-root module import (`import lib as m;`).
 ///
 /// `TopLevel(x)` becomes `Qualified { module: [m], name: x }`. `Qualified` keys
 /// nest the module alias as a new outer segment so `Qualified { module: [dag], name: out }`
@@ -2419,6 +2492,57 @@ node bad: Mass = mass + length;
             result_imported.uri, lib_uri,
             "result should jump to lib.gcl"
         );
+    }
+
+    #[test]
+    fn goto_definition_resolves_direct_file_and_inline_dag_alias_calls() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"lib\"\n"),
+            (
+                "src/lib/library.gcl",
+                "param x: Dimensionless;\n\
+                 pub node doubled: Dimensionless = @x * 2.0;\n\
+                 pub dag helper {\n    \
+                     param x: Dimensionless;\n    \
+                     pub node tripled: Dimensionless = @x * 3.0;\n\
+                 }\n",
+            ),
+            (
+                "src/lib/main.gcl",
+                "import lib.library as file_dag;\n\
+                 import lib.library.helper as inline_dag;\n\
+                 import lib.library.{helper as selected_dag};\n\
+                 node a: Dimensionless = @file_dag(x: 2.0).doubled;\n\
+                 node b: Dimensionless = @inline_dag(x: 3.0).tripled;\n\
+                 node c: Dimensionless = @selected_dag(x: 4.0).tripled;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/lib/main.gcl");
+        let library_path = dir.path().join("src/lib/library.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let library_uri = Url::from_file_path(library_path.canonicalize().unwrap()).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for token in ["doubled", "inline_dag", "selected_dag", "tripled"] {
+            let offset = text.rfind(token).expect("call token in main.gcl");
+            let resolved = resolve_symbol_at(&analysis, offset + 1)
+                .unwrap_or_else(|| panic!("resolve `{token}`"));
+            let SymbolLocation::Imported(imported) = resolved.location else {
+                panic!("expected `{token}` to resolve to an imported definition");
+            };
+            assert_eq!(
+                imported.uri, library_uri,
+                "{token} should jump to library.gcl"
+            );
+        }
     }
 
     /// Issue #631 case 3: variants of a selectively-imported index must
