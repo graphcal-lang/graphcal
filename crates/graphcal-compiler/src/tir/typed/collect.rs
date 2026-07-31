@@ -330,7 +330,8 @@ fn collect_resolved_collection_indexes_from_declared_type(
     refs: &mut ResolvedCollectionRefs,
 ) -> Result<(), GraphcalError> {
     match declared_type {
-        crate::registry::declared_type::DeclaredType::IndexArg(index) => {
+        crate::registry::declared_type::DeclaredType::IndexArg(index)
+        | crate::registry::declared_type::DeclaredType::Key(index) => {
             record_declared_collection_index(index, ctx, src, refs)
         }
         crate::registry::declared_type::DeclaredType::Indexed { element, index } => {
@@ -380,9 +381,11 @@ fn collect_resolved_collection_indexes_from_type(
     refs: &mut ResolvedCollectionRefs,
 ) -> Result<(), GraphcalError> {
     match resolved_type {
-        ResolvedTypeExpr::IndexArg(ResolvedIndex::Concrete(index, span)) => {
-            record_resolved_collection_index(index, ctx, src, *span, refs)
-        }
+        ResolvedTypeExpr::IndexArg(ResolvedIndex::Concrete(index, span))
+        | ResolvedTypeExpr::Key {
+            index: ResolvedIndex::Concrete(index, span),
+            ..
+        } => record_resolved_collection_index(index, ctx, src, *span, refs),
         ResolvedTypeExpr::Indexed { base, indexes } => {
             collect_resolved_collection_indexes_from_type(base, ctx, src, refs)?;
             for index in indexes {
@@ -411,6 +414,7 @@ fn collect_resolved_collection_indexes_from_type(
         }
         ResolvedTypeExpr::Dimensionless
         | ResolvedTypeExpr::Complex { .. }
+        | ResolvedTypeExpr::Key { .. }
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)

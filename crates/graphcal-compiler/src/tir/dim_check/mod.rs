@@ -254,6 +254,9 @@ pub enum InferredType {
     /// It can drive index access and exhaustive label matching but is not a
     /// Graphcal value type.
     NamedIndexCase(InferredIndex),
+    /// An index-key value of type `Key<I>`: a first-class element key of
+    /// axis `I`.
+    Key(InferredIndex),
     /// An index identity carried only while checking an `Index`-sorted generic
     /// argument. This may be a declared or structural finite index and is not a
     /// Graphcal value type.
@@ -1179,6 +1182,7 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) ->
         ResolvedTypeExpr::Indexed { base, .. } => invalid_domain_target_kind(base),
         ResolvedTypeExpr::Bool => Some("Bool".to_string()),
         ResolvedTypeExpr::Complex { .. } => Some("Complex".to_string()),
+        ResolvedTypeExpr::Key { .. } => Some("Key".to_string()),
         ResolvedTypeExpr::IndexArg(index) => {
             Some(format!("index {}", index.format_for_diagnostic()))
         }
@@ -1484,7 +1488,8 @@ fn check_type_expr_for_generic_arg_constraints(
             check_type_expr_for_generic_arg_constraints(base, src)
         }
         TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args } => {
+        | TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
                 if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
                     if let Some(bound) = type_expr.constraints.first() {

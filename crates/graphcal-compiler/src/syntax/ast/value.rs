@@ -392,6 +392,11 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
     /// the built-in semantic identity instead of matching the source name.
     ComplexApplication { generic_args: Vec<GenericArg<P>> },
+    /// `Key<I>` — built-in index-key type parameterized by an index axis.
+    ///
+    /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
+    /// the built-in semantic identity instead of matching the source name.
+    KeyApplication { generic_args: Vec<GenericArg<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
     /// An indexed type such as `Velocity[Maneuver]`, `Dimensionless[Fin(3)]`, or `D[I]`

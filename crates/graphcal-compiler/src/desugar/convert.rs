@@ -456,6 +456,9 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
             TypeExprKind::ComplexApplication { generic_args } => Self::ComplexApplication {
                 generic_args: generic_args.into_iter().map(Into::into).collect(),
             },
+            TypeExprKind::KeyApplication { generic_args } => Self::KeyApplication {
+                generic_args: generic_args.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }

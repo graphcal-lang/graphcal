@@ -2520,6 +2520,7 @@ fn validate_finite_index_obligations_inner(
         | InferredType::Fin(_)
         | InferredType::Datetime(_)
         | InferredType::NamedIndexCase(_)
+        | InferredType::Key(_)
         | InferredType::IndexArg(_) => Ok(()),
     }
 }
@@ -2638,6 +2639,9 @@ fn infer_hir_generic_type_arg(
         hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
             inferred_index_from_type_arg(index, src)?,
         )),
+        hir::TypeExprKind::Key(index) => {
+            Ok(InferredType::Key(inferred_index_from_type_arg(index, src)?))
+        }
         hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
             InferredStructType::from_resolved(name.value.clone()),
             vec![],

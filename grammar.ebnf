@@ -62,7 +62,7 @@ KEYWORD
    "step", "points", "Fin",
    "mark", "encode", "plots", "point", "line", "bar", "area", "rect",
    "tick", "min", "max", "Dim", "Index", "Nat", "Type",
-   "Dimensionless", "Bool", "Int", "Datetime", "Complex". *)
+   "Dimensionless", "Bool", "Int", "Datetime", "Complex", "Key". *)
 (* --- Identifiers --- *)
 LETTER
    = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i"
@@ -669,6 +669,7 @@ type_expr_base
    | "Int"
    | datetime_type
    | complex_type
+   | key_type
    | type_application
    | dim_expr;
 
@@ -682,6 +683,12 @@ complex_type
    = "Complex", "<", generic_arg, ">";
 (* The sole generic argument must have sort `Dim`; bare `Complex`, unit
    arguments such as `Complex<m>`, and non-dimension arguments are rejected. *)
+
+key_type
+   = "Key", "<", generic_arg, ">";
+(* The sole generic argument must have sort `Index` (a named index, a
+   coordinate index, a generic `I: Index` parameter, or `Fin(N)`); bare
+   `Key` and non-index arguments are rejected. *)
 
 (* Domain constraints restrict the valid value range of a quantity, Int, or
    Datetime<S>: Mass(min: 100 kg), Int(max: 100),

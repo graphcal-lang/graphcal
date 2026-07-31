@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+generic parameter `I` expects an argument of sort `Index`, got non-index type argument
+    Diagnostic severity: error
+Begin snippet for key_non_index_argument.gcl starting at line 2, column 1
+
+snippet line 2: // not Dim.
+snippet line 3: param k: Key<Length> = 0.0;
+    label at line 3, columns 14 to 19: error here
+diagnostic code: graphcal::E001

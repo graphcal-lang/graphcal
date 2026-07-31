@@ -71,6 +71,22 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                 .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(">"))
         }
+        TypeExprKind::KeyApplication { generic_args } => {
+            // Bare `Key` (a parse-level arity error) keeps its spelling so the
+            // formatter never fabricates an empty `<>` argument list.
+            let mut doc = RcDoc::text("Key");
+            if !generic_args.is_empty() {
+                let arg_docs: Vec<RcDoc<'static>> = generic_args
+                    .iter()
+                    .map(|arg| format_generic_arg_inline(fmt, arg))
+                    .collect();
+                doc = doc
+                    .append(RcDoc::text("<"))
+                    .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                    .append(RcDoc::text(">"));
+            }
+            doc
+        }
     };
 
     if te.constraints.is_empty() {

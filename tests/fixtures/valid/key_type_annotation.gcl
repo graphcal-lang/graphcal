@@ -1,0 +1,20 @@
+// The built-in `Key<I>` type former is usable in type annotations: payload
+// fields may carry element keys of a named axis, a structural axis, or a
+// generic index parameter. No key value is constructed here; introduction
+// forms are a separate feature slice.
+index Maneuver = { Departure, Correction, Insertion };
+
+type CriticalReport {
+    CriticalReport(which: Key<Maneuver>, margin: Dimensionless),
+}
+
+type Tagged<I: Index> {
+    Tagged(slot: Key<I>, weight: Dimensionless),
+}
+
+type SensorPick {
+    SensorPick(channel: Key<Fin(8)>),
+}
+
+param margin: Dimensionless = 0.25;
+node doubled: Dimensionless = @margin * 2.0;

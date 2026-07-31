@@ -159,6 +159,20 @@ fn error_exp_requires_dimensionless() {
 }
 
 #[test]
+fn error_key_missing_index_argument() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_missing_index_argument.gcl");
+    let rendered = render_error(source, "key_missing_index_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_non_index_argument() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_non_index_argument.gcl");
+    let rendered = render_error(source, "key_non_index_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_complex_aggregation_unsupported() {
     let source =
         include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");

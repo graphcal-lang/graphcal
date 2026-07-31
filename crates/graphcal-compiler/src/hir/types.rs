@@ -108,6 +108,9 @@ pub enum TypeExprKind {
     GenericTypeParam(Spanned<GenericParamId>),
     /// Built-in dimension-aware complex quantity type `Complex<D>`.
     Complex(DimArg),
+    /// Built-in index-key type `Key<I>`: the value type of element keys of
+    /// axis `I`.
+    Key(IndexRef),
     /// A user-defined generic type application.
     TypeApplication {
         name: Spanned<ResolvedStructTypeName>,

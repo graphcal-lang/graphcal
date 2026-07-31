@@ -20,7 +20,15 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
 
 /// Built-ins available while editing a type annotation. `Fin` is offered for
 /// nested Index positions such as `T[Fin(N)]`.
-const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime", "Complex", "Fin"];
+const TYPE_KEYWORDS: &[&str] = &[
+    "Dimensionless",
+    "Bool",
+    "Int",
+    "Datetime",
+    "Complex",
+    "Key",
+    "Fin",
+];
 
 /// Iterate over all visible definitions: local (from symbol table) and imported.
 fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = &DefinitionInfo> {

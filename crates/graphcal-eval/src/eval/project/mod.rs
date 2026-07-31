@@ -591,6 +591,7 @@ fn resolve_field_dimension(
         | TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
+        | TypeExprKind::KeyApplication { .. }
         | TypeExprKind::Indexed { .. }
         | TypeExprKind::TypeApplication { .. } => None,
     }
