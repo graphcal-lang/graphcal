@@ -62,11 +62,11 @@ pub struct ParamDecl {
 }
 
 /// A full type position: a dimension expression, optionally indexed by one
-/// declared index variable (`D[I]`, `Velocity[I]`).
+/// or more declared index variables (`D[I]`, `Velocity[I, J]`).
 pub struct TypeAst {
     pub element: DimExprAst,
-    /// The `[I]` suffix, when present.
-    pub index: Option<syn::Ident>,
+    /// The non-empty `[I, J, ...]` suffix, when present.
+    pub indexes: Option<Vec<syn::Ident>>,
 }
 
 /// A parsed type position: `dim_expr` from the graphcal grammar. A lone
@@ -253,20 +253,28 @@ fn parse_binders(input: ParseStream) -> syn::Result<(Vec<syn::Ident>, Vec<syn::I
 impl Parse for TypeAst {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let element: DimExprAst = input.parse()?;
-        let index = if input.peek(syn::token::Bracket) {
+        let indexes = if input.peek(syn::token::Bracket) {
             let content;
             syn::bracketed!(content in input);
-            let index: syn::Ident = content.parse()?;
-            if !content.is_empty() {
-                return Err(
-                    content.error("extern arrays take exactly one index variable in this phase")
-                );
+            let mut indexes = Vec::new();
+            while !content.is_empty() {
+                indexes.push(content.parse::<syn::Ident>()?);
+                if content.peek(Token![,]) {
+                    content.parse::<Token![,]>()?;
+                } else if content.is_empty() {
+                    break;
+                } else {
+                    return Err(content.error("expected `,` between array index variables"));
+                }
             }
-            Some(index)
+            if indexes.is_empty() {
+                return Err(content.error("extern arrays must declare at least one axis"));
+            }
+            Some(indexes)
         } else {
             None
         };
-        Ok(Self { element, index })
+        Ok(Self { element, indexes })
     }
 }
 

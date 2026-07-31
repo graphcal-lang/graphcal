@@ -4367,7 +4367,7 @@ fn resolve_extern_value_kind(
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
             message:
-                "extern function signatures support Bool, Int, quantity types, and arrays of quantities over a declared index variable in this phase"
+                "extern function signatures support Bool, Int, quantity types, and arrays of quantities over one or more declared index variables"
                     .to_string(),
             src: src.clone(),
             span: type_ann.span.into(),
@@ -4623,13 +4623,13 @@ fn resolve_extern_struct_field(
     }
 }
 
-/// Resolve an array type annotation (`D[I]`, `Velocity[I]`) to
+/// Resolve an array type annotation (`D[I]`, `Velocity[I, J]`) to
 /// [`crate::function_signature::ValueKind::Indexed`].
 ///
-/// The index position must name exactly one of the signature's `Index`
-/// binders: concrete declared/structural indexes and multi-axis forms are all
-/// rejected — an extern function is generic over the index it receives, and
-/// its result length always comes from an input.
+/// Every axis must name one of the signature's `Index` binders. Concrete
+/// declared/structural indexes remain declaration-site concerns: an extern
+/// function is generic over the axes it receives, and every result axis must
+/// come from an input.
 fn resolve_extern_array_kind(
     base: &TypeExpr,
     indexes: &[crate::syntax::ast::IndexExpr],
@@ -4642,31 +4642,35 @@ fn resolve_extern_array_kind(
     use crate::function_signature::{DimMonomial, ValueKind};
     use crate::syntax::ast::IndexExpr;
 
-    let [index_expr] = indexes else {
-        return Err(GraphcalError::InvalidExternSignature {
-            message: "extern arrays take exactly one index variable in this phase".to_string(),
-            src: src.clone(),
-            span: type_ann_indexes_span(indexes, base),
-        });
-    };
-    let index_var = match index_expr {
-        IndexExpr::Name(name) => name.value.as_bare().and_then(|atom| {
-            index_vars
-                .iter()
-                .find(|var| var.as_str() == atom.as_str())
-                .cloned()
-        }),
-        IndexExpr::Finite { .. } | IndexExpr::BareNat(_) => None,
-    };
-    let Some(index) = index_var else {
-        return Err(GraphcalError::InvalidExternSignature {
-            message: "extern array indexes must name one of the signature's `Index` binders \
-                      (concrete indexes and `Fin(N)` axes cannot cross the plugin boundary)"
-                .to_string(),
-            src: src.clone(),
-            span: index_expr.span().into(),
-        });
-    };
+    let resolved_indexes = indexes
+        .iter()
+        .map(|index_expr| {
+            let index_var = match index_expr {
+                IndexExpr::Name(name) => name.value.as_bare().and_then(|atom| {
+                    index_vars
+                        .iter()
+                        .find(|var| var.as_str() == atom.as_str())
+                        .cloned()
+                }),
+                IndexExpr::Finite { .. } | IndexExpr::BareNat(_) => None,
+            };
+            index_var.ok_or_else(|| GraphcalError::InvalidExternSignature {
+                message: "extern array axes must name the signature's `Index` binders \
+                          (concrete indexes and `Fin(N)` axes cannot appear in the declaration)"
+                    .to_string(),
+                src: src.clone(),
+                span: index_expr.span().into(),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let indexes =
+        crate::syntax::non_empty::NonEmpty::try_from_vec(resolved_indexes).map_err(|_| {
+            GraphcalError::InvalidExternSignature {
+                message: "extern arrays must have at least one axis".to_string(),
+                src: src.clone(),
+                span: type_ann_indexes_span(indexes, base),
+            }
+        })?;
 
     if !base.constraints.is_empty() {
         return Err(GraphcalError::InvalidExternSignature {
@@ -4688,7 +4692,7 @@ fn resolve_extern_array_kind(
             });
         }
     };
-    Ok(ValueKind::Indexed { element, index })
+    Ok(ValueKind::Indexed { element, indexes })
 }
 
 /// Span covering an array annotation's index list (falls back to the base

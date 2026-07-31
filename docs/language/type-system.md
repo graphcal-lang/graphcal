@@ -739,7 +739,8 @@ order, a coordinate index by its coordinate sequence from `start` toward
 `end`, and `Fin(N)` by ascending position. Indexed values never carry an
 order of their own — every construction is normalized to the index order, and
 order-sensitive consumers (`scan`, rendered output, extern-function buffers)
-follow it.
+follow it. Multi-axis extern buffers use the lexicographic row-major product of
+those per-axis orders and carry every axis extent explicitly.
 
 ### Named Index
 

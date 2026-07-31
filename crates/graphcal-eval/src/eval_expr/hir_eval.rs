@@ -754,9 +754,121 @@ fn eval_hir_datetime_constructor(
 /// The concrete index an extern call bound to one of its index variables:
 /// the index identity plus its typed entry keys, in
 /// declaration order. Result arrays are rebuilt over exactly these keys.
+#[derive(Clone)]
 struct BoundExternIndex {
     index_name: graphcal_compiler::registry::declared_type::IndexTypeRef,
     keys: Vec<IndexEntryKey>,
+}
+
+impl BoundExternIndex {
+    fn matches(&self, other: &Self) -> bool {
+        self.index_name.matches_ref(&other.index_name) && self.keys == other.keys
+    }
+}
+
+struct FlattenedExternArray {
+    axes: Vec<BoundExternIndex>,
+    values: Vec<f64>,
+}
+
+fn flatten_extern_array(
+    value: &RuntimeValue,
+    ctx: &EvalContext<'_>,
+    span: Span,
+) -> Result<FlattenedExternArray, GraphcalError> {
+    match value {
+        RuntimeValue::Quantity(value) => Ok(FlattenedExternArray {
+            axes: Vec::new(),
+            values: vec![*value],
+        }),
+        RuntimeValue::Indexed {
+            index_name,
+            entries,
+        } => {
+            let children = entries
+                .values()
+                .map(|value| flatten_extern_array(value, ctx, span))
+                .collect::<Result<Vec<_>, _>>()?;
+            let (first, rest) = children.split_first().ok_or_else(|| {
+                ctx.internal_error("extern array unexpectedly had an empty axis", span)
+            })?;
+            if rest.iter().any(|child| {
+                child.axes.len() != first.axes.len()
+                    || child
+                        .axes
+                        .iter()
+                        .zip(&first.axes)
+                        .any(|(left, right)| !left.matches(right))
+            }) {
+                return Err(ctx.eval_error(
+                    "extern array is ragged or changes typed indexes between branches",
+                    span,
+                ));
+            }
+            let mut axes = Vec::with_capacity(first.axes.len().saturating_add(1));
+            axes.push(BoundExternIndex {
+                index_name: index_name.clone(),
+                keys: entries.keys().cloned().collect(),
+            });
+            axes.extend(first.axes.iter().cloned());
+            let values = children
+                .into_iter()
+                .flat_map(|child| child.values)
+                .collect();
+            Ok(FlattenedExternArray { axes, values })
+        }
+        RuntimeValue::Bool(_)
+        | RuntimeValue::Int(_)
+        | RuntimeValue::Label { .. }
+        | RuntimeValue::CoordinateLabel { .. }
+        | RuntimeValue::Datetime(_)
+        | RuntimeValue::Struct { .. } => {
+            Err(ctx.eval_error("extern array elements must be quantities", span))
+        }
+    }
+}
+
+fn rebuild_extern_array(
+    bound_axes: &[BoundExternIndex],
+    values: &[f64],
+    ctx: &EvalContext<'_>,
+    span: Span,
+) -> Result<RuntimeValue, GraphcalError> {
+    match bound_axes.split_first() {
+        None => match values {
+            [value] => Ok(RuntimeValue::Quantity(*value)),
+            _ => {
+                Err(ctx.internal_error("extern array leaf did not contain exactly one value", span))
+            }
+        },
+        Some((axis, remaining)) => {
+            let child_len = remaining
+                .iter()
+                .try_fold(1_usize, |size, axis| size.checked_mul(axis.keys.len()));
+            let Some(child_len) = child_len else {
+                return Err(ctx.eval_error("extern result shape cardinality overflowed", span));
+            };
+            let chunks = values.chunks_exact(child_len);
+            if !chunks.remainder().is_empty() || chunks.len() != axis.keys.len() {
+                return Err(
+                    ctx.internal_error("extern result buffer did not match its bound shape", span)
+                );
+            }
+            let values = axis
+                .keys
+                .iter()
+                .cloned()
+                .zip(chunks)
+                .map(|(key, values)| {
+                    rebuild_extern_array(remaining, values, ctx, span).map(|value| (key, value))
+                })
+                .collect::<Result<IndexMap<_, _>, _>>()?;
+            Ok(RuntimeValue::Indexed {
+                index_name: axis.index_name.clone(),
+                entries: values,
+            })
+        }
+    }
 }
 
 /// Evaluate an extern (plugin) function call through the embedder-injected
@@ -764,10 +876,10 @@ struct BoundExternIndex {
 ///
 /// The host ABI is `fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>`:
 /// quantities cross as SI `f64`s (Int arguments convert exactly, Bool arguments
-/// become `1.0`/`0.0`), arrays cross as dense element buffers in index
-/// order, and the result converts back per the declared result kind — a
-/// result array is rebuilt over the same index the binding argument
-/// supplied. A closure error or a non-finite quantity becomes a per-node
+/// become `1.0`/`0.0`), arrays cross as row-major buffers with an ordered
+/// shape, and the result converts back per the declared result kind — each
+/// result axis is rebuilt over the same typed index keys supplied by an input.
+/// A closure error or a non-finite quantity becomes a per-node
 /// evaluation failure naming the plugin alias and function; dependents
 /// report `DependencyFailed` through the ordinary per-node fault isolation.
 #[expect(
@@ -784,7 +896,7 @@ fn eval_hir_extern_fn(
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::function_signature::ValueKind;
 
-    use crate::host_fns::HostFnValue;
+    use crate::host_fns::{HostArray, HostFnValue};
 
     let Some(registry) = ctx.host_fns else {
         return Err(ctx.eval_error(
@@ -836,40 +948,47 @@ fn eval_hir_extern_fn(
                 HostFnValue::F64(exact_numeric_extern_arg(i, ext, arg.span, ctx)?)
             }
             (ValueKind::Bool, RuntimeValue::Bool(b)) => HostFnValue::F64(if b { 1.0 } else { 0.0 }),
-            (
-                ValueKind::Indexed { index, .. },
-                RuntimeValue::Indexed {
-                    index_name,
-                    entries,
-                },
-            ) => {
-                let mut keys = Vec::with_capacity(entries.len());
-                let mut buffer = Vec::with_capacity(entries.len());
-                for (variant, element) in &entries {
-                    keys.push(variant.clone());
-                    buffer.push(
-                        element
-                            .expect_quantity("extern function array element")
-                            .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?,
-                    );
-                }
-                let bound = BoundExternIndex { index_name, keys };
-                if let Some(previous) = bound_indexes.insert(index.clone(), bound)
-                    && previous.keys.len() != entries.len()
-                {
+            (ValueKind::Indexed { indexes, .. }, value) => {
+                let flattened = flatten_extern_array(&value, ctx, arg.span)?;
+                if flattened.axes.len() != indexes.len() {
                     return Err(ctx.internal_error(
                         format!(
-                            "extern function `{ext}` received arrays of different lengths for index variable `{index}` after dimension checking"
+                            "extern function `{ext}` parameter `{}` received rank {}, expected rank {} after dimension checking",
+                            param.name,
+                            flattened.axes.len(),
+                            indexes.len()
                         ),
                         arg.span,
                     ));
                 }
-                HostFnValue::Buffer(buffer)
+                for (index, bound) in indexes.iter().zip(&flattened.axes) {
+                    match bound_indexes.entry(index.clone()) {
+                        std::collections::hash_map::Entry::Vacant(slot) => {
+                            slot.insert(bound.clone());
+                        }
+                        std::collections::hash_map::Entry::Occupied(previous)
+                            if !previous.get().matches(bound) =>
+                        {
+                            return Err(ctx.internal_error(
+                                format!(
+                                    "extern function `{ext}` received inconsistent typed axes for index variable `{index}` after dimension checking"
+                                ),
+                                arg.span,
+                            ));
+                        }
+                        std::collections::hash_map::Entry::Occupied(_) => {}
+                    }
+                }
+                let shape = flattened.axes.iter().map(|axis| axis.keys.len()).collect();
+                let array = HostArray::try_new(shape, flattened.values).map_err(|error| {
+                    ctx.internal_error(
+                        format!("failed to flatten extern array argument: {error}"),
+                        arg.span,
+                    )
+                })?;
+                HostFnValue::Array(array)
             }
-            (
-                ValueKind::Int | ValueKind::Bool | ValueKind::Indexed { .. } | ValueKind::Struct(_),
-                _,
-            ) => {
+            (ValueKind::Int | ValueKind::Bool | ValueKind::Struct(_), _) => {
                 return Err(ctx.internal_error(
                     format!(
                         "extern function `{ext}` parameter `{}` received a value of the wrong kind after dimension checking",
@@ -895,9 +1014,9 @@ fn eval_hir_extern_fn(
     let abi_f64_result = |result: &HostFnValue| -> Result<f64, GraphcalError> {
         match result {
             HostFnValue::F64(value) => Ok(*value),
-            HostFnValue::Buffer(_) => Err(ctx.eval_error(
+            HostFnValue::Array(_) | HostFnValue::Record(_) => Err(ctx.eval_error(
                 format!(
-                    "extern function `{ext}` declared a single-value result but returned an array"
+                    "extern function `{ext}` declared a single-value result but returned a composite value"
                 ),
                 expr.span,
             )),
@@ -941,57 +1060,51 @@ fn eval_hir_extern_fn(
                 ))
             }
         }
-        ValueKind::Indexed { index, .. } => {
-            let HostFnValue::Buffer(buffer) = result else {
+        ValueKind::Indexed { indexes, .. } => {
+            let HostFnValue::Array(array) = result else {
                 return Err(ctx.eval_error(
                     format!(
-                        "extern function `{ext}` declared an array result but returned an f64 ABI slot"
+                        "extern function `{ext}` declared an array result but returned a non-array value"
                     ),
                     expr.span,
                 ));
             };
-            let Some(bound) = bound_indexes.remove(index) else {
-                return Err(ctx.internal_error(
-                    format!(
-                        "extern function `{ext}` result index variable `{index}` was not bound by any argument"
-                    ),
-                    expr.span,
-                ));
-            };
-            if buffer.len() != bound.keys.len() {
+            let axes = indexes
+                .iter()
+                .map(|index| {
+                    bound_indexes.get(index).cloned().ok_or_else(|| {
+                        ctx.internal_error(
+                            format!(
+                                "extern function `{ext}` result index variable `{index}` was not bound by any argument"
+                            ),
+                            expr.span,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let expected_shape = axes.iter().map(|axis| axis.keys.len()).collect::<Vec<_>>();
+            if array.shape() != expected_shape {
                 return Err(ctx.eval_error(
                     format!(
-                        "extern function `{ext}` returned {} element(s) for an array over `{index}`, expected {}",
-                        buffer.len(),
-                        bound.keys.len()
+                        "extern function `{ext}` returned shape {:?}, expected {expected_shape:?}",
+                        array.shape()
                     ),
                     expr.span,
                 ));
             }
             let display = ext.to_string();
-            let entries = bound
-                .keys
-                .into_iter()
-                .zip(buffer)
-                .map(|(variant, element)| {
-                    Ok((
-                        variant,
-                        RuntimeValue::Quantity(super::arithmetic::check_finite(
-                            element, &display, ctx, expr.span,
-                        )?),
-                    ))
-                })
-                .collect::<Result<indexmap::IndexMap<_, _>, GraphcalError>>()?;
-            Ok(RuntimeValue::Indexed {
-                index_name: bound.index_name,
-                entries,
-            })
+            let values = array
+                .values()
+                .iter()
+                .map(|element| super::arithmetic::check_finite(*element, &display, ctx, expr.span))
+                .collect::<Result<Vec<_>, _>>()?;
+            rebuild_extern_array(&axes, &values, ctx, expr.span)
         }
         ValueKind::Struct(shape) => {
             use graphcal_compiler::function_signature::StructFieldKind;
             use graphcal_compiler::registry::declared_type::StructTypeRef;
 
-            let HostFnValue::Buffer(buffer) = result else {
+            let HostFnValue::Record(buffer) = result else {
                 return Err(ctx.eval_error(
                     format!(
                         "extern function `{ext}` declared a struct result but returned an f64 ABI slot"

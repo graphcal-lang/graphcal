@@ -10,10 +10,11 @@
 //!
 //! Single-value ABI functions (quantities, `Bool`, and `Int`) are emitted as a
 //! single `extern "C-unwind"` item whose raw `f64` parameters double as the
-//! natural test surface. Functions that move arrays split in two: a natural `pub fn` taking `&[f64]` slices
-//! (what `cargo test` calls) and a `wasm32`-only export wrapper that decodes
-//! the `(ptr, len)` pairs, calls the natural function, and writes the
-//! result through the host-allocated out-pointer.
+//! natural test surface. Functions that move arrays split in two: a natural
+//! `pub fn` taking [`graphcal_plugin::ArrayView`] values (what `cargo test`
+//! calls) and a `wasm32`-only export wrapper that decodes the pointer plus one
+//! extent per axis, calls the natural function, and writes an owned
+//! [`graphcal_plugin::Array`] through the host-allocated out-pointer.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -163,16 +164,29 @@ fn wrapper_pieces(function: &FunctionIr) -> WrapperPieces {
                 });
                 natural_args.push(quote! { #pname });
             }
-            KindIr::Array { .. } => {
+            KindIr::Array { indexes, .. } => {
                 let ptr = format_ident!("{pname}_ptr");
                 let len = format_ident!("{pname}_len");
-                raw_params.push(quote! { #ptr: *const f64, #len: u32 });
+                let shape = format_ident!("{pname}_shape");
+                let extents = indexes
+                    .iter()
+                    .enumerate()
+                    .map(|(axis, _)| array_extent_ident(pname, axis))
+                    .collect::<Vec<_>>();
+                raw_params.push(quote! { #ptr: *const f64, #(#extents: u32),* });
                 decodes.push(quote! {
-                    // SAFETY: the host wrote `len` elements at `ptr` inside
-                    // this instance's memory and keeps them alive for the
-                    // duration of the call.
-                    let #pname: &[f64] =
-                        unsafe { ::graphcal_plugin::__rt::slice_from_abi(#ptr, #len) };
+                    let #shape = [#(#extents as usize),*];
+                    let #len = ::graphcal_plugin::__rt::shape_len_u32(&#shape, #pname_str);
+                    // SAFETY: the host wrote the shape product at `ptr` inside
+                    // this instance's memory and keeps it alive for the call.
+                    let #pname = unsafe {
+                        ::graphcal_plugin::__rt::array_view_from_abi(
+                            #ptr,
+                            #len,
+                            &#shape,
+                            #pname_str,
+                        )
+                    };
                 });
                 natural_args.push(quote! { #pname });
             }
@@ -198,7 +212,7 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
             KindIr::Quantity(_) | KindIr::Struct(_) => quote! { #pname: f64 },
             KindIr::Bool => quote! { #pname: bool },
             KindIr::Int => quote! { #pname: i64 },
-            KindIr::Array { .. } => quote! { #pname: &[f64] },
+            KindIr::Array { .. } => quote! { #pname: ::graphcal_plugin::ArrayView<'_> },
         }
     });
     let output_ident = output_struct_ident(name);
@@ -206,7 +220,7 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
         KindIr::Quantity(_) => quote! { f64 },
         KindIr::Bool => quote! { bool },
         KindIr::Int => quote! { i64 },
-        KindIr::Array { .. } => quote! { ::std::vec::Vec<f64> },
+        KindIr::Array { .. } => quote! { ::graphcal_plugin::Array },
         KindIr::Struct(_) => quote! { #output_ident },
     };
     // A struct-shaped result gets a named output type: positional tuples
@@ -268,19 +282,13 @@ fn generate_buffer_wrapper(
     let name_str = name.to_string();
     let wrapper_ident = format_ident!("__graphcal_export_{name}");
     match &function.result {
-        KindIr::Array { index, .. } => {
-            // The out-buffer length is the input array bound to the result's
-            // index variable; lowering guarantees one exists.
-            let binding_len = function
-                .params
+        KindIr::Array { indexes, .. } => {
+            // Every result extent comes from an input occurrence of the same
+            // index variable; lowering guarantees each binding exists.
+            let expected_extents = indexes
                 .iter()
-                .find_map(|param| match &param.kind {
-                    KindIr::Array {
-                        index: param_index, ..
-                    } if param_index == index => Some(format_ident!("{}_len", param.name)),
-                    _ => None,
-                })
-                .unwrap_or_else(|| format_ident!("__graphcal_unreachable"));
+                .map(|index| binding_extent_ident(function, index))
+                .collect::<Vec<_>>();
             quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(export_name = #name_str)]
@@ -291,13 +299,14 @@ fn generate_buffer_wrapper(
                     ::graphcal_plugin::__rt::install_failure_hook();
                     #(#decodes)*
                     let __graphcal_result = #name(#(#natural_args),*);
-                    // SAFETY: the host allocated the out-buffer with the
-                    // binding input's length, which is what is checked here.
+                    let __graphcal_expected_shape = [#(#expected_extents as usize),*];
+                    // SAFETY: the host allocated the product of the
+                    // signature-bound result extents at this pointer.
                     unsafe {
                         ::graphcal_plugin::__rt::write_array_result(
                             &__graphcal_result,
                             __graphcal_out,
-                            #binding_len,
+                            &__graphcal_expected_shape,
                             #name_str,
                         );
                     }
@@ -358,7 +367,7 @@ fn generate_buffer_wrapper(
                     let __graphcal_slots: [f64; #slot_count as usize] = [#(#slots),*];
                     // SAFETY: the host allocated one slot per declared field.
                     unsafe {
-                        ::graphcal_plugin::__rt::write_array_result(
+                        ::graphcal_plugin::__rt::write_slots(
                             &__graphcal_slots,
                             __graphcal_out,
                             #slot_count,
@@ -369,6 +378,24 @@ fn generate_buffer_wrapper(
             }
         }
     }
+}
+
+fn array_extent_ident(param: &syn::Ident, axis: usize) -> syn::Ident {
+    format_ident!("{param}_extent_{axis}")
+}
+
+fn binding_extent_ident(function: &FunctionIr, index: &syn::Ident) -> syn::Ident {
+    function
+        .params
+        .iter()
+        .find_map(|param| match &param.kind {
+            KindIr::Array { indexes, .. } => indexes
+                .iter()
+                .position(|candidate| candidate == index)
+                .map(|axis| array_extent_ident(&param.name, axis)),
+            KindIr::Bool | KindIr::Int | KindIr::Quantity(_) | KindIr::Struct(_) => None,
+        })
+        .unwrap_or_else(|| format_ident!("__graphcal_unreachable_extent"))
 }
 
 /// `solve_orbit` → `SolveOrbitOutput`.

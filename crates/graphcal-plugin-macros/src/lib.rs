@@ -301,11 +301,11 @@ mod tests {
         assert_eq!(function.index_vars, ["I"]);
         assert!(matches!(
             &function.params[0].kind,
-            ManifestValueKind::Array { index, .. } if index == "I"
+            ManifestValueKind::Array { indexes, .. } if indexes == &["I"]
         ));
         assert!(matches!(
             &function.result,
-            ManifestValueKind::Array { index, .. } if index == "I"
+            ManifestValueKind::Array { indexes, .. } if indexes == &["I"]
         ));
     }
 
@@ -372,7 +372,7 @@ mod tests {
             fn f<D: Dim, I: Index>(x: D) -> D[I] { vec![x] }
         });
         assert!(
-            message.contains("cannot invent its output length"),
+            message.contains("cannot invent output axis lengths"),
             "got: {message}"
         );
 

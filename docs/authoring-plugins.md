@@ -61,11 +61,26 @@ graphcal_plugin::plugin! {
         (b - a).mul_add(t, a)
     }
 
-    /// Arrays cross as slices in, `Vec` out — always over an index the
-    /// inputs bind, so the output length can never be invented.
+    /// Arrays carry an ordered shape and flattened row-major values.
     fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I] {
         let total: f64 = xs.iter().sum();
-        xs.iter().map(|x| x / total).collect()
+        let values = xs.iter().map(|x| x / total).collect();
+        graphcal_plugin::Array::new(xs.shape().to_vec(), values)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
+    }
+
+    /// Result axes may reorder axes that parameters bind.
+    fn transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I] {
+        let [rows, columns] = xs.shape() else {
+            graphcal_plugin::fail!("transpose expects rank two");
+        };
+        let values = (0..*columns)
+            .flat_map(|column| {
+                (0..*rows).map(move |row| xs.values()[row * columns + column])
+            })
+            .collect();
+        graphcal_plugin::Array::new(vec![*columns, *rows], values)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
     }
 
     /// Struct results are declared structurally; the macro generates a
@@ -86,8 +101,9 @@ pasted verbatim into the `.gcl` import site.
 ### Signature syntax
 
 Parameter and result types are `Bool`, `Int`, dimension expressions, or
-arrays of quantities over one declared index variable (`xs: D[I]`); a result
-may also be a braced struct shape (`-> { lo: Pressure, hi: Pressure }`).
+arrays of quantities over one or more declared index variables (`xs: D[I]`,
+`matrix: D[I, J]`); a result may also be a braced struct shape
+(`-> { lo: Pressure, hi: Pressure }`).
 Dimension expressions are built from:
 
 | Vocabulary | Names |
@@ -110,8 +126,9 @@ side):
 - every dimension variable must first appear as a **bare** parameter type
   (`x: D`, or a bare array element `xs: D[I]`) before any compound use
   (`D^2`, `D1 * D2`, or the result);
-- a result array must reuse an index variable that indexes some array
-  parameter, and every declared index variable must index one;
+- every result-array axis must reuse an index variable that indexes some
+  array parameter, and every declared index variable must index one; axes may
+  be reordered, but a plugin cannot invent an extent;
 - struct-shape fields are concrete (`Bool`, `Int`, fixed dimensions — no
   dimension variables) with unique names;
 - exponents are non-zero.
@@ -124,12 +141,13 @@ fields must match the shape — names, order, and kinds.
 ### In the body
 
 Parameters arrive with their declared names and natural Rust types —
-`f64` for quantities, `bool` for `Bool`, `i64` for `Int`, `&[f64]` for
-arrays (dense, in index order) — and the body evaluates to `f64`, `bool`,
-`i64`, `Vec<f64>` (arrays; exactly the binding input's length), or the
-generated `...Output` struct (struct shapes) to match the declared
-result. Array-moving functions compile natively as ordinary slice/`Vec`
-functions, so `cargo test` needs no wasm toolchain.
+`f64` for quantities, `bool` for `Bool`, `i64` for `Int`, and
+`graphcal_plugin::ArrayView` for arrays. `ArrayView::shape()` returns extents
+in signature order and `values()` returns dense row-major SI values. An array
+body returns a validated `graphcal_plugin::Array`; its shape must exactly match
+the extents bound by the result's axis list. Other results are `f64`, `bool`,
+`i64`, or the generated `...Output` struct. Array-moving functions still
+compile natively, so `cargo test` needs no wasm toolchain.
 
 **Quantity values are SI base units, always.** A `Pressure` parameter is
 pascals; a `Velocity` result is metres per second. Graphcal checks
@@ -176,8 +194,9 @@ graphcal plugin test target/wasm32-unknown-unknown/release/fluid_props.wasm \
 ban, export types), prints the module's SHA-256 and a **paste-ready
 `import plugin` block**, and `--call` executes one function under the same
 fuel and memory limits evaluation uses — arguments in SI base units,
-`true`/`false` for `Bool`, integers for `Int`, bracketed literals like
-`[1.0,2.5,3]` for arrays. For struct-returning functions the import block
+`true`/`false` for `Bool`, integers for `Int`, and rectangular JSON arrays
+with the declared rank (`[1.0,2.5,3]`, `[[1,2],[3,4]]`). For
+struct-returning functions the import block
 is preceded by a suggested record declaration (rename it freely — the
 loader compares shapes, not names).
 
@@ -203,13 +222,13 @@ The lockfile is the trust boundary: plugin bytes can only change together
 with a reviewable `graphcal.lock` diff. See
 [Trust: Lockfile Pins](language/extern-functions.md#trust-lockfile-pins).
 
-## Scope and limits (ABI v3)
+## Scope and limits (ABI v4)
 
-- Values are SI quantities, `Bool`, `Int`, arrays of quantities over one index
-  variable, and record-shaped results with concrete fields. Not crossing
+- Values are SI quantities, `Bool`, `Int`, non-empty multi-axis arrays of
+  quantities, and record-shaped results with concrete fields. Not crossing
   the boundary yet: `Datetime` (use explicit `to_jd`/`from_jd`-style
-  conversions), `Bool`/`Int` array elements, multi-axis arrays, struct
-  parameters, generic records, and dimension-variable struct fields.
+  conversions), `Bool`/`Int` array elements, struct parameters, generic
+  records, and dimension-variable struct fields.
 - One `plugin!` block per plugin (a second block fails the wasm link with
   a duplicate-symbol error); helper functions can live anywhere in the
   crate.
@@ -225,7 +244,8 @@ The SDK is a convenience, not part of the trust model — a plugin is any
 core wasm module satisfying the [module
 contract](language/extern-functions.md#wasm-plugin-modules): exports
 whose wasm types follow their signatures (one `f64` per quantity/`Bool`/`Int`
-slot, `(i32, i32)` per array, a trailing out-pointer for array/struct results), the
+slot, an `i32` pointer followed by one `i32` extent per array axis, and a
+trailing out-pointer for array/struct results), the
 `graphcal_alloc`/`graphcal_free` pair when buffers are involved, a
 `graphcal-manifest` custom section, and no imports beyond the optional
 `graphcal::fail`. For non-Rust toolchains,

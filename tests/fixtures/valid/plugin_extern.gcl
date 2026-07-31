@@ -2,12 +2,13 @@
 // checked with full dimension safety and evaluated through the embedder's
 // host function registry ("graphcal:demo" is the Phase A built-in demo).
 // Array parameters and results over index variables (issue #25 Phase D)
-// cross the boundary as dense buffers in index order.
+// cross the boundary with explicit row-major shapes.
 import plugin "graphcal:demo" as demo {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
     fn inverse<D: Dim>(x: D) -> D^-1;
     fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
     fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
+    fn matrix_transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I];
     fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
 }
 
@@ -35,6 +36,12 @@ node delta_v: Velocity[Maneuver] = {
 node dv_share: Dimensionless[Maneuver] = demo.normalize(@delta_v);
 node dv_share_total: Dimensionless = sum(@dv_share);
 
+param thrust_grid: Force[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
+    1.0 N, 2.0 N, 3.0 N;
+    4.0 N, 5.0 N, 6.0 N;
+};
+node transposed_thrust: Force[Fin(3), Fin(2)] = demo.matrix_transpose(@thrust_grid);
+
 assert v_mid_interpolates = @v_mid == 150.0 m/s;
 assert scale_is_geometric = @scale == 6.0 m;
 node dv_span: DvRange = demo.dv_range(@delta_v);
@@ -42,4 +49,5 @@ node dv_spread: Velocity = @dv_span.max - @dv_span.min;
 
 assert departure_share = @dv_share[Maneuver.Departure] == 0.5;
 assert shares_sum_to_one = @dv_share_total == 1.0;
+assert matrix_axes_are_reordered = @transposed_thrust[2, 1] == 6.0 N;
 assert spread_is_range = @dv_spread == 1.5 km/s;

@@ -74,7 +74,8 @@ pub enum KindIr {
     Quantity(MonomialIr),
     Array {
         element: MonomialIr,
-        index: syn::Ident,
+        /// Non-empty axis list in row-major order (enforced by parsing).
+        indexes: Vec<syn::Ident>,
     },
     /// A struct-shaped result (never a parameter).
     Struct(Vec<FieldIr>),
@@ -219,8 +220,8 @@ fn lower_params(
         let kind = lower_type(&param.ty, binders, index_binders)?;
         let monomial = match &kind {
             KindIr::Quantity(monomial) => Some(monomial),
-            KindIr::Array { element, index } => {
-                used_indexes.insert(index.to_string());
+            KindIr::Array { element, indexes } => {
+                used_indexes.extend(indexes.iter().map(ToString::to_string));
                 Some(element)
             }
             // The parser only accepts struct shapes in result position.
@@ -271,15 +272,17 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
     let result = lower_result(&decl.result, &binders, &index_binders)?;
     let result_monomial = match &result {
         KindIr::Quantity(monomial) => Some(monomial),
-        KindIr::Array { element, index } => {
-            if !used_indexes.contains(&index.to_string()) {
-                return Err(syn::Error::new(
-                    index.span(),
-                    format!(
-                        "the result array is indexed by `{index}`, which no array parameter \
-                         uses; a plugin cannot invent its output length"
-                    ),
-                ));
+        KindIr::Array { element, indexes } => {
+            for index in indexes {
+                if !used_indexes.contains(&index.to_string()) {
+                    return Err(syn::Error::new(
+                        index.span(),
+                        format!(
+                            "the result array is indexed by `{index}`, which no array parameter \
+                             uses; a plugin cannot invent output axis lengths"
+                        ),
+                    ));
+                }
             }
             Some(element)
         }
@@ -363,7 +366,7 @@ fn lower_result(
                     let kind = match lower_type(
                         &TypeAst {
                             element: clone_dim_expr(&field.ty),
-                            index: None,
+                            indexes: None,
                         },
                         &empty,
                         &empty,
@@ -424,7 +427,7 @@ const fn clone_exponent(exponent: &ExponentAst) -> ExponentAst {
 }
 
 /// Lower one type position: a lone `Bool`/`Int`, a dimension monomial, or
-/// an array of quantities over a declared index variable.
+/// an array of quantities over one or more declared index variables.
 fn lower_type(
     ty: &TypeAst,
     binders: &HashSet<String>,
@@ -433,7 +436,7 @@ fn lower_type(
     let expr = &ty.element;
     if let (DimTermAst::Named { name, pow: None }, true) = (&expr.first, expr.rest.is_empty()) {
         match name.to_string().as_str() {
-            "Bool" | "Int" if ty.index.is_some() => {
+            "Bool" | "Int" if ty.indexes.is_some() => {
                 return Err(syn::Error::new(
                     name.span(),
                     "array elements must be quantities in this phase",
@@ -448,20 +451,22 @@ fn lower_type(
     let mut acc = MonomialAcc::default();
     lower_expr(expr, binders, Rational::ONE, &mut acc)?;
     let element = acc.into_monomial();
-    match &ty.index {
-        Some(index) => {
-            if !index_binders.contains(&index.to_string()) {
-                return Err(syn::Error::new(
-                    index.span(),
-                    format!(
-                        "unknown index variable `{index}`; declare it in the binder list as \
-                         `{index}: Index`"
-                    ),
-                ));
+    match &ty.indexes {
+        Some(indexes) => {
+            for index in indexes {
+                if !index_binders.contains(&index.to_string()) {
+                    return Err(syn::Error::new(
+                        index.span(),
+                        format!(
+                            "unknown index variable `{index}`; declare it in the binder list as \
+                             `{index}: Index`"
+                        ),
+                    ));
+                }
             }
             Ok(KindIr::Array {
                 element,
-                index: index.clone(),
+                indexes: indexes.clone(),
             })
         }
         None => Ok(KindIr::Quantity(element)),

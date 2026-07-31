@@ -1,5 +1,5 @@
 // A result array must reuse an index variable that indexes some parameter:
-// a plugin can never invent its output length (the dynamic-index fence).
+// a plugin can never invent an output extent (the dynamic-index fence).
 import plugin "graphcal:demo" as demo {
     fn make<D: Dim, I: Index>(x: D) -> D[I];
 }

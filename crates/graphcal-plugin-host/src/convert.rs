@@ -111,10 +111,18 @@ fn convert_kind(kind: &ManifestValueKind) -> Result<ValueKind, ConvertErrorKind>
         ManifestValueKind::Quantity(monomial) => {
             Ok(ValueKind::Quantity(convert_monomial(monomial)?))
         }
-        ManifestValueKind::Array { element, index } => Ok(ValueKind::Indexed {
-            element: convert_monomial(element)?,
-            index: convert_index_var(index)?,
-        }),
+        ManifestValueKind::Array { element, indexes } => {
+            let indexes = indexes
+                .iter()
+                .map(|index| convert_index_var(index))
+                .collect::<Result<Vec<_>, _>>()?;
+            let indexes = graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(indexes)
+                .map_err(|_| ConvertErrorKind::EmptyArrayAxes)?;
+            Ok(ValueKind::Indexed {
+                element: convert_monomial(element)?,
+                indexes,
+            })
+        }
         ManifestValueKind::Struct { fields } => {
             let fields = fields
                 .iter()
@@ -228,6 +236,9 @@ pub enum ConvertErrorKind {
         /// Why the name was rejected.
         source: NameAtomError,
     },
+    /// An array kind carries no axes.
+    #[error("array kinds must carry at least one index variable")]
+    EmptyArrayAxes,
     /// A fixed dimension is not one of the prelude base dimensions.
     #[error(
         "`{dim}` is not a prelude base dimension; manifests may only use: {}",

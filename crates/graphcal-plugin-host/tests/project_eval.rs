@@ -547,7 +547,7 @@ fn scale_plugin() -> Vec<u8> {
                         }],
                         fixed: Vec::new(),
                     },
-                    index: "I".to_string(),
+                    indexes: vec!["I".to_string()],
                 },
             ),
             ("k", dimensionless()),
@@ -560,7 +560,7 @@ fn scale_plugin() -> Vec<u8> {
                 }],
                 fixed: Vec::new(),
             },
-            index: "I".to_string(),
+            indexes: vec!["I".to_string()],
         },
     );
     function.index_vars = vec!["I".to_string()];
@@ -694,7 +694,7 @@ fn span_plugin() -> Vec<u8> {
                     }],
                     fixed: Vec::new(),
                 },
-                index: "I".to_string(),
+                indexes: vec!["I".to_string()],
             },
         )],
         ManifestValueKind::Struct {

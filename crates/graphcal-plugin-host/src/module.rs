@@ -12,7 +12,8 @@ use std::sync::{Mutex, PoisonError};
 
 use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::syntax::function_name::FnName;
-use graphcal_eval::host_fns::HostFnValue;
+use graphcal_compiler::syntax::index_name::IndexVarName;
+use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
     ALLOC_EXPORT, FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, FREE_EXPORT, MAX_FAIL_MESSAGE_BYTES,
     ManifestFromWasmError, PluginManifest,
@@ -229,8 +230,8 @@ impl PluginModule {
     }
 
     /// Call one plugin function with SI-normalized values: single-value ABI
-    /// slots cross as raw `f64`s, arrays as dense buffers the host places in (and reads
-    /// back from) the plugin's memory through the allocator exports.
+    /// slots cross as raw `f64`s, arrays as row-major buffers plus one extent
+    /// per axis that the host places in (and reads back from) plugin memory.
     ///
     /// The call — including the allocator round-trips it needs — runs under
     /// the module's fuel and memory limits. A non-finite result is returned
@@ -344,7 +345,19 @@ impl PluginModule {
 
         let value = match (out_buffer, buffers.as_ref()) {
             (Some(out), Some(buffers)) => {
-                HostFnValue::Buffer(buffers.read_buffer(live, out.ptr, out.len)?)
+                let values = buffers.read_buffer(live, out.ptr, out.len)?;
+                match out.kind {
+                    OutBufferKind::Array { shape } => {
+                        HostFnValue::Array(HostArray::try_new(shape, values).map_err(|error| {
+                            PluginCallError::Internal {
+                                message: format!(
+                                    "function `{function}` produced an invalid array: {error}"
+                                ),
+                            }
+                        })?)
+                    }
+                    OutBufferKind::Record => HostFnValue::Record(values),
+                }
             }
             (Some(_), None) => {
                 return Err(PluginCallError::Internal {
@@ -375,10 +388,8 @@ impl PluginModule {
     }
 
     /// Build the wasm parameter list for one call: single-value ABI slots as
-    /// `f64`s, arrays written into plugin memory as `(ptr, len)` pairs, plus the trailing
-    /// out-pointer (returned with its element count) when the result is an
-    /// array — its length is the input array bound to the result's index
-    /// variable.
+    /// `f64`s, arrays as a pointer plus one extent per declared axis, and a
+    /// trailing out-pointer for array and record results.
     fn marshal_params(
         &self,
         live: &mut LiveInstance,
@@ -393,32 +404,55 @@ impl PluginModule {
             ),
         };
 
-        let mut params: Vec<wasmi::Val> = Vec::with_capacity(args.len() + 2);
+        let mut params: Vec<wasmi::Val> = Vec::new();
+        let mut bound_extents: std::collections::HashMap<IndexVarName, usize> =
+            std::collections::HashMap::new();
         for (param, arg) in signature.params().iter().zip(args) {
             match (&param.kind, arg) {
                 (
                     ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int,
                     HostFnValue::F64(value),
                 ) => params.push(wasmi::Val::F64((*value).into())),
-                (ValueKind::Indexed { .. }, HostFnValue::Buffer(values)) => {
+                (ValueKind::Indexed { indexes, .. }, HostFnValue::Array(array)) => {
+                    if array.shape().len() != indexes.len() {
+                        return Err(PluginCallError::Internal {
+                            message: format!(
+                                "function `{function}` parameter `{}` received rank {}, expected {}",
+                                param.name,
+                                array.shape().len(),
+                                indexes.len()
+                            ),
+                        });
+                    }
+                    for (index, extent) in indexes.iter().zip(array.shape()) {
+                        match bound_extents.entry(index.clone()) {
+                            std::collections::hash_map::Entry::Vacant(slot) => {
+                                slot.insert(*extent);
+                            }
+                            std::collections::hash_map::Entry::Occupied(bound)
+                                if *bound.get() != *extent =>
+                            {
+                                return Err(PluginCallError::Internal {
+                                    message: format!(
+                                        "function `{function}` received extent {extent} for index variable `{index}`, previously bound to {}",
+                                        bound.get()
+                                    ),
+                                });
+                            }
+                            std::collections::hash_map::Entry::Occupied(_) => {}
+                        }
+                    }
                     let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-                    let ptr = buffers.write_buffer(live, self.limits.fuel_per_call, values)?;
+                    let ptr =
+                        buffers.write_buffer(live, self.limits.fuel_per_call, array.values())?;
                     params.push(wasmi::Val::I32(ptr));
-                    #[expect(
-                        clippy::cast_possible_truncation,
-                        clippy::cast_possible_wrap,
-                        reason = "write_buffer bounds the length to the 32-bit plugin address space"
-                    )]
-                    params.push(wasmi::Val::I32(values.len() as i32));
+                    for extent in array.shape() {
+                        let extent = u32::try_from(*extent)
+                            .map_err(|_| PluginCallError::BufferTooLarge { elements: *extent })?;
+                        params.push(wasmi::Val::I32(i32::from_ne_bytes(extent.to_ne_bytes())));
+                    }
                 }
-                (
-                    ValueKind::Quantity(_)
-                    | ValueKind::Bool
-                    | ValueKind::Int
-                    | ValueKind::Struct(_),
-                    _,
-                )
-                | (ValueKind::Indexed { .. }, HostFnValue::F64(_)) => {
+                _ => {
                     return Err(PluginCallError::Internal {
                         message: format!(
                             "function `{function}` parameter `{}` received a value of the wrong shape",
@@ -429,50 +463,76 @@ impl PluginModule {
             }
         }
 
-        let out_buffer = match signature.result() {
-            ValueKind::Indexed { index, .. } => {
-                let len = signature
-                    .params()
+        let out_buffer = self.allocate_result_buffer(
+            live,
+            function,
+            signature.result(),
+            &bound_extents,
+            buffers,
+        )?;
+        if let Some(out) = &out_buffer {
+            params.push(wasmi::Val::I32(out.ptr));
+        }
+        Ok((params, out_buffer))
+    }
+
+    fn allocate_result_buffer(
+        &self,
+        live: &mut LiveInstance,
+        function: &FnName,
+        result: &ValueKind,
+        bound_extents: &std::collections::HashMap<IndexVarName, usize>,
+        buffers: &mut Option<BufferProtocol>,
+    ) -> Result<Option<OutBuffer>, PluginCallError> {
+        let protocol_missing = || PluginCallError::Internal {
+            message: format!(
+                "function `{function}` moves buffers without the buffer protocol resolved"
+            ),
+        };
+        let (len, kind) = match result {
+            ValueKind::Indexed { indexes, .. } => {
+                let shape = indexes
                     .iter()
-                    .zip(args)
-                    .find_map(|(param, arg)| match (&param.kind, arg) {
-                        (
-                            ValueKind::Indexed {
-                                index: param_index, ..
-                            },
-                            HostFnValue::Buffer(values),
-                        ) if param_index == index => Some(values.len()),
-                        _ => None,
+                    .map(|index| {
+                        bound_extents.get(index).copied().ok_or_else(|| {
+                            PluginCallError::Internal {
+                                message: format!(
+                                    "function `{function}` result index `{index}` is not bound by any argument"
+                                ),
+                            }
+                        })
                     })
-                    .ok_or_else(|| PluginCallError::Internal {
-                        message: format!(
-                            "function `{function}` result index `{index}` is not bound by any argument"
-                        ),
+                    .collect::<Result<Vec<_>, _>>()?;
+                let len = shape
+                    .iter()
+                    .try_fold(1_usize, |size, extent| size.checked_mul(*extent))
+                    .ok_or(PluginCallError::BufferTooLarge {
+                        elements: usize::MAX,
                     })?;
-                let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-                let ptr = buffers.alloc(live, self.limits.fuel_per_call, len)?;
-                params.push(wasmi::Val::I32(ptr));
-                Some(OutBuffer { ptr, len })
+                (len, OutBufferKind::Array { shape })
             }
             // A struct result is a fixed-size out-buffer: one f64 slot per
             // flattened field, in declaration order.
-            ValueKind::Struct(shape) => {
-                let len = shape.fields().len();
-                let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-                let ptr = buffers.alloc(live, self.limits.fuel_per_call, len)?;
-                params.push(wasmi::Val::I32(ptr));
-                Some(OutBuffer { ptr, len })
-            }
-            ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => None,
+            ValueKind::Struct(shape) => (shape.fields().len(), OutBufferKind::Record),
+            ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => return Ok(None),
         };
-        Ok((params, out_buffer))
+        let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
+        let ptr = buffers.alloc(live, self.limits.fuel_per_call, len)?;
+        Ok(Some(OutBuffer { ptr, len, kind }))
     }
 }
 
-/// The host-allocated out-pointer an array-returning call hands the plugin.
+/// The typed purpose of a host-allocated result buffer.
+enum OutBufferKind {
+    Array { shape: Vec<usize> },
+    Record,
+}
+
+/// A host-allocated result buffer handed to the plugin.
 struct OutBuffer {
     ptr: i32,
     len: usize,
+    kind: OutBufferKind,
 }
 
 /// The per-call handles of the array buffer protocol: the plugin's memory
@@ -652,12 +712,13 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
             ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => {
                 params.push(wasmi::ValType::F64);
             }
-            // Struct parameters never pass signature validation; folding
-            // them into the buffer arm keeps this total without a panic path.
-            ValueKind::Indexed { .. } | ValueKind::Struct(_) => {
+            ValueKind::Indexed { indexes, .. } => {
                 params.push(wasmi::ValType::I32);
-                params.push(wasmi::ValType::I32);
+                params.extend(std::iter::repeat_n(wasmi::ValType::I32, indexes.len()));
             }
+            // Struct parameters never pass signature validation. Keep this
+            // match total for defense in depth.
+            ValueKind::Struct(_) => params.push(wasmi::ValType::I32),
         }
     }
     let results = match signature.result() {

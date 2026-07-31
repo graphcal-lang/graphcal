@@ -44,8 +44,8 @@ import plugin "plugins/fluids.wasm" as fluids {
   function namespace closed.
 - Each `fn` declares **named parameters** and a **result type**. Parameter
   and result types may be `Bool`, `Int`, quantity types written as dimension
-  expressions, or arrays of quantities over a declared index variable
-  (`xs: D[I]`); the result
+  expressions, or arrays of quantities over one or more declared index
+  variables (`xs: D[I]`, `matrix: D[I, J]`); the result
   may additionally be a record type in scope (see
   [Record-Shaped Results](#record-shaped-results)).
 
@@ -99,6 +99,7 @@ return arrays of quantities over them:
 import plugin "plugins/dsp.wasm" as dsp {
     fn smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I];
     fn total<D: Dim, I: Index>(xs: D[I]) -> D;
+    fn transpose<D: Dim, I: Index, J: Index>(matrix: D[I, J]) -> D[J, I];
 }
 
 index Maneuver = { Departure, Correction, Insertion };
@@ -109,22 +110,23 @@ node dv_smooth: Velocity[Maneuver] = dsp.smooth(@dv, 3.0);
 Index variables follow the same explicit discipline as dimension
 variables:
 
-- An array's index position must name one of the declared `Index` binders
-  — concrete declared indexes (`Velocity[Maneuver]`) and structural indexes
-  (`D[Fin(3)]`) cannot cross the plugin boundary. Like dimension variables, index
-  variables are parametric: the plugin sees each array only as a dense
-  buffer of SI values in index order, never the index's identity.
+- Every array axis position must name one of the declared `Index` binders.
+  Concrete declared indexes (`Velocity[Maneuver]`) and structural indexes
+  (`D[Fin(3)]`) cannot be written directly in an extern signature, but either
+  can bind a variable at a call site. Index variables are parametric: the
+  plugin sees ordered extents and dense row-major SI values, never an index's
+  identity or labels.
 - Two parameters sharing an index variable must be passed arrays over the
   *same* index.
-- A **result array must reuse an index variable that indexes some
-  parameter** — its length is always determined by an input, so a plugin
-  can never invent its output length. Results are rebuilt over exactly the
-  binding argument's index, ready for `sum`, indexing, and `for`
-  comprehensions like any other indexed value.
+- **Every result axis must reuse an index variable that indexes some
+  parameter.** Its extent is determined by an input, so a plugin cannot
+  invent output extents. Result axes may be reordered (`D[I, J] -> D[J, I]`)
+  and are rebuilt over exactly the binding arguments' typed indexes and keys,
+  ready for indexing and `for` comprehensions like any other array.
 - A bare array element (`xs: D[I]`) is a binding occurrence for `D`, just
   like a bare quantity parameter.
-- Array elements are quantities in this phase (`Bool[I]`/`Int[I]` and
-  multi-axis arrays are not supported).
+- Array elements are quantities in this phase (`Bool[I]`/`Int[I]` are not
+  supported). Arrays have one or more axes; each axis is non-empty.
 
 ## Record-Shaped Results
 
@@ -199,7 +201,7 @@ deterministic interpreter. The module must satisfy the ABI, all checked
 at load time before any plugin code runs:
 
 - **Manifest.** The module embeds a JSON manifest in a custom section
-  named `graphcal-manifest`, declaring `abi_version: 3` and each provided
+  named `graphcal-manifest`, declaring `abi_version: 4` and each provided
   function's dimensional signature (dimension and index variables, named
   parameters, the result — including array kinds and struct field
   layouts). Fixed dimensions are spelled structurally over the eight
@@ -212,12 +214,12 @@ at load time before any plugin code runs:
 - **Value ABI.** Each function's wasm export type follows its signature:
   quantity/`Bool`/`Int` parameters use one `f64` ABI slot each (raw SI base
   units for quantities; `Int` as exactly-representable integers, `Bool` as
-  `1.0`/`0.0`), and an array parameter is an `(i32 ptr, i32 len)` pair pointing at `len` dense
-  little-endian `f64` elements in index order. A quantity/`Bool`/`Int` result
-  is the single `f64` return value; an array or struct result replaces the
-  return with one trailing `i32` out-pointer the plugin fills — `len`
-  elements for an array (the length of the input bound to the result's
-  index variable) or one slot per field for a struct. A non-finite quantity
+  `1.0`/`0.0`). A rank-`R` array parameter is an `i32` pointer followed by
+  `R` `i32` extents, pointing at the shape product of dense little-endian
+  row-major `f64` elements. A quantity/`Bool`/`Int` result is the single `f64`
+  return value; an array or struct result replaces the return with one trailing
+  `i32` out-pointer the plugin fills — the product of the signature-bound
+  result extents for an array, or one slot per field for a struct. A non-finite quantity
   flows into graphcal's ordinary non-finite containment.
 - **Allocator exports.** A module that takes or returns arrays or structs
   must export its memory as `"memory"` plus
@@ -327,8 +329,8 @@ evaluation starts (P003, P005–P010 depending on the cause).
 Embedders provide native implementations by injecting a
 `HostFunctionRegistry` — a map from `(plugin path, function name)` to a
 function of shape `fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError>`,
-where a `HostFnValue` is `HostFnValue::F64` or a dense `f64` buffer (arrays
-in index order; struct results as one slot per field). WASM plugins
+where a `HostFnValue` is a single `f64`, a shaped row-major `HostArray`, or
+fixed-layout record slots. WASM plugins
 register through the same interface (the `graphcal-plugin-host` crate
 loads a project's vendored modules into the registry), so the evaluator
 itself stays WASM-free:
@@ -346,6 +348,7 @@ let result = compile_and_eval_from_project_with_host_fns(&project, &overrides, &
 Native registry entries carry no manifest, so their declarations are
 trusted as-is — appropriate for embedder-controlled functions. The CLI
 and language server inject the built-in demo plugin (`"graphcal:demo"`:
-`lerp`, `inverse`, `geometric_mean`, `normalize`, `dv_range`) so extern
+`lerp`, `inverse`, `geometric_mean`, `normalize`, `matrix_transpose`,
+`dv_range`) so extern
 declarations — including array and struct-returning ones — can be
 exercised without any plugin file.

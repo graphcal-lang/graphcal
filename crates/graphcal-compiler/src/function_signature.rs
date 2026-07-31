@@ -23,6 +23,7 @@ use crate::dimension::{Dimension, Rational, RationalError};
 use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnParamName;
 use crate::syntax::index_name::IndexVarName;
+use crate::syntax::non_empty::NonEmpty;
 
 /// One dimension-variable factor in a [`DimMonomial`]: `var^power`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,17 +152,17 @@ pub enum ValueKind {
     Bool,
     /// An integer value.
     Int,
-    /// An array of quantities over a declared index variable: `element[index]`.
+    /// An array of quantities over declared axis variables: `element[I, J]`.
     ///
-    /// Elements are quantities whose dimension is given by the monomial; the
-    /// index variable is bound by an argument's concrete index at the call
-    /// site. A result array must reuse an index variable bound by some
-    /// parameter — a function can never invent its output length.
+    /// Elements are quantities whose dimension is given by the monomial; each
+    /// axis variable is bound by an argument's concrete typed index at the call
+    /// site. Every result axis must reuse a variable bound by some parameter —
+    /// a function can reorder axes but cannot invent an output extent.
     Indexed {
         /// The element dimension monomial.
         element: DimMonomial,
-        /// The index variable naming the array's index.
-        index: IndexVarName,
+        /// Index variables naming the array's axes, in row-major order.
+        indexes: NonEmpty<IndexVarName>,
     },
     /// A record value described by its flattened field shape.
     ///
@@ -275,7 +276,7 @@ pub struct FunctionParam {
 ///   by direct evaluation, never by solving equations.
 /// - Every referenced index variable is declared, and every declared index
 ///   variable indexes at least one array parameter. A result array reuses an
-///   index variable some parameter binds — output lengths always come from
+///   index variables that parameters bind — output extents always come from
 ///   inputs (the dynamic-index fence stays closed).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionSignature {
@@ -315,11 +316,13 @@ impl FunctionSignature {
         for param in &params {
             let monomial = match &param.kind {
                 ValueKind::Quantity(monomial) => monomial,
-                ValueKind::Indexed { element, index } => {
-                    if !declared_indexes.contains(index) {
-                        return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
+                ValueKind::Indexed { element, indexes } => {
+                    for index in indexes {
+                        if !declared_indexes.contains(index) {
+                            return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
+                        }
+                        used_indexes.insert(index);
                     }
-                    used_indexes.insert(index);
                     element
                 }
                 ValueKind::Struct(_) => {
@@ -352,12 +355,14 @@ impl FunctionSignature {
 
         let result_monomial = match &result {
             ValueKind::Quantity(monomial) => Some(monomial),
-            ValueKind::Indexed { element, index } => {
-                if !declared_indexes.contains(index) {
-                    return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
-                }
-                if !used_indexes.contains(index) {
-                    return Err(SignatureError::UnboundResultIndexVar { var: index.clone() });
+            ValueKind::Indexed { element, indexes } => {
+                for index in indexes {
+                    if !declared_indexes.contains(index) {
+                        return Err(SignatureError::UndeclaredIndexVar { var: index.clone() });
+                    }
+                    if !used_indexes.contains(index) {
+                        return Err(SignatureError::UnboundResultIndexVar { var: index.clone() });
+                    }
                 }
                 Some(element)
             }
@@ -528,7 +533,7 @@ enum CanonicalValueKind {
     Int,
     Indexed {
         element: CanonicalMonomial,
-        index: usize,
+        indexes: Vec<usize>,
     },
     /// Struct shapes carry no variables; field names, order, and kinds are
     /// the contract and compare verbatim.
@@ -557,9 +562,12 @@ fn canonical_kind<'a>(kind: &'a ValueKind, order: &mut CanonicalOrder<'a>) -> Ca
         ValueKind::Quantity(monomial) => {
             CanonicalValueKind::Quantity(canonical_monomial(monomial, order))
         }
-        ValueKind::Indexed { element, index } => CanonicalValueKind::Indexed {
+        ValueKind::Indexed { element, indexes } => CanonicalValueKind::Indexed {
             element: canonical_monomial(element, order),
-            index: occurrence_index(&mut order.indexes, index),
+            indexes: indexes
+                .iter()
+                .map(|index| occurrence_index(&mut order.indexes, index))
+                .collect(),
         },
         ValueKind::Struct(shape) => CanonicalValueKind::Struct(shape.clone()),
     }
@@ -599,8 +607,13 @@ fn format_value_kind(
         ValueKind::Bool => "Bool".to_string(),
         ValueKind::Int => "Int".to_string(),
         ValueKind::Quantity(monomial) => format_monomial(monomial, format_dim),
-        ValueKind::Indexed { element, index } => {
-            format!("{}[{index}]", format_monomial(element, format_dim))
+        ValueKind::Indexed { element, indexes } => {
+            let indexes = indexes
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}[{indexes}]", format_monomial(element, format_dim))
         }
         ValueKind::Struct(shape) => {
             let fields: Vec<String> = shape
@@ -739,9 +752,9 @@ pub enum SignatureError {
         /// The undeclared variable.
         var: IndexVarName,
     },
-    /// The result array's index variable indexes no parameter.
+    /// One result-array axis variable indexes no parameter.
     #[error(
-        "result array is indexed by `{var}`, which no array parameter uses; a function cannot invent its output length"
+        "result array axis `{var}` is not used by any array parameter; a function cannot invent its output extent"
     )]
     UnboundResultIndexVar {
         /// The unbound index variable.
@@ -1148,7 +1161,7 @@ mod tests {
     fn array(dim_var: &str, index_var: &str) -> ValueKind {
         ValueKind::Indexed {
             element: DimMonomial::var(var(dim_var)),
-            index: ivar(index_var),
+            indexes: NonEmpty::singleton(ivar(index_var)),
         }
     }
 
@@ -1173,6 +1186,28 @@ mod tests {
         let sig = smooth_signature();
         assert_eq!(sig.dim_vars().len(), 1);
         assert_eq!(sig.index_vars().len(), 1);
+    }
+
+    #[test]
+    fn multi_axis_results_may_reorder_bound_axes() {
+        let matrix = |left: &str, right: &str| ValueKind::Indexed {
+            element: DimMonomial::var(var("D")),
+            indexes: NonEmpty::try_from_vec(vec![ivar(left), ivar(right)]).unwrap(),
+        };
+        let signature = FunctionSignature::try_new(
+            vec![var("D")],
+            vec![ivar("I"), ivar("J")],
+            vec![param("matrix", matrix("I", "J"))],
+            matrix("J", "I"),
+        )
+        .unwrap();
+        assert_eq!(
+            signature.result(),
+            &ValueKind::Indexed {
+                element: DimMonomial::var(var("D")),
+                indexes: NonEmpty::try_from_vec(vec![ivar("J"), ivar("I")]).unwrap(),
+            }
+        );
     }
 
     #[test]
@@ -1201,7 +1236,7 @@ mod tests {
 
     #[test]
     fn result_index_var_must_index_a_parameter() {
-        // A function inventing its output length is the dynamic-index
+        // A function inventing an output extent is the dynamic-index
         // problem — the result must reuse an input index variable.
         let err = FunctionSignature::try_new(
             vec![var("D")],
@@ -1234,7 +1269,7 @@ mod tests {
                 "xs",
                 ValueKind::Indexed {
                     element: DimMonomial::var_pow(var("D"), Rational::try_new(2, 1).unwrap()),
-                    index: ivar("I"),
+                    indexes: NonEmpty::singleton(ivar("I")),
                 },
             )],
             ValueKind::dimensionless(),

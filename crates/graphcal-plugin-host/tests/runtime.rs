@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use graphcal_compiler::syntax::function_name::FnName;
-use graphcal_eval::host_fns::HostFnValue;
+use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
     ManifestDecodeError, ManifestFromWasmError, ManifestFunction, ManifestMonomial, ManifestParam,
     ManifestRational, ManifestValueKind, ManifestVarPower, PluginManifest, SectionError,
@@ -73,11 +73,17 @@ fn f64_values(values: &[f64]) -> Vec<HostFnValue> {
     values.iter().map(|v| HostFnValue::F64(*v)).collect()
 }
 
-/// Unwrap an f64 result (panics on a buffer — a test bug).
+fn vector(values: Vec<f64>) -> HostFnValue {
+    HostFnValue::Array(HostArray::vector(values).unwrap())
+}
+
+/// Unwrap an f64 result (panics on a composite value — a test bug).
 fn f64_value(value: &HostFnValue) -> f64 {
     match value {
         HostFnValue::F64(raw) => *raw,
-        HostFnValue::Buffer(_) => panic!("expected an f64 result, got a buffer"),
+        HostFnValue::Array(_) | HostFnValue::Record(_) => {
+            panic!("expected an f64 result, got a composite value")
+        }
     }
 }
 
@@ -391,12 +397,12 @@ fn missing_manifest_section_is_rejected_at_load() {
 #[test]
 fn future_abi_versions_are_rejected_with_a_version_error() {
     let wasm = wat::parse_str(LERP_WAT).unwrap();
-    let wasm = embed_manifest(&wasm, br#"{"abi_version":4,"shape":"unknown"}"#).unwrap();
+    let wasm = embed_manifest(&wasm, br#"{"abi_version":5,"shape":"unknown"}"#).unwrap();
     assert_eq!(
         PluginHost::new().load(&wasm).unwrap_err(),
         PluginLoadError::Manifest(ManifestFromWasmError::Decode(
             ManifestDecodeError::UnsupportedAbiVersion {
-                found: 4,
+                found: 5,
                 supported: graphcal_plugin_abi::ABI_VERSION,
             }
         ))
@@ -405,8 +411,8 @@ fn future_abi_versions_are_rejected_with_a_version_error() {
 
 #[test]
 fn v2_manifests_are_rejected_with_a_version_error() {
-    // ABI v3 renamed the quantity manifest tag, so v2-built modules report a
-    // version error asking for a rebuild instead of a misleading shape error.
+    // Older modules report a version error asking for a rebuild instead of a
+    // misleading shape error under the current shaped-array ABI.
     let wasm = wat::parse_str(LERP_WAT).unwrap();
     let wasm = embed_manifest(&wasm, br#"{"abi_version":2,"functions":[]}"#).unwrap();
     assert_eq!(
@@ -574,7 +580,7 @@ fn array_kind(var: &str, index: &str) -> ManifestValueKind {
             }],
             fixed: Vec::new(),
         },
-        index: index.to_string(),
+        indexes: vec![index.to_string()],
     }
 }
 
@@ -616,23 +622,109 @@ fn calls_an_array_kernel_with_an_array_result() {
     let result = module
         .call(
             &fn_name("scale"),
-            &[
-                HostFnValue::Buffer(vec![1.0, 2.5, -4.0]),
-                HostFnValue::F64(2.0),
-            ],
+            &[vector(vec![1.0, 2.5, -4.0]), HostFnValue::F64(2.0)],
         )
         .unwrap();
-    assert_eq!(result, HostFnValue::Buffer(vec![2.0, 5.0, -8.0]));
+    assert_eq!(result, vector(vec![2.0, 5.0, -8.0]));
 
     // The pooled instance is reused and the buffers were freed: a second
     // call must see fresh inputs, not stale memory.
     let result = module
         .call(
             &fn_name("scale"),
-            &[HostFnValue::Buffer(vec![10.0]), HostFnValue::F64(0.5)],
+            &[vector(vec![10.0]), HostFnValue::F64(0.5)],
         )
         .unwrap();
-    assert_eq!(result, HostFnValue::Buffer(vec![5.0]));
+    assert_eq!(result, vector(vec![5.0]));
+}
+
+const MATRIX_WAT: &str = r#"
+(module
+  (memory (export "memory") 1)
+  (global $bump (mut i32) (i32.const 1024))
+  (func (export "graphcal_alloc") (param $size i32) (result i32)
+    (local $ptr i32)
+    (local.set $ptr (global.get $bump))
+    (global.set $bump
+      (i32.add
+        (global.get $bump)
+        (i32.and (i32.add (local.get $size) (i32.const 7)) (i32.const -8))))
+    (local.get $ptr))
+  (func (export "graphcal_free") (param i32 i32))
+  (func (export "transpose")
+    (param $ptr i32) (param $rows i32) (param $columns i32) (param $out i32)
+    (local $row i32)
+    (local $column i32)
+    (block $columns_done
+      (loop $columns_loop
+        (br_if $columns_done (i32.ge_u (local.get $column) (local.get $columns)))
+        (local.set $row (i32.const 0))
+        (block $rows_done
+          (loop $rows_loop
+            (br_if $rows_done (i32.ge_u (local.get $row) (local.get $rows)))
+            (f64.store
+              (i32.add
+                (local.get $out)
+                (i32.mul
+                  (i32.add
+                    (i32.mul (local.get $column) (local.get $rows))
+                    (local.get $row))
+                  (i32.const 8)))
+              (f64.load
+                (i32.add
+                  (local.get $ptr)
+                  (i32.mul
+                    (i32.add
+                      (i32.mul (local.get $row) (local.get $columns))
+                      (local.get $column))
+                    (i32.const 8)))))
+            (local.set $row (i32.add (local.get $row) (i32.const 1)))
+            (br $rows_loop)))
+        (local.set $column (i32.add (local.get $column) (i32.const 1)))
+        (br $columns_loop))))
+)
+"#;
+
+fn matrix_manifest() -> PluginManifest {
+    let element = ManifestMonomial {
+        vars: vec![ManifestVarPower {
+            var: "D".to_string(),
+            pow: ManifestRational { num: 1, den: 1 },
+        }],
+        fixed: Vec::new(),
+    };
+    manifest(vec![ManifestFunction {
+        name: "transpose".to_string(),
+        dim_vars: vec!["D".to_string()],
+        index_vars: vec!["I".to_string(), "J".to_string()],
+        params: vec![ManifestParam {
+            name: "matrix".to_string(),
+            kind: ManifestValueKind::Array {
+                element: element.clone(),
+                indexes: vec!["I".to_string(), "J".to_string()],
+            },
+        }],
+        result: ManifestValueKind::Array {
+            element,
+            indexes: vec!["J".to_string(), "I".to_string()],
+        },
+    }])
+}
+
+#[test]
+fn calls_a_multi_axis_kernel_and_reorders_result_shape() {
+    let host = PluginHost::new();
+    let module = host.load(&plugin(MATRIX_WAT, &matrix_manifest())).unwrap();
+    let input = HostArray::try_new(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let result = module
+        .call(&fn_name("transpose"), &[HostFnValue::Array(input)])
+        .unwrap();
+    assert_eq!(
+        result,
+        HostFnValue::Array(
+            HostArray::try_new(vec![3, 2], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap()
+        )
+    );
 }
 
 #[test]
@@ -640,10 +732,7 @@ fn calls_an_array_kernel_with_a_quantity_result() {
     let host = PluginHost::new();
     let module = host.load(&plugin(ARRAY_WAT, &array_manifest())).unwrap();
     let result = module
-        .call(
-            &fn_name("total"),
-            &[HostFnValue::Buffer(vec![1.0, 2.0, 3.5])],
-        )
+        .call(&fn_name("total"), &[vector(vec![1.0, 2.0, 3.5])])
         .unwrap();
     assert!((f64_value(&result) - 6.5).abs() < f64::EPSILON);
 }
@@ -790,12 +879,9 @@ fn calls_a_struct_returning_kernel() {
     let host = PluginHost::new();
     let module = host.load(&plugin(STRUCT_WAT, &struct_manifest())).unwrap();
     let result = module
-        .call(
-            &fn_name("span"),
-            &[HostFnValue::Buffer(vec![3.0, -1.5, 2.0])],
-        )
+        .call(&fn_name("span"), &[vector(vec![3.0, -1.5, 2.0])])
         .unwrap();
-    assert_eq!(result, HostFnValue::Buffer(vec![-1.5, 3.0]));
+    assert_eq!(result, HostFnValue::Record(vec![-1.5, 3.0]));
 }
 
 #[test]
