@@ -1,0 +1,7 @@
+// fin_key() constructs Fin-axis keys only; coordinate axes have no exact
+// runtime position constructor.
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+
+param n: Int = 1;
+
+node k: Key<TimeStep> = fin_key(TimeStep, @n);

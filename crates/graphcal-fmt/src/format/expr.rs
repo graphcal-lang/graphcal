@@ -137,6 +137,25 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             index_name,
             body,
         ),
+        ExprKind::KeyForm { kind, axis, arg } => {
+            let axis_doc = match axis {
+                graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+                    RcDoc::text(name.value.display_path())
+                }
+                graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+                    RcDoc::text(format!("Fin({cardinality})"))
+                }
+                graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat_expr) => {
+                    RcDoc::text(nat_expr.to_string())
+                }
+            };
+            RcDoc::text(kind.as_str())
+                .append(RcDoc::text("("))
+                .append(axis_doc)
+                .append(RcDoc::text(", "))
+                .append(format_expr(fmt, arg))
+                .append(RcDoc::text(")"))
+        }
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
     }
 }

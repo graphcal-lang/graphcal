@@ -157,6 +157,9 @@ fn eval_hir_expr_inner(
             init,
             body,
         } => eval_hir_unfold(recurrence, init, body, values, local_values, ctx),
+        hir::ExprKind::KeyForm {
+            kind, axis, arg, ..
+        } => eval_hir_key_form(*kind, axis, arg, expr.span, values, local_values, ctx),
         hir::ExprKind::Match { scrutinee, arms } => {
             eval_hir_match(expr.span, scrutinee, arms, values, local_values, ctx)
         }
@@ -591,6 +594,138 @@ fn eval_hir_fn_call(
         }
         EvalBuiltinRule::RegistryFunction => {
             eval_hir_builtin_fn(expr, name, args, values, local_values, ctx)
+        }
+    }
+}
+
+/// Evaluate a key introduction form.
+///
+/// `key` positions are proven in bounds by the checker; `fin_key` performs
+/// its runtime range check here; the coordinate searches scan the axis's
+/// coordinates with the documented policies.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over every key-form kind"
+)]
+fn eval_hir_key_form(
+    kind: graphcal_compiler::syntax::ast::KeyFormKind,
+    axis: &hir::expr::ForBindingIndex,
+    arg: &hir::Expr,
+    span: Span,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::syntax::ast::KeyFormKind;
+
+    let arg_val = eval_hir_expr(arg, values, local_values, ctx)?;
+    match kind {
+        KeyFormKind::Static => {
+            // Bounds were discharged at compile time.
+            let RuntimeValue::Int(position) = arg_val else {
+                return Err(ctx.internal_error("key() received a non-Int position", arg.span));
+            };
+            Ok(RuntimeValue::Int(position))
+        }
+        KeyFormKind::Fin => {
+            let RuntimeValue::Int(position) = arg_val else {
+                return Err(ctx.internal_error("fin_key() received a non-Int position", arg.span));
+            };
+            let size = match axis {
+                hir::expr::ForBindingIndex::Finite { cardinality, .. } => {
+                    eval_hir_nat_expr(cardinality, ctx)?
+                }
+                hir::expr::ForBindingIndex::Named(axis_name) => {
+                    let axis_ref = IndexTypeRef::from_resolved(axis_name.value.clone());
+                    let definition = index_def_for_ref(&axis_ref, ctx).ok_or_else(|| {
+                        ctx.internal_error(
+                            format!("index `{axis_ref}` has no registered definition"),
+                            span,
+                        )
+                    })?;
+                    definition.finite_index_size().ok_or_else(|| {
+                        ctx.internal_error("fin_key() axis is not a Fin axis", span)
+                    })?
+                }
+            };
+            let in_range = u64::try_from(position).is_ok_and(|position| position < size);
+            if !in_range {
+                return Err(ctx.eval_error(
+                    format!("fin_key: {position} out of bounds for Fin({size})"),
+                    span,
+                ));
+            }
+            Ok(RuntimeValue::Int(position))
+        }
+        KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
+            let quantity = arg_val
+                .expect_quantity("coordinate search argument")
+                .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?;
+            let hir::expr::ForBindingIndex::Named(axis_name) = axis else {
+                return Err(
+                    ctx.internal_error("coordinate search received a non-coordinate axis", span)
+                );
+            };
+            let axis_ref = IndexTypeRef::from_resolved(axis_name.value.clone());
+            let definition = index_def_for_ref(&axis_ref, ctx).ok_or_else(|| {
+                ctx.internal_error(
+                    format!("index `{axis_ref}` has no registered definition"),
+                    span,
+                )
+            })?;
+            let IndexKind::Coordinate(data) = &definition.kind else {
+                return Err(
+                    ctx.internal_error("coordinate search received a non-coordinate axis", span)
+                );
+            };
+            let count = data.cardinality();
+            let mut best: Option<(usize, f64)> = None;
+            for position in 0..count {
+                let coordinate = data.coordinate_value(position);
+                let candidate = match kind {
+                    KeyFormKind::Floor if coordinate <= quantity => Some((position, coordinate)),
+                    KeyFormKind::Ceil if coordinate >= quantity => Some((position, coordinate)),
+                    KeyFormKind::Nearest => Some((position, coordinate)),
+                    _ => None,
+                };
+                let Some((position, coordinate)) = candidate else {
+                    continue;
+                };
+                let better = match (&best, kind) {
+                    (None, _) => true,
+                    // Nearest: strictly closer wins, so midpoint ties keep
+                    // the earlier position (toward the axis start).
+                    (Some((_, incumbent)), KeyFormKind::Nearest) => {
+                        (coordinate - quantity).abs() < (incumbent - quantity).abs()
+                    }
+                    // Floor: the greatest coordinate at or below the target.
+                    (Some((_, incumbent)), KeyFormKind::Floor) => coordinate > *incumbent,
+                    // Ceil: the smallest coordinate at or above the target.
+                    (Some((_, incumbent)), _) => coordinate < *incumbent,
+                };
+                if better {
+                    best = Some((position, coordinate));
+                }
+            }
+            let Some((position, _)) = best else {
+                return Err(ctx.eval_error(
+                    format!(
+                        "{}: no coordinate of `{axis_ref}` is {} the target",
+                        kind.as_str(),
+                        if kind == KeyFormKind::Floor {
+                            "at or below"
+                        } else {
+                            "at or above"
+                        },
+                    ),
+                    span,
+                ));
+            };
+            Ok(RuntimeValue::CoordinateLabel {
+                index_name: axis_ref,
+                position,
+                value: data.coordinate_value(position),
+            })
         }
     }
 }

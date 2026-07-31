@@ -215,6 +215,48 @@ fn error_key_index_cross_axis() {
 }
 
 #[test]
+fn error_key_static_out_of_bounds() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_static_out_of_bounds.gcl");
+    let rendered = render_error(source, "key_static_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_static_runtime_position() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_static_runtime_position.gcl");
+    let rendered = render_error(source, "key_static_runtime_position.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_fin_key_non_fin_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/fin_key_non_fin_axis.gcl");
+    let rendered = render_error(source, "fin_key_non_fin_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_nearest_key_wrong_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/nearest_key_wrong_dimension.gcl");
+    let rendered = render_error(source, "nearest_key_wrong_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_fin_key_out_of_bounds() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/fin_key_out_of_bounds.gcl");
+    let rendered = render_node_error(source, "fin_key_out_of_bounds.gcl", "k");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_floor_key_below_range() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/floor_key_below_range.gcl");
+    let rendered = render_node_error(source, "floor_key_below_range.gcl", "k");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_complex_aggregation_unsupported() {
     let source =
         include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");

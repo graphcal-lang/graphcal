@@ -1,0 +1,4 @@
+// fin_key() range-checks its position at runtime.
+param requested: Int = 7;
+
+node k: Key<Fin(3)> = fin_key(Fin(3), @requested);

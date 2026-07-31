@@ -1147,6 +1147,7 @@ impl HirPolicyChecker<'_> {
                 recurse(init)?;
                 recurse(body)
             }
+            hir::ExprKind::KeyForm { arg, .. } => recurse(arg),
             hir::ExprKind::Match { scrutinee, arms } => {
                 recurse(scrutinee)?;
                 for arm in arms {

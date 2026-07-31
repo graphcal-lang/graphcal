@@ -1,0 +1,31 @@
+// Key introduction formers: static key() (compile-checked), fin_key()
+// (runtime-checked), and the coordinate searches with explicit policies.
+pub index TimeStep = range(0.0 s, 10.0 s, step: 1.0 s);
+
+param readings: Dimensionless[Fin(8)] = table[Fin(8)] {
+    101.2;
+    103.4;
+     99.8;
+    103.4;
+    100.1;
+    101.0;
+    102.2;
+    100.7;
+};
+
+node second: Key<Fin(8)> = key(Fin(8), 1);
+node second_reading: Dimensionless = @readings[@second];
+
+param requested: Int = 5;
+node channel: Key<Fin(8)> = fin_key(Fin(8), @requested);
+node selected: Dimensionless = @readings[@channel];
+
+node altitude: Length[TimeStep] = for t: TimeStep { 100.0 km };
+
+param event_time: Time = 3.4 s;
+node at_event: Key<TimeStep> = nearest_key(TimeStep, @event_time);
+node before_event: Key<TimeStep> = floor_key(TimeStep, @event_time);
+node after_event: Key<TimeStep> = ceil_key(TimeStep, @event_time);
+node t_before: Time = coord(@before_event);
+node t_after: Time = coord(@after_event);
+node altitude_at_event: Length = @altitude[@at_event];

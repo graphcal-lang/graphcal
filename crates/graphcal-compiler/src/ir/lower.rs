@@ -2760,6 +2760,9 @@ fn substitute_type_names_in_expr(
             substitute_type_names_in_expr(init, bindings);
             substitute_type_names_in_expr(body, bindings);
         }
+        ExprKind::KeyForm { arg, .. } => {
+            substitute_type_names_in_expr(arg, bindings);
+        }
         ExprKind::Match { scrutinee, arms } => {
             substitute_type_names_in_expr(scrutinee, bindings);
             for arm in arms {

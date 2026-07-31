@@ -363,6 +363,25 @@ fn infer_hir_type_inner(
             builtin_fns,
             src,
         )?,
+        hir::ExprKind::KeyForm {
+            kind,
+            axis,
+            axis_span,
+            arg,
+        } => infer_hir_key_form(
+            *kind,
+            axis,
+            *axis_span,
+            arg,
+            owner_decl_name,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )?,
         hir::ExprKind::Match { scrutinee, arms } => infer_hir_match(
             expr,
             scrutinee,
@@ -1896,6 +1915,171 @@ fn finite_index_error(
         message: err.to_string(),
         src: src.clone(),
         span: span.into(),
+    }
+}
+
+/// Infer a key introduction form.
+///
+/// `key(Fin(N), c)` is compile-time membership-checked and infallible;
+/// `fin_key(Fin(N), e)` is the explicit runtime-checked constructor; the
+/// coordinate searches require a coordinate axis and a matching-dimension
+/// quantity argument.
+#[expect(clippy::too_many_arguments, reason = "expression inference context")]
+fn infer_hir_key_form(
+    kind: crate::syntax::ast::KeyFormKind,
+    axis: &hir::expr::ForBindingIndex,
+    axis_span: Span,
+    arg: &hir::Expr,
+    owner_decl_name: Option<&str>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    local_types: &HirLocalTypes<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    use crate::syntax::ast::KeyFormKind;
+
+    let arg_type = infer_hir_type(
+        arg,
+        owner_decl_name,
+        declared_types,
+        local_types,
+        dag,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+    )?;
+    // Resolve the axis identity and, for Fin axes, its cardinality form.
+    let (index_identity, finite_form) = match axis {
+        hir::expr::ForBindingIndex::Named(index) => {
+            let identity = InferredIndex::from_resolved(index.value.clone());
+            let idx_def = super::index_def_for_inferred(&identity, Some(dag), registry)
+                .ok_or_else(|| GraphcalError::UnknownIndex {
+                    name: identity.name(),
+                    src: src.clone(),
+                    span: index.span.into(),
+                })?;
+            let finite_form = idx_def.finite_index_size().map(NatPolyForm::from_constant);
+            (identity, finite_form)
+        }
+        hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+            let form = hir_nat_to_linear_form(cardinality)
+                .map_err(|err| nat_overflow_error(err, src, *span))?;
+            let identity = InferredIndex::from_finite_index_form(form.clone())
+                .map_err(|err| finite_index_error(err, src, *span))?;
+            (identity, Some(form))
+        }
+    };
+    match kind {
+        KeyFormKind::Static => {
+            let Some(form) = &finite_form else {
+                return Err(GraphcalError::EvalError {
+                    message: "key() constructs Fin-axis keys; named-axis keys are written as \
+                              qualified labels and coordinate keys come from argmax/argmin or \
+                              the coordinate searches"
+                        .to_string(),
+                    src: src.clone(),
+                    span: axis_span.into(),
+                });
+            };
+            if !arg_type.is_int_like() {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "a static Nat position".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "key(Fin(N), position) takes an integer position".to_string(),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            let Some(position) = try_const_int(arg) else {
+                return Err(GraphcalError::EvalError {
+                    message: "key() requires a static position; use fin_key() for a \
+                              runtime-checked position"
+                        .to_string(),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            };
+            if position < 0 {
+                return Err(GraphcalError::EvalError {
+                    message: format!("key() position evaluated to negative value: {position}"),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            if form.is_constant() {
+                let size = form.constant();
+                let position_u64 = u64::try_from(position).unwrap_or(u64::MAX);
+                if position_u64 >= size {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "key() position {position} is out of bounds for Fin({size})"
+                        ),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    });
+                }
+            }
+            Ok(InferredType::Key(index_identity))
+        }
+        KeyFormKind::Fin => {
+            if finite_form.is_none() {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "fin_key() requires a Fin(...) axis, got `{}`",
+                        index_identity.name()
+                    ),
+                    src: src.clone(),
+                    span: axis_span.into(),
+                });
+            }
+            if !arg_type.is_int_like() {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Int".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "fin_key(Fin(N), position) takes an Int position, checked at \
+                           runtime"
+                        .to_string(),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            Ok(InferredType::Key(index_identity))
+        }
+        KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
+            let idx_def = super::index_def_for_inferred(&index_identity, Some(dag), registry);
+            let dimension = match idx_def.map(|def| &def.kind) {
+                Some(crate::registry::types::IndexKind::Coordinate(data)) => data.dimension.clone(),
+                Some(crate::registry::types::IndexKind::RequiredCoordinate { dimension }) => {
+                    dimension.clone()
+                }
+                _ => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "{}() requires a coordinate axis, got `{}`",
+                            kind.as_str(),
+                            index_identity.name()
+                        ),
+                        src: src.clone(),
+                        span: axis_span.into(),
+                    });
+                }
+            };
+            let arg_dim = expect_quantity(&arg_type, registry, src, arg.span)?;
+            if arg_dim != dimension {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: registry.dimensions.format_dimension(&dimension),
+                    found: registry.dimensions.format_dimension(&arg_dim),
+                    help: format!("{}() takes a quantity in the axis dimension", kind.as_str()),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            Ok(InferredType::Key(index_identity))
+        }
     }
 }
 

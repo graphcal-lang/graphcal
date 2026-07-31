@@ -1,6 +1,7 @@
 use crate::exact_rational::{ExactRational, ExactRationalError};
 use crate::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, ModulePath, PowerExponent, UnaryOp,
+    BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, KeyFormKind, ModulePath, PowerExponent,
+    UnaryOp,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexVariantName;
@@ -471,6 +472,36 @@ impl Parser<'_> {
             {
                 let (_, span) = self.advance()?;
                 self.parse_unfold(span)
+            }
+            Some(Token::ContextualKeyword(ContextualKeyword::Key))
+                if self.lexer.peek_second() == Some(&Token::LParen) =>
+            {
+                let (_, span) = self.advance()?;
+                self.parse_key_form(KeyFormKind::Static, span)
+            }
+            Some(Token::ContextualKeyword(ContextualKeyword::FinKey))
+                if self.lexer.peek_second() == Some(&Token::LParen) =>
+            {
+                let (_, span) = self.advance()?;
+                self.parse_key_form(KeyFormKind::Fin, span)
+            }
+            Some(Token::ContextualKeyword(ContextualKeyword::FloorKey))
+                if self.lexer.peek_second() == Some(&Token::LParen) =>
+            {
+                let (_, span) = self.advance()?;
+                self.parse_key_form(KeyFormKind::Floor, span)
+            }
+            Some(Token::ContextualKeyword(ContextualKeyword::CeilKey))
+                if self.lexer.peek_second() == Some(&Token::LParen) =>
+            {
+                let (_, span) = self.advance()?;
+                self.parse_key_form(KeyFormKind::Ceil, span)
+            }
+            Some(Token::ContextualKeyword(ContextualKeyword::NearestKey))
+                if self.lexer.peek_second() == Some(&Token::LParen) =>
+            {
+                let (_, span) = self.advance()?;
+                self.parse_key_form(KeyFormKind::Nearest, span)
             }
             Some(token) if token.is_identifier() => self.parse_identifier_expr(),
             Some(Token::For) => {

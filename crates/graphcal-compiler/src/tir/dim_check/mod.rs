@@ -564,6 +564,7 @@ fn check_ineffective_conversions_inner(
             check_ineffective_conversions(init, display_position, src)?;
             check_ineffective_conversions(body, false, src)
         }
+        ExprKind::KeyForm { arg, .. } => check_ineffective_conversions(arg, false, src),
         ExprKind::BinOp { lhs, rhs, .. } => {
             check_ineffective_conversions(lhs, false, src)?;
             check_ineffective_conversions(rhs, false, src)

@@ -150,6 +150,9 @@ fn collect_unit_names_from_hir(
             collect_unit_names_from_hir(init, names);
             collect_unit_names_from_hir(body, names);
         }
+        hir::ExprKind::KeyForm { arg, .. } => {
+            collect_unit_names_from_hir(arg, names);
+        }
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_unit_names_from_hir(scrutinee, names);
             for arm in arms {
@@ -574,6 +577,12 @@ fn collect_resolved_collection_refs_from_expr_inner(
             collect_resolved_collection_refs_from_expr(init, ctx, src, refs)?;
             collect_resolved_collection_refs_from_expr(body, ctx, src, refs)
         }
+        hir::ExprKind::KeyForm { axis, arg, .. } => {
+            if let hir::expr::ForBindingIndex::Named(axis) = axis {
+                record_resolved_collection_index(&axis.value, ctx, src, axis.span, refs)?;
+            }
+            collect_resolved_collection_refs_from_expr(arg, ctx, src, refs)
+        }
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_resolved_collection_refs_from_expr(scrutinee, ctx, src, refs)?;
             for arm in arms {
@@ -780,6 +789,9 @@ fn collect_resolved_constructor_refs_from_expr_inner(
             collect_resolved_constructor_refs_from_expr(init, ctx, src, refs)?;
             collect_resolved_constructor_refs_from_expr(body, ctx, src, refs)
         }
+        hir::ExprKind::KeyForm { arg, .. } => {
+            collect_resolved_constructor_refs_from_expr(arg, ctx, src, refs)
+        }
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_resolved_constructor_refs_from_expr(scrutinee, ctx, src, refs)?;
             for arm in arms {
@@ -855,6 +867,10 @@ fn collect_resolved_inline_dag_refs_from_expr(expr: &hir::Expr, refs: &mut Resol
     });
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single recursion covering every ExprKind variant"
+)]
 fn collect_resolved_inline_dag_refs_from_expr_inner(
     expr: &hir::Expr,
     refs: &mut ResolvedInlineDagRefs,
@@ -930,6 +946,9 @@ fn collect_resolved_inline_dag_refs_from_expr_inner(
         hir::ExprKind::Unfold { init, body, .. } => {
             collect_resolved_inline_dag_refs_from_expr(init, refs);
             collect_resolved_inline_dag_refs_from_expr(body, refs);
+        }
+        hir::ExprKind::KeyForm { arg, .. } => {
+            collect_resolved_inline_dag_refs_from_expr(arg, refs);
         }
         hir::ExprKind::Match { scrutinee, arms } => {
             collect_resolved_inline_dag_refs_from_expr(scrutinee, refs);

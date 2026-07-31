@@ -656,6 +656,13 @@ impl<'a> HirRefCollector<'a> {
                 );
                 self.walk(body, table);
             }
+            hir::ExprKind::KeyForm { axis, arg, .. } => {
+                if let hir::expr::ForBindingIndex::Named(axis) = axis {
+                    let axis_key = self.name_key(axis.value.owner(), axis.value.as_str());
+                    Self::reference(table, axis.span, axis_key);
+                }
+                self.walk(arg, table);
+            }
             hir::ExprKind::Match { scrutinee, arms } => {
                 self.walk(scrutinee, table);
                 for arm in arms {

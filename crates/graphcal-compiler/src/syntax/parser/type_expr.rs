@@ -768,7 +768,7 @@ impl Parser<'_> {
     /// - `Fin(N + 1)` → `IndexExpr::Finite`
     /// - bare Nat syntax is retained as `IndexExpr::BareNat` for a targeted
     ///   semantic sort diagnostic.
-    fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
+    pub(super) fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
         self.reject_obsolete_structural_range()?;
         if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
             && self.lexer.peek_second() == Some(&Token::LParen)

@@ -585,6 +585,11 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 val_name,
                 body: Box::new((*body).into()),
             },
+            ExprKind::KeyForm { kind, axis, arg } => Self::KeyForm {
+                kind,
+                axis,
+                arg: Box::new((*arg).into()),
+            },
             ExprKind::Unfold {
                 axis,
                 init,

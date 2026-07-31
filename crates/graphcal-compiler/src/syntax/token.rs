@@ -88,6 +88,16 @@ pub(crate) enum LexicalToken {
     Points,
     #[token("Fin")]
     Fin,
+    #[token("key")]
+    Key,
+    #[token("fin_key")]
+    FinKey,
+    #[token("floor_key")]
+    FloorKey,
+    #[token("ceil_key")]
+    CeilKey,
+    #[token("nearest_key")]
+    NearestKey,
     #[token("pub")]
     Pub,
 
@@ -234,6 +244,19 @@ impl LexicalToken {
                 LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Points))
             }
             Self::Fin => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Fin)),
+            Self::Key => LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::Key)),
+            Self::FinKey => {
+                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::FinKey))
+            }
+            Self::FloorKey => {
+                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::FloorKey))
+            }
+            Self::CeilKey => {
+                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::CeilKey))
+            }
+            Self::NearestKey => {
+                LexicalItem::Syntax(Token::ContextualKeyword(ContextualKeyword::NearestKey))
+            }
             Self::Pub => LexicalItem::Syntax(Token::Pub),
             Self::StringLiteral => LexicalItem::Syntax(Token::StringLiteral),
             Self::Plus => LexicalItem::Syntax(Token::Plus),
@@ -291,6 +314,11 @@ pub enum ContextualKeyword {
     Step,
     Points,
     Fin,
+    Key,
+    FinKey,
+    FloorKey,
+    CeilKey,
+    NearestKey,
 }
 
 impl std::fmt::Display for ContextualKeyword {
@@ -303,6 +331,11 @@ impl std::fmt::Display for ContextualKeyword {
             Self::Step => write!(f, "step"),
             Self::Points => write!(f, "points"),
             Self::Fin => write!(f, "Fin"),
+            Self::Key => write!(f, "key"),
+            Self::FinKey => write!(f, "fin_key"),
+            Self::FloorKey => write!(f, "floor_key"),
+            Self::CeilKey => write!(f, "ceil_key"),
+            Self::NearestKey => write!(f, "nearest_key"),
         }
     }
 }

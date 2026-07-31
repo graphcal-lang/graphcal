@@ -113,7 +113,7 @@ impl CoordinateIndexData {
 
     /// Returns the number of coordinates in this index.
     #[must_use]
-    const fn cardinality(&self) -> usize {
+    pub const fn cardinality(&self) -> usize {
         self.cardinality.get()
     }
 }
@@ -325,7 +325,7 @@ impl IndexDef {
 
     /// Returns the cardinality of a concrete structural `Fin(N)` index.
     #[must_use]
-    pub(crate) const fn finite_index_size(&self) -> Option<u64> {
+    pub const fn finite_index_size(&self) -> Option<u64> {
         match &self.kind {
             IndexKind::Finite { cardinality } => Some(cardinality.get() as u64),
             _ => None,

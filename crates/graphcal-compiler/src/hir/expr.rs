@@ -588,6 +588,14 @@ pub enum ExprKind {
         init: Box<Expr>,
         body: Box<Expr>,
     },
+    /// A key introduction form over a resolved axis:
+    /// `key(Axis, spelling)`, `fin_key(Fin(N), e)`, or a coordinate search.
+    KeyForm {
+        kind: crate::syntax::ast::KeyFormKind,
+        axis: ForBindingIndex,
+        axis_span: Span,
+        arg: Box<Expr>,
+    },
     Match {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
@@ -711,6 +719,9 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
         ExprKind::Unfold { init, body, .. } => {
             collect_expr_dependencies_into(init, deps);
             collect_expr_dependencies_into(body, deps);
+        }
+        ExprKind::KeyForm { arg, .. } => {
+            collect_expr_dependencies_into(arg, deps);
         }
         ExprKind::Match { scrutinee, arms } => {
             collect_expr_dependencies_into(scrutinee, deps);
@@ -890,6 +901,7 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
         ExprKind::Unfold { init, body, .. } => {
             find_extern_call(init).or_else(|| find_extern_call(body))
         }
+        ExprKind::KeyForm { arg, .. } => find_extern_call(arg),
         ExprKind::Match { scrutinee, arms } => find_extern_call(scrutinee)
             .or_else(|| arms.iter().find_map(|arm| find_extern_call(&arm.body))),
         ExprKind::InlineDagRef { args, .. } => args
@@ -1248,6 +1260,40 @@ impl<'a> ExprLowerer<'a> {
                     }),
                     init,
                     body,
+                }
+            }
+            ast::ExprKind::KeyForm { kind, axis, arg } => {
+                let lowered_axis = match axis {
+                    crate::syntax::ast::IndexExpr::Name(path) => {
+                        let resolved = self
+                            .ctx
+                            .resolver
+                            .resolve_index_path(self.ctx.owner, &path.value)
+                            .map_err(|source| ExprLowerError::ModuleResolve {
+                                source,
+                                span: path.span,
+                            })?;
+                        ForBindingIndex::Named(Spanned::new(resolved, path.span))
+                    }
+                    crate::syntax::ast::IndexExpr::Finite { cardinality, span } => {
+                        ForBindingIndex::Finite {
+                            cardinality: lower_nat_expr(cardinality, self.ctx.type_context())?,
+                            span: *span,
+                        }
+                    }
+                    crate::syntax::ast::IndexExpr::BareNat(nat_expr) => {
+                        return Err(crate::hir::lower::HirLowerError::ExpectedIndexFoundNat {
+                            expression: nat_expr.to_string(),
+                            span: nat_expr.span(),
+                        }
+                        .into());
+                    }
+                };
+                ExprKind::KeyForm {
+                    kind: *kind,
+                    axis: lowered_axis,
+                    axis_span: axis.span(),
+                    arg: Box::new(self.lower_expr(arg)),
                 }
             }
             ast::ExprKind::Match { scrutinee, arms } => ExprKind::Match {

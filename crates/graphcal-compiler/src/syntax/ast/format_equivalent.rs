@@ -1954,6 +1954,19 @@ impl FormatEquivalent for ExprKind {
                     && index_name.format_equivalent(other_index_name)
                     && body.format_equivalent(other_body)
             }
+            Self::KeyForm { kind, axis, arg } => {
+                let Self::KeyForm {
+                    kind: other_kind,
+                    axis: other_axis,
+                    arg: other_arg,
+                } = other
+                else {
+                    return false;
+                };
+                kind == other_kind
+                    && axis.format_equivalent(other_axis)
+                    && arg.format_equivalent(other_arg)
+            }
             Self::Match { scrutinee, arms } => {
                 let Self::Match {
                     scrutinee: other_scrutinee,
