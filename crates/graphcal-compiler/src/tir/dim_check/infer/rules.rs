@@ -56,11 +56,71 @@ fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
     })
 }
 
+/// The exact additive fragment of Fin-key arithmetic:
+/// `k : Key<Fin(N)>` plus a static Nat constant `c` yields `Key<Fin(N + c)>`.
+fn fin_key_additive_rule(
+    op: BinOp,
+    key_index: &super::super::InferredIndex,
+    rhs: &Operand,
+    rhs_const_int: Option<i64>,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    let reject = |help: &str| {
+        Err(GraphcalError::DimensionMismatch {
+            expected: "a static Nat constant".to_string(),
+            found: format_inferred_type(&rhs.ty, registry),
+            help: help.to_string(),
+            src: src.clone(),
+            span: rhs.span.into(),
+        })
+    };
+    let Some(bound) = key_index.finite_index_form() else {
+        return reject(
+            "named and coordinate keys have no arithmetic; only Fin-axis keys \
+             carry the additive fragment `k + c`",
+        );
+    };
+    if op != BinOp::Add {
+        return reject(
+            "key subtraction is fallible at 0 and excluded; restructure additively \
+             or use to_int() and fin_key()",
+        );
+    }
+    if !rhs.ty.is_int_like() {
+        return reject("`k + c` takes an integer constant addend");
+    }
+    let Some(addend) = rhs_const_int else {
+        return reject(
+            "a runtime offset escapes any static bound; use `to_int(k) + e` and \
+             re-enter with fin_key()",
+        );
+    };
+    let Ok(addend) = u64::try_from(addend) else {
+        return reject("`k + c` takes a non-negative static constant");
+    };
+    let shifted = bound
+        .add(&crate::nat::NatPolyForm::from_constant(addend))
+        .map_err(|err| GraphcalError::EvalError {
+            message: err.to_string(),
+            src: src.clone(),
+            span: rhs.span.into(),
+        })?;
+    crate::tir::dim_check::InferredIndex::from_finite_index_form(shifted)
+        .map(InferredType::Key)
+        .map_err(|err| GraphcalError::EvalError {
+            message: err.to_string(),
+            src: src.clone(),
+            span: rhs.span.into(),
+        })
+}
+
 /// Typing rule for a binary operation, given already-inferred operands.
 ///
 /// `rhs_const_int` is the right operand's constant-folded `Int` value for
-/// runtime-classified `Int ^ Int` chains (issue #578). Exact literal and
-/// rational power syntax is carried directly by [`BinOp::Pow`].
+/// runtime-classified `Int ^ Int` chains (issue #578) and for the additive
+/// Fin-key rule. Exact literal and rational power syntax is carried directly
+/// by [`BinOp::Pow`].
 #[expect(
     clippy::too_many_lines,
     reason = "exhaustive match over all BinOp variants"
@@ -220,6 +280,25 @@ pub(super) fn binop_rule(
         }
         // Arithmetic operators: require matching numeric operands (Int or Quantity)
         BinOp::Add | BinOp::Sub => {
+            // Additive Fin-key arithmetic: `k + c` with a static Nat constant
+            // shifts the bound into the type — `Key<Fin(N)> + c : Key<Fin(N + c)>`
+            // — exactly and infallibly. Everything else on keys is rejected:
+            // subtraction is fallible at 0 and Nat itself has none; runtime
+            // offsets escape any static bound.
+            if let InferredType::Key(key_index) = lhs_type {
+                return fin_key_additive_rule(op, key_index, rhs, rhs_const_int, registry, src);
+            }
+            if matches!(rhs_type, InferredType::Key(_)) {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: format_inferred_type(lhs_type, registry),
+                    found: format_inferred_type(rhs_type, registry),
+                    help: "Fin-key arithmetic is written key-first: `k + c` with a \
+                           static Nat constant"
+                        .to_string(),
+                    src: src.clone(),
+                    span: rhs.span.into(),
+                });
+            }
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }

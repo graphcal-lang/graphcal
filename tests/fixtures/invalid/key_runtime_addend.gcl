@@ -1,0 +1,4 @@
+// A runtime addend escapes any static bound; exit key-land explicitly.
+param n: Int = 1;
+
+node k: Key<Fin(4)> = key(Fin(3), 1) + @n;

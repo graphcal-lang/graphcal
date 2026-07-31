@@ -1858,8 +1858,9 @@ fn infer_hir_binop(
         src,
     )?;
     // Exact exponent shape is carried by `BinOp::Pow`; constant folding is
-    // needed only for runtime-classified right-associated Int power chains.
-    let rhs_const_int = if matches!(op, BinOp::Pow(_)) {
+    // needed for runtime-classified right-associated Int power chains and for
+    // the additive Fin-key rule (`k + c` shifts the bound by a static Nat).
+    let rhs_const_int = if matches!(op, BinOp::Pow(_) | BinOp::Add) {
         try_const_int(rhs)
     } else {
         None

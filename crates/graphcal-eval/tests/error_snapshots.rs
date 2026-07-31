@@ -257,6 +257,20 @@ fn error_floor_key_below_range() {
 }
 
 #[test]
+fn error_key_subtraction() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_subtraction.gcl");
+    let rendered = render_error(source, "key_subtraction.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_runtime_addend() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_runtime_addend.gcl");
+    let rendered = render_error(source, "key_runtime_addend.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_complex_aggregation_unsupported() {
     let source =
         include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");
