@@ -516,6 +516,7 @@ fn lower_to_builder(
         dag_id,
         None,
         None,
+        &crate::cancellation::CancellationToken::unbounded(),
     )
 }
 
@@ -550,6 +551,36 @@ pub fn lower_to_builder_with_imported_values(
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    lower_to_builder_with_imported_values_and_cancellation(
+        ast,
+        src,
+        imported_names,
+        imported_values,
+        dag_id,
+        registry_seed,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Lower an AST with imported values and cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] for invalid source or cancellation.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+pub fn lower_to_builder_with_imported_values_and_cancellation(
+    ast: &File,
+    src: &NamedSource<Arc<String>>,
+    imported_names: &ImportedValueNames,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    dag_id: &crate::dag_id::DagId,
+    registry_seed: Option<RegistrySeed<'_>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    cancellation.checkpoint()?;
     let imported_decl_types = imported_values
         .iter()
         .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
@@ -563,6 +594,7 @@ pub fn lower_to_builder_with_imported_values(
         HashMap::new(),
         dag_id,
         registry_seed,
+        cancellation,
     )
 }
 
@@ -589,7 +621,9 @@ fn lower_to_builder_with_imported_value_decls(
     imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    cancellation.checkpoint()?;
     // Step 1: Declaration collection with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
 
@@ -608,6 +642,7 @@ fn lower_to_builder_with_imported_value_decls(
         dag_id,
         None,
         registry_seed,
+        cancellation,
     )?;
 
     // Plot aliases from include brace lists become known to this DAG so
@@ -672,6 +707,46 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+        dag_body,
+        parent_registry,
+        imported_names,
+        imported_values,
+        imported_decl_types,
+        imported_value_sources,
+        src,
+        dag_id,
+        registry_seed,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Lower an inline DAG module with cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] for invalid source or cancellation.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dag-module lowering threads import metadata, registry state, and cancellation"
+)]
+pub fn lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+    dag_body: &File,
+    parent_registry: Option<&Registry>,
+    imported_names: &ImportedValueNames,
+    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_decl_types: HashMap<ScopedName, DeclaredType>,
+    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    src: &NamedSource<Arc<String>>,
+    dag_id: &crate::dag_id::DagId,
+    registry_seed: Option<RegistrySeed<'_>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    cancellation.checkpoint()?;
     let resolved = resolve_with_imported_values(dag_body, src, imported_names)?;
     let type_anns = extract_type_annotations(dag_body);
 
@@ -686,6 +761,7 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
         dag_id,
         parent_registry,
         registry_seed,
+        cancellation,
     )
 }
 
@@ -823,7 +899,9 @@ fn build_ir_from_resolved(
     dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
     registry_seed: Option<RegistrySeed<'_>>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
+    cancellation.checkpoint()?;
     // Build registry (prelude + user-declared dimensions/units/indexes/structs).
     // When a parent registry is provided (inline-dag bodies), its entries are
     // merged in before registering the virtual file's own declarations so that
@@ -845,12 +923,14 @@ fn build_ir_from_resolved(
         seed(&mut builder)?;
     }
     register_file_declarations(ast, &mut builder, src, dag_id)?;
+    cancellation.checkpoint()?;
 
     // Pair resolved declarations with type annotations.
     let consts = resolved
         .consts
         .into_iter()
         .map(|entry| {
+            cancellation.checkpoint()?;
             let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenConstEntry {
@@ -864,10 +944,12 @@ fn build_ir_from_resolved(
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
+    cancellation.checkpoint()?;
     let params = resolved
         .params
         .into_iter()
         .map(|entry| {
+            cancellation.checkpoint()?;
             let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenParamEntry {
@@ -881,10 +963,12 @@ fn build_ir_from_resolved(
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
+    cancellation.checkpoint()?;
     let nodes = resolved
         .nodes
         .into_iter()
         .map(|entry| {
+            cancellation.checkpoint()?;
             let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenNodeEntry {
@@ -1034,10 +1118,6 @@ impl UnfrozenIR {
     ///
     /// Returns a [`GraphcalError`] if any body contains a reference that
     /// cannot be resolved.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "single lowering boundary over every declaration kind"
-    )]
     pub fn freeze(
         self,
         registry: Registry,
@@ -1045,6 +1125,33 @@ impl UnfrozenIR {
         resolver: &crate::syntax::module_resolve::ModuleResolver,
         src: &NamedSource<Arc<String>>,
     ) -> Result<IR, GraphcalError> {
+        self.freeze_with_cancellation(
+            registry,
+            owner,
+            resolver,
+            src,
+            &crate::cancellation::CancellationToken::unbounded(),
+        )
+    }
+
+    /// Freeze into IR while observing cooperative cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`GraphcalError`] for unresolved bodies or cancellation.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single lowering boundary over every declaration kind"
+    )]
+    pub fn freeze_with_cancellation(
+        self,
+        registry: Registry,
+        owner: &crate::dag_id::DagId,
+        resolver: &crate::syntax::module_resolve::ModuleResolver,
+        src: &NamedSource<Arc<String>>,
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<IR, GraphcalError> {
+        cancellation.checkpoint()?;
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
         // canonical identities for the lowering below.
@@ -1056,6 +1163,7 @@ impl UnfrozenIR {
             .chain(self.params.iter().map(|entry| &entry.name))
             .chain(self.nodes.iter().map(|entry| &entry.name))
         {
+            cancellation.checkpoint()?;
             let canonical =
                 crate::hir::diagnostics::resolved_decl_key(owner, name).ok_or_else(|| {
                     GraphcalError::InternalError {
@@ -1067,6 +1175,7 @@ impl UnfrozenIR {
             decl_bindings.insert(name.clone(), canonical);
         }
         for name in self.imported_values.keys() {
+            cancellation.checkpoint()?;
             let path = scoped_name_to_name_path(name, src)?;
             let canonical = match resolver.resolve_decl_path(owner, &path) {
                 Ok(target_decl) => target_decl,
@@ -1089,6 +1198,7 @@ impl UnfrozenIR {
             decl_bindings.insert(name.clone(), canonical);
         }
         for (name, source) in &self.imported_value_sources {
+            cancellation.checkpoint()?;
             decl_bindings.insert(
                 name.clone(),
                 ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
@@ -1120,6 +1230,7 @@ impl UnfrozenIR {
             .consts
             .iter()
             .map(|entry| {
+                cancellation.checkpoint()?;
                 Ok(ConstEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
@@ -1134,10 +1245,12 @@ impl UnfrozenIR {
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
+        cancellation.checkpoint()?;
         let params = self
             .params
             .iter()
             .map(|entry| {
+                cancellation.checkpoint()?;
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
@@ -1158,10 +1271,12 @@ impl UnfrozenIR {
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
+        cancellation.checkpoint()?;
         let nodes = self
             .nodes
             .iter()
             .map(|entry| {
+                cancellation.checkpoint()?;
                 Ok(NodeEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
@@ -1176,10 +1291,12 @@ impl UnfrozenIR {
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
+        cancellation.checkpoint()?;
         let asserts = self
             .asserts
             .iter()
             .map(|entry| {
+                cancellation.checkpoint()?;
                 let body_src = entry.src.resolve(src);
                 Ok(AssertEntry {
                     name: entry.name.clone(),
@@ -1216,10 +1333,12 @@ impl UnfrozenIR {
             .with_decl_bindings(&decl_bindings);
             crate::hir::lower_expr(expr, expr_ctx).ok()
         };
+        cancellation.checkpoint()?;
         let plots = self
             .plots
             .iter()
             .map(|entry| {
+                cancellation.checkpoint()?;
                 let mut body = LoweredPlotBody::default();
                 let mut complete = true;
                 for encoding in &entry.decl.encodings {
@@ -1248,14 +1367,14 @@ impl UnfrozenIR {
                         None => complete = false,
                     }
                 }
-                PlotEntry {
+                Ok(PlotEntry {
                     name: entry.name.clone(),
                     mark_type: entry.decl.mark.mark_type,
                     body: complete.then_some(body),
                     displayed: entry.displayed,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
                             resolution_owner: &crate::dag_id::DagId| {
             fields
@@ -1269,24 +1388,34 @@ impl UnfrozenIR {
                 })
                 .collect::<Vec<_>>()
         };
+        cancellation.checkpoint()?;
         let figures = self
             .figures
             .iter()
-            .map(|entry| FigureEntry {
-                name: entry.name.clone(),
-                plot_names: entry.decl.plot_names.clone(),
-                fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+            .map(|entry| {
+                cancellation.checkpoint()?;
+                Ok(FigureEntry {
+                    name: entry.name.clone(),
+                    plot_names: entry.decl.plot_names.clone(),
+                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        cancellation.checkpoint()?;
         let layers = self
             .layers
             .iter()
-            .map(|entry| LayerEntry {
-                name: entry.name.clone(),
-                plot_names: entry.decl.plot_names.clone(),
-                fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+            .map(|entry| {
+                cancellation.checkpoint()?;
+                Ok(LayerEntry {
+                    name: entry.name.clone(),
+                    plot_names: entry.decl.plot_names.clone(),
+                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+
+        cancellation.checkpoint()?;
 
         let extern_functions =
             resolve_plugin_imports(&self.plugin_imports, &registry, owner, resolver, src)?;

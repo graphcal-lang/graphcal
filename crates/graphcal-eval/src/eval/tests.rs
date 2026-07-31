@@ -26,6 +26,48 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap()
 }
 
+#[test]
+fn cancellation_stops_an_in_flight_evaluation() {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::Duration,
+    };
+
+    let source = "node values: Dimensionless[Fin(1000000)] = \
+                  for i: Fin(1000000) { 1.0 };";
+    let project = crate::loader::LoadedProject::from_source(source, "cancel.gcl").unwrap();
+    let cancellation_source = graphcal_compiler::cancellation::CancellationSource::new();
+    let cancellation = cancellation_source.token();
+    let barrier = Arc::new(Barrier::new(2));
+    let worker_barrier = Arc::clone(&barrier);
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        worker_barrier.wait();
+        let result = compile_and_eval_from_project_with_cancellation(
+            &project,
+            &HashMap::new(),
+            &cancellation,
+        );
+        sender.send(result).unwrap();
+    });
+
+    barrier.wait();
+    // Let the worker enter the compile/eval pipeline before requesting
+    // cancellation. The exact stage is deliberately irrelevant: every stage
+    // shares the same token and must unwind to this boundary.
+    thread::sleep(Duration::from_millis(20));
+    cancellation_source.cancel();
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("cancelled evaluation should stop promptly");
+    let error = result.expect_err("the long-running evaluation should be cancelled");
+    assert!(error.is_cancelled(), "unexpected outcome: {error:?}");
+}
+
 fn run_mutated_tir_values(
     tir: &graphcal_compiler::tir::typed::TIR,
     source: &str,
@@ -41,6 +83,7 @@ fn run_mutated_tir_values(
         builtin_consts,
         builtin_fns,
         &crate::host_fns::demo_registry(),
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .unwrap()
     .values
@@ -2343,6 +2386,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
+        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
@@ -2408,6 +2452,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
+        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
@@ -3275,6 +3320,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
+        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
@@ -3341,6 +3387,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
+        cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,

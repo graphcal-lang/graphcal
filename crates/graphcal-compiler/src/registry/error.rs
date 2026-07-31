@@ -24,6 +24,14 @@ fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
 /// Rich diagnostic error types for graphcal evaluation.
 #[derive(Debug, Clone, Error, Diagnostic)]
 pub enum GraphcalError {
+    /// Cooperative cancellation requested by the embedding shell.
+    ///
+    /// This variant is intercepted at the operation boundary and is never
+    /// rendered as a source diagnostic.
+    #[error(transparent)]
+    #[diagnostic(transparent)]
+    Cancelled(#[from] crate::cancellation::Cancelled),
+
     #[error("duplicate name `{name}`")]
     #[diagnostic(code(graphcal::N001), help("each name must be unique within a file"))]
     DuplicateName {
@@ -2016,6 +2024,13 @@ pub enum GraphcalError {
 }
 
 impl GraphcalError {
+    /// Whether this outcome represents cooperative cancellation rather than a
+    /// Graphcal source error.
+    #[must_use]
+    pub const fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled(_))
+    }
+
     /// Return the `NamedSource` embedded in this error, if any.
     ///
     /// Most variants carry a `#[source_code]` field naming the file and its
@@ -2024,8 +2039,8 @@ impl GraphcalError {
     /// into — instead of inferring (name, source) from external context,
     /// which can silently desynchronize when an imported file is the origin.
     ///
-    /// Returns `None` for the handful of variants that represent errors
-    /// without a source location: file-system errors before parsing
+    /// Returns `None` for control flow and the handful of variants without a
+    /// source location: [`Self::Cancelled`], file-system errors before parsing
     /// ([`Self::FileNotFound`], [`Self::InvalidSourcePath`],
     /// [`Self::CircularImport`], [`Self::ManifestError`]) and CLI override errors
     /// ([`Self::OverrideNotAParam`], [`Self::OverrideUnknownParam`]).
@@ -2036,7 +2051,8 @@ impl GraphcalError {
     )]
     pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         let src = match self {
-            Self::FileNotFound { .. }
+            Self::Cancelled(_)
+            | Self::FileNotFound { .. }
             | Self::InvalidSourcePath { .. }
             | Self::CircularImport { .. }
             | Self::ManifestError { .. }

@@ -30,6 +30,12 @@ same-leaf declarations. If `a.gcl` and `b.gcl` both export `Phase`, `Item`, and
 `Pick`, go-to-definition on `a.Phase`, `a.Phase.Burn`, `a.Item`, or `a.Pick(...)`
 jumps to `a.gcl`, not whichever same-leaf symbol was seen first.
 
+Analysis is revision-aware and bounded. A new edit cancels superseded loading,
+compilation, and evaluation work; only the newest completed revision publishes
+diagnostics or inlay-hint data. If an analysis exceeds the server deadline, the
+LSP keeps the last completed result available rather than replacing source
+diagnostics with a server-timeout error.
+
 ## VS Code
 
 The VS Code extension provides syntax highlighting (via TextMate grammar) and full LSP support.

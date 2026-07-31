@@ -49,6 +49,7 @@ Note: `syntax/ast/value.rs`, `syntax/ast/decl.rs`, `syntax/ast/format_equivalent
 - [ ] `crates/graphcal-compiler/src/syntax/ast/common.rs`
 - [ ] `crates/graphcal-compiler/src/exact_rational.rs`
 - [ ] `crates/graphcal-compiler/src/dimension.rs`
+- [ ] `crates/graphcal-compiler/src/cancellation.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/value.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/decl.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/format_equivalent.rs`

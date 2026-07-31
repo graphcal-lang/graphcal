@@ -146,9 +146,33 @@ pub fn type_resolve_with_modules(
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
 ) -> Result<TIR, GraphcalError> {
+    type_resolve_with_modules_and_cancellation(
+        ir,
+        root_dag_id,
+        src,
+        module_resolver,
+        module_types,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Resolve an IR to TIR while observing cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] for invalid types or cancellation.
+pub fn type_resolve_with_modules_and_cancellation(
+    ir: IR,
+    root_dag_id: crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<TIR, GraphcalError> {
+    cancellation.checkpoint()?;
     let owner_for_ctx = root_dag_id.clone();
     let ctx = ModuleTypeContext::new(&owner_for_ctx, module_resolver, module_types);
-    type_resolve_impl(ir, root_dag_id, src, ctx)
+    type_resolve_impl(ir, root_dag_id, src, ctx, cancellation)
 }
 
 fn type_resolve_impl(
@@ -156,7 +180,9 @@ fn type_resolve_impl(
     root_dag_id: crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
+    cancellation.checkpoint()?;
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut root_dag = type_resolve_dag(
@@ -171,6 +197,7 @@ fn type_resolve_impl(
         &ir.imported_values,
         &ir.imported_decl_types,
         &imported_value_sources_for_hir,
+        cancellation,
     )?
     .with_body(
         ir.asserts,
@@ -187,8 +214,10 @@ fn type_resolve_impl(
         module_ctx,
         src,
     )?;
+    cancellation.checkpoint()?;
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut root_dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut root_dag.semantic);
+    cancellation.checkpoint()?;
     check_hir_body_policies(
         &root_dag.semantic,
         &ir.registry,
@@ -216,8 +245,32 @@ pub fn type_resolve_single_with_modules(
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
 ) -> Result<DagTIR, GraphcalError> {
+    type_resolve_single_with_modules_and_cancellation(
+        ir,
+        dag_id,
+        src,
+        module_resolver,
+        module_types,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Resolve one DAG IR while observing cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] for invalid types or cancellation.
+pub fn type_resolve_single_with_modules_and_cancellation(
+    ir: IR,
+    dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<DagTIR, GraphcalError> {
+    cancellation.checkpoint()?;
     let ctx = ModuleTypeContext::new(dag_id, module_resolver, module_types);
-    type_resolve_single_impl(ir, dag_id, src, ctx)
+    type_resolve_single_impl(ir, dag_id, src, ctx, cancellation)
 }
 
 fn type_resolve_single_impl(
@@ -225,7 +278,9 @@ fn type_resolve_single_impl(
     dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
+    cancellation.checkpoint()?;
     let imported_value_sources_for_hir = ir.imported_value_sources.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut dag = type_resolve_dag(
@@ -240,6 +295,7 @@ fn type_resolve_single_impl(
         &ir.imported_values,
         &ir.imported_decl_types,
         &imported_value_sources_for_hir,
+        cancellation,
     )?
     .with_body(
         ir.asserts,
@@ -256,8 +312,10 @@ fn type_resolve_single_impl(
         module_ctx,
         src,
     )?;
+    cancellation.checkpoint()?;
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
+    cancellation.checkpoint()?;
     check_hir_body_policies(
         &dag.semantic,
         &ir.registry,
@@ -303,6 +361,7 @@ fn lower_dynamic_unit_scales(
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
 #[expect(
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "orchestrates per-DAG type resolution across IR declarations and semantic body data"
 )]
 fn type_resolve_dag(
@@ -323,7 +382,9 @@ fn type_resolve_dag(
     >,
     imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIRSeed, GraphcalError> {
+    cancellation.checkpoint()?;
     let mut resolved_decl_types = HashMap::new();
     let no_generic_params: &[GenericParamName] = &[];
 
@@ -331,6 +392,7 @@ fn type_resolve_dag(
     // file's offsets, so resolution errors must render against its own source
     // rather than the importer's `src` (#868).
     for entry in &consts {
+        cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
@@ -345,6 +407,7 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &params {
+        cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
@@ -359,6 +422,7 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &nodes {
+        cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
         let resolved = resolve_type_expr_inner(
             &entry.type_ann,
@@ -373,6 +437,7 @@ fn type_resolve_dag(
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
 
+    cancellation.checkpoint()?;
     let LoweredDagExpressions {
         exprs: expressions,
         domain_bounds,
@@ -386,8 +451,10 @@ fn type_resolve_dag(
         registry,
         src,
     )?;
+    cancellation.checkpoint()?;
     let dependencies =
         collect_resolved_dag_dependencies(&consts, &params, &nodes, &expressions, module_ctx, src)?;
+    cancellation.checkpoint()?;
     let collection_refs = collect_resolved_collection_refs(
         &expressions,
         &domain_bounds,
@@ -397,9 +464,11 @@ fn type_resolve_dag(
         module_ctx,
         src,
     )?;
+    cancellation.checkpoint()?;
     let constructor_refs =
         collect_resolved_constructor_refs(&expressions, &domain_bounds, module_ctx, src)?;
     let inline_dag_refs = collect_resolved_inline_dag_refs(&expressions);
+    cancellation.checkpoint()?;
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
         &constructor_refs,

@@ -26,7 +26,9 @@ pub(in crate::eval::project) fn lower_and_finalize(
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
+    cancellation.checkpoint()?;
     // Snapshot before lower_to_builder_with_imported_values consumes
     // `ctx.imported_values`. The deferred-instantiated-include processing
     // below (and lower in this function) needs the original map back —
@@ -48,13 +50,14 @@ pub(in crate::eval::project) fn lower_and_finalize(
         )
     };
     let (mut builder, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
+        graphcal_compiler::ir::lower::lower_to_builder_with_imported_values_and_cancellation(
             file_ast,
             file_src,
             &ctx.imported_names,
             ctx.imported_values,
             file_dag_id,
             Some(&mut registry_seed),
+            cancellation,
         )?;
 
     // Snapshot the consumer-facing output surface before include bodies are
@@ -91,8 +94,10 @@ pub(in crate::eval::project) fn lower_and_finalize(
         file_ast,
         &mut builder,
         &mut unfrozen,
+        cancellation,
     )?;
 
+    cancellation.checkpoint()?;
     // Apply overrides routed to this file (using original param names)
     // before the freeze boundary lowers every body to HIR.
     let file_overrides: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr> =
@@ -105,14 +110,24 @@ pub(in crate::eval::project) fn lower_and_finalize(
         apply_overrides(&mut unfrozen, &file_overrides)?;
     }
 
+    cancellation.checkpoint()?;
     let module_resolver = project
         .build_module_resolver()
         .map_err(|err| module_resolve_compile_error(err, file_src))?;
+    cancellation.checkpoint()?;
     let registry = builder
         .try_build()
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
-    let ir = unfrozen.freeze(registry, file_dag_id, &module_resolver, file_src)?;
+    cancellation.checkpoint()?;
+    let ir = unfrozen.freeze_with_cancellation(
+        registry,
+        file_dag_id,
+        &module_resolver,
+        file_src,
+        cancellation,
+    )?;
 
+    cancellation.checkpoint()?;
     // Type-resolve top-level decls; then compile each inline dag body
     // explicitly (loader supplies the per-file self-import set and the
     // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
@@ -127,16 +142,18 @@ pub(in crate::eval::project) fn lower_and_finalize(
         })?;
     module_types.insert_registry(file_dag_id, &ir.registry);
     for (dep_dag_id, evaluated) in evaluated_files {
+        cancellation.checkpoint()?;
         module_types.insert_registry(dep_dag_id, &evaluated.registry);
     }
 
     let parent_external_surface = ir.external_surface.clone();
-    let mut tir = graphcal_compiler::tir::typed::type_resolve_with_modules(
+    let mut tir = graphcal_compiler::tir::typed::type_resolve_with_modules_and_cancellation(
         ir,
         file_dag_id.clone(),
         file_src,
         &module_resolver,
         &module_types,
+        cancellation,
     )?;
     // File roots and inline `dag` blocks are both callable DAG modules. Keep
     // their externally projectable ports in the same compiled representation
@@ -152,9 +169,15 @@ pub(in crate::eval::project) fn lower_and_finalize(
         evaluated_files,
         &module_resolver,
         &module_types,
+        cancellation,
     )?;
+    cancellation.checkpoint()?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
-    graphcal_compiler::tir::dim_check::check_dimensions_tir(&tir, file_src)?;
+    graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
+        &tir,
+        file_src,
+        cancellation,
+    )?;
 
     // Resolve domain constraints at compile time so malformed bounds (such as
     // C003 min > max) surface under `graphcal check` instead of only at `eval`.
@@ -163,10 +186,21 @@ pub(in crate::eval::project) fn lower_and_finalize(
     // const values, so we evaluate consts here too. The resulting plan is
     // discarded — `exec_plan::compile` recomputes both as part of its run.
     {
-        let const_values = crate::exec_plan::eval_consts_from_tir(&tir, file_src)?;
-        let _ = crate::exec_plan::resolve_domain_constraints(&tir, &const_values, file_src)?;
+        let const_values =
+            crate::exec_plan::eval_consts_from_tir_with_cancellation(&tir, file_src, cancellation)?;
+        let _ = crate::exec_plan::resolve_domain_constraints_with_cancellation(
+            &tir,
+            &const_values,
+            file_src,
+            cancellation,
+        )?;
         let field_constraints =
-            crate::exec_plan::resolve_struct_field_constraints(&tir, &const_values, file_src)?;
+            crate::exec_plan::resolve_struct_field_constraints_with_cancellation(
+                &tir,
+                &const_values,
+                file_src,
+                cancellation,
+            )?;
         crate::exec_plan::check_const_struct_field_constraints_at_compile_time(
             &tir,
             &const_values,
@@ -178,6 +212,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     let declared_types = tir.build_declared_types(file_src)?;
 
     for override_name in file_overrides.keys() {
+        cancellation.checkpoint()?;
         graphcal_compiler::tir::dim_check::check_override_dimension(
             override_name.as_str(),
             &declared_types,
@@ -246,12 +281,14 @@ fn compile_inline_dag_modules<'a>(
     evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_types: &graphcal_compiler::tir::typed::ModuleTypeRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     let loaded_file = &project.files[file_dag_id];
     let parent_values =
         crate::inline_dag::classify_value_decls_in_tir(tir, parent_external_surface, file_src)?;
 
     for loaded_dag in &loaded_file.inline_dags {
+        cancellation.checkpoint()?;
         let dag_ir = compile_loaded_dag_module_ir(
             tir,
             project,
@@ -260,6 +297,7 @@ fn compile_inline_dag_modules<'a>(
             &parent_values,
             evaluated_files,
             module_resolver,
+            cancellation,
         )?;
         // The shared module registry contains file/dependency registries, but
         // an inline DAG owns type-system declarations in its body (including
@@ -267,13 +305,15 @@ fn compile_inline_dag_modules<'a>(
         // registry under the child DAG identity before resolving its annotations.
         let mut dag_module_types = module_types.clone();
         dag_module_types.insert_registry(&loaded_dag.dag_id, &dag_ir.registry);
-        let mut compiled_dag = graphcal_compiler::tir::typed::type_resolve_single_with_modules(
-            dag_ir,
-            &loaded_dag.dag_id,
-            file_src,
-            module_resolver,
-            &dag_module_types,
-        )?;
+        let mut compiled_dag =
+            graphcal_compiler::tir::typed::type_resolve_single_with_modules_and_cancellation(
+                dag_ir,
+                &loaded_dag.dag_id,
+                file_src,
+                module_resolver,
+                &dag_module_types,
+                cancellation,
+            )?;
         compiled_dag.populate_projectable_outputs(&loaded_dag.body);
         tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
     }
@@ -281,6 +321,10 @@ fn compile_inline_dag_modules<'a>(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "DAG lowering threads project, module, dependency, resolver, and cancellation context"
+)]
 fn compile_loaded_dag_module_ir<'a>(
     tir: &graphcal_compiler::tir::typed::TIR,
     project: &'a crate::loader::LoadedProject,
@@ -289,7 +333,9 @@ fn compile_loaded_dag_module_ir<'a>(
     parent_values: &crate::inline_dag::ParentValueDecls,
     evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+    cancellation.checkpoint()?;
     let parent_loaded = &project.files[&loaded_dag.parent_dag_id];
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
         &loaded_dag.body,
@@ -344,7 +390,7 @@ fn compile_loaded_dag_module_ir<'a>(
         )
     };
     let (mut builder, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls(
+        graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
             dag_ast.as_ref(),
             Some(&tir.registry),
             &ctx.imported_names,
@@ -354,6 +400,7 @@ fn compile_loaded_dag_module_ir<'a>(
             file_src,
             &loaded_dag.dag_id,
             Some(&mut registry_seed),
+            cancellation,
         )?;
 
     process_deferred_dag_includes(
@@ -366,12 +413,20 @@ fn compile_loaded_dag_module_ir<'a>(
         dag_ast.as_ref(),
         &mut builder,
         &mut unfrozen,
+        cancellation,
     )?;
 
+    cancellation.checkpoint()?;
     let registry = builder
         .try_build()
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
-    Ok(unfrozen.freeze(registry, &loaded_dag.dag_id, module_resolver, file_src)?)
+    Ok(unfrozen.freeze_with_cancellation(
+        registry,
+        &loaded_dag.dag_id,
+        module_resolver,
+        file_src,
+        cancellation,
+    )?)
 }
 
 fn registry_build_compile_error(
@@ -628,6 +683,7 @@ fn process_deferred_dag_includes(
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     builder: &mut RegistryBuilder,
     unfrozen: &mut graphcal_compiler::ir::lower::UnfrozenIR,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     let importer_external_surface = super::extract_external_decl_surface(importer_ast);
     let importer_local_type_names = collect_local_type_names(importer_ast);
@@ -637,6 +693,7 @@ fn process_deferred_dag_includes(
     > = HashMap::new();
 
     for deferred in deferred_dag_includes {
+        cancellation.checkpoint()?;
         // ---- 1. Resolve source body + lower to IR ------------------------
         let (
             dep_unfrozen,
@@ -651,13 +708,14 @@ fn process_deferred_dag_includes(
                 let dep_src = &dep_loaded.named_source;
                 let dep_imported = build_dep_imported_values(project, dep_dag_id, evaluated_files)?;
                 let (dep_builder, dep_unfrozen) =
-                    graphcal_compiler::ir::lower::lower_to_builder_with_imported_values(
+                    graphcal_compiler::ir::lower::lower_to_builder_with_imported_values_and_cancellation(
                         &dep_loaded.ast,
                         dep_src,
                         &dep_imported.names,
                         dep_imported.values,
                         dep_dag_id,
                         None,
+                        cancellation,
                     )?;
                 let dep_registry = dep_builder
                     .try_build()
@@ -779,7 +837,7 @@ fn process_deferred_dag_includes(
                         importer_src,
                     )
                 };
-                let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls(
+                let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
                         stripped_body.as_ref(),
                         None,
                         &body_ctx.imported_names,
@@ -789,6 +847,7 @@ fn process_deferred_dag_includes(
                         importer_src,
                         &dag_dag_id,
                         Some(&mut registry_seed),
+                        cancellation,
                     )?;
                 dag_unfrozen.retarget_existing_resolution_owners(dag_id);
                 process_deferred_dag_includes(
@@ -801,6 +860,7 @@ fn process_deferred_dag_includes(
                     stripped_body.as_ref(),
                     &mut dag_builder,
                     &mut dag_unfrozen,
+                    cancellation,
                 )?;
                 let dag_registry = dag_builder
                     .try_build()
