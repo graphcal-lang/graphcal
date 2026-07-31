@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::num::NonZeroUsize;
 
 use thiserror::Error;
@@ -121,6 +122,88 @@ const fn index_position_key(position: usize) -> IndexEntryKey {
     IndexEntryKey::position(position as u64)
 }
 
+/// Coarse semantic category used when checking whether one index may bind another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexCategory {
+    Named,
+    Coordinate,
+    Finite,
+}
+
+impl fmt::Display for IndexCategory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Named => "named",
+            Self::Coordinate => "coordinate",
+            Self::Finite => "finite",
+        })
+    }
+}
+
+/// A required or overridable declared index's typed binding contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexBindingContract {
+    Named,
+    Coordinate { dimension: Dimension },
+}
+
+impl IndexBindingContract {
+    /// Return the semantic index category required by this contract.
+    #[must_use]
+    pub const fn category(&self) -> IndexCategory {
+        match self {
+            Self::Named => IndexCategory::Named,
+            Self::Coordinate { .. } => IndexCategory::Coordinate,
+        }
+    }
+
+    /// Check a candidate index without erasing its category or coordinate dimension.
+    ///
+    /// Both concrete and required declared indexes are valid candidates. Allowing a
+    /// compatible required candidate lets an outer generic DAG forward its own input
+    /// to an inner DAG; the outer include chain must eventually provide a concrete axis.
+    pub fn validate(&self, candidate: &IndexDef) -> Result<(), IndexBindingContractError> {
+        let found = candidate.category();
+        if self.category() != found {
+            return Err(IndexBindingContractError::KindMismatch {
+                expected: self.category(),
+                found,
+            });
+        }
+
+        match (self, &candidate.kind) {
+            (
+                Self::Coordinate {
+                    dimension: expected,
+                },
+                IndexKind::Coordinate(CoordinateIndexData {
+                    dimension: found, ..
+                })
+                | IndexKind::RequiredCoordinate { dimension: found },
+            ) if expected != found => Err(IndexBindingContractError::DimensionMismatch {
+                expected: expected.clone(),
+                found: found.clone(),
+            }),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Failure to satisfy a typed index binding contract.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum IndexBindingContractError {
+    #[error("index categories do not match")]
+    KindMismatch {
+        expected: IndexCategory,
+        found: IndexCategory,
+    },
+    #[error("coordinate-index dimensions do not match")]
+    DimensionMismatch {
+        expected: Dimension,
+        found: Dimension,
+    },
+}
+
 /// Closed semantic categories of indexes.
 #[derive(Debug, Clone)]
 pub enum IndexKind {
@@ -129,7 +212,7 @@ pub enum IndexKind {
     /// A coordinate index created by `range(..., step: ...)` or
     /// `linspace(..., points: ...)`.
     Coordinate(CoordinateIndexData),
-    /// Required named index (no variants): must be bound via parameterized import.
+    /// Required named index (no variants): must be bound via parameterized include.
     RequiredNamed,
     /// Required coordinate index with a dimension constraint.
     RequiredCoordinate { dimension: Dimension },
@@ -145,6 +228,18 @@ pub struct IndexDef {
 }
 
 impl IndexDef {
+    /// Return this definition's coarse semantic category.
+    #[must_use]
+    pub const fn category(&self) -> IndexCategory {
+        match &self.kind {
+            IndexKind::Named { .. } | IndexKind::RequiredNamed => IndexCategory::Named,
+            IndexKind::Coordinate(_) | IndexKind::RequiredCoordinate { .. } => {
+                IndexCategory::Coordinate
+            }
+            IndexKind::Finite { .. } => IndexCategory::Finite,
+        }
+    }
+
     /// Returns typed entry keys in index order.
     ///
     /// Named indexes carry declared labels; coordinate and finite indexes carry
@@ -237,7 +332,7 @@ impl IndexDef {
         }
     }
 
-    /// Returns true if this is a required index (must be bound via parameterized import).
+    /// Returns true if this is a required index (must be bound via parameterized include).
     #[must_use]
     pub const fn is_required(&self) -> bool {
         matches!(
@@ -358,6 +453,56 @@ mod tests {
         };
         assert_eq!(definition.concrete_cardinality(), None);
         assert_eq!(definition.cardinality(), 0);
+    }
+
+    #[test]
+    fn binding_contract_accepts_compatible_required_forwarding() {
+        let time = Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
+        let contract = IndexBindingContract::Coordinate {
+            dimension: time.clone(),
+        };
+        let candidate = IndexDef {
+            name: IndexName::expect_valid("OuterStep"),
+            kind: IndexKind::RequiredCoordinate { dimension: time },
+        };
+
+        assert_eq!(contract.validate(&candidate), Ok(()));
+    }
+
+    #[test]
+    fn binding_contract_preserves_kind_and_dimension_errors() {
+        let time = Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
+        let length = Dimension::base(crate::dimension::BaseDimId::Prelude("Length".to_string()));
+        let contract = IndexBindingContract::Coordinate {
+            dimension: time.clone(),
+        };
+        let named = IndexDef {
+            name: IndexName::expect_valid("Phase"),
+            kind: IndexKind::Named {
+                variants: vec![IndexVariantName::expect_valid("Only")],
+            },
+        };
+        assert_eq!(
+            contract.validate(&named),
+            Err(IndexBindingContractError::KindMismatch {
+                expected: IndexCategory::Coordinate,
+                found: IndexCategory::Named,
+            })
+        );
+
+        let coordinate = IndexDef {
+            name: IndexName::expect_valid("DistanceStep"),
+            kind: IndexKind::RequiredCoordinate {
+                dimension: length.clone(),
+            },
+        };
+        assert_eq!(
+            contract.validate(&coordinate),
+            Err(IndexBindingContractError::DimensionMismatch {
+                expected: time,
+                found: length,
+            })
+        );
     }
 
     #[test]

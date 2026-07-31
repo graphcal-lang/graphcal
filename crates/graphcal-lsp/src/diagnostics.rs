@@ -665,6 +665,34 @@ node factor: Dimensionless = @config().factor;
     }
 
     #[test]
+    fn i009_inline_dag_coordinate_index_binding_produces_diagnostic() {
+        let source = r"
+dag pass_through {
+    pub(bind) index Step: Time;
+    param samples: Length[Step];
+    pub node result: Length[Step] = @samples;
+}
+
+pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
+include pass_through(
+    Step: DistanceStep,
+    samples: for distance: DistanceStep { distance },
+) as output;
+";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let code = diagnostics[0].code.as_ref();
+        assert!(
+            code.is_some_and(|code| {
+                matches!(code, NumberOrString::String(value) if value.contains("I009"))
+            }),
+            "expected I009 error code, got {code:?}"
+        );
+        assert!(diagnostics[0].message.contains("Time"));
+        assert!(diagnostics[0].message.contains("Length"));
+    }
+
+    #[test]
     fn v002_required_index_not_pub_produces_diagnostic() {
         let source = "index Phase;";
         let diags = produce_diagnostics(source, "test.gcl");

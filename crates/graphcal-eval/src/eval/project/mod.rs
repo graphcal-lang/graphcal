@@ -251,6 +251,8 @@ struct DeferredDagInclude {
     bindings: HashMap<DeclName, Expr>,
     /// Index bindings: `dep_index_name` → `importer_index_name`.
     index_bindings: DepToImporter<IndexName>,
+    /// Importer-source value span for each index binding, keyed by dep-side name.
+    index_binding_spans: HashMap<IndexName, Span>,
     /// Type bindings: `dep_type_name` → `importer_type_name`.
     type_bindings: DepToImporter<StructTypeName>,
     /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.

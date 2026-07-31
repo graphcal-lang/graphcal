@@ -582,7 +582,7 @@ node data: Dimensionless[Fin(3), Phase] =
 
 An index can be declared **without** specifying its labels or coordinates. These
 are **required indexes** — they must be bound via a
-[parameterized import](multi-file.md#index-bindings) when the file is used as a
+[parameterized include](multi-file.md#index-bindings) when the DAG is used as a
 library.
 
 ### Required Named Index
@@ -604,8 +604,9 @@ pub(bind) index Step: Time;
 ```
 
 This declares a coordinate index `Step` constrained to dimension `Time`. The
-importer must bind it to a concrete `range` or `linspace` index with the same
-dimension.
+including DAG must bind it to a `range` or `linspace` index with the same
+dimension. A generic outer DAG may instead forward its own compatible required
+coordinate index; that outer input must eventually be bound to a concrete axis.
 
 ### Using Required Indexes
 
@@ -618,7 +619,8 @@ param cost: Dimensionless[Phase];
 pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 ```
 
-The file cannot be evaluated standalone. It must be imported with a binding that supplies a concrete index (see [Index Bindings](multi-file.md#index-bindings)).
+The file cannot be evaluated standalone. It must be included with a binding
+that supplies a compatible index (see [Index Bindings](multi-file.md#index-bindings)).
 
 ## `unfold` (Recurrence Relations)
 

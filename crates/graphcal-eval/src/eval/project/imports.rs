@@ -346,6 +346,7 @@ fn build_dep_decl_index(
 struct ClassifiedBindings {
     params: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     indexes: DepToImporter<IndexName>,
+    index_spans: HashMap<IndexName, Span>,
     types: DepToImporter<StructTypeName>,
     dims: DepToImporter<DimName>,
 }
@@ -366,6 +367,7 @@ fn classify_param_bindings(
     let mut out = ClassifiedBindings {
         params: HashMap::new(),
         indexes: HashMap::new(),
+        index_spans: HashMap::new(),
         types: HashMap::new(),
         dims: HashMap::new(),
     };
@@ -406,10 +408,10 @@ fn classify_param_bindings(
                 binding_name,
                 file_src,
             )?;
-            out.indexes.insert(
-                IndexName::expect_valid(binding_name),
-                IndexName::expect_valid(rhs_name),
-            );
+            let dep_name = IndexName::expect_valid(binding_name);
+            out.index_spans.insert(dep_name.clone(), binding.value.span);
+            out.indexes
+                .insert(dep_name, IndexName::expect_valid(rhs_name));
             continue;
         }
         if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
@@ -436,13 +438,8 @@ fn classify_param_bindings(
     clippy::too_many_lines,
     reason = "binding validation and scope registration form a single cohesive pipeline"
 )]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "needs access to project, importer, dep, and context"
-)]
 pub(in crate::eval::project) fn process_instantiated_include<'a>(
     project: &'a crate::loader::LoadedProject,
-    importer_dag_id: &graphcal_compiler::dag_id::DagId,
     import_dag_id: &graphcal_compiler::dag_id::DagId,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
@@ -451,7 +448,6 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files[import_dag_id];
-    let importer_loaded = &project.files[importer_dag_id];
     let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
 
     // Determine the prefix (namespace) for the merged declarations.
@@ -495,6 +491,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     let ClassifiedBindings {
         params: bindings,
         indexes: index_bindings,
+        index_spans: index_binding_spans,
         types: type_bindings,
         dims: dim_bindings,
     } = classify_param_bindings(
@@ -504,106 +501,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         &dep_path_display,
     )?;
 
-    // File includes additionally require each index binding's RHS to
-    // resolve to an index already visible to the importer (in its own AST
-    // or in a previously-evaluated dep's registry), and the dep/importer
-    // kinds (named vs range) to agree. Inline-DAG includes share the
-    // file's registry and skip this pass.
-    for binding in &include_decl.param_bindings {
-        let binding_name = &binding.name.name;
-        let Some(dep_idx) = dep_index.indexes.get(binding_name.as_str()).copied() else {
-            continue;
-        };
-        // classify_param_bindings inserts an entry for every accepted index
-        // binding; the let-else is a no-panic safety net rather than a real
-        // branch — a `continue` here is unreachable under that invariant.
-        let Some(rhs_name) = index_bindings.get(binding_name.as_str()) else {
-            continue;
-        };
-        let rhs_name = rhs_name.as_str().to_string();
-
-        // Validate the RHS resolves to an index in the importer's scope.
-        // Check 1: importer's own AST.
-        let importer_idx_ast =
-            importer_loaded
-                .ast
-                .declarations
-                .iter()
-                .find_map(|d| match &d.kind {
-                    DeclKind::Index(idx) if idx.name.value.as_str() == rhs_name => Some(idx),
-                    _ => None,
-                });
-        // Check 2: already-compiled dependency registries. Collect every
-        // same-leaf match instead of taking the first `HashMap` iteration hit:
-        // if two dependencies expose the same index name with different kinds,
-        // acceptance must not depend on map order.
-        let importer_registry_index_kinds = if importer_idx_ast.is_none() {
-            let mut kinds = ctx
-                .extra_registry_builders
-                .iter()
-                .filter_map(|import| import.registry.indexes.get_index(&rhs_name))
-                .map(graphcal_compiler::registry::types::IndexDef::is_named)
-                .collect::<Vec<_>>();
-            kinds.extend(
-                evaluated_files
-                    .values()
-                    .filter_map(|ef| ef.registry.indexes.get_index(&rhs_name))
-                    .map(graphcal_compiler::registry::types::IndexDef::is_named),
-            );
-            kinds.sort_unstable();
-            kinds.dedup();
-            kinds
-        } else {
-            Vec::new()
-        };
-
-        if importer_idx_ast.is_none() && importer_registry_index_kinds.is_empty() {
-            return Err(CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
-                dep_index: binding_name.to_string(),
-                value: rhs_name,
-                src: file_src.clone(),
-                span: binding.value.span.into(),
-            }));
-        }
-
-        // Validate kind matching (named-to-named, coordinate-to-coordinate).
-        let dep_is_named = matches!(
-            dep_idx.kind,
-            graphcal_compiler::desugar::desugared_ast::IndexDeclKind::Named { .. }
-                | graphcal_compiler::desugar::desugared_ast::IndexDeclKind::RequiredNamed
-        );
-        let imp_is_named = importer_idx_ast.map_or_else(
-            || importer_registry_index_kinds.first().copied(),
-            |imp_idx| {
-                Some(matches!(
-                    imp_idx.kind,
-                    graphcal_compiler::desugar::desugared_ast::IndexDeclKind::Named { .. }
-                        | graphcal_compiler::desugar::desugared_ast::IndexDeclKind::RequiredNamed
-                ))
-            },
-        );
-        let ambiguous_registry_kind =
-            importer_idx_ast.is_none() && importer_registry_index_kinds.len() > 1;
-        if ambiguous_registry_kind
-            || matches!(imp_is_named, Some(imp_named) if dep_is_named != imp_named)
-        {
-            return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
-                dep_index: binding_name.to_string(),
-                dep_kind: if dep_is_named { "named" } else { "coordinate" }.to_string(),
-                bound_index: rhs_name,
-                bound_kind: match (ambiguous_registry_kind, imp_is_named) {
-                    (true, _) => "ambiguous".to_string(),
-                    (false, Some(true)) => "named".to_string(),
-                    (false, Some(false)) => "coordinate".to_string(),
-                    (false, None) => "unknown".to_string(),
-                },
-                src: file_src.clone(),
-                span: binding.name.span.into(),
-            }));
-        }
-        // Dimension matching for coordinate indexes is deferred to
-        // process_deferred_dag_includes() where registries are available.
-    }
+    // Index existence, category, and effective coordinate dimension are checked
+    // uniformly with inline-DAG bindings after both typed registries are available.
 
     // Register the dependency's declaration names in the importer's scope
     // so that the resolver recognizes references to them.
@@ -734,13 +633,11 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             && idx.kind.is_required()
             && !index_bindings.contains_key(idx.name.value.as_str())
         {
-            return Err(CompileError::Eval(
-                GraphcalError::RequiredParamNotProvided {
-                    name: idx.name.value.to_string(),
-                    src: file_src.clone(),
-                    span: include_decl.path.span().into(),
-                },
-            ));
+            return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
+                name: idx.name.value.to_string(),
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            }));
         }
     }
 
@@ -761,6 +658,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         prefix,
         bindings,
         index_bindings,
+        index_binding_spans,
         type_bindings,
         dim_bindings,
         selective_names,
@@ -836,14 +734,13 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     };
     let dag_imported_names = ImportedValueNames::default();
 
-    // Classify and validate bindings against the DAG body's declarations.
-    // Inline DAGs reuse the same DepDeclIndex as file-based instantiated
-    // includes, but do not do additional cross-registry index-kind validation
-    // (which file includes need to handle re-exported indexes).
+    // Classify bindings against the DAG body's declarations. Typed index
+    // compatibility is deferred to the same registry-backed path as file DAGs.
     let dep_index = build_dep_decl_index(&dag_body.declarations);
     let ClassifiedBindings {
         params: bindings,
         indexes: index_bindings,
+        index_spans: index_binding_spans,
         types: type_bindings,
         dims: dim_bindings,
     } = classify_param_bindings(&include_decl.param_bindings, &dep_index, file_src, dag_name)?;
@@ -950,19 +847,17 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     let surface_outputs =
         include_surface_outputs(&dag_body.declarations, &prefix, selective_names.as_deref());
 
-    // Strict binding check: all required params/indexes must be bound.
+    // Strict binding check: all required indexes must be bound.
     for dep_decl in &dag_body.declarations {
         if let DeclKind::Index(idx) = &dep_decl.kind
             && idx.kind.is_required()
             && !index_bindings.contains_key(idx.name.value.as_str())
         {
-            return Err(CompileError::Eval(
-                GraphcalError::RequiredParamNotProvided {
-                    name: idx.name.value.to_string(),
-                    src: file_src.clone(),
-                    span: include_decl.path.span().into(),
-                },
-            ));
+            return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
+                name: idx.name.value.to_string(),
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            }));
         }
     }
 
@@ -986,6 +881,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         prefix,
         bindings,
         index_bindings,
+        index_binding_spans,
         type_bindings,
         dim_bindings,
         selective_names,

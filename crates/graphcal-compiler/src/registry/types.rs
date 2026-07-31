@@ -19,8 +19,9 @@ use super::time_zone::TimeZoneRegistry;
 pub use super::dag::DagRegistry;
 pub use super::dimension_registry::{DimensionRegistry, RegistryBuildError};
 pub use super::index::{
-    CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexCardinality,
-    IndexCardinalityError, IndexDef, IndexKind, IndexRegistry, MAX_INDEX_CARDINALITY,
+    CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingContract,
+    IndexBindingContractError, IndexCardinality, IndexCardinalityError, IndexCategory, IndexDef,
+    IndexKind, IndexRegistry, MAX_INDEX_CARDINALITY,
 };
 pub use super::type_def::{
     StructField, TypeDef, TypeDefKind, TypeGenericConstraint, TypeGenericParam, TypeRegistry,
@@ -405,7 +406,7 @@ impl RegistryBuilder {
 
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`, preserving the
     /// unknown referenced dimension name in the error.
-    pub(crate) fn resolve_dim_expr_detailed(
+    pub fn resolve_dim_expr_detailed(
         &self,
         expr: &DimExpr,
     ) -> Result<Dimension, DimensionResolveError> {

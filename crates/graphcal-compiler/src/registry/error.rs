@@ -1489,7 +1489,7 @@ pub enum GraphcalError {
     #[error("binding target `{name}` is an index, not a param")]
     #[diagnostic(
         code(graphcal::M016),
-        help("index bindings must use another index name as the value, e.g., `{name} = MyIndex`")
+        help("index bindings must use another index name as the value, e.g., `{name}: MyIndex`")
     )]
     BindingTargetsIndex {
         name: String,
@@ -1499,11 +1499,11 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("index binding `{dep_index} = {value}`: `{value}` is not a known index")]
+    #[error("index binding `{dep_index}: {value}`: `{value}` is not a known index")]
     #[diagnostic(
         code(graphcal::M019),
         help(
-            "the right-hand side of an index binding must be a `cat` or `range` index declared in the importing file or its transitive imports"
+            "the right-hand side of an index binding must name a compatible index visible in the including DAG"
         )
     )]
     IndexBindingNotAnIndex {
@@ -1551,20 +1551,20 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    /// A required index was not bound via parameterized import.
+    /// A required index was not bound through an include chain.
     ///
     /// Required indexes (`index Foo;`, `index Foo: Time;`) must be bound when the
-    /// file is imported. They cannot be evaluated standalone.
+    /// declaring DAG is included. A standalone file containing one is a library.
     #[error("required index `{name}` must be bound via parameterized include")]
     #[diagnostic(
         code(graphcal::I010),
-        help("use `include \"./file.gcl\"({name}: SomeIndex)` to bind this index")
+        help("bind the index by name at the include site, for example `{name}: SomeIndex`")
     )]
     RequiredIndexNotBound {
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("required index declared here")]
+        #[label("required index is not bound")]
         span: SourceSpan,
     },
 

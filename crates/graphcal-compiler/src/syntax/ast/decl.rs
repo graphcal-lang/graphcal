@@ -684,16 +684,16 @@ pub enum IndexDeclKind<P: Phase = Raw> {
     },
     /// Required named index (no variants): `index Foo;`
     ///
-    /// Must be bound via parameterized import.
+    /// Must be bound via parameterized include.
     RequiredNamed,
     /// Required coordinate index with a dimension constraint: `index Foo: Time;`
     ///
-    /// Must be bound via parameterized import.
+    /// Must be bound via parameterized include.
     RequiredCoordinate { dimension: DimExpr },
 }
 
 impl<P: Phase> IndexDeclKind<P> {
-    /// Returns `true` for required index declarations that must be bound via import.
+    /// Returns `true` for required index declarations that must be bound via include.
     #[must_use]
     pub const fn is_required(&self) -> bool {
         matches!(self, Self::RequiredNamed | Self::RequiredCoordinate { .. })
