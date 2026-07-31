@@ -57,6 +57,27 @@ pub(in crate::eval::project) fn lower_and_finalize(
             Some(&mut registry_seed),
         )?;
 
+    // Snapshot the consumer-facing output surface before include bodies are
+    // merged. The file's own declarations and imported values are visible;
+    // each deferred include contributes only its selected/projectable outputs.
+    let output_surface: HashSet<ScopedName> = unfrozen
+        .source_order
+        .iter()
+        .chain(ctx.imported_source_order.iter())
+        .filter(|(_, category)| {
+            matches!(
+                category,
+                DeclCategory::Const | DeclCategory::Param | DeclCategory::Node
+            )
+        })
+        .map(|(name, _)| name.clone())
+        .chain(
+            ctx.deferred_dag_includes
+                .iter()
+                .flat_map(|include| include.surface_outputs.iter().cloned()),
+        )
+        .collect();
+
     // Process every deferred DAG include (file-level instantiated, inline
     // DAG, qualified inline DAG) through one path: compile each source's
     // body to IR and merge into the importer.
@@ -171,6 +192,8 @@ pub(in crate::eval::project) fn lower_and_finalize(
         declared_types,
         imported_values: saved_imported_values,
         imported_source_order: ctx.imported_source_order,
+        output_surface,
+        included_debug_values: ctx.included_debug_values,
         included_plots: ctx.included_plot_specs,
     })
 }
@@ -285,6 +308,7 @@ fn compile_loaded_dag_module_ir<'a>(
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
         deferred_dag_includes: Vec::new(),
+        included_debug_values: Vec::new(),
         included_plot_specs: Vec::new(),
     };
 
@@ -679,6 +703,7 @@ fn process_deferred_dag_includes(
                     module_map: HashMap::new(),
                     extra_registry_builders: Vec::new(),
                     deferred_dag_includes: Vec::new(),
+                    included_debug_values: Vec::new(),
                     included_plot_specs: Vec::new(),
                 };
                 if let Some(loaded_inline) = loaded_inline {
