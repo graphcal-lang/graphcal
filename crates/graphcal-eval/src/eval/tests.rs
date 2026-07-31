@@ -5005,6 +5005,21 @@ node out: Length = @with_const(v: @src).result;
 }
 
 #[test]
+fn dag_local_required_types_enable_reusable_linear_algebra() {
+    let source = include_str!("../../../../tests/fixtures/valid/linear_algebra_reusable_dag.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    assert!((find_value(&result, "displacement_magnitude.result") - 13.0).abs() < 1e-12);
+    assert!((find_value(&result, "duration_magnitude.result") - 13.0).abs() < 1e-12);
+    assert!(
+        result
+            .assertions
+            .iter()
+            .all(|(_, result, _)| matches!(result, super::types::AssertResult::Pass))
+    );
+}
+
+#[test]
 fn eval_extern_plugin_fixture() {
     // Extern functions (#943 Phase A): dim-variable polymorphism, rational
     // result powers, and cross-variable monomial results all evaluate through
