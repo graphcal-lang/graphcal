@@ -1,0 +1,3 @@
+// Runtime conversion errors when a parameter supplies a non-integer value.
+param value: Dimensionless = 3.7;
+node invalid: Int = to_int(@value);

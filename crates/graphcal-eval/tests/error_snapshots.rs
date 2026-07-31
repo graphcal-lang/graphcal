@@ -483,6 +483,20 @@ fn error_convert_dynamic_target_zero_scale() {
 }
 
 #[test]
+fn error_to_int_non_integer_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/to_int_non_integer_const.gcl");
+    let rendered = render_error(source, "to_int_non_integer_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_to_int_non_integer_runtime() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/to_int_non_integer.gcl");
+    let rendered = render_node_error(source, "to_int_non_integer.gcl", "invalid");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_division_by_zero() {
     let source = include_str!("../../../tests/fixtures/runtime_error/division_by_zero.gcl");
     let rendered = render_node_error(source, "division_by_zero.gcl", "y");

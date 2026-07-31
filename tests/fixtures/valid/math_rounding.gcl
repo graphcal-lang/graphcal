@@ -19,9 +19,10 @@ const node ceil_neg: Dimensionless = ceil(-2.3);
 const node trunc_pos: Dimensionless = trunc(2.7);
 const node trunc_neg: Dimensionless = trunc(-2.7);
 
-// to_int truncates toward zero on both signs.
-const node to_int_pos: Int = to_int(3.7);
-const node to_int_neg: Int = to_int(-3.7);
+// to_int requires an integer-valued input; trunc makes the policy explicit.
+const node to_int_exact: Int = to_int(3.0);
+const node to_int_trunc_pos: Int = to_int(trunc(3.7));
+const node to_int_trunc_neg: Int = to_int(trunc(-3.7));
 
 // abs preserves the dimension.
 const node abs_neg_len: Length = abs(-5.0 m);

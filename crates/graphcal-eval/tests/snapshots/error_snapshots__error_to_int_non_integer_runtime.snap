@@ -1,0 +1,5 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+to_int() argument is not integer-valued (got 3.7); apply trunc(), floor(), ceil(), or round() explicitly before to_int()

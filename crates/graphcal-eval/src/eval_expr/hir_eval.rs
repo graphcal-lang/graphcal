@@ -644,9 +644,19 @@ fn eval_hir_conversion_fn(
             let f = arg
                 .expect_quantity("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
-            super::conversions::checked_f64_to_i64(f)
+            super::conversions::exact_f64_to_i64(f)
                 .map(RuntimeValue::Int)
-                .map_err(|err| ctx.eval_error(err.to_string(), span))
+                .map_err(|error| {
+                    let rounding_help = matches!(
+                        &error,
+                        super::conversions::ExactIntConversionError::NonInteger { .. }
+                    )
+                    .then_some(
+                        "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()",
+                    )
+                    .unwrap_or_default();
+                    ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
+                })
         }
     }
 }
@@ -1061,11 +1071,11 @@ fn eval_hir_extern_fn(
                 expr.span,
             )?))
         }
-        ValueKind::Int => super::conversions::checked_f64_to_i64(abi_f64_result(&result)?)
+        ValueKind::Int => super::conversions::exact_f64_to_i64(abi_f64_result(&result)?)
             .map(RuntimeValue::Int)
-            .map_err(|err| {
+            .map_err(|error| {
                 ctx.eval_error(
-                    format!("extern function `{ext}` returned a non-Int value: {err}"),
+                    format!("extern function `{ext}` returned an invalid Int value that {error}"),
                     expr.span,
                 )
             }),
@@ -1168,12 +1178,12 @@ fn eval_hir_extern_fn(
                         StructFieldKind::Quantity(_) => RuntimeValue::Quantity(
                             super::arithmetic::check_finite(slot, &display, ctx, expr.span)?,
                         ),
-                        StructFieldKind::Int => super::conversions::checked_f64_to_i64(slot)
+                        StructFieldKind::Int => super::conversions::exact_f64_to_i64(slot)
                             .map(RuntimeValue::Int)
-                            .map_err(|err| {
+                            .map_err(|error| {
                                 ctx.eval_error(
                                     format!(
-                                        "extern function `{ext}` returned a non-Int value for field `{}`: {err}",
+                                        "extern function `{ext}` returned an invalid Int value for field `{}` that {error}",
                                         field.name
                                     ),
                                     expr.span,

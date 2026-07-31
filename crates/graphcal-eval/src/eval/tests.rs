@@ -1814,8 +1814,10 @@ fn eval_integers_milestone() {
 
     // to_float(10) = 10.0
     assert!((find_value(&result, "a_float") - 10.0).abs() < f64::EPSILON);
-    // to_int(3.7) = 3 (truncating)
+    // Exact conversion accepts an integer-valued quantity.
     assert_eq!(find_int_value(&result, "back_to_int"), 3);
+    // A rounding policy must be explicit before conversion.
+    assert_eq!(find_int_value(&result, "truncated_to_int"), 3);
 }
 
 #[test]

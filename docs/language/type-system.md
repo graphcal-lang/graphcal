@@ -990,14 +990,19 @@ Graphcal has **no implicit type conversions**. You must use explicit conversion 
 | Function | From | To | Example |
 |----------|------|----|---------|
 | `to_float(x)` | `Int` | `Dimensionless` | `to_float(42)` yields `42.0` |
-| `to_int(x)` | `Dimensionless` | `Int` | `to_int(3.7)` yields `3` |
+| `to_int(x)` | `Dimensionless` | `Int` | `to_int(3.0)` yields `3`; `to_int(3.7)` errors |
 | `to_utc(x)` | `Datetime(S)` | `Datetime(UTC)` | Time scale conversion |
 | `to_tai(x)` | `Datetime(S)` | `Datetime(TAI)` | Time scale conversion |
 | `to_tt(x)` | `Datetime(S)` | `Datetime(TT)` | Time scale conversion |
 
 The existing `to_float` name describes conversion to the floating-point
-representation; it does not name a source-level `Float` type. `to_int`
-truncates toward zero. Time scale conversion functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`, `to_bdt`, `to_qzsst`) convert between time scales without changing the physical instant.
+representation; it does not name a source-level `Float` type. `to_int` requires
+a finite, integer-valued binary64 input in the `Int` range. It does not choose a
+rounding policy: use `to_int(trunc(x))`, `to_int(floor(x))`, `to_int(ceil(x))`,
+or `to_int(round(x))` to state that policy explicitly. Time scale conversion
+functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`,
+`to_bdt`, `to_qzsst`) convert between time scales without changing the physical
+instant.
 
 ## Dimension Algebra
 

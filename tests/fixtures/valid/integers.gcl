@@ -26,4 +26,5 @@ node clamped: Int = if @a > @seven { @seven } else { @a };
 
 // Conversions
 node a_float: Dimensionless = to_float(@a);
-node back_to_int: Int = to_int(3.7);
+node back_to_int: Int = to_int(3.0);
+node truncated_to_int: Int = to_int(trunc(3.7));

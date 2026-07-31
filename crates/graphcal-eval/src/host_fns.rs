@@ -493,4 +493,51 @@ mod tests {
         .unwrap_err();
         assert!(err.message.contains("not a single quantity slot"), "{err}");
     }
+
+    #[test]
+    fn evaluator_rejects_fractional_host_int_results() {
+        let plugin = PluginPath::new("graphcal:test-exact-int");
+        let mut registry = HostFunctionRegistry::new();
+        registry.register(
+            plugin.clone(),
+            FnName::expect_valid("fractional_scalar"),
+            |_| Ok(HostFnValue::F64(3.7)),
+        );
+        registry.register(plugin, FnName::expect_valid("fractional_record"), |_| {
+            Ok(HostFnValue::Record(vec![3.7]))
+        });
+        let source = r#"
+type IntResult {
+    IntResult(value: Int),
+}
+import plugin "graphcal:test-exact-int" as test {
+    fn fractional_scalar() -> Int;
+    fn fractional_record() -> IntResult;
+}
+node invalid_scalar: Int = test.fractional_scalar();
+node invalid_record: IntResult = test.fractional_record();
+"#;
+        let project = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
+        let result = crate::eval::compile_and_eval_from_project_with_host_fns(
+            &project,
+            &HashMap::new(),
+            &registry,
+        )
+        .unwrap();
+
+        for name in ["invalid_scalar", "invalid_record"] {
+            let error = result
+                .nodes
+                .iter()
+                .find(|(candidate, _)| candidate.to_string() == name)
+                .unwrap_or_else(|| panic!("{name} node should exist"))
+                .1
+                .as_ref()
+                .expect_err("fractional Int result should fail");
+            let crate::eval::NodeError::EvalFailed { message } = error else {
+                panic!("expected EvalFailed, got {error:?}");
+            };
+            assert!(message.contains("is not integer-valued"), "{message}");
+        }
+    }
 }
