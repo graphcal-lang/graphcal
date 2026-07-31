@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cannot match on `Key<Fin(3)>`; only named-axis keys support label matching
+    Diagnostic severity: error
+Begin snippet for key_match_fin_axis.gcl starting at line 6, column 1
+
+snippet line 6: 
+snippet line 7: node x: Dimensionless = match @k {
+    label at line 7, columns 31 to 32: error here
+snippet line 8:     Maneuver.Departure => 1.0,
+diagnostic code: graphcal::E001

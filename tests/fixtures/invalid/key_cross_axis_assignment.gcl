@@ -1,0 +1,6 @@
+// A label of one axis is not a key of another: Key<Phase> does not match
+// the declared Key<Maneuver>.
+index Maneuver = { Departure, Correction };
+index Phase = { Launch, Cruise };
+
+node k: Key<Maneuver> = Phase.Launch;

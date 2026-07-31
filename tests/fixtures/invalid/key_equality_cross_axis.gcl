@@ -1,0 +1,5 @@
+// Keys of different axes cannot be compared.
+index Maneuver = { Departure, Correction };
+index Phase = { Launch, Cruise };
+
+node same: Bool = Maneuver.Departure == Phase.Launch;

@@ -1,0 +1,23 @@
+// Qualified labels are self-typed Key<X> constant expressions: storable in
+// nodes, comparable with == / != on the same axis, exhaustively matchable,
+// and carried in constructor payloads.
+index Maneuver = { Departure, Correction, Insertion };
+
+node critical: Key<Maneuver> = Maneuver.Departure;
+node fallback: Key<Maneuver> = Maneuver.Correction;
+
+node is_critical_first: Bool = @critical == Maneuver.Departure;
+node differs: Bool = @critical != @fallback;
+
+node contingency: Dimensionless = match @critical {
+    Maneuver.Departure => 1.1,
+    Maneuver.Correction => 1.5,
+    Maneuver.Insertion => 1.25,
+};
+
+type Report {
+    Report(which: Key<Maneuver>, factor: Dimensionless),
+}
+
+node report: Report = Report(which: @critical, factor: @contingency);
+node roundtrip: Dimensionless = @report.factor;

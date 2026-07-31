@@ -173,6 +173,27 @@ fn error_key_non_index_argument() {
 }
 
 #[test]
+fn error_key_cross_axis_assignment() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_cross_axis_assignment.gcl");
+    let rendered = render_error(source, "key_cross_axis_assignment.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_equality_cross_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_equality_cross_axis.gcl");
+    let rendered = render_error(source, "key_equality_cross_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_match_fin_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_match_fin_axis.gcl");
+    let rendered = render_error(source, "key_match_fin_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_complex_aggregation_unsupported() {
     let source =
         include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");

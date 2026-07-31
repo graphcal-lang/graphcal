@@ -151,14 +151,11 @@ fn infer_hir_type_inner(
         }
         hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, registry, src)?,
         hir::ExprKind::VariantLiteral(variant) => {
-            return Err(GraphcalError::EvalError {
-                message: format!(
-                    "index label `{}` cannot be used as a value",
-                    variant.variant
-                ),
-                src: src.clone(),
-                span: variant.path_span().into(),
-            });
+            // A qualified label is self-typed: `Maneuver.Departure` is a
+            // constant of type `Key<Maneuver>` — the axis is in the spelling.
+            InferredType::Key(InferredIndex::from_resolved(
+                variant.variant.index().clone(),
+            ))
         }
         hir::ExprKind::GraphRef(target) => {
             infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
@@ -3606,7 +3603,17 @@ fn infer_hir_match(
         src,
     )?;
     match &scrutinee_type {
-        InferredType::NamedIndexCase(index_identity) => {
+        InferredType::NamedIndexCase(index_identity) | InferredType::Key(index_identity) => {
+            if index_identity.finite_index_form().is_some() {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "cannot match on `Key<{}>`; only named-axis keys support label matching",
+                        index_identity.name()
+                    ),
+                    src: src.clone(),
+                    span: scrutinee.span.into(),
+                });
+            }
             let index_def = super::index_def_for_inferred(index_identity, Some(dag), registry)
                 .ok_or_else(|| GraphcalError::UnknownIndex {
                     name: index_identity.name(),
