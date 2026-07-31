@@ -219,6 +219,42 @@ Convert a count explicitly when quantity arithmetic needs a dimensionless
 scalar: `sum(@values) / to_float(count(@values))`. Direct multi-axis aggregation
 is rejected; reduce one selected axis at a time with an explicit `for`.
 
+### Linear Algebra (Indexed Quantities)
+
+Linear-algebra built-ins operate on rank-one vectors and rank-two matrices.
+Axes are part of the type and contractions require the same typed axis, not
+merely the same number of entries. `Fin(N)` axes match structurally; named axes
+match by their declaration identity.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `dot(a, b)` | `(D1[I], D2[I]) -> D1 * D2` | Dot product |
+| `matmul(a, b)` | `(D1[I, J], D2[J, K]) -> (D1 * D2)[I, K]` | Matrix product over `J` |
+| `transpose(a)` | `D[I, J] -> D[J, I]` | Swap matrix axes |
+| `trace(a)` | `D[I, I] -> D` | Sum the diagonal of a square typed-axis matrix |
+| `norm(v)` | `D[I] -> D` | Euclidean vector norm |
+| `cross(a, b)` | `(D1[I], D2[I]) -> (D1 * D2)[I]` | Three-component cross product; `I` must have exactly three entries |
+| `outer(a, b)` | `(D1[I], D2[J]) -> (D1 * D2)[I, J]` | Outer product |
+
+```graphcal
+param A: Length[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
+    1.0 m, 2.0 m, 3.0 m;
+    4.0 m, 5.0 m, 6.0 m;
+};
+param B: Dimensionless[Fin(3), Fin(2)] = table[Fin(3), Fin(2)] {
+    7.0, 8.0;
+    9.0, 10.0;
+    11.0, 12.0;
+};
+
+node AB: Length[Fin(2), Fin(2)] = matmul(@A, @B);
+node A_t: Length[Fin(3), Fin(2)] = transpose(@A);
+```
+
+There is no implicit axis selection or broadcasting. For example, `matmul`
+always contracts the second axis of its first argument with the first axis of
+its second argument. Distinct named axes with equal cardinality are rejected.
+
 ## Prelude Base Dimensions
 
 | Dimension | Description |

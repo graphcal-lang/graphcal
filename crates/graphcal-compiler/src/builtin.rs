@@ -112,6 +112,13 @@ define_builtin_names! {
         Greatest => "greatest",
         Hypot => "hypot",
         Clamp => "clamp",
+        Dot => "dot",
+        Matmul => "matmul",
+        Transpose => "transpose",
+        Trace => "trace",
+        Norm => "norm",
+        Cross => "cross",
+        Outer => "outer",
         Sum => "sum",
         Minimum => "minimum",
         Maximum => "maximum",
@@ -147,9 +154,125 @@ define_builtin_names! {
     }
 }
 
+/// Built-in linear-algebra operations over rank-one and rank-two indexed
+/// quantities.
+///
+/// This typed category is shared by dimension checking and evaluation. Source
+/// spellings cross into it only through [`BuiltinFnName::parse`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LinearAlgebraFn {
+    Dot,
+    Matmul,
+    Transpose,
+    Trace,
+    Norm,
+    Cross,
+    Outer,
+}
+
+impl LinearAlgebraFn {
+    /// Every linear-algebra operation, for display-table and routing tests.
+    pub const ALL: &'static [Self] = &[
+        Self::Dot,
+        Self::Matmul,
+        Self::Transpose,
+        Self::Trace,
+        Self::Norm,
+        Self::Cross,
+        Self::Outer,
+    ];
+
+    /// Canonical built-in function identity.
+    #[must_use]
+    pub const fn builtin_name(self) -> BuiltinFnName {
+        match self {
+            Self::Dot => BuiltinFnName::Dot,
+            Self::Matmul => BuiltinFnName::Matmul,
+            Self::Transpose => BuiltinFnName::Transpose,
+            Self::Trace => BuiltinFnName::Trace,
+            Self::Norm => BuiltinFnName::Norm,
+            Self::Cross => BuiltinFnName::Cross,
+            Self::Outer => BuiltinFnName::Outer,
+        }
+    }
+
+    /// Number of runtime arguments.
+    #[must_use]
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::Transpose | Self::Trace | Self::Norm => 1,
+            Self::Dot | Self::Matmul | Self::Cross | Self::Outer => 2,
+        }
+    }
+
+    /// Source-like parameter labels used at LSP/display boundaries.
+    #[must_use]
+    pub const fn parameter_labels(self) -> &'static [&'static str] {
+        match self {
+            Self::Dot | Self::Cross => &["a: D1[I]", "b: D2[I]"],
+            Self::Matmul => &["a: D1[I, J]", "b: D2[J, K]"],
+            Self::Transpose => &["a: D[I, J]"],
+            Self::Trace => &["a: D[I, I]"],
+            Self::Norm => &["v: D[I]"],
+            Self::Outer => &["a: D1[I]", "b: D2[J]"],
+        }
+    }
+
+    /// Source-like signature label used at LSP/display boundaries.
+    #[must_use]
+    pub const fn signature(self) -> &'static str {
+        match self {
+            Self::Dot => "fn dot<D1: Dim, D2: Dim, I: Index>(a: D1[I], b: D2[I]) -> D1 * D2",
+            Self::Matmul => {
+                "fn matmul<D1: Dim, D2: Dim, I: Index, J: Index, K: Index>(a: D1[I, J], b: D2[J, K]) -> (D1 * D2)[I, K]"
+            }
+            Self::Transpose => "fn transpose<D: Dim, I: Index, J: Index>(a: D[I, J]) -> D[J, I]",
+            Self::Trace => "fn trace<D: Dim, I: Index>(a: D[I, I]) -> D",
+            Self::Norm => "fn norm<D: Dim, I: Index>(v: D[I]) -> D",
+            Self::Cross => {
+                "fn cross<D1: Dim, D2: Dim, I: Index>(a: D1[I], b: D2[I]) -> (D1 * D2)[I] where |I| = 3"
+            }
+            Self::Outer => {
+                "fn outer<D1: Dim, D2: Dim, I: Index, J: Index>(a: D1[I], b: D2[J]) -> (D1 * D2)[I, J]"
+            }
+        }
+    }
+}
+
+impl BuiltinFnName {
+    /// Classify this built-in as a linear-algebra operation.
+    #[must_use]
+    pub const fn linear_algebra(self) -> Option<LinearAlgebraFn> {
+        match self {
+            Self::Dot => Some(LinearAlgebraFn::Dot),
+            Self::Matmul => Some(LinearAlgebraFn::Matmul),
+            Self::Transpose => Some(LinearAlgebraFn::Transpose),
+            Self::Trace => Some(LinearAlgebraFn::Trace),
+            Self::Norm => Some(LinearAlgebraFn::Norm),
+            Self::Cross => Some(LinearAlgebraFn::Cross),
+            Self::Outer => Some(LinearAlgebraFn::Outer),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::BuiltinFnName;
+    use super::{BuiltinFnName, LinearAlgebraFn};
+
+    #[test]
+    fn linear_algebra_names_have_one_typed_route() {
+        for function in LinearAlgebraFn::ALL {
+            let name = function.builtin_name();
+            assert_eq!(BuiltinFnName::parse(name.as_str()), Some(name));
+            assert_eq!(name.linear_algebra(), Some(*function));
+        }
+        let classified = BuiltinFnName::ALL
+            .iter()
+            .filter(|name| name.linear_algebra().is_some())
+            .count();
+        assert_eq!(classified, LinearAlgebraFn::ALL.len());
+    }
 
     #[test]
     fn extremum_function_spellings_are_canonical() {

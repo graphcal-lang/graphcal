@@ -7,6 +7,7 @@
 
 mod builtin_call;
 pub(super) mod hir;
+mod linear_algebra;
 mod rules;
 
 use super::InferredIndex;

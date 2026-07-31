@@ -5,7 +5,7 @@
 //! evaluated through the ordinary quantity built-in function registry, or does it
 //! need a custom runtime path here?
 
-use graphcal_compiler::builtin::BuiltinFnName;
+use graphcal_compiler::builtin::{BuiltinFnName, LinearAlgebraFn};
 use graphcal_compiler::registry::time_scale::TimeScale;
 
 /// How HIR evaluation should dispatch a built-in function call.
@@ -15,6 +15,8 @@ pub(super) enum EvalBuiltinRule {
     RegistryFunction,
     /// One-argument reductions over indexed values.
     CollectionAggregation(AggregationFn),
+    /// Shape-aware operations over rank-one and rank-two indexed quantities.
+    LinearAlgebra(LinearAlgebraFn),
     /// Type-category conversions between `Int` and dimensionless quantity values.
     TypeConversion(TypeConversionFn),
     /// Datetime time-scale conversion to the carried target scale.
@@ -99,6 +101,9 @@ pub(super) enum DatetimeToFn {
 /// Classify a built-in for the runtime HIR evaluation call path.
 #[must_use]
 pub(super) const fn eval_rule_for_builtin(name: BuiltinFnName) -> EvalBuiltinRule {
+    if let Some(function) = name.linear_algebra() {
+        return EvalBuiltinRule::LinearAlgebra(function);
+    }
     match name {
         BuiltinFnName::Sum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Sum),
         BuiltinFnName::Minimum => EvalBuiltinRule::CollectionAggregation(AggregationFn::Minimum),
@@ -155,6 +160,7 @@ mod tests {
                     name.as_str()
                 ),
                 EvalBuiltinRule::CollectionAggregation(_)
+                | EvalBuiltinRule::LinearAlgebra(_)
                 | EvalBuiltinRule::TypeConversion(_)
                 | EvalBuiltinRule::TimeScaleConversion(_)
                 | EvalBuiltinRule::DatetimeConstructor(_)

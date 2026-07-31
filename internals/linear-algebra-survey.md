@@ -16,21 +16,20 @@ aggregation) and the closed
 variables, which delivered the static bounds checking that positional
 vector/matrix code relies on).
 
-Every "works" claim below was verified by evaluating probe programs with the
-CLI at commit `bdb597a` (v0.0.1-alpha.17); expected rejections were verified
-to produce their documented diagnostics.
+The original "works" claims below were verified by evaluating probe programs
+with the CLI at commit `bdb597a` (v0.0.1-alpha.17); expected rejections were
+verified to produce their documented diagnostics. Implementation-status notes
+in Section 4 track the follow-up work prompted by this survey.
 
 ## 1. Summary
 
-Graphcal has no linear-algebra operations — no builtins and no standard
-library. What it has is a data model (indexed values over `Fin(N)` axes) on
-which the *polynomial* subset of linear algebra — products, transpose,
-norms, traces, fixed-size closed forms — is fully hand-expressible with
-`for` comprehensions and `sum`, with dimension bookkeeping coming out
-correctly. Everything *algorithmic* — `solve(A, b)`, general inverse,
-factorizations, eigendecomposition — is inexpressible in-language for
-general N because the language has no iteration constructs beyond axis
-folds, and the WASM plugin escape hatch cannot accept a matrix argument yet.
+Graphcal now has an axis-safe core linear-algebra layer: `dot`, `matmul`,
+`transpose`, `trace`, `norm`, `cross`, and `outer` operate directly on indexed
+quantities with dimension bookkeeping and typed-axis contractions. The data
+model remains indexed values rather than a dedicated matrix type. Algorithmic
+operations — `solve(A, b)`, general inverse, factorizations, and spectra —
+remain the hard boundary described below until the next implementation slice,
+and the WASM plugin escape hatch still cannot accept a matrix argument.
 
 ## 2. Representation
 
@@ -138,20 +137,16 @@ can bind the variable at a call site.)
 
 ## 4. What is missing
 
-### 4.1 The operations themselves
+### 4.1 The operations themselves — core contractions addressed
 
-`crates/graphcal-compiler/src/registry/builtins.rs` contains scalar math
-plus five aggregations (`sum`, `minimum`, `maximum`, `mean`, `count`) —
-nothing else. Missing, roughly in order of value:
+The first implementation slice adds native `dot`, `matmul`, `transpose`,
+`trace`, `norm`, `cross`, and `outer` builtins. They preserve element-dimension
+algebra, require rank-one/rank-two quantity inputs as appropriate, and match
+contracted axes by typed identity rather than cardinality alone. Demonstration
+and regression coverage lives in `tests/fixtures/valid/linear_algebra.gcl`.
 
-- `solve(A, b)` — the highest-value primitive (per #890, and confirmed by
-  this survey: it is the one thing neither the language nor plugins can
-  currently provide)
-- `matmul`, `transpose`, `dot` — expressible by hand but verbose enough
-  that builtins carry real ergonomic weight
-- `inverse`, `det` — closed forms only exist for fixed small sizes
-- `norm`, `cross`, `outer`
-- Factorizations and spectra: LU, QR, Cholesky, SVD, eigendecomposition
+The algorithmic remainder (`solve`, `inverse`, `det`, and decompositions) is
+the subject of the next subsection and implementation slice.
 
 ### 4.2 Algorithmic linear algebra is inexpressible in-language
 

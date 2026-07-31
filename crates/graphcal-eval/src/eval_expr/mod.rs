@@ -4,6 +4,7 @@ mod builtin_call;
 mod conversions;
 mod datetime;
 mod hir_eval;
+mod linear_algebra;
 mod numeric;
 mod unit_scale;
 

@@ -1242,7 +1242,12 @@ fn register_builtins(table: &mut SymbolTable) {
     for name in BuiltinFnName::ALL {
         let spelling = name.as_str();
         let detail = registry_functions.get(spelling).map_or_else(
-            || "builtin".to_string(),
+            || {
+                name.linear_algebra().map_or_else(
+                    || "builtin".to_string(),
+                    |function| format!("builtin, arity {}", function.arity()),
+                )
+            },
             |function| format!("builtin, arity {}", function.arity()),
         );
         table.insert_definition(

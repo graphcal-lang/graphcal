@@ -457,6 +457,20 @@ fn eval_hir_fn_call(
             };
             eval_hir_aggregation_fn(kind, &entries, expr.span, ctx.src)
         }
+        EvalBuiltinRule::LinearAlgebra(function) => {
+            expect_hir_builtin_arity(name, args, function.arity(), callee.span, ctx)?;
+            let arguments = args
+                .iter()
+                .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            super::linear_algebra::evaluate(function, arguments).map_err(|error| {
+                if error.is_internal_invariant() {
+                    ctx.internal_error(error.to_string(), expr.span)
+                } else {
+                    ctx.eval_error(error.to_string(), expr.span)
+                }
+            })
+        }
         EvalBuiltinRule::TypeConversion(kind) => {
             eval_hir_conversion_fn(kind, expr.span, args, values, local_values, ctx)
         }
