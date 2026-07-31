@@ -5,6 +5,7 @@ mod conversions;
 mod datetime;
 mod hir_eval;
 mod linear_algebra;
+mod linear_algebra_lu;
 mod numeric;
 mod unit_scale;
 

@@ -119,6 +119,9 @@ define_builtin_names! {
         Norm => "norm",
         Cross => "cross",
         Outer => "outer",
+        Solve => "solve",
+        Inverse => "inverse",
+        Det => "det",
         Sum => "sum",
         Minimum => "minimum",
         Maximum => "maximum",
@@ -168,6 +171,9 @@ pub enum LinearAlgebraFn {
     Norm,
     Cross,
     Outer,
+    Solve,
+    Inverse,
+    Determinant,
 }
 
 impl LinearAlgebraFn {
@@ -180,6 +186,9 @@ impl LinearAlgebraFn {
         Self::Norm,
         Self::Cross,
         Self::Outer,
+        Self::Solve,
+        Self::Inverse,
+        Self::Determinant,
     ];
 
     /// Canonical built-in function identity.
@@ -193,6 +202,9 @@ impl LinearAlgebraFn {
             Self::Norm => BuiltinFnName::Norm,
             Self::Cross => BuiltinFnName::Cross,
             Self::Outer => BuiltinFnName::Outer,
+            Self::Solve => BuiltinFnName::Solve,
+            Self::Inverse => BuiltinFnName::Inverse,
+            Self::Determinant => BuiltinFnName::Det,
         }
     }
 
@@ -200,8 +212,8 @@ impl LinearAlgebraFn {
     #[must_use]
     pub const fn arity(self) -> usize {
         match self {
-            Self::Transpose | Self::Trace | Self::Norm => 1,
-            Self::Dot | Self::Matmul | Self::Cross | Self::Outer => 2,
+            Self::Transpose | Self::Trace | Self::Norm | Self::Inverse | Self::Determinant => 1,
+            Self::Dot | Self::Matmul | Self::Cross | Self::Outer | Self::Solve => 2,
         }
     }
 
@@ -212,9 +224,10 @@ impl LinearAlgebraFn {
             Self::Dot | Self::Cross => &["a: D1[I]", "b: D2[I]"],
             Self::Matmul => &["a: D1[I, J]", "b: D2[J, K]"],
             Self::Transpose => &["a: D[I, J]"],
-            Self::Trace => &["a: D[I, I]"],
+            Self::Trace | Self::Inverse | Self::Determinant => &["a: D[I, I]"],
             Self::Norm => &["v: D[I]"],
             Self::Outer => &["a: D1[I]", "b: D2[J]"],
+            Self::Solve => &["a: D1[I, I]", "b: D2[I]"],
         }
     }
 
@@ -235,6 +248,11 @@ impl LinearAlgebraFn {
             Self::Outer => {
                 "fn outer<D1: Dim, D2: Dim, I: Index, J: Index>(a: D1[I], b: D2[J]) -> (D1 * D2)[I, J]"
             }
+            Self::Solve => {
+                "fn solve<D1: Dim, D2: Dim, I: Index>(a: D1[I, I], b: D2[I]) -> (D2 / D1)[I]"
+            }
+            Self::Inverse => "fn inverse<D: Dim, I: Index>(a: D[I, I]) -> D^-1[I, I]",
+            Self::Determinant => "fn det<D: Dim, I: Index>(a: D[I, I]) -> D^|I|",
         }
     }
 }
@@ -251,6 +269,9 @@ impl BuiltinFnName {
             Self::Norm => Some(LinearAlgebraFn::Norm),
             Self::Cross => Some(LinearAlgebraFn::Cross),
             Self::Outer => Some(LinearAlgebraFn::Outer),
+            Self::Solve => Some(LinearAlgebraFn::Solve),
+            Self::Inverse => Some(LinearAlgebraFn::Inverse),
+            Self::Det => Some(LinearAlgebraFn::Determinant),
             _ => None,
         }
     }

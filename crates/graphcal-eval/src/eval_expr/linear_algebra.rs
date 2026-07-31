@@ -48,11 +48,17 @@ pub(super) enum LinearAlgebraError {
     ShapeInvariant(String),
     #[error(transparent)]
     Numeric(#[from] QuantityValidationError),
+    #[error(transparent)]
+    Algorithm(#[from] super::linear_algebra_lu::LuError),
 }
 
 impl LinearAlgebraError {
     pub(super) const fn is_internal_invariant(&self) -> bool {
-        matches!(self, Self::ShapeInvariant(_))
+        match self {
+            Self::ShapeInvariant(_) => true,
+            Self::Algorithm(error) => error.is_internal_invariant(),
+            Self::Numeric(_) => false,
+        }
     }
 }
 
@@ -422,6 +428,45 @@ fn evaluate_outer(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAl
     matrix_value(lhs.axis, rhs.axis, values)
 }
 
+fn evaluate_solve(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+    let function = LinearAlgebraFn::Solve;
+    let [matrix, rhs] = two_arguments(function, arguments)?;
+    let matrix = matrix_from_value(matrix, "solve")?;
+    let rhs = vector_from_value(rhs, "solve")?;
+    if !matrix.rows.matches(&matrix.columns) || !matrix.rows.matches(&rhs.axis) {
+        return Err(LinearAlgebraError::ShapeInvariant(
+            "solve() requires a square matrix and right-hand side over the same axis".to_string(),
+        ));
+    }
+    let solution = super::linear_algebra_lu::solve(&matrix.values, matrix.rows.len(), &rhs.values)?;
+    vector_value(matrix.rows, solution)
+}
+
+fn evaluate_inverse(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+    let function = LinearAlgebraFn::Inverse;
+    let matrix = matrix_from_value(one_argument(function, arguments)?, "inverse")?;
+    if !matrix.rows.matches(&matrix.columns) {
+        return Err(LinearAlgebraError::ShapeInvariant(
+            "inverse() requires identical row and column axes".to_string(),
+        ));
+    }
+    let inverse = super::linear_algebra_lu::inverse(&matrix.values, matrix.rows.len())?;
+    matrix_value(matrix.rows, matrix.columns, inverse)
+}
+
+fn evaluate_determinant(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+    let function = LinearAlgebraFn::Determinant;
+    let matrix = matrix_from_value(one_argument(function, arguments)?, "det")?;
+    if !matrix.rows.matches(&matrix.columns) {
+        return Err(LinearAlgebraError::ShapeInvariant(
+            "det() requires identical row and column axes".to_string(),
+        ));
+    }
+    super::linear_algebra_lu::determinant(&matrix.values, matrix.rows.len())
+        .map(RuntimeValue::Quantity)
+        .map_err(LinearAlgebraError::from)
+}
+
 /// Evaluate a shape-checked built-in linear-algebra operation.
 pub(super) fn evaluate(
     function: LinearAlgebraFn,
@@ -435,5 +480,8 @@ pub(super) fn evaluate(
         LinearAlgebraFn::Norm => evaluate_norm(arguments),
         LinearAlgebraFn::Cross => evaluate_cross(arguments),
         LinearAlgebraFn::Outer => evaluate_outer(arguments),
+        LinearAlgebraFn::Solve => evaluate_solve(arguments),
+        LinearAlgebraFn::Inverse => evaluate_inverse(arguments),
+        LinearAlgebraFn::Determinant => evaluate_determinant(arguments),
     }
 }

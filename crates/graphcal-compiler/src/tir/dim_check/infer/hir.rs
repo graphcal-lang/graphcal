@@ -672,6 +672,19 @@ fn infer_hir_linear_algebra_call(
             src: src.clone(),
             span: args[argument].span.into(),
         },
+        LinearAlgebraTypeError::ConcreteCardinalityRequired { argument } => {
+            GraphcalError::LinearAlgebraShapeMismatch {
+                function: name,
+                expected: "an axis with a concrete cardinality".to_string(),
+                found: "an axis whose cardinality is still generic".to_string(),
+                help: format!(
+                    "{}() needs a concrete matrix size because its result dimension depends on that size",
+                    name.as_str()
+                ),
+                src: src.clone(),
+                span: args[argument].span.into(),
+            }
+        }
         LinearAlgebraTypeError::DimensionOverflow => GraphcalError::DimensionOverflow {
             src: src.clone(),
             span: callee_span.into(),

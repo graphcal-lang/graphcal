@@ -26,10 +26,10 @@ in Section 4 track the follow-up work prompted by this survey.
 Graphcal now has an axis-safe core linear-algebra layer: `dot`, `matmul`,
 `transpose`, `trace`, `norm`, `cross`, and `outer` operate directly on indexed
 quantities with dimension bookkeeping and typed-axis contractions. The data
-model remains indexed values rather than a dedicated matrix type. Algorithmic
-operations — `solve(A, b)`, general inverse, factorizations, and spectra —
-remain the hard boundary described below until the next implementation slice,
-and the WASM plugin escape hatch still cannot accept a matrix argument.
+model remains indexed values rather than a dedicated matrix type. Native
+scaled-pivoting LU now provides general `solve(A, b)`, `inverse`, and `det`,
+closing the highest-value algorithmic gap without adding unbounded language
+iteration. The WASM plugin escape hatch still cannot accept a matrix argument.
 
 ## 2. Representation
 
@@ -145,24 +145,28 @@ algebra, require rank-one/rank-two quantity inputs as appropriate, and match
 contracted axes by typed identity rather than cardinality alone. Demonstration
 and regression coverage lives in `tests/fixtures/valid/linear_algebra.gcl`.
 
-The algorithmic remainder (`solve`, `inverse`, `det`, and decompositions) is
-the subject of the next subsection and implementation slice.
+The algorithmic remainder (`solve`, `inverse`, and `det`) is implemented by
+the next subsection's native-kernel slice. Public factorization objects and
+spectral decompositions remain future extensions rather than prerequisites for
+practical linear systems.
 
-### 4.2 Algorithmic linear algebra is inexpressible in-language
+### 4.2 Algorithmic linear algebra — addressed with native kernels
 
-This is the hard boundary, and it is structural rather than a missing
-feature:
+The structural finding remains true: Graphcal intentionally has no recursion,
+`while`, convergence loops, or data-dependent pivoting in user expressions.
+Instead of weakening the finite reactive model, native `solve`, `inverse`, and
+`det` builtins use one shared scaled partial-pivoting LU implementation.
+`solve(A, b)` preserves `(D2 / D1)[I]`, `inverse(A)` preserves `D^-1[I, I]`,
+and `det(A)` computes `D^N` from the concrete axis cardinality. Solve-like
+operations reject singular or numerically ill-conditioned matrices and verify
+residuals before exposing results; determinant remains defined as zero for a
+singular matrix.
 
-- No recursion, no `while`, no convergence loops — `for` is a
-  comprehension over a fixed finite axis.
-- `scan` / `unfold` fold along one fixed axis; they cannot express
-  pivoting or data-dependent iteration counts.
-- Gaussian elimination, LU/QR, and iterative eigensolvers therefore cannot
-  be hand-written for general N. Only fixed-size closed forms (2×2, 3×3
-  cofactor inverses, quadratic formulas) are available.
-
-Consequence: `solve` must arrive as a builtin or plugin capability; it
-cannot be a userland library.
+This closes the practical in-language boundary at the builtin layer while
+keeping arbitrary iterative algorithms out of the source language. The valid
+fixture demonstrates all three operations, and
+`tests/fixtures/runtime_error/linear_algebra_singular.gcl` locks in explicit
+singularity failure.
 
 ### 4.3 The plugin boundary stops at rank 1
 

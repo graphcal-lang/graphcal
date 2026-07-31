@@ -176,10 +176,11 @@ Note: the proc-macro pipeline is parse/lower/manifest/codegen, but `codegen.rs` 
 
 ## Stage 13 - Runtime values and expression evaluator
 
-Note: `eval_expr/builtin_call.rs`, `eval_expr/arithmetic.rs`, `eval_expr/aggregations.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.rs`, and `eval_expr/mod.rs` form a mutually dependent group.
+Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_expr/builtin_call.rs`, `eval_expr/arithmetic.rs`, `eval_expr/aggregations.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.rs`, and `eval_expr/mod.rs` form a mutually dependent group.
 
 - [ ] `crates/graphcal-eval/src/decl_key.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/numeric.rs`
+- [ ] `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/conversions.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/datetime.rs`

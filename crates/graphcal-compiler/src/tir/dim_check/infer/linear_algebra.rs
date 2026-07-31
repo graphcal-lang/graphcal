@@ -30,6 +30,9 @@ pub(super) enum LinearAlgebraTypeError {
         expected: usize,
         found: Option<usize>,
     },
+    /// An operation needs the concrete cardinality of an axis to determine its
+    /// result dimension.
+    ConcreteCardinalityRequired { argument: usize },
     /// Dimension exponent arithmetic overflowed.
     DimensionOverflow,
 }
@@ -100,6 +103,20 @@ fn product_dimension(
     lhs.clone()
         .checked_mul(rhs)
         .map_err(|_| LinearAlgebraTypeError::DimensionOverflow)
+}
+
+fn quotient_dimension(
+    numerator: &Dimension,
+    denominator: &Dimension,
+) -> Result<Dimension, LinearAlgebraTypeError> {
+    numerator
+        .clone()
+        .checked_div(denominator)
+        .map_err(|_| LinearAlgebraTypeError::DimensionOverflow)
+}
+
+fn reciprocal_dimension(dimension: &Dimension) -> Result<Dimension, LinearAlgebraTypeError> {
+    quotient_dimension(&Dimension::dimensionless(), dimension)
 }
 
 /// Infer one built-in linear-algebra call from already-inferred arguments.
@@ -176,6 +193,37 @@ pub(super) fn infer_linear_algebra_type(
                 product_dimension(lhs.dimension, rhs.dimension)?,
                 &[lhs.axis(0), rhs.axis(0)],
             ))
+        }
+        LinearAlgebraFn::Solve => {
+            let matrix = indexed_quantity(0, &arguments[0], 2)?;
+            let rhs = indexed_quantity(1, &arguments[1], 1)?;
+            require_same_axis(matrix.axis(0), 0, matrix.axis(1))?;
+            require_same_axis(matrix.axis(0), 1, rhs.axis(0))?;
+            Ok(quantity_over(
+                quotient_dimension(rhs.dimension, matrix.dimension)?,
+                &[matrix.axis(0)],
+            ))
+        }
+        LinearAlgebraFn::Inverse => {
+            let matrix = indexed_quantity(0, &arguments[0], 2)?;
+            require_same_axis(matrix.axis(0), 0, matrix.axis(1))?;
+            Ok(quantity_over(
+                reciprocal_dimension(matrix.dimension)?,
+                &[matrix.axis(0), matrix.axis(1)],
+            ))
+        }
+        LinearAlgebraFn::Determinant => {
+            let matrix = indexed_quantity(0, &arguments[0], 2)?;
+            require_same_axis(matrix.axis(0), 0, matrix.axis(1))?;
+            let cardinality = cardinality(matrix.axis(0))
+                .ok_or(LinearAlgebraTypeError::ConcreteCardinalityRequired { argument: 0 })?;
+            let exponent = i32::try_from(cardinality)
+                .map_err(|_| LinearAlgebraTypeError::DimensionOverflow)?;
+            let dimension = matrix
+                .dimension
+                .pow(exponent)
+                .map_err(|_| LinearAlgebraTypeError::DimensionOverflow)?;
+            Ok(InferredType::Quantity(dimension))
         }
     }
 }
