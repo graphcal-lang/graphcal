@@ -26,6 +26,10 @@ that exist implicitly in graphcal source:
 - `Iᵢ` ranges over finite, ordered **index axes**. An axis can come from an
   `index` declaration or from an explicit structural index such as `Fin(3)` in
   `T[Fin(3)]`.
+- `J̄` ranges over a possibly empty ordered sequence of state axes. In recurrence
+  rules, `T[J̄]` means `T` when the sequence is empty and
+  `T[J₁, ..., Jₙ]` otherwise; a comma before an empty `J̄` is omitted, so
+  `T[I, J̄]` becomes `T[I]`.
 - `N` ranges over type-level **natural numbers**, used as `Fin` cardinalities
   and `Nat` generic arguments. In a generic declaration, `<N: Nat>` introduces
   a source-level variable over this domain.
@@ -243,7 +247,8 @@ and a datetime's **timezone**. Both select rendering only — magnitudes are
 stored in SI base units, instants in their time scale.
 
 The structural value formers and eliminators have these signatures, where
-`ℓᵢ` is a label of axis `Iᵢ` and `U` an accumulator ValueType:
+`ℓᵢ` is a label of axis `Iᵢ`, `U` is the recurrence state's element ValueType,
+and `J̄` is its possibly empty sequence of fixed axes:
 
 ```text
 Cᵢ          : DT₁ × ... × DTₖ -> A                value former, one per constructor of A
@@ -251,8 +256,8 @@ map / table : T at each label tuple -> T[I₁, ..., Iₘ]
 for         : T at each label tuple -> T[I₁, ..., Iₘ]
 _[_]        : T[I₁, ..., Iₘ] × ℓ₁ × ... × ℓₘ -> T
 _.fᵢ        : A -> DTᵢ                            single-constructor A only
-scan        : T[I] × U × (U × T -> U) -> U[I]
-unfold      : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]
+scan        : T[I] × U[J̄] × (U[J̄] × T -> U[J̄]) -> U[I, J̄]
+unfold      : I × U[J̄] × (U[J̄] × Quantity(D) × Quantity(D) -> U[J̄]) -> U[I, J̄]
 sum, maximum, minimum, mean, rss : Quantity(D)[I] -> Quantity(D)
 product     : Quantity(D)[I] -> Quantity(D^|I|)
 count       : T[I] -> Int
@@ -273,7 +278,9 @@ types. Constructor calls always spell field names (`Cᵢ(f₁: v₁, ...)`), and
 constructor of a generic `A` produces the applied `A<G₁, ..., Gₙ>`. The
 closure positions in `scan` and `unfold` are special syntax, not function
 values; `unfold`'s first argument is an explicit reference to a coordinate
-index over dimension `D`. Map and table literals must be total and are
+index over dimension `D`. Recurrence state may carry the fixed axes `J̄`; the
+recurrence axis is prepended to them, without making an indexed declaration
+type an inhabitant of the `Type` kind. Map and table literals must be total and are
 normalized to index order, element access must supply every axis, and
 aggregations reduce exactly one axis. Linear-algebra contractions require the
 same typed axis at each paired position; `I₃` denotes an axis with exactly
@@ -908,8 +915,10 @@ scan(
 ```
 
 `scan` folds in the index order — label declaration order for a named axis
-such as `Maneuver`. Each output element is the accumulated result up to and
-including that position.
+such as `Maneuver`. Its source has exactly one axis; it does not implicitly
+select an axis from a multi-axis value. Each output element is the accumulated
+result up to and including that position. The accumulator may independently
+carry fixed state axes, which follow the source axis in the result.
 
 ### No Implicit Broadcasting
 
@@ -1214,13 +1223,22 @@ for v1: Index1, v2: Index2 { body_expr }
 scan(source, init, |acc, item| body)
 ```
 
-In signature notation, `scan : T[I] × U × (U × T -> U) -> U[I]`:
+In signature notation,
+`scan : T[I] × U[J̄] × (U[J̄] × T -> U[J̄]) -> U[I, J̄]`:
 
-- `source` must be an indexed type `T[I]`.
-- `init` must have type `U` (the accumulator type).
-- `acc` is bound to type `U`; `item` is bound to type `T`.
-- `body` must have type `U`.
-- The result type is `U[I]` (accumulated values for each index element).
+- `source` must have exactly one axis, with type `T[I]`. A multi-axis source is
+  rejected because `scan` does not choose an axis implicitly.
+- `init` has accumulator type `U[J̄]`, where `J̄` may be empty, one axis, or
+  several fixed axes.
+- `acc` is bound to type `U[J̄]`; `item` is bound to type `T`.
+- `body` must return exactly `U[J̄]`, including the same axes in the same order.
+- The result type is `U[I, J̄]`: the source axis is prepended to the accumulator
+  axes.
+
+For example, scanning scalar inputs `Dimensionless[Step]` with an initial
+vector `Dimensionless[Element]` produces
+`Dimensionless[Step, Element]`. Each iteration reads the complete previous
+vector before constructing the next vector.
 
 The `|acc, item| body` is special syntax, not a function value.
 
@@ -1231,18 +1249,24 @@ unfold(index, init, |prev_state, prev_i, i| body)
 ```
 
 In signature notation,
-`unfold : I × T × (T × Quantity(D) × Quantity(D) -> T) -> T[I]` for a
-coordinate index `I` over dimension `D`:
+`unfold : I × U[J̄] × (U[J̄] × Quantity(D) × Quantity(D) -> U[J̄]) -> U[I, J̄]`
+for a coordinate index `I` over dimension `D`:
 
 - `index` is an explicit reference to a coordinate index `I`, not a value expression.
-- `init` must have type `T` and becomes the result at the first coordinate.
-- `prev_state` is bound to type `T`.
+- `init` has state type `U[J̄]` and becomes the result at the first coordinate.
+  `J̄` may be empty, one axis, or several fixed axes.
+- `prev_state` is bound to the complete previous state `U[J̄]`.
 - `prev_i` and `i` are bound to consecutive coordinate labels from `I`.
-- `body` must have type `T`.
-- The result type is `T[I]`.
+- `body` must return exactly `U[J̄]`, including the same axes in the same order.
+- The result type is `U[I, J̄]`: the coordinate axis is prepended to the state
+  axes. For example, vector state `U[Element]` produces
+  `U[Time, Element]`, and matrix state `U[Row, Column]` produces
+  `U[Time, Row, Column]`.
 
 For coordinates `i₀, i₁, …`, `result[i₀] = init` and each later value is
-`body(result[iₖ₋₁], iₖ₋₁, iₖ)`. The
+`body(result[iₖ₋₁], iₖ₋₁, iₖ)`. The complete previous state is frozen while
+that body constructs the next state, so component iteration order has no
+semantic effect. The
 `|prev_state, prev_i, i| body` form is special syntax, not a function value.
 Use `prev_state` directly; an explicit reference to the declaration being
 defined is an ordinary dependency cycle, regardless of the coordinate used to

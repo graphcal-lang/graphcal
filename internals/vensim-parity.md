@@ -436,8 +436,8 @@ binding. Consequences:
 - A flow cannot be a named `node` if it reads the stock it feeds
   (`stock ↔ flow` is a node-level cycle). It must be inlined in the closure.
 - Two stocks that read each other cannot be two `unfold` nodes. They must be
-  packed into one struct state in one `unfold` (#889 notes this workaround and
-  its cost).
+  carried by one `unfold`: a homogeneous coupled system can use indexed state
+  directly (#889), while heterogeneous stocks still need a structured state.
 - There are **no expression-local bindings** (no `let` in `grammar.ebnf`), so
   the inlined flows can't even be *named locally* — every flow is repeated
   inline or the model becomes one opaque expression. (The removed design doc
@@ -448,10 +448,11 @@ This — not delays or lookups — is the deepest parity gap: the Vensim modeler
 unit of thought is the named equation, and today every coupled subsystem
 collapses into one giant anonymous closure. The design doc's answer was
 per-`(node, t)` DAG granularity so `A[t] → B[t-1]` cross-references work; the
-lighter-weight alternative is `let` bindings (or DAG-style bodies, #349) plus
-struct-state packing (#889). Either way this needs a design decision before the
-SD stdlib (§4.3) can even be written, because `DELAY3`/`SMOOTH` are themselves
-stocks that must compose inside a user's recurrence.
+lighter-weight alternative is `let` bindings (or DAG-style bodies, #349) around
+one indexed or structured recurrence state. The state representation is now
+available, but named intermediate computations still need a design before the
+SD stdlib (§4.3) can be written, because `DELAY3`/`SMOOTH` are themselves stocks
+that must compose inside a user's recurrence.
 
 A related, smaller gap is **initialization structure**. Vensim recursively
 resolves arbitrary acyclic initial expressions at t₀. Many steady-state
@@ -466,7 +467,8 @@ supply a separate initial expression; genuinely self-referential equilibrium
 or active algebraic constraints need the bounded solve/fixpoint primitive
 proposed in #888.
 
-Tracked: #889 (indexed state in unfold/scan), #349 (closure body syntax),
+Tracked: #349 (closure body syntax). Indexed recurrence state is covered by
+issue #889.
 
 ## 888 (bounded solve/fixpoint — covers `FIND ZERO`/`SIMULTANEOUS`/equilibrium
 
@@ -836,8 +838,8 @@ concrete user appears. A Molecules-style collection becomes a normal
 **M1 — "port a textbook SD model"** (SIR, Bass diffusion, inventory
 oscillation, World3-style stock webs):
 
-1. §4.1 named flows / local bindings / coupled-state decision (#349, #889 + new
-   design) — *first, everything composes with it*
+1. §4.1 named flows / local bindings (#349 + new design; indexed coupled state
+   is available through #889) — *first, everything composes with it*
 2. `integrate` + Euler/RK4 and explicit stage-input semantics (#351)
 3. Lookups with explicit range policy (#891)
 4. SD function set: delays/smooths/test inputs (§4.3, new)
@@ -902,7 +904,7 @@ plugin today · `non-goal` / `divergent` = deliberate difference.
 | `STEP`, `RAMP`, `PULSE`, `PULSE TRAIN` | `TIME STEP`-quantized forcing functions with defined boundary rules | 🟡 mathematical shapes via `if`; exact Vensim boundaries absent | stdlib + stage-input policy (§4.2) |
 | **Sample/discrete** | | | |
 | `SAMPLE IF TRUE(c, x, i)` | hold unless condition | 🟡 `unfold` state | stdlib |
-| `SHIFT IF TRUE` | aging-chain shift | ❌ | stdlib after #889 |
+| `SHIFT IF TRUE` | aging-chain shift | ❌ | stdlib; indexed recurrence state is available via #889 |
 | `INTEGER(x)` | truncate | ✅ `trunc` (dimensionless-only) | divergent (by design, #1039) |
 | `QUANTUM(a, b)` | truncate toward zero to a multiple of `b` (`b<=0` returns `a`) | 🟡 `b*trunc(a/b)` for `b>0` | maybe builtin |
 | `MODULO(x, m)` | remainder | ✅ `%` operator | — |

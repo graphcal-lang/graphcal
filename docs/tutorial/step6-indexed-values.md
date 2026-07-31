@@ -85,6 +85,11 @@ The accumulation follows the order in which the labels were declared in
 which a map literal happens to list its entries. Declare labels in a
 meaningful sequence when you plan to `scan` over the axis.
 
+A `scan` source has exactly one axis, but its accumulator may itself be an
+indexed vector or matrix. In that case the source axis is prepended to the
+accumulator axes in the result; see
+[Indexed recurrence state](../language/indexes.md#indexed-recurrence-state).
+
 ## Complete Example
 
 ```

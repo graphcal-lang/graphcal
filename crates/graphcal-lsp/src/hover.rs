@@ -161,4 +161,27 @@ node high: Dimensionless = maximum(@values);
             );
         }
     }
+
+    #[test]
+    fn indexed_recurrence_state_has_clean_analysis_and_multi_axis_hover() {
+        let source = include_str!("../../../tests/fixtures/valid/indexed_state_recurrence.gcl");
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:indexed-recurrence.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+
+        let offset = source.find("trajectory:").expect("trajectory declaration");
+        let result = hover(&analysis, offset).expect("trajectory hover");
+        let HoverContents::Markup(markup) = result.contents else {
+            panic!("trajectory hover should be Markdown");
+        };
+        assert!(
+            markup.value.contains("Dimensionless[TimeStep, Element]"),
+            "hover should preserve source axis order: {}",
+            markup.value
+        );
+    }
 }

@@ -388,8 +388,18 @@ impl DeclaredType {
                     format!("{name}<{}>", args_str.join(", "))
                 }
             }
-            Self::Indexed { element, index } => {
-                format!("{}[{index}]", element.format(dims))
+            Self::Indexed { .. } => {
+                // Multi-axis source syntax uses one bracket list (`T[I, J]`),
+                // while the concrete type stores one outer-to-inner layer per
+                // axis. Flatten those layers at the diagnostic boundary rather
+                // than exposing the invalid internal spelling `T[J][I]`.
+                let mut indexes = Vec::new();
+                let mut base = self;
+                while let Self::Indexed { element, index } = base {
+                    indexes.push(index.to_string());
+                    base = element;
+                }
+                format!("{}[{}]", base.format(dims), indexes.join(", "))
             }
         }
     }

@@ -683,6 +683,10 @@ snapshot_test!(snapshot_functions, "invalid/functions.gcl");
 snapshot_test!(snapshot_generics, "valid/generics.gcl");
 snapshot_test!(snapshot_hohmann, "valid/hohmann.gcl");
 snapshot_test!(snapshot_indexed, "valid/indexed.gcl");
+snapshot_test!(
+    snapshot_indexed_state_recurrence,
+    "valid/indexed_state_recurrence.gcl"
+);
 snapshot_test!(snapshot_integers, "valid/integers.gcl");
 snapshot_test!(snapshot_orbital, "valid/orbital.gcl");
 snapshot_test!(snapshot_range_index, "valid/range_index.gcl");

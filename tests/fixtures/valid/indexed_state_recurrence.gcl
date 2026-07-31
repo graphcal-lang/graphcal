@@ -1,0 +1,29 @@
+// Indexed recurrence state: each next element reads the complete previous snapshot.
+pub index Element = { A, B };
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+
+param initial: Dimensionless[Element] = {
+    Element.A: 1.0,
+    Element.B: 2.0,
+};
+
+param coupling: Dimensionless[Element, Element] = {
+    (Element.A, Element.A): 1.0,
+    (Element.A, Element.B): 1.0,
+    (Element.B, Element.A): 1.0,
+    (Element.B, Element.B): 0.0,
+};
+
+node trajectory: Dimensionless[TimeStep, Element] = unfold(
+    TimeStep,
+    @initial,
+    |previous, previous_time, time|
+        for i: Element { sum(for j: Element { @coupling[i, j] * previous[j] }) }
+);
+
+node input: Dimensionless[TimeStep] = for time: TimeStep { time / 1.0 s };
+node scanned_state: Dimensionless[TimeStep, Element] = scan(
+    @input,
+    @initial,
+    |state, item| for i: Element { state[i] + item }
+);

@@ -1188,6 +1188,38 @@ node distance: Length[Step] = unfold(
 }
 
 #[test]
+fn eval_indexed_unfold_and_scan_state_preserve_complete_previous_snapshot() {
+    let source = include_str!("../../../../tests/fixtures/valid/indexed_state_recurrence.gcl");
+    let result = compile_and_eval(source).unwrap();
+
+    let state_rows = |name| {
+        let Value::Indexed { entries, .. } = find_entry(&result, name) else {
+            panic!("expected indexed recurrence result for `{name}`");
+        };
+        entries
+            .values()
+            .map(|state| {
+                indexed_si_values(state)
+                    .into_iter()
+                    .map(|(_, value)| value)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // The asymmetric coupling catches in-place updates: B at step 1 must read
+    // the previous A=1, not the newly computed A=3.
+    assert_eq!(
+        state_rows("trajectory"),
+        [vec![1.0, 2.0], vec![3.0, 1.0], vec![4.0, 3.0]]
+    );
+    assert_eq!(
+        state_rows("scanned_state"),
+        [vec![1.0, 2.0], vec![2.0, 3.0], vec![4.0, 5.0]]
+    );
+}
+
+#[test]
 fn eval_nested_unfold_uses_its_expression_axis_under_scalar_owner() {
     let source = r"
 index Step = range(0.0 s, 2.0 s, step: 1.0 s);

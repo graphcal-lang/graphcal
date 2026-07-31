@@ -95,7 +95,7 @@ and unit-correct:
 Element-wise arithmetic requires explicit `for` — `@a + @b` on indexed
 values is rejected (`D001`/`D019`), by design (no implicit broadcasting).
 
-### 3.1 Matrix–vector recurrences work — incidentally
+### 3.1 Matrix–vector recurrences preserve indexed state
 
 The state-space pattern `x_{k+1} = A·x_k` evaluates correctly through
 `unfold` with an indexed value as recurrence state:
@@ -111,12 +111,13 @@ node x_hist: Dimensionless[Step, Fin(2)] = unfold(
 Verified: with `A = [[0.9, 0.1], [0, 1]]` and `x0 = [1, 0]`, the history is
 `[1, 0.9, 0.81]` in component 0. The result flattens to `T[Step, Fin(2)]`.
 
-Caveat: no documentation, fixture, or unit test covers indexed
-`unfold`/`scan` state. The docs describe the accumulator as a single type
-`T`, and the type-system stratification (`ValueType[I…]`, no nesting) does
-not obviously admit it. This capability should either be blessed with tests
-and docs or rejected deliberately — right now it is load-bearing for
-time-marching models but incidental.
+Indexed recurrence state is specified and covered by the compiler, evaluator,
+formatter, and LSP through `tests/fixtures/valid/indexed_state_recurrence.gcl`
+(#889). The recurrence axis is prepended to the fixed state axes without
+introducing nested source type syntax: `T[Element]` becomes
+`T[Step, Element]`. `scan` likewise permits indexed accumulator state while
+requiring its input source to be rank one, so it never chooses a source axis
+implicitly.
 
 ### 3.2 The plugin escape hatch works for rank-1 arrays
 

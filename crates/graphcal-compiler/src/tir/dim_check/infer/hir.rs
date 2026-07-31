@@ -3282,6 +3282,7 @@ fn infer_hir_scan(
         builtin_fns,
         src,
     )?;
+    let source_rank = source_type.indexed_rank();
     let InferredType::Indexed { element, index } = source_type else {
         return Err(GraphcalError::EvalError {
             message: "scan source must be an indexed value".to_string(),
@@ -3289,6 +3290,13 @@ fn infer_hir_scan(
             span: source.span.into(),
         });
     };
+    if source_rank > 1 {
+        return Err(GraphcalError::MultiAxisScanSource {
+            rank: source_rank,
+            src: src.clone(),
+            span: source.span.into(),
+        });
+    }
     let accumulator_type = infer_hir_type(
         init,
         owner_decl_name,
