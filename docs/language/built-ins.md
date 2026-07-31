@@ -125,6 +125,7 @@ These selectors always take exactly two values. To reduce an indexed value, use
 |----------|-----------|-------------|
 | `to_float(x)` | `Int -> Dimensionless` | Convert an integer to a binary64 `Dimensionless` quantity |
 | `to_int(x)` | `Dimensionless -> Int` | Convert an integer-valued `Dimensionless` quantity exactly; reject fractional, non-finite, or out-of-range values |
+| `to_int(k)` | `Key<Fin(N)> -> Int` | Extract the integer position of a `Fin` index key; named and coordinate keys are rejected |
 
 `to_int` never chooses a rounding policy implicitly. Apply `trunc`, `floor`,
 `ceil`, or `round` before converting when that is the intended policy:
@@ -137,6 +138,41 @@ node nearest: Int = to_int(round(3.7));
 
 Integrality is checked on the represented binary64 value. A conversion cannot
 detect precision that was already lost while computing that value.
+
+### Index Key Functions
+
+These functions construct and consume [index keys](indexes.md#index-keys) of
+type `Key<I>`. `C` is a coordinate axis over dimension `D`; `c` is a static
+Nat constant; `e` is a runtime `Int`; `q` is a quantity of dimension `D`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `key(Fin(N), c)` | `(Fin(N), static Nat) -> Key<Fin(N)>` | Static `Fin` key; the position is range-checked while the program is compiled |
+| `fin_key(Fin(N), e)` | `(Fin(N), Int) -> Key<Fin(N)>` | Runtime `Fin` key; an out-of-range position is a per-node evaluation error |
+| `floor_key(C, q)` | `(C, D) -> Key<C>` | Greatest grid point `<= q`; fails when `q` is below the axis range |
+| `ceil_key(C, q)` | `(C, D) -> Key<C>` | Least grid point `>= q`; fails when `q` is above the axis range |
+| `nearest_key(C, q)` | `(C, D) -> Key<C>` | Closest grid point; total — a midpoint tie resolves toward the axis start |
+| `coord(k)` | `Key<C> -> D` | Extract the quantity coordinate of a coordinate-axis key |
+| `to_int(k)` | `Key<Fin(N)> -> Int` | Extract the integer position of a `Fin` key |
+
+Named axes need no former — a qualified label such as `Maneuver.Departure`
+is itself a constant of type `Key<Maneuver>` — and have no extraction: a
+named key is opaque apart from equality and `match`. There is no exact
+quantity-to-key cast for coordinate axes; select a grid point with an
+explicit search policy instead.
+
+```graphcal
+index TimeStep = range(0.0 s, 10.0 s, step: 0.1 s);
+
+param event_time: Time = 3.47 s;
+node before_event: Key<TimeStep> = floor_key(TimeStep, @event_time);
+node event_coord: Time = coord(@before_event);
+
+param readings: Pressure[Fin(8)] = for i: Fin(8) { 100.0 Pa };
+param requested: Int = 5;
+node channel: Key<Fin(8)> = fin_key(Fin(8), @requested);
+node selected: Pressure = @readings[@channel];
+```
 
 ### Datetime Functions
 
@@ -257,9 +293,35 @@ These functions operate on rank-one `for` comprehensions or indexed values.
 | `product(values)` | `D[I] -> D^\|I\|` | Product of all elements; cardinality determines the result dimension |
 | `maximum(values)` | `D[I] -> D` | Maximum element |
 | `minimum(values)` | `D[I] -> D` | Minimum element |
+| `argmax(values)` | `D[I] -> Key<I>` | Key of the maximum element; ties resolve to the first extremum in index order |
+| `argmin(values)` | `D[I] -> Key<I>` | Key of the minimum element; ties resolve to the first extremum in index order |
 | `mean(values)` | `D[I] -> D` | Arithmetic mean |
 | `rss(values)` | `D[I] -> D` | Root sum square, computed with scaled accumulation |
 | `count(values)` | `T[I] -> Int` | Exact number of elements |
+
+`argmax` and `argmin` return the extremum's *location* as an
+[index key](indexes.md#index-keys) rather than its value, so the result can
+re-index the source or any other value on the same axis. Because axes are
+never empty and ties are deterministic, the identity
+`@x[argmax(@x)] == maximum(@x)` always holds:
+
+```graphcal
+index Maneuver = { Departure, Correction, Insertion };
+param delta_v: Velocity[Maneuver] = {
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
+};
+param fuel_margin: Dimensionless[Maneuver] = {
+    Maneuver.Departure: 1.1,
+    Maneuver.Correction: 1.2,
+    Maneuver.Insertion: 1.3,
+};
+
+node critical: Key<Maneuver> = argmax(@delta_v);
+node critical_dv: Velocity = @delta_v[@critical];        // 2.46 km/s
+node critical_margin: Dimensionless = @fuel_margin[@critical];
+```
 
 `product` makes chained reductions explicit without deeply nested binary
 multiplication. A dimensioned product requires a concrete axis cardinality so

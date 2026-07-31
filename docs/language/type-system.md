@@ -34,9 +34,10 @@ that exist implicitly in graphcal source:
   and `Nat` generic arguments. In a generic declaration, `<N: Nat>` introduces
   a source-level variable over this domain.
 
-`Quantity(D)`, `Complex(D)`, and `Datetime(S)` use parentheses only as semantic
-notation; they are not constructor calls or literal source syntax. The source
-type for `Complex(D)` is `Complex<D>`. `A<G₁, ..., Gₙ>` and
+`Quantity(D)`, `Complex(D)`, `Key(I)`, and `Datetime(S)` use parentheses only
+as semantic notation; they are not constructor calls or literal source syntax.
+The source types for `Complex(D)` and `Key(I)` are `Complex<D>` and `Key<I>`.
+`A<G₁, ..., Gₙ>` and
 `T[I₁, ..., Iₘ]` mirror graphcal's source syntax. Angle brackets apply a
 generic algebraic type, while square brackets index a value type over one or
 more axes.
@@ -59,6 +60,7 @@ signatures. The arrows are not graphcal function types:
 ```text
 Quantity : Dim -> Type
 Complex  : Dim -> Type
+Key      : Index -> Type
 Int      : Type
 Bool     : Type
 Datetime : TimeScale -> Type
@@ -95,7 +97,7 @@ Level 0: type-level entities, classified by kinds
   N : Nat        = 0 | 1 | 2 | ... | N + N | N * N
   I : Index      = X | C | Fin(N)                                (N >= 1)
 
-Level 1: Primitive = Quantity(D) | Complex(D) | Int | Bool | Datetime(S)
+Level 1: Primitive = Quantity(D) | Complex(D) | Key(I) | Int | Bool | Datetime(S)
 
 Level 2: ValueType (T : Type) = Primitive | A | A<G₁, ..., Gₙ>
          GenericArg         G = D | T | I | N
@@ -188,17 +190,18 @@ signatures listed in
 index has no former — its label set is the declaration itself.
 
 `Fin(0)` is invalid and a cardinality beyond the compiler's practical limit is
-rejected, so every axis is finite and non-empty. The elements of an axis are
-entities in their own right with different value-ness (see
-[Index Capabilities](#index-capabilities)): a named-index *label* is never a
-value; a *coordinate* is a quantity value when bound by a loop variable; a
-`Fin` *position* is a bounded integer.
+rejected, so every axis is finite and non-empty. The elements of an axis stay
+type-level entities, but each is uniformly reflected at the term level as a
+**key** of type `Key(I)` (see [Index Capabilities](#index-capabilities)):
+a qualified label is a `Key(X)` constant, and coordinate and `Fin` loop
+variables bind `Key(C)` / `Key(Fin(N))` values whose coordinate or integer
+content is extracted explicitly with `coord` / `to_int`.
 
 ### Levels 1–3: The Type Hierarchy
 
 - **Primitive (Level 1)** — an indivisible atomic datum: a real quantity, a
-  dimension-aware complex quantity, an integer, a boolean, or a datetime in
-  one time scale.
+  dimension-aware complex quantity, an index key, an integer, a boolean, or a
+  datetime in one time scale.
 - **ValueType (Level 2)** — a single logical value: a primitive or an
   instance of a nominal algebraic type. This is the domain of kind `Type` —
   what one DAG node stores, one DAG parameter carries, and expressions
@@ -292,13 +295,21 @@ and `J̄` is its possibly empty sequence of fixed axes:
 Cᵢ          : DT₁ × ... × DTₖ -> A                value former, one per constructor of A
 map / table : T at each label tuple -> T[I₁, ..., Iₘ]
 for         : T at each label tuple -> T[I₁, ..., Iₘ]
-_[_]        : T[I₁, ..., Iₘ] × ℓ₁ × ... × ℓₘ -> T
+_[_]        : T[I₁, ..., Iₘ] × Key(I₁) × ... × Key(Iₘ) -> T
 _.fᵢ        : A -> DTᵢ                            single-constructor A only
 scan        : T[I] × U[J̄] × (U[J̄] × T -> U[J̄]) -> U[I, J̄]
-unfold      : I × U[J̄] × (U[J̄] × Quantity(D) × Quantity(D) -> U[J̄]) -> U[I, J̄]
+unfold      : I × U[J̄] × (U[J̄] × Key(I) × Key(I) -> U[J̄]) -> U[I, J̄]
 sum, maximum, minimum, mean, rss : Quantity(D)[I] -> Quantity(D)
+argmax, argmin : Quantity(D)[I] -> Key(I)
 product     : Quantity(D)[I] -> Quantity(D^|I|)
 count       : T[I] -> Int
+X.ℓ         : Key(X)                              label expression, one per label of X
+key         : Fin(N) × static Nat -> Key(Fin(N))  compile-time range check
+fin_key     : Fin(N) × Int -> Key(Fin(N))         runtime range check
+floor_key, ceil_key, nearest_key : C × Quantity(D) -> Key(C)
+coord       : Key(C) -> Quantity(D)               C a coordinate axis over D
+to_int      : Key(Fin(N)) -> Int                  Fin keys only
+_ + _       : Key(Fin(N)) × static Nat c -> Key(Fin(N + c))
 dot         : Quantity(D1)[I] × Quantity(D2)[I] -> Quantity(D1 × D2)
 matmul      : Quantity(D1)[I, J] × Quantity(D2)[J, K] -> Quantity(D1 × D2)[I, K]
 transpose   : Quantity(D)[I, J] -> Quantity(D)[J, I]
@@ -316,19 +327,25 @@ types. Constructor calls always spell field names (`Cᵢ(f₁: v₁, ...)`), and
 constructor of a generic `A` produces the applied `A<G₁, ..., Gₙ>`. The
 closure positions in `scan` and `unfold` are special syntax, not function
 values; `unfold`'s first argument is an explicit reference to a coordinate
-index over dimension `D`. Recurrence state may carry the fixed axes `J̄`; the
+index over dimension `D`, and its closure binds the previous and current
+element keys `Key(I)`. Recurrence state may carry the fixed axes `J̄`; the
 recurrence axis is prepended to them, without making an indexed declaration
 type an inhabitant of the `Type` kind. Map and table literals must be total and are
-normalized to index order, element access must supply every axis, and
-aggregations reduce exactly one axis. Linear-algebra contractions require the
-same typed axis at each paired position; `I₃` denotes an axis with exactly
-three entries.
+normalized to index order, element access must supply a key for every axis
+(a qualified label is the constant-key spelling), and aggregations —
+including `argmax`/`argmin`, which tie-break to the first extremum in index
+order — reduce exactly one axis. `key`'s static position and Fin-key `+` are
+checked while the program is compiled; `fin_key`, `floor_key`, and
+`ceil_key` range-check at evaluation time. Linear-algebra contractions
+require the same typed axis at each paired position; `I₃` denotes an axis
+with exactly three entries.
 
 Term-level names are bound by `param` (a named DAG input port), `node` (a
 computed value), and `const node` (a compile-time value); a
 multi-declaration binds several such slots from one shared table literal.
 Local names — loop variables, `match` bindings, and `scan`/`unfold` closure
-variables — bind values (or index positions) inside a single expression.
+variables — bind values (element keys, accumulator or element values) inside
+a single expression.
 There are no first-class functions at the term level: built-ins, extern
 functions, and DAG blocks are called or instantiated, never stored.
 
@@ -388,14 +405,14 @@ or exist only at construction and rendering boundaries:
 | Built-in constants `PI`, `E`, `TAU` | prelude | `Dimensionless` | expressions, referenced bare |
 | Built-in functions (`sqrt`, `sum`, ...) | prelude | dimension-polymorphic signatures | call position only |
 | `scan` / `unfold` | special syntax forms | their typing rules | expressions; their closures are syntax, not values |
-| Index label `X.ℓ` | named-index declaration | a position on axis `X` — never a value | index access, map/table keys, `match` patterns, `#[expected_fail(...)]` keys, include index bindings |
-| Coordinate | coordinate-index declaration | `Quantity(D)` | via loop variables: indexing and arithmetic |
-| `Fin` position | structural axis | `Fin(N)`, a bounded-integer refinement of `Int` | via loop variables: indexing and integer arithmetic |
+| Index label `X.ℓ` | named-index declaration | `Key(X)` as an expression; a selector in pattern-like positions | expressions, index access, map/table keys, `match` patterns, `#[expected_fail(...)]` keys, include index bindings |
+| Coordinate | coordinate-index declaration | `Key(C)`; coordinate exposed via `coord` | via loop variables and coordinate searches: indexing, equality, `coord` extraction |
+| `Fin` position | structural axis | `Key(Fin(N))`; integer exposed via `to_int` | via loop variables, `key`, and `fin_key`: indexing, equality, additive key arithmetic |
 | Constructor | `type` declaration | forms values of its algebraic type | construction calls and `match` patterns |
 | Payload field | constructor declaration | its DeclType | `Ctor(field: expr)` construction, `.field` access, pattern bindings |
-| Loop variable | `for v: I` | by axis kind: index case variable / `Quantity(D)` / `Fin(N)` | the comprehension body |
+| Loop variable | `for v: I` | `Key(I)` for the iterated axis | the comprehension body |
 | `match` binding | `field: name` in a pattern | the bound field's type | the arm expression |
-| Closure variables | `scan` binders `acc`, `item`; `unfold` binders `prev_state`, `prev_i`, `i` | accumulator / element / coordinate types | the `scan` / `unfold` body |
+| Closure variables | `scan` binders `acc`, `item`; `unfold` binders `prev_state`, `prev_i`, `i` | accumulator / element values; `unfold`'s `prev_i`, `i` are `Key(I)` | the `scan` / `unfold` body |
 | Attributes | `#[...]` before a declaration | closed set: `assumes`, `expected_fail`, `hidden`, `lazy` | declaration metadata |
 | String literals | quoted text | — (there is no `String` ValueType) | `datetime`/`epoch` arguments, timezone display targets, plot properties, plugin paths |
 | Timezone | quoted IANA name | validated against the bundled tzdb | `datetime(..., tz)` construction, `-> "Area/Location"` display |
@@ -432,15 +449,17 @@ The indivisible types. Each represents a single atomic datum.
 | Semantic type | Representation | Carries a dimension? |
 |---------------|----------------|----------------------|
 | `Quantity(D)` | IEEE 754 binary64 magnitude in SI base units | Yes |
+| `Key(I)` | Axis identity plus element position | No |
 | `Int` | 64-bit signed integer | No |
 | `Bool` | Boolean | No |
 | `Datetime(S)` | High-precision epoch in time scale `S` | No |
 
-`Quantity(D)` and `Datetime(S)` are semantic notation, not literal source
-syntax. Their source spellings are:
+`Quantity(D)`, `Key(I)`, and `Datetime(S)` are semantic notation, not literal
+source syntax. Their source spellings are:
 
 ```text
 Quantity(D)    -> D
+Key(I)         -> Key<I>
 Datetime(UTC)  -> Datetime
 Datetime(S)    -> Datetime<S>
 ```
@@ -466,8 +485,30 @@ of the same dimension are divided, the result has type `Dimensionless`.
 Floating-point arithmetic follows IEEE 754 binary64 rules. The runtime detects
 and reports NaN and infinity.
 
-Only quantities carry physical dimensions. `Int`, `Bool`, and `Datetime(S)`
-are separate primitive families, not quantities.
+Only quantities carry physical dimensions. `Key(I)`, `Int`, `Bool`, and
+`Datetime(S)` are separate primitive families, not quantities.
+
+#### Index Keys
+
+`Key<I>` is the ValueType of element keys of axis `I` — the term-level
+reflection of the type-level axis, mirroring the `Dim`/`Quantity(D)` pattern.
+`I` may be a named, coordinate, `Fin`, or required axis. A key stores the
+axis identity and an element position, so coordinate keys re-index exactly.
+
+```
+param delta_v: Velocity[Maneuver] = { ... };
+node critical: Key<Maneuver> = argmax(@delta_v);
+node critical_dv: Velocity = @delta_v[@critical];
+```
+
+Keys are introduced by qualified label expressions
+(`Maneuver.Departure : Key<Maneuver>`), loop variables, `argmax`/`argmin`,
+and the explicit formers `key`, `fin_key`, `floor_key`, `ceil_key`, and
+`nearest_key`; they are eliminated by element access, same-axis `==`/`!=`,
+exhaustive `match` (concrete named axes), and the extractions `coord`
+(coordinate keys) and `to_int` (`Fin` keys). See
+[Index Keys](indexes.md#index-keys) for the full reference. Like `Complex`,
+keys do not cross the experimental plugin ABI.
 
 #### Int
 
@@ -806,13 +847,19 @@ them from algebraic-type constructors, which use bare syntax (`Nominal`). This
 reflects a genuine semantic difference: labels identify positions within a
 collection axis, while constructors form values of an algebraic type.
 
-Named index labels are not ValueType values. They cannot be stored in nodes or params, compared with `==`, passed through DAG parameters, or used in constructor payloads. Labels appear only in index positions and index-pattern positions:
+A qualified label is a **self-typed constant**: as an expression,
+`Maneuver.Departure` has type `Key<Maneuver>` and is an ordinary value — it
+can be stored in nodes, compared with `==`, passed through DAG parameters,
+and used in constructor payloads (see [Index Keys](indexes.md#index-keys)).
+Exactly as a constructor name is both an expression and a pattern, the label
+spelling additionally remains a *syntactic selector* in pattern-like
+positions:
 
-- Indexed type axes: `Velocity[Maneuver]`
-- Element access: `@delta_v[Maneuver.Departure]`
-- Map and table keys: `{ Maneuver.Departure: 2.46 km/s, ... }`
+- Indexed type axes name the index itself: `Velocity[Maneuver]`
+- Element access: `@delta_v[Maneuver.Departure]` (the label as a constant key)
+- Map and table keys: `{ Maneuver.Departure: 2.46 km/s, ... }` (selector)
 - `for` bindings and index access through their loop variables: `for m: Maneuver { @delta_v[m] }`
-- `match` patterns over named-index loop variables: `match m { Maneuver.Departure => ..., ... }`
+- `match` patterns over `Key<Maneuver>` scrutinees: `match m { Maneuver.Departure => ..., ... }`
 
 An algebraic type with only unit constructors (e.g., `type Foo { A, B }`) is
 NOT automatically an index. The `index` keyword explicitly marks an
@@ -830,8 +877,9 @@ index Samples = linspace(0.0 s, 100.0 s, points: 1001);
 
 `range` makes the exact increment authoritative; `linspace` makes the exact
 point count authoritative. Their arguments are static and finite. A coordinate
-loop variable has semantic type `Quantity(D)` and can participate in arithmetic
-and indexing.
+loop variable is a key of type `Key<C>`: it indexes and compares with `==`
+directly, while its quantity coordinate is extracted explicitly with
+`coord(t)` for arithmetic and ordering.
 
 ### Structural Finite Index
 
@@ -841,25 +889,30 @@ and indexing.
 param vector: Dimensionless[Fin(3)] = for i: Fin(3) { 0.0 };
 ```
 
-Its loop variable has the bounded integer type `Fin(N)`, which is accepted in
-`Int` operations while retaining its bound for static index checks. The Nat `N`
-and Index `Fin(N)` remain distinct sorts, so a bare `D[3]` is invalid.
+Its loop variable is a key of type `Key<Fin(N)>`: it indexes directly,
+supports additive bound-tracking arithmetic (`i + c : Key<Fin(N + c)>` for a
+static Nat `c`), and exposes its integer position explicitly through
+`to_int(i)`. The Nat `N` and Index `Fin(N)` remain distinct sorts, so a bare
+`D[3]` is invalid.
 
 ### Index Capabilities
 
 | Capability | Named (`Maneuver`) | Coordinate (`TimeStep`) | Finite (`Fin(3)`) |
 |-----------|----------------------|--------------------------|-------------------|
-| Loop variable type | index case variable | `Quantity(D)` | `Fin(3)` (bounded integer) |
+| Loop variable type | `Key<Maneuver>` | `Key<TimeStep>` | `Key<Fin(3)>` |
 | Indexing: `@x[i]` | Yes | Yes | Yes |
 | Explicit map key | Yes | No | No |
-| Equality comparison | No; use `match` | Yes | Yes |
+| Equality comparison | Yes (same axis) | Yes (same axis) | Yes (same axis) |
 | Pattern matching | Yes (qualified label) | No | No |
-| Arithmetic | No | Yes (quantity) | Yes (integer) |
-| Pass to DAG param | No | Yes (as quantity) | Yes (as `Int`) |
+| Arithmetic | No | Via `coord(t)` quantity arithmetic | Additive `i + c` (bound-tracking); integer via `to_int(i)` |
+| Pass to DAG param | Yes (as key) | Yes (as key) | Yes (as key) |
 
-Coordinate-index loop variables are quantity values. Named-index loop variables
-are index case variables: they can select an indexed entry and drive exhaustive
-`match`, but they are not values.
+Every loop variable is a key of its axis. All keys index and compare for
+equality on the same axis; none is ordered. Beyond that, the axis kinds
+differ in what the key exposes: a named key drives exhaustive `match` and is
+otherwise opaque, a coordinate key exposes its quantity through `coord(t)`,
+and a `Fin` key exposes its position through `to_int(i)` and carries the
+additive arithmetic above. See [Index Keys](indexes.md#index-keys).
 
 ### Construction of Indexed Values
 
@@ -991,6 +1044,8 @@ Graphcal has **no implicit type conversions**. You must use explicit conversion 
 |----------|------|----|---------|
 | `to_float(x)` | `Int` | `Dimensionless` | `to_float(42)` yields `42.0` |
 | `to_int(x)` | `Dimensionless` | `Int` | `to_int(3.0)` yields `3`; `to_int(3.7)` errors |
+| `to_int(k)` | `Key(Fin(N))` | `Int` | Position of a `Fin` key |
+| `coord(k)` | `Key(C)` | `Quantity(D)` | Coordinate of a coordinate-axis key |
 | `to_utc(x)` | `Datetime(S)` | `Datetime(UTC)` | Time scale conversion |
 | `to_tai(x)` | `Datetime(S)` | `Datetime(TAI)` | Time scale conversion |
 | `to_tt(x)` | `Datetime(S)` | `Datetime(TT)` | Time scale conversion |
@@ -999,7 +1054,11 @@ The existing `to_float` name describes conversion to the floating-point
 representation; it does not name a source-level `Float` type. `to_int` requires
 a finite, integer-valued binary64 input in the `Int` range. It does not choose a
 rounding policy: use `to_int(trunc(x))`, `to_int(floor(x))`, `to_int(ceil(x))`,
-or `to_int(round(x))` to state that policy explicitly. Time scale conversion
+or `to_int(round(x))` to state that policy explicitly. On keys, `to_int` and
+`coord` are the only extractions: `to_int` accepts `Fin` keys only, and
+`coord` accepts coordinate-axis keys only — a named key is opaque, and there
+is no reverse quantity-to-key conversion (use the explicit key formers).
+Time scale conversion
 functions (`to_utc`, `to_tai`, `to_tt`, `to_tdb`, `to_et`, `to_gpst`, `to_gst`,
 `to_bdt`, `to_qzsst`) convert between time scales without changing the physical
 instant.
@@ -1134,8 +1193,8 @@ checking and evaluation rather than recovering it from binary64.
 
 | Expression | Result Type | Constraint |
 |-----------|-------------|------------|
-| `a == b`, `a != b` | `Bool` | `a` and `b` must be unindexed and have the same type; complex equality compares both components exactly |
-| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | operands must be unindexed and either Int/Fin-compatible, same-dimension real quantities, or same-scale datetimes; complex values are unordered |
+| `a == b`, `a != b` | `Bool` | `a` and `b` must be unindexed and have the same type; complex equality compares both components exactly; key equality requires the same axis |
+| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | operands must be unindexed and either both `Int`, same-dimension real quantities, or same-scale datetimes; complex values and keys are unordered — extract with `coord(t)` / `to_int(i)` to order key contents |
 | `a && b`, `a \|\| b` | `Bool` | `a` and `b` must be `Bool` |
 | `!a` | `Bool` | `a` must be `Bool` |
 
@@ -1187,6 +1246,13 @@ expr[Index1.V1, Index2.V2] // multi-dimensional access
 
 - `expr` must be an indexed type `T[I]` (or `T[I1, I2]` for multi-dimensional).
 - All axes must be specified (no partial indexing).
+- Each argument is a `Key<I>` term for its axis position — a qualified label
+  (the constant-key spelling), a loop variable, or any computed key such as
+  `@x[argmax(@x)]`. Axis identity governs: `Key<Fin(N)>` widens into
+  `Fin(M)` positions when `N <= M`; no other cross-axis access exists.
+- Statically discharged constant-`Int` positions on `Fin` axes (`@x[2]`)
+  remain legal; a runtime `Int` or quantity never indexes implicitly (use
+  `fin_key` or the coordinate searches).
 - The result type is the element type `T`.
 
 ### Algebraic Value Construction
@@ -1212,8 +1278,12 @@ IndexName.VariantName
 ```
 
 - References a specific label of a named index.
-- This is not a value expression and has no ValueType.
-- It is legal only in index positions, such as element access, map/table keys, `#[expected_fail(...)]` keys, include index bindings, and named-index `match` patterns.
+- As an expression, it is a self-typed constant of type `Key<IndexName>` —
+  storable, comparable, and passable like any other value.
+- In pattern-like positions — map/table keys, `#[expected_fail(...)]` keys,
+  include index bindings, and `match` patterns — the same spelling is a
+  syntactic selector, mirroring the expression/pattern duality of
+  constructor names.
 
 ### Match Expression
 
@@ -1224,13 +1294,16 @@ match scrutinee {
 }
 ```
 
-- `scrutinee` must be an algebraic-type value or a named-index loop variable.
+- `scrutinee` must be an algebraic-type value or a `Key<X>` value of a
+  concrete named axis `X` (a loop variable, a stored key, an
+  `argmax`/`argmin` result, ...). Keys of coordinate, `Fin`, and required
+  axes cannot be matched.
 - `match` is for exhaustive case analysis over closed finite alternatives. Use `if` for ordinary boolean predicates and comparisons.
 - All members/labels must be covered (exhaustiveness check).
 - For algebraic-type scrutinees, arms use constructor patterns (bare or
   module-qualified) and can bind payload fields explicitly with
   `field: variable` or `field: _`.
-- For named-index loop variables, arms use qualified index-label patterns (`Index.Label` or `module.Index.Label`) and cannot bind fields.
+- For named-axis key scrutinees, arms use qualified index-label patterns (`Index.Label` or `module.Index.Label`) and cannot bind fields.
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
 
@@ -1260,10 +1333,16 @@ for var: IndexName { body_expr }
 for v1: Index1, v2: Index2 { body_expr }
 ```
 
-- `var` is bound to each label of the index in turn.
-- For named indexes, the loop variable is an index case variable. It is valid in index access (`@x[var]`) and named-index `match`, but not as a ValueType value.
-- For coordinate indexes, the loop variable has `Quantity(D)` type.
-- For `Fin(N)`, the loop variable has bounded integer type `Fin(N)`; ordinary integer operations widen their results to `Int`.
+- `var` is bound to each element of the index in turn, as a per-node
+  constant key of type `Key<IndexName>`.
+- For named indexes, the `Key<X>` loop variable indexes (`@x[var]`),
+  compares with `==` against other `Key<X>` values, and drives exhaustive
+  `match`.
+- For coordinate indexes, the `Key<C>` loop variable indexes and compares;
+  its quantity coordinate is extracted with `coord(var)`.
+- For `Fin(N)`, the `Key<Fin(N)>` loop variable indexes (including additive
+  `var + c` accesses), compares, and exposes its integer position via
+  `to_int(var)`.
 - `body_expr` is evaluated for each binding; its type is `T`.
 - The result type is `T[IndexName]` (or `T[Index1, Index2]` for multiple bindings).
 
@@ -1299,14 +1378,16 @@ unfold(index, init, |prev_state, prev_i, i| body)
 ```
 
 In signature notation,
-`unfold : I × U[J̄] × (U[J̄] × Quantity(D) × Quantity(D) -> U[J̄]) -> U[I, J̄]`
+`unfold : I × U[J̄] × (U[J̄] × Key(I) × Key(I) -> U[J̄]) -> U[I, J̄]`
 for a coordinate index `I` over dimension `D`:
 
 - `index` is an explicit reference to a coordinate index `I`, not a value expression.
 - `init` has state type `U[J̄]` and becomes the result at the first coordinate.
   `J̄` may be empty, one axis, or several fixed axes.
 - `prev_state` is bound to the complete previous state `U[J̄]`.
-- `prev_i` and `i` are bound to consecutive coordinate labels from `I`.
+- `prev_i` and `i` are bound to consecutive element keys `Key<I>`; the
+  coordinate quantities they stand on are extracted with `coord(prev_i)` and
+  `coord(i)`.
 - `body` must return exactly `U[J̄]`, including the same axes in the same order.
 - The result type is `U[I, J̄]`: the coordinate axis is prepended to the state
   axes. For example, vector state `U[Element]` produces
@@ -1360,13 +1441,14 @@ are legal and how the parameter may be used in the declaration.
 |------|--------|-----------------------|------------|
 | `Dim` | `<D: Dim>` | Any dimension, such as `Length` or `Length / Time` | Real quantity fields, `Complex<D>`, and dimension expressions such as `D^2` |
 | `Type` | `<T: Type>` | Any `ValueType`, such as `Bool`, `Length`, or `Vec3<Length, Eci>` | A payload field type, or a phantom/tag parameter if unused in any payload |
-| `Index` | `<I: Index>` | A finite ordered index axis | An axis in an indexed type such as `D[I]` |
+| `Index` | `<I: Index>` | A finite ordered index axis | An axis in an indexed type such as `D[I]`, or a key type `Key<I>` |
 | `Nat` | `<N: Nat>` | A non-negative natural number used in type-level size arithmetic | A finite cardinality such as `D[Fin(N)]`, subject to the non-empty-axis rule |
 
 These kinds are not themselves `ValueType`s. For example, `Index` denotes the
-domain of collection axes; it does not mean an index label is a first-class
-value. Likewise, `Type` denotes the `ValueType` domain and excludes both a bare
-index axis and an indexed `DeclType` such as `Velocity[Maneuver]`.
+domain of collection axes; an axis only reaches the term level through its
+reflection type `Key<I>`, whose values are the axis's element keys. Likewise,
+`Type` denotes the `ValueType` domain and excludes both a bare index axis and
+an indexed `DeclType` such as `Velocity[Maneuver]`.
 
 A `Type` parameter is not inherently phantom. It is phantom only when the
 declaration carries it for nominal distinction without using it in a
@@ -1465,9 +1547,10 @@ multiplication, with `*` binding more tightly than `+`; subtraction is not
 supported. Express the larger side additively, for example use
 `D[Fin(N + 1)]` for an input and `D[Fin(N)]` for its smaller output.
 
-`Fin(0)` is invalid. Loop variables from `for i: Fin(N)` have bounded integer
-type `Fin(N)` and can index values carrying that finite axis. They are accepted
-where an `Int` is required; arithmetic results are ordinary `Int` values.
+`Fin(0)` is invalid. Loop variables from `for i: Fin(N)` are keys of type
+`Key<Fin(N)>` and can index values carrying that finite axis, including
+through additive bound-tracking arithmetic (`i + c : Key<Fin(N + c)>`).
+Integer use is explicit: `to_int(i)` produces an ordinary `Int`.
 
 ## Type Equivalence
 
@@ -1484,10 +1567,16 @@ Two types are equivalent if:
 
 There is no general subtyping. `Length` is not assignable to `Dimensionless`,
 and `Vec3<Length, ECI>` is not assignable to `Vec3<Length, Unframed>` even if
-both have the same fields. The bounded `Fin(N)` loop-local type is the explicit
-integer-refinement exception: it is accepted where `Int` is required.
+both have the same fields. The one structural exception is `Fin`-key
+widening: `Key<Fin(N)>` is accepted where `Key<Fin(M)>` is expected when
+`N <= M`. Named and coordinate keys are nominal — `Key<Maneuver>` and
+`Key<Phase>` never unify, and neither does a key with its content type
+(`Key<TimeStep>` is not a `Time`; extract with `coord`).
 
-Named index labels do not participate in value type equivalence. They are index positions and patterns, not ValueTypes. Use `match` over a named-index loop variable for case analysis.
+A qualified label expression has the key type of its axis
+(`Maneuver.Departure : Key<Maneuver>`), so keys participate in type
+equivalence like any other primitive. In pattern position the same spelling
+stays a selector; use `match` over a `Key<X>` value for case analysis.
 
 ## Complete Entity Map
 
@@ -1499,10 +1588,10 @@ Named index labels do not participate in value type equivalence. They are index 
 | Datetime value | ValueType | Yes | Yes | Yes | Yes |
 | Algebraic value | ValueType | Yes | Yes | Yes | Yes |
 | Algebraic constructor | No | No | No | No | Construction and match patterns |
-| Named index label | No | No | No | No | Index positions and match patterns |
+| Named index label | ValueType (`Key<X>`) as expression | Yes (constant key) | Yes (as key) | Yes | Expressions and indexing; a selector in match patterns and map/table keys |
 | Indexed value | DeclType | Yes | Yes | Yes | Via `for` |
-| Coordinate index label | Quantity(D) | Yes | Yes (as quantity) | Yes (as quantity) | Indexing, arithmetic |
-| `Fin` position | `Fin(N)` integer refinement | Yes | Yes (as `Int`) | Yes (as `Int`) | Indexing, arithmetic |
+| Coordinate index label | ValueType (`Key<C>`) | Yes (as key) | Yes (as key) | Yes | Indexing, equality, `coord` extraction |
+| `Fin` position | ValueType (`Key<Fin(N)>`) | Yes (as key) | Yes (as key) | Yes | Indexing, equality, additive key arithmetic, `to_int` extraction |
 | Built-in constant (`PI`, `E`, `TAU`) | ValueType (`Dimensionless`) | Yes | Yes | Yes | Bare reference, no `@` |
 | Built-in function | No | No | No | No | Calling only |
 | Extern function | No | No | No | No | Qualified calling only (`ns.fn(...)`) |

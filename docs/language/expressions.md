@@ -109,7 +109,9 @@ expression that constant-folds to one is also accepted: `2 ^ 3 ^ 2` parses as
 
 All comparison operators return `Bool` for unindexed operands. Complex
 quantities support exact `==` and `!=` when their dimensions match, but do not
-support ordering comparisons.
+support ordering comparisons. [Index keys](indexes.md#index-keys) likewise
+support `==` and `!=` on the same axis only and have no ordering; compare
+their extracted contents (`coord(t)`, `to_int(i)`) when an order is needed.
 
 Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Time + Datetime`, and `Datetime - Time` produce `Datetime`, while
@@ -209,6 +211,10 @@ Access an element of an indexed value:
 ```
 node first: Velocity = @delta_v[Maneuver.Departure];
 ```
+
+Each bracket argument is an [index key](indexes.md#index-keys) for its axis:
+a qualified label (a constant key), a loop variable, or any computed
+`Key<I>` value such as an `argmax` result.
 
 ## If/Else Expressions
 

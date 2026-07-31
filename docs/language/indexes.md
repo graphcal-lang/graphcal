@@ -16,9 +16,11 @@ index Maneuver = { Departure, Correction, Insertion };
 
 Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver.Departure`.
 
-Named labels identify positions on an index axis. They are not values: use them
-in index access, map/table keys, expected-fail keys, include index bindings, and
-`match` patterns over named-index loop variables.
+Named labels identify positions on an index axis. As an expression, a
+qualified label is a self-typed constant [index key](#index-keys) of type
+`Key<Maneuver>`. Like a constructor name, the same spelling also serves as a
+syntactic selector in map/table keys, expected-fail keys, include index
+bindings, and `match` patterns.
 
 The label list is **ordered**: the sequence in which labels are declared is the
 index order of the axis. Every index kind carries such an intrinsic order —
@@ -78,7 +80,7 @@ Access a specific element with `[Index.Label]`:
 node departure_dv: Velocity = @delta_v[Maneuver.Departure];
 ```
 
-Or with a loop variable:
+Or with a loop variable, which is a key of the iterated axis:
 
 ```
 node doubled: Velocity[Maneuver] = for m: Maneuver {
@@ -86,12 +88,17 @@ node doubled: Velocity[Maneuver] = for m: Maneuver {
 };
 ```
 
-For structural `Fin` indexes, use integer expressions as index arguments:
+For structural `Fin` indexes, constant-`Int` positions (`@v[2]`) are checked
+statically, and a `Fin` loop variable supports additive
+[Fin-key arithmetic](#fin-key-arithmetic):
 
 ```
 param v: Dimensionless[Fin(4)] = for i: Fin(4) { 1.0 };
 node shifted: Dimensionless[Fin(3)] = for i: Fin(3) { @v[i + 1] };
 ```
+
+Any `Key`-typed expression selects an element the same way; see
+[Key-Based Element Access](#key-based-element-access).
 
 ## `for` Comprehensions
 
@@ -111,7 +118,7 @@ order; they do not introduce additional variables:
 
 ```
 node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
-    (m, t) => @accel[m] * t
+    (m, t) => @accel[m] * coord(t)
 };
 ```
 
@@ -121,6 +128,8 @@ Aggregation functions currently accept exactly one index axis. Numeric
 aggregations require quantity elements. Most preserve the element dimension;
 `product` raises it to the concrete axis cardinality. `count` accepts any
 non-indexed element type and returns the exact cardinality as `Int`.
+`argmax` and `argmin` return the *location* of the extremum as an
+[index key](#index-keys) rather than its value.
 
 | Function | Description | Result Type |
 |----------|-------------|-------------|
@@ -128,9 +137,15 @@ non-indexed element type and returns the exact cardinality as `Int`.
 | `product(values)` | Product of all elements | Element dimension raised to axis cardinality |
 | `maximum(values)` | Maximum element | Same dimension as elements |
 | `minimum(values)` | Minimum element | Same dimension as elements |
+| `argmax(values)` | Key of the maximum element | `Key<I>` |
+| `argmin(values)` | Key of the minimum element | `Key<I>` |
 | `mean(values)` | Arithmetic mean | Same dimension as elements |
 | `rss(values)` | Root sum square | Same dimension as elements |
 | `count(values)` | Number of elements | `Int` |
+
+On ties, `argmax` and `argmin` return the first extremum in index order, so
+the identity `@x[argmax(@x)] == maximum(@x)` is guaranteed (axes are never
+empty).
 
 ```
 node total: Velocity = sum(for m: Maneuver { @delta_v[m] });
@@ -138,12 +153,235 @@ node largest: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node combined_sigma: Velocity = rss(for m: Maneuver { @delta_v[m] });
 node n: Int = count(for m: Maneuver { @delta_v[m] });
 node normalized: Velocity = sum(@delta_v) / to_float(count(@delta_v));
+node critical: Key<Maneuver> = argmax(@delta_v);
+node critical_dv: Velocity = @delta_v[@critical];
 ```
 
 `Int` and quantity arithmetic never mix implicitly. Use `to_float(count(...))`
 when a scalar calculation needs the cardinality. A multi-axis value must first be
 projected to a single axis with an explicit `for` comprehension (`D021`); total-
 and partial-axis aggregation are not yet defined.
+
+## Index Keys
+
+Every axis element is reflected at the term level as a **key** of type
+`Key<I>`, where `I` is the axis — named, coordinate, `Fin`, or required.
+This mirrors the `Dim`/`Quantity(D)` pattern: the axis stays a static,
+type-level entity, while its elements become ordinary runtime values.
+
+`Key<I>` is an ordinary value type. Keys can be stored in `node` and
+`const node` declarations, passed to DAG params, carried in constructor
+payload fields, and indexed themselves (`Key<TimeStep>[Maneuver]`). A key is
+represented as its axis identity plus an element position — a coordinate key
+carries the position, not the float coordinate, so re-indexing through a key
+is exact and never a floating-point lookup.
+
+```
+index Maneuver = { Departure, Correction, Insertion };
+param delta_v: Velocity[Maneuver] = {
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
+};
+
+node critical: Key<Maneuver> = argmax(@delta_v);
+node critical_dv: Velocity = @delta_v[@critical];
+```
+
+### Labels Are Key Constants
+
+A qualified label is a self-typed constant expression:
+`Maneuver.Departure : Key<Maneuver>`. Exactly as a constructor name is both
+an expression and a pattern, the label spelling keeps its selector role in
+pattern-like positions — `match` arms, map/table keys, table headers and
+slices — while everywhere else it is a `Key`-typed term:
+
+```
+node fallback: Key<Maneuver> = Maneuver.Correction;
+```
+
+Axis-less spellings are never keys implicitly: `node k: Key<Fin(3)> = 1;` is
+rejected. Annotations check types, they do not convert integers into keys —
+use the explicit formers below.
+
+### Loop Variables Are Keys
+
+A loop variable has exactly one type: the key type of its axis.
+
+| Binding | Loop variable type | Content extraction |
+|---------|--------------------|--------------------|
+| `for m: Maneuver` | `Key<Maneuver>` | opaque (equality and `match` only) |
+| `for t: TimeStep` | `Key<TimeStep>` | coordinate via `coord(t)` |
+| `for i: Fin(3)` | `Key<Fin(3)>` | integer via `to_int(i)` |
+
+There is no dual use: coordinate arithmetic and comparison go through the
+explicit extraction `coord(t)`, and integer use of a `Fin` key through
+`to_int(i)`. In particular `t == 0.5 s` is a type error — write
+`coord(t) == 0.5 s`. The `unfold` closure binders over coordinates
+(`prev_t`, `t`) follow the same rule.
+
+### Equality and `match`
+
+Keys of the same axis compare with `==` and `!=`. Keys of different axes
+never compare, and keys have no ordering — extract the content first
+(`coord(t1) < coord(t2)`, `to_int(i) < to_int(j)`) when an order is needed.
+
+```
+node critical: Key<Maneuver> = argmax(@delta_v);
+node is_critical: Bool[Maneuver] = for m: Maneuver { m == @critical };
+```
+
+A key of a concrete named axis drives exhaustive `match`, with the same
+label patterns used for named-index loop variables:
+
+```
+node contingency: Dimensionless = match @critical {
+    Maneuver.Departure  => 1.10,
+    Maneuver.Correction => 1.50,
+    Maneuver.Insertion  => 1.25,
+};
+```
+
+Keys of a required (`pub(bind)`) axis support indexing and equality only;
+`match` needs the concrete label set.
+
+### Key-Based Element Access
+
+Brackets accept any `Key`-typed term per axis position, mixing labels, loop
+variables, and computed keys freely:
+
+```
+node peak_per_maneuver: Key<TimeStep>[Maneuver] = for m: Maneuver {
+    argmax(for t: TimeStep { @v[m, t] })
+};
+node v_at_peak: Velocity[Maneuver] = for m: Maneuver {
+    @v[m, @peak_per_maneuver[m]]
+};
+```
+
+Access is governed by axis identity: `Key<Maneuver>` cannot index a `Phase`
+axis. The one widening is structural: `Key<Fin(N)>` is accepted where
+`Key<Fin(M)>` is expected when `N <= M`.
+
+!!! note "Evaluation granularity"
+    Access with a compile-time-constant key (a label, a loop variable, or
+    `key(...)`) keeps fine-grained per-element DAG edges. Access with a
+    runtime key is a gather: the edge covers the whole indexed declaration.
+
+### Extractions: `coord` and `to_int`
+
+The only key extractions are:
+
+| Function | Signature | Applies to |
+|----------|-----------|------------|
+| `coord(k)` | `Key<C> -> Quantity(D)` | coordinate axes over dimension `D` |
+| `to_int(k)` | `Key<Fin(N)> -> Int` | `Fin` axes only |
+
+For a `Fin` key the position is the semantic content; for a coordinate key
+only the coordinate is exposed, because exposing its position would couple
+programs to the grid definition. A named key is opaque: it supports equality
+and `match`, nothing else.
+
+```
+node peak: Key<TimeStep> = argmax(@altitude);
+node peak_time: Time = coord(@peak);
+```
+
+### Introducing Keys
+
+All introduction forms state their axis explicitly:
+
+| Form | Checking | Fallible? |
+|------|----------|-----------|
+| Label expression `Maneuver.Departure` | compile time | no |
+| Loop variable | compile time | no |
+| `argmax(v)` / `argmin(v)` | — | no (axes are non-empty) |
+| `key(Fin(N), c)` with static `c` | compile-time range check | no |
+| `fin_key(Fin(N), e)` with runtime `Int` `e` | runtime range check | yes |
+| `floor_key(C, q)` / `ceil_key(C, q)` | runtime | yes (outside the axis range) |
+| `nearest_key(C, q)` | runtime | no (total) |
+
+`key(Fin(N), c)` takes a static constant and is fully discharged during
+checking; an out-of-range position is a compile error. `fin_key(Fin(N), e)`
+accepts a runtime `Int` and range-checks it during evaluation — a failure is
+a per-node evaluation error, and downstream nodes receive
+`DependencyFailed`. Named axes need no positional former (write the label),
+and coordinate axes have no exact quantity-to-key cast: select a grid point
+with an explicit search policy instead.
+
+```
+param readings: Pressure[Fin(8)] = for i: Fin(8) { 100.0 Pa };
+node second: Key<Fin(8)> = key(Fin(8), 1);
+param requested: Int = 5;
+node channel: Key<Fin(8)> = fin_key(Fin(8), @requested);
+node selected: Pressure = @readings[@channel];
+```
+
+The coordinate searches take a quantity of the axis dimension and return the
+grid point below (`floor_key`), above (`ceil_key`), or closest to
+(`nearest_key`) the query. `floor_key` and `ceil_key` fail when the query
+falls outside the axis range; `nearest_key` is total, and a midpoint tie
+resolves toward the axis start.
+
+```
+index TimeStep = range(0.0 s, 10.0 s, step: 0.1 s);
+param event_time: Time = 3.47 s;
+node before_event: Key<TimeStep> = floor_key(TimeStep, @event_time);
+node near_event: Key<TimeStep> = nearest_key(TimeStep, @event_time);
+```
+
+!!! warning "No implicit runtime indexing"
+    A runtime `Int` never indexes a `Fin` axis implicitly (`@x[@n]` is
+    rejected — write `fin_key(Fin(N), @n)`), and a quantity never looks up a
+    coordinate axis (`@x[@t]` is rejected — pick a policy with
+    `nearest_key` / `floor_key` / `ceil_key`). Statically discharged
+    constant positions such as `@x[2]` remain legal.
+
+### Fin-Key Arithmetic
+
+A `Fin` key plus a static Nat constant is again a `Fin` key, with the bound
+tracked exactly in the type:
+
+```text
+i : Key<Fin(N)>,  c a static Nat  ⟹  i + c : Key<Fin(N + c)>
+```
+
+The shift is exact and infallible — the bound grows in the type, so there is
+no runtime check, wraparound, or clamp. It composes directly with indexing
+and `Fin` widening:
+
+```
+param values: Velocity[Fin(5)] = for i: Fin(5) { 1.0 m/s };
+node diffs: Velocity[Fin(4)] = for i: Fin(4) {
+    @values[i + 1] - @values[i]   // i + 1 : Key<Fin(5)> — exact
+};
+node smoothed: Velocity[Fin(3)] = for i: Fin(3) {
+    (@values[i] + @values[i + 1] + @values[i + 2]) / 3.0
+};
+```
+
+The fragment is deliberately exact: one key, `+`, static Nat constants.
+Everything else is excluded for a stated reason:
+
+- `i - 1` — fallible at position 0, and Nat has no subtraction; restructure
+  additively (take `T[Fin(N + 1)]` input and produce `T[Fin(N)]` output).
+- `i * 2`, `i + j` — only loose static bounds exist, which could not widen
+  into the natural target axis.
+- `i % c`, `i / c` — wraparound and truncation are data policies, not index
+  arithmetic.
+- `i + @k` with runtime `@k` — a runtime offset escapes any static bound;
+  write `to_int(i) + @k : Int` and re-enter through `fin_key`.
+
+Named and coordinate keys have no arithmetic at all: for named keys it would
+couple runtime behavior to label declaration order, and for coordinate keys
+it is ambiguous (position or coordinate?) — use `coord(t)` and quantity
+arithmetic instead.
+
+!!! note "Rendering and boundaries"
+    Keys render at output boundaries as their label, position, or coordinate
+    (presentation only), and boundary inputs encode named keys by label,
+    `Fin` keys by position, and coordinate keys by coordinate. Keys do not
+    cross the experimental plugin ABI (same posture as `Complex`).
 
 ## `scan` (Cumulative Fold)
 
@@ -240,9 +478,13 @@ node accel: Acceleration[Maneuver] = {
 };
 
 node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
-    @accel[m] * t
+    @accel[m] * coord(t)
 };
 ```
+
+The coordinate loop variable `t` is a key of the `TimeStep` axis; the
+quantity coordinate it stands on is extracted explicitly with `coord(t)`
+(see [Index Keys](#index-keys)).
 
 ### Construction via Map Literal with `for` Values
 
@@ -251,9 +493,9 @@ comprehension over a coordinate index:
 
 ```
 node v: Velocity[Maneuver, TimeStep] = {
-    Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * t },
-    Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * t },
-    Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * t },
+    Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * coord(t) },
+    Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * coord(t) },
+    Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * coord(t) },
 };
 ```
 
@@ -552,17 +794,19 @@ Subtraction is deliberately unsupported; express the larger side additively,
 for example use `D[Fin(N + 1)]` for an input and `D[Fin(N)]` for a smaller
 output.
 
-A `Fin(N)` loop variable has the bounded integer type `Fin(N)` and evaluates
-with an integer representation at runtime. It can index the corresponding
-value:
+A `Fin(N)` loop variable is a key of type `Key<Fin(N)>` (see
+[Index Keys](#index-keys)). It can index the corresponding value, and its
+integer position is extracted explicitly with `to_int(i)`:
 
 ```
 node doubled: Dimensionless[Fin(3)] =
     for i: Fin(3) { @v[i] * 2.0 };
+node positions: Dimensionless[Fin(3)] =
+    for i: Fin(3) { to_float(to_int(i)) };
 ```
 
-Integer index expressions are allowed and statically bounds-checked when
-possible:
+Additive [Fin-key arithmetic](#fin-key-arithmetic) tracks the bound in the
+type, so shifted access is checked statically:
 
 ```
 param values: Velocity[Fin(4)] = for i: Fin(4) { 1.0 m/s };
@@ -631,19 +875,20 @@ depends on the previous state:
 node x: Dimensionless[TimeStep] = unfold(
     TimeStep,
     @x0,
-    |prev_x, prev_t, t| prev_x * (1.0 + @rate * (t - prev_t))
+    |prev_x, prev_t, t| prev_x * (1.0 + @rate * (coord(t) - coord(prev_t)))
 );
 ```
 
 The first coordinate receives `@x0`. At every later coordinate, the body
-receives the previous value, the previous coordinate, and the current
-coordinate. The axis belongs to the expression; the enclosing declaration's
-type is not consulted to select it, so `unfold` can be nested or consumed
-immediately:
+receives the previous value together with the previous and current
+coordinate keys (`Key<TimeStep>`); their quantity coordinates are extracted
+with `coord(...)`, exactly as for coordinate loop variables. The axis
+belongs to the expression; the enclosing declaration's type is not consulted
+to select it, so `unfold` can be nested or consumed immediately:
 
 ```
 node total: Dimensionless = sum(
-    unfold(TimeStep, @x0, |prev_x, prev_t, t| prev_x + @rate * (t - prev_t))
+    unfold(TimeStep, @x0, |prev_x, prev_t, t| prev_x + @rate * (coord(t) - coord(prev_t)))
 );
 ```
 
@@ -711,4 +956,5 @@ Use aggregation functions directly on indexed values:
 node total_dv: Velocity = sum(for m: Maneuver { @delta_v[m] });
 ```
 
-Built-in aggregation functions (`sum`, `minimum`, `maximum`, `mean`, `count`) work with any index type.
+Built-in aggregation functions (`sum`, `minimum`, `maximum`, `argmin`,
+`argmax`, `mean`, `count`) work with any index type.
