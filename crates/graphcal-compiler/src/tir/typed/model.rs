@@ -107,6 +107,11 @@ pub enum ResolvedTypeExpr {
     IndexArg(ResolvedIndex),
     /// A concrete quantity type, e.g. `Length * Time^-2`.
     Quantity(Dimension),
+    /// A dimension-aware complex quantity type, e.g. `Complex<Length>`.
+    Complex {
+        dimension: ResolvedDimArg,
+        span: Span,
+    },
     /// A non-generic struct type name, e.g. `TransferResult`.
     Struct(ResolvedStructTypeName, Span),
     /// A generic struct with sort-aware arguments, e.g. `Vec3<Length, ECI>`
@@ -155,6 +160,9 @@ impl ResolvedTypeExpr {
                 } else {
                     formatted
                 }
+            }
+            Self::Complex { dimension, .. } => {
+                format!("Complex<{}>", dimension.format(registry))
             }
             Self::Struct(name, _) => name.as_str().to_string(),
             Self::GenericStruct {

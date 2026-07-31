@@ -453,6 +453,9 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
             TypeExprKind::DatetimeApplication { type_args } => Self::DatetimeApplication {
                 type_args: type_args.into_iter().map(Into::into).collect(),
             },
+            TypeExprKind::ComplexApplication { generic_args } => Self::ComplexApplication {
+                generic_args: generic_args.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }

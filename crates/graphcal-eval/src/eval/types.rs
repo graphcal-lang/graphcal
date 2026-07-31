@@ -4,6 +4,7 @@ use indexmap::IndexMap;
 use miette::Diagnostic;
 use thiserror::Error;
 
+use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::EncodingChannel;
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
@@ -41,6 +42,14 @@ pub enum Value {
         /// The dimension of this value.
         dimension: Dimension,
         /// Optional display unit for pretty-printing.
+        display_unit: Option<DisplayUnit>,
+    },
+    Complex {
+        /// Cartesian components in base SI units.
+        si_value: ComplexValue,
+        /// Shared physical dimension of both components.
+        dimension: Dimension,
+        /// Optional display unit applied to both components.
         display_unit: Option<DisplayUnit>,
     },
     Bool(bool),
@@ -93,6 +102,18 @@ impl PartialEq for Value {
                     display_unit: l_unit,
                 },
                 Self::Quantity {
+                    si_value: r_si,
+                    dimension: r_dim,
+                    display_unit: r_unit,
+                },
+            ) => l_si == r_si && l_dim == r_dim && l_unit == r_unit,
+            (
+                Self::Complex {
+                    si_value: l_si,
+                    dimension: l_dim,
+                    display_unit: l_unit,
+                },
+                Self::Complex {
                     si_value: r_si,
                     dimension: r_dim,
                     display_unit: r_unit,
@@ -180,8 +201,10 @@ fn value_entry_maps_equal(
 
 /// Error returned when a [`Value`] accessor is called on an incompatible variant.
 #[derive(Debug, Clone, Error)]
-#[error("expected Quantity value, got {actual}")]
+#[error("expected {expected} value, got {actual}")]
 pub struct ValueError {
+    /// Description of the variant accepted by the accessor.
+    expected: &'static str,
     /// A short description of the actual variant (e.g. "Bool", "Int", "struct `Foo`").
     actual: String,
 }
@@ -249,6 +272,7 @@ impl Value {
     fn variant_description(&self) -> String {
         match self {
             Self::Quantity { .. } => "Quantity".to_string(),
+            Self::Complex { .. } => "Complex".to_string(),
             Self::Bool(_) => "Bool".to_string(),
             Self::Int(_) => "Int".to_string(),
             Self::Label {
@@ -270,20 +294,39 @@ impl Value {
         match self {
             Self::Quantity { si_value, .. } => Ok(*si_value),
             other => Err(ValueError {
+                expected: "Quantity",
                 actual: other.variant_description(),
             }),
         }
     }
 
-    /// Get the dimension.
+    /// Get the Cartesian SI components of a complex quantity.
     ///
     /// # Errors
     ///
-    /// Returns [`ValueError`] if this is not a `Quantity`.
+    /// Returns [`ValueError`] if this is not a `Complex` value.
+    pub fn complex_si_value(&self) -> Result<ComplexValue, ValueError> {
+        match self {
+            Self::Complex { si_value, .. } => Ok(*si_value),
+            other => Err(ValueError {
+                expected: "Complex",
+                actual: other.variant_description(),
+            }),
+        }
+    }
+
+    /// Get the dimension of a real or complex quantity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValueError`] if this is not a `Quantity` or `Complex` value.
     pub fn dimension(&self) -> Result<Dimension, ValueError> {
         match self {
-            Self::Quantity { dimension, .. } => Ok(dimension.clone()),
+            Self::Quantity { dimension, .. } | Self::Complex { dimension, .. } => {
+                Ok(dimension.clone())
+            }
             other => Err(ValueError {
+                expected: "Quantity or Complex",
                 actual: other.variant_description(),
             }),
         }
@@ -303,6 +346,7 @@ impl Value {
                 ..
             } => Ok(quantity_display_value(*si_value, display_unit.as_ref())),
             other => Err(ValueError {
+                expected: "Quantity",
                 actual: other.variant_description(),
             }),
         }
@@ -317,6 +361,11 @@ impl Value {
     pub fn display_label(&self, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
         match self {
             Self::Quantity {
+                display_unit,
+                dimension,
+                ..
+            }
+            | Self::Complex {
                 display_unit,
                 dimension,
                 ..
@@ -364,6 +413,27 @@ impl Value {
                 let formatted = graphcal_compiler::registry::format::format_number(
                     quantity_display_value(*si_value, display_unit.as_ref()),
                 );
+                match symbols.and_then(|s| self.display_label(s)) {
+                    Some(label) => format!("{formatted} [{label}]"),
+                    None => formatted,
+                }
+            }
+            Self::Complex {
+                si_value,
+                display_unit,
+                ..
+            } => {
+                let re = graphcal_compiler::registry::format::format_number(
+                    quantity_display_value(si_value.re(), display_unit.as_ref()),
+                );
+                let displayed_im = quantity_display_value(si_value.im(), display_unit.as_ref());
+                let sign = if displayed_im.is_sign_negative() {
+                    "-"
+                } else {
+                    "+"
+                };
+                let im = graphcal_compiler::registry::format::format_number(displayed_im.abs());
+                let formatted = format!("{re} {sign} {im}i");
                 match symbols.and_then(|s| self.display_label(s)) {
                     Some(label) => format!("{formatted} [{label}]"),
                     None => formatted,

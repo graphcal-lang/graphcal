@@ -20,7 +20,7 @@ const TOP_LEVEL_KEYWORDS: &[&str] = &[
 
 /// Built-ins available while editing a type annotation. `Fin` is offered for
 /// nested Index positions such as `T[Fin(N)]`.
-const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime", "Fin"];
+const TYPE_KEYWORDS: &[&str] = &["Dimensionless", "Bool", "Int", "Datetime", "Complex", "Fin"];
 
 /// Iterate over all visible definitions: local (from symbol table) and imported.
 fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = &DefinitionInfo> {
@@ -241,6 +241,34 @@ mod tests {
             assert!(
                 TOP_LEVEL_KEYWORDS.contains(&required),
                 "missing top-level keyword: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn complex_type_and_functions_are_completed() {
+        let source = "node z: Complex<Length> = complex(1.0 m, 2.0 m);";
+        let uri = tower_lsp::lsp_types::Url::parse("file:///tmp/completion-complex.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+
+        let type_items =
+            completion(&analysis, source, source.find("Complex").unwrap()).unwrap_or_default();
+        assert!(type_items.iter().any(|item| item.label == "Complex"));
+
+        let expression_items =
+            completion(&analysis, source, source.find("complex").unwrap()).unwrap_or_default();
+        for function in [
+            "complex",
+            "polar",
+            "to_complex",
+            "re",
+            "im",
+            "phase",
+            "conj",
+        ] {
+            assert!(
+                expression_items.iter().any(|item| item.label == function),
+                "missing complex function completion `{function}`"
             );
         }
     }

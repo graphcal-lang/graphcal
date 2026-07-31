@@ -355,6 +355,7 @@ fn collect_resolved_collection_indexes_from_declared_type(
             Ok(())
         }
         crate::registry::declared_type::DeclaredType::Quantity(_)
+        | crate::registry::declared_type::DeclaredType::Complex(_)
         | crate::registry::declared_type::DeclaredType::Bool
         | crate::registry::declared_type::DeclaredType::Int
         | crate::registry::declared_type::DeclaredType::Datetime(_) => Ok(()),
@@ -409,6 +410,7 @@ fn collect_resolved_collection_indexes_from_type(
             Ok(())
         }
         ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Complex { .. }
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)

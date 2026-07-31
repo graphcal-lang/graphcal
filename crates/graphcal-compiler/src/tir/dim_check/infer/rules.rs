@@ -157,6 +157,27 @@ pub(super) fn binop_rule(
         BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
             let lhs_type = comparison_operand_type(lhs, registry, src)?;
             let rhs_type = comparison_operand_type(rhs, registry, src)?;
+            if matches!(lhs_type, InferredType::Complex(_))
+                || matches!(rhs_type, InferredType::Complex(_))
+            {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "an ordered real quantity, integer, or datetime".to_string(),
+                    found: if matches!(lhs_type, InferredType::Complex(_)) {
+                        format_inferred_type(lhs_type, registry)
+                    } else {
+                        format_inferred_type(rhs_type, registry)
+                    },
+                    help: "complex quantities are unordered; compare re(), im(), abs(), or phase() explicitly"
+                        .to_string(),
+                    src: src.clone(),
+                    span: if matches!(lhs_type, InferredType::Complex(_)) {
+                        lhs.span
+                    } else {
+                        rhs.span
+                    }
+                    .into(),
+                });
+            }
             if lhs_type.is_int_like() || rhs_type.is_int_like() {
                 if !lhs_type.is_int_like() || !rhs_type.is_int_like() {
                     return Err(GraphcalError::DimensionMismatch {
@@ -201,6 +222,32 @@ pub(super) fn binop_rule(
         BinOp::Add | BinOp::Sub => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
+            }
+            match (lhs_type, rhs_type) {
+                (InferredType::Complex(lhs_dim), InferredType::Complex(rhs_dim)) => {
+                    if lhs_dim != rhs_dim {
+                        return Err(GraphcalError::DimensionMismatch {
+                            expected: format_inferred_type(lhs_type, registry),
+                            found: format_inferred_type(rhs_type, registry),
+                            help: "complex operands of addition and subtraction must have the same dimension"
+                                .to_string(),
+                            src: src.clone(),
+                            span: rhs.span.into(),
+                        });
+                    }
+                    return Ok(InferredType::Complex(lhs_dim.clone()));
+                }
+                (InferredType::Complex(_), _) | (_, InferredType::Complex(_)) => {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: format_inferred_type(lhs_type, registry),
+                        found: format_inferred_type(rhs_type, registry),
+                        help: "addition and subtraction do not implicitly promote real quantities; use to_complex()"
+                            .to_string(),
+                        src: src.clone(),
+                        span: rhs.span.into(),
+                    });
+                }
+                _ => {}
             }
             // Point-vs-vector rules for Datetime
             if let InferredType::Datetime(ls) = lhs_type {
@@ -288,8 +335,14 @@ pub(super) fn binop_rule(
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
-            let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
+            let (lhs_dim, lhs_complex) = match lhs_type {
+                InferredType::Complex(dimension) => (dimension.clone(), true),
+                _ => (expect_quantity(lhs_type, registry, src, lhs.span)?, false),
+            };
+            let (rhs_dim, rhs_complex) = match rhs_type {
+                InferredType::Complex(dimension) => (dimension.clone(), true),
+                _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
+            };
             let dim =
                 lhs_dim
                     .checked_mul(&rhs_dim)
@@ -297,14 +350,24 @@ pub(super) fn binop_rule(
                         src: src.clone(),
                         span: expr_span.into(),
                     })?;
-            Ok(InferredType::Quantity(dim))
+            if lhs_complex || rhs_complex {
+                Ok(InferredType::Complex(dim))
+            } else {
+                Ok(InferredType::Quantity(dim))
+            }
         }
         BinOp::Div => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
                 return Ok(InferredType::Int);
             }
-            let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
-            let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
+            let (lhs_dim, lhs_complex) = match lhs_type {
+                InferredType::Complex(dimension) => (dimension.clone(), true),
+                _ => (expect_quantity(lhs_type, registry, src, lhs.span)?, false),
+            };
+            let (rhs_dim, rhs_complex) = match rhs_type {
+                InferredType::Complex(dimension) => (dimension.clone(), true),
+                _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
+            };
             let dim =
                 lhs_dim
                     .checked_div(&rhs_dim)
@@ -312,7 +375,11 @@ pub(super) fn binop_rule(
                         src: src.clone(),
                         span: expr_span.into(),
                     })?;
-            Ok(InferredType::Quantity(dim))
+            if lhs_complex || rhs_complex {
+                Ok(InferredType::Complex(dim))
+            } else {
+                Ok(InferredType::Quantity(dim))
+            }
         }
         BinOp::Mod => {
             if lhs_type.is_int_like() && rhs_type.is_int_like() {
@@ -454,7 +521,9 @@ pub(super) fn unary_rule(
             Ok(InferredType::Bool)
         }
         UnaryOp::Neg => match &operand.ty {
-            InferredType::Quantity(_) | InferredType::Int => Ok(operand.ty.clone()),
+            InferredType::Quantity(_) | InferredType::Complex(_) | InferredType::Int => {
+                Ok(operand.ty.clone())
+            }
             InferredType::CoordinateIndexLabel { dimension, .. } => {
                 Ok(InferredType::Quantity(dimension.clone()))
             }

@@ -679,6 +679,7 @@ macro_rules! snapshot_test {
 }
 
 snapshot_test!(snapshot_constants, "valid/constants.gcl");
+snapshot_test!(snapshot_complex, "valid/complex.gcl");
 snapshot_test!(snapshot_functions, "invalid/functions.gcl");
 snapshot_test!(snapshot_generics, "valid/generics.gcl");
 snapshot_test!(snapshot_hohmann, "valid/hohmann.gcl");

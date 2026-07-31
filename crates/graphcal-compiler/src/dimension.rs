@@ -399,7 +399,7 @@ impl Dimension {
     }
 
     /// Divide two dimensions, returning an error if exponent arithmetic overflows.
-    pub(crate) fn checked_div(self, other: &Self) -> Result<Self, RationalError> {
+    pub fn checked_div(self, other: &Self) -> Result<Self, RationalError> {
         self.combine(other, CombineOp::Sub)
     }
 

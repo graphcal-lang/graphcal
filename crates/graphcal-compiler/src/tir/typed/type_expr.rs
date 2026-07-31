@@ -113,7 +113,8 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
                     | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => false,
                 })
         }
-        TypeExprKind::TypeApplication { generic_args, .. } => generic_args.iter().any(|arg| {
+        TypeExprKind::TypeApplication { generic_args, .. }
+        | TypeExprKind::ComplexApplication { generic_args } => generic_args.iter().any(|arg| {
             matches!(
                 arg,
                 crate::desugar::desugared_ast::GenericArg::Type(type_expr)
@@ -138,11 +139,16 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
             .iter()
             .any(|item| item.term.name.span == span),
         TypeExprKind::Indexed { base, .. } => type_expr_has_dim_term_at_span(base, span),
-        TypeExprKind::TypeApplication { generic_args, .. } => generic_args.iter().any(|arg| {
+        TypeExprKind::TypeApplication { generic_args, .. }
+        | TypeExprKind::ComplexApplication { generic_args } => generic_args.iter().any(|arg| {
             matches!(
                 arg,
                 crate::desugar::desugared_ast::GenericArg::Type(type_expr)
                     if type_expr_has_dim_term_at_span(type_expr, span)
+            ) || matches!(
+                arg,
+                crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous)
+                    if ambiguous.span() == span
             )
         }),
         TypeExprKind::DatetimeApplication { type_args } => type_args
@@ -218,6 +224,10 @@ fn resolve_hir_type_expr_inner(
     match &type_ann.kind {
         hir::TypeExprKind::Builtin(builtin) => Ok(resolve_hir_builtin_type(*builtin)),
         hir::TypeExprKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
+        hir::TypeExprKind::Complex(dimension) => Ok(ResolvedTypeExpr::Complex {
+            dimension: resolve_hir_dim_arg(dimension, ctx)?,
+            span: type_ann.span,
+        }),
         hir::TypeExprKind::Index(index) => Err(GraphcalError::EvalError {
             message: format!(
                 "index `{}` cannot be used as a type",
@@ -748,6 +758,9 @@ fn substitute_params_in_resolved_type(
             substitute_params_in_dim_arg(&mut dim_arg, substitutions)?;
             *type_expr = dim_arg_as_resolved_type(dim_arg);
             Ok(())
+        }
+        ResolvedTypeExpr::Complex { dimension, .. } => {
+            substitute_params_in_dim_arg(dimension, substitutions)
         }
         ResolvedTypeExpr::GenericStruct { generic_args, .. } => generic_args
             .iter_mut()
@@ -1298,6 +1311,17 @@ pub(super) fn resolve_type_expr_inner(
         TypeExprKind::DatetimeApplication { type_args } => {
             resolve_datetime_application(type_ann, type_args, src)
         }
+        TypeExprKind::ComplexApplication { generic_args } => resolve_complex_application(
+            type_ann,
+            generic_args,
+            registry,
+            owner,
+            dim_params,
+            index_params,
+            nat_params,
+            src,
+            module_ctx,
+        ),
 
         TypeExprKind::Indexed { base, indexes } => {
             let resolved_base = resolve_type_expr_inner(
@@ -1589,6 +1613,60 @@ fn resolve_datetime_application(
             span: arg.span.into(),
         }),
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes full type resolution context from resolve_type_expr"
+)]
+fn resolve_complex_application(
+    type_ann: &TypeExpr,
+    generic_args: &[crate::desugar::desugared_ast::GenericArg],
+    registry: &Registry,
+    owner: &crate::dag_id::DagId,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let [arg] = generic_args else {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "type `Complex` expects 1 generic argument, got {}",
+                generic_args.len()
+            ),
+            src: src.clone(),
+            span: type_ann.span.into(),
+        });
+    };
+    let param = crate::registry::types::TypeGenericParam {
+        name: GenericParamName::expect_valid("D"),
+        constraint: TypeGenericConstraint::Dim,
+        default: None,
+    };
+    let resolved = resolve_type_arg_for_param(
+        &param,
+        arg,
+        registry,
+        owner,
+        dim_params,
+        index_params,
+        nat_params,
+        src,
+        module_ctx,
+    )?;
+    let ResolvedGenericArg::Dim(dimension) = resolved else {
+        return Err(internal_error(
+            "Complex dimension argument resolved to a non-dimension sort".to_string(),
+            src,
+            arg.span(),
+        ));
+    };
+    Ok(ResolvedTypeExpr::Complex {
+        dimension,
+        span: type_ann.span,
+    })
 }
 
 /// Resolve a user-defined type application like `Vec3<Length, ECI>` to a

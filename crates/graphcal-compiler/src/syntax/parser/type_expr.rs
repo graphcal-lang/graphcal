@@ -73,6 +73,7 @@ impl Parser<'_> {
                         }
                     }
                 }
+                Some("Complex") => self.parse_complex_type(path_span)?,
                 _ if self.lexer.peek() == Some(&Token::Lt) => {
                     // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
                     // `<` cannot follow a complete dim expr in type position,
@@ -136,6 +137,23 @@ impl Parser<'_> {
         }
 
         Ok(base)
+    }
+
+    /// Parse the built-in `Complex<D>` type former into its dedicated syntax variant.
+    fn parse_complex_type(&mut self, name_span: Span) -> Result<TypeExpr, ParseError> {
+        // Bare `Complex` is retained with zero arguments so HIR can report the
+        // missing mandatory dimension with a targeted arity diagnostic.
+        let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
+            self.parse_generic_arg_list()?
+        } else {
+            Vec::new()
+        };
+        let end_span = generic_args.last().map_or(name_span, GenericArg::span);
+        Ok(TypeExpr {
+            kind: TypeExprKind::ComplexApplication { generic_args },
+            constraints: vec![],
+            span: name_span.merge(end_span),
+        })
     }
 
     /// Parse domain constraints: `(min: expr, max: expr)`.
@@ -1099,6 +1117,33 @@ mod tests {
             },
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn parse_complex_application_uses_dedicated_variant() {
+        let source = "param z: Complex<Length> = complex(1.0 m, 2.0 m);";
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        let TypeExprKind::ComplexApplication { generic_args } = &param.type_ann.kind else {
+            panic!("expected ComplexApplication");
+        };
+        assert_eq!(generic_args.len(), 1);
+        assert_eq!(generic_arg_name(&generic_args[0]), "Length");
+    }
+
+    #[test]
+    fn parse_bare_complex_for_targeted_arity_diagnostic() {
+        let source = "param z: Complex;";
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        assert!(matches!(
+            &param.type_ann.kind,
+            TypeExprKind::ComplexApplication { generic_args } if generic_args.is_empty()
+        ));
     }
 
     #[test]

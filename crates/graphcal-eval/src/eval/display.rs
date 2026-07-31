@@ -48,7 +48,8 @@ fn attach_display_units_depth<'a>(
         (Value::Quantity { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
             *display_unit = Some(resolve_unit_to_display(unit, ctx, values)?);
         }
-        (Value::Quantity { display_unit, .. }, ExprKind::Convert { target, .. }) => {
+        (Value::Quantity { display_unit, .. }, ExprKind::Convert { target, .. })
+        | (Value::Complex { display_unit, .. }, ExprKind::Convert { target, .. }) => {
             *display_unit = Some(resolve_unit_to_display(target, ctx, values)?);
         }
         // Element-wise conversion on indexed values (#648 U1): apply the
@@ -349,8 +350,11 @@ pub(super) fn format_coordinate_exact(
 
 /// Set display unit on a quantity value. No-op for non-quantity values.
 fn set_quantity_display_unit(value: &mut Value, du: &DisplayUnit) {
-    if let Value::Quantity { display_unit, .. } = value {
-        *display_unit = Some(du.clone());
+    match value {
+        Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } => {
+            *display_unit = Some(du.clone());
+        }
+        _ => {}
     }
 }
 
@@ -358,7 +362,9 @@ fn set_quantity_display_unit(value: &mut Value, du: &DisplayUnit) {
 /// `Indexed` layers (multi-axis values).
 fn set_quantity_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
     match value {
-        Value::Quantity { display_unit, .. } => *display_unit = Some(du.clone()),
+        Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } => {
+            *display_unit = Some(du.clone());
+        }
         Value::Indexed { entries, .. } => {
             for entry in entries.values_mut() {
                 set_quantity_display_unit_deep(entry, du);

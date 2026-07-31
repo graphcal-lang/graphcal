@@ -106,6 +106,8 @@ pub enum TypeExprKind {
     Struct(Spanned<ResolvedStructTypeName>),
     /// A generic type parameter (`F: Type`).
     GenericTypeParam(Spanned<GenericParamId>),
+    /// Built-in dimension-aware complex quantity type `Complex<D>`.
+    Complex(DimArg),
     /// A user-defined generic type application.
     TypeApplication {
         name: Spanned<ResolvedStructTypeName>,

@@ -490,6 +490,25 @@ fn type_resolve_indexed() {
 }
 
 #[test]
+fn type_resolve_complex() {
+    let source = include_str!("../../../../../tests/fixtures/valid/complex.gcl");
+    let tir = parse_and_type_resolve(source).unwrap();
+
+    assert!(matches!(
+        &tir.root().resolved_decl_types[&ScopedName::local("a")],
+        ResolvedTypeExpr::Complex {
+            dimension: ResolvedDimArg::Concrete(dimension),
+            ..
+        } if *dimension == Dimension::base(BaseDimId::Prelude("Length".to_string()))
+    ));
+    assert!(matches!(
+        &tir.root().resolved_decl_types[&ScopedName::local("series")],
+        ResolvedTypeExpr::Indexed { base, .. }
+            if matches!(base.as_ref(), ResolvedTypeExpr::Complex { .. })
+    ));
+}
+
+#[test]
 fn type_resolve_hohmann() {
     // hohmann.gcl uses DAG+include. Project-level `graphcal check`
     // accepts it (see the CLI tests), but single-file TIR resolution

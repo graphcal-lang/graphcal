@@ -39,6 +39,36 @@ left.
 | `a ^ n` | Exponentiation | Integer exponentiation (non-negative exponent) | Dimension raised to power |
 | `-a` | Negation | Negation | Dimension preserved |
 
+### Complex arithmetic
+
+A complex quantity has type `Complex<D>`, where `D` is the shared dimension of
+its real and imaginary components. Real quantities are never promoted
+implicitly for addition or subtraction; write `to_complex(x)` explicitly.
+
+| Expression | Result | Requirement |
+|------------|--------|-------------|
+| `z1 + z2`, `z1 - z2` | `Complex<D>` | Both operands are `Complex<D>` |
+| `z1 * z2` | `Complex<D1 * D2>` | Complex operands may have different dimensions |
+| `z1 / z2` | `Complex<D1 / D2>` | The divisor must be nonzero |
+| `q * z`, `z * q` | `Complex<Dq * Dz>` | `q` is a real quantity |
+| `z / q` | `Complex<Dz / Dq>` | `q` is a nonzero real quantity |
+| `q / z` | `Complex<Dq / Dz>` | `z` is nonzero |
+| `-z` | `Complex<D>` | |
+
+For example:
+
+```graphcal
+node displacement: Complex<Length> = complex(3.0 m, 4.0 m);
+node gain: Complex<Dimensionless> = complex(0.5, -0.25);
+node transformed: Complex<Length> = @displacement * @gain;
+node with_offset: Complex<Length> = @displacement + to_complex(1.0 m);
+```
+
+`%` and `^` are not defined for complex operands. `==` and `!=` compare real
+and imaginary components exactly; complex values have no ordering, so `<`,
+`>`, `<=`, and `>=` are rejected. Use `re`, `im`, `abs`, `phase`, and `conj`
+for component and polar operations.
+
 ### Power exponents
 
 Every quantity exponent must be dimensionless. If the base is
@@ -62,8 +92,8 @@ expression that constant-folds to one is also accepted: `2 ^ 3 ^ 2` parses as
 `2 ^ (3 ^ 2)` and evaluates as `2 ^ 9`.
 
 !!! note "Finite quantities"
-    Floating-point literals must be finite. Quantity operations that would
-    create `NaN` or `inf` are surfaced as errors instead of producing a
+    Floating-point literals must be finite. Real or complex operations that
+    would create `NaN` or `inf` are surfaced as errors instead of producing a
     runtime value.
 
 ## Comparison Operators
@@ -77,7 +107,9 @@ expression that constant-folds to one is also accepted: `2 ^ 3 ^ 2` parses as
 | `<=` | Less or equal | Same type and dimension |
 | `>=` | Greater or equal | Same type and dimension |
 
-All comparison operators return `Bool` for unindexed operands.
+All comparison operators return `Bool` for unindexed operands. Complex
+quantities support exact `==` and `!=` when their dimensions match, but do not
+support ordering comparisons.
 
 Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Time + Datetime`, and `Datetime - Time` produce `Datetime`, while
@@ -125,10 +157,13 @@ Convert a value to a different unit of the same dimension:
 ```
 node alt_m: Length = @altitude -> m;
 node time_h: Time = @duration -> h;
+node displacement_cm: Complex<Length> = @displacement -> cm;
 ```
 
-The target follows unit scoping rules: bare names for local, selectively
-imported, or prelude units, and `alias.unit` for units of a module imported
+For `Complex<D>`, the target scales both components and is display metadata;
+the stored SI components and type do not change. The target otherwise follows
+unit scoping rules: bare names for local, selectively imported, or prelude
+units, and `alias.unit` for units of a module imported
 with an alias (see
 [Unit Scoping](dimensions-and-units.md#unit-scoping)).
 

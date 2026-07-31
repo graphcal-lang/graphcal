@@ -18,6 +18,7 @@ All Rust files in the workspace, in library-consumer order: every `use`d file ap
 - [x] `crates/graphcal-compiler/src/lib.rs`
 - [ ] `crates/graphcal-compiler/src/datetime_literal.rs`
 - [x] `crates/graphcal-compiler/src/builtin.rs`
+- [ ] `crates/graphcal-compiler/src/complex_value.rs`
 - [x] `crates/graphcal-compiler/src/dag_id.rs`
 
 ## Stage 1 - Names, spans, tokens, lexer, and syntax-domain leaves
@@ -129,6 +130,7 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 - [ ] `crates/graphcal-compiler/src/tir/typed/tests.rs`
 - [ ] `crates/graphcal-compiler/src/ir/resolve/tests.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+- [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
@@ -187,6 +189,7 @@ Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_exp
 - [ ] `crates/graphcal-eval/src/lib.rs`
 - [ ] `crates/graphcal-eval/src/host_fns.rs`
 - [ ] `crates/graphcal-eval/src/domain_check.rs`
+- [ ] `crates/graphcal-eval/src/eval_expr/complex.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/builtin_call.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/aggregations.rs`

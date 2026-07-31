@@ -1,0 +1,11 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`Complex` expects 1 generic argument(s), got 0
+    Diagnostic severity: error
+Begin snippet for complex_requires_dimension_arg.gcl starting at line 1, column 1
+
+snippet line 1: node invalid: Complex = complex(1.0, 2.0);
+    label at line 1, columns 15 to 21: error here
+diagnostic code: graphcal::E001

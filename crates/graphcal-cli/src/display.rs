@@ -3,7 +3,7 @@
 //! The CLI text format is the human-readable flavour of evaluation results. It
 //! prints:
 //!
-//! * Quantity / bool / int / struct / datetime values one per line, aligned on
+//! * Real/complex quantity, bool, int, struct, and datetime values one per line, aligned on
 //!   the widest name.
 //! * 1D indexed values flattened to `name[Variant]` lines.
 //! * Higher-dimensional indexed values rendered as table grids (2D) or as a
@@ -51,7 +51,7 @@ pub enum OutputBlock<'a> {
 
 /// Count how many levels of `Indexed` nesting a value has.
 ///
-/// Quantities / bools / structs return `0`. A 1D indexed value returns `1`. A 2D
+/// Scalar values / structs return `0`. A 1D indexed value returns `1`. A 2D
 /// indexed-of-indexed returns `2`, and so on. The table renderer switches
 /// modes at depth >= 2.
 #[must_use]
@@ -62,14 +62,14 @@ pub fn index_depth(value: &Value) -> usize {
     }
 }
 
-/// Walk into nested `Indexed` to find the first leaf quantity's display label (unit).
+/// Walk into nested `Indexed` to find the first real/complex quantity's display label.
 ///
 /// Used to annotate the table header (e.g. `delta_v (m/s):`). Returns `None`
-/// if the value has no quantity leaves (e.g. an indexed of structs or labels).
+/// if the value has no numeric quantity leaves (e.g. an indexed of structs or labels).
 #[must_use]
 pub fn extract_unit_label(value: &Value, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
     match value {
-        Value::Quantity { .. } => value.display_label(symbols),
+        Value::Quantity { .. } | Value::Complex { .. } => value.display_label(symbols),
         Value::Indexed { entries, .. } => entries
             .values()
             .next()
@@ -89,6 +89,7 @@ pub fn extract_unit_label(value: &Value, symbols: &BTreeMap<BaseDimId, String>) 
 pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatEntry<'a>>) {
     match value {
         Value::Quantity { .. }
+        | Value::Complex { .. }
         | Value::Bool(_)
         | Value::Int(_)
         | Value::Label { .. }

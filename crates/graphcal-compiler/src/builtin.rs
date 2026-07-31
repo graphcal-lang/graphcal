@@ -82,6 +82,13 @@ define_builtin_names! {
     pub enum BuiltinFnName {
         Sqrt => "sqrt",
         Cbrt => "cbrt",
+        Complex => "complex",
+        Polar => "polar",
+        ToComplex => "to_complex",
+        Re => "re",
+        Im => "im",
+        Phase => "phase",
+        Conj => "conj",
         Exp => "exp",
         Expm1 => "expm1",
         Ln => "ln",
@@ -332,7 +339,110 @@ impl LinearAlgebraFn {
     }
 }
 
+/// Built-ins that construct, inspect, or overload operations for complex quantities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ComplexFn {
+    Rectangular,
+    Polar,
+    ToComplex,
+    Real,
+    Imaginary,
+    Phase,
+    Conjugate,
+    Absolute,
+    Exponential,
+}
+
+impl ComplexFn {
+    pub const ALL: &'static [Self] = &[
+        Self::Rectangular,
+        Self::Polar,
+        Self::ToComplex,
+        Self::Real,
+        Self::Imaginary,
+        Self::Phase,
+        Self::Conjugate,
+        Self::Absolute,
+        Self::Exponential,
+    ];
+
+    #[must_use]
+    pub const fn builtin_name(self) -> BuiltinFnName {
+        match self {
+            Self::Rectangular => BuiltinFnName::Complex,
+            Self::Polar => BuiltinFnName::Polar,
+            Self::ToComplex => BuiltinFnName::ToComplex,
+            Self::Real => BuiltinFnName::Re,
+            Self::Imaginary => BuiltinFnName::Im,
+            Self::Phase => BuiltinFnName::Phase,
+            Self::Conjugate => BuiltinFnName::Conj,
+            Self::Absolute => BuiltinFnName::Abs,
+            Self::Exponential => BuiltinFnName::Exp,
+        }
+    }
+
+    #[must_use]
+    pub const fn arity(self) -> usize {
+        match self {
+            Self::Rectangular | Self::Polar => 2,
+            Self::ToComplex
+            | Self::Real
+            | Self::Imaginary
+            | Self::Phase
+            | Self::Conjugate
+            | Self::Absolute
+            | Self::Exponential => 1,
+        }
+    }
+
+    #[must_use]
+    pub const fn parameter_labels(self) -> &'static [&'static str] {
+        match self {
+            Self::Rectangular => &["re: D", "im: D"],
+            Self::Polar => &["magnitude: D", "phase: Angle"],
+            Self::ToComplex => &["x: D"],
+            Self::Real | Self::Imaginary | Self::Phase | Self::Conjugate => &["z: Complex<D>"],
+            Self::Absolute => &["x: D | Complex<D>"],
+            Self::Exponential => &["x: Dimensionless | Complex<Dimensionless>"],
+        }
+    }
+
+    #[must_use]
+    pub const fn signature(self) -> &'static str {
+        match self {
+            Self::Rectangular => "fn complex<D: Dim>(re: D, im: D) -> Complex<D>",
+            Self::Polar => "fn polar<D: Dim>(magnitude: D, phase: Angle) -> Complex<D>",
+            Self::ToComplex => "fn to_complex<D: Dim>(x: D) -> Complex<D>",
+            Self::Real => "fn re<D: Dim>(z: Complex<D>) -> D",
+            Self::Imaginary => "fn im<D: Dim>(z: Complex<D>) -> D",
+            Self::Phase => "fn phase<D: Dim>(z: Complex<D>) -> Angle",
+            Self::Conjugate => "fn conj<D: Dim>(z: Complex<D>) -> Complex<D>",
+            Self::Absolute => "fn abs<D: Dim>(x: D | Complex<D>) -> D",
+            Self::Exponential => {
+                "fn exp(x: Dimensionless | Complex<Dimensionless>) -> Dimensionless | Complex<Dimensionless>"
+            }
+        }
+    }
+}
+
 impl BuiltinFnName {
+    /// Classify this built-in as a complex-number operation or overload.
+    #[must_use]
+    pub const fn complex(self) -> Option<ComplexFn> {
+        match self {
+            Self::Complex => Some(ComplexFn::Rectangular),
+            Self::Polar => Some(ComplexFn::Polar),
+            Self::ToComplex => Some(ComplexFn::ToComplex),
+            Self::Re => Some(ComplexFn::Real),
+            Self::Im => Some(ComplexFn::Imaginary),
+            Self::Phase => Some(ComplexFn::Phase),
+            Self::Conj => Some(ComplexFn::Conjugate),
+            Self::Abs => Some(ComplexFn::Absolute),
+            Self::Exp => Some(ComplexFn::Exponential),
+            _ => None,
+        }
+    }
+
     /// Classify this built-in as an indexed aggregation.
     #[must_use]
     pub const fn aggregation(self) -> Option<AggregationFn> {
@@ -369,7 +479,21 @@ impl BuiltinFnName {
 
 #[cfg(test)]
 mod tests {
-    use super::{AggregationFn, BuiltinFnName, LinearAlgebraFn};
+    use super::{AggregationFn, BuiltinFnName, ComplexFn, LinearAlgebraFn};
+
+    #[test]
+    fn complex_names_have_one_typed_route() {
+        for function in ComplexFn::ALL {
+            let name = function.builtin_name();
+            assert_eq!(BuiltinFnName::parse(name.as_str()), Some(name));
+            assert_eq!(name.complex(), Some(*function));
+        }
+        let classified = BuiltinFnName::ALL
+            .iter()
+            .filter(|name| name.complex().is_some())
+            .count();
+        assert_eq!(classified, ComplexFn::ALL.len());
+    }
 
     #[test]
     fn aggregation_names_have_one_typed_route() {

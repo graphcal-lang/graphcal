@@ -69,7 +69,7 @@ pub(crate) const PRELUDE_DIMENSION_NAMES: &[&str] = &[
 
 /// Non-dimension type names provided by the Graphcal prelude.
 pub(crate) const PRELUDE_BUILTIN_TYPE_NAMES: &[&str] =
-    &["Dimensionless", "Bool", "Int", "Datetime"];
+    &["Dimensionless", "Bool", "Int", "Datetime", "Complex"];
 
 /// Unit names provided by the Graphcal prelude.
 pub const PRELUDE_UNIT_NAMES: &[&str] = &[

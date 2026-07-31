@@ -683,6 +683,39 @@ fn eval_rocket_json_output() {
 }
 
 #[test]
+fn eval_complex_text_and_json_output() {
+    let path = fixture("valid/complex.gcl");
+    let text = graphcal_bin()
+        .args(["eval", &path])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        text.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("a ") && line.contains("3 + 4i [m]"))
+    );
+    assert!(stdout.contains("display_cm") && stdout.contains("300 + 400i [cm]"));
+
+    let json_output = graphcal_bin()
+        .args(["eval", &path, "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(json_output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    assert_eq!(json["node"]["a"]["si_value"]["re"], 3.0);
+    assert_eq!(json["node"]["a"]["si_value"]["im"], 4.0);
+    assert_eq!(json["node"]["display_cm"]["display_value"]["re"], 300.0);
+    assert_eq!(json["node"]["display_cm"]["display_value"]["im"], 400.0);
+    assert_eq!(json["node"]["display_cm"]["unit"], "cm");
+}
+
+#[test]
 fn eval_nonexistent_file_fails() {
     let output = graphcal_bin()
         .args(["eval", "nonexistent.gcl"])

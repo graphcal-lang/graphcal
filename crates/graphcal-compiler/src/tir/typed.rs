@@ -491,6 +491,7 @@ fn collect_struct_type_defs_from_declared_type(
             collect_struct_type_defs_from_declared_type(element, ctx, registry, src, defs)?;
         }
         crate::registry::declared_type::DeclaredType::Quantity(_)
+        | crate::registry::declared_type::DeclaredType::Complex(_)
         | crate::registry::declared_type::DeclaredType::Bool
         | crate::registry::declared_type::DeclaredType::Int
         | crate::registry::declared_type::DeclaredType::Datetime(_)
@@ -526,6 +527,7 @@ fn collect_struct_type_defs_from_resolved_type(
             collect_struct_type_defs_from_resolved_type(base, ctx, registry, src, defs)?;
         }
         ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Complex { .. }
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)

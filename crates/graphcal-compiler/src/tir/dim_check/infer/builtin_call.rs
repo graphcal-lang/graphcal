@@ -5,7 +5,7 @@
 //! the ordinary quantity dimension-signature registry, or does it need a custom
 //! type rule here?
 
-use crate::builtin::{AggregationFn, BuiltinFnName, LinearAlgebraFn};
+use crate::builtin::{AggregationFn, BuiltinFnName, ComplexFn, LinearAlgebraFn};
 use crate::registry::time_scale::TimeScale;
 
 /// How HIR type inference should check a built-in function call.
@@ -13,6 +13,8 @@ use crate::registry::time_scale::TimeScale;
 pub(super) enum BuiltinTypeRule {
     /// Use [`crate::registry::builtins::BuiltinFunction::signature`].
     RegistrySignature,
+    /// Complex construction, inspection, and real/complex overloads.
+    Complex(ComplexFn),
     /// One-argument reductions over indexed values.
     CollectionAggregation(AggregationFn),
     /// Shape-aware operations over rank-one and rank-two indexed quantities.
@@ -59,6 +61,9 @@ pub(super) enum DatetimeConstructorFn {
 /// Classify a built-in for the type-inference call path.
 #[must_use]
 pub(super) const fn type_rule_for_builtin(name: BuiltinFnName) -> BuiltinTypeRule {
+    if let Some(function) = name.complex() {
+        return BuiltinTypeRule::Complex(function);
+    }
     if let Some(function) = name.linear_algebra() {
         return BuiltinTypeRule::LinearAlgebra(function);
     }
@@ -115,7 +120,8 @@ mod tests {
                     "BuiltinFnName::{name:?} (`{}`) is neither in builtin_functions() nor handled by a custom HIR type rule",
                     name.as_str()
                 ),
-                BuiltinTypeRule::CollectionAggregation(_)
+                BuiltinTypeRule::Complex(_)
+                | BuiltinTypeRule::CollectionAggregation(_)
                 | BuiltinTypeRule::LinearAlgebra(_)
                 | BuiltinTypeRule::TypeConversion(_)
                 | BuiltinTypeRule::TimeScaleConversion(_)

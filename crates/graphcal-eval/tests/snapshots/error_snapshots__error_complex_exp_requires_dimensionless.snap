@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Dimensionless or Complex<Dimensionless>, found Complex<Length>
+    Diagnostic severity: error
+Begin snippet for complex_exp_requires_dimensionless.gcl starting at line 1, column 1
+
+snippet line 1: node z: Complex<Length> = complex(1.0 m, 2.0 m);
+snippet line 2: node invalid: Complex<Dimensionless> = exp(@z);
+    label at line 2, columns 44 to 45: has dimension Complex<Length>
+diagnostic help: exp() requires a dimensionless real or complex argument
+diagnostic code: graphcal::D001

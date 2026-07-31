@@ -50,6 +50,9 @@ pub fn resolved_to_declared_type(
             span: resolved_type_expr_span(resolved).into(),
         }),
         ResolvedTypeExpr::Quantity(dim) => Ok(DeclaredType::Quantity(dim.clone())),
+        ResolvedTypeExpr::Complex { dimension, span } => {
+            resolved_complex_to_declared(dimension, *span, src)
+        }
         ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(
             StructTypeRef::from_resolved(name.clone()),
             vec![],
@@ -130,6 +133,28 @@ pub fn resolved_to_declared_type(
     }
 }
 
+fn resolved_complex_to_declared(
+    dimension: &ResolvedDimArg,
+    span: Span,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::registry::declared_type::DeclaredType, GraphcalError> {
+    use crate::registry::declared_type::DeclaredType;
+    match dimension {
+        ResolvedDimArg::Dimensionless => Ok(DeclaredType::Complex(Dimension::dimensionless())),
+        ResolvedDimArg::Concrete(dimension) => Ok(DeclaredType::Complex(dimension.clone())),
+        ResolvedDimArg::GenericParam(name, _) => Err(GraphcalError::EvalError {
+            message: format!("complex dimension parameter `{name}` is not bound"),
+            src: src.clone(),
+            span: span.into(),
+        }),
+        ResolvedDimArg::Expr { .. } => Err(GraphcalError::EvalError {
+            message: "complex dimension expression is not concrete".to_string(),
+            src: src.clone(),
+            span: span.into(),
+        }),
+    }
+}
+
 fn resolved_generic_arg_to_declared(
     resolved: &ResolvedGenericArg,
     src: &NamedSource<Arc<String>>,
@@ -173,7 +198,8 @@ fn resolved_type_expr_span(resolved: &ResolvedTypeExpr) -> Span {
         | ResolvedTypeExpr::Datetime(_)
         | ResolvedTypeExpr::Quantity(_) => Span::new(0, 0),
         ResolvedTypeExpr::IndexArg(index) => resolved_index_span(index),
-        ResolvedTypeExpr::Struct(_, span)
+        ResolvedTypeExpr::Complex { span, .. }
+        | ResolvedTypeExpr::Struct(_, span)
         | ResolvedTypeExpr::GenericDimParam(_, span)
         | ResolvedTypeExpr::GenericTypeParam(_, span)
         | ResolvedTypeExpr::GenericDimExpr { span, .. }
@@ -719,6 +745,28 @@ pub fn unify_resolved_type(
             Ok(())
         }
 
+        ResolvedTypeExpr::Complex { dimension, .. } => {
+            let InferredType::Complex(actual_dim) = actual else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: format!("Complex<{}>", dimension.format(registry)),
+                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    help: "expected a complex quantity".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            };
+            unify_resolved_type(
+                &resolved_dim_arg_as_type(dimension),
+                &InferredType::Quantity(actual_dim.clone()),
+                dim_sub,
+                index_sub,
+                nat_sub,
+                registry,
+                src,
+                span,
+            )
+        }
+
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
         } => {
@@ -1132,6 +1180,26 @@ pub fn substitute_resolved_type_with_types(
             resolved_index_to_inferred(index, src).map(InferredType::IndexArg)
         }
         ResolvedTypeExpr::Quantity(dim) => Ok(InferredType::Quantity(dim.clone())),
+        ResolvedTypeExpr::Complex { dimension, span } => {
+            let resolved_dimension = resolved_dim_arg_as_type(dimension);
+            match substitute_resolved_type_with_types(
+                &resolved_dimension,
+                dim_sub,
+                index_sub,
+                nat_sub,
+                type_sub,
+                src,
+            )? {
+                InferredType::Quantity(dimension) => Ok(InferredType::Complex(dimension)),
+                other => Err(GraphcalError::InternalError {
+                    message: format!(
+                        "complex dimension substituted to non-quantity type {other:?}"
+                    ),
+                    src: src.clone(),
+                    span: (*span).into(),
+                }),
+            }
+        }
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
             crate::tir::dim_check::InferredStructType::from_resolved(name.clone()),
             vec![],
