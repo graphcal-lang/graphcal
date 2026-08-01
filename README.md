@@ -84,7 +84,7 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 graphcal deps lock --root mission
 ```
 
-Try Graphcal without installing it in the [browser playground](https://graphcal-lang.github.io/graphcal/playground/). See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full local surface, including `format`, `check`, `deps lock`, `graph`, and `lsp`.
+Try Graphcal without installing it in the [browser playground](https://graphcal.org/docs/playground/). See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full local surface, including `format`, `check`, `deps lock`, `graph`, and `lsp`.
 
 ## Editor Support
 
@@ -94,18 +94,18 @@ Inlay hints show computed values right next to the source -- install one of the 
 - **Zed** -- extension source in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal) (not yet published; install as a dev extension)
 - **Neovim / Helix** -- tree-sitter grammar in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal), plus the `graphcal lsp` server
 
-Setup details for each editor are in the [Editor Setup guide](https://graphcal-lang.github.io/graphcal/editor-setup/).
+Setup details for each editor are in the [Editor Setup guide](https://graphcal.org/docs/editor-setup/).
 
 ## Documentation
 
-The full tutorial, language reference, and CLI/editor guides are available in the live documentation: <https://graphcal-lang.github.io/graphcal/>.
+The full tutorial, language reference, and CLI/editor guides are available in the live documentation: <https://graphcal.org/docs/>.
 
-- **[Browser Playground (experimental)](https://graphcal-lang.github.io/graphcal/playground/)** -- edit and evaluate alpha-stage Graphcal without installing it
-- **[Interactive Tutorial](https://graphcal-lang.github.io/graphcal/tutorial/)** -- learn Graphcal step by step with editable examples
-- **[Language Reference](https://graphcal-lang.github.io/graphcal/language/)** -- every feature, formally
-- **[Built-in Reference](https://graphcal-lang.github.io/graphcal/language/built-ins/)** -- constants, math, type conversions, aggregations, prelude dimensions and units
-- **[Multi-file Projects](https://graphcal-lang.github.io/graphcal/language/multi-file/)** -- `import`, `include`, package dependencies, and the `pub(bind)` visibility model
-- **[CLI Reference](https://graphcal-lang.github.io/graphcal/cli-reference/)** -- `eval`, `format`, `check`, `deps lock`, `lsp`
+- **[Browser Playground (experimental)](https://graphcal.org/docs/playground/)** -- edit and evaluate alpha-stage Graphcal without installing it
+- **[Interactive Tutorial](https://graphcal.org/docs/tutorial/)** -- learn Graphcal step by step with editable examples
+- **[Language Reference](https://graphcal.org/docs/language/)** -- every feature, formally
+- **[Built-in Reference](https://graphcal.org/docs/language/built-ins/)** -- constants, math, type conversions, aggregations, prelude dimensions and units
+- **[Multi-file Projects](https://graphcal.org/docs/language/multi-file/)** -- `import`, `include`, package dependencies, and the `pub(bind)` visibility model
+- **[CLI Reference](https://graphcal.org/docs/cli-reference/)** -- `eval`, `format`, `check`, `deps lock`, `lsp`
 
 The [`docs/`](docs/) directory contains the Zensical source for the site. With `wasm-pack` and Zensical installed, run `just docs-serve` and open `http://localhost:8000`; the recipe builds the browser evaluator before starting Zensical. Use `just docs-build` with Node.js available to build the production site and smoke-test the worker bridge.
 
@@ -133,7 +133,8 @@ graphcal/
     graphcal-cli/       # CLI binary -- `eval`, `format`, `check`, `lsp`
     graphcal-lsp/       # LSP server (tower-lsp) -- diagnostics, symbols, hover, inlay hints
   grammar.ebnf          # formal grammar (source of truth for tree-sitter / TextMate)
-  docs/                 # source for https://graphcal-lang.github.io/graphcal/
+  docs/                 # source for https://graphcal.org/docs/
+  site-root/            # published site root: redirect stub, CNAME, robots.txt
   tests/fixtures/       # .gcl test files: valid/, runtime_error/, invalid/
 
 Editor extensions and tree-sitter grammar live in separate repositories under github.com/graphcal-lang/.

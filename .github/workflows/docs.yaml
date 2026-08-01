@@ -44,13 +44,27 @@ jobs:
             --no-pack
           rm -f docs/assets/playground/pkg/.gitignore
       - run: zensical build --clean
+      - name: Assemble published site root
+        run: |
+          # Mirrors the `docs-assemble` recipe in the justfile. The documentation
+          # is built into site/docs; the site root carries the redirect stub, the
+          # custom domain, and a copy of the themed 404 page.
+          cp -R site-root/. site/
+          cp site/docs/404.html site/404.html
+      - name: Verify published site root
+        run: |
+          test -s site/index.html
+          test -s site/404.html
+          grep -q 'url=/docs/' site/index.html
+          # GitHub Pages only honours a CNAME file at the root of the artifact.
+          test "$(cat site/CNAME)" = graphcal.org
       - name: Verify playground artifacts
         run: |
-          test -s site/assets/playground/pkg/graphcal_wasm.js
-          test -s site/assets/playground/pkg/graphcal_wasm_bg.wasm
-          test -s site/javascripts/playground-worker.mjs
+          test -s site/docs/assets/playground/pkg/graphcal_wasm.js
+          test -s site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm
+          test -s site/docs/javascripts/playground-worker.mjs
           # Keep the initial raw WebAssembly download within the 5 MiB v1 budget.
-          wasm_bytes=$(wc -c < site/assets/playground/pkg/graphcal_wasm_bg.wasm)
+          wasm_bytes=$(wc -c < site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm)
           test "$wasm_bytes" -le 5242880
           node --check docs/javascripts/playground.mjs
           node --check docs/javascripts/playground-worker.mjs
