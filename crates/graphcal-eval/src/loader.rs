@@ -20,6 +20,39 @@ use graphcal_package::{
     validate_lock_against_manifests,
 };
 
+/// Loader-resolved identities for one module path.
+///
+/// A path may name a file-root DAG or an inline DAG inside a loaded file.
+/// Consumers need the source file to retrieve compiled artifacts and the exact
+/// module target for semantic name resolution, so both identities are retained.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedModuleTarget {
+    source_file: DagId,
+    target: DagId,
+}
+
+impl ResolvedModuleTarget {
+    /// Loaded file that owns the target's compiled artifacts.
+    #[must_use]
+    pub const fn source_file(&self) -> &DagId {
+        &self.source_file
+    }
+
+    /// Exact file-root or inline-DAG module named by the source path.
+    #[must_use]
+    pub const fn target(&self) -> &DagId {
+        &self.target
+    }
+}
+
+/// Failure to associate a loader-resolved module with its owning source file.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResolvedModuleTargetError {
+    /// The resolved identity is neither a loaded file root nor one of its inline DAGs.
+    #[error("resolved module `{target}` is not owned by a loaded source file")]
+    UnknownOwner { target: DagId },
+}
+
 /// Span-free identity for an `import`/`include` path.
 ///
 /// Used as a `HashMap` key in `LoadedFile::resolved_imports` /
@@ -384,6 +417,46 @@ impl LoadedProject {
             load_order: vec![dag_id],
             plugins,
         })
+    }
+
+    /// Refine a loader-resolved dependency identity to the exact module named
+    /// by `path`, while retaining the file that owns its compiled artifacts.
+    ///
+    /// File loading resolves a path to a physical source file first. When the
+    /// path's leaf names an inline DAG in that file, the semantic target is the
+    /// corresponding child [`DagId`] rather than the file root.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResolvedModuleTargetError`] when `resolved` is not owned by
+    /// any loaded file.
+    pub fn resolved_module_target(
+        &self,
+        path: &ModulePath,
+        resolved: &DagId,
+    ) -> Result<ResolvedModuleTarget, ResolvedModuleTargetError> {
+        match self.files.get(resolved) {
+            Some(_) => Ok(ResolvedModuleTarget {
+                source_file: resolved.clone(),
+                target: module_resolver_target_for_path(path, resolved, &self.files),
+            }),
+            None => self
+                .files
+                .iter()
+                .find_map(|(file_id, loaded)| {
+                    loaded
+                        .inline_dags
+                        .iter()
+                        .any(|inline| inline.dag_id == *resolved)
+                        .then(|| ResolvedModuleTarget {
+                            source_file: file_id.clone(),
+                            target: resolved.clone(),
+                        })
+                })
+                .ok_or_else(|| ResolvedModuleTargetError::UnknownOwner {
+                    target: resolved.clone(),
+                }),
+        }
     }
 
     /// Build module-aware symbol tables for every loaded file and inline DAG.

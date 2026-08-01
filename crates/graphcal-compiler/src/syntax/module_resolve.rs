@@ -5,9 +5,11 @@
 //! symbol tables for loaded DAG/module identities and resolves syntactic
 //! [`NamePath`] / [`IdentPath`] references to canonical [`ResolvedName`] values.
 //!
-//! The important invariant is that source qualifier text is used only to look up
-//! a module alias in the current module scope. The result of a successful lookup
-//! carries the canonical [`DagId`] owner, not the textual alias.
+//! The important invariant is that source spelling is used only to look up a
+//! scoped symbol or DAG-module binding. Imported aliases may name a file root or
+//! inline DAG directly, and local DAGs may qualify their children. Every
+//! successful lookup carries the canonical [`DagId`] owner, not textual path
+//! conventions.
 
 use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
 use crate::syntax::dimension::{
@@ -141,6 +143,26 @@ pub enum ModuleAccess {
 impl ModuleAccess {
     const fn requires_public(self) -> bool {
         matches!(self, Self::PublicOnly)
+    }
+}
+
+/// Semantic role of a module alias introduced by an import or include.
+///
+/// An imported module names a reusable DAG blueprint, so its alias may be
+/// invoked directly (`@alias(args).out`) or used to reach a child DAG
+/// (`@alias.child(args).out`). An included instance is already instantiated;
+/// its alias is only a namespace for the selected instance's members.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModuleAliasRole {
+    /// Alias of a reusable file or inline-DAG module introduced by `import`.
+    ImportedDag,
+    /// Namespace of an already-instantiated DAG introduced by `include`.
+    IncludedInstance,
+}
+
+impl ModuleAliasRole {
+    const fn is_callable(self) -> bool {
+        matches!(self, Self::ImportedDag)
     }
 }
 
@@ -852,6 +874,7 @@ pub struct ModuleAliasTarget {
     target: DagId,
     span: Span,
     access: ModuleAccess,
+    role: ModuleAliasRole,
 }
 
 impl ModuleAliasTarget {
@@ -871,6 +894,12 @@ impl ModuleAliasTarget {
     #[must_use]
     pub const fn access(&self) -> ModuleAccess {
         self.access
+    }
+
+    /// Whether this alias names an imported DAG or an included instance.
+    #[must_use]
+    pub const fn role(&self) -> ModuleAliasRole {
+        self.role
     }
 }
 
@@ -1043,6 +1072,7 @@ enum ImportAddition {
         alias: Spanned<ModuleAliasName>,
         target: DagId,
         access: ModuleAccess,
+        role: ModuleAliasRole,
     },
     Decl {
         local: Spanned<DeclName>,
@@ -1163,6 +1193,37 @@ impl ModuleResolver {
         &self.scopes
     }
 
+    /// Return selectively imported DAG bindings as local name → canonical DAG.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError`] if a selected declaration's canonical
+    /// owner is missing from the project-wide resolver.
+    pub fn selected_dag_imports(
+        &self,
+        owner: &DagId,
+    ) -> Result<Vec<(DeclName, DagId)>, ModuleResolveError> {
+        let scope = self.module_scope(owner)?;
+        scope
+            .selected_decls
+            .iter()
+            .map(|(local, imported)| {
+                self.decl_symbol_kind(imported.resolved()).map(|kind| {
+                    (kind == DeclSymbolKind::Dag).then(|| {
+                        (
+                            local.clone(),
+                            imported
+                                .resolved()
+                                .owner()
+                                .child(imported.resolved().as_str()),
+                        )
+                    })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|entries| entries.into_iter().flatten().collect())
+    }
+
     /// Register one loader-resolved `import` edge in `owner`'s scope.
     ///
     /// `path` and `kind` come from the source AST. `target` is the canonical
@@ -1180,7 +1241,14 @@ impl ModuleResolver {
         kind: &ImportKind,
         target: &DagId,
     ) -> Result<(), ModuleResolveError> {
-        self.register_import_with_access(owner, path, kind, target, ModuleAccess::PublicOnly)
+        self.register_import_with_access(
+            owner,
+            path,
+            kind,
+            target,
+            ModuleAccess::PublicOnly,
+            ModuleAliasRole::ImportedDag,
+        )
     }
 
     /// Register one loader-resolved `include` edge in `owner`'s scope.
@@ -1195,7 +1263,14 @@ impl ModuleResolver {
         kind: &ImportKind,
         target: &DagId,
     ) -> Result<(), ModuleResolveError> {
-        self.register_import_with_access(owner, path, kind, target, ModuleAccess::PublicOnly)
+        self.register_import_with_access(
+            owner,
+            path,
+            kind,
+            target,
+            ModuleAccess::PublicOnly,
+            ModuleAliasRole::IncludedInstance,
+        )
     }
 
     /// Make an instantiated include's own indexes resolvable in the importer.
@@ -1276,11 +1351,12 @@ impl ModuleResolver {
         kind: &ImportKind,
         target: &DagId,
         access: ModuleAccess,
+        role: ModuleAliasRole,
     ) -> Result<(), ModuleResolveError> {
         self.module_symbols(owner)?;
         self.module_symbols(target)?;
 
-        let additions = self.import_additions(path, kind, target, access)?;
+        let additions = self.import_additions(path, kind, target, access, role)?;
         self.check_import_exclusive_name_collisions(owner, &additions)?;
         let scope =
             self.scopes
@@ -1547,41 +1623,110 @@ impl ModuleResolver {
         }
     }
 
-    /// Resolve a source inline-DAG/module path to its canonical [`DagId`].
+    /// Resolve a source DAG/module call path to its canonical [`DagId`].
     ///
-    /// Single-segment paths first name inline DAG children of `owner`; when
-    /// called from an inline DAG body and no nested child exists, they may also
-    /// name sibling DAGs under the parent file. Qualified paths use the first
-    /// segment as a module alias and append the remaining segments to the alias
-    /// target. The returned identity is canonical; source qualifier text is not
-    /// carried beyond this resolver boundary.
+    /// The first segment names a reusable DAG module in the caller's scope. It
+    /// may be a local inline DAG, a sibling DAG visible from an inline body, or
+    /// an imported module alias. That binding is itself callable regardless of
+    /// whether its canonical target is a file root or an inline DAG; remaining
+    /// path segments descend through child DAG modules uniformly.
     pub(crate) fn resolve_module_path(
         &self,
         owner: &DagId,
         path: &ModulePath,
     ) -> Result<DagId, ModuleResolveError> {
-        if let [leaf] = path.segments() {
-            let target = owner.child(leaf.name.as_str());
-            if self.modules.contains_key(&target) {
-                return Ok(target);
+        let head = &path.segments.first().name;
+        let local_target = {
+            let child = owner.child(head.as_str());
+            if self.modules.contains_key(&child) {
+                Some(child)
+            } else {
+                // Only inline DAGs have a semantic parent module in the
+                // resolver. A file root's `DagId` also has filesystem-like
+                // parent segments, but sibling files never enter scope without
+                // an explicit import.
+                owner
+                    .parent()
+                    .filter(|parent| self.modules.contains_key(parent))
+                    .and_then(|parent| {
+                        let sibling = parent.child(head.as_str());
+                        self.modules.contains_key(&sibling).then_some(sibling)
+                    })
             }
-            if let Some(parent) = owner.parent() {
-                let sibling = parent.child(leaf.name.as_str());
-                if self.modules.contains_key(&sibling) {
-                    return Ok(sibling);
-                }
-            }
-            return Err(ModuleResolveError::UnknownModule { owner: target });
-        }
+        };
 
-        let atoms = path
-            .segments()
-            .iter()
-            .map(|segment| segment.name.clone())
+        let scope = self.module_scope(owner)?;
+        let alias = ModuleAliasName::from_atom(head.clone());
+        let alias_binding = scope.module_aliases.get(alias.as_str());
+        let imported_alias_target = alias_binding
+            .filter(|binding| binding.role.is_callable())
+            .map(|binding| (binding.target.clone(), Some(binding.access)));
+        let selected_name = DeclName::from_atom(head.clone());
+        let selected_target = match scope.selected_decls.get(selected_name.as_str()) {
+            Some(imported)
+                if self.decl_symbol_kind(imported.resolved())? == DeclSymbolKind::Dag =>
+            {
+                Some((
+                    imported
+                        .resolved()
+                        .owner()
+                        .child(imported.resolved().as_str()),
+                    Some(ModuleAccess::PublicOnly),
+                ))
+            }
+            Some(_) | None => None,
+        };
+        let candidates = local_target
+            .map(|target| (target, None))
+            .into_iter()
+            .chain(selected_target)
+            .chain(imported_alias_target)
             .collect::<Vec<_>>();
-        let resolved = self.resolve_module_qualifier(owner, &atoms)?;
-        self.ensure_module_visible(&resolved.owner, resolved.access)?;
-        Ok(resolved.owner)
+
+        let (mut target, imported_access) = match candidates.as_slice() {
+            [(target, access)] => (target.clone(), *access),
+            [] => {
+                if alias_binding.is_some() {
+                    return Err(ModuleResolveError::IncludedInstanceNotCallable {
+                        owner: owner.clone(),
+                        alias,
+                    });
+                }
+                if path.segments().len() == 1 {
+                    return Err(ModuleResolveError::UnknownModule {
+                        owner: owner.child(head.as_str()),
+                    });
+                }
+                return Err(ModuleResolveError::UnknownModuleAlias {
+                    owner: owner.clone(),
+                    alias,
+                });
+            }
+            _ => {
+                return Err(ModuleResolveError::AmbiguousCallableModule {
+                    owner: owner.clone(),
+                    name: alias,
+                    targets: candidates
+                        .iter()
+                        .map(|(target, _access)| target.clone())
+                        .collect(),
+                });
+            }
+        };
+
+        if let Some(access) = imported_access {
+            self.ensure_module_visible(&target, access)?;
+        }
+        for segment in path.segments().iter().skip(1) {
+            target = target.child(segment.name.as_str());
+            if !self.modules.contains_key(&target) {
+                return Err(ModuleResolveError::UnknownModule { owner: target });
+            }
+            if let Some(access) = imported_access {
+                self.ensure_module_visible(&target, access)?;
+            }
+        }
+        Ok(target)
     }
 
     fn import_additions(
@@ -1590,6 +1735,7 @@ impl ModuleResolver {
         kind: &ImportKind,
         target: &DagId,
         access: ModuleAccess,
+        role: ModuleAliasRole,
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
         match kind {
             ImportKind::Module { alias } => {
@@ -1603,6 +1749,7 @@ impl ModuleResolver {
                     alias,
                     target: target.clone(),
                     access,
+                    role,
                 }])
             }
             ImportKind::Selective(items) => items
@@ -2156,6 +2303,7 @@ impl ModuleScope {
                 alias,
                 target,
                 access,
+                role,
             } => {
                 // Module aliases and plugin aliases share one qualifier
                 // namespace: `alias.name` must have a single meaning.
@@ -2174,6 +2322,7 @@ impl ModuleScope {
                     alias,
                     target,
                     access,
+                    role,
                     ModuleAliasNameNamespace::DISPLAY_NAME,
                 )
             }
@@ -2259,6 +2408,7 @@ fn insert_module_alias(
     alias: Spanned<ModuleAliasName>,
     target: DagId,
     access: ModuleAccess,
+    role: ModuleAliasRole,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
     if let Some(first) = map.get(alias.value.as_str()) {
@@ -2276,6 +2426,7 @@ fn insert_module_alias(
             target,
             span: alias.span,
             access,
+            role,
         },
     );
     Ok(())
@@ -2602,6 +2753,19 @@ pub enum ModuleResolveError {
     /// A module qualifier's first segment is not an alias in the current module.
     #[error("module alias `{alias}` is not in scope of `{owner}`")]
     UnknownModuleAlias {
+        owner: DagId,
+        alias: ModuleAliasName,
+    },
+    /// A call path is ambiguous between a local DAG and an imported module alias.
+    #[error("DAG name `{name}` is ambiguous in `{owner}`")]
+    AmbiguousCallableModule {
+        owner: DagId,
+        name: ModuleAliasName,
+        targets: Vec<DagId>,
+    },
+    /// An include alias denotes an existing instance, not a reusable DAG blueprint.
+    #[error("included instance `{alias}` is not callable in `{owner}`")]
+    IncludedInstanceNotCallable {
         owner: DagId,
         alias: ModuleAliasName,
     },
@@ -3216,6 +3380,238 @@ mod tests {
                 namespace: _,
                 name,
             } if owner == lib_id && name == "hidden"
+        ));
+    }
+
+    #[test]
+    fn loaded_sibling_file_is_not_callable_without_an_import() {
+        let main_id = DagId::new("test", NonEmpty::new("src", vec!["pkg", "main"]));
+        let sibling_id = DagId::new("test", NonEmpty::new("src", vec!["pkg", "library"]));
+        let empty = desugared_source("");
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(main_id.clone(), &empty.declarations)
+            .unwrap();
+        resolver
+            .add_module(sibling_id, &empty.declarations)
+            .unwrap();
+
+        assert!(matches!(
+            resolver.resolve_module_path(&main_id, &module_path(&["library"])),
+            Err(ModuleResolveError::UnknownModule { .. })
+        ));
+    }
+
+    #[test]
+    fn imported_file_module_alias_is_callable_as_its_exact_target() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source("pub node result: Dimensionless = 1.0;");
+        let main = desugared_source("import lib;");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["lib"]))
+                .unwrap(),
+            lib_id
+        );
+    }
+
+    #[test]
+    fn imported_inline_dag_alias_is_callable_as_its_exact_target() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let helper_id = lib_id.child("helper");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source(
+            "pub dag helper {
+                pub node result: Dimensionless = 1.0;
+            }",
+        );
+        let helper = first_dag(&lib);
+        let main = desugared_source("import lib.helper as imported;");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver.add_module(lib_id, &lib.declarations).unwrap();
+        resolver
+            .add_module(helper_id.clone(), &helper.body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &helper_id)
+            .unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["imported"]))
+                .unwrap(),
+            helper_id
+        );
+    }
+
+    #[test]
+    fn direct_alias_of_private_inline_dag_is_rejected_when_called() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let helper_id = lib_id.child("helper");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source("dag helper { pub node result: Dimensionless = 1.0; }");
+        let helper = first_dag(&lib);
+        let main = desugared_source("import lib.helper as imported;");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(helper_id.clone(), &helper.body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &helper_id)
+            .unwrap();
+
+        assert!(matches!(
+            resolver.resolve_module_path(&main_id, &module_path(&["imported"])),
+            Err(ModuleResolveError::PrivateName {
+                owner,
+                namespace: "dag",
+                name,
+            }) if owner == lib_id && name == "helper"
+        ));
+    }
+
+    #[test]
+    fn selectively_imported_dag_alias_is_callable() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let helper_id = lib_id.child("helper");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source("pub dag helper { pub node result: Dimensionless = 1.0; }");
+        let helper = first_dag(&lib);
+        let main = desugared_source("import lib.{helper as imported};");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(helper_id.clone(), &helper.body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["imported"]))
+                .unwrap(),
+            helper_id
+        );
+    }
+
+    #[test]
+    fn local_inline_dag_can_qualify_its_nested_child() {
+        let main_id = DagId::root_in_package("test", "main");
+        let outer_id = main_id.child("outer");
+        let inner_id = outer_id.child("inner");
+        let main = desugared_source("dag outer { dag inner {} }");
+        let outer = first_dag(&main);
+        let inner = outer
+            .body
+            .iter()
+            .find_map(|decl| match &decl.kind {
+                ast::DeclKind::Dag(dag) => Some(dag),
+                _ => None,
+            })
+            .expect("outer should contain inner");
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver.add_module(outer_id, &outer.body).unwrap();
+        resolver.add_module(inner_id.clone(), &inner.body).unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["outer", "inner"]))
+                .unwrap(),
+            inner_id
+        );
+    }
+
+    #[test]
+    fn included_instance_alias_is_not_callable() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source("pub node result: Dimensionless = 1.0;");
+        let main = desugared_source("include lib() as instance;");
+        let (include_path, include_kind) = first_include(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_include(&main_id, include_path, include_kind, &lib_id)
+            .unwrap();
+
+        assert!(matches!(
+            resolver.resolve_module_path(&main_id, &module_path(&["instance"])),
+            Err(ModuleResolveError::IncludedInstanceNotCallable { alias, .. })
+                if alias.as_str() == "instance"
+        ));
+    }
+
+    #[test]
+    fn local_dag_and_imported_module_alias_are_ambiguous_when_called() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let local_id = main_id.child("shared");
+        let lib = desugared_source("pub node result: Dimensionless = 1.0;");
+        let main = desugared_source("dag shared {} import lib as shared;");
+        let local = first_dag(&main);
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver.add_module(local_id, &local.body).unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap();
+
+        assert!(matches!(
+            resolver.resolve_module_path(&main_id, &module_path(&["shared"])),
+            Err(ModuleResolveError::AmbiguousCallableModule { targets, .. })
+                if targets.len() == 2
         ));
     }
 

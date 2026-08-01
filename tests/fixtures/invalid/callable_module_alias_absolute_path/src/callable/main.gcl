@@ -1,0 +1,4 @@
+import callable.library.helper as helper;
+
+// Expression paths start with the imported local name, not an absolute package path.
+node invalid: Dimensionless = @callable.library.helper(x: 1.0).result;

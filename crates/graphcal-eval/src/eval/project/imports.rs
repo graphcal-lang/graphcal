@@ -405,17 +405,21 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     };
 
     // Check for duplicate module names (instantiated includes occupy the same namespace).
-    if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
+    if let Some(first) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix.to_string(),
-            first: (*first_span).into(),
+            first: first.span().into(),
             src: file_src.clone(),
             span: include_decl.path.span().into(),
         }));
     }
     ctx.module_map.insert(
         prefix.clone(),
-        (import_dag_id.clone(), include_decl.path.span()),
+        ProjectModuleBinding {
+            target: import_dag_id.clone(),
+            span: include_decl.path.span(),
+            role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
+        },
     );
 
     // Classify and validate bindings against the dependency's AST. Each
@@ -739,16 +743,22 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     // Check for duplicate module names. The map records the inline DAG's
     // real canonical id — a fabricated `<dag:name>` sentinel here would
     // silently mismatch any comparison against genuine DagIds.
-    if let Some((_, first_span)) = ctx.module_map.get(&prefix) {
+    if let Some(first) = ctx.module_map.get(&prefix) {
         return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
             name: prefix.to_string(),
-            first: (*first_span).into(),
+            first: first.span().into(),
             src: file_src.clone(),
             span: include_decl.path.span().into(),
         }));
     }
-    ctx.module_map
-        .insert(prefix.clone(), (dag_id.clone(), include_decl.path.span()));
+    ctx.module_map.insert(
+        prefix.clone(),
+        ProjectModuleBinding {
+            target: dag_id.clone(),
+            span: include_decl.path.span(),
+            role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
+        },
+    );
 
     let dag_body = graphcal_compiler::desugar::desugared_ast::File {
         declarations: dag_def.body.clone(),
@@ -969,14 +979,25 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
     ctx: &mut ImportContext<'a>,
     is_import: bool,
 ) -> Result<(), CompileError> {
-    let dep = evaluated_files.get(import_dag_id).ok_or_else(|| {
+    let resolved_module = project
+        .resolved_module_target(import_path, import_dag_id)
+        .map_err(|err| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: err.to_string(),
+                src: file_src.clone(),
+                span: import_path.span().into(),
+            })
+        })?;
+    let source_file = resolved_module.source_file();
+    let module_target = resolved_module.target();
+    let dep = evaluated_files.get(source_file).ok_or_else(|| {
         CompileError::Eval(GraphcalError::EvalError {
-            message: format!("dependency `{import_dag_id}` is not available for imports"),
+            message: format!("dependency `{source_file}` is not available for imports"),
             src: file_src.clone(),
             span: import_path.span().into(),
         })
     })?;
-    let dep_loaded = &project.files[import_dag_id];
+    let dep_loaded = &project.files[source_file];
     let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
 
     match import_kind {
@@ -1010,7 +1031,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Type
                 {
                     ctx.imported_type_system_names
-                        .entry(import_dag_id.clone())
+                        .entry(source_file.clone())
                         .or_default()
                         .insert_type(orig_name.clone());
                     continue;
@@ -1131,7 +1152,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         ) {
                             // Default type-system declaration (dim/unit/index/dag).
                             ctx.imported_type_system_names
-                                .entry(import_dag_id.clone())
+                                .entry(source_file.clone())
                                 .or_default()
                                 .insert_default(orig_name.clone());
                         } else {
@@ -1151,17 +1172,26 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 || derive_module_name_from_import_path(import_path),
                 |alias_ident| alias_ident.value.clone(),
             );
-            if let Some((_, first_span)) = ctx.module_map.get(&module_name) {
+            if let Some(first) = ctx.module_map.get(&module_name) {
                 return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
                     name: module_name.to_string(),
-                    first: (*first_span).into(),
+                    first: first.span().into(),
                     src: file_src.clone(),
                     span: import_path.span().into(),
                 }));
             }
+            let role = if is_import {
+                graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag
+            } else {
+                graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance
+            };
             ctx.module_map.insert(
                 module_name.clone(),
-                (import_dag_id.clone(), import_path.span()),
+                ProjectModuleBinding {
+                    target: module_target.clone(),
+                    span: import_path.span(),
+                    role,
+                },
             );
 
             // Import all values under module::name prefix.

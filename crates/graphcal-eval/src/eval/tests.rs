@@ -4109,6 +4109,32 @@ fn eval_qualified_inline_dag_call_imports_parent_const_with_alias() {
 }
 
 #[test]
+fn imported_file_and_inline_dag_aliases_are_both_directly_callable() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/valid/callable_module_aliases/src/callable/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "file_result") - 4.0).abs() < 1e-10);
+    assert!((find_value(&result, "file_param_result") - 7.0).abs() < 1e-10);
+    assert!((find_value(&result, "inline_result") - 9.0).abs() < 1e-10);
+    assert!((find_value(&result, "selected_result") - 12.0).abs() < 1e-10);
+    assert!((find_value(&result, "unaliased_file_result") - 10.0).abs() < 1e-10);
+    assert!((find_value(&result, "unaliased_inline_result") - 18.0).abs() < 1e-10);
+    assert!((find_value(&result, "nested_scope_result") - 40.0).abs() < 1e-10);
+}
+
+#[test]
+fn absolute_inline_call_path_reports_imported_name_diagnostic() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/fixtures/invalid/callable_module_alias_absolute_path/src/callable/main.gcl",
+    );
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        err,
+        CompileError::Eval(GraphcalError::UnknownModule { name, .. }) if name == "callable"
+    ));
+}
+
+#[test]
 fn eval_inline_dag_namespace_alias_at_field() {
     // Issue #518: `include foo() as bar; @bar.member` was N002.
     // Two instances confirm distinct namespaces.

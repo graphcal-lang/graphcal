@@ -117,6 +117,11 @@ pub(in crate::eval::project) fn lower_and_finalize(
         &module_resolver,
         &module_types,
     )?;
+    // File roots and inline `dag` blocks are both callable DAG modules. Keep
+    // their externally projectable ports in the same compiled representation
+    // so an imported file alias can be invoked directly as `@alias(...).out`.
+    tir.root_mut()
+        .populate_projectable_outputs(&file_ast.declarations);
     compile_inline_dag_modules(
         &mut tir,
         project,
@@ -497,38 +502,34 @@ fn find_inline_dag_decl_in_declarations<'a>(
     })
 }
 
-/// Merge compiled per-DAG TIRs from each module-imported dependency into
-/// the importer's flat `tir.dags`, keyed by the dep's canonical
-/// [`DagId`](graphcal_compiler::dag_id::DagId), and record the
-/// alias→DagId mapping in `tir.module_aliases` so user-typed
-/// `@alias.dag(args).out` references resolve through
-/// [`graphcal_compiler::tir::typed::TIR::lookup_call_target`].
+/// Merge every loaded dependency's compiled DAGs into the importer's flat
+/// canonical registry and record this file root's source alias mappings.
 ///
-/// Every dep `DagTIR` is brought along — the dep file's own root entry as
-/// well as its inline children — under their canonical id. Cross-file
-/// qualified calls (`@alias.dag(...)`) and bare module-path calls
-/// (`@alias.dag(...).out`) resolve through the same flat lookup as
-/// same-file calls.
+/// Imports inside inline DAG bodies have their own lexical scopes and therefore
+/// do not appear in the file root's `module_map`. Their HIR calls already carry
+/// canonical targets, so all loaded dependency TIRs must be available here.
+/// Visibility is enforced while HIR resolves each import edge; retaining private
+/// dependency DAGs internally is also necessary when a public DAG calls one of
+/// its private implementation children.
 ///
-/// Only explicitly exported DAGs cross the import boundary; private DAGs
-/// in the dependency stay local.
-///
-/// Each cloned DAG TIR also receives the dep-file values named by the
-/// DAG body's explicit imports, so `import dep.{const as local}`
-/// resolves under the local alias at inline-call eval time.
+/// Each cloned DAG TIR also receives the dep-file values named by the DAG
+/// body's explicit imports, so `import dep.{const as local}` resolves under the
+/// local alias at inline-call eval time.
 fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TIR,
-    module_map: &HashMap<ModuleAliasName, (graphcal_compiler::dag_id::DagId, Span)>,
+    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
 ) {
-    for (alias, (dep_dag_id, _)) in module_map {
-        // Record the alias → dep DagId mapping so call paths like
-        // `@alias.dag(args)` translate to `dep_dag_id.child("dag")`.
-        tir.module_aliases.insert(alias.clone(), dep_dag_id.clone());
+    for (alias, binding) in module_map {
+        // Imported aliases name their exact reusable DAG target. Included
+        // aliases are namespaces for an existing instance and are not callable.
+        if binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
+            tir.module_aliases
+                .insert(alias.clone(), binding.target.clone());
+        }
+    }
 
-        let Some(dep_eval) = evaluated_files.get(dep_dag_id) else {
-            continue;
-        };
+    for (dep_dag_id, dep_eval) in evaluated_files {
         // Extern signatures travel with the dep's dag bodies: a qualified
         // inline call into a dep dag that uses extern functions resolves its
         // signature from the importer's merged TIR at eval time. First
@@ -540,17 +541,10 @@ fn merge_dep_dag_tirs(
                 .or_insert_with(|| function.clone());
         }
         for (dep_id, dag_tir) in &dep_eval.dag_tirs {
-            // Visibility check: only carry across `pub` dags. The dep's
-            // own root is treated as accessible (it's the file itself).
-            let is_root = dep_id == dep_dag_id;
-            if !is_root {
-                let leaf = dep_id.name();
-                if !dep_eval
-                    .external_surface
-                    .is_explicit_export(&DeclName::expect_valid(leaf))
-                {
-                    continue;
-                }
+            if dep_id != dep_dag_id && !dep_id.is_descendant_of(dep_dag_id) {
+                // `dep_eval` may itself contain canonical TIRs merged from its
+                // dependencies. Their owning artifacts are visited separately.
+                continue;
             }
             let mut cloned = dag_tir.clone();
             // Inject only the values that the dag body imported from its

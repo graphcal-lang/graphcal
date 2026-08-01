@@ -195,6 +195,16 @@ pub fn expr_lower_error_to_graphcal(
             };
         }
         hir::ExprLowerError::ModuleResolve {
+            source: ModuleResolveError::UnknownModuleAlias { alias, .. },
+            span,
+        } => {
+            return GraphcalError::UnknownModule {
+                name: alias.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
             span,
         } => {

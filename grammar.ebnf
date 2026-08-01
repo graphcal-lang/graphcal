@@ -437,6 +437,11 @@ index_decl
                           (brings: only the listed names; the brace
                            form does NOT also bring the module leaf)
 
+   A whole-module binding names the exact reusable DAG module and is callable
+   as `@rocket(args).out` / `@nr(args).out`, whether its target is a file root
+   or an inline DAG. Additional segments reach child DAGs. A selectively
+   imported DAG is callable by its selected local name as well.
+
    Alias and brace list are mutually exclusive:
    `import nasa.rocket as nr.{Orbit};` is a parse error.
 
@@ -875,22 +880,23 @@ inline_dag_call_suffix
      ")", ".", IDENT;
 
 (* @name                              -- graph ref (param, node, or const node).
-   @name(args).out                    -- same-file inline DAG invocation.
-   @module.name(args).out             -- qualified inline DAG invocation,
-                                         where `module` is brought into scope
-                                         via `import <pkg>(.<sub>)* as module;`
-                                         (or unaliased `import <pkg>.module;`).
+   @name(args).out                    -- invocation of a local DAG or an imported
+                                         module alias. The imported target may
+                                         be a file root or an inline DAG.
+   @module.child(args).out            -- invocation of a child DAG reached from
+                                         an imported alias or local DAG module.
    @name.field, @name.field.subfield  -- struct field projection on a graph
                                          reference (no `(` follows the path).
 
    What `@` enforces is semantic, not syntactic: the post-`@` expression
    must denote a graph value. `@dag(args).out` projects an externally
    projectable value from the fresh DAG instance: either an explicitly
-   exported node or a param's effective bound/default value. The qualified
-   `@module.dag(args).out` form has the same rule. Bare `@dag(args)` and
-   `@module.dag(args)` are rejected because an unprojected DAG instance is
-   not itself a graph value; the rule does not depend on how many segments
-   precede the `(`.
+   exported node or a param's effective bound/default value. Imported file
+   modules and inline DAG modules follow the same rule: an alias bound by
+   `import <path> as module` is callable as `@module(args).out`, while
+   `@module.child(args).out` descends to a child DAG. Unprojected forms are
+   rejected because a DAG instance is not itself a graph value; the rule does
+   not depend on how many segments precede the `(`.
 
    Each inline-call call site denotes a fresh DAG instantiation and
    desugars to a synthetic `include ... as <id>; @<id>.out` during TIR

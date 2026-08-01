@@ -230,8 +230,10 @@ It stores one `ModuleSymbols` table per canonical `DagId` and one `ModuleScope`
 per module for import/include aliases and selective imports. It resolves
 syntactic `NamePath` / `IdentPath` values into canonical
 `ResolvedName<namespace::...>` values or `ResolvedIndexVariant` values. Source
-qualifier text is used only to find a module alias; successful lookups carry the
-canonical `DagId` owner.
+qualifier text is used only to find a scoped module/DAG binding; successful
+lookups carry the canonical `DagId` owner. For inline-call paths, an imported
+alias resolves to its exact file-root or inline-DAG target and is itself
+callable; additional segments descend through child DAG modules.
 
 `graphcal-eval/src/loader.rs` remains the only layer that resolves import paths
 to files/DAGs. This is physical project loading and path resolution, not

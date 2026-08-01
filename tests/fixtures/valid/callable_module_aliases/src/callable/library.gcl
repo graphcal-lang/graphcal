@@ -1,0 +1,8 @@
+// A file root and an inline `dag` are the same kind of callable module.
+param x: Dimensionless;
+pub node doubled: Dimensionless = @x * 2.0;
+
+pub dag helper {
+    param x: Dimensionless;
+    pub node tripled: Dimensionless = @x * 3.0;
+}
