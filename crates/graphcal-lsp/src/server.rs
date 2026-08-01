@@ -1,20 +1,20 @@
 //! LSP server backend: state management and `LanguageServer` trait implementation.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionOptions,
-    CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
-    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    DidSaveTextDocumentParams, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
-    DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
-    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
-    InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
-    PrepareRenameResponse, Range, ReferenceParams, RenameOptions, RenameParams, SaveOptions,
+    CompletionParams, CompletionResponse, Diagnostic, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
+    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
+    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
+    PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams, SaveOptions,
     ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
     TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
     TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions,
@@ -26,13 +26,14 @@ use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
+use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
-    CompileError, EvalResult, Value, compile_and_eval_from_project_with_host_fns,
-    compile_to_tir_from_project_with_host_fns,
+    CompileError, EvalResult, Value, compile_and_eval_from_project_with_host_fns_and_cancellation,
+    compile_to_tir_from_project_with_host_fns_and_cancellation,
 };
 use graphcal_eval::loader::LoadedProject;
 
@@ -106,11 +107,173 @@ pub(crate) struct AnalysisResult {
 const DEBOUNCE_DELAY_MS: u64 = 300;
 
 /// Wall-clock cap on a single `run_analysis` pass. When exceeded, the LSP
-/// publishes a timeout diagnostic and leaves any prior cached analysis in
-/// place so queries (hover, goto, etc.) still answer from the last good
-/// state. The blocking thread keeps running until it returns — `spawn_blocking`
-/// is not cancellable — but its result is discarded.
+/// requests cooperative cancellation and leaves prior cached analysis in
+/// place so queries still answer from the last good state.
 const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Global cap for CPU-bound analyses. Permits are owned by the blocking
+/// closures, not their async waiters, so a timed-out but not-yet-cooperating
+/// operation continues to consume its permit instead of allowing runaway
+/// replacement work to accumulate.
+const MAX_CONCURRENT_ANALYSES: usize = 2;
+
+/// Bounded, per-document single-flight coordination for blocking analysis.
+#[derive(Debug)]
+struct AnalysisScheduler {
+    /// Closing entries remain only while old work is unwinding. A quick reopen
+    /// reuses that gate; quiescent closed entries are removed.
+    states: Mutex<HashMap<Url, AnalysisScheduleState>>,
+    global_gate: Arc<Semaphore>,
+}
+
+#[derive(Debug)]
+struct AnalysisScheduleState {
+    document_gate: Arc<Semaphore>,
+    cancellations: HashMap<u64, CancellationSource>,
+    is_open: bool,
+}
+
+impl AnalysisScheduleState {
+    fn new(is_open: bool) -> Self {
+        Self {
+            document_gate: Arc::new(Semaphore::new(1)),
+            cancellations: HashMap::new(),
+            is_open,
+        }
+    }
+}
+
+impl AnalysisScheduler {
+    fn new() -> Self {
+        Self {
+            states: Mutex::new(HashMap::new()),
+            global_gate: Arc::new(Semaphore::new(MAX_CONCURRENT_ANALYSES)),
+        }
+    }
+
+    fn open_document(&self, uri: &Url) {
+        self.states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(uri.clone())
+            .and_modify(|state| state.is_open = true)
+            .or_insert_with(|| AnalysisScheduleState::new(true));
+    }
+
+    /// Register one revision before it waits for a worker permit. A later edit
+    /// can therefore cancel queued as well as running work.
+    fn register(&self, uri: &Url, generation: u64) -> ScheduledAnalysis {
+        let source = CancellationSource::new();
+        let mut states = self
+            .states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A missing entry here belongs to a stale task racing with
+        // `did_close`; genuine open/change/save paths call `open_document`
+        // first. Keep it closed so `finish` can remove it.
+        let state = states
+            .entry(uri.clone())
+            .or_insert_with(|| AnalysisScheduleState::new(false));
+        if let Some(replaced) = state.cancellations.insert(generation, source.clone()) {
+            replaced.cancel();
+        }
+        let document_gate = Arc::clone(&state.document_gate);
+        drop(states);
+        ScheduledAnalysis {
+            source,
+            document_gate,
+            global_gate: Arc::clone(&self.global_gate),
+        }
+    }
+
+    fn cancel_document(&self, uri: &Url) {
+        let states = self
+            .states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(state) = states.get(uri) {
+            for source in state.cancellations.values() {
+                source.cancel();
+            }
+        }
+    }
+
+    fn close_document(&self, uri: &Url) {
+        let mut states = self
+            .states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let remove = states.get_mut(uri).is_some_and(|state| {
+            state.is_open = false;
+            for source in state.cancellations.values() {
+                source.cancel();
+            }
+            state.cancellations.is_empty()
+        });
+        if remove {
+            states.remove(uri);
+        }
+    }
+
+    fn cancel_all(&self) {
+        let states = self
+            .states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for state in states.values() {
+            for source in state.cancellations.values() {
+                source.cancel();
+            }
+        }
+    }
+
+    fn finish(&self, uri: &Url, generation: u64) {
+        let mut states = self
+            .states
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let remove = states.get_mut(uri).is_some_and(|state| {
+            state.cancellations.remove(&generation);
+            !state.is_open && state.cancellations.is_empty()
+        });
+        if remove {
+            states.remove(uri);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ScheduledAnalysis {
+    source: CancellationSource,
+    document_gate: Arc<Semaphore>,
+    global_gate: Arc<Semaphore>,
+}
+
+/// Wait for a worker permit while periodically observing the core's std-only
+/// cancellation token. Dropping and retrying the acquire future removes stale
+/// revisions from Tokio's waiter queue, so repeated edits cannot accumulate an
+/// unbounded pending backlog behind one slow analysis.
+async fn acquire_analysis_permit(
+    gate: Arc<Semaphore>,
+    cancellation: &CancellationToken,
+) -> std::result::Result<Option<tokio::sync::OwnedSemaphorePermit>, tokio::sync::AcquireError> {
+    const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+    loop {
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        match tokio::time::timeout(
+            CANCELLATION_POLL_INTERVAL,
+            Arc::clone(&gate).acquire_owned(),
+        )
+        .await
+        {
+            Ok(result) => return result.map(Some),
+            Err(_elapsed) => {}
+        }
+    }
+}
 
 /// The LSP server backend.
 #[cfg_attr(test, derive(Debug))]
@@ -133,6 +296,8 @@ pub struct Backend {
     /// every debounced keystroke hits the content-hash module cache instead
     /// of recompiling unchanged plugins.
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
+    /// Per-document single-flight and global concurrency control.
+    analysis_scheduler: Arc<AnalysisScheduler>,
 }
 
 #[cfg(test)]
@@ -218,6 +383,7 @@ impl Backend {
             return;
         }
 
+        self.analysis_scheduler.open_document(&uri);
         self.record_latest_text(&uri, &text).await;
 
         // Bump the generation so any in-flight debounced analysis for this URI
@@ -230,6 +396,7 @@ impl Backend {
             &self.change_generations,
             &self.latest_text,
             Arc::clone(&self.plugin_host),
+            Arc::clone(&self.analysis_scheduler),
             uri,
             text,
             generation,
@@ -248,6 +415,7 @@ impl Backend {
         let generations = self.change_generations.clone();
         let latest_text = self.latest_text.clone();
         let plugin_host = Arc::clone(&self.plugin_host);
+        let analysis_scheduler = Arc::clone(&self.analysis_scheduler);
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
@@ -263,6 +431,7 @@ impl Backend {
                 &generations,
                 &latest_text,
                 plugin_host,
+                analysis_scheduler,
                 uri,
                 text,
                 generation,
@@ -273,13 +442,15 @@ impl Backend {
 
     /// Increment and return the current generation for `uri`.
     async fn bump_generation(&self, uri: &Url) -> u64 {
-        *self
+        let generation = *self
             .change_generations
             .write()
             .await
             .entry(uri.clone())
-            .and_modify(|v| *v += 1)
-            .or_insert(1)
+            .and_modify(|value| *value = value.saturating_add(1))
+            .or_insert(1);
+        self.analysis_scheduler.cancel_document(uri);
+        generation
     }
 }
 
@@ -288,6 +459,7 @@ impl Backend {
 /// (`did_change`) paths so the panic/timeout/store sequence lives once.
 #[expect(
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "one call site per trigger; the arguments are the Backend's shared state"
 )]
 async fn analyze_store_publish(
@@ -296,10 +468,64 @@ async fn analyze_store_publish(
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     latest_text: &Arc<RwLock<HashMap<Url, Arc<String>>>>,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
+    scheduler: Arc<AnalysisScheduler>,
     uri: Url,
     text: String,
     generation: u64,
 ) {
+    let registration = scheduler.register(&uri, generation);
+    let cancellation = registration.source.token();
+    if !is_generation_current(generations, &uri, generation).await {
+        registration.source.cancel();
+        scheduler.finish(&uri, generation);
+        return;
+    }
+    let document_permit =
+        match acquire_analysis_permit(registration.document_gate, &cancellation).await {
+            Ok(Some(permit)) => permit,
+            Ok(None) => {
+                scheduler.finish(&uri, generation);
+                return;
+            }
+            Err(error) => {
+                scheduler.finish(&uri, generation);
+                client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("document analysis gate closed unexpectedly: {error}"),
+                    )
+                    .await;
+                return;
+            }
+        };
+    if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
+        scheduler.finish(&uri, generation);
+        return;
+    }
+
+    let global_permit = match acquire_analysis_permit(registration.global_gate, &cancellation).await
+    {
+        Ok(Some(permit)) => permit,
+        Ok(None) => {
+            scheduler.finish(&uri, generation);
+            return;
+        }
+        Err(error) => {
+            scheduler.finish(&uri, generation);
+            client
+                .log_message(
+                    MessageType::ERROR,
+                    format!("global analysis gate closed unexpectedly: {error}"),
+                )
+                .await;
+            return;
+        }
+    };
+    if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
+        scheduler.finish(&uri, generation);
+        return;
+    }
+
     // Snapshot every *other* open document's latest text: the analysis
     // overlays them onto the filesystem so imports of open-but-dirty files
     // see the editor state, not stale disk content. The analyzed document
@@ -316,23 +542,58 @@ async fn analyze_store_publish(
             })
         })
         .collect();
+    if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
+        scheduler.finish(&uri, generation);
+        return;
+    }
+
     let uri_for_analysis = uri.clone();
-    let task = tokio::task::spawn_blocking(move || {
-        run_analysis(&uri_for_analysis, &text, &open_buffers, &plugin_host)
+    let source = registration.source;
+    let mut task = tokio::task::spawn_blocking(move || {
+        // Keep both permits until the synchronous worker truly exits. Dropping
+        // the async waiter on timeout must not admit replacement work while a
+        // non-cooperating blocking closure still consumes CPU.
+        let _permits = (document_permit, global_permit);
+        run_analysis_with_cancellation(
+            &uri_for_analysis,
+            &text,
+            &open_buffers,
+            &plugin_host,
+            &cancellation,
+        )
     });
-    let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, task).await {
-        Ok(Ok(a)) => a,
-        Ok(Err(e)) => {
+    let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, &mut task).await {
+        Ok(Ok(Ok(analysis))) => analysis,
+        Ok(Ok(Err(Cancelled))) => {
+            scheduler.finish(&uri, generation);
+            return;
+        }
+        Ok(Err(error)) => {
+            scheduler.finish(&uri, generation);
             client
-                .log_message(MessageType::ERROR, format!("analysis task panicked: {e}"))
+                .log_message(
+                    MessageType::ERROR,
+                    format!("analysis task panicked: {error}"),
+                )
                 .await;
             return;
         }
         Err(_elapsed) => {
-            publish_analysis_timeout(client, &uri).await;
+            source.cancel();
+            task.abort();
+            let cleanup_scheduler = Arc::clone(&scheduler);
+            let cleanup_uri = uri.clone();
+            tokio::spawn(async move {
+                let _ = task.await;
+                cleanup_scheduler.finish(&cleanup_uri, generation);
+            });
+            if is_generation_current(generations, &uri, generation).await {
+                publish_analysis_timeout(client, &uri).await;
+            }
             return;
         }
     };
+    scheduler.finish(&uri, generation);
 
     // Hold the documents write lock across the generation re-check and
     // the insert: a newer-generation analysis completing between a
@@ -415,29 +676,17 @@ fn merged_diagnostics_for(
         .collect()
 }
 
-/// Publish a single error diagnostic on `uri` indicating that the analysis
-/// pipeline exceeded [`ANALYSIS_TIMEOUT`], and log the event to the client.
-///
-/// The cached `AnalysisResult` for `uri` (if any) is intentionally left
-/// untouched so symbol queries continue to answer from the last good state.
-/// Other URIs are not affected — `publish_diagnostics` is per-URI.
+/// Log a current-revision analysis timeout without replacing source
+/// diagnostics. A timeout is a server condition, not a Graphcal program error;
+/// the last completed diagnostics remain visible while the worker cooperatively
+/// shuts down.
 async fn publish_analysis_timeout(client: &Client, uri: &Url) {
     let secs = ANALYSIS_TIMEOUT.as_secs();
     client
         .log_message(
             MessageType::ERROR,
-            format!("analysis for {uri} timed out after {secs}s"),
+            format!("analysis for {uri} timed out after {secs}s and was cancelled"),
         )
-        .await;
-    let diag = Diagnostic {
-        range: Range::default(),
-        severity: Some(DiagnosticSeverity::ERROR),
-        source: Some("graphcal".to_string()),
-        message: format!("graphcal-lsp: analysis timed out after {secs}s"),
-        ..Default::default()
-    };
-    client
-        .publish_diagnostics(uri.clone(), vec![diag], None)
         .await;
 }
 
@@ -471,6 +720,7 @@ fn build_project(
     uri: &Url,
     text: &str,
     open_buffers: &[OpenBuffer],
+    cancellation: &CancellationToken,
 ) -> std::result::Result<LoadedProject, Box<CompileError>> {
     let name = uri.as_str();
     match uri.to_file_path() {
@@ -488,9 +738,12 @@ fn build_project(
                     .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
             );
             let fs = graphcal_io::OverlayFileSystem::with_overlays(base, overlays);
-            graphcal_eval::loader::load_project(&path, None, &fs).map_err(Box::new)
+            graphcal_eval::loader::load_project_with_cancellation(&path, None, &fs, cancellation)
+                .map_err(Box::new)
         }
-        Err(()) => LoadedProject::from_source(text, name).map_err(Box::new),
+        Err(()) => {
+            LoadedProject::from_source_with_cancellation(text, name, cancellation).map_err(Box::new)
+        }
     }
 }
 
@@ -516,36 +769,66 @@ pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
     run_analysis(uri, text, &[], tests::test_plugin_host())
 }
 
+#[cfg(test)]
 fn run_analysis(
     uri: &Url,
     text: &str,
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
 ) -> AnalysisResult {
+    run_analysis_with_cancellation(
+        uri,
+        text,
+        open_buffers,
+        plugin_host,
+        &CancellationToken::unbounded(),
+    )
+    .expect("an unbounded analysis cannot be cancelled")
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "analysis coordinates fallback diagnostics and successful semantic metadata"
+)]
+fn run_analysis_with_cancellation(
+    uri: &Url,
+    text: &str,
+    open_buffers: &[OpenBuffer],
+    plugin_host: &graphcal_plugin_host::PluginHost,
+    cancellation: &CancellationToken,
+) -> std::result::Result<AnalysisResult, Cancelled> {
+    cancellation.checkpoint()?;
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
     // back to parsing just the active buffer so hover/goto-def on the active
     // file's own symbols still answer — the imported-file error remains
     // visible, but local LSP features degrade gracefully.
-    let project = match build_project(uri, text, open_buffers) {
+    let project = match build_project(uri, text, open_buffers, cancellation) {
         Ok(project) => project,
-        Err(e) => {
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
+        Err(error) if error.is_cancelled() => return Err(Cancelled),
+        Err(error) => {
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
             // `Some` when the failure was in an *import* (the buffer itself
             // parses): the buffer's own symbols are still fully usable.
             // `None` when the buffer doesn't parse — the result is then a
             // diagnostics-only fallback and `store_analysis` retains the
             // previous symbol state (#834).
-            let parsed_buffer_table =
-                LoadedProject::from_source(text, uri.as_str())
-                    .ok()
-                    .map(|single| {
-                        let root_ast = &single.files[&single.root].ast;
-                        symbol_table::build_for_buffer(root_ast, text)
-                    });
+            let parsed_buffer_table = match LoadedProject::from_source_with_cancellation(
+                text,
+                uri.as_str(),
+                cancellation,
+            ) {
+                Ok(single) => {
+                    let root_ast = &single.files[&single.root].ast;
+                    Some(symbol_table::build_for_buffer(root_ast, text))
+                }
+                Err(error) if error.is_cancelled() => return Err(Cancelled),
+                Err(_) => None,
+            };
+            cancellation.checkpoint()?;
             let buffer_parsed = parsed_buffer_table.is_some();
-            return AnalysisResult {
+            return Ok(AnalysisResult {
                 source: Arc::new(text.to_string()),
                 symbol_table: parsed_buffer_table.unwrap_or_default(),
                 imported_definitions: HashMap::new(),
@@ -555,12 +838,14 @@ fn run_analysis(
                 extern_fn_signatures: HashMap::new(),
                 import_links: Vec::new(),
                 buffer_parsed,
-            };
+            });
         }
     };
 
+    cancellation.checkpoint()?;
     let root_ast = &project.files[&project.root].ast;
-    let import_links = collect_import_links(&project);
+    let import_links = collect_import_links(&project, cancellation)?;
+    cancellation.checkpoint()?;
     // The project resolver backs the symbol table's reference walk: bodies
     // are tolerantly lowered to HIR and references keyed from canonical
     // identities. A resolver failure (e.g. duplicate symbols) degrades to
@@ -570,21 +855,36 @@ fn run_analysis(
     // Extern (plugin) registry for this pass: the built-in demo plugin plus
     // the project's vendored wasm plugins. The plugin host outlives passes,
     // so unchanged modules come from its content-hash cache.
+    cancellation.checkpoint()?;
     let mut host_fns = graphcal_eval::host_fns::demo_registry();
     graphcal_plugin_host::register_project_plugins(plugin_host, &project, &mut host_fns);
+    cancellation.checkpoint()?;
 
     // Stage 2: Compile TIR from the project.
-    match compile_to_tir_from_project_with_host_fns(&project, &host_fns) {
+    match compile_to_tir_from_project_with_host_fns_and_cancellation(
+        &project,
+        &host_fns,
+        cancellation,
+    ) {
         Ok(tir) => {
+            cancellation.checkpoint()?;
             // Full success: symbol table from AST + TIR enrichment.
             let mut symbol_table =
                 symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
+            cancellation.checkpoint()?;
             symbol_table::enrich_from_tir(&mut symbol_table, &tir, &project.root);
 
-            let imported_definitions =
-                collect_imported_definitions(uri, &project, Some(&tir), &module_resolver);
+            cancellation.checkpoint()?;
+            let imported_definitions = collect_imported_definitions(
+                uri,
+                &project,
+                Some(&tir),
+                &module_resolver,
+                cancellation,
+            )?;
+            cancellation.checkpoint()?;
             let fn_signatures = build_fn_signatures();
-            let extern_fn_signatures = build_extern_fn_signatures(&tir);
+            let extern_fn_signatures = build_extern_fn_signatures(&tir, cancellation)?;
             // Library files (required param/index not yet bound) cannot be evaluated
             // standalone. Skip the eval pipeline so editors don't surface false-positive
             // `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics when the
@@ -592,11 +892,12 @@ fn run_analysis(
             let (mut diagnostics, eval_values) = if tir.is_library() {
                 (HashMap::new(), HashMap::new())
             } else {
-                run_eval_from_project(&project, uri, text, &symbol_table, &host_fns)
+                run_eval_from_project(&project, uri, text, &symbol_table, &host_fns, cancellation)?
             };
+            cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default();
 
-            AnalysisResult {
+            Ok(AnalysisResult {
                 source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
@@ -606,18 +907,21 @@ fn run_analysis(
                 extern_fn_signatures,
                 import_links,
                 buffer_parsed: true,
-            }
+            })
         }
-        Err(e) => {
+        Err(error) if error.is_cancelled() => Err(Cancelled),
+        Err(error) => {
+            cancellation.checkpoint()?;
             // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
             let symbol_table =
                 symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
+            cancellation.checkpoint()?;
             let imported_definitions =
-                collect_imported_definitions(uri, &project, None, &module_resolver);
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
+                collect_imported_definitions(uri, &project, None, &module_resolver, cancellation)?;
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
 
-            AnalysisResult {
+            Ok(AnalysisResult {
                 source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
@@ -627,10 +931,12 @@ fn run_analysis(
                 extern_fn_signatures: HashMap::new(),
                 import_links,
                 buffer_parsed: true,
-            }
+            })
         }
     }
 }
+
+type EvalAnalysisOutput = (HashMap<Url, Vec<Diagnostic>>, HashMap<ScopedName, String>);
 
 /// Run evaluation from a loaded project and extract diagnostics and formatted values.
 fn run_eval_from_project(
@@ -639,17 +945,25 @@ fn run_eval_from_project(
     text: &str,
     symbol_table: &SymbolTable,
     host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
-) -> (HashMap<Url, Vec<Diagnostic>>, HashMap<ScopedName, String>) {
-    match compile_and_eval_from_project_with_host_fns(project, &HashMap::new(), host_fns) {
+    cancellation: &CancellationToken,
+) -> std::result::Result<EvalAnalysisOutput, Cancelled> {
+    match compile_and_eval_from_project_with_host_fns_and_cancellation(
+        project,
+        &HashMap::new(),
+        host_fns,
+        cancellation,
+    ) {
         Ok(result) => {
+            cancellation.checkpoint()?;
             let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);
-            let values = format_eval_values(&result);
-            (diagnostics_for_active_uri(uri, diagnostics), values)
+            let values = format_eval_values(&result, cancellation)?;
+            Ok((diagnostics_for_active_uri(uri, diagnostics), values))
         }
-        Err(e) => {
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&e, uri);
+        Err(error) if error.is_cancelled() => Err(Cancelled),
+        Err(error) => {
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
-            (diagnostics, HashMap::new())
+            Ok((diagnostics, HashMap::new()))
         }
     }
 }
@@ -658,9 +972,13 @@ fn run_eval_from_project(
 ///
 /// Uses `imports_with_paths()` and `includes_with_paths()` from the loader,
 /// so document links agree with actual compilation behavior.
-fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
+fn collect_import_links(
+    project: &LoadedProject,
+    cancellation: &CancellationToken,
+) -> std::result::Result<Vec<ResolvedImportLink>, Cancelled> {
+    cancellation.checkpoint()?;
     let Some(root_file) = project.files.get(&project.root) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
     let import_links = root_file
@@ -672,15 +990,19 @@ fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
 
     import_links
         .chain(include_links)
-        .filter_map(|(span, dag_id)| {
-            let loaded = project.files.get(dag_id)?;
-            let uri = Url::from_file_path(&loaded.path).ok()?;
-            Some(ResolvedImportLink {
-                path_span: span,
-                target_uri: uri,
-            })
+        .map(|(span, dag_id)| {
+            cancellation.checkpoint()?;
+            Ok(project.files.get(dag_id).and_then(|loaded| {
+                Url::from_file_path(&loaded.path)
+                    .ok()
+                    .map(|target_uri| ResolvedImportLink {
+                        path_span: span,
+                        target_uri,
+                    })
+            }))
         })
-        .collect()
+        .collect::<std::result::Result<Vec<_>, Cancelled>>()
+        .map(|links| links.into_iter().flatten().collect())
 }
 
 /// Build extern (plugin) function signatures for Signature Help, keyed by
@@ -690,11 +1012,13 @@ fn collect_import_links(project: &LoadedProject) -> Vec<ResolvedImportLink> {
 /// file's `import plugin` blocks and its registry's dimension names).
 fn build_extern_fn_signatures(
     tir: &graphcal_compiler::tir::typed::TIR,
-) -> HashMap<String, FnSignatureInfo> {
+    cancellation: &CancellationToken,
+) -> std::result::Result<HashMap<String, FnSignatureInfo>, Cancelled> {
     use graphcal_compiler::function_signature::ValueKind as ExternValueKind;
 
     let mut sigs = HashMap::new();
     for function in tir.extern_functions.values() {
+        cancellation.checkpoint()?;
         let format_monomial = |monomial: &graphcal_compiler::function_signature::DimMonomial| {
             let mut parts: Vec<String> = monomial
                 .vars
@@ -767,7 +1091,7 @@ fn build_extern_fn_signatures(
         );
         sigs.insert(qualified, FnSignatureInfo { label, parameters });
     }
-    sigs
+    Ok(sigs)
 }
 
 /// Get builtin function signatures for Signature Help.
@@ -925,9 +1249,13 @@ fn monomial_display(monomial: &DimMonomial) -> std::result::Result<String, Strin
 }
 
 /// Format all successfully evaluated values into display strings.
-fn format_eval_values(result: &EvalResult) -> HashMap<ScopedName, String> {
+fn format_eval_values(
+    result: &EvalResult,
+    cancellation: &CancellationToken,
+) -> std::result::Result<HashMap<ScopedName, String>, Cancelled> {
     let mut map = HashMap::new();
     for (name, value_result, _decl_type) in &result.all {
+        cancellation.checkpoint()?;
         if let Ok(value) = value_result {
             map.insert(
                 name.clone(),
@@ -935,7 +1263,7 @@ fn format_eval_values(result: &EvalResult) -> HashMap<ScopedName, String> {
             );
         }
     }
-    map
+    Ok(map)
 }
 
 /// Maximum character length for inlay hint display strings.
@@ -1150,11 +1478,13 @@ fn collect_imported_definitions(
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_compiler::tir::typed::TIR>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
-) -> HashMap<SymbolKey, ImportedDefinition> {
+    cancellation: &CancellationToken,
+) -> std::result::Result<HashMap<SymbolKey, ImportedDefinition>, Cancelled> {
+    cancellation.checkpoint()?;
     let mut result = HashMap::new();
 
     let Some(root_file) = project.files.get(&project.root) else {
-        return result;
+        return Ok(result);
     };
 
     // Cache symbol tables per dag_id to avoid re-building for files referenced
@@ -1172,6 +1502,7 @@ fn collect_imported_definitions(
         .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
 
     for (path, kind, dag_id) in imports.chain(includes) {
+        cancellation.checkpoint()?;
         let Ok(resolved_module) = project.resolved_module_target(path, dag_id) else {
             continue;
         };
@@ -1217,10 +1548,12 @@ fn collect_imported_definitions(
                 let src = Arc::clone(&loaded_file.source);
                 (table, uri, src)
             });
+        cancellation.checkpoint()?;
 
         match kind {
             graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
                 for import_item in items {
+                    cancellation.checkpoint()?;
                     let original_name = import_item.name.name.clone();
                     let local_name = import_item.local_name().to_string();
                     // Bring across the named definition itself plus every
@@ -1232,6 +1565,7 @@ fn collect_imported_definitions(
                     // (DAG body member) miss because their non-TopLevel keys
                     // would never travel with the selective import.
                     for (key, def) in &imported_table.definitions {
+                        cancellation.checkpoint()?;
                         let Some(local_key) = rekey_selective_import(
                             key,
                             def.category,
@@ -1258,6 +1592,7 @@ fn collect_imported_definitions(
                     |alias_ident| alias_ident.value.to_string(),
                 );
                 for (key, def) in &imported_table.definitions {
+                    cancellation.checkpoint()?;
                     let Some(qualified_key) =
                         rekey_module_target_import(key, &module_name, &target_prefix)
                     else {
@@ -1269,7 +1604,7 @@ fn collect_imported_definitions(
         }
     }
 
-    result
+    Ok(result)
 }
 
 /// Re-key an imported-file table entry for a selective import (`import lib.{X};`).
@@ -1552,6 +1887,7 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        self.analysis_scheduler.cancel_all();
         Ok(())
     }
 
@@ -1569,6 +1905,7 @@ impl LanguageServer for Backend {
             return;
         }
 
+        self.analysis_scheduler.open_document(&uri);
         // Record the new text synchronously: completion/signature-help fire
         // on trigger characters milliseconds after this notification, long
         // before the debounced analysis lands.
@@ -1586,6 +1923,11 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        // Invalidate and cancel queued/running work before clearing state. Keep
+        // the generation entry to avoid an ABA collision if the URI is reopened
+        // while an old blocking worker is still winding down.
+        self.bump_generation(&uri).await;
+        self.analysis_scheduler.close_document(&uri);
         // Re-publish every URI the closing document reported on from the
         // *remaining* open documents' merged view: closing one document only
         // removes that document's contribution — a URI another open document
@@ -1606,7 +1948,6 @@ impl LanguageServer for Backend {
             drop(docs);
             publish
         };
-        self.change_generations.write().await.remove(&uri);
         self.latest_text.write().await.remove(&uri);
         for (target_uri, diags) in publish {
             self.client
@@ -1792,6 +2133,7 @@ pub(crate) async fn run() {
         change_generations: Arc::new(RwLock::new(HashMap::new())),
         latest_text: Arc::new(RwLock::new(HashMap::new())),
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
+        analysis_scheduler: Arc::new(AnalysisScheduler::new()),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
 }
@@ -1805,8 +2147,35 @@ mod tests {
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
+    use tower_lsp::lsp_types::Range;
 
     use super::*;
+
+    #[test]
+    fn scheduler_cancels_registered_document_work() {
+        let scheduler = AnalysisScheduler::new();
+        let uri = Url::parse("file:///cancel.gcl").unwrap();
+        scheduler.open_document(&uri);
+        let registration = scheduler.register(&uri, 1);
+        let cancellation = registration.source.token();
+
+        assert!(!cancellation.is_cancelled());
+        scheduler.cancel_document(&uri);
+        assert!(cancellation.is_cancelled());
+
+        scheduler.finish(&uri, 1);
+        let next = scheduler.register(&uri, 2);
+        assert!(!next.source.is_cancelled());
+        scheduler.close_document(&uri);
+        scheduler.finish(&uri, 2);
+        assert!(
+            !scheduler
+                .states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(&uri)
+        );
+    }
 
     #[test]
     fn complex_signature_help_uses_dimension_aware_signatures() {

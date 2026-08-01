@@ -39,6 +39,8 @@ pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 /// Bundles built-in constants, built-in functions, the type/unit registry,
 /// and source information for diagnostics.
 pub struct EvalContext<'a> {
+    /// Cooperative cancellation for recursive expression evaluation.
+    pub cancellation: graphcal_compiler::cancellation::CancellationToken,
     pub builtin_consts: &'a HashMap<&'a str, f64>,
     pub builtin_fns: &'a HashMap<&'a str, BuiltinFunction>,
     pub registry: &'a Registry,

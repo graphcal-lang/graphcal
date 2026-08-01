@@ -22,7 +22,9 @@ fn compile_single_file_in_project(
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
+    cancellation.checkpoint()?;
     let loaded_file = &project.files[file_dag_id];
     let file_src = &loaded_file.named_source;
 
@@ -55,6 +57,7 @@ fn compile_single_file_in_project(
 
     // Process all import declarations (non-instantiated, compile-time items only).
     for (_decl, import_decl, import_canonical) in loaded_file.imports_with_dag_ids() {
+        cancellation.checkpoint()?;
         let import_canonical = import_canonical.clone();
         imports::process_non_instantiated_import(
             project,
@@ -72,6 +75,7 @@ fn compile_single_file_in_project(
     // Inline DAG includes (single-segment paths matching a dag name) and
     // qualified module-path DAG includes are handled below.
     for (decl, include_decl, include_canonical) in loaded_file.includes_with_dag_ids() {
+        cancellation.checkpoint()?;
         // Skip qualified module-path DAG references — handled after inline
         // DAGs. These are multi-segment paths where the last segment matches
         // a DAG declared in the resolved target file.
@@ -107,6 +111,7 @@ fn compile_single_file_in_project(
     // Process inline DAG includes (include dag_name(...);).
     // These are includes with single-segment paths matching inline DAG defs.
     for decl in &loaded_file.ast.declarations {
+        cancellation.checkpoint()?;
         let DeclKind::Include(include_decl) = &decl.kind else {
             continue;
         };
@@ -139,6 +144,7 @@ fn compile_single_file_in_project(
     // These are multi-segment paths where the last segment is a DAG declared
     // in the resolved target file (e.g. `pkg/mod.gcl` contains `dag dag_name`).
     for (decl, include_decl, include_canonical) in loaded_file.includes_with_dag_ids() {
+        cancellation.checkpoint()?;
         if !imports::is_bare_module_dag_ref(&include_decl.path, include_canonical, project) {
             continue;
         }
@@ -218,6 +224,7 @@ fn compile_single_file_in_project(
         evaluated_files,
         overrides,
         override_targets,
+        cancellation,
     )
 }
 
@@ -374,8 +381,14 @@ fn store_compiled_file_artifact(
     file_src: &NamedSource<Arc<String>>,
     external_surface: ExternalDeclSurface,
     evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
-    let const_values = crate::exec_plan::eval_consts_from_tir(&compiled.tir, file_src)?;
+    cancellation.checkpoint()?;
+    let const_values = crate::exec_plan::eval_consts_from_tir_with_cancellation(
+        &compiled.tir,
+        file_src,
+        cancellation,
+    )?;
     let top_level_consts = top_level_const_values(&compiled.tir, &const_values);
     let dag_tirs = compiled.tir.dags.clone();
     let extern_functions = compiled.tir.extern_functions.clone();
@@ -408,18 +421,22 @@ fn evaluate_and_store_file(
     external_surface: ExternalDeclSurface,
     evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
-    let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
+    cancellation.checkpoint()?;
+    let plan = crate::exec_plan::compile_with_cancellation(&compiled.tir, file_src, cancellation)?;
     // One eval-loop run yields both the public result and the raw values
     // exported to downstream imports (this used to evaluate the whole file
     // twice).
-    let (eval_result, runtime_values) = super::super::runtime::evaluate_plan_with_values(
-        &compiled.tir,
-        &plan,
-        &compiled.declared_types,
-        file_src,
-        host_fns,
-    )?;
+    let (eval_result, runtime_values) =
+        super::super::runtime::evaluate_plan_with_values_and_cancellation(
+            &compiled.tir,
+            &plan,
+            &compiled.declared_types,
+            file_src,
+            host_fns,
+            cancellation,
+        )?;
     let file_runtime_values = filter_local_runtime_values(&compiled.tir, &runtime_values);
     let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
     // Dynamic-unit scales resolve against this file's final values here, so
@@ -429,7 +446,8 @@ fn evaluate_and_store_file(
         &plan,
         &runtime_values,
         file_src,
-    );
+        cancellation,
+    )?;
 
     // Capture dag TIRs so cross-file qualified inline calls can merge them
     // into the importer's TIR::dags under module-prefixed keys.
@@ -488,7 +506,9 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalResult, CompileError> {
+    cancellation.checkpoint()?;
     // Pre-compute override routing: map each override name to the file that owns
     // the param. Walk root file's imports to find the owning file for each override.
     let override_targets = route_overrides_to_files(project, overrides)?;
@@ -497,6 +517,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
         HashMap::new();
 
     for file_dag_id in &project.load_order {
+        cancellation.checkpoint()?;
         let is_root = *file_dag_id == project.root;
         let compiled = compile_single_file_in_project(
             project,
@@ -504,6 +525,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             &evaluated_files,
             overrides,
             &override_targets,
+            cancellation,
         )?;
 
         // Load-time verification: every declared extern function must have a
@@ -515,6 +537,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             &compiled.tir,
             &project.files[file_dag_id].named_source,
             host_fns,
+            cancellation,
         )?;
 
         // Files with required params (no default) or required indexes cannot be
@@ -532,6 +555,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                 file_src,
                 external_surface,
                 &mut evaluated_files,
+                cancellation,
             )?;
             continue;
         }
@@ -551,13 +575,15 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                 }
             }
             let file_src = &project.files[file_dag_id].named_source;
-            let plan = crate::exec_plan::compile(&compiled.tir, file_src)?;
-            let eval_result = evaluate_plan(
+            let plan =
+                crate::exec_plan::compile_with_cancellation(&compiled.tir, file_src, cancellation)?;
+            let eval_result = super::super::runtime::evaluate_plan_with_cancellation(
                 &compiled.tir,
                 &plan,
                 &compiled.declared_types,
                 file_src,
                 host_fns,
+                cancellation,
             )?;
 
             // Build a mapping from each dependency file path to the root-level
@@ -568,6 +594,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             // assertion's original span with the root file's import statement span.
             let mut all_assertions: Vec<(ScopedName, AssertResult, Span)> = Vec::new();
             for dep_dag_id in &project.load_order {
+                cancellation.checkpoint()?;
                 if *dep_dag_id == project.root {
                     continue;
                 }
@@ -593,6 +620,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             let mut seen = HashSet::new();
 
             for entry in &compiled.included_debug_values {
+                cancellation.checkpoint()?;
                 if !seen.insert(entry.0.clone()) {
                     continue;
                 }
@@ -605,6 +633,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                 );
             }
             for (name, category) in &compiled.imported_source_order {
+                cancellation.checkpoint()?;
                 if !seen.insert(name.clone()) {
                     continue;
                 }
@@ -663,6 +692,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             external_surface,
             &mut evaluated_files,
             host_fns,
+            cancellation,
         )?;
     }
 
@@ -694,6 +724,7 @@ fn verify_host_functions(
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
 
@@ -702,6 +733,7 @@ fn verify_host_functions(
     declared.sort_by_key(|(_, function)| function.name_span.offset());
 
     for (key, function) in declared {
+        cancellation.checkpoint()?;
         if key.plugin.source_kind() == PluginSourceKind::WasmModule {
             verify_wasm_plugin(project, file_dag_id, function, src, host_fns)?;
         }
@@ -875,13 +907,16 @@ fn build_dep_import_spans(
 pub(in crate::eval::project) fn compile_to_tir_project_perfile(
     project: &crate::loader::LoadedProject,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
+    cancellation.checkpoint()?;
     let empty_overrides = HashMap::new();
     let empty_targets = HashMap::new();
     let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
     for file_dag_id in &project.load_order {
+        cancellation.checkpoint()?;
         let is_root = *file_dag_id == project.root;
         let compiled = compile_single_file_in_project(
             project,
@@ -889,6 +924,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
             &evaluated_files,
             &empty_overrides,
             &empty_targets,
+            cancellation,
         )?;
 
         // Compile-only consumers (`graphcal check`, LSP analysis) must
@@ -902,6 +938,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
             &compiled.tir,
             &project.files[file_dag_id].named_source,
             host_fns,
+            cancellation,
         )?;
 
         if is_root {
@@ -919,6 +956,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
                 file_src,
                 external_surface,
                 &mut evaluated_files,
+                cancellation,
             )?;
             continue;
         }
@@ -932,6 +970,7 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
             external_surface,
             &mut evaluated_files,
             host_fns,
+            cancellation,
         )?;
     }
 

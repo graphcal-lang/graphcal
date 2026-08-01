@@ -45,6 +45,7 @@ pub fn eval_hir_expr(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    ctx.cancellation.checkpoint()?;
     // Recursion choke point: evaluation recurses once per tree level
     // (unbounded for left-nested operator chains).
     graphcal_compiler::stack::with_stack_growth(|| {
@@ -2003,6 +2004,7 @@ fn eval_hir_inline_dag_call(
     seed_inline_dag_imported_values(dag_tir, &mut dag_values, caller_values, ctx);
 
     let dag_ctx = EvalContext {
+        cancellation: ctx.cancellation.clone(),
         builtin_consts: ctx.builtin_consts,
         builtin_fns: ctx.builtin_fns,
         registry: ctx.registry,

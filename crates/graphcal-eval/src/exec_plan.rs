@@ -110,9 +110,29 @@ pub struct ExecPlan {
 ///
 /// Returns a [`GraphcalError`] if there is a cyclic dependency or if
 /// const evaluation fails.
+#[cfg(test)]
 pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, GraphcalError> {
-    let const_values = eval_consts_from_tir(tir, src)?;
-    let topo_order = build_runtime_dag(tir, src)?;
+    compile_with_cancellation(
+        tir,
+        src,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Compile a TIR into an execution plan with cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] for an invalid plan or cancellation.
+pub fn compile_with_cancellation(
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<ExecPlan, GraphcalError> {
+    cancellation.checkpoint()?;
+    let const_values = eval_consts_from_tir_with_cancellation(tir, src, cancellation)?;
+    cancellation.checkpoint()?;
+    let topo_order = build_runtime_dag(tir, src, cancellation)?;
 
     let root = tir.root();
     let assert_bodies: Vec<AssertBodyEntry> = root
@@ -180,15 +200,20 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
         .collect();
 
     // Resolve domain constraints from type annotations.
-    let domain_constraints = resolve_domain_constraints(tir, &const_values, src)?;
+    cancellation.checkpoint()?;
+    let domain_constraints =
+        resolve_domain_constraints_with_cancellation(tir, &const_values, src, cancellation)?;
     // Resolve domain constraints declared on struct/union member fields.
-    let struct_field_constraints = resolve_struct_field_constraints(tir, &const_values, src)?;
+    cancellation.checkpoint()?;
+    let struct_field_constraints =
+        resolve_struct_field_constraints_with_cancellation(tir, &const_values, src, cancellation)?;
 
     // Validate struct field constraints against const struct values. Const
     // evaluation runs before field constraints are resolved (the constraint
     // bound exprs themselves need const values), so the violation check is
     // deferred to here. Top-level struct-typed consts that violate any field
     // constraint produce a compile-time `DomainViolation`.
+    cancellation.checkpoint()?;
     check_const_struct_field_constraints_at_compile_time(
         tir,
         &const_values,
@@ -252,10 +277,12 @@ fn visible_values_with_imports(
 }
 
 /// Topologically sort and evaluate const declarations from a TIR.
-pub fn eval_consts_from_tir(
+pub fn eval_consts_from_tir_with_cancellation(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeValueMap, GraphcalError> {
+    cancellation.checkpoint()?;
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let dag = tir.root();
@@ -264,15 +291,17 @@ pub fn eval_consts_from_tir(
         return Ok(HashMap::new());
     }
 
-    let sorted_names = const_eval_order(dag, src)?;
+    let sorted_names = const_eval_order(dag, src, cancellation)?;
 
     let empty_hir_locals = HirLocalValueMap::root();
     let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
     let mut local_const_values: RuntimeValueMap = HashMap::new();
 
     for name in sorted_names {
+        cancellation.checkpoint()?;
         let key = RuntimeDeclKey::for_local_decl(dag, &name);
         let ctx = EvalContext {
+            cancellation: cancellation.clone(),
             builtin_consts,
             builtin_fns,
             registry: &tir.registry,
@@ -304,15 +333,18 @@ pub fn eval_consts_from_tir(
 fn const_eval_order(
     dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    const_eval_order_resolved(dag, &dag.semantic.dependencies, src)
+    const_eval_order_resolved(dag, &dag.semantic.dependencies, src, cancellation)
 }
 
 fn const_eval_order_resolved(
     dag: &DagTIR,
     deps: &ResolvedDagDependencies,
     src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
+    cancellation.checkpoint()?;
     let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
     let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
     let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
@@ -322,6 +354,7 @@ fn const_eval_order_resolved(
     let mut sorted_consts: Vec<&_> = dag.consts.iter().collect();
     sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in &sorted_consts {
+        cancellation.checkpoint()?;
         let key = local_resolved_decl_key(dag, &entry.name, entry.span, src)?;
         let idx = graph.add_node(key.clone());
         index_map.insert(key.clone(), idx);
@@ -330,6 +363,7 @@ fn const_eval_order_resolved(
     }
 
     for (name, dep_set) in &deps.const_deps {
+        cancellation.checkpoint()?;
         let Some(&dependent_idx) = index_map.get(name) else {
             continue;
         };
@@ -366,6 +400,7 @@ fn const_eval_order_resolved(
 fn build_runtime_dag(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
     // Merge params and nodes, then sort by name for canonical tie-breaking
     // among incomparable nodes in the topological sort.
@@ -390,6 +425,7 @@ fn build_runtime_dag(
         }
     }
 
+    cancellation.checkpoint()?;
     let dag = tir.root();
     let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
 
@@ -402,6 +438,7 @@ fn build_runtime_dag(
     all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 
     for decl in &all_decls {
+        cancellation.checkpoint()?;
         let name = decl.name().clone();
         decl_spans.push((name.clone(), decl.span()));
         match decl {
@@ -416,7 +453,7 @@ fn build_runtime_dag(
         }
     }
 
-    Ok(runtime_eval_order(dag, &decl_spans, src)?
+    Ok(runtime_eval_order(dag, &decl_spans, src, cancellation)?
         .into_iter()
         .map(|name| RuntimeDeclKey::for_local_decl(dag, &name))
         .collect())
@@ -426,8 +463,15 @@ fn runtime_eval_order(
     dag: &DagTIR,
     decl_spans: &[(ScopedName, Span)],
     src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    runtime_eval_order_resolved(dag, decl_spans, &dag.semantic.dependencies, src)
+    runtime_eval_order_resolved(
+        dag,
+        decl_spans,
+        &dag.semantic.dependencies,
+        src,
+        cancellation,
+    )
 }
 
 fn runtime_eval_order_resolved(
@@ -435,13 +479,16 @@ fn runtime_eval_order_resolved(
     decl_spans: &[(ScopedName, Span)],
     deps: &ResolvedDagDependencies,
     src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
+    cancellation.checkpoint()?;
     let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
     let mut index_map: HashMap<ResolvedDeclKey, petgraph::graph::NodeIndex> = HashMap::new();
     let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
     let mut span_by_key: HashMap<ResolvedDeclKey, Span> = HashMap::new();
 
     for (name, span) in decl_spans {
+        cancellation.checkpoint()?;
         let key = local_resolved_decl_key(dag, name, *span, src)?;
         let idx = graph.add_node(key.clone());
         index_map.insert(key.clone(), idx);
@@ -450,6 +497,7 @@ fn runtime_eval_order_resolved(
     }
 
     for (name, dep_set) in &deps.runtime_deps {
+        cancellation.checkpoint()?;
         let Some(&dependent_idx) = index_map.get(name) else {
             continue;
         };
@@ -492,16 +540,19 @@ fn runtime_eval_order_resolved(
 /// For const declarations, the resolved constraint is also checked against the
 /// already-evaluated const value at compile time, raising `DomainViolation`
 /// if the value is out of bounds.
-pub fn resolve_domain_constraints(
+pub fn resolve_domain_constraints_with_cancellation(
     tir: &TIR,
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
+    cancellation.checkpoint()?;
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
+        cancellation: cancellation.clone(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
@@ -530,6 +581,7 @@ pub fn resolve_domain_constraints(
         .chain(tir.root().nodes.iter().map(|e| (&e.name, e.span, false)));
 
     for (name, decl_span, is_const) in decl_iter {
+        cancellation.checkpoint()?;
         let domain_bounds = tir
             .root()
             .resolved_decl_key_for_local(name)
@@ -753,16 +805,33 @@ fn domain_bound_value_error(
 /// Bound types and target compatibility are validated earlier by the compiler's
 /// field-domain checks. This pass focuses on the runtime-relevant pieces: bound
 /// evaluation, `min ≤ max`, and storage.
+#[cfg(test)]
 pub fn resolve_struct_field_constraints(
     tir: &TIR,
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
+    resolve_struct_field_constraints_with_cancellation(
+        tir,
+        const_values,
+        src,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+pub fn resolve_struct_field_constraints_with_cancellation(
+    tir: &TIR,
+    const_values: &RuntimeValueMap,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
+    cancellation.checkpoint()?;
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
+        cancellation: cancellation.clone(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
@@ -782,6 +851,7 @@ pub fn resolve_struct_field_constraints(
     > = std::collections::HashSet::new();
 
     for (id, dag) in &tir.dags {
+        cancellation.checkpoint()?;
         if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
             continue;
         }

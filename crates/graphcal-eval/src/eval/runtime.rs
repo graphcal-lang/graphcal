@@ -247,7 +247,9 @@ pub(super) fn run_eval_loop(
     builtin_consts: &HashMap<&str, f64>,
     builtin_fns: &HashMap<&str, BuiltinFunction>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalLoopResult, GraphcalError> {
+    cancellation.checkpoint()?;
     let empty_hir_locals = HirLocalValueMap::root();
 
     let mut values: RuntimeValueMap = HashMap::new();
@@ -267,6 +269,7 @@ pub(super) fn run_eval_loop(
     // Evaluate in topological order (params first, then nodes that depend on them).
     // Top-level declarations in a single file are always `Local`-form names.
     for name in &plan.topo_order {
+        cancellation.checkpoint()?;
         if values.contains_key(name) {
             continue;
         }
@@ -283,6 +286,7 @@ pub(super) fn run_eval_loop(
         }
 
         let ctx = EvalContext {
+            cancellation: cancellation.clone(),
             builtin_consts,
             builtin_fns,
             registry: &tir.registry,
@@ -323,7 +327,9 @@ pub(super) fn run_eval_loop(
                 }
                 values.insert(name.clone(), val);
             }
-            Err(error @ GraphcalError::InternalError { .. }) => return Err(error),
+            Err(error @ (GraphcalError::InternalError { .. } | GraphcalError::Cancelled(_))) => {
+                return Err(error);
+            }
             Err(error) => {
                 errors.insert(name.clone(), eval_failed_node_error(&error));
             }
@@ -369,13 +375,19 @@ pub(super) fn export_dynamic_unit_scales(
     plan: &crate::exec_plan::ExecPlan,
     values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
-) -> HashMap<
-    graphcal_compiler::syntax::dimension::UnitRef,
-    graphcal_compiler::registry::types::PositiveFiniteScale,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<
+    HashMap<
+        graphcal_compiler::syntax::dimension::UnitRef,
+        graphcal_compiler::registry::types::PositiveFiniteScale,
+    >,
+    graphcal_compiler::cancellation::Cancelled,
 > {
+    cancellation.checkpoint()?;
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let ctx = EvalContext {
+        cancellation: cancellation.clone(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
@@ -387,7 +399,9 @@ pub(super) fn export_dynamic_unit_scales(
         // Dimension checking rejects extern calls in unit scale expressions.
         host_fns: None,
     };
-    crate::eval_expr::resolve_exportable_dynamic_unit_scales(values, &ctx)
+    let scales = crate::eval_expr::resolve_exportable_dynamic_unit_scales(values, &ctx);
+    cancellation.checkpoint()?;
+    Ok(scales)
 }
 
 /// Evaluate using TIR + `ExecPlan` (new linear pipeline).
@@ -395,6 +409,7 @@ pub(super) fn export_dynamic_unit_scales(
 /// Runtime errors are contained per-node: if a node fails, independent nodes
 /// still evaluate, and dependent nodes receive a `DependencyFailed` error.
 /// Internal invariant violations abort evaluation as `X001`.
+#[cfg(test)]
 pub(super) fn evaluate_plan(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
@@ -402,7 +417,33 @@ pub(super) fn evaluate_plan(
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<EvalResult, GraphcalError> {
-    evaluate_plan_with_values(tir, plan, declared_types, src, host_fns).map(|(result, _)| result)
+    evaluate_plan_with_cancellation(
+        tir,
+        plan,
+        declared_types,
+        src,
+        host_fns,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+pub(super) fn evaluate_plan_with_cancellation(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    plan: &crate::exec_plan::ExecPlan,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
+    src: &NamedSource<Arc<String>>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<EvalResult, GraphcalError> {
+    evaluate_plan_with_values_and_cancellation(
+        tir,
+        plan,
+        declared_types,
+        src,
+        host_fns,
+        cancellation,
+    )
+    .map(|(result, _)| result)
 }
 
 /// Like [`evaluate_plan`], but also returns the raw runtime-value map so
@@ -412,21 +453,32 @@ pub(super) fn evaluate_plan(
     clippy::too_many_lines,
     reason = "linear evaluation pipeline is clearest as a single function"
 )]
-pub(super) fn evaluate_plan_with_values(
+pub(super) fn evaluate_plan_with_values_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(EvalResult, RuntimeValueMap), GraphcalError> {
+    cancellation.checkpoint()?;
     let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
 
-    let EvalLoopResult { values, errors } =
-        run_eval_loop(plan, tir, src, builtin_consts, builtin_fns, host_fns)?;
+    let EvalLoopResult { values, errors } = run_eval_loop(
+        plan,
+        tir,
+        src,
+        builtin_consts,
+        builtin_fns,
+        host_fns,
+        cancellation,
+    )?;
 
+    cancellation.checkpoint()?;
     let ctx = EvalContext {
+        cancellation: cancellation.clone(),
         builtin_consts,
         builtin_fns,
         registry: &tir.registry,
@@ -498,6 +550,7 @@ pub(super) fn evaluate_plan_with_values(
         .iter()
         .map(|e| (e.name.clone(), make_result(&e.name)))
         .collect();
+    cancellation.checkpoint()?;
 
     let all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)> = tir
         .root()
@@ -527,6 +580,7 @@ pub(super) fn evaluate_plan_with_values(
             Some((name.clone(), result, decl_type))
         })
         .collect();
+    cancellation.checkpoint()?;
     // A directly evaluated DAG is its own entry surface. Project evaluation
     // replaces this set with include-aware classification after assembling the
     // root result.
@@ -556,6 +610,7 @@ pub(super) fn evaluate_plan_with_values(
             (entry.name.clone(), assert_result, entry.span)
         })
         .collect();
+    cancellation.checkpoint()?;
 
     // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
     // plot that cannot be rendered is reported, never silently dropped
@@ -584,6 +639,7 @@ pub(super) fn evaluate_plan_with_values(
                 .ok()
         })
         .collect();
+    cancellation.checkpoint()?;
 
     // Evaluate figure declarations; a failing field reports the figure
     // instead of silently dropping the property (#845).
@@ -631,6 +687,7 @@ pub(super) fn evaluate_plan_with_values(
             }
         })
         .collect();
+    cancellation.checkpoint()?;
 
     // Re-key domain constraints from runtime identities back to the
     // source-order `ScopedName`s using the same key derivation the value
@@ -645,6 +702,7 @@ pub(super) fn evaluate_plan_with_values(
                 .map(|v| (name.clone(), v.clone()))
         })
         .collect();
+    cancellation.checkpoint()?;
     let assumes_map: HashMap<ScopedName, Vec<ScopedName>> = plan.assumes_map.clone();
 
     let result = EvalResult {

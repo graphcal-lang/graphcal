@@ -863,7 +863,22 @@ pub enum CompileError {
     Eval(#[from] graphcal_compiler::registry::error::GraphcalError),
 }
 
+impl From<graphcal_compiler::cancellation::Cancelled> for CompileError {
+    fn from(cancelled: graphcal_compiler::cancellation::Cancelled) -> Self {
+        Self::Eval(graphcal_compiler::registry::error::GraphcalError::from(
+            cancelled,
+        ))
+    }
+}
+
 impl CompileError {
+    /// Whether this outcome represents cooperative cancellation rather than a
+    /// Graphcal source error.
+    #[must_use]
+    pub const fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Eval(error) if error.is_cancelled())
+    }
+
     /// Return the `NamedSource` embedded in this error, if any.
     ///
     /// Forwards to the inner

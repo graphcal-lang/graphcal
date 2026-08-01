@@ -308,6 +308,7 @@ impl InferredType {
 /// six positional arguments.
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
+    cancellation: &'a crate::cancellation::CancellationToken,
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
@@ -331,6 +332,10 @@ impl<'a> DimCheckContext<'a> {
 }
 
 impl DimCheckContext<'_> {
+    fn checkpoint(&self) -> Result<(), GraphcalError> {
+        self.cancellation.checkpoint().map_err(GraphcalError::from)
+    }
+
     /// Look up the module-aware HIR expression for a local declaration.
     fn hir_expr_for_decl(
         &self,
@@ -899,6 +904,24 @@ pub fn check_dimensions_tir(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
+    check_dimensions_tir_with_cancellation(
+        tir,
+        src,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Check dimensions while observing cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] for invalid dimensions or cancellation.
+pub fn check_dimensions_tir_with_cancellation(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<(), GraphcalError> {
+    cancellation.checkpoint()?;
     detect_decl_cycles(tir, src)?;
     detect_cross_dag_cycles(tir, src)?;
     let builtin_fns = builtin_functions();
@@ -909,8 +932,9 @@ pub fn check_dimensions_tir(
     // their own registry — re-checking them here against the importer's
     // registry would fail on types renamed by include bindings.
     for (id, dag) in &tir.dags {
+        cancellation.checkpoint()?;
         if id == &tir.root_dag_id || id.parent().as_ref() == Some(&tir.root_dag_id) {
-            check_dimensions_dag(dag, tir, &tir.registry, builtin_fns, src)?;
+            check_dimensions_dag(dag, tir, &tir.registry, builtin_fns, src, cancellation)?;
         }
     }
 
@@ -919,8 +943,11 @@ pub fn check_dimensions_tir(
     // dep imports were already validated in their defining file's pipeline,
     // so the redundant pass is idempotent. (#450 Position 1+2.)
     let declared_types = tir.build_declared_types(src)?;
+    cancellation.checkpoint()?;
     check_no_constraints_on_generic_type_args(tir, src)?;
+    cancellation.checkpoint()?;
     check_field_domain_constraint_targets(tir, src)?;
+    cancellation.checkpoint()?;
     check_field_domain_constraint_dimensions(
         tir,
         &declared_types,
@@ -940,9 +967,12 @@ fn check_dimensions_dag(
     registry: &crate::registry::types::Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
     src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
+    cancellation.checkpoint()?;
     let declared_types = dag.build_declared_types(src)?;
     let ctx = DimCheckContext {
+        cancellation,
         declared_types: &declared_types,
         dag: Some(dag),
         tir,
@@ -954,16 +984,19 @@ fn check_dimensions_dag(
     // Declarations merged in from instantiated dependencies keep the
     // dependency file's spans, so each is checked against its own source (#868).
     for entry in &dag.consts {
+        ctx.checkpoint()?;
         let entry_ctx = ctx.for_body(entry.src.resolve(src));
         validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
         check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.nodes {
+        ctx.checkpoint()?;
         let entry_ctx = ctx.for_body(entry.src.resolve(src));
         validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
         check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
     }
     for entry in &dag.params {
+        ctx.checkpoint()?;
         let entry_ctx = ctx.for_body(entry.src.resolve(src));
         validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
         let Some(_value_expr) = entry.default_expr.as_ref() else {
@@ -973,6 +1006,7 @@ fn check_dimensions_dag(
     }
 
     for entry in &dag.asserts {
+        ctx.checkpoint()?;
         let body_src = entry.src.resolve(src);
         let entry_ctx = ctx.for_body(body_src);
         let body = entry_ctx.hir_assert_body(&entry.name, entry.span)?;
@@ -999,9 +1033,12 @@ fn check_dimensions_dag(
         }
     }
 
+    ctx.checkpoint()?;
     plot::check_plot_properties_dag(&ctx)?;
 
+    ctx.checkpoint()?;
     check_domain_constraint_targets_dag(dag, src)?;
+    ctx.checkpoint()?;
     check_domain_constraint_dimensions_dag(dag, &declared_types, tir, registry, builtin_fns, src)?;
 
     Ok(())

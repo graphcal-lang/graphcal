@@ -20,6 +20,17 @@ use graphcal_package::{
     validate_lock_against_manifests,
 };
 
+fn parse_operation_error(
+    error: graphcal_compiler::syntax::parser::ParseOperationError,
+) -> CompileError {
+    match error {
+        graphcal_compiler::syntax::parser::ParseOperationError::Cancelled(cancelled) => {
+            cancelled.into()
+        }
+        graphcal_compiler::syntax::parser::ParseOperationError::Parse(error) => error.into(),
+    }
+}
+
 /// Loader-resolved identities for one module path.
 ///
 /// A path may name a file-root DAG or an inline DAG inside a loaded file.
@@ -377,11 +388,33 @@ impl LoadedProject {
     /// Returns a [`CompileError`] if parsing fails or `name` is not a valid
     /// `.gcl` source path.
     pub fn from_source(source: &str, name: &str) -> Result<Self, CompileError> {
+        Self::from_source_with_cancellation(
+            source,
+            name,
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+    }
+
+    /// Build a single-file project while observing cooperative cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`CompileError`] for invalid source or cooperative
+    /// cancellation.
+    pub fn from_source_with_cancellation(
+        source: &str,
+        name: &str,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<Self, CompileError> {
+        cancellation.checkpoint()?;
         let source = Arc::new(source.to_string());
         let named_source = NamedSource::new(name, Arc::clone(&source));
-        let raw_ast =
-            graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
+        let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, name)
+            .parse_file_with_cancellation(cancellation)
+            .map_err(parse_operation_error)?;
+        cancellation.checkpoint()?;
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+        cancellation.checkpoint()?;
         let path = PathBuf::from(name);
         let dag_id = DagId::from_virtual_relative_path(&path).map_err(|e| {
             CompileError::Eval(
@@ -395,11 +428,13 @@ impl LoadedProject {
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
         let inline_dags = lift_inline_dags_by_stem(&ast, &path, &dag_id);
+        cancellation.checkpoint()?;
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.
         let plugins = wasm_plugin_paths(&ast)
             .map(|plugin| (plugin.clone(), Err(PluginFileError::NoProjectFilesystem)))
             .collect();
+        cancellation.checkpoint()?;
         let loaded_file = LoadedFile {
             path,
             dag_id: dag_id.clone(),
@@ -748,6 +783,27 @@ pub fn load_project<F: FileSystemReader>(
     project_root_override: Option<&Path>,
     fs: &F,
 ) -> Result<LoadedProject, CompileError> {
+    load_project_with_cancellation(
+        root_path,
+        project_root_override,
+        fs,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Load a project with cooperative cancellation between files and declarations.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for loading/parsing failures or cooperative
+/// cancellation.
+pub fn load_project_with_cancellation<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<LoadedProject, CompileError> {
+    cancellation.checkpoint()?;
     let root_canonical = fs
         .canonicalize(root_path)
         .map_err(|_| io_not_found(root_path))?;
@@ -778,6 +834,7 @@ pub fn load_project<F: FileSystemReader>(
                 &project_root,
                 package_manifest,
                 fs,
+                cancellation,
             );
         }
         DagPackageId::new(package_manifest.name.as_str())
@@ -796,9 +853,12 @@ pub fn load_project<F: FileSystemReader>(
         &mut stack,
         manifest.as_ref(),
         fs,
+        cancellation,
     )?;
 
+    cancellation.checkpoint()?;
     let root_dag_id = path_to_dag_id[&root_canonical].clone();
+    cancellation.checkpoint()?;
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
     let mut plugins = read_wasm_plugins(files.values().map(|file| &file.ast), &project_root, fs);
@@ -810,6 +870,7 @@ pub fn load_project<F: FileSystemReader>(
         let pins = load_plugin_pins(&project_root, fs)?;
         apply_plugin_pins(&mut plugins, &pins);
     }
+    cancellation.checkpoint()?;
     Ok(LoadedProject {
         files,
         root: root_dag_id,
@@ -872,8 +933,10 @@ fn load_locked_package_project<F: FileSystemReader>(
     project_root: &Path,
     root_manifest: PackageManifest,
     fs: &F,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
-    let context = PackageLoadContext::from_lockfile(project_root, root_manifest, fs)?;
+    cancellation.checkpoint()?;
+    let context = PackageLoadContext::from_lockfile(project_root, root_manifest, fs, cancellation)?;
     let root_package = context.graph.root().clone();
 
     let mut files: HashMap<DagId, LoadedFile> = HashMap::new();
@@ -891,9 +954,12 @@ fn load_locked_package_project<F: FileSystemReader>(
         &mut load_order,
         &mut loading,
         &mut stack,
+        cancellation,
     )?;
 
+    cancellation.checkpoint()?;
     let root_dag_id = path_to_dag_id[&(root_package.clone(), root_canonical.to_path_buf())].clone();
+    cancellation.checkpoint()?;
     // Wasm plugin files may only be declared by the root package (dependency
     // packages' declarations are rejected at verification); resolve and read
     // them against the root package's source root.
@@ -908,6 +974,7 @@ fn load_locked_package_project<F: FileSystemReader>(
         fs,
     );
     apply_plugin_pins(&mut plugins, &context.plugin_pins);
+    cancellation.checkpoint()?;
     Ok(LoadedProject {
         files,
         root: root_dag_id,
@@ -928,7 +995,9 @@ impl PackageLoadContext {
         project_root: &Path,
         root_manifest: PackageManifest,
         fs: &F,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, CompileError> {
+        cancellation.checkpoint()?;
         let lockfile_path = project_root.join("graphcal.lock");
         let lockfile_text = fs.read_to_string(&lockfile_path).map_err(|e| {
             CompileError::Eval(GraphcalError::ManifestError {
@@ -954,6 +1023,7 @@ impl PackageLoadContext {
         let mut roots = BTreeMap::new();
         let mut manifests = BTreeMap::new();
         for package in &lockfile.packages {
+            cancellation.checkpoint()?;
             let root = source_root(project_root, &cache_dir, package)?;
             verify_locked_source(&root, package)?;
             let manifest = read_package_manifest_from_path(&root)?;
@@ -1013,7 +1083,9 @@ fn load_package_file_dfs(
     load_order: &mut Vec<DagId>,
     loading: &mut HashSet<(PackageInstanceId, PathBuf)>,
     stack: &mut Vec<String>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
+    cancellation.checkpoint()?;
     let path_key = (package_id.clone(), canonical_path.to_path_buf());
     if path_to_dag_id.contains_key(&path_key) {
         return Ok(());
@@ -1034,8 +1106,11 @@ fn load_package_file_dfs(
     let source = Arc::new(source_str);
     let named_source = NamedSource::new(display_name.as_str(), Arc::clone(&source));
     let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display_name)
-        .parse_file()?;
+        .parse_file_with_cancellation(cancellation)
+        .map_err(parse_operation_error)?;
+    cancellation.checkpoint()?;
     let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+    cancellation.checkpoint()?;
     let dag_names = collect_inline_dag_names(&ast.declarations);
     let package_root = context.root_for(package_id)?;
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
@@ -1047,6 +1122,7 @@ fn load_package_file_dfs(
         HashMap::new();
 
     for decl in &ast.declarations {
+        cancellation.checkpoint()?;
         let path = match &decl.kind {
             DeclKind::Import(import_decl) => &import_decl.path,
             DeclKind::Include(include_decl) => &include_decl.path,
@@ -1073,11 +1149,13 @@ fn load_package_file_dfs(
             load_order,
             loading,
             stack,
+            cancellation,
         )?;
         resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.into_key());
     }
 
     for path in inline_dag_dependency_paths(&ast.declarations) {
+        cancellation.checkpoint()?;
         if path.segments.len() == 1 && dag_names.contains(path.segments[0].name.as_str()) {
             continue;
         }
@@ -1101,9 +1179,11 @@ fn load_package_file_dfs(
             load_order,
             loading,
             stack,
+            cancellation,
         )?;
     }
 
+    cancellation.checkpoint()?;
     let relative_path = canonical_path
         .strip_prefix(package_root)
         .unwrap_or(canonical_path);
@@ -1130,6 +1210,7 @@ fn load_package_file_dfs(
         file_stem,
     };
     let inline_dags = lift_package_inline_dags(&ast, &dag_id, &inline_context);
+    cancellation.checkpoint()?;
 
     load_order.push(dag_id.clone());
     loading.remove(&path_key);
@@ -1566,7 +1647,9 @@ fn load_file_dfs<F: FileSystemReader>(
     stack: &mut Vec<String>,
     manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
     fs: &F,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
+    cancellation.checkpoint()?;
     // Already fully loaded — skip.
     if path_to_dag_id.contains_key(canonical_path) {
         return Ok(());
@@ -1597,9 +1680,12 @@ fn load_file_dfs<F: FileSystemReader>(
     // arise. The CLI's miette renderer trims this for display anyway.
     let name = display_name.as_str();
     let named_source = NamedSource::new(name, Arc::clone(&source));
-    let raw_ast =
-        graphcal_compiler::syntax::parser::Parser::with_name(&source, name).parse_file()?;
+    let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, name)
+        .parse_file_with_cancellation(cancellation)
+        .map_err(parse_operation_error)?;
+    cancellation.checkpoint()?;
     let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
+    cancellation.checkpoint()?;
 
     // Collect inline DAG names (including nested DAGs) so dependency scanning
     // can skip single-segment includes/imports that reference same-file DAG
@@ -1610,6 +1696,7 @@ fn load_file_dfs<F: FileSystemReader>(
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
     let mut resolved_imports_paths: HashMap<ModulePathKey, PathBuf> = HashMap::new();
     for decl in &ast.declarations {
+        cancellation.checkpoint()?;
         let path = match &decl.kind {
             DeclKind::Import(import_decl) => &import_decl.path,
             DeclKind::Include(include_decl) => &include_decl.path,
@@ -1662,6 +1749,7 @@ fn load_file_dfs<F: FileSystemReader>(
             stack,
             manifest,
             fs,
+            cancellation,
         )?;
     }
 
@@ -1671,6 +1759,7 @@ fn load_file_dfs<F: FileSystemReader>(
     // body import remains in the source and the module resolver can produce
     // the span-precise diagnostic later.
     for path in inline_dag_dependency_paths(&ast.declarations) {
+        cancellation.checkpoint()?;
         if path.segments.len() == 1 && dag_names.contains(path.segments[0].name.as_str()) {
             continue;
         }
@@ -1708,9 +1797,11 @@ fn load_file_dfs<F: FileSystemReader>(
             stack,
             manifest,
             fs,
+            cancellation,
         )?;
     }
 
+    cancellation.checkpoint()?;
     // Compute the DagId from the path relative to the project root.
     let relative_path = canonical_path
         .strip_prefix(project_root)
@@ -1757,6 +1848,7 @@ fn load_file_dfs<F: FileSystemReader>(
         path_to_dag_id,
         fs,
     );
+    cancellation.checkpoint()?;
 
     // Post-order: add this file after its dependencies.
     load_order.push(dag_id.clone());

@@ -29,7 +29,6 @@ use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{PositiveFiniteScale, Registry, RegistryBuilder};
 
-use super::runtime::evaluate_plan;
 use super::types::{AssertResult, CompileError, DeclType, EvalResult, NodeError, Value};
 
 mod imports;
@@ -670,9 +669,28 @@ fn apply_overrides(
 pub fn compile_to_tir_from_project(
     project: &crate::loader::LoadedProject,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
+    compile_to_tir_from_project_with_cancellation(
+        project,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Compile a loaded project to TIR with cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for invalid source or cancellation.
+pub fn compile_to_tir_from_project_with_cancellation(
+    project: &crate::loader::LoadedProject,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     // Phase A default: dependency-file extern calls evaluate through the
     // built-in demo registry (see `crate::host_fns`).
-    compile_to_tir_from_project_with_host_fns(project, &crate::host_fns::demo_registry())
+    compile_to_tir_from_project_with_host_fns_and_cancellation(
+        project,
+        &crate::host_fns::demo_registry(),
+        cancellation,
+    )
 }
 
 /// Like [`compile_to_tir_from_project`], with an embedder-supplied host
@@ -690,7 +708,24 @@ pub fn compile_to_tir_from_project_with_host_fns(
     project: &crate::loader::LoadedProject,
     host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    pipeline::compile_to_tir_project_perfile(project, host_fns)
+    compile_to_tir_from_project_with_host_fns_and_cancellation(
+        project,
+        host_fns,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Compile with embedder host functions and cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for invalid source or cancellation.
+pub fn compile_to_tir_from_project_with_host_fns_and_cancellation(
+    project: &crate::loader::LoadedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
+    pipeline::compile_to_tir_project_perfile(project, host_fns, cancellation)
 }
 
 /// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
@@ -712,12 +747,35 @@ pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
 ) -> Result<EvalResult, CompileError> {
+    compile_and_eval_from_project_with_cancellation(
+        project,
+        overrides,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Compile and evaluate a project with cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for invalid source, evaluation failure, or
+/// cancellation.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API accepts HashMap without requiring specific hasher"
+)]
+pub fn compile_and_eval_from_project_with_cancellation(
+    project: &crate::loader::LoadedProject,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<EvalResult, CompileError> {
     // Phase A default: no real plugins exist yet, so the built-in demo
     // registry is the standard embedder injection (see `crate::host_fns`).
-    compile_and_eval_from_project_with_host_fns(
+    compile_and_eval_from_project_with_host_fns_and_cancellation(
         project,
         overrides,
         &crate::host_fns::demo_registry(),
+        cancellation,
     )
 }
 
@@ -741,7 +799,32 @@ pub fn compile_and_eval_from_project_with_host_fns(
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<EvalResult, CompileError> {
-    pipeline::evaluate_project_perfile(project, overrides, host_fns)
+    compile_and_eval_from_project_with_host_fns_and_cancellation(
+        project,
+        overrides,
+        host_fns,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Compile and evaluate with embedder host functions and cooperative
+/// cancellation.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for invalid source, evaluation failure, or
+/// cancellation.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API accepts HashMap without requiring specific hasher"
+)]
+pub fn compile_and_eval_from_project_with_host_fns_and_cancellation(
+    project: &crate::loader::LoadedProject,
+    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<EvalResult, CompileError> {
+    pipeline::evaluate_project_perfile(project, overrides, host_fns, cancellation)
 }
 
 /// Full pipeline for multi-file projects with parameter overrides.
