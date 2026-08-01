@@ -340,12 +340,12 @@ fn build_dep_decl_index(
 }
 
 /// Classified param bindings: each entry routes to one of the four binding
-/// maps based on what the dependency declares the binding name as. The
-/// `indexes` / `types` / `dims` maps use [`DepToImporter`] keying — the key
-/// is the dep-side name and the value is the importer-side name it binds to.
+/// maps based on what the dependency declares the binding name as. Index
+/// values retain a typed declared-or-structural target; `types` / `dims` use
+/// [`DepToImporter`] keying from the dep-side name to the importer-side name.
 struct ClassifiedBindings {
     params: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    indexes: DepToImporter<IndexName>,
+    indexes: IndexBindings,
     index_spans: HashMap<IndexName, Span>,
     types: DepToImporter<StructTypeName>,
     dims: DepToImporter<DimName>,
@@ -403,15 +403,11 @@ fn classify_param_bindings(
             continue;
         }
         if dep_index.indexes.contains_key(binding_name.as_str()) {
-            let rhs_name = lowering::extract_index_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
             let dep_name = IndexName::expect_valid(binding_name);
+            let target =
+                lowering::extract_index_binding_target(&binding.value, &dep_name, file_src)?;
             out.index_spans.insert(dep_name.clone(), binding.value.span);
-            out.indexes
-                .insert(dep_name, IndexName::expect_valid(rhs_name));
+            out.indexes.insert(dep_name, target);
             continue;
         }
         if let Some(kind) = dep_index.other.get(binding_name.as_str()) {

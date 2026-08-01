@@ -557,7 +557,11 @@ include_param_bindings
             { ",", include_param_binding }, [ "," ] ], ")";
 
 (* Binding names are semantically unique within one list. Their order has no
-   effect: each name selects exactly one value or type-level input port. *)
+   effect: each name selects exactly one value or type-level input port.
+   The dependency determines the RHS sort after parsing: value ports consume
+   expr; index ports consume index_expr (including Fin(nat_expr)); type and
+   dimension ports consume compatible names. The shared parser retains the RHS
+   as expr until that target namespace is known. *)
 include_param_binding
    = IDENT, ":", expr;
 

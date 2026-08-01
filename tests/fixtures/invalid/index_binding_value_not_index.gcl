@@ -1,0 +1,14 @@
+dag scale {
+    pub(bind) index Axis;
+    param xs: Dimensionless[Axis];
+    pub node ys: Dimensionless[Axis] = for i: Axis { @xs[i] * 2.0 };
+}
+
+include scale(
+    Axis: 3,
+    xs: table[Fin(3)] {
+        1.0;
+        2.0;
+        3.0;
+    }
+) as scaled;

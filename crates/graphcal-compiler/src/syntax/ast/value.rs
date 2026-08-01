@@ -12,6 +12,7 @@ use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
+use crate::syntax::token::ContextualKeyword;
 use crate::syntax::type_name::{ConstructorName, FieldName};
 
 /// Expression-level sugar — only legal in [`Raw`].
@@ -563,6 +564,103 @@ impl<P: Phase> Expr<P> {
             span,
             _phase: PhantomData,
         }
+    }
+
+    /// Reclassify an include-binding RHS that has index-argument syntax.
+    ///
+    /// Include bindings are parsed uniformly as expressions because the target
+    /// namespace is known only after the dependency is loaded. This adapter is
+    /// the syntax boundary where a bare path or contextual `Fin(nat_expr)` call
+    /// regains its typed [`IndexExpr`] shape before semantic binding
+    /// classification.
+    #[must_use]
+    pub fn index_binding_arg(&self) -> Option<IndexExpr> {
+        match &self.kind {
+            ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => {
+                Some(IndexExpr::Name(path.clone().into_spanned_name_path()))
+            }
+            ExprKind::FnCall {
+                callee,
+                generic_args,
+                args,
+            } => {
+                let constructor = callee.as_bare()?;
+                if !ContextualKeyword::Fin.matches(constructor.name.as_str())
+                    || !generic_args.is_empty()
+                {
+                    return None;
+                }
+                let [cardinality] = args.as_slice() else {
+                    return None;
+                };
+                Some(IndexExpr::Finite {
+                    cardinality: nat_expr_from_binding_expr(cardinality)?,
+                    span: self.span,
+                })
+            }
+            ExprKind::ConstructorCall {
+                callee,
+                generic_args,
+                fields,
+            } if generic_args.is_empty() && fields.is_empty() => {
+                let constructor = callee.as_bare()?;
+                (!ContextualKeyword::Fin.matches(constructor.name.as_str()))
+                    .then(|| IndexExpr::Name(callee.clone().into_spanned_name_path()))
+            }
+            _ => None,
+        }
+    }
+}
+
+fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
+    match &expr.kind {
+        ExprKind::Integer(value) => u64::try_from(*value)
+            .ok()
+            .map(|value| NatExpr::Literal(value, expr.span)),
+        ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => {
+            path.as_bare().cloned().map(NatExpr::Var)
+        }
+        ExprKind::BinOp { op, lhs, rhs } => {
+            let lhs = Box::new(nat_expr_from_binding_expr(lhs)?);
+            let rhs = Box::new(nat_expr_from_binding_expr(rhs)?);
+            match op {
+                BinOp::Add => Some(NatExpr::Add(lhs, rhs, expr.span)),
+                BinOp::Mul => Some(NatExpr::Mul(lhs, rhs, expr.span)),
+                BinOp::Sub
+                | BinOp::Div
+                | BinOp::Mod
+                | BinOp::Pow(_)
+                | BinOp::Eq
+                | BinOp::Ne
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::Le
+                | BinOp::Ge
+                | BinOp::And
+                | BinOp::Or => None,
+            }
+        }
+        ExprKind::Number(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::GraphRef(_)
+        | ExprKind::UnaryOp { .. }
+        | ExprKind::FnCall { .. }
+        | ExprKind::If { .. }
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::Convert { .. }
+        | ExprKind::DisplayTimezone { .. }
+        | ExprKind::FieldAccess { .. }
+        | ExprKind::ConstructorCall { .. }
+        | ExprKind::MapLiteral { .. }
+        | ExprKind::ForComp { .. }
+        | ExprKind::IndexAccess { .. }
+        | ExprKind::Scan { .. }
+        | ExprKind::Unfold { .. }
+        | ExprKind::KeyForm { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::InlineDagRef { .. }
+        | ExprKind::Sugar(_) => None,
     }
 }
 

@@ -321,22 +321,36 @@ pub enum ContextualKeyword {
     NearestKey,
 }
 
+impl ContextualKeyword {
+    /// Canonical source spelling recognized by the lexer.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scan => "scan",
+            Self::Unfold => "unfold",
+            Self::Range => "range",
+            Self::Linspace => "linspace",
+            Self::Step => "step",
+            Self::Points => "points",
+            Self::Fin => "Fin",
+            Self::Key => "key",
+            Self::FinKey => "fin_key",
+            Self::FloorKey => "floor_key",
+            Self::CeilKey => "ceil_key",
+            Self::NearestKey => "nearest_key",
+        }
+    }
+
+    /// Classify an AST identifier spelling at a syntax boundary.
+    #[must_use]
+    pub fn matches(self, spelling: &str) -> bool {
+        spelling == self.as_str()
+    }
+}
+
 impl std::fmt::Display for ContextualKeyword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Scan => write!(f, "scan"),
-            Self::Unfold => write!(f, "unfold"),
-            Self::Range => write!(f, "range"),
-            Self::Linspace => write!(f, "linspace"),
-            Self::Step => write!(f, "step"),
-            Self::Points => write!(f, "points"),
-            Self::Fin => write!(f, "Fin"),
-            Self::Key => write!(f, "key"),
-            Self::FinKey => write!(f, "fin_key"),
-            Self::FloorKey => write!(f, "floor_key"),
-            Self::CeilKey => write!(f, "ceil_key"),
-            Self::NearestKey => write!(f, "nearest_key"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

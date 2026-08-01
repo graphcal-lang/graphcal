@@ -230,6 +230,12 @@ impl NatPolyForm {
         self.terms.get(&Monomial::constant()).copied().unwrap_or(0)
     }
 
+    /// Return the concrete value when this normalized form has no variables.
+    #[must_use]
+    pub fn constant_value(&self) -> Option<u64> {
+        self.is_constant().then(|| self.constant())
+    }
+
     /// Returns `true` if this form has no variables (is a constant).
     #[must_use]
     pub(crate) fn is_constant(&self) -> bool {

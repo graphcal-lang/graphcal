@@ -1558,7 +1558,7 @@ impl UnfrozenIR {
     pub fn check_include_reconciles_overrides(
         &self,
         bindings: &HashMap<DeclName, Expr>,
-        index_bindings: &HashMap<IndexName, IndexName>,
+        index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         importer_src: &NamedSource<Arc<String>>,
         include_span: Span,
@@ -1614,7 +1614,7 @@ impl UnfrozenIR {
         prefix: &str,
         bindings: &HashMap<DeclName, Expr>,
         dep_names: &HashSet<DeclName>,
-        index_bindings: &HashMap<IndexName, IndexName>,
+        index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         dim_bindings: &HashMap<DimName, DimName>,
         import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::desugared_ast::Attribute>>,
@@ -1673,10 +1673,10 @@ impl UnfrozenIR {
 
         // Merge consts
         for mut entry in dep.consts {
-            substitute_index_names(&mut entry.expr, index_bindings);
+            substitute_indexes(&mut entry.expr, index_bindings);
             substitute_type_names_in_expr(&mut entry.expr, type_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
-            substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
+            substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
@@ -1705,8 +1705,8 @@ impl UnfrozenIR {
                     entry.default_expr = Some(binding_expr.clone());
                     importer_owner.clone()
                 } else if let Some(ref mut expr) = entry.default_expr {
-                    // Keep default, but substitute index names and prefix internal refs
-                    substitute_index_names(expr, index_bindings);
+                    // Keep default, but substitute indexes and prefix internal refs.
+                    substitute_indexes(expr, index_bindings);
                     substitute_type_names_in_expr(expr, type_bindings);
                     prefix_expr_refs(expr, prefix, dep_names);
                     merge_resolution_owner(entry.default_resolution_owner)
@@ -1714,7 +1714,7 @@ impl UnfrozenIR {
                     // Required param without binding — stays None, caught later in exec_plan
                     merge_resolution_owner(entry.default_resolution_owner)
                 };
-            substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
+            substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             self.params.push(UnfrozenParamEntry {
@@ -1731,10 +1731,10 @@ impl UnfrozenIR {
 
         // Merge nodes
         for mut entry in dep.nodes {
-            substitute_index_names(&mut entry.expr, index_bindings);
+            substitute_indexes(&mut entry.expr, index_bindings);
             substitute_type_names_in_expr(&mut entry.expr, type_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names);
-            substitute_type_expr_index_names(&mut entry.type_ann, index_bindings);
+            substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.with_prefix(prefix);
@@ -1754,7 +1754,7 @@ impl UnfrozenIR {
         for mut entry in dep.asserts {
             match &mut entry.body {
                 crate::desugar::desugared_ast::AssertBody::Expr(e) => {
-                    substitute_index_names(e, index_bindings);
+                    substitute_indexes(e, index_bindings);
                     substitute_type_names_in_expr(e, type_bindings);
                     prefix_expr_refs(e, prefix, dep_names);
                 }
@@ -1764,13 +1764,13 @@ impl UnfrozenIR {
                     tolerance,
                     ..
                 } => {
-                    substitute_index_names(actual, index_bindings);
+                    substitute_indexes(actual, index_bindings);
                     substitute_type_names_in_expr(actual, type_bindings);
                     prefix_expr_refs(actual, prefix, dep_names);
-                    substitute_index_names(expected, index_bindings);
+                    substitute_indexes(expected, index_bindings);
                     substitute_type_names_in_expr(expected, type_bindings);
                     prefix_expr_refs(expected, prefix, dep_names);
-                    substitute_index_names(tolerance, index_bindings);
+                    substitute_indexes(tolerance, index_bindings);
                     substitute_type_names_in_expr(tolerance, type_bindings);
                     prefix_expr_refs(tolerance, prefix, dep_names);
                 }
@@ -1797,17 +1797,17 @@ impl UnfrozenIR {
                 continue;
             };
             for encoding in &mut entry.decl.encodings {
-                substitute_index_names(&mut encoding.value, index_bindings);
+                substitute_indexes(&mut encoding.value, index_bindings);
                 substitute_type_names_in_expr(&mut encoding.value, type_bindings);
                 prefix_expr_refs(&mut encoding.value, prefix, dep_names);
             }
             for prop in &mut entry.decl.mark.properties {
-                substitute_index_names(&mut prop.value, index_bindings);
+                substitute_indexes(&mut prop.value, index_bindings);
                 substitute_type_names_in_expr(&mut prop.value, type_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
             for prop in &mut entry.decl.properties {
-                substitute_index_names(&mut prop.value, index_bindings);
+                substitute_indexes(&mut prop.value, index_bindings);
                 substitute_type_names_in_expr(&mut prop.value, type_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
@@ -1925,7 +1925,7 @@ impl UnfrozenIR {
 /// point at the importer's include statement — the error blames the
 /// importer for omitting the required re-binding.
 struct OverrideReconciliationChecker<'a> {
-    index_bindings: &'a HashMap<IndexName, IndexName>,
+    index_bindings: &'a HashMap<IndexName, types::IndexBindingTarget>,
     type_bindings: &'a HashMap<StructTypeName, StructTypeName>,
     orphan_decl: &'a str,
     importer_src: &'a NamedSource<Arc<String>>,
@@ -2279,42 +2279,79 @@ fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<DeclName>
     let _ = prefixer.visit_expr_mut(expr);
 }
 
-/// Visitor that rewrites index names in expressions according to a binding map.
+/// Visitor that rewrites index references in expressions according to a
+/// resolved include binding map.
 ///
-/// Overrides the per-variant handler methods for nodes that carry index name
-/// fields (`VariantLiteral`, `ForComp`, `Unfold`, `IndexAccess`,
-/// `MapLiteral`, `TableLiteral`, `Match`) to rewrite those names before
-/// recursing into child expressions.
+/// Index positions such as `for i: Axis` can become either another declared
+/// axis or a structural `Fin(N)` axis. Label-bearing positions can only be
+/// renamed to another declared axis; a required index has no labels of its own,
+/// so a valid generic body cannot require such a rewrite for a finite target.
 struct IndexSubstituter<'a> {
-    bindings: &'a HashMap<IndexName, IndexName>,
+    bindings: &'a HashMap<IndexName, types::IndexBindingTarget>,
 }
 
 impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
     type Error = std::convert::Infallible;
 
+    fn visit_expr_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        if let ExprKind::KeyForm { axis, .. } = &mut expr.kind {
+            substitute_index_expr(axis, self.bindings);
+        }
+        self.dispatch_mut(expr)
+    }
+
+    fn visit_generic_args_mut(
+        &mut self,
+        args: &mut [crate::desugar::desugared_ast::GenericArg],
+    ) -> Result<(), Self::Error> {
+        for arg in args {
+            substitute_generic_arg_indexes(arg, self.bindings);
+            if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
+                self.visit_type_expr_mut(type_expr)?;
+            }
+        }
+        Ok(())
+    }
+
     fn visit_unresolved_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         // A two-segment path whose head names a rebound index is a variant
-        // literal of that index (`Phase.Burn`); rewrite the head segment so
-        // the literal points at the importer's index.
+        // literal of that index (`Phase.Burn`). Only a declared target can
+        // preserve such a label-bearing reference.
         if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) =
             &mut expr.kind
             && let [head, _variant] = path.segments.as_mut_slice()
-            && let Some(new) = self.bindings.get(head.name.as_str())
-            && let Ok(new_atom) = NameAtom::parse(new.as_str())
+            && let Some(new) = self
+                .bindings
+                .get(head.name.as_str())
+                .and_then(types::IndexBindingTarget::declared_name)
         {
-            head.name = new_atom;
+            head.name = new.atom().clone();
         }
         Ok(())
     }
 
     fn visit_for_comp_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
+        use crate::desugar::desugared_ast::{ForBindingIndex, NatExpr};
+
         if let ExprKind::ForComp { bindings, body } = &mut expr.kind {
-            for b in bindings {
-                if let crate::desugar::desugared_ast::ForBindingIndex::Named(ref mut spanned_idx) =
-                    b.index
-                    && let Some(new) = self.bindings.get(spanned_idx.value.leaf().as_str())
-                {
-                    spanned_idx.value = new.clone().into();
+            for binding in bindings {
+                let replacement = match &binding.index {
+                    ForBindingIndex::Named(index) => self
+                        .bindings
+                        .get(index.value.leaf().as_str())
+                        .map(|target| match target {
+                            types::IndexBindingTarget::Declared(name) => ForBindingIndex::Named(
+                                Spanned::new(name.clone().into(), index.span),
+                            ),
+                            types::IndexBindingTarget::Finite(finite) => ForBindingIndex::Finite {
+                                cardinality: NatExpr::Literal(finite.size_u64(), index.span),
+                                span: index.span,
+                            },
+                        }),
+                    ForBindingIndex::Finite { .. } => None,
+                };
+                if let Some(replacement) = replacement {
+                    binding.index = replacement;
                 }
             }
             self.visit_expr_mut(body)?;
@@ -2327,7 +2364,11 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
             axis, init, body, ..
         } = &mut expr.kind
         {
-            if let Some(new) = self.bindings.get(axis.value.leaf().as_str()) {
+            if let Some(new) = self
+                .bindings
+                .get(axis.value.leaf().as_str())
+                .and_then(types::IndexBindingTarget::declared_name)
+            {
                 axis.value = new.clone().into();
             }
             self.visit_expr_mut(init)?;
@@ -2342,7 +2383,11 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
             for arg in args.iter_mut() {
                 match arg {
                     IndexArg::Variant { index, .. } => {
-                        if let Some(new) = self.bindings.get(index.value.leaf().as_str()) {
+                        if let Some(new) = self
+                            .bindings
+                            .get(index.value.leaf().as_str())
+                            .and_then(types::IndexBindingTarget::declared_name)
+                        {
                             index.value = new.clone().into();
                         }
                     }
@@ -2362,7 +2407,10 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
             for entry in entries.iter_mut() {
                 for key in &mut entry.keys {
                     if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
-                        && let Some(new) = self.bindings.get(index_name.leaf().as_str())
+                        && let Some(new) = self
+                            .bindings
+                            .get(index_name.leaf().as_str())
+                            .and_then(types::IndexBindingTarget::declared_name)
                     {
                         key.index.value =
                             crate::syntax::ast::MapEntryIndex::Named(new.clone().into());
@@ -2380,7 +2428,11 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
             for arm in arms {
                 match &mut arm.pattern {
                     crate::desugar::desugared_ast::MatchPattern::IndexLabel { index, .. } => {
-                        if let Some(new) = self.bindings.get(index.value.leaf().as_str()) {
+                        if let Some(new) = self
+                            .bindings
+                            .get(index.value.leaf().as_str())
+                            .and_then(types::IndexBindingTarget::declared_name)
+                        {
                             index.value = new.clone().into();
                         }
                     }
@@ -2388,10 +2440,12 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
                     // index is an index-label pattern; rewrite the head.
                     crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
                         if let [head, _variant] = path.segments.as_mut_slice()
-                            && let Some(new) = self.bindings.get(head.name.as_str())
-                            && let Ok(new_atom) = NameAtom::parse(new.as_str())
+                            && let Some(new) = self
+                                .bindings
+                                .get(head.name.as_str())
+                                .and_then(types::IndexBindingTarget::declared_name)
                         {
-                            head.name = new_atom;
+                            head.name = new.atom().clone();
                         }
                     }
                     crate::desugar::desugared_ast::MatchPattern::Constructor { .. } => {}
@@ -2411,7 +2465,7 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
 ///
 /// This must be called **before** `prefix_expr_refs` so that index names are
 /// correct before ref-prefixing adds the `prefix.` qualifier.
-fn substitute_index_names(expr: &mut Expr, bindings: &HashMap<IndexName, IndexName>) {
+fn substitute_indexes(expr: &mut Expr, bindings: &HashMap<IndexName, types::IndexBindingTarget>) {
     if bindings.is_empty() {
         return;
     }
@@ -2463,21 +2517,72 @@ fn rewrite_ambiguous_generic_arg_names<K>(
     }
 }
 
-fn substitute_generic_arg_index_names(
-    arg: &mut crate::desugar::desugared_ast::GenericArg,
-    bindings: &HashMap<IndexName, IndexName>,
+fn rewrite_ambiguous_index_arg_declared_names(
+    arg: &mut crate::desugar::desugared_ast::AmbiguousGenericArg,
+    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
 ) {
     match arg {
-        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
-            substitute_type_expr_index_names(type_expr, bindings);
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
+            if let Some(name) = bindings
+                .get(ident.name.as_str())
+                .and_then(types::IndexBindingTarget::declared_name)
+            {
+                ident.name = name.atom().clone();
+            }
         }
-        crate::desugar::desugared_ast::GenericArg::Index(index) => {
-            substitute_index_expr_names(index, bindings);
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            rewrite_ambiguous_index_arg_declared_names(lhs, bindings);
+            rewrite_ambiguous_index_arg_declared_names(rhs, bindings);
         }
-        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
-            rewrite_ambiguous_generic_arg_names(ambiguous, bindings);
+    }
+}
+
+fn index_expr_for_binding_target(
+    target: &types::IndexBindingTarget,
+    span: Span,
+) -> crate::desugar::desugared_ast::IndexExpr {
+    use crate::desugar::desugared_ast::{IndexExpr, NatExpr};
+
+    match target {
+        types::IndexBindingTarget::Declared(name) => IndexExpr::Name(Spanned::new(
+            crate::syntax::names::NamePath::expect_local(name.as_str()),
+            span,
+        )),
+        types::IndexBindingTarget::Finite(finite) => IndexExpr::Finite {
+            cardinality: NatExpr::Literal(finite.size_u64(), span),
+            span,
+        },
+    }
+}
+
+fn substitute_generic_arg_indexes(
+    arg: &mut crate::desugar::desugared_ast::GenericArg,
+    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
+) {
+    use crate::desugar::desugared_ast::{AmbiguousGenericArg, GenericArg};
+
+    let finite_replacement = match arg {
+        GenericArg::Ambiguous(AmbiguousGenericArg::Name(ident)) => bindings
+            .get(ident.name.as_str())
+            .filter(|target| matches!(target, types::IndexBindingTarget::Finite(_)))
+            .map(|target| GenericArg::Index(index_expr_for_binding_target(target, ident.span))),
+        GenericArg::Type(_)
+        | GenericArg::Index(_)
+        | GenericArg::Nat(_)
+        | GenericArg::Ambiguous(AmbiguousGenericArg::Mul(..)) => None,
+    };
+    if let Some(replacement) = finite_replacement {
+        *arg = replacement;
+        return;
+    }
+
+    match arg {
+        GenericArg::Type(type_expr) => substitute_type_expr_indexes(type_expr, bindings),
+        GenericArg::Index(index) => substitute_index_expr(index, bindings),
+        GenericArg::Ambiguous(ambiguous) => {
+            rewrite_ambiguous_index_arg_declared_names(ambiguous, bindings);
         }
-        crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+        GenericArg::Nat(_) => {}
     }
 }
 
@@ -2499,31 +2604,37 @@ fn substitute_generic_arg_nominal_names<K>(
     }
 }
 
-fn substitute_index_expr_names(
+fn substitute_index_expr(
     index: &mut crate::desugar::desugared_ast::IndexExpr,
-    bindings: &HashMap<IndexName, IndexName>,
+    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
 ) {
-    if let crate::desugar::desugared_ast::IndexExpr::Name(path) = index
-        && let Some(atom) = path.value.as_bare()
-        && let Some(new_name) = bindings.get(atom.as_str())
-    {
-        path.value = crate::syntax::names::NamePath::expect_local(new_name.as_str());
+    let replacement = match index {
+        crate::desugar::desugared_ast::IndexExpr::Name(path) => path
+            .value
+            .as_bare()
+            .and_then(|atom| bindings.get(atom.as_str()))
+            .map(|target| index_expr_for_binding_target(target, path.span)),
+        crate::desugar::desugared_ast::IndexExpr::Finite { .. }
+        | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => None,
+    };
+    if let Some(replacement) = replacement {
+        *index = replacement;
     }
 }
 
-/// Rewrite index names within a type expression according to a binding map.
+/// Rewrite index arguments within a type expression according to a binding map.
 ///
 /// `TypeExpr` is not part of the `Expr` tree, so it needs a separate
-/// substitution pass. This rewrites index identifiers in `Indexed` types
-/// (e.g., `Dimensionless[Phase]` → `Dimensionless[MyPhase]`) and recurses
-/// into `TypeApplication` arguments.
+/// substitution pass. This rewrites index identifiers in `Indexed` types to a
+/// declared target or structural `Fin(N)` target and recurses into
+/// `TypeApplication` arguments.
 #[expect(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn substitute_type_expr_index_names(
+pub fn substitute_type_expr_indexes(
     type_expr: &mut TypeExpr,
-    bindings: &HashMap<IndexName, IndexName>,
+    bindings: &HashMap<IndexName, types::IndexBindingTarget>,
 ) {
     use crate::desugar::desugared_ast::TypeExprKind;
 
@@ -2533,20 +2644,20 @@ pub fn substitute_type_expr_index_names(
     match &mut type_expr.kind {
         TypeExprKind::Indexed { base, indexes } => {
             for index in indexes {
-                substitute_index_expr_names(index, bindings);
+                substitute_index_expr(index, bindings);
             }
-            substitute_type_expr_index_names(base, bindings);
+            substitute_type_expr_indexes(base, bindings);
         }
         TypeExprKind::TypeApplication { generic_args, .. }
         | TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
-                substitute_generic_arg_index_names(arg, bindings);
+                substitute_generic_arg_indexes(arg, bindings);
             }
         }
         TypeExprKind::DatetimeApplication { type_args } => {
             for arg in type_args {
-                substitute_type_expr_index_names(arg, bindings);
+                substitute_type_expr_indexes(arg, bindings);
             }
         }
         TypeExprKind::Dimensionless

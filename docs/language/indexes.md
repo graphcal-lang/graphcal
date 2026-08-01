@@ -759,10 +759,10 @@ param m: Dimensionless[Fin(2), Fin(3)] =
 ```
 
 Write `Fin(N)` in every Index position, including indexed types, `for`
-bindings, tables, and Index-sorted generic arguments. Obsolete forms such as
-`Dimensionless[3]`, `for i: range(3)`, and `table[3]` are rejected with a
-`Fin(3)` suggestion. `Fin(0)` and cardinalities above the practical limit are
-invalid.
+bindings, tables, Index-sorted generic arguments, and bindings for required
+discrete index ports. Obsolete forms such as `Dimensionless[3]`,
+`for i: range(3)`, and `table[3]` are rejected with a `Fin(3)` suggestion.
+`Fin(0)` and cardinalities above the practical limit are invalid.
 
 ### Generic Sorts Stay Distinct
 
@@ -829,13 +829,16 @@ are **required indexes** — they must be bound via a
 [parameterized include](multi-file.md#index-bindings) when the DAG is used as a
 library.
 
-### Required Named Index
+### Required Discrete Index
 
 ```
-pub(bind) index Phase;
+pub(bind) index Axis;
 ```
 
-This declares a named index `Phase` with no variants. A file importing this library must bind it to a concrete named index.
+This declares an unconstrained discrete index port `Axis`. A caller can bind it
+to a concrete named index, forward another compatible required discrete index,
+or supply a structural axis such as `Fin(3)` directly. Coordinate axes use the
+dimension-constrained form below instead.
 
 Required indexes form the library's bindable interface and must carry
 `pub(bind)` (see [Visibility, Bindability, and Input Ports](multi-file.md#visibility-bindability-and-input-ports)).
