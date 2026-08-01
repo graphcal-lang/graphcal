@@ -231,8 +231,8 @@ pub enum InferredType {
     Complex(Dimension),
     /// A quantity produced by iterating a declared coordinate index.
     ///
-    /// Coordinate labels participate in quantity arithmetic while retaining
-    /// their originating index identity for type-safe indexed access.
+    /// TODO(#1073): no longer constructed — coordinate loop variables are
+    /// `Key`-typed and expose their quantity through `coord()`; remove.
     CoordinateIndexLabel {
         index: InferredIndex,
         dimension: Dimension,
@@ -244,15 +244,15 @@ pub enum InferredType {
     /// A value of type `Fin(N)` satisfies `0 <= value < N`. This enables compile-time
     /// bounds checking: `v[i]` is valid when `i : Fin(N)` and `v : T[M]` with `N <= M`.
     ///
-    /// `Fin(N)` is not a user-declarable type — it only arises as the type of loop
-    /// variables in `for i: Fin(N) { ... }`.
+    /// TODO(#1073): no longer constructed — `Fin` loop variables are
+    /// `Key<Fin(N)>`-typed and expose integers through `to_int()`; remove.
     Fin(NatPolyForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
     /// A named-index case bound by a `for` comprehension.
     ///
-    /// It can drive index access and exhaustive label matching but is not a
-    /// Graphcal value type.
+    /// TODO(#1073): no longer constructed — loop variables are `Key`-typed;
+    /// remove together with `CoordinateIndexLabel` and `Fin`.
     NamedIndexCase(InferredIndex),
     /// An index-key value of type `Key<I>`: a first-class element key of
     /// axis `I`.
