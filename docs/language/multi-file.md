@@ -846,8 +846,8 @@ pub include container(Element: Inner) as c;
 ## Parameterized Includes
 
 A bound `param` or `index` in an `include` instantiates the dependency
-with a specific value. This is how reusable "library" DAGs are
-specialized at the call site.
+with a specific value or type-level argument. This is how reusable "library"
+DAGs are specialized at the call site.
 
 ### Param bindings
 
@@ -900,9 +900,9 @@ If a required param is not provided, the compiler emits error `O003`.
 
 ### Index bindings
 
-Bind a [required index](indexes.md#required-indexes) by name; the
-right-hand side must be the **name of a compatible index**, not an
-expression:
+Bind a [required index](indexes.md#required-indexes) with a compatible Index
+argument. The right-hand side can name an index in the including DAG or use a
+structural `Fin(N)` axis directly:
 
 ```graphcal
 // lib/budget.gcl
@@ -924,11 +924,32 @@ include lib.budget(
 node result: Dimensionless = @total;  // 35.0
 ```
 
+A positional-axis DAG needs no named alias for its cardinality:
+
+```graphcal
+dag scale {
+    pub(bind) index Axis;
+    param xs: Dimensionless[Axis];
+    pub node ys: Dimensionless[Axis] = for i: Axis { @xs[i] * 2.0 };
+}
+
+include scale(
+    Axis: Fin(3),
+    xs: table[Fin(3)] { 1.0; 2.0; 3.0; },
+) as scaled;
+```
+
+The `Fin` cardinality uses normal type-level Nat addition and multiplication,
+must normalize to a concrete positive value at this call site, and remains
+subject to the practical index-cardinality limit.
+
 #### Kind matching
 
-Named indexes can only be bound to named indexes, and coordinate indexes can
-only be bound to coordinate indexes. Binding one category to the other is a
-compile error.
+An unconstrained required index (`pub(bind) index Axis;`) is a discrete port
+and accepts either a named index or `Fin(N)`. A concrete bindable named index
+remains nominal and can only be rebound to another named index. Coordinate
+indexes can only be bound to coordinate indexes; binding a discrete axis to a
+coordinate port (or vice versa) is a compile error.
 
 #### Dimension matching for coordinate indexes
 
@@ -965,7 +986,7 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 
 ### Validation
 
-- A binding list is a unique name-to-expression mapping. Binding order has no
+- A binding list is a unique name-to-argument mapping. Binding order has no
   effect, and repeating a value, index, type, or dimension target is a compile
   error rather than a last-binding-wins override.
 - A value binding name must identify a `param` input port in the included
@@ -976,12 +997,13 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
   required input ports of the entry DAG must be provided by `--set` or
   `--input`.
 - All required indexes must be provided by bindings.
-- Index binding values must be the name of a compatible index in the
-  importer's scope. An outer generic DAG may forward a required index; the
-  include chain must eventually supply a concrete index.
-- Named indexes can only be bound to named indexes; coordinate indexes can
-  only be bound to coordinate indexes. Coordinate-index dimensions must match
-  after applying simultaneous dimension bindings.
+- Index binding values must be a compatible index name in the importer's scope
+  or a concrete structural `Fin(N)` argument. An outer generic DAG may forward
+  a required index; the include chain must eventually supply a concrete index.
+- Unconstrained required indexes accept named and structural finite axes.
+  Concrete named indexes remain named-only, while coordinate indexes remain
+  coordinate-only. Coordinate-index dimensions must match after applying
+  simultaneous dimension bindings.
 - Coordinate-index binding dimensions are checked after simultaneous
   type-level substitutions have been applied.
 

@@ -1501,16 +1501,18 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("binding target `{name}` is an index, not a param")]
+    #[error("invalid type-level binding value for `{name}`")]
     #[diagnostic(
         code(graphcal::M016),
-        help("index bindings must use another index name as the value, e.g., `{name}: MyIndex`")
+        help(
+            "index bindings accept a compatible index name or structural axis such as `{name}: Fin(3)`; type and dimension bindings accept a compatible name"
+        )
     )]
-    BindingTargetsIndex {
+    InvalidTypeLevelBindingValue {
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("targets an index, not a param")]
+        #[label("expected a compatible type-level binding argument")]
         span: SourceSpan,
     },
 
@@ -1518,7 +1520,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M019),
         help(
-            "the right-hand side of an index binding must name a compatible index visible in the including DAG"
+            "the right-hand side must name a compatible index visible in the including DAG or use a structural Fin(N) axis"
         )
     )]
     IndexBindingNotAnIndex {
@@ -1534,7 +1536,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M018),
         help(
-            "named indexes can only be bound to named indexes; coordinate indexes can only be bound to coordinate indexes"
+            "unconstrained required indexes accept named or Fin(N) axes; concrete named indexes remain named-only, and coordinate indexes remain coordinate-only"
         )
     )]
     IndexKindMismatch {
@@ -2175,7 +2177,7 @@ impl GraphcalError {
             | Self::PackageNameMismatch { src, .. }
             | Self::StdlibNotImplemented { src, .. }
             | Self::CrossFileImportInVirtualPackage { src, .. }
-            | Self::BindingTargetsIndex { src, .. }
+            | Self::InvalidTypeLevelBindingValue { src, .. }
             | Self::IndexBindingNotAnIndex { src, .. }
             | Self::IndexKindMismatch { src, .. }
             | Self::IndexBindingDimensionMismatch { src, .. }

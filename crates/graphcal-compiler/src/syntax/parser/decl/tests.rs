@@ -1019,6 +1019,22 @@ fn parse_include_dotted_path_with_param_bindings() {
 }
 
 #[test]
+fn include_binding_recovers_finite_index_argument_shape() {
+    let file = Parser::new("include scale(Axis: Fin(1 + 2)) as scaled;")
+        .parse_file()
+        .unwrap();
+    let DeclKind::Include(include) = &file.declarations[0].kind else {
+        panic!("expected Include");
+    };
+    let Some(crate::syntax::ast::IndexExpr::Finite { cardinality, .. }) =
+        include.param_bindings[0].value.index_binding_arg()
+    else {
+        panic!("expected finite index binding argument");
+    };
+    assert_eq!(cardinality.to_string(), "1 + 2");
+}
+
+#[test]
 fn duplicate_include_binding_is_rejected() {
     let err = Parser::new("include combine(a: 1.0, a: 2.0) as result;")
         .parse_file()

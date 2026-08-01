@@ -3514,6 +3514,21 @@ fn project_required_param_import() {
 // --- Injectable index tests ---
 
 #[test]
+fn include_required_index_accepts_structural_finite_axis() {
+    // Regression for #1077: structural axes need no fabricated named-index alias.
+    let source = include_str!("../../../../tests/fixtures/valid/finite_index_dag_binding.gcl");
+    let result = compile_and_eval(source).unwrap();
+    let Value::Indexed { entries, .. } = find_entry(&result, "out") else {
+        panic!("expected finite-indexed output");
+    };
+    let values = entries
+        .values()
+        .map(|value| value.si_value().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(values, vec![2.0, 4.0, 6.0]);
+}
+
+#[test]
 fn project_injectable_index_kind_mismatch() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/invalid/multi/injectable_index_kind_mismatch/src/lib/main.gcl");

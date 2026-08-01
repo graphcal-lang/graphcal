@@ -140,20 +140,51 @@ impl fmt::Display for IndexCategory {
     }
 }
 
+/// Semantic category accepted by an index binding contract.
+///
+/// `Discrete` is the capability exposed by an unconstrained required index:
+/// callers may supply either a label-bearing named axis or a structural
+/// `Fin(N)` axis. Concrete named declarations remain nominal and therefore use
+/// the narrower `Named` requirement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexBindingCategory {
+    /// Only a concrete or forwarded named axis is accepted.
+    Named,
+    /// A named axis or structural finite axis is accepted.
+    Discrete,
+    /// Only a dimension-compatible coordinate axis is accepted.
+    Coordinate,
+}
+
+impl fmt::Display for IndexBindingCategory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Named => "named",
+            Self::Discrete => "named or finite",
+            Self::Coordinate => "coordinate",
+        })
+    }
+}
+
 /// A required or overridable declared index's typed binding contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IndexBindingContract {
+    /// A concrete named declaration can only retain another named identity.
     Named,
+    /// An unconstrained required index accepts named and structural finite axes.
+    Discrete,
+    /// A coordinate declaration requires an axis with the same dimension.
     Coordinate { dimension: Dimension },
 }
 
 impl IndexBindingContract {
     /// Return the semantic index category required by this contract.
     #[must_use]
-    pub const fn category(&self) -> IndexCategory {
+    pub const fn category(&self) -> IndexBindingCategory {
         match self {
-            Self::Named => IndexCategory::Named,
-            Self::Coordinate { .. } => IndexCategory::Coordinate,
+            Self::Named => IndexBindingCategory::Named,
+            Self::Discrete => IndexBindingCategory::Discrete,
+            Self::Coordinate { .. } => IndexBindingCategory::Coordinate,
         }
     }
 
@@ -164,7 +195,16 @@ impl IndexBindingContract {
     /// to an inner DAG; the outer include chain must eventually provide a concrete axis.
     pub fn validate(&self, candidate: &IndexDef) -> Result<(), IndexBindingContractError> {
         let found = candidate.category();
-        if self.category() != found {
+        let kind_matches = matches!(
+            (self.category(), found),
+            (IndexBindingCategory::Named, IndexCategory::Named)
+                | (
+                    IndexBindingCategory::Discrete,
+                    IndexCategory::Named | IndexCategory::Finite
+                )
+                | (IndexBindingCategory::Coordinate, IndexCategory::Coordinate)
+        );
+        if !kind_matches {
             return Err(IndexBindingContractError::KindMismatch {
                 expected: self.category(),
                 found,
@@ -194,7 +234,7 @@ impl IndexBindingContract {
 pub enum IndexBindingContractError {
     #[error("index categories do not match")]
     KindMismatch {
-        expected: IndexCategory,
+        expected: IndexBindingCategory,
         found: IndexCategory,
     },
     #[error("coordinate-index dimensions do not match")]
@@ -410,6 +450,39 @@ impl FiniteIndex {
     }
 }
 
+/// Resolved importer-side argument supplied to an include index port.
+///
+/// Declared axes retain their typed declaration names. Structural axes retain
+/// their validated finite identity instead of fabricating a recoverable name
+/// such as `"Fin(3)"`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexBindingTarget {
+    /// A declared axis in the including DAG's registry.
+    Declared(IndexName),
+    /// A validated structural finite identity.
+    Finite(FiniteIndex),
+}
+
+impl IndexBindingTarget {
+    /// Return the declared target name, when the argument names a declaration.
+    #[must_use]
+    pub const fn declared_name(&self) -> Option<&IndexName> {
+        match self {
+            Self::Declared(name) => Some(name),
+            Self::Finite(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for IndexBindingTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Declared(name) => name.fmt(formatter),
+            Self::Finite(index) => index.display_name().fmt(formatter),
+        }
+    }
+}
+
 /// Index registry: maps declared names and typed structural identities to definitions.
 #[derive(Debug, Clone)]
 pub struct IndexRegistry {
@@ -470,6 +543,33 @@ mod tests {
     }
 
     #[test]
+    fn discrete_binding_contract_accepts_named_and_finite_axes() {
+        let contract = IndexBindingContract::Discrete;
+        let named = IndexDef {
+            name: IndexName::expect_valid("Phase"),
+            kind: IndexKind::Named {
+                variants: vec![IndexVariantName::expect_valid("Only")],
+            },
+        };
+        let finite = IndexDef {
+            name: IndexName::expect_valid("Fin(3)"),
+            kind: IndexKind::Finite {
+                cardinality: IndexCardinality::try_from_u64(3).unwrap(),
+            },
+        };
+
+        assert_eq!(contract.validate(&named), Ok(()));
+        assert_eq!(contract.validate(&finite), Ok(()));
+        assert_eq!(
+            IndexBindingContract::Named.validate(&finite),
+            Err(IndexBindingContractError::KindMismatch {
+                expected: IndexBindingCategory::Named,
+                found: IndexCategory::Finite,
+            })
+        );
+    }
+
+    #[test]
     fn binding_contract_preserves_kind_and_dimension_errors() {
         let time = Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
         let length = Dimension::base(crate::dimension::BaseDimId::Prelude("Length".to_string()));
@@ -485,7 +585,7 @@ mod tests {
         assert_eq!(
             contract.validate(&named),
             Err(IndexBindingContractError::KindMismatch {
-                expected: IndexCategory::Coordinate,
+                expected: IndexBindingCategory::Coordinate,
                 found: IndexCategory::Named,
             })
         );

@@ -19,9 +19,10 @@ use super::time_zone::TimeZoneRegistry;
 pub use super::dag::DagRegistry;
 pub use super::dimension_registry::{DimensionRegistry, RegistryBuildError};
 pub use super::index::{
-    CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingContract,
-    IndexBindingContractError, IndexCardinality, IndexCardinalityError, IndexCategory, IndexDef,
-    IndexKind, IndexRegistry, MAX_INDEX_CARDINALITY,
+    CoordinateIndexData, CoordinateSpacing, FiniteIndex, FiniteIndexError, IndexBindingCategory,
+    IndexBindingContract, IndexBindingContractError, IndexBindingTarget, IndexCardinality,
+    IndexCardinalityError, IndexCategory, IndexDef, IndexKind, IndexRegistry,
+    MAX_INDEX_CARDINALITY,
 };
 pub use super::type_def::{
     StructField, TypeDef, TypeDefKind, TypeGenericConstraint, TypeGenericParam, TypeRegistry,

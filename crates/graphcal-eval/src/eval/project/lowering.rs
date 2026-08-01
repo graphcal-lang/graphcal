@@ -988,27 +988,41 @@ fn index_binding_span(
 
 /// Capture candidates from the importer before dependency declarations are merged.
 fn capture_index_binding_candidates(
-    builder: &RegistryBuilder,
-    bindings: &HashMap<IndexName, IndexName>,
+    builder: &mut RegistryBuilder,
+    bindings: &IndexBindings,
     spans: &HashMap<IndexName, Span>,
     importer_src: &NamedSource<Arc<String>>,
     include_span: Span,
 ) -> Result<HashMap<IndexName, graphcal_compiler::registry::types::IndexDef>, CompileError> {
     bindings
         .iter()
-        .map(|(dep_index, importer_index)| {
-            builder
-                .get_index(importer_index.as_str())
-                .cloned()
-                .map(|candidate| (dep_index.clone(), candidate))
-                .ok_or_else(|| {
-                    CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
-                        dep_index: dep_index.to_string(),
-                        value: importer_index.to_string(),
-                        src: importer_src.clone(),
-                        span: index_binding_span(dep_index, spans, include_span).into(),
-                    })
-                })
+        .map(|(dep_index, target)| {
+            let candidate = match target {
+                IndexBindingTarget::Declared(importer_index) => builder
+                    .get_index(importer_index.as_str())
+                    .cloned()
+                    .ok_or_else(|| {
+                        CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
+                            dep_index: dep_index.to_string(),
+                            value: target.to_string(),
+                            src: importer_src.clone(),
+                            span: index_binding_span(dep_index, spans, include_span).into(),
+                        })
+                    })?,
+                IndexBindingTarget::Finite(finite) => {
+                    builder.ensure_finite_index(finite.cardinality());
+                    builder.get_finite_index(*finite).cloned().ok_or_else(|| {
+                        CompileError::Eval(GraphcalError::InternalError {
+                            message: format!(
+                                "registered structural index `{target}` is unavailable"
+                            ),
+                            src: importer_src.clone(),
+                            span: index_binding_span(dep_index, spans, include_span).into(),
+                        })
+                    })?
+                }
+            };
+            Ok((dep_index.clone(), candidate))
         })
         .collect()
 }
@@ -1020,7 +1034,7 @@ fn capture_index_binding_candidates(
 fn validate_index_binding_contracts(
     dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     dep_registry: &Registry,
-    bindings: &HashMap<IndexName, IndexName>,
+    bindings: &IndexBindings,
     spans: &HashMap<IndexName, Span>,
     dim_bindings: &HashMap<DimName, DimName>,
     candidates: &HashMap<IndexName, graphcal_compiler::registry::types::IndexDef>,
@@ -1030,7 +1044,7 @@ fn validate_index_binding_contracts(
 ) -> Result<(), CompileError> {
     use graphcal_compiler::registry::types::IndexBindingContractError;
 
-    for (dep_index, importer_index) in bindings {
+    for (dep_index, target) in bindings {
         let span = index_binding_span(dep_index, spans, include_span);
         let contract = effective_index_binding_contract(
             dep_index,
@@ -1055,7 +1069,7 @@ fn validate_index_binding_contracts(
                 return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
                     dep_index: dep_index.to_string(),
                     dep_kind: expected.to_string(),
-                    bound_index: importer_index.to_string(),
+                    bound_index: target.to_string(),
                     bound_kind: found.to_string(),
                     src: importer_src.clone(),
                     span: span.into(),
@@ -1066,7 +1080,7 @@ fn validate_index_binding_contracts(
                     GraphcalError::IndexBindingDimensionMismatch {
                         dep_index: dep_index.to_string(),
                         expected_dim: builder.format_dimension(&expected),
-                        bound_index: importer_index.to_string(),
+                        bound_index: target.to_string(),
                         found_dim: builder.format_dimension(&found),
                         src: importer_src.clone(),
                         span: span.into(),
@@ -1105,7 +1119,8 @@ fn effective_index_binding_contract(
         })?;
 
     match &definition.kind {
-        IndexKind::Named { .. } | IndexKind::RequiredNamed => Ok(IndexBindingContract::Named),
+        IndexKind::Named { .. } => Ok(IndexBindingContract::Named),
+        IndexKind::RequiredNamed => Ok(IndexBindingContract::Discrete),
         IndexKind::Coordinate(data) => Ok(IndexBindingContract::Coordinate {
             dimension: data.dimension.clone(),
         }),
@@ -1166,7 +1181,7 @@ fn effective_index_binding_contract(
 /// it is registered in the importer's IR. Shared by both inline-DAG and
 /// file-include alias paths so their type-substitution stays in lock-step.
 struct AliasSubstitutions<'a> {
-    pub index: &'a HashMap<IndexName, IndexName>,
+    pub index: &'a IndexBindings,
     pub r#type: &'a HashMap<StructTypeName, StructTypeName>,
     pub dim: &'a HashMap<DimName, DimName>,
 }
@@ -1220,7 +1235,7 @@ fn add_selective_aliases_inner(
             continue;
         };
 
-        graphcal_compiler::ir::lower::substitute_type_expr_index_names(&mut type_ann, subs.index);
+        graphcal_compiler::ir::lower::substitute_type_expr_indexes(&mut type_ann, subs.index);
         graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
             &mut type_ann,
             subs.r#type,
@@ -1289,7 +1304,7 @@ fn add_selective_aliases_inner(
 fn merge_registry_into_builder(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
-    index_bindings: &HashMap<IndexName, IndexName>,
+    index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
 ) -> Result<(), UnitMergeConflict> {
@@ -1421,7 +1436,7 @@ pub(in crate::eval::project) struct UnitMergeConflict {
 fn merge_registry_into_builder_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
-    index_bindings: &HashMap<IndexName, IndexName>,
+    index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     external_surface: Option<&ExternalDeclSurface>,
@@ -1602,47 +1617,54 @@ fn unit_definitions_compatible(
     }
 }
 
-/// Extract a `PascalCase` index name from a binding expression.
+/// Resolve the importer-side argument of an index-port binding.
 ///
-/// Index bindings use the form `DepIndex = ImporterIndex`, where both sides are
-/// `PascalCase` identifiers. In the desugared AST a bare identifier is an
-/// unresolved reference path; the parser can also produce a zero-arg
-/// `ConstructorCall` for constructor-shaped binding RHSs.
-pub(in crate::eval::project) fn extract_index_name_from_binding_expr(
+/// The parser retains every include RHS as an expression until dependency
+/// loading reveals the target namespace. [`Expr::index_binding_arg`] recovers
+/// the source-level index shape here; this function then crosses into the
+/// typed include core as either a declared index name or a validated structural
+/// finite identity.
+pub(in crate::eval::project) fn extract_index_binding_target(
     expr: &Expr,
-    dep_index_name: &str,
+    dep_index_name: &IndexName,
     file_src: &NamedSource<Arc<String>>,
-) -> Result<String, CompileError> {
-    match &expr.kind {
-        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => path
-            .as_bare()
-            .map(|ident| ident.name.to_string())
-            .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::BindingTargetsIndex {
-                    name: dep_index_name.to_string(),
-                    src: file_src.clone(),
-                    span: expr.span.into(),
-                })
-            }),
-        ExprKind::ConstructorCall {
-            callee,
-            generic_args,
-            fields,
-        } if generic_args.is_empty() && fields.is_empty() => callee
-            .as_bare()
-            .map(|ident| ident.name.to_string())
-            .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::BindingTargetsIndex {
-                    name: dep_index_name.to_string(),
-                    src: file_src.clone(),
-                    span: expr.span.into(),
-                })
-            }),
-        _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
+) -> Result<IndexBindingTarget, CompileError> {
+    use graphcal_compiler::desugar::desugared_ast::IndexExpr;
+    use graphcal_compiler::registry::types::FiniteIndex;
+
+    let invalid_binding = || {
+        CompileError::Eval(GraphcalError::InvalidTypeLevelBindingValue {
             name: dep_index_name.to_string(),
             src: file_src.clone(),
             span: expr.span.into(),
-        })),
+        })
+    };
+    match expr.index_binding_arg().ok_or_else(invalid_binding)? {
+        IndexExpr::Name(path) => path
+            .value
+            .as_bare()
+            .map(|name| IndexBindingTarget::Declared(IndexName::from_atom(name.clone())))
+            .ok_or_else(invalid_binding),
+        IndexExpr::Finite { cardinality, .. } => {
+            let normalized =
+                graphcal_compiler::tir::typed::normalize_nat_expr(&cardinality, &[], file_src)?;
+            let cardinality = normalized.constant_value().ok_or_else(|| {
+                CompileError::Eval(GraphcalError::EvalError {
+                    message: "Fin cardinality in an index binding must be concrete".to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            })?;
+            let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
+                CompileError::Eval(GraphcalError::EvalError {
+                    message: error.to_string(),
+                    src: file_src.clone(),
+                    span: expr.span.into(),
+                })
+            })?;
+            Ok(IndexBindingTarget::Finite(finite))
+        }
+        IndexExpr::BareNat(_) => Err(invalid_binding()),
     }
 }
 
@@ -1656,17 +1678,18 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
     dep_type_name: &str,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<String, CompileError> {
+    let invalid_binding = || {
+        CompileError::Eval(GraphcalError::InvalidTypeLevelBindingValue {
+            name: dep_type_name.to_string(),
+            src: file_src.clone(),
+            span: expr.span.into(),
+        })
+    };
     match &expr.kind {
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => path
             .as_bare()
             .map(|ident| ident.name.to_string())
-            .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::BindingTargetsIndex {
-                    name: dep_type_name.to_string(),
-                    src: file_src.clone(),
-                    span: expr.span.into(),
-                })
-            }),
+            .ok_or_else(invalid_binding),
         ExprKind::ConstructorCall {
             callee,
             generic_args,
@@ -1674,18 +1697,8 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
         } if generic_args.is_empty() && fields.is_empty() => callee
             .as_bare()
             .map(|ident| ident.name.to_string())
-            .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::BindingTargetsIndex {
-                    name: dep_type_name.to_string(),
-                    src: file_src.clone(),
-                    span: expr.span.into(),
-                })
-            }),
-        _ => Err(CompileError::Eval(GraphcalError::BindingTargetsIndex {
-            name: dep_type_name.to_string(),
-            src: file_src.clone(),
-            span: expr.span.into(),
-        })),
+            .ok_or_else(invalid_binding),
+        _ => Err(invalid_binding()),
     }
 }
 
@@ -1954,7 +1967,7 @@ fn check_generics_leakage(
     dep_ast: &graphcal_compiler::desugar::desugared_ast::File,
     pub_reexport_whole: bool,
     pub_reexport_items: &HashSet<DeclName>,
-    index_bindings: &HashMap<IndexName, IndexName>,
+    index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     importer_external_surface: &ExternalDeclSurface,
@@ -2026,8 +2039,14 @@ fn check_generics_leakage(
         // Apply substitutions, then check each substituted name against the
         // importer's visibility table.
         for raw_name in refs {
-            let substituted = index_bindings
-                .get(raw_name.as_str())
+            let index_target = index_bindings.get(raw_name.as_str());
+            // A structural target carries no importer-local declaration whose
+            // visibility could leak through the re-exported signature.
+            if matches!(index_target, Some(IndexBindingTarget::Finite(_))) {
+                continue;
+            }
+            let substituted = index_target
+                .and_then(IndexBindingTarget::declared_name)
                 .map(IndexName::as_str)
                 .or_else(|| {
                     type_bindings

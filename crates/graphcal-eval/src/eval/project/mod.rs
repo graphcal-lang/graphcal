@@ -27,7 +27,9 @@ use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{PositiveFiniteScale, Registry, RegistryBuilder};
+use graphcal_compiler::registry::types::{
+    IndexBindingTarget, PositiveFiniteScale, Registry, RegistryBuilder,
+};
 
 use super::types::{AssertResult, CompileError, DeclType, EvalResult, NodeError, Value};
 
@@ -40,11 +42,14 @@ mod pipeline;
 // ---------------------------------------------------------------------------
 
 /// A binding map whose **key** is the dependency-side name and whose **value**
-/// is the importer-side name the dep name resolves to. Used for index, type,
-/// and dim bindings on instantiated includes. The aliased name keeps the
+/// is the importer-side name the dep name resolves to. Used for type and
+/// dimension bindings on instantiated includes. The aliased name keeps the
 /// directional convention discoverable everywhere the map shape appears in a
 /// signature.
 type DepToImporter<T> = HashMap<T, T>;
+
+/// Dependency index port to a resolved importer-side declared or structural axis.
+type IndexBindings = HashMap<IndexName, IndexBindingTarget>;
 
 /// One evaluated value retained for output assembly across project-file
 /// boundaries.
@@ -249,8 +254,8 @@ struct DeferredDagInclude {
     prefix: ModuleAliasName,
     /// Param bindings: `param_name` → binding expression.
     bindings: HashMap<DeclName, Expr>,
-    /// Index bindings: `dep_index_name` → `importer_index_name`.
-    index_bindings: DepToImporter<IndexName>,
+    /// Index bindings: dependency port → resolved importer-side axis.
+    index_bindings: IndexBindings,
     /// Importer-source value span for each index binding, keyed by dep-side name.
     index_binding_spans: HashMap<IndexName, Span>,
     /// Type bindings: `dep_type_name` → `importer_type_name`.

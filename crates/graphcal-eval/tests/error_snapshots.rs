@@ -1147,6 +1147,13 @@ fn error_extern_duplicate_param() {
 }
 
 #[test]
+fn error_index_binding_value_not_index() {
+    let source = include_str!("../../../tests/fixtures/invalid/index_binding_value_not_index.gcl");
+    let rendered = render_error(source, "index_binding_value_not_index.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_duplicate_include_binding() {
     let source = include_str!("../../../tests/fixtures/invalid/duplicate_include_binding.gcl");
     let rendered = render_error(source, "duplicate_include_binding.gcl");

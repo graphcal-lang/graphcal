@@ -693,6 +693,23 @@ node factor: Dimensionless = @config().factor;
     }
 
     #[test]
+    fn finite_index_include_binding_produces_no_diagnostic() {
+        let source = r"
+dag scale {
+    pub(bind) index Axis;
+    param xs: Dimensionless[Axis];
+    pub node ys: Dimensionless[Axis] = for i: Axis { @xs[i] * 2.0 };
+}
+include scale(
+    Axis: Fin(3),
+    xs: table[Fin(3)] { 1.0; 2.0; 3.0; },
+) as scaled;
+node out: Dimensionless[Fin(3)] = @scaled.ys;
+";
+        assert!(produce_diagnostics(source, "test.gcl").is_empty());
+    }
+
+    #[test]
     fn i009_inline_dag_coordinate_index_binding_produces_diagnostic() {
         let source = r"
 dag pass_through {
