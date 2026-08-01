@@ -229,7 +229,7 @@ fn range_rejects_tiny_endpoint_misses_relative_to_the_coordinate_scale() {
 fn linspace_uses_exact_point_count_and_endpoints() {
     let source = r#"
 pub index TimeIdx = linspace(0.0 s, 1.0 s, points: 4);
-node x: Time[TimeIdx] = for t: TimeIdx { t };
+node x: Time[TimeIdx] = for t: TimeIdx { coord(t) };
 "#;
     let result = compile_and_eval(source).unwrap();
     let x = find_entry(&result, "x");
@@ -252,7 +252,7 @@ node x: Time[TimeIdx] = for t: TimeIdx { t };
 fn range_preserves_declared_endpoint_after_binary64_interval_validation() {
     let source = r#"
 index Tenths = range(0.0 s, 0.3 s, step: 0.1 s);
-node coordinates: Time[Tenths] = for t: Tenths { t };
+node coordinates: Time[Tenths] = for t: Tenths { coord(t) };
 "#;
     let result = compile_and_eval(source).unwrap();
     let Value::Indexed { entries, .. } = find_entry(&result, "coordinates") else {
@@ -269,7 +269,7 @@ node coordinates: Time[Tenths] = for t: Tenths { t };
 fn coordinate_display_names_remain_unique_when_rounded_labels_collide() {
     let source = r#"
 index Tiny = range(1.0, 1.0000002, step: 0.0000001);
-node values: Dimensionless[Tiny] = for t: Tiny { t };
+node values: Dimensionless[Tiny] = for t: Tiny { coord(t) };
 "#;
     let Value::Indexed {
         entry_display_names: Some(display_names),
@@ -293,8 +293,8 @@ fn descending_range_and_linspace_are_monotone_with_exact_endpoints() {
     let source = r#"
 pub index ByStep = range(1.0 s, -1.0 s, step: -0.5 s);
 pub index ByCount = linspace(1.0 s, -1.0 s, points: 5);
-node stepped: Time[ByStep] = for t: ByStep { t };
-node spaced: Time[ByCount] = for t: ByCount { t };
+node stepped: Time[ByStep] = for t: ByStep { coord(t) };
+node spaced: Time[ByCount] = for t: ByCount { coord(t) };
 "#;
     let result = compile_and_eval(source).unwrap();
     for name in ["stepped", "spaced"] {
@@ -419,12 +419,12 @@ node x: Dimensionless[TimeIdx] = for t: TimeIdx { @x0 };
 #[test]
 fn for_comp_returning_range_loop_variable_yields_quantities() {
     // Regression: the loop variable of a `for` over a range index is bound to
-    // an internal CoordinateLabel value. Returning it directly used to hit
+    // an internal CoordinateLabel value. Extracting its coordinate used to hit
     // `unreachable!("CoordinateLabel should not appear in final values")` when
     // converting the result to a public value. It must surface as a quantity.
     let source = r#"
 index Step = range(0.0 s, 2.0 s, step: 1.0 s);
-node t: Time[Step] = for i: Step { i };
+node t: Time[Step] = for i: Step { coord(i) };
 "#;
     let result = compile_and_eval(source).unwrap();
     let t = find_entry(&result, "t");

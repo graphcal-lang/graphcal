@@ -656,6 +656,13 @@ impl<'a> HirRefCollector<'a> {
                 );
                 self.walk(body, table);
             }
+            hir::ExprKind::KeyForm { axis, arg, .. } => {
+                if let hir::expr::ForBindingIndex::Named(axis) = axis {
+                    let axis_key = self.name_key(axis.value.owner(), axis.value.as_str());
+                    Self::reference(table, axis.span, axis_key);
+                }
+                self.walk(arg, table);
+            }
             hir::ExprKind::Match { scrutinee, arms } => {
                 self.walk(scrutinee, table);
                 for arm in arms {
@@ -759,7 +766,7 @@ impl<'a> HirRefCollector<'a> {
                     }
                 }
             }
-            hir::TypeExprKind::Index(index) => {
+            hir::TypeExprKind::Index(index) | hir::TypeExprKind::Key(index) => {
                 if let hir::IndexRef::Concrete(name) = index {
                     let key = self.name_key(name.value.owner(), name.value.as_str());
                     Self::reference(table, name.span, key);
@@ -1885,7 +1892,8 @@ fn collect_type_expr_refs_in_scope(
                 collect_generic_arg_refs(arg, generic_scope, table);
             }
         }
-        TypeExprKind::ComplexApplication { generic_args } => {
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
                 collect_generic_arg_refs(arg, generic_scope, table);
             }

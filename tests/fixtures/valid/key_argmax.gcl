@@ -1,0 +1,38 @@
+// argmax/argmin return the extremum's identity as a Key<I> for every axis
+// kind; keys re-index the source and sibling values exactly, coordinate keys
+// expose their coordinate via coord(), and Fin keys their position via
+// to_int().
+pub index Maneuver = { Departure, Correction, Insertion };
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+
+param delta_v: Velocity[Maneuver] = {
+    Maneuver.Departure: 2.46 km/s,
+    Maneuver.Correction: 0.12 km/s,
+    Maneuver.Insertion: 1.83 km/s,
+};
+param fuel_margin: Dimensionless[Maneuver] = {
+    Maneuver.Departure: 0.15,
+    Maneuver.Correction: 0.4,
+    Maneuver.Insertion: 0.08,
+};
+
+node critical: Key<Maneuver> = argmax(@delta_v);
+node cheapest: Key<Maneuver> = argmin(@delta_v);
+node critical_dv: Velocity = @delta_v[@critical];
+node critical_margin: Dimensionless = @fuel_margin[@critical];
+node critical_is_departure: Bool = @critical == Maneuver.Departure;
+
+node altitude: Length[TimeStep] = for t: TimeStep { 100.0 km + coord(t) * 5.0 km/s };
+node peak: Key<TimeStep> = argmax(@altitude);
+node peak_time: Time = coord(@peak);
+node peak_altitude: Length = @altitude[@peak];
+
+param readings: Dimensionless[Fin(4)] = table[Fin(4)] {
+    101.2;
+    103.4;
+     99.8;
+    103.4;
+};
+node worst: Key<Fin(4)> = argmax(@readings);
+node worst_position: Int = to_int(@worst);
+node worst_reading: Dimensionless = @readings[@worst];

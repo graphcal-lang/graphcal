@@ -1,0 +1,2 @@
+// Key subtraction is fallible at 0 and excluded from the additive fragment.
+node k: Key<Fin(3)> = key(Fin(3), 1) - 1;

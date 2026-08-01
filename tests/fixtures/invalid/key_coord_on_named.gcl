@@ -1,0 +1,5 @@
+// coord() extracts coordinates from coordinate-axis keys only; named keys
+// are opaque.
+index Maneuver = { Departure, Correction };
+
+node t: Dimensionless = coord(Maneuver.Departure);

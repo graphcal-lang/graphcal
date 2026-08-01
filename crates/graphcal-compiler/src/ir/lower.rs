@@ -1999,7 +1999,8 @@ impl OverrideReconciliationChecker<'_> {
                 }
                 Ok(())
             }
-            TypeExprKind::ComplexApplication { generic_args } => {
+            TypeExprKind::ComplexApplication { generic_args }
+            | TypeExprKind::KeyApplication { generic_args } => {
                 for arg in generic_args {
                     match arg {
                         crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
@@ -2537,7 +2538,8 @@ pub fn substitute_type_expr_index_names(
             substitute_type_expr_index_names(base, bindings);
         }
         TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args } => {
+        | TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
                 substitute_generic_arg_index_names(arg, bindings);
             }
@@ -2613,7 +2615,8 @@ where
                 substitute_generic_arg_nominal_names(arg, bindings);
             }
         }
-        TypeExprKind::ComplexApplication { generic_args } => {
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
                 substitute_generic_arg_nominal_names(arg, bindings);
             }
@@ -2756,6 +2759,9 @@ fn substitute_type_names_in_expr(
         ExprKind::Unfold { init, body, .. } => {
             substitute_type_names_in_expr(init, bindings);
             substitute_type_names_in_expr(body, bindings);
+        }
+        ExprKind::KeyForm { arg, .. } => {
+            substitute_type_names_in_expr(arg, bindings);
         }
         ExprKind::Match { scrutinee, arms } => {
             substitute_type_names_in_expr(scrutinee, bindings);
@@ -3836,7 +3842,8 @@ fn find_non_earlier_type_reference(
             })
         }
         TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args } => generic_args
+        | TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => generic_args
             .iter()
             .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().find_map(|type_arg| {
@@ -4538,6 +4545,7 @@ fn resolve_extern_value_kind(
         TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
+        | TypeExprKind::KeyApplication { .. }
         | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
             message:
                 "extern function signatures support Bool, Int, quantity types, and arrays of quantities over one or more declared index variables"
@@ -4792,6 +4800,7 @@ fn resolve_extern_struct_field(
         TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
+        | TypeExprKind::KeyApplication { .. }
         | TypeExprKind::Indexed { .. }
         | TypeExprKind::TypeApplication { .. } => Err(unsupported()),
     }

@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+index mismatch: expected `Maneuver`, found `Phase`
+    Diagnostic severity: error
+Begin snippet for key_index_cross_axis.gcl starting at line 11, column 1
+
+snippet line 11: node k: Key<Phase> = Phase.Launch;
+snippet line 12: node bad: Velocity = @dv[@k];
+    label at line 12, columns 26 to 27: wrong index
+diagnostic code: graphcal::I005

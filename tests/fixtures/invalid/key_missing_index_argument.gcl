@@ -1,0 +1,2 @@
+// Bare `Key` is rejected: the index axis argument is mandatory.
+param k: Key = 0.0;

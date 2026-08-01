@@ -358,6 +358,8 @@ pub enum DeclaredType {
     /// This is not a standalone value type; it is carried only as metadata for
     /// generic type parameters constrained as `Index`.
     IndexArg(IndexTypeRef),
+    /// An index-key value type `Key<I>`: element keys of axis `I`.
+    Key(IndexTypeRef),
     /// A struct type, optionally with concrete sorted generic arguments.
     Struct(StructTypeRef, Vec<DeclaredGenericArg>),
     Indexed {
@@ -383,6 +385,7 @@ impl DeclaredType {
                 }
             }
             Self::IndexArg(index) => format!("index {index}"),
+            Self::Key(index) => format!("Key<{index}>"),
             Self::Struct(name, args) => {
                 if args.is_empty() {
                     name.to_string()

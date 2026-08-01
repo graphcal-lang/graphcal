@@ -564,7 +564,8 @@ fn collect_struct_type_defs_from_declared_type(
         | crate::registry::declared_type::DeclaredType::Bool
         | crate::registry::declared_type::DeclaredType::Int
         | crate::registry::declared_type::DeclaredType::Datetime(_)
-        | crate::registry::declared_type::DeclaredType::IndexArg(_) => {}
+        | crate::registry::declared_type::DeclaredType::IndexArg(_)
+        | crate::registry::declared_type::DeclaredType::Key(_) => {}
     }
     Ok(())
 }
@@ -597,6 +598,7 @@ fn collect_struct_type_defs_from_resolved_type(
         }
         ResolvedTypeExpr::Dimensionless
         | ResolvedTypeExpr::Complex { .. }
+        | ResolvedTypeExpr::Key { .. }
         | ResolvedTypeExpr::Bool
         | ResolvedTypeExpr::Int
         | ResolvedTypeExpr::Datetime(_)
@@ -1145,6 +1147,7 @@ impl HirPolicyChecker<'_> {
                 recurse(init)?;
                 recurse(body)
             }
+            hir::ExprKind::KeyForm { arg, .. } => recurse(arg),
             hir::ExprKind::Match { scrutinee, arms } => {
                 recurse(scrutinee)?;
                 for arm in arms {

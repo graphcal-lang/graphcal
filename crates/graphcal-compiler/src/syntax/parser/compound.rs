@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
-    Expr, ExprKind, ForBinding, ForBindingIndex, IdentPath, MatchArm, MatchPattern, NatExpr,
-    PatternBinding,
+    Expr, ExprKind, ForBinding, ForBindingIndex, IdentPath, KeyFormKind, MatchArm, MatchPattern,
+    NatExpr, PatternBinding,
 };
 use crate::syntax::names::NamePath;
 use crate::syntax::span::{Span, Spanned};
@@ -339,6 +339,32 @@ impl Parser<'_> {
                 acc_name,
                 val_name,
                 body: Box::new(body),
+            },
+            span,
+        ))
+    }
+
+    /// Parse a key introduction form:
+    /// `key(Axis, spelling)`, `fin_key(Fin(N), e)`, `floor_key(C, q)`,
+    /// `ceil_key(C, q)`, `nearest_key(C, q)` → `ExprKind::KeyForm`.
+    ///
+    /// The keyword has already been consumed; `keyword_span` is its span.
+    pub(super) fn parse_key_form(
+        &mut self,
+        kind: KeyFormKind,
+        keyword_span: Span,
+    ) -> Result<Expr, ParseError> {
+        self.expect(Token::LParen)?;
+        let axis = self.parse_index_expr()?;
+        self.expect(Token::Comma)?;
+        let arg = self.parse_expr()?;
+        let (_, end_span) = self.expect(Token::RParen)?;
+        let span = keyword_span.merge(end_span);
+        Ok(Expr::new(
+            ExprKind::KeyForm {
+                kind,
+                axis,
+                arg: Box::new(arg),
             },
             span,
         ))

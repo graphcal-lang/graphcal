@@ -1101,6 +1101,11 @@ fn resolve_constraint_target(
             src: src.clone(),
             span: decl_span.into(),
         }),
+        ResolvedTypeExpr::Key { .. } => Err(GraphcalError::InvalidDomainTarget {
+            type_kind: "Key".to_string(),
+            src: src.clone(),
+            span: decl_span.into(),
+        }),
         ResolvedTypeExpr::IndexArg(index) => Err(GraphcalError::InvalidDomainTarget {
             type_kind: format!("index {}", index.format_for_diagnostic()),
             src: src.clone(),

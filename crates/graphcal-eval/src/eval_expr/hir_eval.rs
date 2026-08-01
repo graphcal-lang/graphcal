@@ -157,6 +157,9 @@ fn eval_hir_expr_inner(
             init,
             body,
         } => eval_hir_unfold(recurrence, init, body, values, local_values, ctx),
+        hir::ExprKind::KeyForm {
+            kind, axis, arg, ..
+        } => eval_hir_key_form(*kind, axis, arg, expr.span, values, local_values, ctx),
         hir::ExprKind::Match { scrutinee, arms } => {
             eval_hir_match(expr.span, scrutinee, arms, values, local_values, ctx)
         }
@@ -476,12 +479,19 @@ fn eval_hir_fn_call(
         EvalBuiltinRule::CollectionAggregation(kind) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
-            let RuntimeValue::Indexed { entries, .. } = arg_val else {
+            let RuntimeValue::Indexed {
+                index_name,
+                entries,
+            } = arg_val
+            else {
                 return Err(ctx.internal_error(
                     format!("{}() received a non-indexed argument", name.as_str()),
                     args[0].span,
                 ));
             };
+            if matches!(kind, AggregationFn::Argmin | AggregationFn::Argmax) {
+                return eval_hir_extremum_key(kind, &index_name, &entries, expr.span, ctx);
+            }
             eval_hir_aggregation_fn(kind, &entries, expr.span, ctx.src)
         }
         EvalBuiltinRule::LinearAlgebra(function) => {
@@ -588,6 +598,211 @@ fn eval_hir_fn_call(
     }
 }
 
+/// Evaluate a key introduction form.
+///
+/// `key` positions are proven in bounds by the checker; `fin_key` performs
+/// its runtime range check here; the coordinate searches scan the axis's
+/// coordinates with the documented policies.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over every key-form kind"
+)]
+fn eval_hir_key_form(
+    kind: graphcal_compiler::syntax::ast::KeyFormKind,
+    axis: &hir::expr::ForBindingIndex,
+    arg: &hir::Expr,
+    span: Span,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::syntax::ast::KeyFormKind;
+
+    let arg_val = eval_hir_expr(arg, values, local_values, ctx)?;
+    match kind {
+        KeyFormKind::Static => {
+            // Bounds were discharged at compile time.
+            let RuntimeValue::Int(position) = arg_val else {
+                return Err(ctx.internal_error("key() received a non-Int position", arg.span));
+            };
+            Ok(RuntimeValue::Int(position))
+        }
+        KeyFormKind::Fin => {
+            let RuntimeValue::Int(position) = arg_val else {
+                return Err(ctx.internal_error("fin_key() received a non-Int position", arg.span));
+            };
+            let size = match axis {
+                hir::expr::ForBindingIndex::Finite { cardinality, .. } => {
+                    eval_hir_nat_expr(cardinality, ctx)?
+                }
+                hir::expr::ForBindingIndex::Named(axis_name) => {
+                    let axis_ref = IndexTypeRef::from_resolved(axis_name.value.clone());
+                    let definition = index_def_for_ref(&axis_ref, ctx).ok_or_else(|| {
+                        ctx.internal_error(
+                            format!("index `{axis_ref}` has no registered definition"),
+                            span,
+                        )
+                    })?;
+                    definition.finite_index_size().ok_or_else(|| {
+                        ctx.internal_error("fin_key() axis is not a Fin axis", span)
+                    })?
+                }
+            };
+            let in_range = u64::try_from(position).is_ok_and(|position| position < size);
+            if !in_range {
+                return Err(ctx.eval_error(
+                    format!("fin_key: {position} out of bounds for Fin({size})"),
+                    span,
+                ));
+            }
+            Ok(RuntimeValue::Int(position))
+        }
+        KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
+            let quantity = arg_val
+                .expect_quantity("coordinate search argument")
+                .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?;
+            let hir::expr::ForBindingIndex::Named(axis_name) = axis else {
+                return Err(
+                    ctx.internal_error("coordinate search received a non-coordinate axis", span)
+                );
+            };
+            let axis_ref = IndexTypeRef::from_resolved(axis_name.value.clone());
+            let definition = index_def_for_ref(&axis_ref, ctx).ok_or_else(|| {
+                ctx.internal_error(
+                    format!("index `{axis_ref}` has no registered definition"),
+                    span,
+                )
+            })?;
+            let IndexKind::Coordinate(data) = &definition.kind else {
+                return Err(
+                    ctx.internal_error("coordinate search received a non-coordinate axis", span)
+                );
+            };
+            let count = data.cardinality();
+            let mut best: Option<(usize, f64)> = None;
+            for position in 0..count {
+                let coordinate = data.coordinate_value(position);
+                let candidate = match kind {
+                    KeyFormKind::Floor if coordinate <= quantity => Some((position, coordinate)),
+                    KeyFormKind::Ceil if coordinate >= quantity => Some((position, coordinate)),
+                    KeyFormKind::Nearest => Some((position, coordinate)),
+                    _ => None,
+                };
+                let Some((position, coordinate)) = candidate else {
+                    continue;
+                };
+                let better = match (&best, kind) {
+                    (None, _) => true,
+                    // Nearest: strictly closer wins, so midpoint ties keep
+                    // the earlier position (toward the axis start).
+                    (Some((_, incumbent)), KeyFormKind::Nearest) => {
+                        (coordinate - quantity).abs() < (incumbent - quantity).abs()
+                    }
+                    // Floor: the greatest coordinate at or below the target.
+                    (Some((_, incumbent)), KeyFormKind::Floor) => coordinate > *incumbent,
+                    // Ceil: the smallest coordinate at or above the target.
+                    (Some((_, incumbent)), _) => coordinate < *incumbent,
+                };
+                if better {
+                    best = Some((position, coordinate));
+                }
+            }
+            let Some((position, _)) = best else {
+                return Err(ctx.eval_error(
+                    format!(
+                        "{}: no coordinate of `{axis_ref}` is {} the target",
+                        kind.as_str(),
+                        if kind == KeyFormKind::Floor {
+                            "at or below"
+                        } else {
+                            "at or above"
+                        },
+                    ),
+                    span,
+                ));
+            };
+            Ok(RuntimeValue::CoordinateLabel {
+                index_name: axis_ref,
+                position,
+                value: data.coordinate_value(position),
+            })
+        }
+    }
+}
+
+/// Evaluate `argmin`/`argmax`: find the extremum entry and reify its entry
+/// key as the matching key runtime value for the reduced axis.
+fn eval_hir_extremum_key(
+    kind: AggregationFn,
+    index_name: &IndexTypeRef,
+    entries: &IndexMap<IndexEntryKey, RuntimeValue>,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    let entry_key = super::aggregations::extremum_entry_key(kind, entries).map_err(|error| {
+        let message = error.to_string();
+        if error.is_internal_invariant() {
+            ctx.internal_error(message, span)
+        } else {
+            ctx.eval_error(message, span)
+        }
+    })?;
+    runtime_key_for_entry(index_name, &entry_key, span, ctx)
+}
+
+/// Reify an [`IndexEntryKey`] of `index_name` as the key runtime value:
+/// a label for named axes, a coordinate label for coordinate axes, and a
+/// position integer for `Fin` axes.
+fn runtime_key_for_entry(
+    index_name: &IndexTypeRef,
+    entry_key: &IndexEntryKey,
+    span: Span,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    match entry_key {
+        IndexEntryKey::Named(variant) => Ok(RuntimeValue::Label {
+            index_name: index_name.clone(),
+            variant: variant.clone(),
+        }),
+        IndexEntryKey::Position(position) => {
+            if index_name.finite_index().is_some() {
+                let position = i64::try_from(*position).map_err(|_| {
+                    ctx.internal_error(
+                        format!("key position {position} cannot be represented as Int"),
+                        span,
+                    )
+                })?;
+                return Ok(RuntimeValue::Int(position));
+            }
+            let index_def = index_def_for_ref(index_name, ctx).ok_or_else(|| {
+                ctx.internal_error(
+                    format!("index `{index_name}` has no registered definition"),
+                    span,
+                )
+            })?;
+            match &index_def.kind {
+                IndexKind::Coordinate(data) => {
+                    let position = usize::try_from(*position).map_err(|_| {
+                        ctx.internal_error(
+                            format!("coordinate position {position} exceeds the platform range"),
+                            span,
+                        )
+                    })?;
+                    Ok(RuntimeValue::CoordinateLabel {
+                        index_name: index_name.clone(),
+                        position,
+                        value: data.coordinate_value(position),
+                    })
+                }
+                _ => Err(ctx.internal_error(
+                    format!("position key on non-coordinate, non-finite index `{index_name}`"),
+                    span,
+                )),
+            }
+        }
+    }
+}
+
 fn eval_hir_aggregation_fn(
     kind: AggregationFn,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
@@ -623,6 +838,7 @@ fn eval_hir_conversion_fn(
     let name = match kind {
         TypeConversionFn::ToFloat => BuiltinFnName::ToFloat,
         TypeConversionFn::ToInt => BuiltinFnName::ToInt,
+        TypeConversionFn::Coord => BuiltinFnName::Coord,
     };
     expect_hir_builtin_arity(name, args, 1, span, ctx)?;
     match kind {
@@ -641,6 +857,11 @@ fn eval_hir_conversion_fn(
         }
         TypeConversionFn::ToInt => {
             let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            // A Fin-axis key is represented as its position integer: to_int()
+            // on a key is the identity at runtime, checked at the type level.
+            if let RuntimeValue::Int(position) = arg {
+                return Ok(RuntimeValue::Int(position));
+            }
             let f = arg
                 .expect_quantity("to_int argument")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
@@ -657,6 +878,16 @@ fn eval_hir_conversion_fn(
                     .unwrap_or_default();
                     ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
                 })
+        }
+        TypeConversionFn::Coord => {
+            let arg = eval_hir_expr(&args[0], values, local_values, ctx)?;
+            let RuntimeValue::CoordinateLabel { value, .. } = arg else {
+                return Err(ctx.internal_error(
+                    "coord() received a non-coordinate-key argument",
+                    args[0].span,
+                ));
+            };
+            Ok(RuntimeValue::Quantity(value))
         }
     }
 }
@@ -1674,6 +1905,10 @@ fn eval_hir_for_comp(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over every index-argument category"
+)]
 fn eval_hir_index_access(
     span: Span,
     inner: &hir::Expr,
@@ -1756,24 +1991,39 @@ fn eval_hir_index_access(
             }
             hir::expr::IndexArg::Expr(index_expr) => {
                 let val = eval_hir_expr(index_expr, values, local_values, ctx)?;
-                let RuntimeValue::Int(n) = val else {
-                    return Err(ctx.eval_error(
-                        "index expression must evaluate to an integer",
-                        index_expr.span,
-                    ));
-                };
-                if n < 0 {
-                    return Err(ctx.eval_error(
-                        format!("index expression evaluated to negative value: {n}"),
-                        index_expr.span,
-                    ));
+                match val {
+                    // A key value selects the entry it names; the checker has
+                    // already proven the axis identity.
+                    RuntimeValue::Label { variant, .. } => IndexEntryKey::named(variant),
+                    RuntimeValue::CoordinateLabel { position, .. } => {
+                        IndexEntryKey::position(u64::try_from(position).map_err(|_| {
+                            ctx.internal_error(
+                                format!("coordinate key position {position} is unrepresentable"),
+                                index_expr.span,
+                            )
+                        })?)
+                    }
+                    RuntimeValue::Int(n) => {
+                        if n < 0 {
+                            return Err(ctx.eval_error(
+                                format!("index expression evaluated to negative value: {n}"),
+                                index_expr.span,
+                            ));
+                        }
+                        IndexEntryKey::position(u64::try_from(n).map_err(|_| {
+                            ctx.eval_error(
+                                format!("index expression is too large: {n}"),
+                                index_expr.span,
+                            )
+                        })?)
+                    }
+                    _ => {
+                        return Err(ctx.eval_error(
+                            "index expression must evaluate to an integer or an index key",
+                            index_expr.span,
+                        ));
+                    }
                 }
-                IndexEntryKey::position(u64::try_from(n).map_err(|_| {
-                    ctx.eval_error(
-                        format!("index expression is too large: {n}"),
-                        index_expr.span,
-                    )
-                })?)
             }
         };
         current = entries

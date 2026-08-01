@@ -456,6 +456,9 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
             TypeExprKind::ComplexApplication { generic_args } => Self::ComplexApplication {
                 generic_args: generic_args.into_iter().map(Into::into).collect(),
             },
+            TypeExprKind::KeyApplication { generic_args } => Self::KeyApplication {
+                generic_args: generic_args.into_iter().map(Into::into).collect(),
+            },
         }
     }
 }
@@ -581,6 +584,11 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
                 acc_name,
                 val_name,
                 body: Box::new((*body).into()),
+            },
+            ExprKind::KeyForm { kind, axis, arg } => Self::KeyForm {
+                kind,
+                axis,
+                arg: Box::new((*arg).into()),
             },
             ExprKind::Unfold {
                 axis,

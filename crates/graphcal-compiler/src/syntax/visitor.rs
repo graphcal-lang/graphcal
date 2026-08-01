@@ -104,6 +104,8 @@ pub(crate) trait ExprVisitor<P: Phase> {
 
             ExprKind::Unfold { init, body, .. } => self.visit_unfold(expr, init, body),
 
+            ExprKind::KeyForm { arg, .. } => self.visit_expr(arg),
+
             ExprKind::Match { scrutinee, arms } => self.visit_match(expr, scrutinee, arms),
 
             // Phase-specific sugar. Default: ignore — Raw consumers that need
@@ -172,7 +174,8 @@ pub(crate) trait ExprVisitor<P: Phase> {
                 }
             }
             TypeExprKind::TypeApplication { generic_args, .. }
-            | TypeExprKind::ComplexApplication { generic_args } => {
+            | TypeExprKind::ComplexApplication { generic_args }
+            | TypeExprKind::KeyApplication { generic_args } => {
                 self.visit_generic_args(generic_args)?;
             }
             TypeExprKind::Indexed { base, .. } => self.visit_type_expr(base)?,
@@ -360,6 +363,7 @@ pub trait ExprVisitorMut<P: Phase> {
                 self.visit_expr_mut(body)
             }
             ExprKind::Unfold { .. } => self.visit_unfold_mut(expr),
+            ExprKind::KeyForm { arg, .. } => self.visit_expr_mut(arg),
             ExprKind::Match { .. } => self.visit_match_mut(expr),
         }
     }
@@ -418,7 +422,8 @@ pub trait ExprVisitorMut<P: Phase> {
                 }
             }
             TypeExprKind::TypeApplication { generic_args, .. }
-            | TypeExprKind::ComplexApplication { generic_args } => {
+            | TypeExprKind::ComplexApplication { generic_args }
+            | TypeExprKind::KeyApplication { generic_args } => {
                 Self::visit_generic_args_mut(self, generic_args)?;
             }
             TypeExprKind::Indexed { base, .. } => self.visit_type_expr_mut(base)?,

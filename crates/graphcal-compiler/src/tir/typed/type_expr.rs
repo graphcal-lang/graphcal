@@ -114,7 +114,8 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
                 })
         }
         TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args } => generic_args.iter().any(|arg| {
+        | TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => generic_args.iter().any(|arg| {
             matches!(
                 arg,
                 crate::desugar::desugared_ast::GenericArg::Type(type_expr)
@@ -140,7 +141,8 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
             .any(|item| item.term.name.span == span),
         TypeExprKind::Indexed { base, .. } => type_expr_has_dim_term_at_span(base, span),
         TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args } => generic_args.iter().any(|arg| {
+        | TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => generic_args.iter().any(|arg| {
             matches!(
                 arg,
                 crate::desugar::desugared_ast::GenericArg::Type(type_expr)
@@ -226,6 +228,10 @@ fn resolve_hir_type_expr_inner(
         hir::TypeExprKind::DimExpr(dim_expr) => resolve_hir_dim_expr(dim_expr, ctx),
         hir::TypeExprKind::Complex(dimension) => Ok(ResolvedTypeExpr::Complex {
             dimension: resolve_hir_dim_arg(dimension, ctx)?,
+            span: type_ann.span,
+        }),
+        hir::TypeExprKind::Key(index) => Ok(ResolvedTypeExpr::Key {
+            index: resolve_hir_index_ref(index, ctx)?,
             span: type_ann.span,
         }),
         hir::TypeExprKind::Index(index) => Err(GraphcalError::EvalError {
@@ -735,7 +741,7 @@ fn substitute_params_in_resolved_type(
     substitutions: &ResolvedGenericSubstitutions,
 ) -> Result<(), GenericDefaultSubstitutionError> {
     match type_expr {
-        ResolvedTypeExpr::IndexArg(index) => {
+        ResolvedTypeExpr::IndexArg(index) | ResolvedTypeExpr::Key { index, .. } => {
             substitute_params_in_resolved_index(index, substitutions)
         }
         ResolvedTypeExpr::GenericDimParam(name, _) => {
@@ -1285,6 +1291,10 @@ pub fn resolve_type_expr_with_modules(
     clippy::too_many_arguments,
     reason = "recursive resolver threads generic parameter scopes and optional module context"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "single dispatch over every TypeExprKind variant"
+)]
 pub(super) fn resolve_type_expr_inner(
     type_ann: &TypeExpr,
     registry: &Registry,
@@ -1312,6 +1322,17 @@ pub(super) fn resolve_type_expr_inner(
             resolve_datetime_application(type_ann, type_args, src)
         }
         TypeExprKind::ComplexApplication { generic_args } => resolve_complex_application(
+            type_ann,
+            generic_args,
+            registry,
+            owner,
+            dim_params,
+            index_params,
+            nat_params,
+            src,
+            module_ctx,
+        ),
+        TypeExprKind::KeyApplication { generic_args } => resolve_key_application(
             type_ann,
             generic_args,
             registry,
@@ -1665,6 +1686,62 @@ fn resolve_complex_application(
     };
     Ok(ResolvedTypeExpr::Complex {
         dimension,
+        span: type_ann.span,
+    })
+}
+
+/// Resolve the built-in `Key<I>` application by checking its single generic
+/// argument against a synthetic `I: Index` parameter.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "passes full type resolution context from resolve_type_expr"
+)]
+fn resolve_key_application(
+    type_ann: &TypeExpr,
+    generic_args: &[crate::desugar::desugared_ast::GenericArg],
+    registry: &Registry,
+    owner: &crate::dag_id::DagId,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: Option<ModuleTypeContext<'_>>,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let [arg] = generic_args else {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "type `Key` expects 1 generic argument, got {}",
+                generic_args.len()
+            ),
+            src: src.clone(),
+            span: type_ann.span.into(),
+        });
+    };
+    let param = crate::registry::types::TypeGenericParam {
+        name: GenericParamName::expect_valid("I"),
+        constraint: TypeGenericConstraint::Index,
+        default: None,
+    };
+    let resolved = resolve_type_arg_for_param(
+        &param,
+        arg,
+        registry,
+        owner,
+        dim_params,
+        index_params,
+        nat_params,
+        src,
+        module_ctx,
+    )?;
+    let ResolvedGenericArg::Index(index) = resolved else {
+        return Err(internal_error(
+            "Key index argument resolved to a non-index sort".to_string(),
+            src,
+            arg.span(),
+        ));
+    };
+    Ok(ResolvedTypeExpr::Key {
+        index,
         span: type_ann.span,
     })
 }

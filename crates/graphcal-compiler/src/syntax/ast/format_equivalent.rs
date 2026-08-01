@@ -1185,6 +1185,15 @@ impl FormatEquivalent for TypeExprKind {
                 };
                 generic_args.format_equivalent(other_generic_args)
             }
+            Self::KeyApplication { generic_args } => {
+                let Self::KeyApplication {
+                    generic_args: other_generic_args,
+                } = other
+                else {
+                    return false;
+                };
+                generic_args.format_equivalent(other_generic_args)
+            }
             Self::DimExpr(dim) => {
                 let Self::DimExpr(other_dim) = other else {
                     return false;
@@ -1944,6 +1953,19 @@ impl FormatEquivalent for ExprKind {
                     && prev_index_name.format_equivalent(other_prev_index_name)
                     && index_name.format_equivalent(other_index_name)
                     && body.format_equivalent(other_body)
+            }
+            Self::KeyForm { kind, axis, arg } => {
+                let Self::KeyForm {
+                    kind: other_kind,
+                    axis: other_axis,
+                    arg: other_arg,
+                } = other
+                else {
+                    return false;
+                };
+                kind == other_kind
+                    && axis.format_equivalent(other_axis)
+                    && arg.format_equivalent(other_arg)
             }
             Self::Match { scrutinee, arms } => {
                 let Self::Match {

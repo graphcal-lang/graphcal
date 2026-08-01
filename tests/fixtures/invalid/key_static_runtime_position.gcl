@@ -1,0 +1,5 @@
+// key() requires a static position; a runtime Int must use the explicit
+// runtime-checked fin_key().
+param n: Int = 1;
+
+node k: Key<Fin(3)> = key(Fin(3), @n);

@@ -65,7 +65,8 @@ pub(crate) fn resolve_type_expr_impl(
         | TypeExprKind::Datetime
         | TypeExprKind::TypeApplication { .. }
         | TypeExprKind::DatetimeApplication { .. }
-        | TypeExprKind::ComplexApplication { .. } => Ok(None),
+        | TypeExprKind::ComplexApplication { .. }
+        | TypeExprKind::KeyApplication { .. } => Ok(None),
         TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr_impl(dimensions, dim_expr),
         TypeExprKind::Indexed { base, .. } => resolve_type_expr_impl(dimensions, base),
     }

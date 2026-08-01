@@ -1,0 +1,4 @@
+// The coordinate searches take a quantity in the axis dimension.
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+
+node k: Key<TimeStep> = nearest_key(TimeStep, 1.0 m);

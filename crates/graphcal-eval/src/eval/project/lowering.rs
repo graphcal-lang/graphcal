@@ -1887,8 +1887,10 @@ fn collect_type_expr_names(
                 }
             }
         }
-        TypeExprKind::ComplexApplication { generic_args } => {
-            // `Complex` is built in; collect only names in its dimension argument.
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
+            // `Complex` and `Key` are built in; collect only names in their
+            // generic argument.
             for arg in generic_args {
                 match arg {
                     graphcal_compiler::syntax::ast::GenericArg::Type(type_expr) => {

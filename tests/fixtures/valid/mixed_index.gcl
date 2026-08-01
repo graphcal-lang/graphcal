@@ -11,13 +11,13 @@ param accel: Acceleration[Maneuver] = {
 };
 
 // Mixed-index via for comprehension (label x range)
-node v_for: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep { @accel[m] * t };
+node v_for: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep { @accel[m] * coord(t) };
 
 // Mixed-index via map literal with for-comprehension values
 param v_map: Velocity[Maneuver, TimeStep] = {
-    Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * t },
-    Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * t },
-    Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * t },
+    Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * coord(t) },
+    Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * coord(t) },
+    Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * coord(t) },
 };
 
 // Index access with qualified variant and loop variable

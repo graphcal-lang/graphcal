@@ -38,6 +38,7 @@ pub(super) enum BuiltinTypeRule {
 pub(super) enum TypeConversionFn {
     ToFloat,
     ToInt,
+    Coord,
 }
 
 impl TypeConversionFn {
@@ -47,6 +48,7 @@ impl TypeConversionFn {
         match self {
             Self::ToFloat => BuiltinFnName::ToFloat.as_str(),
             Self::ToInt => BuiltinFnName::ToInt.as_str(),
+            Self::Coord => BuiltinFnName::Coord.as_str(),
         }
     }
 }
@@ -73,6 +75,7 @@ pub(super) const fn type_rule_for_builtin(name: BuiltinFnName) -> BuiltinTypeRul
     match name {
         BuiltinFnName::ToFloat => BuiltinTypeRule::TypeConversion(TypeConversionFn::ToFloat),
         BuiltinFnName::ToInt => BuiltinTypeRule::TypeConversion(TypeConversionFn::ToInt),
+        BuiltinFnName::Coord => BuiltinTypeRule::TypeConversion(TypeConversionFn::Coord),
         BuiltinFnName::ToUtc => BuiltinTypeRule::TimeScaleConversion(TimeScale::UTC),
         BuiltinFnName::ToTai => BuiltinTypeRule::TimeScaleConversion(TimeScale::TAI),
         BuiltinFnName::ToTt => BuiltinTypeRule::TimeScaleConversion(TimeScale::TT),

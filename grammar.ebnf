@@ -60,9 +60,10 @@ KEYWORD
    coordinate-index declarations; "Fin" is special only in Index positions.
    The full contextual set includes: "scan", "unfold", "range", "linspace",
    "step", "points", "Fin",
+   "key", "fin_key", "floor_key", "ceil_key", "nearest_key",
    "mark", "encode", "plots", "point", "line", "bar", "area", "rect",
    "tick", "min", "max", "Dim", "Index", "Nat", "Type",
-   "Dimensionless", "Bool", "Int", "Datetime", "Complex". *)
+   "Dimensionless", "Bool", "Int", "Datetime", "Complex", "Key". *)
 (* --- Identifiers --- *)
 LETTER
    = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i"
@@ -669,6 +670,7 @@ type_expr_base
    | "Int"
    | datetime_type
    | complex_type
+   | key_type
    | type_application
    | dim_expr;
 
@@ -682,6 +684,12 @@ complex_type
    = "Complex", "<", generic_arg, ">";
 (* The sole generic argument must have sort `Dim`; bare `Complex`, unit
    arguments such as `Complex<m>`, and non-dimension arguments are rejected. *)
+
+key_type
+   = "Key", "<", generic_arg, ">";
+(* The sole generic argument must have sort `Index` (a named index, a
+   coordinate index, a generic `I: Index` parameter, or `Fin(N)`); bare
+   `Key` and non-index arguments are rejected. *)
 
 (* Domain constraints restrict the valid value range of a quantity, Int, or
    Datetime<S>: Mass(min: 100 kg), Int(max: 100),
@@ -851,7 +859,8 @@ atom
    | match_expr
    | for_expr
    | scan_expr
-   | unfold_expr;
+   | unfold_expr
+   | key_form_expr;
 
 (* --- Literals --- *)
 float_literal
@@ -1094,6 +1103,20 @@ unfold_expr
    Generates an indexed value over an explicit coordinate index. The first
    argument is an index reference, not a value expression. The state may
    itself be indexed; the coordinate axis is prepended to its axes. *)
+
+key_form_expr
+   = ( "key" | "fin_key" | "floor_key" | "ceil_key" | "nearest_key" ),
+     "(", index_expr, ",", expr, ")";
+
+(* Key introduction forms. The first argument is an index reference (a
+   named index path or `Fin(N)`), not a value expression. `key` is
+   compile-time membership-checked over a Fin axis; `fin_key` performs a
+   runtime range check over a Fin axis; `floor_key` / `ceil_key` /
+   `nearest_key` search a coordinate axis with explicit policies
+   (`nearest_key` is total, resolving midpoint ties toward the axis
+   start; the other two error when no coordinate qualifies). Like `scan`
+   and `unfold`, the head spellings are contextual: they select these
+   forms only as bare call heads immediately followed by `(`. *)
 
 (* ================================================================== *)
 (* 10. Precedence and Associativity Summary                           *)

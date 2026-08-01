@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+fin_key() requires a Fin(...) axis, got `TimeStep`
+    Diagnostic severity: error
+Begin snippet for fin_key_non_fin_axis.gcl starting at line 6, column 1
+
+snippet line 6: 
+snippet line 7: node k: Key<TimeStep> = fin_key(TimeStep, @n);
+    label at line 7, columns 33 to 40: error here
+diagnostic code: graphcal::E001

@@ -74,6 +74,7 @@ impl Parser<'_> {
                     }
                 }
                 Some("Complex") => self.parse_complex_type(path_span)?,
+                Some("Key") => self.parse_key_type(path_span)?,
                 _ if self.lexer.peek() == Some(&Token::Lt) => {
                     // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
                     // `<` cannot follow a complete dim expr in type position,
@@ -151,6 +152,23 @@ impl Parser<'_> {
         let end_span = generic_args.last().map_or(name_span, GenericArg::span);
         Ok(TypeExpr {
             kind: TypeExprKind::ComplexApplication { generic_args },
+            constraints: vec![],
+            span: name_span.merge(end_span),
+        })
+    }
+
+    /// Parse the built-in `Key<I>` type former into its dedicated syntax variant.
+    fn parse_key_type(&mut self, name_span: Span) -> Result<TypeExpr, ParseError> {
+        // Bare `Key` is retained with zero arguments so HIR can report the
+        // missing mandatory index axis with a targeted arity diagnostic.
+        let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
+            self.parse_generic_arg_list()?
+        } else {
+            Vec::new()
+        };
+        let end_span = generic_args.last().map_or(name_span, GenericArg::span);
+        Ok(TypeExpr {
+            kind: TypeExprKind::KeyApplication { generic_args },
             constraints: vec![],
             span: name_span.merge(end_span),
         })
@@ -750,7 +768,7 @@ impl Parser<'_> {
     /// - `Fin(N + 1)` → `IndexExpr::Finite`
     /// - bare Nat syntax is retained as `IndexExpr::BareNat` for a targeted
     ///   semantic sort diagnostic.
-    fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
+    pub(super) fn parse_index_expr(&mut self) -> Result<IndexExpr, ParseError> {
         self.reject_obsolete_structural_range()?;
         if self.lexer.peek() == Some(&Token::ContextualKeyword(ContextualKeyword::Fin))
             && self.lexer.peek_second() == Some(&Token::LParen)
@@ -1143,6 +1161,50 @@ mod tests {
         assert!(matches!(
             &param.type_ann.kind,
             TypeExprKind::ComplexApplication { generic_args } if generic_args.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parse_key_application_uses_dedicated_variant() {
+        let source = "param k: Key<Maneuver>;";
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.kind else {
+            panic!("expected KeyApplication");
+        };
+        assert_eq!(generic_args.len(), 1);
+        assert_eq!(generic_arg_name(&generic_args[0]), "Maneuver");
+    }
+
+    #[test]
+    fn parse_key_application_with_finite_index_argument() {
+        let source = "param k: Key<Fin(3)>;";
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.kind else {
+            panic!("expected KeyApplication");
+        };
+        assert_eq!(generic_args.len(), 1);
+        assert!(matches!(
+            &generic_args[0],
+            GenericArg::Index(IndexExpr::Finite { .. })
+        ));
+    }
+
+    #[test]
+    fn parse_bare_key_for_targeted_arity_diagnostic() {
+        let source = "param k: Key;";
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        assert!(matches!(
+            &param.type_ann.kind,
+            TypeExprKind::KeyApplication { generic_args } if generic_args.is_empty()
         ));
     }
 

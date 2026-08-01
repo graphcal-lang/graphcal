@@ -1,0 +1,11 @@
+// Additive Fin-key arithmetic: k + c shifts the bound into the type,
+// exactly and infallibly, so diffs and stencils type through keys.
+param values: Velocity[Fin(5)] = for i: Fin(5) { 1.0 m/s };
+
+node third: Key<Fin(4)> = key(Fin(4), 2);
+node shifted: Key<Fin(5)> = key(Fin(3), 2) + 2;
+node shifted_value: Velocity = @values[@shifted];
+
+node widened_value: Velocity = @values[@third];
+node third_value: Velocity = @values[@third];
+node next_value: Velocity = @values[@third + 1];

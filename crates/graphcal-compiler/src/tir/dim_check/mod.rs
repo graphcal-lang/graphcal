@@ -231,8 +231,8 @@ pub enum InferredType {
     Complex(Dimension),
     /// A quantity produced by iterating a declared coordinate index.
     ///
-    /// Coordinate labels participate in quantity arithmetic while retaining
-    /// their originating index identity for type-safe indexed access.
+    /// TODO(#1073): no longer constructed — coordinate loop variables are
+    /// `Key`-typed and expose their quantity through `coord()`; remove.
     CoordinateIndexLabel {
         index: InferredIndex,
         dimension: Dimension,
@@ -244,16 +244,19 @@ pub enum InferredType {
     /// A value of type `Fin(N)` satisfies `0 <= value < N`. This enables compile-time
     /// bounds checking: `v[i]` is valid when `i : Fin(N)` and `v : T[M]` with `N <= M`.
     ///
-    /// `Fin(N)` is not a user-declarable type — it only arises as the type of loop
-    /// variables in `for i: Fin(N) { ... }`.
+    /// TODO(#1073): no longer constructed — `Fin` loop variables are
+    /// `Key<Fin(N)>`-typed and expose integers through `to_int()`; remove.
     Fin(NatPolyForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
     /// A named-index case bound by a `for` comprehension.
     ///
-    /// It can drive index access and exhaustive label matching but is not a
-    /// Graphcal value type.
+    /// TODO(#1073): no longer constructed — loop variables are `Key`-typed;
+    /// remove together with `CoordinateIndexLabel` and `Fin`.
     NamedIndexCase(InferredIndex),
+    /// An index-key value of type `Key<I>`: a first-class element key of
+    /// axis `I`.
+    Key(InferredIndex),
     /// An index identity carried only while checking an `Index`-sorted generic
     /// argument. This may be a declared or structural finite index and is not a
     /// Graphcal value type.
@@ -561,6 +564,7 @@ fn check_ineffective_conversions_inner(
             check_ineffective_conversions(init, display_position, src)?;
             check_ineffective_conversions(body, false, src)
         }
+        ExprKind::KeyForm { arg, .. } => check_ineffective_conversions(arg, false, src),
         ExprKind::BinOp { lhs, rhs, .. } => {
             check_ineffective_conversions(lhs, false, src)?;
             check_ineffective_conversions(rhs, false, src)
@@ -1179,6 +1183,7 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) ->
         ResolvedTypeExpr::Indexed { base, .. } => invalid_domain_target_kind(base),
         ResolvedTypeExpr::Bool => Some("Bool".to_string()),
         ResolvedTypeExpr::Complex { .. } => Some("Complex".to_string()),
+        ResolvedTypeExpr::Key { .. } => Some("Key".to_string()),
         ResolvedTypeExpr::IndexArg(index) => {
             Some(format!("index {}", index.format_for_diagnostic()))
         }
@@ -1484,7 +1489,8 @@ fn check_type_expr_for_generic_arg_constraints(
             check_type_expr_for_generic_arg_constraints(base, src)
         }
         TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args } => {
+        | TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
                 if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
                     if let Some(bound) = type_expr.constraints.first() {

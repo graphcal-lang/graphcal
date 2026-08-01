@@ -151,14 +151,11 @@ fn infer_hir_type_inner(
         }
         hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, registry, src)?,
         hir::ExprKind::VariantLiteral(variant) => {
-            return Err(GraphcalError::EvalError {
-                message: format!(
-                    "index label `{}` cannot be used as a value",
-                    variant.variant
-                ),
-                src: src.clone(),
-                span: variant.path_span().into(),
-            });
+            // A qualified label is self-typed: `Maneuver.Departure` is a
+            // constant of type `Key<Maneuver>` — the axis is in the spelling.
+            InferredType::Key(InferredIndex::from_resolved(
+                variant.variant.index().clone(),
+            ))
         }
         hir::ExprKind::GraphRef(target) => {
             infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
@@ -357,6 +354,25 @@ fn infer_hir_type_inner(
             &recurrence.previous_index,
             &recurrence.current_index,
             body,
+            owner_decl_name,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        )?,
+        hir::ExprKind::KeyForm {
+            kind,
+            axis,
+            axis_span,
+            arg,
+        } => infer_hir_key_form(
+            *kind,
+            axis,
+            *axis_span,
+            arg,
             owner_decl_name,
             declared_types,
             local_types,
@@ -774,6 +790,24 @@ fn infer_hir_fn_call(
             }
             if kind == AggregationFn::Count {
                 return Ok(InferredType::Int);
+            }
+            if matches!(kind, AggregationFn::Argmin | AggregationFn::Argmax) {
+                // The extremum's identity: a key of the reduced axis. The
+                // element-type requirement below still applies, so check it
+                // before returning.
+                if element.quantity_dimension().is_none() {
+                    return Err(GraphcalError::DimensionMismatch {
+                        expected: "indexed quantity collection".to_string(),
+                        found: format_inferred_type(element, registry),
+                        help: format!(
+                            "{}() requires every indexed element to be quantity",
+                            name.as_str()
+                        ),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    });
+                }
+                return Ok(InferredType::Key(index.clone()));
             }
             let Some(dimension) = element.quantity_dimension().cloned() else {
                 return Err(GraphcalError::DimensionMismatch {
@@ -1373,6 +1407,22 @@ fn infer_hir_type_conversion(
             Ok(InferredType::Quantity(Dimension::dimensionless()))
         }
         TypeConversionFn::ToInt => {
+            // A `Fin`-axis key exposes its position: the position is the
+            // key's semantic content. Named and coordinate keys stay opaque.
+            if let InferredType::Key(index) = &arg_type {
+                if index.finite_index_form().is_some() {
+                    return Ok(InferredType::Int);
+                }
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<Fin(N)>".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "to_int() extracts positions from Fin-axis keys only; \
+                           named and coordinate keys have no ordinal"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            }
             let dim = expect_quantity(&arg_type, registry, src, args[0].span)?;
             if !dim.is_dimensionless() {
                 return Err(GraphcalError::DimensionMismatch {
@@ -1384,6 +1434,55 @@ fn infer_hir_type_conversion(
                 });
             }
             Ok(InferredType::Int)
+        }
+        TypeConversionFn::Coord => {
+            let InferredType::Key(index) = &arg_type else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<C> for a coordinate axis C".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "coord() extracts the coordinate quantity of a \
+                           coordinate-axis key"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            };
+            if index.finite_index_form().is_some() {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<C> for a coordinate axis C".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "coord() applies to coordinate-axis keys only; named \
+                           keys are opaque and Fin keys expose to_int()"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                });
+            }
+            let index_def =
+                super::index_def_for_inferred(index, Some(dag), registry).ok_or_else(|| {
+                    GraphcalError::UnknownIndex {
+                        name: index.name(),
+                        src: src.clone(),
+                        span: args[0].span.into(),
+                    }
+                })?;
+            match &index_def.kind {
+                crate::registry::types::IndexKind::Coordinate(data) => {
+                    Ok(InferredType::Quantity(data.dimension.clone()))
+                }
+                crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
+                    Ok(InferredType::Quantity(dimension.clone()))
+                }
+                _ => Err(GraphcalError::DimensionMismatch {
+                    expected: "Key<C> for a coordinate axis C".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "coord() applies to coordinate-axis keys only; named \
+                           keys are opaque and Fin keys expose to_int()"
+                        .to_string(),
+                    src: src.clone(),
+                    span: args[0].span.into(),
+                }),
+            }
         }
     }
 }
@@ -1759,8 +1858,9 @@ fn infer_hir_binop(
         src,
     )?;
     // Exact exponent shape is carried by `BinOp::Pow`; constant folding is
-    // needed only for runtime-classified right-associated Int power chains.
-    let rhs_const_int = if matches!(op, BinOp::Pow(_)) {
+    // needed for runtime-classified right-associated Int power chains and for
+    // the additive Fin-key rule (`k + c` shifts the bound by a static Nat).
+    let rhs_const_int = if matches!(op, BinOp::Pow(_) | BinOp::Add) {
         try_const_int(rhs)
     } else {
         None
@@ -1819,6 +1919,171 @@ fn finite_index_error(
     }
 }
 
+/// Infer a key introduction form.
+///
+/// `key(Fin(N), c)` is compile-time membership-checked and infallible;
+/// `fin_key(Fin(N), e)` is the explicit runtime-checked constructor; the
+/// coordinate searches require a coordinate axis and a matching-dimension
+/// quantity argument.
+#[expect(clippy::too_many_arguments, reason = "expression inference context")]
+fn infer_hir_key_form(
+    kind: crate::syntax::ast::KeyFormKind,
+    axis: &hir::expr::ForBindingIndex,
+    axis_span: Span,
+    arg: &hir::Expr,
+    owner_decl_name: Option<&str>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    local_types: &HirLocalTypes<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    use crate::syntax::ast::KeyFormKind;
+
+    let arg_type = infer_hir_type(
+        arg,
+        owner_decl_name,
+        declared_types,
+        local_types,
+        dag,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+    )?;
+    // Resolve the axis identity and, for Fin axes, its cardinality form.
+    let (index_identity, finite_form) = match axis {
+        hir::expr::ForBindingIndex::Named(index) => {
+            let identity = InferredIndex::from_resolved(index.value.clone());
+            let idx_def = super::index_def_for_inferred(&identity, Some(dag), registry)
+                .ok_or_else(|| GraphcalError::UnknownIndex {
+                    name: identity.name(),
+                    src: src.clone(),
+                    span: index.span.into(),
+                })?;
+            let finite_form = idx_def.finite_index_size().map(NatPolyForm::from_constant);
+            (identity, finite_form)
+        }
+        hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+            let form = hir_nat_to_linear_form(cardinality)
+                .map_err(|err| nat_overflow_error(err, src, *span))?;
+            let identity = InferredIndex::from_finite_index_form(form.clone())
+                .map_err(|err| finite_index_error(err, src, *span))?;
+            (identity, Some(form))
+        }
+    };
+    match kind {
+        KeyFormKind::Static => {
+            let Some(form) = &finite_form else {
+                return Err(GraphcalError::EvalError {
+                    message: "key() constructs Fin-axis keys; named-axis keys are written as \
+                              qualified labels and coordinate keys come from argmax/argmin or \
+                              the coordinate searches"
+                        .to_string(),
+                    src: src.clone(),
+                    span: axis_span.into(),
+                });
+            };
+            if !arg_type.is_int_like() {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "a static Nat position".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "key(Fin(N), position) takes an integer position".to_string(),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            let Some(position) = try_const_int(arg) else {
+                return Err(GraphcalError::EvalError {
+                    message: "key() requires a static position; use fin_key() for a \
+                              runtime-checked position"
+                        .to_string(),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            };
+            if position < 0 {
+                return Err(GraphcalError::EvalError {
+                    message: format!("key() position evaluated to negative value: {position}"),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            if form.is_constant() {
+                let size = form.constant();
+                let position_u64 = u64::try_from(position).unwrap_or(u64::MAX);
+                if position_u64 >= size {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "key() position {position} is out of bounds for Fin({size})"
+                        ),
+                        src: src.clone(),
+                        span: arg.span.into(),
+                    });
+                }
+            }
+            Ok(InferredType::Key(index_identity))
+        }
+        KeyFormKind::Fin => {
+            if finite_form.is_none() {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "fin_key() requires a Fin(...) axis, got `{}`",
+                        index_identity.name()
+                    ),
+                    src: src.clone(),
+                    span: axis_span.into(),
+                });
+            }
+            if !arg_type.is_int_like() {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: "Int".to_string(),
+                    found: format_inferred_type(&arg_type, registry),
+                    help: "fin_key(Fin(N), position) takes an Int position, checked at \
+                           runtime"
+                        .to_string(),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            Ok(InferredType::Key(index_identity))
+        }
+        KeyFormKind::Floor | KeyFormKind::Ceil | KeyFormKind::Nearest => {
+            let idx_def = super::index_def_for_inferred(&index_identity, Some(dag), registry);
+            let dimension = match idx_def.map(|def| &def.kind) {
+                Some(crate::registry::types::IndexKind::Coordinate(data)) => data.dimension.clone(),
+                Some(crate::registry::types::IndexKind::RequiredCoordinate { dimension }) => {
+                    dimension.clone()
+                }
+                _ => {
+                    return Err(GraphcalError::EvalError {
+                        message: format!(
+                            "{}() requires a coordinate axis, got `{}`",
+                            kind.as_str(),
+                            index_identity.name()
+                        ),
+                        src: src.clone(),
+                        span: axis_span.into(),
+                    });
+                }
+            };
+            let arg_dim = expect_quantity(&arg_type, registry, src, arg.span)?;
+            if arg_dim != dimension {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: registry.dimensions.format_dimension(&dimension),
+                    found: registry.dimensions.format_dimension(&arg_dim),
+                    help: format!("{}() takes a quantity in the axis dimension", kind.as_str()),
+                    src: src.clone(),
+                    span: arg.span.into(),
+                });
+            }
+            Ok(InferredType::Key(index_identity))
+        }
+    }
+}
+
 #[expect(clippy::too_many_arguments, reason = "for-comprehension context")]
 fn infer_hir_for_comp(
     bindings: &[hir::expr::ForBinding],
@@ -1834,41 +2099,28 @@ fn infer_hir_for_comp(
 ) -> Result<InferredType, GraphcalError> {
     let mut inner_locals = local_types.child(Vec::new());
     for binding in bindings {
+        // Every loop variable is a key of its axis. Coordinate arithmetic
+        // goes through coord(), integer use of a Fin key through to_int().
         let var_type = match &binding.index {
             hir::expr::ForBindingIndex::Named(index) => {
                 let index_identity = InferredIndex::from_resolved(index.value.clone());
-                let idx_def = super::index_def_for_inferred(&index_identity, Some(dag), registry)
-                    .ok_or_else(|| GraphcalError::UnknownIndex {
-                    name: index_identity.name(),
-                    src: src.clone(),
-                    span: index.span.into(),
-                })?;
-                match &idx_def.kind {
-                    crate::registry::types::IndexKind::Named { .. }
-                    | crate::registry::types::IndexKind::RequiredNamed => {
-                        InferredType::NamedIndexCase(index_identity)
-                    }
-                    crate::registry::types::IndexKind::Coordinate(data) => {
-                        InferredType::CoordinateIndexLabel {
-                            index: index_identity,
-                            dimension: data.dimension.clone(),
-                        }
-                    }
-                    crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
-                        InferredType::CoordinateIndexLabel {
-                            index: index_identity,
-                            dimension: dimension.clone(),
-                        }
-                    }
-                    crate::registry::types::IndexKind::Finite { cardinality } => {
-                        InferredType::Fin(NatPolyForm::from_constant(cardinality.get() as u64))
-                    }
-                }
+                super::index_def_for_inferred(&index_identity, Some(dag), registry).ok_or_else(
+                    || GraphcalError::UnknownIndex {
+                        name: index_identity.name(),
+                        src: src.clone(),
+                        span: index.span.into(),
+                    },
+                )?;
+                InferredType::Key(index_identity)
             }
-            hir::expr::ForBindingIndex::Finite { cardinality, span } => InferredType::Fin(
-                hir_nat_to_linear_form(cardinality)
-                    .map_err(|err| nat_overflow_error(err, src, *span))?,
-            ),
+            hir::expr::ForBindingIndex::Finite { cardinality, span } => {
+                let form = hir_nat_to_linear_form(cardinality)
+                    .map_err(|err| nat_overflow_error(err, src, *span))?;
+                InferredType::Key(
+                    InferredIndex::from_finite_index_form(form)
+                        .map_err(|err| finite_index_error(err, src, *span))?,
+                )
+            }
         };
         inner_locals.bind(binding.local.id, var_type);
     }
@@ -1957,56 +2209,27 @@ fn infer_hir_index_access(
                     });
                 };
                 match var_type {
-                    InferredType::NamedIndexCase(label_index) => {
-                        if label_index != &index {
-                            return Err(GraphcalError::IndexMismatch {
-                                expected: index.name(),
-                                found: label_index.name(),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
-                    }
-                    InferredType::CoordinateIndexLabel {
-                        index: label_index,
-                        dimension: label_dimension,
-                    } => {
-                        let idx_def = super::index_def_for_inferred(&index, Some(dag), registry)
-                            .ok_or_else(|| GraphcalError::UnknownIndex {
-                                name: index.name(),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            })?;
-                        let expected_dimension = match &idx_def.kind {
-                            crate::registry::types::IndexKind::Coordinate(data) => &data.dimension,
-                            crate::registry::types::IndexKind::RequiredCoordinate { dimension } => {
-                                dimension
-                            }
-                            _ => {
-                                return Err(GraphcalError::EvalError {
-                                    message: format!(
-                                        "coordinate-index loop variable cannot index into non-coordinate index `{}`",
-                                        index.name()
-                                    ),
-                                    src: src.clone(),
-                                    span: local.span.into(),
-                                });
-                            }
+                    // Loop variables are keys of their axes: accept on axis
+                    // identity, with Fin widening (`N <= M`).
+                    InferredType::Key(key_index) => {
+                        let axis_form = super::index_def_for_inferred(&index, Some(dag), registry)
+                            .map_or_else(
+                                || index.finite_index_form(),
+                                |idx_def| {
+                                    if !idx_def.is_finite_index() {
+                                        return None;
+                                    }
+                                    idx_def.finite_index_size().map(NatPolyForm::from_constant)
+                                },
+                            );
+                        let accepted = match (key_index.finite_index_form(), &axis_form) {
+                            (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
+                            _ => key_index == &index,
                         };
-                        if label_index != &index {
+                        if !accepted {
                             return Err(GraphcalError::IndexMismatch {
                                 expected: index.name(),
-                                found: label_index.name(),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
-                        if label_dimension != expected_dimension {
-                            return Err(GraphcalError::DimensionMismatch {
-                                expected: registry.dimensions.format_dimension(expected_dimension),
-                                found: registry.dimensions.format_dimension(label_dimension),
-                                help: "coordinate-index loop variable dimension must match the indexed coordinate axis"
-                                    .to_string(),
+                                found: key_index.name(),
                                 src: src.clone(),
                                 span: local.span.into(),
                             });
@@ -2021,55 +2244,6 @@ fn infer_hir_index_access(
                             src: src.clone(),
                             span: local.span.into(),
                         });
-                    }
-                    InferredType::Int => {
-                        let is_finite = index.finite_index_form().is_some()
-                            || super::index_def_for_inferred(&index, Some(dag), registry)
-                                .is_some_and(crate::registry::types::IndexDef::is_finite_index);
-                        if !is_finite {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "Int local cannot index into non-finite-index index `{}`",
-                                    index.name()
-                                ),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
-                    }
-                    InferredType::Fin(fin_bound) => {
-                        let index_form = super::index_def_for_inferred(&index, Some(dag), registry)
-                            .map_or_else(
-                                || index.finite_index_form(),
-                                |idx_def| {
-                                    if !idx_def.is_finite_index() {
-                                        return None;
-                                    }
-                                    idx_def.finite_index_size().map(NatPolyForm::from_constant)
-                                },
-                            );
-                        let Some(index_form) = index_form else {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "Fin({}) local cannot index into non-finite-index index `{}`",
-                                    fin_bound.format(),
-                                    index.name()
-                                ),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        };
-                        if !fin_bound.is_leq(&index_form) {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "index out of bounds: local has type Fin({}) but array has size {}",
-                                    fin_bound.format(),
-                                    index_form.format(),
-                                ),
-                                src: src.clone(),
-                                span: local.span.into(),
-                            });
-                        }
                     }
                     _ => {
                         return Err(GraphcalError::EvalError {
@@ -2105,6 +2279,24 @@ fn infer_hir_index_access(
                             idx_def.finite_index_size().map(NatPolyForm::from_constant)
                         },
                     );
+                // A key-typed expression selects by axis identity: exact for
+                // named and coordinate axes, widening (`N <= M`) for Fin.
+                if let InferredType::Key(key_index) = &expr_type {
+                    let accepted = match (key_index.finite_index_form(), &index_form) {
+                        (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
+                        _ => *key_index == index,
+                    };
+                    if !accepted {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: index.name(),
+                            found: key_index.name(),
+                            src: src.clone(),
+                            span: index_expr.span.into(),
+                        });
+                    }
+                    current = *element;
+                    continue;
+                }
                 let Some(index_form) = index_form else {
                     return Err(GraphcalError::EvalError {
                         message: format!(
@@ -2117,6 +2309,21 @@ fn infer_hir_index_access(
                 };
                 match expr_type {
                     InferredType::Int => {
+                        // Runtime-checked Int indexing was removed: only a
+                        // statically discharged constant selects implicitly;
+                        // a runtime Int goes through the explicit fin_key().
+                        if try_const_int(index_expr).is_none() {
+                            return Err(GraphcalError::EvalError {
+                                message: format!(
+                                    "a runtime Int cannot index `{}` implicitly; write \
+                                     `fin_key({}, ...)` to make the range check explicit",
+                                    index.name(),
+                                    index.name(),
+                                ),
+                                src: src.clone(),
+                                span: index_expr.span.into(),
+                            });
+                        }
                         check_constant_finite_index_index(index_expr, &index_form, src)?;
                     }
                     InferredType::Fin(ref fin_bound) => {
@@ -2520,6 +2727,7 @@ fn validate_finite_index_obligations_inner(
         | InferredType::Fin(_)
         | InferredType::Datetime(_)
         | InferredType::NamedIndexCase(_)
+        | InferredType::Key(_)
         | InferredType::IndexArg(_) => Ok(()),
     }
 }
@@ -2638,6 +2846,9 @@ fn infer_hir_generic_type_arg(
         hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
             inferred_index_from_type_arg(index, src)?,
         )),
+        hir::TypeExprKind::Key(index) => {
+            Ok(InferredType::Key(inferred_index_from_type_arg(index, src)?))
+        }
         hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
             InferredStructType::from_resolved(name.value.clone()),
             vec![],
@@ -3494,9 +3705,9 @@ fn infer_hir_unfold(
             src: src.clone(),
             span: axis.span.into(),
         })?;
-    let dimension = match &idx_def.kind {
-        crate::registry::types::IndexKind::Coordinate(data) => data.dimension.clone(),
-        crate::registry::types::IndexKind::RequiredCoordinate { dimension } => dimension.clone(),
+    match &idx_def.kind {
+        crate::registry::types::IndexKind::Coordinate(_)
+        | crate::registry::types::IndexKind::RequiredCoordinate { .. } => {}
         _ => {
             return Err(GraphcalError::EvalError {
                 message: format!("unfold requires a coordinate index, got `{}`", index.name()),
@@ -3504,11 +3715,10 @@ fn infer_hir_unfold(
                 span: axis.span.into(),
             });
         }
-    };
-    let coordinate_type = InferredType::CoordinateIndexLabel {
-        index: index.clone(),
-        dimension,
-    };
+    }
+    // The recurrence coordinate binders are keys of the axis; the coordinate
+    // quantity is extracted with coord().
+    let coordinate_type = InferredType::Key(index.clone());
     let unfold_locals = local_types.child(vec![
         (prev_state.id, init_type.clone()),
         (prev_index.id, coordinate_type.clone()),
@@ -3602,7 +3812,17 @@ fn infer_hir_match(
         src,
     )?;
     match &scrutinee_type {
-        InferredType::NamedIndexCase(index_identity) => {
+        InferredType::NamedIndexCase(index_identity) | InferredType::Key(index_identity) => {
+            if index_identity.finite_index_form().is_some() {
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "cannot match on `Key<{}>`; only named-axis keys support label matching",
+                        index_identity.name()
+                    ),
+                    src: src.clone(),
+                    span: scrutinee.span.into(),
+                });
+            }
             let index_def = super::index_def_for_inferred(index_identity, Some(dag), registry)
                 .ok_or_else(|| GraphcalError::UnknownIndex {
                     name: index_identity.name(),

@@ -315,6 +315,38 @@ pub struct DomainBound<P: Phase = Raw> {
 
 /// An expression in index position of an indexed type.
 ///
+/// The closed set of key introduction forms.
+///
+/// Shared by the AST and HIR so downstream phases dispatch on the typed kind
+/// rather than a source spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyFormKind {
+    /// `key(Axis, spelling)` — static, compile-time membership-checked.
+    Static,
+    /// `fin_key(Fin(N), e)` — runtime range-checked position key.
+    Fin,
+    /// `floor_key(C, q)` — last coordinate at or before `q` (fallible).
+    Floor,
+    /// `ceil_key(C, q)` — first coordinate at or after `q` (fallible).
+    Ceil,
+    /// `nearest_key(C, q)` — closest coordinate, ties toward the axis start.
+    Nearest,
+}
+
+impl KeyFormKind {
+    /// Canonical source spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Static => "key",
+            Self::Fin => "fin_key",
+            Self::Floor => "floor_key",
+            Self::Ceil => "ceil_key",
+            Self::Nearest => "nearest_key",
+        }
+    }
+}
+
 /// In `Velocity[Maneuver]` or `Velocity[module.Maneuver]`, the index path is
 /// an [`IndexExpr::Name`]. Structural indexes use the explicit
 /// [`IndexExpr::Finite`] constructor, as in `Dimensionless[Fin(N)]`.
@@ -392,6 +424,11 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
     /// the built-in semantic identity instead of matching the source name.
     ComplexApplication { generic_args: Vec<GenericArg<P>> },
+    /// `Key<I>` — built-in index-key type parameterized by an index axis.
+    ///
+    /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
+    /// the built-in semantic identity instead of matching the source name.
+    KeyApplication { generic_args: Vec<GenericArg<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
     /// An indexed type such as `Velocity[Maneuver]`, `Dimensionless[Fin(3)]`, or `D[I]`
@@ -627,6 +664,17 @@ pub enum ExprKind<P: Phase = Raw> {
         prev_index_name: Spanned<LocalName>,
         index_name: Spanned<LocalName>,
         body: Box<Expr<P>>,
+    },
+    /// A key introduction form: `key(Axis, spelling)`, `fin_key(Fin(N), e)`,
+    /// `floor_key(C, q)`, `ceil_key(C, q)`, or `nearest_key(C, q)`.
+    ///
+    /// The axis argument is an index reference (a named path or `Fin(N)`),
+    /// not an expression, so these are special forms following the `unfold`
+    /// precedent rather than ordinary function calls.
+    KeyForm {
+        kind: KeyFormKind,
+        axis: IndexExpr,
+        arg: Box<Expr<P>>,
     },
     /// Match expression: `match @status { Nominal => ..., Warning(message: code) => ... }`
     Match {

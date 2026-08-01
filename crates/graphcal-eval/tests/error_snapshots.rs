@@ -159,6 +159,118 @@ fn error_exp_requires_dimensionless() {
 }
 
 #[test]
+fn error_key_missing_index_argument() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_missing_index_argument.gcl");
+    let rendered = render_error(source, "key_missing_index_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_non_index_argument() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_non_index_argument.gcl");
+    let rendered = render_error(source, "key_non_index_argument.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_cross_axis_assignment() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_cross_axis_assignment.gcl");
+    let rendered = render_error(source, "key_cross_axis_assignment.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_equality_cross_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_equality_cross_axis.gcl");
+    let rendered = render_error(source, "key_equality_cross_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_match_fin_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_match_fin_axis.gcl");
+    let rendered = render_error(source, "key_match_fin_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_coord_on_named() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_coord_on_named.gcl");
+    let rendered = render_error(source, "key_coord_on_named.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_to_int_on_named() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_to_int_on_named.gcl");
+    let rendered = render_error(source, "key_to_int_on_named.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_index_cross_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_index_cross_axis.gcl");
+    let rendered = render_error(source, "key_index_cross_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_static_out_of_bounds() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_static_out_of_bounds.gcl");
+    let rendered = render_error(source, "key_static_out_of_bounds.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_static_runtime_position() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_static_runtime_position.gcl");
+    let rendered = render_error(source, "key_static_runtime_position.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_fin_key_non_fin_axis() {
+    let source = include_str!("../../../tests/fixtures/invalid/fin_key_non_fin_axis.gcl");
+    let rendered = render_error(source, "fin_key_non_fin_axis.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_nearest_key_wrong_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/nearest_key_wrong_dimension.gcl");
+    let rendered = render_error(source, "nearest_key_wrong_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_fin_key_out_of_bounds() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/fin_key_out_of_bounds.gcl");
+    let rendered = render_node_error(source, "fin_key_out_of_bounds.gcl", "k");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_floor_key_below_range() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/floor_key_below_range.gcl");
+    let rendered = render_node_error(source, "floor_key_below_range.gcl", "k");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_subtraction() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_subtraction.gcl");
+    let rendered = render_error(source, "key_subtraction.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_key_runtime_addend() {
+    let source = include_str!("../../../tests/fixtures/invalid/key_runtime_addend.gcl");
+    let rendered = render_error(source, "key_runtime_addend.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_complex_aggregation_unsupported() {
     let source =
         include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");

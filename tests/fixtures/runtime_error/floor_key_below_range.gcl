@@ -1,0 +1,6 @@
+// floor_key() errors when no coordinate lies at or below the target.
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+
+param early: Time = -1.0 s;
+
+node k: Key<TimeStep> = floor_key(TimeStep, @early);

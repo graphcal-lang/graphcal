@@ -1,0 +1,3 @@
+// `Key<Length>` is rejected: the generic argument must have sort Index,
+// not Dim.
+param k: Key<Length> = 0.0;

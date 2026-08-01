@@ -121,9 +121,11 @@ All channels of one plot are flattened onto a single shared row set:
   and labels within one channel) are errors. Index variant names are never
   substituted for data.
 
-Booleans encode as the labels `"true"`/`"false"`, labels as their variant
-names, datetimes as ISO 8601 timestamps with a temporal axis, and numbers
-as quantitative data.
+Booleans encode as the labels `"true"`/`"false"`, index keys as their
+rendered form (label, position, or coordinate), datetimes as ISO 8601
+timestamps with a temporal axis, and numbers as quantitative data. Plot a
+coordinate axis quantitatively by extracting the coordinate explicitly
+(`for t: Step { coord(t) }`).
 
 ### Unit-Aware Axis Titles
 
@@ -212,8 +214,8 @@ plot mass_vs_dv = {
 plot efficiency_map = {
     mark: rect,
     encode: {
-        x: for p: Pressure { p },
-        y: for t: Temperature { t },
+        x: for p: Pressure { coord(p) },
+        y: for t: Temperature { coord(t) },
         color: for p: Pressure, t: Temperature { @efficiency[p, t] },
     },
     title: "Efficiency Map",
@@ -228,7 +230,7 @@ Plots are **displayed standalone by default** — you write a plot to see it:
 plot curve_a = {
     mark: line,
     encode: {
-        x: for t: Time { t },
+        x: for t: Time { coord(t) },
         y: for t: Time { @altitude[t] -> km },
     },
     title: "Altitude",

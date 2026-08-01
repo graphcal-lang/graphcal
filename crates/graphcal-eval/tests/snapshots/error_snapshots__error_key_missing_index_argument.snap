@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`Key` expects 1 generic argument(s), got 0
+    Diagnostic severity: error
+Begin snippet for key_missing_index_argument.gcl starting at line 1, column 1
+
+snippet line 1: // Bare `Key` is rejected: the index axis argument is mandatory.
+snippet line 2: param k: Key = 0.0;
+    label at line 2, columns 10 to 12: error here
+diagnostic code: graphcal::E001

@@ -53,6 +53,9 @@ pub fn resolved_to_declared_type(
         ResolvedTypeExpr::Complex { dimension, span } => {
             resolved_complex_to_declared(dimension, *span, src)
         }
+        ResolvedTypeExpr::Key { index, .. } => {
+            resolved_index_to_declared_ref(index, src).map(DeclaredType::Key)
+        }
         ResolvedTypeExpr::Struct(name, _) => Ok(DeclaredType::Struct(
             StructTypeRef::from_resolved(name.clone()),
             vec![],
@@ -199,6 +202,7 @@ fn resolved_type_expr_span(resolved: &ResolvedTypeExpr) -> Span {
         | ResolvedTypeExpr::Quantity(_) => Span::new(0, 0),
         ResolvedTypeExpr::IndexArg(index) => resolved_index_span(index),
         ResolvedTypeExpr::Complex { span, .. }
+        | ResolvedTypeExpr::Key { span, .. }
         | ResolvedTypeExpr::Struct(_, span)
         | ResolvedTypeExpr::GenericDimParam(_, span)
         | ResolvedTypeExpr::GenericTypeParam(_, span)
@@ -767,6 +771,56 @@ pub fn unify_resolved_type(
             )
         }
 
+        ResolvedTypeExpr::Key { index, .. } => {
+            let InferredType::Key(actual_index) = actual else {
+                return Err(GraphcalError::DimensionMismatch {
+                    expected: format!("Key<{}>", resolved_index_display_name(index)),
+                    found: crate::tir::dim_check::format_inferred_type(actual, registry),
+                    help: "expected an index-key value".to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                });
+            };
+            match index {
+                ResolvedIndex::GenericParam(gp, _) => bind_or_check(
+                    index_sub,
+                    gp.clone(),
+                    actual_index.type_ref().clone(),
+                    |prev, _| GraphcalError::IndexMismatch {
+                        expected: prev.display_name(),
+                        found: actual_index.name(),
+                        src: src.clone(),
+                        span: span.into(),
+                    },
+                ),
+                ResolvedIndex::Concrete(name, _) => {
+                    if !actual_index.matches_resolved(name) {
+                        return Err(GraphcalError::IndexMismatch {
+                            expected: name.to_unowned_def_name(),
+                            found: actual_index.name(),
+                            src: src.clone(),
+                            span: span.into(),
+                        });
+                    }
+                    Ok(())
+                }
+                ResolvedIndex::Finite(form, _) => {
+                    let actual_nat = actual_index
+                        .finite_index_form()
+                        .filter(NatPolyForm::is_constant)
+                        .map(|actual_form| actual_form.constant())
+                        .ok_or_else(|| GraphcalError::IndexMismatch {
+                            expected: IndexName::expect_valid(format!("Fin({})", form.format())),
+                            found: actual_index.name(),
+                            src: src.clone(),
+                            span: span.into(),
+                        })?;
+                    let actual_index_name = actual_index.name();
+                    unify_nat_poly_form(form, actual_nat, nat_sub, &actual_index_name, src, span)
+                }
+            }
+        }
+
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
         } => {
@@ -1096,44 +1150,7 @@ pub fn substitute_resolved_generic_arg(
             }
         }
         ResolvedGenericArg::Index(index) => {
-            let inferred = match index {
-                ResolvedIndex::Concrete(name, _) => {
-                    crate::tir::dim_check::InferredIndex::from_resolved(name.clone())
-                }
-                ResolvedIndex::GenericParam(name, span) => {
-                    crate::tir::dim_check::InferredIndex::from_ref(
-                        index_sub
-                            .get(name)
-                            .cloned()
-                            .ok_or_else(|| GraphcalError::EvalError {
-                                message: format!("generic index `{name}` is not bound"),
-                                src: src.clone(),
-                                span: (*span).into(),
-                            })?,
-                    )
-                }
-                ResolvedIndex::Finite(form, span) => {
-                    let value = form
-                        .evaluate(nat_sub)
-                        .ok_or_else(|| GraphcalError::EvalError {
-                            message: format!(
-                                "generic finite index `Fin({})` is not concrete",
-                                form.format()
-                            ),
-                            src: src.clone(),
-                            span: (*span).into(),
-                        })?;
-                    crate::tir::dim_check::InferredIndex::from_finite_index_form(
-                        NatPolyForm::from_constant(value),
-                    )
-                    .map_err(|err| GraphcalError::EvalError {
-                        message: err.to_string(),
-                        src: src.clone(),
-                        span: (*span).into(),
-                    })?
-                }
-            };
-            Ok(InferredGenericArg::Index(inferred))
+            substitute_resolved_index(index, index_sub, nat_sub, src).map(InferredGenericArg::Index)
         }
         ResolvedGenericArg::Nat(form, span) => {
             let value = form
@@ -1149,6 +1166,53 @@ pub fn substitute_resolved_generic_arg(
             type_expr, dim_sub, index_sub, nat_sub, type_sub, src,
         )
         .map(InferredGenericArg::Type),
+    }
+}
+
+/// Substitute generic index and nat bindings into a [`ResolvedIndex`],
+/// yielding the concrete inferred index identity.
+fn substitute_resolved_index(
+    index: &ResolvedIndex,
+    index_sub: &HashMap<GenericParamName, IndexTypeRef>,
+    nat_sub: &HashMap<GenericParamName, u64>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<crate::tir::dim_check::InferredIndex, GraphcalError> {
+    match index {
+        ResolvedIndex::Concrete(name, _) => Ok(
+            crate::tir::dim_check::InferredIndex::from_resolved(name.clone()),
+        ),
+        ResolvedIndex::GenericParam(name, span) => {
+            Ok(crate::tir::dim_check::InferredIndex::from_ref(
+                index_sub
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: format!("generic index `{name}` is not bound"),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    })?,
+            ))
+        }
+        ResolvedIndex::Finite(form, span) => {
+            let value = form
+                .evaluate(nat_sub)
+                .ok_or_else(|| GraphcalError::EvalError {
+                    message: format!(
+                        "generic finite index `Fin({})` is not concrete",
+                        form.format()
+                    ),
+                    src: src.clone(),
+                    span: (*span).into(),
+                })?;
+            crate::tir::dim_check::InferredIndex::from_finite_index_form(
+                NatPolyForm::from_constant(value),
+            )
+            .map_err(|err| GraphcalError::EvalError {
+                message: err.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            })
+        }
     }
 }
 
@@ -1199,6 +1263,9 @@ pub fn substitute_resolved_type_with_types(
                     span: (*span).into(),
                 }),
             }
+        }
+        ResolvedTypeExpr::Key { index, .. } => {
+            substitute_resolved_index(index, index_sub, nat_sub, src).map(InferredType::Key)
         }
         ResolvedTypeExpr::Struct(name, _) => Ok(InferredType::Struct(
             crate::tir::dim_check::InferredStructType::from_resolved(name.clone()),

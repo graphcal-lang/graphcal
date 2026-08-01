@@ -1,7 +1,7 @@
 // Per-key `#[expected_fail]` on assertions indexed by Fin axes uses `#N`
 // keys, matching the `#N` slice-label syntax of `table` expressions.
 #[expected_fail(#1)]
-assert single_finite = for i: Fin(2) { i == 0 };
+assert single_finite = for i: Fin(2) { to_int(i) == 0 };
 
 index Mode = { Boost, Cruise };
 
@@ -11,7 +11,7 @@ index Mode = { Boost, Cruise };
 assert mixed = for m: Mode {
     for i: Fin(2) {
         match m {
-            Mode.Boost => if i == 1 { false } else { true },
+            Mode.Boost => if to_int(i) == 1 { false } else { true },
             Mode.Cruise => true,
         }
     }

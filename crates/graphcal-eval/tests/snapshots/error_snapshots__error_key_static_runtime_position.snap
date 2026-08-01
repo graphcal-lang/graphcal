@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+key() requires a static position; use fin_key() for a runtime-checked position
+    Diagnostic severity: error
+Begin snippet for key_static_runtime_position.gcl starting at line 4, column 1
+
+snippet line 4: 
+snippet line 5: node k: Key<Fin(3)> = key(Fin(3), @n);
+    label at line 5, columns 35 to 36: error here
+diagnostic code: graphcal::E001
