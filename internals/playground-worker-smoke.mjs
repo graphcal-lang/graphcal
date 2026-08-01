@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const siteRoot = new URL("../site/", import.meta.url);
-const exampleRoot = new URL("assets/playground/examples/step-5/", siteRoot);
+// The documentation is built into site/docs; site/ itself is the published
+// site root, which holds only the redirect stub and its companions.
+const docsRoot = new URL("../site/docs/", import.meta.url);
+const exampleRoot = new URL("assets/playground/examples/step-5/", docsRoot);
 const descriptor = JSON.parse(readFileSync(new URL("project.json", exampleRoot), "utf8"));
 
 let onMessage;
@@ -20,7 +22,7 @@ globalThis.fetch = async (input) => {
   return new Response(readFileSync(fileURLToPath(url)));
 };
 
-await import(new URL("javascripts/playground-worker.mjs", siteRoot));
+await import(new URL("javascripts/playground-worker.mjs", docsRoot));
 if (typeof onMessage !== "function") {
   throw new Error("playground worker did not register a message handler");
 }
