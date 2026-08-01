@@ -1774,6 +1774,16 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_inline_dag_binding_is_rejected() {
+        let err = Parser::new("node y: Dimensionless = @combine(a: 1.0, a: 2.0).result;")
+            .parse_file()
+            .unwrap_err();
+        assert!(
+            matches!(err, ParseError::DuplicateDagBinding { name, .. } if name.as_str() == "a")
+        );
+    }
+
+    #[test]
     fn parse_inline_dag_ref_qualified_accepted() {
         // `@<module>.<dag>(args).<out>` projects a graph value from a DAG
         // brought into scope via `import path as module` (or `import path;`).

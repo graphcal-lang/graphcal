@@ -440,6 +440,34 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn duplicate_dag_binding_has_original_as_related_information() {
+        let source = "node result: Dimensionless = @combine(a: 1.0, a: 2.0).out;";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(matches!(
+            &diagnostics[0].code,
+            Some(NumberOrString::String(code)) if code == "graphcal::P025"
+        ));
+        assert!(diagnostics[0].related_information.is_some());
+    }
+
+    #[test]
+    fn duplicate_extern_param_has_original_as_related_information() {
+        let source = concat!(
+            "import plugin \"graphcal:demo\" as demo {\n",
+            "    fn lerp<D: Dim>(a: D, a: D, t: Dimensionless) -> D;\n",
+            "}\n",
+        );
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(matches!(
+            &diagnostics[0].code,
+            Some(NumberOrString::String(code)) if code == "graphcal::P011"
+        ));
+        assert!(diagnostics[0].related_information.is_some());
+    }
+
+    #[test]
     fn sort_aware_nat_generic_arguments_produce_no_diagnostics() {
         let source = "pub type Fixed<N: Nat> { Fixed(value: Dimensionless) }\n\
                       param x: Fixed<3> = Fixed<3>(value: 1.0);";

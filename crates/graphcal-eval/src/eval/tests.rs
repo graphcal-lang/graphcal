@@ -4327,6 +4327,37 @@ node doubled: Length = @scale(factor: 2.0, v: @src).result;
 }
 
 #[test]
+fn eval_inline_dag_call_binds_reordered_args_by_name() {
+    let source = "\
+dag combine {
+    param a: Dimensionless;
+    param b: Dimensionless;
+    pub node result: Dimensionless = @a * 10.0 + @b;
+}
+
+node combined: Dimensionless = @combine(b: 2.0, a: 1.0).result;
+";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "combined") - 12.0).abs() < 1e-10);
+}
+
+#[test]
+fn eval_include_binds_reordered_args_by_name() {
+    let source = "\
+dag combine {
+    param a: Dimensionless;
+    param b: Dimensionless;
+    pub node result: Dimensionless = @a * 10.0 + @b;
+}
+
+include combine(b: 2.0, a: 1.0) as combined;
+node result: Dimensionless = @combined.result;
+";
+    let result = compile_and_eval(source).unwrap();
+    assert!((find_value(&result, "result") - 12.0).abs() < 1e-10);
+}
+
+#[test]
 fn eval_inline_dag_call_projects_effective_param_value() {
     let source = "\
 dag config {

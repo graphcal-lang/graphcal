@@ -1,0 +1,3 @@
+import plugin "graphcal:demo" as demo {
+    fn lerp<D: Dim>(a: D, a: D, t: Dimensionless) -> D;
+}

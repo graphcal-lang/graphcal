@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+duplicate DAG binding `a`
+    Diagnostic severity: error
+Begin snippet for duplicate_include_binding.gcl starting at line 1, column 1
+
+snippet line 1: include combine(a: 1.0, a: 2.0) as combined;
+    label at line 1, column 17: first bound here
+    label at line 1, column 25: duplicate binding
+diagnostic help: each name may appear at most once in a DAG binding list
+diagnostic code: graphcal::P025

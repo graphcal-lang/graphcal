@@ -1140,6 +1140,27 @@ fn error_extern_use_before_binding() {
 }
 
 #[test]
+fn error_extern_duplicate_param() {
+    let source = include_str!("../../../tests/fixtures/invalid/extern_duplicate_param.gcl");
+    let rendered = render_error(source, "extern_duplicate_param.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_duplicate_include_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/duplicate_include_binding.gcl");
+    let rendered = render_error(source, "duplicate_include_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_duplicate_inline_dag_binding() {
+    let source = include_str!("../../../tests/fixtures/invalid/duplicate_inline_dag_binding.gcl");
+    let rendered = render_error(source, "duplicate_inline_dag_binding.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_extern_unknown_dimension() {
     let source = include_str!("../../../tests/fixtures/invalid/extern_unknown_dimension.gcl");
     let rendered = render_error(source, "extern_unknown_dimension.gcl");

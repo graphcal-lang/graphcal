@@ -965,6 +965,9 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 
 ### Validation
 
+- A binding list is a unique name-to-expression mapping. Binding order has no
+  effect, and repeating a value, index, type, or dimension target is a compile
+  error rather than a last-binding-wins override.
 - A value binding name must identify a `param` input port in the included
   module; index/type/dim bindings target declarations explicitly marked
   `pub(bind)`.

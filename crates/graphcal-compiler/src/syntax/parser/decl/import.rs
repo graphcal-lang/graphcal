@@ -372,7 +372,7 @@ impl Parser<'_> {
         Ok(names)
     }
 
-    /// Parse the `(name: expr, ...)` param bindings of an include declaration.
+    /// Parse the unique `(name: expr, ...)` bindings of an include or DAG call.
     pub(in crate::syntax::parser) fn parse_import_param_bindings(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {
@@ -392,6 +392,17 @@ impl Parser<'_> {
         })?;
 
         self.expect(Token::RParen)?;
+        let mut declared = std::collections::HashMap::new();
+        for binding in &bindings {
+            if let Some(first) = declared.insert(&binding.name.name, binding.name.span) {
+                return Err(ParseError::DuplicateDagBinding {
+                    name: binding.name.name.clone(),
+                    src: self.named_source(),
+                    duplicate: binding.name.span.into(),
+                    first: first.into(),
+                });
+            }
+        }
         Ok(bindings)
     }
 }

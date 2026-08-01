@@ -15,7 +15,7 @@
 //! is plain data end-to-end so boundaries (Phase B plugin manifests) can
 //! serialize it without the core ever carrying strings.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
@@ -266,6 +266,7 @@ pub struct FunctionParam {
 ///
 /// - Declared dimension variables are distinct; declared index variables are
 ///   distinct.
+/// - Parameter names are distinct.
 /// - Monomial factors carry no zero exponents and no duplicate variables.
 /// - Every referenced dimension variable is declared, and every declared
 ///   dimension variable has a *binding occurrence*: a parameter whose quantity
@@ -310,6 +311,7 @@ impl FunctionSignature {
                 return Err(SignatureError::DuplicateIndexVar { var: var.clone() });
             }
         }
+        validate_unique_param_names(&params)?;
 
         let mut bound: HashSet<&DimVarName> = HashSet::new();
         let mut used_indexes: HashSet<&IndexVarName> = HashSet::new();
@@ -691,9 +693,33 @@ fn validate_monomial_factors(monomial: &DimMonomial) -> Result<(), SignatureErro
     Ok(())
 }
 
+fn validate_unique_param_names(params: &[FunctionParam]) -> Result<(), SignatureError> {
+    let mut declared: HashMap<&FnParamName, usize> = HashMap::new();
+    for (duplicate, param) in params.iter().enumerate() {
+        if let Some(first) = declared.insert(&param.name, duplicate) {
+            return Err(SignatureError::DuplicateParamName {
+                name: param.name.clone(),
+                first,
+                duplicate,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Error from [`FunctionSignature::try_new`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SignatureError {
+    /// The same parameter name was declared twice.
+    #[error("parameter `{name}` is declared more than once")]
+    DuplicateParamName {
+        /// The duplicated parameter name.
+        name: FnParamName,
+        /// Position of the first declaration in the parameter list.
+        first: usize,
+        /// Position of the repeated declaration in the parameter list.
+        duplicate: usize,
+    },
     /// The same dimension variable was declared twice.
     #[error("dimension variable `{var}` is declared more than once")]
     DuplicateDimVar {
@@ -1016,6 +1042,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sig.arity(), 2);
+    }
+
+    #[test]
+    fn duplicate_param_name_is_rejected() {
+        let err = FunctionSignature::try_new(
+            Vec::new(),
+            Vec::new(),
+            vec![
+                param("value", ValueKind::Bool),
+                param("other", ValueKind::Int),
+                param("value", ValueKind::Int),
+            ],
+            ValueKind::Int,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            SignatureError::DuplicateParamName {
+                name: FnParamName::expect_valid("value"),
+                first: 0,
+                duplicate: 2,
+            }
+        );
     }
 
     #[test]

@@ -556,6 +556,8 @@ include_param_bindings
    = "(", [ include_param_binding,
             { ",", include_param_binding }, [ "," ] ], ")";
 
+(* Binding names are semantically unique within one list. Their order has no
+   effect: each name selects exactly one value or type-level input port. *)
 include_param_binding
    = IDENT, ":", expr;
 
@@ -887,6 +889,8 @@ inline_dag_call_suffix
    = "(", [ include_param_binding,
             { ",", include_param_binding }, [ "," ] ],
      ")", ".", IDENT;
+
+(* Inline calls inherit include_param_binding's unique-name rule. *)
 
 (* @name                              -- graph ref (param, node, or const node).
    @name(args).out                    -- invocation of a local DAG or an imported
