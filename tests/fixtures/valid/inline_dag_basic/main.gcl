@@ -2,7 +2,7 @@
 pub dim Speed = Length / Time;
 
 dag double_speed {
-    import main.{ Speed };
+    import main.{ dim Speed };
     param v: Speed;
 
     node result: Speed = @v * 2.0;

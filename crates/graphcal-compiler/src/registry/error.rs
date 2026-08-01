@@ -9,6 +9,7 @@ use crate::registry::time_zone::IanaTimeZoneId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::{FnName, FnParamName};
+use crate::syntax::import_category::ImportItemCategoryMismatch;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NameAtom;
@@ -1029,6 +1030,17 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found in imported file")]
+        span: SourceSpan,
+    },
+
+    #[error("in imported file `{file_path}`, {mismatch}")]
+    #[diagnostic(code(graphcal::M022))]
+    ImportCategoryMismatch {
+        file_path: String,
+        mismatch: ImportItemCategoryMismatch,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("wrong import category")]
         span: SourceSpan,
     },
 
@@ -2145,6 +2157,7 @@ impl GraphcalError {
             | Self::IndexMismatch { src, .. }
             | Self::ImportFileNotFound { src, .. }
             | Self::ImportNameNotFound { src, .. }
+            | Self::ImportCategoryMismatch { src, .. }
             | Self::InvalidModuleName { src, .. }
             | Self::DuplicateModuleName { src, .. }
             | Self::UnknownModule { src, .. }

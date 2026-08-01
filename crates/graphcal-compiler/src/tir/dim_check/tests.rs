@@ -2337,7 +2337,7 @@ fn inline_dag_indexed_output_type_flows_through() {
 pub index Region = { A, B };
 
 dag doubler {
-    import test.{ Region };
+    import test.{ index Region };
 
     param v: Length[Region];
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };

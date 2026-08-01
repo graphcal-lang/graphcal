@@ -7,6 +7,7 @@ pub mod decl_name;
 pub mod desugar;
 pub mod dimension;
 pub mod function_name;
+pub mod import_category;
 pub mod index_name;
 pub mod lexer;
 pub mod local_name;

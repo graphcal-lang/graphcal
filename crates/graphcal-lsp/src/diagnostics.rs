@@ -12,6 +12,48 @@ use graphcal_eval::eval::CompileError;
 use crate::convert::LineIndex;
 use crate::symbol_table::{SymbolKey, SymbolTable};
 
+/// Typed LSP payload category for an unknown-name auto-import repair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoImportCategory {
+    Term,
+    Type,
+    Dimension,
+    Unit,
+    Index,
+}
+
+impl AutoImportCategory {
+    pub const fn namespace(self) -> graphcal_compiler::syntax::ast::ImportItemNamespace {
+        use graphcal_compiler::syntax::ast::ImportItemNamespace;
+        match self {
+            Self::Term => ImportItemNamespace::Term,
+            Self::Type => ImportItemNamespace::Type,
+            Self::Dimension => ImportItemNamespace::Dimension,
+            Self::Unit => ImportItemNamespace::Unit,
+            Self::Index => ImportItemNamespace::Index,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoImportDiagnosticData {
+    pub auto_import_name: String,
+    pub auto_import_category: AutoImportCategory,
+}
+
+fn auto_import_data(
+    name: impl Into<String>,
+    category: AutoImportCategory,
+) -> Option<serde_json::Value> {
+    serde_json::to_value(AutoImportDiagnosticData {
+        auto_import_name: name.into(),
+        auto_import_category: category,
+    })
+    .ok()
+}
+
 /// Convert per-node runtime errors and assertion failures in an `EvalResult` to LSP diagnostics.
 ///
 /// `symbol_table` is used to resolve the declaration span for each per-node
@@ -168,6 +210,27 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
             replacement: Some(replacement),
             ..
         } => Some(serde_json::json!({ "replacement": replacement })),
+        GraphcalError::UnknownDimension { name, .. } => {
+            auto_import_data(name.as_str(), AutoImportCategory::Dimension)
+        }
+        GraphcalError::UnknownUnit { name, .. } if !name.is_qualified() => {
+            auto_import_data(name.name().as_str(), AutoImportCategory::Unit)
+        }
+        GraphcalError::UnknownIndex { name, .. } => {
+            auto_import_data(name.as_str(), AutoImportCategory::Index)
+        }
+        GraphcalError::UnknownStructType { name, .. } => {
+            auto_import_data(name, AutoImportCategory::Type)
+        }
+        GraphcalError::UnknownLocalRef { name, .. } => {
+            auto_import_data(name, AutoImportCategory::Term)
+        }
+        GraphcalError::UnknownGraphRef { name, .. }
+        | GraphcalError::UnknownConstRef { name, .. }
+            if name.qualifier().is_empty() =>
+        {
+            auto_import_data(name.member(), AutoImportCategory::Term)
+        }
         _ => None,
     }
 }
@@ -596,6 +659,10 @@ param event: Datetime<TT>(
             code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("N002"))),
             "expected N002 error code, got {code:?}"
         );
+        let auto_import: AutoImportDiagnosticData =
+            serde_json::from_value(diags[0].data.clone().expect("auto-import payload")).unwrap();
+        assert_eq!(auto_import.auto_import_name, "nonexistent");
+        assert_eq!(auto_import.auto_import_category, AutoImportCategory::Term);
     }
 
     #[test]
@@ -664,6 +731,41 @@ param event: Datetime<TT>(
         );
         assert!(diags[0].message.contains("secret"));
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
+    }
+
+    #[test]
+    fn m022_wrong_import_category_points_at_item_and_lists_all_alternatives() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
+        std::fs::write(
+            dir.path().join("src/app/lib.gcl"),
+            "pub const node JPY: Length = 1.0 m;\n\
+             pub const unit JPY: Length = 1.0 m;\n",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/app/main.gcl");
+        let source = "import app.lib.{ dim JPY };\n";
+        std::fs::write(&main_path, source).unwrap();
+
+        let diagnostics = produce_diagnostics_for_file(&main_path, source);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert!(matches!(
+            diagnostic.code.as_ref(),
+            Some(NumberOrString::String(code)) if code == "graphcal::M022"
+        ));
+        assert!(
+            diagnostic
+                .message
+                .contains("did you mean `JPY` or `unit JPY`?")
+        );
+        assert_eq!(diagnostic.range.start.line, 0);
+        assert!(diagnostic.range.start.character > 0, "{diagnostic:?}");
     }
 
     #[test]

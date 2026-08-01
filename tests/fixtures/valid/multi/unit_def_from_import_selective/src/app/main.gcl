@@ -1,5 +1,5 @@
 // A local `const unit` definition can reference a selectively imported unit (#822).
-import app.units.{ mile };
+import app.units.{ unit mile };
 
 const unit halfmile: Length = 0.5 mile;
 

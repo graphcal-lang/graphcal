@@ -113,7 +113,7 @@ Unit scale factors must be **positive and finite**. Static unit definitions such
 
 ### Unit Scoping
 
-Units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported units (`import app.units.{ mile };`). A module imported with an alias exposes its `pub` units under that alias — `import app.units as u;` makes the unit available as `u.mile`, and only as `u.mile`:
+Units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported units (`import app.units.{ unit mile };`). A module imported with an alias exposes its `pub` units under that alias — `import app.units as u;` makes the unit available as `u.mile`, and only as `u.mile`:
 
 ```
 import app.units as u;            // defines `pub const unit mile: Length = 1609.344 m;`
@@ -126,7 +126,7 @@ Referencing an alias-imported unit by its bare name is an unknown-unit error (`D
 
 Because each alias scopes its own names, two modules may define the same unit name *differently* and both stay usable — `ua.mile` and `ub.mile` never collide. Selectively importing the same bare name from two modules is rejected as a duplicate import, like any other name clash.
 
-Local `const unit` definitions can reference imported const units in their bodies, with either import form: `const unit halfmile: Length = 0.5 u.mile;` after `import app.units as u;`, or `const unit halfmile: Length = 0.5 mile;` after `import app.units.{ mile };`.
+Local `const unit` definitions can reference imported const units in their bodies, with either import form: `const unit halfmile: Length = 0.5 u.mile;` after `import app.units as u;`, or `const unit halfmile: Length = 0.5 mile;` after `import app.units.{ unit mile };`.
 
 ### Dynamic Units
 
@@ -144,7 +144,7 @@ Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so ov
 
 Dynamic units behave identically to static units for dimension checking (compile-time). The scale is only resolved at evaluation time, after the referenced params have been computed.
 
-A `pub` dynamic unit is also usable across a module-import boundary (`fx.EUR` after `import app.fx as fx;`, or `EUR` after `import app.fx.{ EUR };`). The defining module's evaluation resolves the scale — the expression references that module's own params — and the importer carries the resolved value as a fixed scale. If the defining module cannot be evaluated standalone (e.g., it has required params), using its dynamic unit in an importer fails at evaluation time with a scale-resolution error.
+A `pub` dynamic unit is also usable across a module-import boundary (`fx.EUR` after `import app.fx as fx;`, or `EUR` after `import app.fx.{ unit EUR };`). The defining module's evaluation resolves the scale — the expression references that module's own params — and the importer carries the resolved value as a fixed scale. If the defining module cannot be evaluated standalone (e.g., it has required params), using its dynamic unit in an importer fails at evaluation time with a scale-resolution error.
 
 ### Using Units
 

@@ -1707,6 +1707,7 @@ dependencies = [
  "graphcal-plugin-host",
  "indexmap",
  "miette",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

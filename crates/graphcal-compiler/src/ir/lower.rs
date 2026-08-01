@@ -2905,40 +2905,71 @@ fn register_file_declarations(
     register_declarations_impl(file, registry, src, None, dag_id)
 }
 
-/// Names selected from a dependency's type-system registry.
+/// Categorized declarations selected from a dependency's registry.
 ///
-/// The sets span several namespaces by design (dims, units, indexes, and
-/// types share the selective-import surface), so entries are kept as the
-/// namespace-agnostic [`NameAtom`] rather than coerced into one name type.
+/// Each source import marker maps to exactly one typed set. Keeping the
+/// categories separate prevents a declaration from drifting between semantic
+/// namespaces without changing the importing source.
 #[derive(Debug, Default, Clone)]
 pub struct SelectedDeclarations {
-    /// Names imported from the default compile-time namespace.
-    pub default: HashSet<crate::syntax::names::NameAtom>,
-    /// Names imported from the explicit `type` namespace.
-    types: HashSet<crate::syntax::names::NameAtom>,
+    /// Bare items are unresolved between declaration and constructor namespaces.
+    terms: HashSet<crate::syntax::names::NameAtom>,
+    dimensions: HashSet<crate::syntax::dimension::DimName>,
+    units: HashSet<crate::syntax::dimension::UnitName>,
+    indexes: HashSet<crate::syntax::index_name::IndexName>,
+    types: HashSet<crate::syntax::type_name::StructTypeName>,
 }
 
 impl SelectedDeclarations {
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.default.is_empty() && self.types.is_empty()
+        self.terms.is_empty()
+            && self.dimensions.is_empty()
+            && self.units.is_empty()
+            && self.indexes.is_empty()
+            && self.types.is_empty()
     }
 
-    pub fn insert_default(&mut self, name: impl Into<crate::syntax::names::NameAtom>) {
-        self.default.insert(name.into());
+    /// Record one selective import in its declared namespace.
+    pub fn insert(
+        &mut self,
+        namespace: crate::syntax::ast::ImportItemNamespace,
+        name: crate::syntax::names::NameAtom,
+    ) {
+        match namespace {
+            crate::syntax::ast::ImportItemNamespace::Term => {
+                self.terms.insert(name);
+            }
+            crate::syntax::ast::ImportItemNamespace::Type => {
+                self.types
+                    .insert(crate::syntax::type_name::StructTypeName::from_atom(name));
+            }
+            crate::syntax::ast::ImportItemNamespace::Dimension => {
+                self.dimensions
+                    .insert(crate::syntax::dimension::DimName::from_atom(name));
+            }
+            crate::syntax::ast::ImportItemNamespace::Unit => {
+                self.units
+                    .insert(crate::syntax::dimension::UnitName::from_atom(name));
+            }
+            crate::syntax::ast::ImportItemNamespace::Index => {
+                self.indexes
+                    .insert(crate::syntax::index_name::IndexName::from_atom(name));
+            }
+        }
     }
 
-    pub fn insert_type(&mut self, name: impl Into<crate::syntax::names::NameAtom>) {
-        self.types.insert(name.into());
+    /// Unit names selected with the explicit `unit` marker.
+    pub fn units(&self) -> impl Iterator<Item = &crate::syntax::dimension::UnitName> {
+        self.units.iter()
     }
 }
 
-/// Register only the named type-system declarations (dimensions, units, indexes, types)
-/// from a file into the registry.
+/// Register only categorized declarations selected from a file.
 ///
-/// This is the selective counterpart to `register_file_declarations`: instead of
-/// registering everything, it filters default-namespace declarations and type
-/// declarations independently.
+/// This is the selective counterpart to `register_file_declarations`: each
+/// declaration kind is filtered through the import category written by the
+/// consumer.
 ///
 /// # Errors
 ///
@@ -2966,8 +2997,8 @@ pub fn register_selected_declarations(
 /// 5. Coordinate indexes (depend on dimensions and units)
 ///
 /// When `filter` is `None`, all declarations are registered.
-/// When `filter` is `Some(names)`, default-namespace declarations and type
-/// declarations are filtered independently.
+/// When `filter` is `Some(names)`, every declaration kind is filtered through
+/// its own typed import category.
 fn register_declarations_impl(
     file: &File,
     registry: &mut RegistryBuilder,
@@ -2977,8 +3008,12 @@ fn register_declarations_impl(
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::{DimDecl, IndexDecl, UnitDecl};
 
-    let should_register_default =
-        |name: &str| filter.is_none_or(|names| names.default.contains(name));
+    let should_register_term = |name: &str| filter.is_none_or(|names| names.terms.contains(name));
+    let should_register_dimension =
+        |name: &str| filter.is_none_or(|names| names.dimensions.contains(name));
+    let should_register_unit = |name: &str| filter.is_none_or(|names| names.units.contains(name));
+    let should_register_index =
+        |name: &str| filter.is_none_or(|names| names.indexes.contains(name));
     let should_register_type = |name: &str| filter.is_none_or(|names| names.types.contains(name));
 
     // Collect declarations by kind for phased registration.
@@ -2991,10 +3026,10 @@ fn register_declarations_impl(
     // Also collect derived dims, units, and dependent indexes for later phases.
     for decl in &file.declarations {
         match &decl.kind {
-            DeclKind::BaseDimension(d) if should_register_default(d.name.value.as_str()) => {
+            DeclKind::BaseDimension(d) if should_register_dimension(d.name.value.as_str()) => {
                 register_base_dimension_decl(d, registry, dag_id);
             }
-            DeclKind::Dimension(d) if should_register_default(d.name.value.as_str()) => {
+            DeclKind::Dimension(d) if should_register_dimension(d.name.value.as_str()) => {
                 if d.definition.is_some() {
                     derived_dims.push(d);
                 } else {
@@ -3005,10 +3040,10 @@ fn register_declarations_impl(
                     register_required_dimension_decl(d, registry, dag_id);
                 }
             }
-            DeclKind::Unit(u) if should_register_default(u.name.value.as_str()) => {
+            DeclKind::Unit(u) if should_register_unit(u.name.value.as_str()) => {
                 units.push(u);
             }
-            DeclKind::Index(idx) if should_register_default(idx.name.value.as_str()) => {
+            DeclKind::Index(idx) if should_register_index(idx.name.value.as_str()) => {
                 match &idx.kind {
                     IndexDeclKind::RequiredCoordinate { .. } => {
                         required_coordinate_indexes.push((idx, decl.span));
@@ -3024,7 +3059,7 @@ fn register_declarations_impl(
             DeclKind::Type(t) if should_register_type(t.name.value.as_str()) => {
                 register_type_decl(t, registry, src)?;
             }
-            DeclKind::Dag(d) if should_register_default(d.name.value.as_str()) => {
+            DeclKind::Dag(d) if should_register_term(d.name.value.as_str()) => {
                 registry.register_dag(d.name.value.clone(), d.clone());
             }
             _ => {}
@@ -3057,9 +3092,18 @@ fn register_declarations_impl(
         register_index_decl(idx, registry, src, *span)?;
     }
 
-    // Phase 6: Register concrete Fin definitions under typed structural identities
-    // appearing in type positions (e.g., `Length[Fin(3), Fin(4)]`) or
-    // finite comprehensions (e.g., `for i: Fin(3) { ... }`).
+    register_structural_finite_indexes(file, registry, src)?;
+
+    Ok(())
+}
+
+/// Register concrete Fin definitions under typed structural identities appearing
+/// in type positions or finite comprehensions.
+fn register_structural_finite_indexes(
+    file: &File,
+    registry: &mut RegistryBuilder,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     for decl in &file.declarations {
         match &decl.kind {
             DeclKind::Param(d) => {

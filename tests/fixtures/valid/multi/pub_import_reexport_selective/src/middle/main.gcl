@@ -1,8 +1,8 @@
 // main.gcl -- imports `GravityAccel` (a pub dim) transitively via middle.gcl.
 //
-// `middle.gcl` re-exports `GravityAccel` via `{ pub GravityAccel }`,
+// `middle.gcl` re-exports `GravityAccel` via `{ pub dim GravityAccel }`,
 // so `GravityAccel` appears in `middle.gcl`'s visible surface and this
 // import succeeds. Issue #452.
-import middle.lib.{ GravityAccel };
+import middle.lib.{ dim GravityAccel };
 
 const node result: GravityAccel = 9.80665 m/s^2;

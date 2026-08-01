@@ -6,7 +6,9 @@
     reason = "submodule of project/ uses parent types extensively"
 )]
 use super::*;
-use crate::import_surface::{ProjectDeclIdentity, ProjectDeclKind, decl_identity};
+use crate::import_surface::{
+    ProjectDeclIdentity, ProjectDeclKind, decl_identity, import_item_not_found_error,
+};
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
 
@@ -39,7 +41,6 @@ struct DepDeclIndex<'a> {
     plots: HashSet<DeclName>,
     types: HashSet<StructTypeName>,
     dims: HashSet<DimName>,
-    units: HashSet<graphcal_compiler::syntax::dimension::UnitName>,
     /// Maps index name to its declaration (needed for kind/required checks).
     indexes: HashMap<IndexName, &'a graphcal_compiler::desugar::desugared_ast::IndexDecl>,
     /// "Other" declarations (const node / node / assert) that are invalid as
@@ -79,12 +80,6 @@ impl DepDeclIndex<'_> {
     }
     fn is_plot(&self, name: &str) -> bool {
         self.plots.contains(name)
-    }
-    fn is_type_system(&self, name: &str) -> bool {
-        self.dims.contains(name)
-            || self.units.contains(name)
-            || self.indexes.contains_key(name)
-            || self.types.contains(name)
     }
 }
 
@@ -289,7 +284,6 @@ fn build_dep_decl_index(
     let mut plots = HashSet::new();
     let mut types = HashSet::new();
     let mut dims = HashSet::new();
-    let mut units = HashSet::new();
     let mut indexes: HashMap<IndexName, &graphcal_compiler::desugar::desugared_ast::IndexDecl> =
         HashMap::new();
     let mut other: HashMap<DeclName, OtherDeclKind> = HashMap::new();
@@ -306,9 +300,6 @@ fn build_dep_decl_index(
             }
             DeclKind::Dimension(dim) => {
                 dims.insert(dim.name.value.clone());
-            }
-            DeclKind::Unit(u) => {
-                units.insert(u.name.value.clone());
             }
             DeclKind::Index(idx) => {
                 indexes.insert(idx.name.value.clone(), idx);
@@ -333,7 +324,6 @@ fn build_dep_decl_index(
         plots,
         types,
         dims,
-        units,
         indexes,
         other,
     }
@@ -525,10 +515,10 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     import_item.name.span,
                 )?;
 
-                let is_default_namespace = import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default;
-                let is_plot = is_default_namespace && dep_index.is_plot(orig_name);
-                let is_assert = is_default_namespace && dep_index.is_assert(orig_name);
+                let is_term_namespace = import_item.namespace
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
+                let is_plot = is_term_namespace && dep_index.is_plot(orig_name);
+                let is_assert = is_term_namespace && dep_index.is_assert(orig_name);
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
@@ -560,25 +550,13 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 // Determine the category from the dep's AST.
                 let scoped = ScopedName::local(local_name.as_str());
                 let span = import_item.name.span;
-                if dep_index.is_const(orig_name) {
-                    ctx.imported_names.const_names.push((scoped, span));
-                } else if dep_index.is_runtime(orig_name) {
-                    ctx.imported_names.param_names.push((scoped, span));
-                } else {
-                    // Type-system declarations (dim/unit/index/type) are not
-                    // registered in imported_names; handled via registry merge.
-                }
-                // Type-system declarations from instantiated imports also need registration.
-                if dep_index.is_type_system(orig_name) {
-                    let selected = ctx
-                        .imported_type_system_names
-                        .entry(import_dag_id.clone())
-                        .or_default();
-                    if dep_index.types.contains(orig_name.as_str()) {
-                        selected.insert_type(orig_name.clone());
-                    } else {
-                        selected.insert_default(orig_name.clone());
-                    }
+                match (
+                    dep_index.is_const(orig_name),
+                    dep_index.is_runtime(orig_name),
+                ) {
+                    (true, _) => ctx.imported_names.const_names.push((scoped, span)),
+                    (false, true) => ctx.imported_names.param_names.push((scoped, span)),
+                    (false, false) => {}
                 }
 
                 selective.push(ImportAlias {
@@ -765,13 +743,13 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     import_item.name.span,
                 )?;
 
-                let is_default_namespace = import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default;
-                let is_plot = is_default_namespace
+                let is_term_namespace = import_item.namespace
+                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
+                let is_plot = is_term_namespace
                     && dag_body.declarations.iter().any(|d| {
                         matches!(&d.kind, DeclKind::Plot(pl) if pl.name.value.as_str() == orig_name.as_str())
                     });
-                let is_assert = is_default_namespace
+                let is_assert = is_term_namespace
                     && dag_body.declarations.iter().any(|d| {
                         matches!(&d.kind, DeclKind::Assert(assert) if assert.name.value.as_str() == orig_name.as_str())
                     });
@@ -985,33 +963,32 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                             span: import_item.name.span.into(),
                         }));
                     }
-                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                        name: orig_name.to_string(),
-                        file_path: import_path.display_path(),
-                        src: file_src.clone(),
-                        span: import_item.name.span.into(),
-                    }));
+                    return Err(CompileError::Eval(import_item_not_found_error(
+                        &dep_loaded.ast,
+                        orig_name,
+                        import_item.namespace,
+                        &import_path.display_path(),
+                        file_src,
+                        import_item.name.span,
+                    )));
                 }
 
                 if import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Type
+                    != graphcal_compiler::syntax::ast::ImportItemNamespace::Term
                 {
                     ctx.imported_type_system_names
                         .entry(source_file.clone())
                         .or_default()
-                        .insert_type(orig_name.clone());
+                        .insert(import_item.namespace, orig_name.clone());
                     continue;
                 }
-
-                let is_default_namespace = import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Default;
 
                 // Plot items: the brace entry is the consumer's display
                 // request (#847). The dep file evaluated standalone (its
                 // default instance); its evaluated spec travels as data,
                 // renamed to the local alias.
-                let is_plot = is_default_namespace && dep_index.is_plot(orig_name);
-                let is_assert = is_default_namespace && dep_index.is_assert(orig_name);
+                let is_plot = dep_index.is_plot(orig_name);
+                let is_assert = dep_index.is_assert(orig_name);
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
@@ -1042,7 +1019,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                     continue;
                 }
 
-                if is_default_namespace && dep_index.is_runtime(orig_name) {
+                if dep_index.is_runtime(orig_name) {
                     if is_import {
                         return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
                             name: orig_name.to_string(),
@@ -1060,8 +1037,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         ));
                     }
                 }
-                if is_default_namespace && dep_index.is_assert(orig_name) && !dep.runtime_available
-                {
+                if dep_index.is_assert(orig_name) && !dep.runtime_available {
                     let item_description = format!("assertion `{orig_name}`");
                     return Err(runtime_artifact_unavailable_error(
                         &item_description,
@@ -1099,9 +1075,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                             .push((DeclName::expect_valid(&local_name), import_item.name.span));
                     }
                     SelectiveImportResult::NotFound => {
-                        if is_default_namespace
-                            && (dep_index.is_runtime(orig_name) || dep_index.is_assert(orig_name))
-                        {
+                        if dep_index.is_runtime(orig_name) || dep_index.is_assert(orig_name) {
                             let item_description = format!("runtime item `{orig_name}`");
                             return Err(runtime_artifact_unavailable_error(
                                 &item_description,
@@ -1114,13 +1088,13 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         if file_has_import_item(
                             &dep_loaded.ast,
                             orig_name,
-                            graphcal_compiler::syntax::ast::ImportItemNamespace::Default,
+                            graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
                         ) {
-                            // Default type-system declaration (dim/unit/index/dag).
+                            // A bare non-value term, such as a DAG or constructor.
                             ctx.imported_type_system_names
                                 .entry(source_file.clone())
                                 .or_default()
-                                .insert_default(orig_name.clone());
+                                .insert(import_item.namespace, orig_name.clone());
                         } else {
                             return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
                                 name: orig_name.to_string(),
@@ -1562,7 +1536,7 @@ mod tests {
             },
             alias: None,
             is_pub: false,
-            namespace: graphcal_compiler::syntax::ast::ImportItemNamespace::Default,
+            namespace: graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
             attributes: Vec::new(),
         };
         let import_kind =

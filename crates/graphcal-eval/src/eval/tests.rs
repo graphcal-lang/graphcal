@@ -3169,11 +3169,11 @@ fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
 #[test]
 fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
-        "import collide.a.{ Phase };\n\
+        "import collide.a.{ index Phase };\n\
          import collide.a as a;\n\
          import collide.b as b;\n\
          dag pick_a {\n\
-             import collide.a.{ Phase };\n\
+             import collide.a.{ index Phase };\n\
              param series: Dimensionless[Phase];\n\
              pub node burn: Dimensionless = @series[Phase.Burn];\n\
              pub node echoed: Dimensionless[Phase] = for p: Phase { @series[p] };\n\
@@ -3758,6 +3758,38 @@ fn setup_inline_semantics_project(
     }
     let root = dir.path().join(root_rel);
     (dir, root)
+}
+
+#[test]
+fn selective_import_wrong_category_preserves_marker_and_alternatives() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "pub const node JPY: Length = 1.0 m;\n\
+                 pub const unit JPY: Length = 1.0 m;\n",
+            ),
+            ("src/sem/main.gcl", "import sem.lib.{ dim JPY };\n"),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    let CompileError::Eval(GraphcalError::ImportCategoryMismatch { mismatch, .. }) = error else {
+        panic!("expected category mismatch, got {error:?}");
+    };
+    assert_eq!(mismatch.name().as_str(), "JPY");
+    assert_eq!(
+        mismatch.expected(),
+        graphcal_compiler::syntax::ast::ImportItemNamespace::Dimension
+    );
+    assert_eq!(
+        mismatch.alternatives().as_slice(),
+        &[
+            graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
+            graphcal_compiler::syntax::ast::ImportItemNamespace::Unit,
+        ]
+    );
 }
 
 #[test]
@@ -4564,7 +4596,7 @@ fn eval_included_struct_array_field_access_uses_imported_type_metadata() {
     std::fs::write(
         &root,
         "import repro.types.{ type Item };\n\
-         import repro.data.{ ItemId };\n\
+         import repro.data.{ index ItemId };\n\
          include repro.data().{ items };\n\
          node first_mass: Mass = @items[ItemId.Only].mass;\n",
     )
@@ -5039,7 +5071,7 @@ fn eval_inline_dag_call_indexed_output_projection() {
 pub index Region = { A, B };
 
 dag doubler {
-    import input.{ Region };
+    import input.{ index Region };
 
     param v: Length[Region];
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };

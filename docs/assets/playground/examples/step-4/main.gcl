@@ -1,7 +1,7 @@
 pub dim GravParam = Length^3 / Time^2;
 
 dag orbital_velocity {
-    import main.{GravParam};
+    import main.{dim GravParam};
 
     param gm: GravParam;
     param r: Length;
@@ -9,7 +9,7 @@ dag orbital_velocity {
 }
 
 dag hohmann_transfer {
-    import main.{GravParam};
+    import main.{dim GravParam};
 
     param gm: GravParam;
     param r1: Length;

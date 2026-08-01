@@ -845,6 +845,7 @@ fn parse_import_brace_list_no_alias() {
         panic!("expected Selective");
     };
     assert_eq!(names.len(), 2);
+    assert_eq!(names[0].namespace, ImportItemNamespace::Term);
     assert_eq!(names[0].name.name, "x");
     assert!(names[0].alias.is_none());
     assert_eq!(names[0].local_name(), "x");
@@ -869,27 +870,46 @@ fn parse_import_brace_list_with_alias() {
 }
 
 #[test]
-fn parse_import_type_item_with_alias() {
-    let file = Parser::new("import helper.{type Student as Pupil};")
-        .parse_file()
-        .unwrap();
+fn parse_import_category_items_with_aliases() {
+    let file = Parser::new(
+        "import helper.{type Student as Pupil, dim Length as Distance, unit m as metre, index Case as Scenario};",
+    )
+    .parse_file()
+    .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
     let crate::syntax::ast::ImportKind::Selective(names) = &u.kind else {
         panic!("expected Selective");
     };
-    assert_eq!(names.len(), 1);
-    assert_eq!(names[0].namespace, ImportItemNamespace::Type);
-    assert_eq!(names[0].name.name, "Student");
-    assert_eq!(names[0].alias.as_ref().unwrap().name, "Pupil");
-    assert_eq!(names[0].local_name(), "Pupil");
+    assert_eq!(names.len(), 4);
+    for (item, namespace, name, alias) in [
+        (&names[0], ImportItemNamespace::Type, "Student", "Pupil"),
+        (
+            &names[1],
+            ImportItemNamespace::Dimension,
+            "Length",
+            "Distance",
+        ),
+        (&names[2], ImportItemNamespace::Unit, "m", "metre"),
+        (&names[3], ImportItemNamespace::Index, "Case", "Scenario"),
+    ] {
+        assert_eq!(item.namespace, namespace);
+        assert_eq!(item.name.name, name);
+        assert_eq!(item.alias.as_ref().unwrap().name, alias);
+        assert_eq!(item.local_name(), alias);
+    }
 }
 
 #[test]
-fn parse_include_rejects_type_item_marker() {
-    let result = Parser::new("include helper().{type Student};").parse_file();
-    assert!(result.is_err());
+fn parse_include_rejects_import_category_markers() {
+    for marker in ["type", "dim", "unit", "index"] {
+        let source = format!("include helper().{{{marker} Item}};");
+        assert!(
+            Parser::new(&source).parse_file().is_err(),
+            "marker: {marker}"
+        );
+    }
 }
 
 #[test]

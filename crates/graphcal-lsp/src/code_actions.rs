@@ -5,6 +5,7 @@
 //! - V002: Add `pub(bind)` to a required `index` / `type` / `dim`.
 //! - V003: Add `pub` to a private item referenced by a public declaration.
 //! - V006: Add `pub` to a leaked symbol referenced by a re-exported declaration.
+//! - Unknown names: add a category-marked selective import from a loaded module.
 
 use std::collections::HashMap;
 
@@ -14,6 +15,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::convert::LineIndex;
+use crate::diagnostics::AutoImportDiagnosticData;
 use crate::server::AnalysisResult;
 use crate::symbol_table::SymbolKey;
 
@@ -64,6 +66,12 @@ pub fn code_actions(
             }
             _ => {}
         }
+
+        actions.extend(
+            make_auto_import_actions(diag, analysis, &params.text_document.uri)
+                .into_iter()
+                .map(CodeActionOrCommand::CodeAction),
+        );
     }
 
     if actions.is_empty() {
@@ -71,6 +79,67 @@ pub fn code_actions(
     } else {
         Some(actions)
     }
+}
+
+/// Build category-preserving auto-import actions for an unknown name.
+fn make_auto_import_actions(
+    diag: &Diagnostic,
+    analysis: &AnalysisResult,
+    uri: &Url,
+) -> Vec<CodeAction> {
+    let Some(data) = diag
+        .data
+        .clone()
+        .and_then(|data| serde_json::from_value::<AutoImportDiagnosticData>(data).ok())
+    else {
+        return Vec::new();
+    };
+    let namespace = data.auto_import_category.namespace();
+
+    let mut candidates = analysis
+        .import_surfaces
+        .iter()
+        .flat_map(|(path, items)| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.name.as_str() == data.auto_import_name
+                        && item.kind.namespace() == namespace
+                })
+                .map(move |item| (path, item))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(left_path, left_item), (right_path, right_item)| {
+        left_path
+            .as_slice()
+            .cmp(right_path.as_slice())
+            .then_with(|| left_item.render().cmp(&right_item.render()))
+    });
+
+    candidates
+        .into_iter()
+        .map(|(path, item)| {
+            let path = path.as_slice().join(".");
+            let import_item = item.render();
+            let edit = TextEdit {
+                range: Range::default(),
+                new_text: format!("import {path}.{{ {import_item} }};\n"),
+            };
+            let mut changes = HashMap::new();
+            changes.insert(uri.clone(), vec![edit]);
+            CodeAction {
+                title: format!("Import `{import_item}` from `{path}`"),
+                kind: Some(CodeActionKind::QUICKFIX),
+                diagnostics: Some(vec![diag.clone()]),
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
+                is_preferred: Some(false),
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 
 /// The referenced private name a V003/V006 diagnostic carries in its
@@ -259,6 +328,7 @@ mod tests {
             source: Arc::new(source.to_string()),
             symbol_table,
             imported_definitions: StdHashMap::new(),
+            import_surfaces: StdHashMap::new(),
             diagnostics: Arc::new(StdHashMap::new()),
             eval_values: StdHashMap::new(),
             fn_signatures: build_fn_signatures(),
@@ -500,6 +570,55 @@ mod tests {
                 line: 0,
                 character: 0
             }
+        );
+    }
+
+    #[test]
+    fn unknown_name_auto_import_uses_canonical_category_marker() {
+        let mut analysis = analysis_from_source("node x: Information = 1.0;");
+        analysis.import_surfaces.insert(
+            graphcal_compiler::syntax::non_empty::NonEmpty::new(
+                "finance".to_string(),
+                vec!["units".to_string()],
+            ),
+            vec![
+                graphcal_compiler::syntax::module_resolve::ExportedImportItem {
+                    name: graphcal_compiler::syntax::names::NameAtom::parse("Information")
+                        .unwrap(),
+                    kind: graphcal_compiler::syntax::module_resolve::ExportedImportItemKind::Dimension,
+                },
+                graphcal_compiler::syntax::module_resolve::ExportedImportItem {
+                    name: graphcal_compiler::syntax::names::NameAtom::parse("Information")
+                        .unwrap(),
+                    kind: graphcal_compiler::syntax::module_resolve::ExportedImportItemKind::Unit,
+                },
+            ],
+        );
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let diag = make_diag(
+            "graphcal::D004",
+            "unknown dimension `Information`",
+            Range::default(),
+            Some(serde_json::json!({
+                "autoImportName": "Information",
+                "autoImportCategory": "dimension"
+            })),
+        );
+
+        let params = make_params(&uri, vec![diag]);
+        let actions = code_actions(&params, &analysis, &analysis.source).unwrap();
+        assert_eq!(actions.len(), 1);
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected CodeAction");
+        };
+        assert_eq!(
+            action.title,
+            "Import `dim Information` from `finance.units`"
+        );
+        let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
+        assert_eq!(
+            edits[0].new_text,
+            "import finance.units.{ dim Information };\n"
         );
     }
 

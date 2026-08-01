@@ -77,9 +77,10 @@ surface forms; each form introduces **exactly the names you write
 down** — no implicit additions.
 
 ```graphcal
-import nasa.rocket;                                  // bare: brings `rocket`
-import nasa.rocket as nr;                            // alias: brings `nr`
-import nasa.rocket.{type Orbit, compute_thrust as ct}; // brace: brings `Orbit` and `ct` only
+import nasa.rocket;                                      // bare: brings `rocket`
+import nasa.rocket as nr;                                // alias: brings `nr`
+import nasa.rocket.{type Orbit, dim Length, compute_thrust as ct};
+// brace: brings `Orbit`, `Length`, and `ct` only
 ```
 
 The forms differ in what enters scope:
@@ -89,7 +90,7 @@ The forms differ in what enters scope:
 | `import nasa.rocket;`                                  | `rocket` (the module, by its leaf name)    |
 | `import nasa.rocket as nr;`                            | `nr` (the module under alias)              |
 | `import nasa.rocket.{type Orbit};`                     | `Orbit` only — **not** `rocket`            |
-| `import nasa.rocket.{type Orbit, compute_thrust as ct};` | `Orbit` and `ct` only                    |
+| `import nasa.rocket.{type Orbit, dim Length, compute_thrust as ct};` | `Orbit`, `Length`, and `ct` only |
 | `import nasa.rocket as nr.{type Orbit};`               | parse error — alias and brace mutually exclusive |
 
 A whole-module name denotes the exact imported DAG module, not merely a prefix
@@ -113,23 +114,46 @@ This is a deliberate divergence from Gleam: Graphcal's brace form does
 what enters scope so a reader scanning the import list sees the precise
 set of names introduced.
 
-### Type imports use `type`
+### Selective imports declare their category
 
-Graphcal has separate namespaces for type names and constructors. To
-import a type name selectively, prefix the item with `type`. Bare items
-target the default compile-time namespace:
+Every non-term namespace has an explicit marker. A bare item selects only the
+term namespace (constants, DAGs, assertions, and constructors):
+
+| Item form | Selects |
+|-----------|---------|
+| `name` | Term declaration or constructor |
+| `type Name` | Struct or union type |
+| `dim Name` | Dimension |
+| `unit name` | Unit |
+| `index Name` | Index |
 
 ```graphcal
-import nasa.rocket.{type Orbit, Length, m, MAX_THRUST, Maneuver};
-//                       type   dim     unit  const       index
+import nasa.rocket.{
+    type Orbit,
+    dim Length,
+    unit nautical_mile,
+    MAX_THRUST,
+    index Maneuver,
+};
 ```
 
-This is required even when the type and its constructor share the same
-spelling. To import both namespaces, write both items:
+The marker makes an import a typed manifest. If the exporter changes
+`nautical_mile` from a unit into another kind of entity, the import fails at
+that line instead of silently binding the new category. The M022 diagnostic
+lists every exported category with that spelling using copy-pasteable forms
+such as `nautical_mile` or `unit nautical_mile`.
+
+Type names and constructors intentionally occupy different namespaces. To
+import both sides of a same-spelled type/constructor pair, write both items:
 
 ```graphcal
 import school.records.{type Student, Student};
 ```
+
+Units may likewise share a spelling with a term because units are used only in
+unit positions. Import each side explicitly, for example
+`import finance.{unit JPY, JPY};`. A value and a constructor may **not** share
+a name because both are terms and would be indistinguishable in expressions.
 
 ### Aliasing items
 
@@ -143,15 +167,15 @@ import nasa.rocket.{type Orbit as O, compute_thrust as ct};
 
 Only compile-time names cross the `import` boundary:
 
-| Declaration kind     | Reference after import                 |
-|----------------------|----------------------------------------|
-| `const node`         | `@name`                                |
-| `dim`                | `DimName`                              |
-| `unit`               | `unit_name`                            |
-| `type`               | `TypeName`                             |
-| `index`              | `IndexName`                            |
-| `dag`                | Used with `include` or `@name(args).out` |
-| `assert`             | Used in `#[assumes(name)]`              |
+| Declaration kind | Selective item | Reference after import |
+|------------------|----------------|------------------------|
+| `const node` | `name` | `@name` |
+| `dim` | `dim DimName` | `DimName` |
+| `unit` | `unit unit_name` | `unit_name` |
+| `type` | `type TypeName` | `TypeName` |
+| `index` | `index IndexName` | `IndexName` |
+| `dag` | `name` | Used with `include` or `@name(args).out` |
+| `assert` | `name` | Used in `#[assumes(name)]` |
 
 Runtime values — non-`const` `node` and any `param` — are **not**
 importable. To consume runtime values from another file, instantiate
@@ -231,6 +255,9 @@ node t: Force = @ct.thrust;
 include nasa.rocket.compute_thrust(orbit: @o).{ thrust };
 include nasa.rocket.compute_thrust(orbit: @o).{ thrust, isp, mass_flow as mdot };
 node t: Force = @thrust;
+
+// Category markers are import-only; include selectors are always node outputs.
+// include nasa.rocket.compute_thrust(orbit: @o).{ dim thrust }; // parse error
 ```
 
 | Form                                                            | Result                                                |
@@ -594,8 +621,8 @@ units_v2 = { package = "units", git = "https://github.com/acme/units.git", rev =
 Source resolves those aliases explicitly:
 
 ```graphcal
-import units_v1.si.{m as m_v1};
-import units_v2.si.{m as m_v2};
+import units_v1.si.{unit m as m_v1};
+import units_v2.si.{unit m as m_v2};
 ```
 
 Run `graphcal deps lock` before checking or evaluating a package with

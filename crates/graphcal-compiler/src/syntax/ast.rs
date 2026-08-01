@@ -8,6 +8,7 @@ mod format_equivalent;
 mod plot_props;
 mod value;
 
+pub use crate::syntax::import_category::ImportItemNamespace;
 pub use common::*;
 pub use decl::*;
 pub use format_equivalent::FormatEquivalent;

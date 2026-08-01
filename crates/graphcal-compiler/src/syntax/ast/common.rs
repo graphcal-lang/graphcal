@@ -1,3 +1,4 @@
+use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::names::NameAtom;
 use crate::syntax::non_empty::NonEmpty;
@@ -194,11 +195,15 @@ impl ModulePath {
         (!qualifier.is_empty()).then_some((qualifier, leaf))
     }
 }
+
 /// A single item in an `import` declaration, optionally aliased.
 ///
 /// Example: `name1 as local_name` → `ImportItem { name: "name1", alias: Some("local_name") }`
 /// Example: `name1` → `ImportItem { name: "name1", alias: None }`
 /// Example: `type name1` → imports from the type namespace.
+/// Example: `dim Length` → imports from the dimension namespace.
+/// Example: `unit m` → imports from the unit namespace.
+/// Example: `index Case` → imports from the index namespace.
 /// Example: `pub name1` → re-exported at the importer (selective form).
 #[derive(Debug, Clone)]
 pub struct ImportItem {
@@ -218,16 +223,6 @@ pub struct ImportItem {
     pub alias: Option<Ident>,
 }
 
-/// Namespace targeted by a single selective import item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportItemNamespace {
-    /// Default compile-time namespace: consts, dimensions, units, indexes,
-    /// DAGs, assertions, and other non-type importable items.
-    Default,
-    /// Type namespace, written with the `type` marker.
-    Type,
-}
-
 impl ImportItem {
     /// The name that this import introduces into the local scope.
     /// Returns the alias if present, otherwise the original name.
@@ -244,6 +239,7 @@ impl ImportItem {
         self.alias.as_ref().map_or(self.name.span, |a| a.span)
     }
 }
+
 /// An identifier with its source span.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Ident {
