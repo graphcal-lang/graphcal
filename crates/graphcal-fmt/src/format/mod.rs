@@ -308,6 +308,33 @@ pub fn soft_parenthesized_list(
     soft_parenthesized(body)
 }
 
+/// Format a non-empty comma-separated list in parentheses using an explicitly
+/// expanded layout.
+///
+/// This is the forced counterpart to [`soft_parenthesized_list`], used when
+/// source syntax such as a magic trailing comma requests multiline output even
+/// though the list would fit on one line.
+pub fn multiline_parenthesized_list(
+    items: Vec<RcDoc<'static>>,
+    trailing_comma: bool,
+) -> RcDoc<'static> {
+    if items.is_empty() {
+        return RcDoc::text("()");
+    }
+
+    let body = RcDoc::intersperse(items, RcDoc::text(",").append(RcDoc::hardline()));
+    let body = if trailing_comma {
+        body.append(RcDoc::text(","))
+    } else {
+        body
+    };
+
+    RcDoc::text("(")
+        .append(RcDoc::hardline().append(body).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text(")"))
+}
+
 /// Render an `RcDoc` to a string (for measuring column widths).
 pub fn render_doc_to_string(doc: &RcDoc<'static>) -> String {
     let mut buf = Vec::new();

@@ -3,15 +3,17 @@ use graphcal_compiler::syntax::ast::{
     Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
     IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MapEntryIndex, MapEntryKey, MultiDecl,
     MultiHeaderCell, MultiSlotAxis, MultiSlotKind, NodeDecl, ParamBinding, ParamDecl, PlotDecl,
-    TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr, UnitConstness, UnitDecl, UnitDef, Visibility,
+    TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr, UnionMember, UnitConstness, UnitDecl,
+    UnitDef, Visibility,
 };
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use pretty::RcDoc;
 
 use super::{
     Formatter, INDENT, display_width, flat_alt_group, format_dim_expr_inline, format_expr,
-    format_type_expr_inline, format_unit_expr_inline, pad_left_to_width, pad_right_to_width,
-    render_doc_to_string, soft_parenthesized, soft_parenthesized_list, text_with_hardlines,
+    format_type_expr_inline, format_unit_expr_inline, multiline_parenthesized_list,
+    pad_left_to_width, pad_right_to_width, render_doc_to_string, soft_parenthesized,
+    soft_parenthesized_list, text_with_hardlines,
 };
 
 // ---------------------------------------------------------------------------
@@ -244,18 +246,16 @@ fn format_type_decl(fmt: &mut Formatter<'_>, d: &TypeDecl) -> RcDoc<'static> {
         .map(|m| {
             let mut doc = RcDoc::text(m.name.value.as_str().to_string());
             if let Some(fields) = &m.payload {
-                if fields.is_empty() {
-                    doc = doc.append(RcDoc::text("()"));
+                let field_docs: Vec<RcDoc<'static>> = fields
+                    .iter()
+                    .map(|f| format_single_field_decl(fmt, f))
+                    .collect();
+                let payload_doc = if constructor_payload_has_magic_trailing_comma(fmt, m) {
+                    multiline_parenthesized_list(field_docs, true)
                 } else {
-                    let field_docs: Vec<RcDoc<'static>> = fields
-                        .iter()
-                        .map(|f| format_single_field_decl(fmt, f))
-                        .collect();
-                    doc = doc
-                        .append(RcDoc::text("("))
-                        .append(RcDoc::intersperse(field_docs, RcDoc::text(", ")))
-                        .append(RcDoc::text(")"));
-                }
+                    soft_parenthesized_list(field_docs, true)
+                };
+                doc = doc.append(payload_doc);
             }
             doc.append(RcDoc::text(","))
         })
@@ -335,6 +335,19 @@ fn format_extern_fn_decl(
         .append(RcDoc::text(") -> "))
         .append(format_type_expr_inline(fmt, &f.result))
         .append(RcDoc::text(";"))
+}
+
+/// Return whether the source payload ends in a comma immediately before its
+/// closing `)`.
+///
+/// The parser intentionally omits trailing-comma trivia from the AST, while
+/// [`UnionMember::span`] ends exactly at the payload's closing `)`. This
+/// bounded source-level check therefore observes formatter trivia without
+/// confusing the constructor-list comma that follows the member.
+fn constructor_payload_has_magic_trailing_comma(fmt: &Formatter<'_>, member: &UnionMember) -> bool {
+    fmt.slice(member.span)
+        .strip_suffix(')')
+        .is_some_and(|before_closing| before_closing.trim_end().ends_with(','))
 }
 
 fn format_single_field_decl(fmt: &mut Formatter<'_>, f: &FieldDecl) -> RcDoc<'static> {
