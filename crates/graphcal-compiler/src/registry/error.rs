@@ -8,7 +8,7 @@ use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
-use crate::syntax::function_name::FnName;
+use crate::syntax::function_name::{FnName, FnParamName};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NameAtom;
@@ -259,6 +259,21 @@ pub enum GraphcalError {
         src: NamedSource<Arc<String>>,
         #[label("invalid signature")]
         span: SourceSpan,
+    },
+
+    #[error("duplicate parameter `{name}` in extern function signature")]
+    #[diagnostic(
+        code(graphcal::P011),
+        help("each extern function parameter name must be unique")
+    )]
+    DuplicateExternParameter {
+        name: FnParamName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate parameter")]
+        duplicate: SourceSpan,
+        #[label("first declared here")]
+        first: SourceSpan,
     },
 
     #[error("extern function `{name}` (plugin \"{plugin}\") is not provided by the host")]
@@ -2081,6 +2096,7 @@ impl GraphcalError {
             | Self::PluginNotPinned { src, .. }
             | Self::PluginHashMismatch { src, .. }
             | Self::InvalidExternSignature { src, .. }
+            | Self::DuplicateExternParameter { src, .. }
             | Self::MissingHostFunction { src, .. }
             | Self::ExternCallNotAllowed { src, .. }
             | Self::GraphRefInConst { src, .. }

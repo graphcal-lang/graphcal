@@ -4,7 +4,7 @@ use crate::syntax::ast::{
     ImportItemNamespace, ImportKind, IndexDeclKind, MulDivOp, TypeDecl, TypeDeclBody, TypeExprKind,
     UnionMember, UnitConstness, Visibility,
 };
-use crate::syntax::parser::Parser;
+use crate::syntax::parser::{ParseError, Parser};
 
 fn type_members(t: &TypeDecl) -> &[UnionMember] {
     match &t.body {
@@ -1016,6 +1016,14 @@ fn parse_include_dotted_path_with_param_bindings() {
         panic!("expected Module");
     };
     assert_eq!(alias.as_ref().unwrap().value.as_str(), "stage_1");
+}
+
+#[test]
+fn duplicate_include_binding_is_rejected() {
+    let err = Parser::new("include combine(a: 1.0, a: 2.0) as result;")
+        .parse_file()
+        .unwrap_err();
+    assert!(matches!(err, ParseError::DuplicateDagBinding { name, .. } if name.as_str() == "a"));
 }
 
 #[test]

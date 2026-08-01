@@ -71,7 +71,9 @@ algorithms do not need a separate natural-number parameter. General
 `Nat`-generic DAG declarations and size arithmetic remain outside this model.
 
 Type-level bindings belong to `include`; expression-form `@dag(args).out`
-invocation supplies value parameters only.
+invocation supplies value parameters only. In either form, bindings are a
+unique name-to-expression mapping: order does not affect which input is bound,
+and a target name cannot appear more than once in the same list.
 
 ### Multi-Output DAGs
 

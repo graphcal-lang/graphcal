@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+duplicate parameter `a` in extern function signature
+    Diagnostic severity: error
+Begin snippet for extern_duplicate_param.gcl starting at line 1, column 1
+
+snippet line 1: import plugin "graphcal:demo" as demo {
+snippet line 2:     fn lerp<D: Dim>(a: D, a: D, t: Dimensionless) -> D;
+    label at line 2, column 21: first declared here
+    label at line 2, column 27: duplicate parameter
+snippet line 3: }
+diagnostic help: each extern function parameter name must be unique
+diagnostic code: graphcal::P011

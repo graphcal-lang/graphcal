@@ -4620,10 +4620,27 @@ fn resolve_extern_function(
     )?;
     let signature =
         crate::function_signature::FunctionSignature::try_new(dim_vars, index_vars, params, result)
-            .map_err(|err| GraphcalError::InvalidExternSignature {
-                message: err.to_string(),
-                src: src.clone(),
-                span: function.span.into(),
+            .map_err(|err| {
+                if let crate::function_signature::SignatureError::DuplicateParamName {
+                    name,
+                    first,
+                    duplicate,
+                } = &err
+                    && let (Some(first_param), Some(duplicate_param)) =
+                        (function.params.get(*first), function.params.get(*duplicate))
+                {
+                    return GraphcalError::DuplicateExternParameter {
+                        name: name.clone(),
+                        src: src.clone(),
+                        duplicate: duplicate_param.name.span.into(),
+                        first: first_param.name.span.into(),
+                    };
+                }
+                GraphcalError::InvalidExternSignature {
+                    message: err.to_string(),
+                    src: src.clone(),
+                    span: function.span.into(),
+                }
             })?;
     let key = crate::syntax::plugin::ExternFnKey {
         plugin: decl.path.value.clone(),

@@ -87,6 +87,21 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
+    #[error("duplicate DAG binding `{name}`")]
+    #[diagnostic(
+        code(graphcal::P025),
+        help("each name may appear at most once in a DAG binding list")
+    )]
+    DuplicateDagBinding {
+        name: NameAtom,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate binding")]
+        duplicate: SourceSpan,
+        #[label("first bound here")]
+        first: SourceSpan,
+    },
+
     #[error("stray character in source")]
     #[diagnostic(
         code(graphcal::P006),
@@ -375,6 +390,7 @@ impl ParseError {
             | Self::TableRowLengthMismatch { src, .. }
             | Self::InvalidDomainBoundKey { src, .. }
             | Self::DuplicateDomainBound { src, .. }
+            | Self::DuplicateDagBinding { src, .. }
             | Self::UnknownToken { src, .. }
             | Self::MultiDeclTupleArity { src, .. }
             | Self::MultiDeclHeaderArity { src, .. }
