@@ -8,6 +8,28 @@ lint:
 test:
     cargo test --workspace
 
+wasm-test:
+    wasm-pack test --node crates/graphcal-wasm
+
+# Build the browser adapter and wasm-bindgen glue consumed by Zensical.
+wasm-playground:
+    rm -rf docs/assets/playground/pkg
+    wasm-pack build crates/graphcal-wasm --target web --out-dir ../../docs/assets/playground/pkg --release --no-typescript --no-pack
+    rm -f docs/assets/playground/pkg/.gitignore
+
+# Build docs, smoke-test the worker bridge, and enforce a 5 MiB raw Wasm budget.
+docs-build: wasm-playground
+    zensical build --clean
+    test -s site/assets/playground/pkg/graphcal_wasm.js
+    test -s site/assets/playground/pkg/graphcal_wasm_bg.wasm
+    test "$(wc -c < site/assets/playground/pkg/graphcal_wasm_bg.wasm)" -le 5242880
+    node --check docs/javascripts/playground.mjs
+    node --check docs/javascripts/playground-worker.mjs
+    node internals/playground-worker-smoke.mjs
+
+docs-serve: wasm-playground
+    zensical serve
+
 coverage:
     cargo llvm-cov --workspace --html
     @echo "Coverage report generated at target/llvm-cov/html/index.html"

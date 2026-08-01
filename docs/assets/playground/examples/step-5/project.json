@@ -1,0 +1,9 @@
+{
+  "entry": "src/rocket_project/main.gcl",
+  "files": [
+    "graphcal.toml",
+    "src/rocket_project/constants.gcl",
+    "src/rocket_project/params.gcl",
+    "src/rocket_project/main.gcl"
+  ]
+}

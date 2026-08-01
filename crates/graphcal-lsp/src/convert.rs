@@ -1,6 +1,7 @@
 //! Conversion utilities between byte offsets/spans and LSP positions/ranges.
 
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::text_position::{Utf16LineIndex, Utf16Position};
 use tower_lsp::lsp_types::{Position, Range};
 
 /// Per-handler cache of line-start byte offsets paired with the source text.
@@ -9,20 +10,16 @@ use tower_lsp::lsp_types::{Position, Range};
 /// go through this type. Construct once at the top of each handler that
 /// answers more than one position query, then reuse for every conversion —
 /// each call is O(log lines + col) instead of O(n).
-pub struct LineIndex<'src> {
-    source: &'src str,
-    /// Sorted byte offsets where each line starts. Always starts with `0`
-    /// and has one entry per line.
-    line_starts: Vec<usize>,
+pub struct LineIndex<'source> {
+    inner: Utf16LineIndex<'source>,
 }
 
-impl<'src> LineIndex<'src> {
+impl<'source> LineIndex<'source> {
     /// Build a `LineIndex` for `source`. Scans the source once.
     #[must_use]
-    pub fn new(source: &'src str) -> Self {
+    pub fn new(source: &'source str) -> Self {
         Self {
-            source,
-            line_starts: compute_line_starts(source),
+            inner: Utf16LineIndex::new(source),
         }
     }
 
@@ -30,7 +27,7 @@ impl<'src> LineIndex<'src> {
     /// character offset).
     #[must_use]
     pub fn position(&self, offset: usize) -> Position {
-        byte_offset_to_position_cached(&self.line_starts, self.source, offset)
+        lsp_position(self.inner.position(offset))
     }
 
     /// Convert a `Span` to an LSP `Range`.
@@ -42,60 +39,18 @@ impl<'src> LineIndex<'src> {
     /// Convert a byte offset and length to an LSP `Range`.
     #[must_use]
     pub fn offset_len_to_range(&self, offset: usize, len: usize) -> Range {
+        let range = self.inner.range(offset, len);
         Range {
-            start: self.position(offset),
-            end: self.position(offset + len),
+            start: lsp_position(range.start),
+            end: lsp_position(range.end),
         }
     }
 }
 
-/// Precompute a sorted table of line-start byte offsets for `source`.
-///
-/// Pairs with [`byte_offset_to_position_cached`] to answer many position
-/// queries against the same source without rescanning it on each call.
-///
-/// The returned vector always starts with `0` (the first line starts at the
-/// beginning of the source) and has one entry per line.
-fn compute_line_starts(source: &str) -> Vec<usize> {
-    let mut starts = Vec::with_capacity(source.bytes().filter(|&b| b == b'\n').count() + 1);
-    starts.push(0);
-    for (i, byte) in source.bytes().enumerate() {
-        if byte == b'\n' {
-            starts.push(i + 1);
-        }
-    }
-    starts
-}
-
-/// Convert a byte offset to an LSP `Position` using a precomputed `line_starts` table.
-///
-/// `line_starts` must be the output of [`compute_line_starts`] for the same
-/// `source` being queried. The line lookup is O(log lines); the column
-/// computation is O(col) (UTF-16 widths on the one line the offset sits in).
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "char::len_utf16() returns 1 or 2, never truncates to u32; line count fits in u32 for any realistic source"
-)]
-fn byte_offset_to_position_cached(line_starts: &[usize], source: &str, offset: usize) -> Position {
-    let mut offset = offset.min(source.len());
-    // Snap down to a char boundary: compiler spans are always aligned, but
-    // this function already defends against out-of-range offsets and a
-    // mid-char offset would panic the slice below.
-    while !source.is_char_boundary(offset) {
-        offset -= 1;
-    }
-    // Find the line whose start is <= offset. `partition_point` returns the
-    // first index where the predicate is false, so we subtract 1.
-    let line_idx = line_starts.partition_point(|&start| start <= offset).max(1) - 1;
-    let line_start = line_starts[line_idx];
-    // Compute UTF-16 columns on the single line containing `offset`.
-    let col: u32 = source[line_start..offset]
-        .chars()
-        .map(|ch| ch.len_utf16() as u32)
-        .sum();
+const fn lsp_position(position: Utf16Position) -> Position {
     Position {
-        line: line_idx as u32,
-        character: col,
+        line: position.line,
+        character: position.character,
     }
 }
 
@@ -332,19 +287,6 @@ mod tests {
                 "round-trip failed for offset {offset} via {pos:?}"
             );
         }
-    }
-
-    #[test]
-    fn compute_line_starts_basic() {
-        let source = "hello\nworld\nfoo";
-        let starts = compute_line_starts(source);
-        assert_eq!(starts, vec![0, 6, 12]);
-    }
-
-    #[test]
-    fn compute_line_starts_empty() {
-        let starts = compute_line_starts("");
-        assert_eq!(starts, vec![0]);
     }
 
     #[test]

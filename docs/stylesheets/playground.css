@@ -1,0 +1,303 @@
+graphcal-playground {
+  display: block;
+}
+
+.gc-playground-fallback {
+  margin: 1.5rem 0;
+  padding: 0.85rem 1rem;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.35rem;
+  background: var(--md-code-bg-color);
+}
+
+.gc-playground {
+  display: block;
+  margin: 1.5rem 0;
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.35rem;
+  overflow: hidden;
+  background: var(--md-default-bg-color);
+  box-shadow: var(--md-shadow-z1);
+}
+
+.gc-playground__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0.8rem;
+  border-bottom: 0.05rem solid var(--md-default-fg-color--lightest);
+}
+
+.gc-playground__title {
+  font-size: 0.8rem;
+}
+
+.gc-playground__status {
+  font-size: 0.65rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.gc-playground__status[data-state="success"],
+.gc-playground__status[data-state="ready"] {
+  color: var(--md-code-hl-string-color);
+}
+
+.gc-playground__status[data-state="error"] {
+  color: var(--md-code-hl-generic-color);
+}
+
+.gc-playground__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(15rem, 0.9fr);
+  min-height: 25rem;
+}
+
+.gc-playground__editor-pane {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  border-right: 0.05rem solid var(--md-default-fg-color--lightest);
+  background: var(--md-code-bg-color);
+}
+
+.gc-playground__tabs {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  border-bottom: 0.05rem solid var(--md-default-fg-color--lightest);
+}
+
+.gc-playground__tab {
+  padding: 0.45rem 0.65rem;
+  border: 0;
+  border-right: 0.05rem solid var(--md-default-fg-color--lightest);
+  background: transparent;
+  color: var(--md-default-fg-color--light);
+  font: inherit;
+  font-size: 0.6rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.gc-playground__tab[aria-selected="true"] {
+  background: var(--md-default-bg-color);
+  color: var(--md-typeset-a-color);
+  box-shadow: inset 0 -0.12rem var(--md-accent-fg-color);
+}
+
+.gc-playground__editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 20rem;
+  flex: 1;
+  resize: vertical;
+  border: 0;
+  outline: 0;
+  padding: 0.8rem;
+  background: var(--md-code-bg-color);
+  color: var(--md-code-fg-color);
+  font: 0.68rem/1.55 var(--md-code-font-family);
+  tab-size: 4;
+}
+
+.gc-playground__editor:focus {
+  box-shadow: inset 0 0 0 0.1rem var(--md-accent-fg-color);
+}
+
+.gc-playground__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border-top: 0.05rem solid var(--md-default-fg-color--lightest);
+}
+
+.gc-playground__controls .md-button {
+  margin: 0;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.62rem;
+}
+
+.gc-playground__shortcut {
+  margin-left: auto;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.55rem;
+}
+
+.gc-playground__output {
+  min-width: 0;
+  overflow: auto;
+  padding: 0.8rem;
+  font-size: 0.68rem;
+}
+
+.gc-playground__output-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+}
+
+.gc-playground__values,
+.gc-playground__nested-values {
+  display: grid;
+  grid-template-columns: minmax(5rem, max-content) minmax(0, 1fr);
+  gap: 0.25rem 0.65rem;
+  margin: 0;
+}
+
+.gc-playground__value-name,
+.gc-playground__nested-values dt {
+  overflow-wrap: anywhere;
+  color: var(--md-code-hl-name-color);
+  font-family: var(--md-code-font-family);
+}
+
+.gc-playground__value,
+.gc-playground__nested-values dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.gc-playground__scalar,
+.gc-playground__runtime-error {
+  font-family: var(--md-code-font-family);
+}
+
+.gc-playground__runtime-error {
+  color: var(--md-code-hl-generic-color);
+}
+
+.gc-playground__composite {
+  margin: 0.1rem 0;
+}
+
+.gc-playground__composite summary {
+  cursor: pointer;
+  color: var(--md-code-hl-function-color);
+  font-family: var(--md-code-font-family);
+}
+
+.gc-playground__nested-values,
+.gc-playground__indexed-table {
+  margin: 0.35rem 0 0.5rem 0.5rem;
+}
+
+.gc-playground__indexed-table {
+  width: auto;
+  min-width: 12rem;
+  font-family: var(--md-code-font-family);
+}
+
+.gc-playground__indexed-table th,
+.gc-playground__indexed-table td {
+  padding: 0.25rem 0.45rem;
+}
+
+.gc-playground__diagnostic {
+  margin-bottom: 0.65rem;
+  padding: 0.65rem;
+  border-left: 0.15rem solid var(--md-code-hl-generic-color);
+  background: color-mix(in srgb, var(--md-code-hl-generic-color) 8%, transparent);
+}
+
+.gc-playground__diagnostic p {
+  margin: 0.4rem 0;
+}
+
+.gc-playground__diagnostic-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-family: var(--md-code-font-family);
+}
+
+.gc-playground__diagnostic-location {
+  display: block;
+  max-width: 100%;
+  margin-top: 0.3rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--md-typeset-a-color);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gc-playground__diagnostic-help {
+  color: var(--md-default-fg-color--light);
+}
+
+.gc-playground__message {
+  margin: 0 0 0.65rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.2rem;
+}
+
+.gc-playground__message--error {
+  border-left: 0.15rem solid var(--md-code-hl-generic-color);
+  background: color-mix(in srgb, var(--md-code-hl-generic-color) 8%, transparent);
+}
+
+.gc-playground__message--notice {
+  border-left: 0.15rem solid var(--md-code-hl-keyword-color);
+  background: color-mix(in srgb, var(--md-code-hl-keyword-color) 8%, transparent);
+}
+
+.gc-playground__assertions {
+  padding-left: 1rem;
+}
+
+.gc-playground__assertion--pass {
+  color: var(--md-code-hl-string-color);
+}
+
+.gc-playground__assertion--fail,
+.gc-playground__assertion--error {
+  color: var(--md-code-hl-generic-color);
+}
+
+.gc-playground__placeholder,
+.gc-playground__version,
+.gc-playground__scope {
+  color: var(--md-default-fg-color--light);
+}
+
+.gc-playground__version {
+  margin-top: 1rem;
+  font-size: 0.55rem;
+}
+
+.gc-playground__scope {
+  margin: 0;
+  padding: 0.45rem 0.8rem;
+  border-top: 0.05rem solid var(--md-default-fg-color--lightest);
+  font-size: 0.55rem;
+}
+
+@media screen and (max-width: 60rem) {
+  .gc-playground__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .gc-playground__editor-pane {
+    border-right: 0;
+    border-bottom: 0.05rem solid var(--md-default-fg-color--lightest);
+  }
+
+  .gc-playground__output {
+    max-height: 24rem;
+  }
+}
+
+@media screen and (max-width: 30rem) {
+  .gc-playground__header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .gc-playground__shortcut {
+    display: none;
+  }
+}

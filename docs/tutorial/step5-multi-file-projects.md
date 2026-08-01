@@ -69,6 +69,18 @@ node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
+## Try the Multi-File Project in Your Browser
+
+Use the file tabs to edit `graphcal.toml`, both library modules, and the entry file. Imports are resolved entirely inside the browser's in-memory filesystem.
+
+<div class="gc-playground-host">
+  <graphcal-playground example="step-5">
+    <p class="gc-playground-fallback">The editable playground requires JavaScript. Read the tutorial above, <a href="../assets/playground/examples/step-5/src/rocket_project/main.gcl">open the static entry source</a>, or inspect its <a href="../assets/playground/examples/step-5/project.json">project manifest</a>.</p>
+  </graphcal-playground>
+</div>
+
+Expected initial output includes all seven projected values from `g0` through `delta_v`.
+
 The path before `.{...}` is absolute from the package root. The
 first segment is the package name (from `graphcal.toml`); subsequent
 segments walk the directory tree under `source_dir`.
