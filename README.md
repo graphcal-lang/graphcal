@@ -36,23 +36,15 @@ mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
 ```
 
+[Try `rocket.gcl` in the browser playground](https://graphcal.org/docs/playground/) without installing anything.
+
 ## Why Graphcal?
 
-- **Dimensions as types.** Every Graphcal quantity carries a compile-time dimension (`Dimensionless` when unitless). The compiler catches `km + kg` and demands explicit unit conversions.
-- **Dimension-aware complex quantities.** `Complex<D>` carries the shared dimension of its real and imaginary components, with explicit rectangular, polar, and real-promotion constructors and unit-safe mixed arithmetic.
-- **Safety-oriented numerics.** Non-finite literals, invalid unit scales, empty indexes, and non-integral or out-of-range `Dimensionless`-to-`Int` conversions are rejected instead of silently producing `NaN`, `inf`, rounded values, or saturated integers. Dimensioned powers require exact integer or rational exponents (`^ 2`, `^ (1/3)`), while runtime exponents are allowed only when the base is dimensionless. Domain constraints preserve full-range integer bounds and require explicit, same-scale bounds for `Datetime<S>`.
-- **Reactive by design.** `param` declares an annotation-free named DAG input port whose effective bound/default value remains externally projectable; `node` and `const node` represent computed and fixed values. Entry-DAG ports are supplied from the CLI, callable-DAG ports by name at call/include sites, and dependents recompute automatically. Internal values use private nodes or private DAG/module boundaries rather than “internal params.”
-- **In-language checks.** Boolean and tolerance assertions verify computed results after evaluation. Tolerances are explicit absolute expressions, so relative policies are written compositionally instead of hidden behind special `%` syntax.
-- **Git-friendly.** Plain text `.gcl` files diff and merge cleanly. No binary spreadsheets, no hidden state.
-- **Locked Git dependencies.** Exact-rev package dependencies are resolved into a deterministic `graphcal.lock` with package-instance identities, so multiple revisions of the same package can coexist without global name collisions. Civil-time calculations likewise use a bundled, pinned IANA timezone database instead of host zoneinfo.
-- **Algebraic types and sort-aware generics.** One- or multi-constructor `type` declarations, exhaustive `match`, and explicit `Dim`, `Type`, `Index`, and `Nat` generic parameters—for reference frames (`Vec3<Length, Eci>` vs `Vec3<Length, Body>`) and fixed-size nominal types (`Buffer<3>`).
-- **Indexed values.** Named axes, explicit structural `Fin(N)` indexes, exact-step `range`, and count-based `linspace` support `for` comprehensions, aggregations, and expression-local `unfold(index, init, |prev_state, prev_i, i| ...)` recurrences with explicit scalar, vector, or matrix state and ordinary self-cycle rules, without implicit Nat-to-Index conversion. A recurrence prepends its ordered step axis to fixed state axes, preserving complete previous snapshots for coupled updates. Indexed values are nonempty, and rank-one `count` returns exact `Int`; multi-axis reductions and `scan` sources require explicit axis selection. Arithmetic and comparison operators never broadcast indexed operands; element-wise work uses an explicit `for`, while `product` and numerically stable `rss` provide explicit engineering reductions. Spreadsheet-style tables preserve typed axes while keeping rows readable. Constructor words such as `range`, `linspace`, and `Fin` are contextual, so those names remain available elsewhere.
-- **Typed index keys.** Axis elements are first-class values of the reflection type `Key<I>`: `argmax`/`argmin` return the extremum's key (with `@x[argmax(@x)] == maximum(@x)` guaranteed), qualified labels are self-typed key constants, and loop variables — including `unfold` coordinate binders — are keys whose contents are extracted explicitly with `coord(t)` and `to_int(i)` instead of leaking as raw floats or integers. Named-axis keys drive exhaustive `match`, `Fin` keys carry exact bound-tracking additive arithmetic (`i + 1 : Key<Fin(N + 1)>`), and runtime selection is explicit and range-checked (`fin_key`, `floor_key`/`ceil_key`/`nearest_key`) rather than an implicit integer or quantity lookup.
-- **Axis-safe linear algebra.** `dot`, `matmul`, `transpose`, `trace`, `norm`, `cross`, and `outer` operate on indexed quantities while preserving physical dimensions. `solve`, `inverse`, and `det` provide general square-matrix algorithms through scaled partial-pivoting LU with explicit singularity and numerical-safety failures. Contractions match axes by typed identity rather than cardinality alone, so accidentally multiplying matrices over unrelated named axes is a compile error.
-- **Reusable computation.** `dag` blocks parameterize sub-graphs and instantiate them as expressions or via `include`; call/include bindings form an order-independent mapping with each target named exactly once. Required `pub(bind)` dimensions, types, and indexes act as explicit type-level input ports for dimension- and axis-polymorphic libraries, and a discrete index port accepts either a named axis or structural `Fin(N)` directly. File roots and inline DAGs are the same callable module abstraction: `import path as m` binds either target for `@m(args).out`, while `@m.child(args).out` descends to a child DAG. Inline DAG bodies use explicit `import`/`include` edges just like file DAGs. Multi-file projects compose with module-qualified type/index/constructor paths, explicit `pub` / `pub(bind)` exports, and separately modeled param input ports.
-- **WASM plugins (experimental).** `import plugin` blocks declare externally-provided functions with full dimensional signatures -- dimension-variable polymorphism with rational powers (`fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2)`), multi-axis arrays over index variables (`fn transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I]`, explicitly shaped row-major SI buffers whose result extents always come from inputs), and record-shaped algebraic results verified field-by-field against the module. Backed by sandboxed, fuel-metered WebAssembly modules vendored in the project: declarations are verified against the manifest embedded in each module, and `graphcal.lock` pins every plugin binary by SHA-256 so plugin code only changes through a reviewable diff. Embedders can also inject native host functions through the same registry. Authoring is one declaration in Rust: the `graphcal-plugin` SDK's `plugin!` macro takes graphcal-syntax signatures with Rust bodies and generates both the exports and the embedded manifest, panics surface as readable per-node diagnostics, and `graphcal plugin new`/`graphcal plugin test` scaffold and exercise a module without a project. The plugin runtime is new and relatively untested; expect rough edges and breaking changes.
-- **Built-in plotting.** `plot` and `figure` declarations render to interactive [Vega-Lite](https://vega.github.io/vega-lite/) charts.
-- **Live editor experience.** The LSP server provides diagnostics, symbols, hover, owner-aware go-to-definition for imports, and inlay hints that show computed values inline -- your editor becomes a live calculation sheet. Revision-aware cooperative cancellation and bounded analysis concurrency keep superseded edits from consuming background workers.
+- **Unit-safe.** Physical dimensions are checked at compile time, and conversions are explicit.
+- **Reactive.** Change a parameter and every dependent value is recomputed automatically.
+- **Git-friendly.** Plain-text `.gcl` files diff and merge cleanly, with no hidden spreadsheet state.
+- **Built for engineering.** Typed axes, dimension-aware linear algebra, assertions, plotting, and reusable computation graphs are built in.
+- **Live in your editor.** The language server provides diagnostics, navigation, and inline computed values.
 
 ## Installation
 
@@ -84,7 +76,7 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 graphcal deps lock --root mission
 ```
 
-Try Graphcal without installing it in the [browser playground](https://graphcal.org/docs/playground/). See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full local surface, including `format`, `check`, `deps lock`, `graph`, and `lsp`.
+See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface.
 
 ## Editor Support
 
@@ -96,56 +88,12 @@ Inlay hints show computed values right next to the source -- install one of the 
 
 Setup details for each editor are in the [Editor Setup guide](https://graphcal.org/docs/editor-setup/).
 
-## Documentation
-
-The full tutorial, language reference, and CLI/editor guides are available in the live documentation: <https://graphcal.org/docs/>.
-
-- **[Browser Playground (experimental)](https://graphcal.org/docs/playground/)** -- edit and evaluate alpha-stage Graphcal without installing it
-- **[Interactive Tutorial](https://graphcal.org/docs/tutorial/)** -- learn Graphcal step by step with editable examples
-- **[Language Reference](https://graphcal.org/docs/language/)** -- every feature, formally
-- **[Built-in Reference](https://graphcal.org/docs/language/built-ins/)** -- constants, math, type conversions, aggregations, prelude dimensions and units
-- **[Multi-file Projects](https://graphcal.org/docs/language/multi-file/)** -- `import`, `include`, package dependencies, and the `pub(bind)` visibility model
-- **[CLI Reference](https://graphcal.org/docs/cli-reference/)** -- `eval`, `format`, `check`, `deps lock`, `lsp`
-
-The [`docs/`](docs/) directory contains the Zensical source for the site. With `wasm-pack` and Zensical installed, run `just docs-serve` and open `http://localhost:8000`; the recipe builds the browser evaluator before starting Zensical. Use `just docs-build` with Node.js available to build the production site and smoke-test the worker bridge.
-
-## Vision
-
-Graphcal is heading toward:
-
-- **Dynamic simulation** -- higher-level integration and solver workflows built on `scan`/`unfold` over time axes
-- **Python interop** -- parameter sweeps and Monte Carlo at native speed
-- **Spreadsheet bridges** -- keep `.gcl` as the source of truth, let domain experts stay in Excel
-
-Track progress and discussion on [GitHub Issues](https://github.com/graphcal-lang/graphcal/issues).
-
-## Project Structure
-
-```
-graphcal/
-  crates/
-    graphcal-compiler/  # lexer (logos) + parser + AST + HIR + IR + TIR + registry
-    graphcal-package/   # pure package manifest, lockfile, and package graph model
-    graphcal-eval/      # const eval, runtime eval, project loader, exec plan
-    graphcal-fmt/       # code formatter
-    graphcal-io/        # filesystem abstraction (real, in-memory, overlay)
-    graphcal-wasm/      # unpublished browser WebAssembly adapter
-    graphcal-cli/       # CLI binary -- `eval`, `format`, `check`, `lsp`
-    graphcal-lsp/       # LSP server (tower-lsp) -- diagnostics, symbols, hover, inlay hints
-  grammar.ebnf          # formal grammar (source of truth for tree-sitter / TextMate)
-  docs/                 # source for https://graphcal.org/docs/
-  site-root/            # published site root: redirect stub, CNAME, robots.txt
-  tests/fixtures/       # .gcl test files: valid/, runtime_error/, invalid/
-
-Editor extensions and tree-sitter grammar live in separate repositories under github.com/graphcal-lang/.
-```
-
 ## Design Influences
 
 - [Numbat](https://numbat.dev) -- dimensions as types, units as values
-- [Sguaba](https://github.com/helsing-ai/sguaba) -- phantom-typed coordinate frames
-- [Gleam](https://gleam.run) -- `type` declarations for structs and union types
+- [Gleam](https://gleam.run) -- unified `type` declarations for structs and union types
 - [marimo](https://marimo.io) -- reactive DAG on cells, pure text files
+- [Sguaba](https://github.com/helsing-ai/sguaba) -- phantom-typed coordinate frames
 
 ## License
 
