@@ -347,6 +347,8 @@ impl DeclaredGenericArg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeclaredType {
     Quantity(Dimension),
+    /// A complex quantity whose real and imaginary components share one dimension.
+    Complex(Dimension),
     Bool,
     Int,
     /// A datetime instant in a specific time scale. `Datetime(UTC)` is the default for civil use.
@@ -370,6 +372,7 @@ impl DeclaredType {
     pub(crate) fn format(&self, dims: &DimensionRegistry) -> String {
         match self {
             Self::Quantity(d) => dims.format_dimension(d),
+            Self::Complex(d) => format!("Complex<{}>", dims.format_dimension(d)),
             Self::Bool => "Bool".to_string(),
             Self::Int => "Int".to_string(),
             Self::Datetime(scale) => {

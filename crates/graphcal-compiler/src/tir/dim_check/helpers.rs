@@ -27,6 +27,7 @@ pub(super) fn is_bool_type(ty: &InferredType) -> bool {
 pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> bool {
     match (declared, inferred) {
         (DeclaredType::Quantity(d), inferred) => inferred.quantity_dimension() == Some(d),
+        (DeclaredType::Complex(d), InferredType::Complex(inferred)) => d == inferred,
         (DeclaredType::Bool, InferredType::Bool) => true,
         (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
@@ -92,6 +93,17 @@ pub(super) fn resolved_type_matches_inferred(
         (ResolvedTypeExpr::Quantity(expected), inferred) => {
             inferred.quantity_dimension() == Some(expected)
         }
+        (
+            ResolvedTypeExpr::Complex {
+                dimension: expected,
+                ..
+            },
+            InferredType::Complex(actual),
+        ) => match expected {
+            ResolvedDimArg::Dimensionless => actual.is_dimensionless(),
+            ResolvedDimArg::Concrete(expected) => expected == actual,
+            ResolvedDimArg::GenericParam(_, _) | ResolvedDimArg::Expr { .. } => false,
+        },
         (ResolvedTypeExpr::IndexArg(expected), InferredType::IndexArg(actual)) => {
             resolved_index_matches_inferred(expected, actual)
         }
@@ -214,6 +226,7 @@ impl From<&InferredType> for DeclaredType {
             InferredType::Quantity(d) | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
                 Self::Quantity(d.clone())
             }
+            InferredType::Complex(d) => Self::Complex(d.clone()),
             InferredType::Bool => Self::Bool,
             InferredType::Int | InferredType::Fin(_) => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
@@ -258,6 +271,7 @@ impl From<&DeclaredType> for InferredType {
     fn from(dt: &DeclaredType) -> Self {
         match dt {
             DeclaredType::Quantity(d) => Self::Quantity(d.clone()),
+            DeclaredType::Complex(d) => Self::Complex(d.clone()),
             DeclaredType::Bool => Self::Bool,
             DeclaredType::Int => Self::Int,
             DeclaredType::Datetime(scale) => Self::Datetime(*scale),
@@ -284,6 +298,7 @@ pub fn expect_quantity(
         InferredType::Quantity(d) | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
             return Ok(d.clone());
         }
+        InferredType::Complex(_) => "a Complex value",
         InferredType::Bool => "a Bool value",
         InferredType::Int | InferredType::Fin(_) => "an Int value",
         InferredType::Datetime(_) => "a Datetime value",

@@ -1637,6 +1637,26 @@ fn collect_type_expr_names(
                 }
             }
         }
+        TypeExprKind::ComplexApplication { generic_args } => {
+            // `Complex` is built in; collect only names in its dimension argument.
+            for arg in generic_args {
+                match arg {
+                    graphcal_compiler::syntax::ast::GenericArg::Type(type_expr) => {
+                        collect_type_expr_names(type_expr, refs);
+                    }
+                    graphcal_compiler::syntax::ast::GenericArg::Index(IndexExpr::Name(path)) => {
+                        refs.push(path.value.display_path());
+                    }
+                    graphcal_compiler::syntax::ast::GenericArg::Index(
+                        IndexExpr::Finite { .. } | IndexExpr::BareNat(_),
+                    )
+                    | graphcal_compiler::syntax::ast::GenericArg::Nat(_) => {}
+                    graphcal_compiler::syntax::ast::GenericArg::Ambiguous(ambiguous) => {
+                        collect_ambiguous_generic_names(ambiguous, refs);
+                    }
+                }
+            }
+        }
         TypeExprKind::DatetimeApplication { type_args } => {
             // `Datetime` is a built-in — no top-level name to push.
             for arg in type_args {

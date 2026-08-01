@@ -336,6 +336,9 @@ pub(crate) fn lower_type_expr(
         ast::TypeExprKind::DatetimeApplication { type_args } => {
             TypeExprKind::Builtin(lower_datetime_application(type_ann.span, type_args)?)
         }
+        ast::TypeExprKind::ComplexApplication { generic_args } => {
+            TypeExprKind::Complex(lower_complex_application(type_ann.span, generic_args, ctx)?)
+        }
         ast::TypeExprKind::DimExpr(dim_expr) => lower_dim_expr_as_type(dim_expr, ctx)?,
         ast::TypeExprKind::Indexed { base, indexes } => TypeExprKind::Indexed {
             base: Box::new(lower_type_expr(base, ctx)?),
@@ -374,6 +377,33 @@ pub(crate) fn lower_type_expr(
     };
 
     Ok(TypeExpr::new(kind, type_ann.span))
+}
+
+fn lower_complex_application(
+    span: Span,
+    args: &[ast::GenericArg],
+    ctx: TypeLoweringContext<'_>,
+) -> Result<DimArg, HirLowerError> {
+    let [arg] = args else {
+        return Err(HirLowerError::WrongGenericArgCount {
+            target: "Complex".to_string(),
+            expected: "1".to_string(),
+            got: args.len(),
+            span,
+        });
+    };
+    let parameter = GenericParamName::expect_valid("D");
+    match lower_generic_arg_for_constraint(arg, GenericConstraint::Dim, &parameter, ctx)? {
+        GenericArg::Dim(dimension) => Ok(dimension),
+        GenericArg::Index(_) | GenericArg::Nat(_) | GenericArg::Type(_) => {
+            Err(generic_arg_sort_mismatch(
+                &parameter,
+                GenericConstraint::Dim,
+                "non-dimension type argument",
+                arg.span(),
+            ))
+        }
+    }
 }
 
 pub(crate) fn lower_generic_args(

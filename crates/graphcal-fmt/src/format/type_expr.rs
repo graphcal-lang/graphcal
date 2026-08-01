@@ -61,6 +61,16 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                 .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(">"))
         }
+        TypeExprKind::ComplexApplication { generic_args } => {
+            let arg_docs: Vec<RcDoc<'static>> = generic_args
+                .iter()
+                .map(|arg| format_generic_arg_inline(fmt, arg))
+                .collect();
+            RcDoc::text("Complex")
+                .append(RcDoc::text("<"))
+                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(">"))
+        }
     };
 
     if te.constraints.is_empty() {

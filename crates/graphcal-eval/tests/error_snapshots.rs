@@ -159,6 +159,80 @@ fn error_exp_requires_dimensionless() {
 }
 
 #[test]
+fn error_complex_aggregation_unsupported() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_aggregation_unsupported.gcl");
+    let rendered = render_error(source, "complex_aggregation_unsupported.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_component_dimension_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_component_dimension_mismatch.gcl");
+    let rendered = render_error(source, "complex_component_dimension_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_mixed_add_requires_conversion() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_mixed_add_requires_conversion.gcl");
+    let rendered = render_error(source, "complex_mixed_add_requires_conversion.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_is_unordered() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_is_unordered.gcl");
+    let rendered = render_error(source, "complex_is_unordered.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_exp_requires_dimensionless() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/complex_exp_requires_dimensionless.gcl");
+    let rendered = render_error(source, "complex_exp_requires_dimensionless.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_invalid_dimension_arg() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_invalid_dimension_arg.gcl");
+    let rendered = render_error(source, "complex_invalid_dimension_arg.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_unit_is_not_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_unit_is_not_dimension.gcl");
+    let rendered = render_error(source, "complex_unit_is_not_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_requires_dimension_arg() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_requires_dimension_arg.gcl");
+    let rendered = render_error(source, "complex_requires_dimension_arg.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_domain_constraint() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_domain_constraint.gcl");
+    let rendered = render_error(source, "complex_domain_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_extern_unsupported() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_extern_unsupported.gcl");
+    let rendered = render_error(source, "complex_extern_unsupported.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_rounding_requires_dimensionless() {
     let source =
         include_str!("../../../tests/fixtures/invalid/rounding_requires_dimensionless.gcl");
@@ -412,6 +486,21 @@ fn error_convert_dynamic_target_zero_scale() {
 fn error_division_by_zero() {
     let source = include_str!("../../../tests/fixtures/runtime_error/division_by_zero.gcl");
     let rendered = render_node_error(source, "division_by_zero.gcl", "y");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_division_by_zero() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/complex_division_by_zero.gcl");
+    let rendered = render_node_error(source, "complex_division_by_zero.gcl", "invalid");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_complex_polar_negative_magnitude() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/complex_polar_negative_magnitude.gcl");
+    let rendered = render_node_error(source, "complex_polar_negative_magnitude.gcl", "invalid");
     insta::assert_snapshot!(rendered);
 }
 

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected Complex<Length>, found Length
+    Diagnostic severity: error
+Begin snippet for complex_mixed_add_requires_conversion.gcl starting at line 1, column 1
+
+snippet line 1: node z: Complex<Length> = complex(1.0 m, 2.0 m);
+snippet line 2: node invalid: Complex<Length> = @z + 1.0 m;
+    label at line 2, columns 38 to 42: has dimension Length
+diagnostic help: addition and subtraction do not implicitly promote real quantities; use to_complex()
+diagnostic code: graphcal::D001

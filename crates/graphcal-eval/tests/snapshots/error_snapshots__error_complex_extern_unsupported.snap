@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+invalid extern function signature: extern function signatures support Bool, Int, quantity types, and arrays of quantities over one or more declared index variables
+    Diagnostic severity: error
+Begin snippet for complex_extern_unsupported.gcl starting at line 1, column 1
+
+snippet line 1: import plugin "phasor.wasm" as phasor {
+snippet line 2:     fn identity(z: Complex<Length>) -> Complex<Length>;
+    label at line 2, columns 20 to 33: invalid signature
+snippet line 3: }
+diagnostic help: extern signatures support Bool, Int, quantity types, arrays of quantities over one or more declared index variables, and record struct returns with concrete fields; each dimension variable must be declared in the `<...>` binder list and bound by a bare quantity parameter or bare array element before compound uses, and every result axis must reuse an index variable that indexes some parameter
+diagnostic code: graphcal::P001

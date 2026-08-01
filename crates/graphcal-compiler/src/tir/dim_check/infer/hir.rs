@@ -722,6 +722,18 @@ fn infer_hir_fn_call(
         }
     };
     match type_rule_for_builtin(name) {
+        BuiltinTypeRule::Complex(function) => infer_hir_complex_call(
+            function,
+            callee.span,
+            args,
+            declared_types,
+            local_types,
+            dag,
+            tir,
+            registry,
+            builtin_fns,
+            src,
+        ),
         BuiltinTypeRule::CollectionAggregation(kind) => {
             if args.len() != 1 {
                 return Err(GraphcalError::WrongArity {
@@ -928,6 +940,103 @@ fn infer_hir_fn_call(
             src,
         ),
     }
+}
+
+#[expect(clippy::too_many_arguments, reason = "function-call context")]
+fn infer_hir_complex_call(
+    function: crate::builtin::ComplexFn,
+    callee_span: Span,
+    args: &[hir::Expr],
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    local_types: &HirLocalTypes<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<InferredType, GraphcalError> {
+    use super::complex::ComplexTypeError;
+
+    let inferred = args
+        .iter()
+        .map(|arg| {
+            infer_arg(
+                arg,
+                declared_types,
+                local_types,
+                dag,
+                tir,
+                registry,
+                builtin_fns,
+                src,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    super::complex::infer(function, &inferred).map_err(|error| match error {
+        ComplexTypeError::WrongArity { expected, got } => GraphcalError::WrongArity {
+            name: crate::syntax::function_name::FnName::expect_valid(
+                function.builtin_name().as_str(),
+            ),
+            expected,
+            got,
+            src: src.clone(),
+            span: callee_span.into(),
+        },
+        ComplexTypeError::ExpectedQuantity { argument } => GraphcalError::DimensionMismatch {
+            expected: "quantity type".to_string(),
+            found: format_inferred_type(&inferred[argument], registry),
+            help: format!(
+                "{}() requires a quantity in argument {}",
+                function.builtin_name().as_str(),
+                argument.saturating_add(1)
+            ),
+            src: src.clone(),
+            span: args[argument].span.into(),
+        },
+        ComplexTypeError::ExpectedComplex { argument } => GraphcalError::DimensionMismatch {
+            expected: "Complex<D>".to_string(),
+            found: format_inferred_type(&inferred[argument], registry),
+            help: format!(
+                "{}() requires a complex quantity",
+                function.builtin_name().as_str()
+            ),
+            src: src.clone(),
+            span: args[argument].span.into(),
+        },
+        ComplexTypeError::ExpectedQuantityOrComplex { argument } => {
+            GraphcalError::DimensionMismatch {
+                expected: "a real or complex quantity".to_string(),
+                found: format_inferred_type(&inferred[argument], registry),
+                help: format!(
+                    "{}() requires a real or complex quantity",
+                    function.builtin_name().as_str()
+                ),
+                src: src.clone(),
+                span: args[argument].span.into(),
+            }
+        }
+        ComplexTypeError::DimensionMismatch { left, right } => GraphcalError::DimensionMismatch {
+            expected: format_inferred_type(&inferred[left], registry),
+            found: format_inferred_type(&inferred[right], registry),
+            help: "real and imaginary components must have the same dimension".to_string(),
+            src: src.clone(),
+            span: args[right].span.into(),
+        },
+        ComplexTypeError::ExpectedAngle { argument } => GraphcalError::DimensionMismatch {
+            expected: "Angle".to_string(),
+            found: format_inferred_type(&inferred[argument], registry),
+            help: "polar() phase must be an Angle quantity".to_string(),
+            src: src.clone(),
+            span: args[argument].span.into(),
+        },
+        ComplexTypeError::ExpectedDimensionless { argument } => GraphcalError::DimensionMismatch {
+            expected: "Dimensionless or Complex<Dimensionless>".to_string(),
+            found: format_inferred_type(&inferred[argument], registry),
+            help: "exp() requires a dimensionless real or complex argument".to_string(),
+            src: src.clone(),
+            span: args[argument].span.into(),
+        },
+    })
 }
 
 /// Check an extern (plugin) function call against its declared
@@ -2132,7 +2241,10 @@ fn infer_hir_convert(
     {
         element = nested;
     }
-    let expr_dim = expect_quantity(element, registry, src, inner.span)?;
+    let expr_dim = match element.complex_dimension() {
+        Some(dimension) => dimension.clone(),
+        None => expect_quantity(element, registry, src, inner.span)?,
+    };
     let target_dim = rules::resolve_unit_dimension_or_diagnose(target, registry, src)?;
 
     if expr_dim != target_dim {
@@ -2401,6 +2513,7 @@ fn validate_finite_index_obligations_inner(
             validate_finite_index_obligations_inner(element, dag, registry, src, span, visited)
         }
         InferredType::Quantity(_)
+        | InferredType::Complex(_)
         | InferredType::CoordinateIndexLabel { .. }
         | InferredType::Bool
         | InferredType::Int
@@ -2516,6 +2629,12 @@ fn infer_hir_generic_type_arg(
         hir::TypeExprKind::DimExpr(dim_expr) => {
             infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Quantity)
         }
+        hir::TypeExprKind::Complex(dimension) => match dimension {
+            hir::DimArg::Dimensionless(_) => Ok(InferredType::Complex(Dimension::dimensionless())),
+            hir::DimArg::Expr(dim_expr) => {
+                infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Complex)
+            }
+        },
         hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
             inferred_index_from_type_arg(index, src)?,
         )),

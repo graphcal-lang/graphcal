@@ -1870,6 +1870,29 @@ impl OverrideReconciliationChecker<'_> {
                 }
                 Ok(())
             }
+            TypeExprKind::ComplexApplication { generic_args } => {
+                for arg in generic_args {
+                    match arg {
+                        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+                            self.check_type_expr(type_expr)?;
+                        }
+                        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+                            for ident in ambiguous_generic_arg_idents(ambiguous) {
+                                if self.type_bindings.contains_key(ident.name.as_str()) {
+                                    return Err(self.orphan_error(
+                                        "type",
+                                        ident.name.as_str(),
+                                        format!("generic argument `{ambiguous}`"),
+                                    ));
+                                }
+                            }
+                        }
+                        crate::desugar::desugared_ast::GenericArg::Index(_)
+                        | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+                    }
+                }
+                Ok(())
+            }
             TypeExprKind::DatetimeApplication { type_args } => {
                 for arg in type_args {
                     self.check_type_expr(arg)?;
@@ -2384,7 +2407,8 @@ pub fn substitute_type_expr_index_names(
             }
             substitute_type_expr_index_names(base, bindings);
         }
-        TypeExprKind::TypeApplication { generic_args, .. } => {
+        TypeExprKind::TypeApplication { generic_args, .. }
+        | TypeExprKind::ComplexApplication { generic_args } => {
             for arg in generic_args {
                 substitute_generic_arg_index_names(arg, bindings);
             }
@@ -2443,6 +2467,11 @@ where
             {
                 name.value = crate::syntax::names::NamePath::expect_local(new_name.as_ref());
             }
+            for arg in generic_args {
+                substitute_generic_arg_nominal_names(arg, bindings);
+            }
+        }
+        TypeExprKind::ComplexApplication { generic_args } => {
             for arg in generic_args {
                 substitute_generic_arg_nominal_names(arg, bindings);
             }
@@ -3664,7 +3693,8 @@ fn find_non_earlier_type_reference(
                 })
             })
         }
-        TypeExprKind::TypeApplication { generic_args, .. } => generic_args
+        TypeExprKind::TypeApplication { generic_args, .. }
+        | TypeExprKind::ComplexApplication { generic_args } => generic_args
             .iter()
             .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().find_map(|type_arg| {
@@ -4365,6 +4395,7 @@ fn resolve_extern_value_kind(
         }
         TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
+        | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
             message:
                 "extern function signatures support Bool, Int, quantity types, and arrays of quantities over one or more declared index variables"
@@ -4618,6 +4649,7 @@ fn resolve_extern_struct_field(
         }
         TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
+        | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::Indexed { .. }
         | TypeExprKind::TypeApplication { .. } => Err(unsupported()),
     }

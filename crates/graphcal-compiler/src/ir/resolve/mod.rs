@@ -917,6 +917,27 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names:
                 }
             }
         }
+        TypeExprKind::ComplexApplication { generic_args } => {
+            // `Complex` is built in; only its dimension argument contributes
+            // type-level dependencies.
+            for arg in generic_args {
+                match arg {
+                    crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+                        collect_type_refs(type_expr, refs);
+                    }
+                    crate::desugar::desugared_ast::GenericArg::Index(IndexExpr::Name(path)) => {
+                        refs.push((path.value.clone(), path.span));
+                    }
+                    crate::desugar::desugared_ast::GenericArg::Index(
+                        IndexExpr::Finite { .. } | IndexExpr::BareNat(_),
+                    )
+                    | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
+                    crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
+                        collect_ambiguous_generic_refs(ambiguous, refs);
+                    }
+                }
+            }
+        }
         TypeExprKind::DatetimeApplication { type_args } => {
             // No top-level name to record — `Datetime` is built-in. Recurse
             // into the args so any user-defined name reachable from the time

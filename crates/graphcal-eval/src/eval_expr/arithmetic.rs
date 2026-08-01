@@ -23,6 +23,7 @@ fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
             reason = "Graphcal equality uses exact IEEE quantity equality"
         )]
         (RuntimeValue::Quantity(lhs), RuntimeValue::Quantity(rhs)) => lhs == rhs,
+        (RuntimeValue::Complex(lhs), RuntimeValue::Complex(rhs)) => lhs == rhs,
         (RuntimeValue::Bool(lhs), RuntimeValue::Bool(rhs)) => lhs == rhs,
         (RuntimeValue::Int(lhs), RuntimeValue::Int(rhs)) => lhs == rhs,
         (
@@ -85,6 +86,7 @@ pub(super) fn eval_equality_values(
         }
         (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => lb == rb,
         (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => li == ri,
+        (RuntimeValue::Complex(lc), RuntimeValue::Complex(rc)) => lc == rc,
         (
             RuntimeValue::Label {
                 index_name: li,

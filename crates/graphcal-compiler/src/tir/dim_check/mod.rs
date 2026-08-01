@@ -227,6 +227,8 @@ pub enum InferredGenericArg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InferredType {
     Quantity(Dimension),
+    /// A complex quantity whose real and imaginary components share one dimension.
+    Complex(Dimension),
     /// A quantity produced by iterating a declared coordinate index.
     ///
     /// Coordinate labels participate in quantity arithmetic while retaining
@@ -272,6 +274,13 @@ impl InferredType {
     }
 
     #[must_use]
+    pub(crate) const fn complex_dimension(&self) -> Option<&Dimension> {
+        match self {
+            Self::Complex(dimension) => Some(dimension),
+            _ => None,
+        }
+    }
+
     const fn quantity_dimension(&self) -> Option<&Dimension> {
         match self {
             Self::Quantity(dimension) | Self::CoordinateIndexLabel { dimension, .. } => {
@@ -1132,6 +1141,7 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) ->
     match resolved {
         ResolvedTypeExpr::Indexed { base, .. } => invalid_domain_target_kind(base),
         ResolvedTypeExpr::Bool => Some("Bool".to_string()),
+        ResolvedTypeExpr::Complex { .. } => Some("Complex".to_string()),
         ResolvedTypeExpr::IndexArg(index) => {
             Some(format!("index {}", index.format_for_diagnostic()))
         }
@@ -1436,7 +1446,8 @@ fn check_type_expr_for_generic_arg_constraints(
         TypeExprKind::Indexed { base, .. } => {
             check_type_expr_for_generic_arg_constraints(base, src)
         }
-        TypeExprKind::TypeApplication { generic_args, .. } => {
+        TypeExprKind::TypeApplication { generic_args, .. }
+        | TypeExprKind::ComplexApplication { generic_args } => {
             for arg in generic_args {
                 if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
                     if let Some(bound) = type_expr.constraints.first() {

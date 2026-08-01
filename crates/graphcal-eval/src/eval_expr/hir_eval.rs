@@ -310,6 +310,15 @@ fn eval_hir_binop(
                 }
                 _ => {}
             }
+            if matches!(l, RuntimeValue::Complex(_)) || matches!(r, RuntimeValue::Complex(_)) {
+                return super::complex::evaluate_binary(op, &l, &r).map_err(|error| {
+                    if error.is_internal_invariant() {
+                        ctx.internal_error(error.to_string(), span)
+                    } else {
+                        ctx.eval_error(error.to_string(), span)
+                    }
+                });
+            }
             let lv = l
                 .expect_quantity("binary operand")
                 .map_err(|e| ctx.eval_error(e.to_string(), span))?;
@@ -391,6 +400,9 @@ fn eval_hir_unary(
                     .checked_neg()
                     .map(RuntimeValue::Int)
                     .ok_or_else(|| ctx.eval_error("integer negation overflow", span)),
+                RuntimeValue::Complex(value) => super::complex::negate(value)
+                    .map(RuntimeValue::Complex)
+                    .map_err(|error| ctx.eval_error(error.to_string(), span)),
                 _ => Ok(RuntimeValue::Quantity(
                     -v.expect_quantity("unary negation")
                         .map_err(|e| ctx.eval_error(e.to_string(), span))?,
@@ -446,6 +458,20 @@ fn eval_hir_fn_call(
         }
     };
     match eval_rule_for_builtin(name) {
+        EvalBuiltinRule::Complex(function) => {
+            expect_hir_builtin_arity(name, args, function.arity(), callee.span, ctx)?;
+            let arguments = args
+                .iter()
+                .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            super::complex::evaluate_builtin(function, &arguments).map_err(|error| {
+                if error.is_internal_invariant() {
+                    ctx.internal_error(error.to_string(), expr.span)
+                } else {
+                    ctx.eval_error(error.to_string(), expr.span)
+                }
+            })
+        }
         EvalBuiltinRule::CollectionAggregation(kind) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
             let arg_val = eval_hir_expr(&args[0], values, local_values, ctx)?;
@@ -817,7 +843,8 @@ fn flatten_extern_array(
                 .collect();
             Ok(FlattenedExternArray { axes, values })
         }
-        RuntimeValue::Bool(_)
+        RuntimeValue::Complex(_)
+        | RuntimeValue::Bool(_)
         | RuntimeValue::Int(_)
         | RuntimeValue::Label { .. }
         | RuntimeValue::CoordinateLabel { .. }

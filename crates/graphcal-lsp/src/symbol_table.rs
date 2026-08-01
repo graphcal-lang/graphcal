@@ -723,6 +723,16 @@ impl<'a> HirRefCollector<'a> {
     fn walk_type(&self, type_expr: &hir::TypeExpr, table: &mut SymbolTable) {
         match &type_expr.kind {
             hir::TypeExprKind::Builtin(_) | hir::TypeExprKind::GenericTypeParam(_) => {}
+            hir::TypeExprKind::Complex(dimension) => {
+                if let hir::DimArg::Expr(dim_expr) = dimension {
+                    for item in &dim_expr.terms {
+                        if let hir::DimTermTarget::Dimension(name) = &item.term.target {
+                            let key = self.name_key(name.value.owner(), name.value.as_str());
+                            Self::reference(table, name.span, key);
+                        }
+                    }
+                }
+            }
             hir::TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
                     if let hir::DimTermTarget::Dimension(name) = &item.term.target {
@@ -1242,10 +1252,17 @@ fn register_builtins(table: &mut SymbolTable) {
     for name in BuiltinFnName::ALL {
         let spelling = name.as_str();
         let detail = registry_functions.get(spelling).map_or_else(
-            || match (name.aggregation(), name.linear_algebra()) {
-                (Some(function), None) => format!("builtin, arity {}", function.arity()),
-                (None, Some(function)) => format!("builtin, arity {}", function.arity()),
-                (None, None) | (Some(_), Some(_)) => "builtin".to_string(),
+            || match (name.complex(), name.aggregation(), name.linear_algebra()) {
+                (Some(function), None, None) => {
+                    format!("builtin, arity {}", function.arity())
+                }
+                (None, Some(function), None) => {
+                    format!("builtin, arity {}", function.arity())
+                }
+                (None, None, Some(function)) => {
+                    format!("builtin, arity {}", function.arity())
+                }
+                _ => "builtin".to_string(),
             },
             |function| format!("builtin, arity {}", function.arity()),
         );
@@ -1846,6 +1863,11 @@ fn collect_type_expr_refs_in_scope(
                 span: name.span,
                 target: symbol_key_for_name_path(&name.value),
             });
+            for arg in generic_args {
+                collect_generic_arg_refs(arg, generic_scope, table);
+            }
+        }
+        TypeExprKind::ComplexApplication { generic_args } => {
             for arg in generic_args {
                 collect_generic_arg_refs(arg, generic_scope, table);
             }

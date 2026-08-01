@@ -27,7 +27,7 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 |----------|-----------|-------------|
 | `sqrt(x)` | `D -> D^(1/2)` | Square root (dimension halved) |
 | `cbrt(x)` | `D -> D^(1/3)` | Cube root (dimension divided by 3) |
-| `abs(x)` | `D -> D` | Absolute value |
+| `abs(x)` | `D -> D` or `Complex<D> -> D` | Absolute value or complex magnitude |
 | `sign(x)` | `D -> Dimensionless` | Sign of value (-1.0, 0.0, or 1.0) |
 | `round(x)` | `Dimensionless -> Dimensionless` | Round to nearest integer |
 | `trunc(x)` | `Dimensionless -> Dimensionless` | Truncate toward zero |
@@ -35,7 +35,7 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 | `ceil(x)` | `Dimensionless -> Dimensionless` | Round toward positive infinity |
 | `clamp(x, min, max)` | `(D, D, D) -> D` | Clamp value to range |
 | `hypot(a, b)` | `(D, D) -> D` | Hypotenuse (sqrt(a^2 + b^2)) |
-| `exp(x)` | `Dimensionless -> Dimensionless` | Exponential (e^x) |
+| `exp(x)` | `Dimensionless -> Dimensionless` or `Complex<Dimensionless> -> Complex<Dimensionless>` | Real or complex exponential |
 | `expm1(x)` | `Dimensionless -> Dimensionless` | exp(x) - 1 (numerically stable for small x) |
 | `ln(x)` | `Dimensionless -> Dimensionless` | Natural logarithm |
 | `log1p(x)` | `Dimensionless -> Dimensionless` | ln(1 + x) (numerically stable for small x) |
@@ -53,6 +53,38 @@ dimensionless ratio, and scale back:
 // Round down to whole centimeters.
 node whole_cm: Length = floor(@x / 1.0 cm) * 1.0 cm;
 ```
+
+### Complex Functions
+
+`Complex<D>` is the built-in complex type over dimension `D`. Both components
+are stored in SI base units and must have the same dimension. Construction is
+explicit; there is no `a + bi` literal syntax.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `complex(re, im)` | `(D, D) -> Complex<D>` | Construct from rectangular components |
+| `polar(magnitude, phase)` | `(D, Angle) -> Complex<D>` | Construct from a non-negative magnitude and phase |
+| `to_complex(x)` | `D -> Complex<D>` | Promote a real quantity with zero imaginary component |
+| `re(z)` | `Complex<D> -> D` | Extract the real component |
+| `im(z)` | `Complex<D> -> D` | Extract the imaginary component |
+| `abs(z)` | `Complex<D> -> D` | Return the Euclidean magnitude |
+| `phase(z)` | `Complex<D> -> Angle` | Return the principal phase from `atan2(im, re)` |
+| `conj(z)` | `Complex<D> -> Complex<D>` | Return the complex conjugate |
+| `exp(z)` | `Complex<Dimensionless> -> Complex<Dimensionless>` | Return `e^z`; dimensioned input is rejected |
+
+```graphcal
+node displacement: Complex<Length> = complex(3.0 m, 4.0 m);
+node same_polar: Complex<Length> = polar(5.0 m, 53.130102 deg);
+node magnitude: Length = abs(@displacement); // 5 m
+node direction: Angle = phase(@displacement);
+node shifted: Complex<Length> = @displacement + to_complex(1.0 m);
+```
+
+`polar` rejects a negative magnitude instead of silently rotating the phase by
+π. Arithmetic and complex function results must remain finite. Complex division
+by zero is an evaluation error. See
+[Complex Arithmetic](expressions.md#complex-arithmetic) for the mixed
+real/complex operation matrix.
 
 ### Trigonometric Functions
 

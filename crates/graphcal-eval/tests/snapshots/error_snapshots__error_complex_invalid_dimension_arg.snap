@@ -1,0 +1,11 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+generic parameter `D` expects an argument of sort `Dim`, got non-dimension type argument
+    Diagnostic severity: error
+Begin snippet for complex_invalid_dimension_arg.gcl starting at line 1, column 1
+
+snippet line 1: node invalid: Complex<Bool> = complex(true, false);
+    label at line 1, columns 23 to 26: error here
+diagnostic code: graphcal::E001

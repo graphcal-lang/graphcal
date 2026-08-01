@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dimension mismatch: expected an ordered real quantity, integer, or datetime, found Complex<Dimensionless>
+    Diagnostic severity: error
+Begin snippet for complex_is_unordered.gcl starting at line 1, column 1
+
+snippet line 1: node invalid: Bool = complex(1.0, 2.0) < complex(2.0, 1.0);
+    label at line 1, columns 22 to 38: has dimension Complex<Dimensionless>
+diagnostic help: complex quantities are unordered; compare re(), im(), abs(), or phase() explicitly
+diagnostic code: graphcal::D001

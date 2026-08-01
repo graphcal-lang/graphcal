@@ -62,7 +62,7 @@ KEYWORD
    "step", "points", "Fin",
    "mark", "encode", "plots", "point", "line", "bar", "area", "rect",
    "tick", "min", "max", "Dim", "Index", "Nat", "Type",
-   "Dimensionless", "Bool", "Int", "Datetime". *)
+   "Dimensionless", "Bool", "Int", "Datetime", "Complex". *)
 (* --- Identifiers --- *)
 LETTER
    = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i"
@@ -641,8 +641,8 @@ layer_named_field
 (* 4. Type Expressions                                                *)
 (* ================================================================== *)
 (* The type system has three levels:
-   Level 1 -- Primitive: Quantity(D) | Int | Bool | Datetime(S),
-                         where D: Dim and S: TimeScale
+   Level 1 -- Primitive: Quantity(D) | Complex(D) | Int | Bool | Datetime(S),
+                                      where D: Dim and S: TimeScale
    Level 2 -- ValueType: Primitive | AlgebraicType
    Level 3 -- DeclType:  ValueType | Indexed(ValueType, [Index])
 
@@ -663,6 +663,7 @@ type_expr_base
    | "Bool"
    | "Int"
    | datetime_type
+   | complex_type
    | type_application
    | dim_expr;
 
@@ -671,6 +672,11 @@ datetime_type
 (* Bare `Datetime` defaults to `Datetime<UTC>`; parameterized forms such
    as `Datetime<TT>` use the dedicated built-in datetime type, not a
    user-defined generic type application. *)
+
+complex_type
+   = "Complex", "<", generic_arg, ">";
+(* The sole generic argument must have sort `Dim`; bare `Complex`, unit
+   arguments such as `Complex<m>`, and non-dimension arguments are rejected. *)
 
 (* Domain constraints restrict the valid value range of a quantity, Int, or
    Datetime<S>: Mass(min: 100 kg), Int(max: 100),

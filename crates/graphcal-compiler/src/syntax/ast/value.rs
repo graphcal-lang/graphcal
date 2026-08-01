@@ -387,6 +387,11 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// resolution dispatches on the variant rather than string-matching the
     /// built-in name.
     DatetimeApplication { type_args: Vec<TypeExpr<P>> },
+    /// `Complex<D>` — built-in complex quantity type parameterized by a dimension.
+    ///
+    /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
+    /// the built-in semantic identity instead of matching the source name.
+    ComplexApplication { generic_args: Vec<GenericArg<P>> },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
     /// An indexed type such as `Velocity[Maneuver]`, `Dimensionless[Fin(3)]`, or `D[I]`
@@ -396,8 +401,8 @@ pub enum TypeExprKind<P: Phase = Raw> {
     },
     /// A user-defined generic type application like `Vec3<Length, ECI>` or
     /// `FixedVec<3>`.
-    /// Built-in parameterized types (currently only `Datetime<...>`) have their
-    /// own variants instead — see [`Self::DatetimeApplication`]. Generic
+    /// Built-in parameterized types have their own variants instead — see
+    /// [`Self::DatetimeApplication`] and [`Self::ComplexApplication`]. Generic
     /// arguments remain syntax-level and unsorted until the referenced type's
     /// parameter constraints are known.
     TypeApplication {

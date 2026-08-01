@@ -34,8 +34,9 @@ that exist implicitly in graphcal source:
   and `Nat` generic arguments. In a generic declaration, `<N: Nat>` introduces
   a source-level variable over this domain.
 
-`Quantity(D)` and `Datetime(S)` use parentheses only as semantic notation; they
-are not constructor calls or literal source syntax. `A<G₁, ..., Gₙ>` and
+`Quantity(D)`, `Complex(D)`, and `Datetime(S)` use parentheses only as semantic
+notation; they are not constructor calls or literal source syntax. The source
+type for `Complex(D)` is `Complex<D>`. `A<G₁, ..., Gₙ>` and
 `T[I₁, ..., Iₘ]` mirror graphcal's source syntax. Angle brackets apply a
 generic algebraic type, while square brackets index a value type over one or
 more axes.
@@ -57,6 +58,7 @@ signatures. The arrows are not graphcal function types:
 
 ```text
 Quantity : Dim -> Type
+Complex  : Dim -> Type
 Int      : Type
 Bool     : Type
 Datetime : TimeScale -> Type
@@ -93,7 +95,7 @@ Level 0: type-level entities, classified by kinds
   N : Nat        = 0 | 1 | 2 | ... | N + N | N * N
   I : Index      = X | C | Fin(N)                                (N >= 1)
 
-Level 1: Primitive = Quantity(D) | Int | Bool | Datetime(S)
+Level 1: Primitive = Quantity(D) | Complex(D) | Int | Bool | Datetime(S)
 
 Level 2: ValueType (T : Type) = Primitive | A | A<G₁, ..., Gₙ>
          GenericArg         G = D | T | I | N
@@ -194,8 +196,9 @@ value; a *coordinate* is a quantity value when bound by a loop variable; a
 
 ### Levels 1–3: The Type Hierarchy
 
-- **Primitive (Level 1)** — an indivisible atomic datum: a dimensioned
-  quantity, an integer, a boolean, or a datetime in one time scale.
+- **Primitive (Level 1)** — an indivisible atomic datum: a real quantity, a
+  dimension-aware complex quantity, an integer, a boolean, or a datetime in
+  one time scale.
 - **ValueType (Level 2)** — a single logical value: a primitive or an
   instance of a nominal algebraic type. This is the domain of kind `Type` —
   what one DAG node stores, one DAG parameter carries, and expressions
@@ -223,6 +226,40 @@ and crossing kinds is an error (`ByNat<Fin(3)>`, `Dimensionless[3]`). The
 `Type` kind contains exactly the ValueTypes: an index axis or an indexed
 DeclType such as `Velocity[Maneuver]` is not a legal `Type` argument.
 
+### Dimension-Aware Complex Quantities
+
+`Complex : Dim -> Type` is a built-in primitive type former. A value of
+`Complex<D>` stores real and imaginary binary64 components in SI base units,
+and both components have the same dimension `D`:
+
+```graphcal
+node displacement: Complex<Length> = complex(3.0 m, 4.0 m);
+node dimensionless: Complex<Dimensionless> = complex(1.0, -2.0);
+```
+
+The dimension argument is mandatory and is a dimension, not a unit:
+`Complex<Length>` and `Complex<Length / Time>` are valid; bare `Complex` and
+`Complex<m>` are errors. Generic dimension parameters can appear directly:
+
+```graphcal
+type Phasor<D: Dim> {
+    Phasor(value: Complex<D>),
+}
+```
+
+Graphcal has no complex literal syntax. Construction is explicit through
+`complex(re, im)`, `polar(magnitude, phase)`, or `to_complex(real)`. Explicit
+construction prevents an identifier such as `i` from acquiring special
+lexical meaning and makes real-to-complex promotion visible. See
+[Complex Functions](built-ins.md#complex-functions) and the
+[complex arithmetic matrix](expressions.md#complex-arithmetic).
+
+A complex value may be indexed and may be carried in algebraic payloads.
+`count` accepts an indexed complex value because it is element-type agnostic;
+quantity aggregations and linear-algebra kernels do not yet accept complex
+elements. Complex values also do not cross the experimental plugin ABI. Plot
+`re(z)`, `im(z)`, `abs(z)`, or `phase(z)` rather than plotting `z` directly.
+
 ### Required Entities (Holes)
 
 Dimensions, algebraic types, and named or coordinate indexes may be declared
@@ -239,12 +276,13 @@ Units and time scales have no required form. See
 
 ### The Term Level
 
-Values inhabit ValueTypes. A value is a quantity, an integer, a boolean, a
-datetime, or an algebraic value built by a constructor; an indexed value is a
-total map with one value per label tuple of its axes. Two pieces of display
-metadata ride on values without affecting their types: a quantity's **unit**
-and a datetime's **timezone**. Both select rendering only — magnitudes are
-stored in SI base units, instants in their time scale.
+Values inhabit ValueTypes. A value is a real or complex quantity, an integer,
+a boolean, a datetime, or an algebraic value built by a constructor; an
+indexed value is a total map with one value per label tuple of its axes. Two
+pieces of display metadata ride on values without affecting their types: a
+real or complex quantity's **unit** and a datetime's **timezone**. Both select
+rendering only — real and complex components are stored in SI base units,
+instants in their time scale.
 
 The structural value formers and eliminators have these signatures, where
 `ℓᵢ` is a label of axis `Iᵢ`, `U` is the recurrence state's element ValueType,
@@ -1009,8 +1047,9 @@ Built-in math functions have specific dimension constraints:
 | `sin(x)`, `cos(x)`, `tan(x)` | `Angle` | `Dimensionless` |
 | `asin(x)`, `acos(x)` | `Dimensionless` | `Angle` |
 | `atan2(y, x)` | Both same `D` | `Angle` |
-| `exp(x)`, `ln(x)`, `log10(x)` | `Dimensionless` | `Dimensionless` |
-| `abs(x)` | Any `D` | `D` |
+| `exp(x)` | `Dimensionless` or `Complex<Dimensionless>` | Same real/complex kind as input, dimensionless |
+| `ln(x)`, `log10(x)` | `Dimensionless` | `Dimensionless` |
+| `abs(x)` | Any real `D` or `Complex<D>` | Real `D` |
 | `least(a, b)`, `greatest(a, b)` | Both same `D` | `D` |
 | `floor(x)`, `ceil(x)`, `round(x)`, `trunc(x)` | `Dimensionless` | `Dimensionless` |
 
@@ -1022,10 +1061,11 @@ a quantity, divide by an explicit granularity, e.g.
 
 ## Unit Conversion
 
-The `->` operator converts between units of the same dimension. It binds at the lowest precedence.
+The `->` operator converts between units of the same dimension. It binds at the lowest precedence. For a complex value, one display unit scales both components.
 
 ```
 node speed_kmh: Velocity = @speed -> km/h;
+node displacement_cm: Complex<Length> = @displacement -> cm;
 ```
 
 There is no type-cast operator. To change a value's phantom type parameter (e.g., re-label a reference frame), construct a new instance and assign each field explicitly:
@@ -1065,15 +1105,20 @@ This section lists the type of each expression form and the constraints the comp
 
 | Expression | Result Type | Constraint |
 |-----------|-------------|------------|
-| `a + b` | `dim(a)` | `dim(a) == dim(b)` |
-| `a - b` | `dim(a)` | `dim(a) == dim(b)` |
-| `a * b` | `dim(a) * dim(b)` | |
-| `a / b` | `dim(a) / dim(b)` | |
-| `a % b` | `dim(a)` | `dim(a) == dim(b)` |
-| `a ^ n` | `dim(a) ^ n` | `n` is dimensionless; a dimensioned base requires an exact integer or parenthesized rational |
-| `-a` | `dim(a)` | |
+| `a + b` | type of `a` | Same numeric kind and dimension |
+| `a - b` | type of `a` | Same numeric kind and dimension |
+| `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports real×real, real×complex, complex×real, and complex×complex |
+| `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, and complex÷complex |
+| `a % b` | `dim(a)` | Real quantities or integers only; dimensions must match |
+| `a ^ n` | `dim(a) ^ n` | Real quantities or integers only; `n` is dimensionless and a dimensioned base requires an exact integer or parenthesized rational |
+| `-a` | type and dimension of `a` | Real quantity, complex quantity, or integer |
 
-For a `Dimensionless` base, `n` may be a runtime `Dimensionless` quantity. For
+Complex addition and subtraction require two `Complex<D>` operands with the
+same `D`; Graphcal never promotes a real quantity implicitly. Use
+`to_complex(x)` when that promotion is intended. Complex remainder and power
+are not supported.
+
+For a `Dimensionless` real base, `n` may be a runtime `Dimensionless` quantity. For
 any other quantity dimension, `n` must be written exactly as an integer such as
 `2` or `-2`, or as a parenthesized rational such as `(3/2)`. Decimal syntax
 cannot determine a dimension exponent: use `(1/4)` instead of `0.25` and `2`
@@ -1084,8 +1129,8 @@ checking and evaluation rather than recovering it from binary64.
 
 | Expression | Result Type | Constraint |
 |-----------|-------------|------------|
-| `a == b`, `a != b` | `Bool` | `a` and `b` must be unindexed and have the same type |
-| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | operands must be unindexed and either Int/Fin-compatible, same-dimension quantities, or same-scale datetimes |
+| `a == b`, `a != b` | `Bool` | `a` and `b` must be unindexed and have the same type; complex equality compares both components exactly |
+| `a < b`, `a > b`, `a <= b`, `a >= b` | `Bool` | operands must be unindexed and either Int/Fin-compatible, same-dimension real quantities, or same-scale datetimes; complex values are unordered |
 | `a && b`, `a \|\| b` | `Bool` | `a` and `b` must be `Bool` |
 | `!a` | `Bool` | `a` must be `Bool` |
 
@@ -1308,7 +1353,7 @@ are legal and how the parameter may be used in the declaration.
 
 | Kind | Syntax | Parameter ranges over | Valid uses |
 |------|--------|-----------------------|------------|
-| `Dim` | `<D: Dim>` | Any dimension, such as `Length` or `Length / Time` | Quantity field types and dimension expressions such as `D^2` |
+| `Dim` | `<D: Dim>` | Any dimension, such as `Length` or `Length / Time` | Real quantity fields, `Complex<D>`, and dimension expressions such as `D^2` |
 | `Type` | `<T: Type>` | Any `ValueType`, such as `Bool`, `Length`, or `Vec3<Length, Eci>` | A payload field type, or a phantom/tag parameter if unused in any payload |
 | `Index` | `<I: Index>` | A finite ordered index axis | An axis in an indexed type such as `D[I]` |
 | `Nat` | `<N: Nat>` | A non-negative natural number used in type-level size arithmetic | A finite cardinality such as `D[Fin(N)]`, subject to the non-empty-axis rule |

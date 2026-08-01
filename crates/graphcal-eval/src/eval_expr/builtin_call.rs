@@ -5,7 +5,7 @@
 //! evaluated through the ordinary quantity built-in function registry, or does it
 //! need a custom runtime path here?
 
-use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName, LinearAlgebraFn};
+use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::registry::time_scale::TimeScale;
 
 /// How HIR evaluation should dispatch a built-in function call.
@@ -13,6 +13,8 @@ use graphcal_compiler::registry::time_scale::TimeScale;
 pub(super) enum EvalBuiltinRule {
     /// Use [`graphcal_compiler::registry::builtins::BuiltinFunction::eval`].
     RegistryFunction,
+    /// Complex construction, inspection, and real/complex overloads.
+    Complex(ComplexFn),
     /// One-argument reductions over indexed values.
     CollectionAggregation(AggregationFn),
     /// Shape-aware operations over rank-one and rank-two indexed quantities.
@@ -77,6 +79,9 @@ pub(super) enum DatetimeToFn {
 /// Classify a built-in for the runtime HIR evaluation call path.
 #[must_use]
 pub(super) const fn eval_rule_for_builtin(name: BuiltinFnName) -> EvalBuiltinRule {
+    if let Some(function) = name.complex() {
+        return EvalBuiltinRule::Complex(function);
+    }
     if let Some(function) = name.linear_algebra() {
         return EvalBuiltinRule::LinearAlgebra(function);
     }
@@ -133,7 +138,8 @@ mod tests {
                     "BuiltinFnName::{name:?} (`{}`) is neither in builtin_functions() nor handled by a custom eval rule",
                     name.as_str()
                 ),
-                EvalBuiltinRule::CollectionAggregation(_)
+                EvalBuiltinRule::Complex(_)
+                | EvalBuiltinRule::CollectionAggregation(_)
                 | EvalBuiltinRule::LinearAlgebra(_)
                 | EvalBuiltinRule::TypeConversion(_)
                 | EvalBuiltinRule::TimeScaleConversion(_)

@@ -93,6 +93,10 @@ fn plot_datum_from_leaf(rv: &RuntimeValue) -> Result<PlotDatum, String> {
     )]
     match rv {
         RuntimeValue::Quantity(v) => Ok(PlotDatum::Number(*v)),
+        RuntimeValue::Complex(_) => Err(
+            "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
+                .to_string(),
+        ),
         RuntimeValue::Int(i) => Ok(PlotDatum::Number(*i as f64)),
         // A coordinate-index loop variable surfacing as a value
         // (e.g. `x: for t: T { t }`) is numeric data (#839).
@@ -261,6 +265,7 @@ pub(super) fn align_encoding_channels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use graphcal_compiler::complex_value::ComplexValue;
     use graphcal_compiler::dag_id::DagId;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
     use indexmap::IndexMap;
@@ -281,6 +286,13 @@ mod tests {
             PlotFieldValue::Numbers(ns) => ns.clone(),
             other => panic!("expected Numbers, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn rejects_complex_plot_data_with_projection_guidance() {
+        let error = channel_data_from_runtime(&RuntimeValue::Complex(ComplexValue::new(1.0, 2.0)))
+            .unwrap_err();
+        assert!(error.contains("use re(), im(), abs(), or phase()"));
     }
 
     #[test]

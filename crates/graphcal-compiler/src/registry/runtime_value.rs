@@ -2,6 +2,7 @@
 
 use indexmap::IndexMap;
 
+use crate::complex_value::ComplexValue;
 use crate::dag_id::DagId;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
@@ -11,6 +12,7 @@ use crate::syntax::type_name::{FieldName, StructTypeName};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeValueKind {
     Quantity,
+    Complex,
     Bool,
     Int,
     Label {
@@ -33,6 +35,7 @@ impl std::fmt::Display for RuntimeValueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Quantity => write!(f, "Quantity"),
+            Self::Complex => write!(f, "Complex"),
             Self::Bool => write!(f, "Bool"),
             Self::Int => write!(f, "Int"),
             Self::Label {
@@ -77,6 +80,7 @@ impl std::error::Error for RuntimeValueError {}
 #[derive(Debug, Clone)]
 pub enum RuntimeValue {
     Quantity(f64),
+    Complex(ComplexValue),
     Bool(bool),
     Int(i64),
     /// Internal carrier for a named-index loop case.
@@ -166,6 +170,7 @@ impl RuntimeValue {
     pub fn kind(&self) -> RuntimeValueKind {
         match self {
             Self::Quantity(_) => RuntimeValueKind::Quantity,
+            Self::Complex(_) => RuntimeValueKind::Complex,
             Self::Bool(_) => RuntimeValueKind::Bool,
             Self::Int(_) => RuntimeValueKind::Int,
             Self::Label {
@@ -195,6 +200,18 @@ impl RuntimeValue {
             Self::Quantity(v) | Self::CoordinateLabel { value: v, .. } => Ok(*v),
             other => Err(RuntimeValueError {
                 expected: "quantity",
+                context: context.to_string(),
+                actual: other.kind(),
+            }),
+        }
+    }
+
+    /// Extract a complex value, returning a structured error for another variant.
+    pub fn expect_complex(&self, context: &str) -> Result<ComplexValue, RuntimeValueError> {
+        match self {
+            Self::Complex(value) => Ok(*value),
+            other => Err(RuntimeValueError {
+                expected: "complex quantity",
                 context: context.to_string(),
                 actual: other.kind(),
             }),

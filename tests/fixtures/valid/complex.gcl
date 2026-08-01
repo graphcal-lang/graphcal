@@ -1,0 +1,55 @@
+// Native dimension-aware complex quantities.
+type ComplexHolder<D: Dim> {
+    ComplexHolder(value: Complex<D>),
+}
+type ComplexRateHolder<D: Dim> {
+    ComplexRateHolder(value: Complex<D / Time>),
+}
+
+index Sample = { First, Second };
+
+node a: Complex<Length> = complex(3.0 m, 4.0 m);
+node b: Complex<Length> = complex(5.0 m, 6.0 m);
+node sum: Complex<Length> = @a + @b;
+node difference: Complex<Length> = @a - @b;
+node negated: Complex<Length> = -@a;
+node product: Complex<Area> = @a * @b;
+node quotient: Complex<Dimensionless> = @a / @b;
+node scaled_left: Complex<Length> = 2.0 * @a;
+node scaled_right: Complex<Length> = @a * 2.0;
+node divided_by_scalar: Complex<Length> = @a / 2.0;
+node scalar_divided_by_complex: Complex<Length^-1> = 2.0 / @a;
+node real_part: Length = re(@a);
+node imaginary_part: Length = im(@a);
+node magnitude: Length = abs(@a);
+node angle: Angle = phase(@a);
+node conjugate: Complex<Length> = conj(@a);
+node from_polar: Complex<Length> = polar(5.0 m, @angle);
+node lifted: Complex<Length> = to_complex(2.0 m);
+node euler: Complex<Dimensionless> = exp(complex(0.0, PI));
+node display_cm: Complex<Length> = @a -> cm;
+node copied_cm: Complex<Length> = @display_cm;
+node wrapped: ComplexHolder<Length> = ComplexHolder<Length>(value: @a);
+node wrapped_rate: ComplexRateHolder<Length> = ComplexRateHolder<Length>(
+    value: complex(1.0 m/s, 2.0 m/s),
+);
+node series: Complex<Length>[Sample] = {
+    Sample.First: @a,
+    Sample.Second: @b,
+};
+node sample_count: Int = count(@series);
+
+assert rectangular_equality = @a == complex(3.0 m, 4.0 m);
+assert sum_real = re(@sum) == 8.0 m;
+assert sum_imaginary = im(@sum) == 10.0 m;
+assert product_real = re(@product) == -9.0 m^2;
+assert product_imaginary = im(@product) == 38.0 m^2;
+assert negated_real = re(@negated) == -3.0 m;
+assert conjugate_imaginary = im(@conjugate) == -4.0 m;
+assert sample_count_is_two = @sample_count == 2;
+assert magnitude_is_five = @magnitude == 5.0 m;
+assert phase_matches_atan2 = @angle ~= atan2(4.0 m, 3.0 m) +/- 1.0e-12 rad;
+assert polar_real = re(@from_polar) ~= 3.0 m +/- 1.0e-12 m;
+assert polar_imaginary = im(@from_polar) ~= 4.0 m +/- 1.0e-12 m;
+assert euler_real = re(@euler) ~= -1.0 +/- 1.0e-12;
+assert euler_imaginary = im(@euler) ~= 0.0 +/- 1.0e-12;

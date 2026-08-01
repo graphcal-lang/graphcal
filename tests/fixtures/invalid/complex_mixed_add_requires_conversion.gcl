@@ -1,0 +1,2 @@
+node z: Complex<Length> = complex(1.0 m, 2.0 m);
+node invalid: Complex<Length> = @z + 1.0 m;

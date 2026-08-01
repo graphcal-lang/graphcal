@@ -1,0 +1,3 @@
+node numerator: Complex<Dimensionless> = complex(1.0, 2.0);
+node zero: Complex<Dimensionless> = complex(0.0, 0.0);
+node invalid: Complex<Dimensionless> = @numerator / @zero;

@@ -1176,6 +1176,15 @@ impl FormatEquivalent for TypeExprKind {
                 };
                 type_args.format_equivalent(other_type_args)
             }
+            Self::ComplexApplication { generic_args } => {
+                let Self::ComplexApplication {
+                    generic_args: other_generic_args,
+                } = other
+                else {
+                    return false;
+                };
+                generic_args.format_equivalent(other_generic_args)
+            }
             Self::DimExpr(dim) => {
                 let Self::DimExpr(other_dim) = other else {
                     return false;

@@ -25,7 +25,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
-use graphcal_compiler::builtin::{AggregationFn, LinearAlgebraFn};
+use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
 use graphcal_compiler::registry::builtins::builtin_functions;
@@ -793,6 +793,19 @@ pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo>
                 },
             );
         }
+        for function in ComplexFn::ALL {
+            sigs.insert(
+                function.builtin_name().as_str().to_string(),
+                FnSignatureInfo {
+                    label: function.signature().to_string(),
+                    parameters: function
+                        .parameter_labels()
+                        .iter()
+                        .map(|parameter| (*parameter).to_string())
+                        .collect(),
+                },
+            );
+        }
         for function in AggregationFn::ALL {
             sigs.insert(
                 function.builtin_name().as_str().to_string(),
@@ -954,6 +967,7 @@ fn format_value_inline_with_budget(
     match value {
         // Leaf types: delegate to the shared `format_display` on `Value`.
         Value::Quantity { .. }
+        | Value::Complex { .. }
         | Value::Bool(_)
         | Value::Int(_)
         | Value::Label { .. }
@@ -1720,6 +1734,29 @@ mod tests {
     use indexmap::IndexMap;
 
     use super::*;
+
+    #[test]
+    fn complex_signature_help_uses_dimension_aware_signatures() {
+        let signatures = build_fn_signatures();
+        assert_eq!(
+            signatures
+                .get("complex")
+                .map(|signature| signature.label.as_str()),
+            Some("fn complex<D: Dim>(re: D, im: D) -> Complex<D>")
+        );
+        assert_eq!(
+            signatures
+                .get("polar")
+                .map(|signature| signature.parameters.as_slice()),
+            Some(["magnitude: D".to_string(), "phase: Angle".to_string()].as_slice())
+        );
+        assert_eq!(
+            signatures
+                .get("abs")
+                .map(|signature| signature.label.as_str()),
+            Some("fn abs<D: Dim>(x: D | Complex<D>) -> D")
+        );
+    }
 
     #[test]
     fn aggregation_signature_help_includes_product_and_rss() {

@@ -459,6 +459,16 @@ pub(super) fn resolve_field_declared_type(
     {
         return Some(concrete.clone());
     }
+    if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::ComplexApplication {
+        generic_args,
+    } = &field.type_ann.kind
+        && let [dimension_arg] = generic_args.as_slice()
+    {
+        let dimension = resolve_field_dimension_arg(dimension_arg, generic_sub, registry);
+        if let Some(dimension) = dimension {
+            return Some(DeclaredType::Complex(dimension));
+        }
+    }
     // Non-generic: resolve directly from the registry. Overflow in dimension
     // arithmetic is treated as "no declared type info" here — the value will
     // render as a raw quantity, and dim_check would have already flagged the
@@ -469,6 +479,95 @@ pub(super) fn resolve_field_declared_type(
         .ok()
         .flatten()
         .map(DeclaredType::Quantity)
+}
+
+fn resolve_field_dimension_arg(
+    arg: &graphcal_compiler::syntax::ast::GenericArg<graphcal_compiler::syntax::phase::Desugared>,
+    generic_sub: &HashMap<&str, DeclaredType>,
+    registry: &Registry,
+) -> Option<graphcal_compiler::dimension::Dimension> {
+    use graphcal_compiler::syntax::ast::GenericArg;
+    match arg {
+        GenericArg::Type(type_expr) => resolve_field_dimension(type_expr, generic_sub, registry),
+        GenericArg::Ambiguous(ambiguous) => {
+            resolve_ambiguous_field_dimension(ambiguous, generic_sub, registry)
+        }
+        GenericArg::Index(_) | GenericArg::Nat(_) => None,
+    }
+}
+
+fn resolve_ambiguous_field_dimension(
+    arg: &graphcal_compiler::syntax::ast::AmbiguousGenericArg,
+    generic_sub: &HashMap<&str, DeclaredType>,
+    registry: &Registry,
+) -> Option<graphcal_compiler::dimension::Dimension> {
+    use graphcal_compiler::syntax::ast::AmbiguousGenericArg;
+    match arg {
+        AmbiguousGenericArg::Name(name) => {
+            field_dimension_name(name.name.as_str(), generic_sub, registry)
+        }
+        AmbiguousGenericArg::Mul(lhs, rhs, _) => {
+            resolve_ambiguous_field_dimension(lhs, generic_sub, registry)?
+                .checked_mul(&resolve_ambiguous_field_dimension(
+                    rhs,
+                    generic_sub,
+                    registry,
+                )?)
+                .ok()
+        }
+    }
+}
+
+fn resolve_field_dimension(
+    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
+    generic_sub: &HashMap<&str, DeclaredType>,
+    registry: &Registry,
+) -> Option<graphcal_compiler::dimension::Dimension> {
+    use graphcal_compiler::desugar::desugared_ast::{MulDivOp, TypeExprKind};
+    match &type_expr.kind {
+        TypeExprKind::Dimensionless => {
+            Some(graphcal_compiler::dimension::Dimension::dimensionless())
+        }
+        TypeExprKind::DimExpr(dim_expr) => dim_expr.terms.iter().try_fold(
+            graphcal_compiler::dimension::Dimension::dimensionless(),
+            |acc, item| {
+                let name = item.term.name.value.leaf().as_str();
+                let dimension = field_dimension_name(name, generic_sub, registry)?;
+                let powered = dimension
+                    .pow(
+                        item.term
+                            .power
+                            .unwrap_or(graphcal_compiler::dimension::Rational::ONE),
+                    )
+                    .ok()?;
+                match item.op {
+                    MulDivOp::Mul => acc.checked_mul(&powered).ok(),
+                    MulDivOp::Div => acc.checked_div(&powered).ok(),
+                }
+            },
+        ),
+        TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime
+        | TypeExprKind::DatetimeApplication { .. }
+        | TypeExprKind::ComplexApplication { .. }
+        | TypeExprKind::Indexed { .. }
+        | TypeExprKind::TypeApplication { .. } => None,
+    }
+}
+
+fn field_dimension_name(
+    name: &str,
+    generic_sub: &HashMap<&str, DeclaredType>,
+    registry: &Registry,
+) -> Option<graphcal_compiler::dimension::Dimension> {
+    generic_sub
+        .get(name)
+        .and_then(|declared| match declared {
+            DeclaredType::Quantity(dimension) => Some(dimension.clone()),
+            _ => None,
+        })
+        .or_else(|| registry.dimensions.get_dimension(name).cloned())
 }
 
 /// Validate and apply parameter overrides to an IR.

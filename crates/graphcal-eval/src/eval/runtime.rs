@@ -63,6 +63,17 @@ pub(super) fn runtime_to_value(
                 display_unit: None,
             }
         }
+        RuntimeValue::Complex(si_value) => {
+            let dimension = match declared_type {
+                Some(DeclaredType::Complex(d)) => d.clone(),
+                _ => Dimension::dimensionless(),
+            };
+            Value::Complex {
+                si_value: *si_value,
+                dimension,
+                display_unit: None,
+            }
+        }
         RuntimeValue::Bool(b) => Value::Bool(*b),
         RuntimeValue::Int(i) => Value::Int(*i),
         RuntimeValue::Label {
@@ -1520,6 +1531,10 @@ fn check_positive_property(
 fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     match rv {
         RuntimeValue::Quantity(v) => Ok(PlotFieldValue::Number(*v)),
+        RuntimeValue::Complex(_) => Err(
+            "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
+                .to_string(),
+        ),
         RuntimeValue::Int(i) => Ok(PlotFieldValue::Number(*i as f64)),
         RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
         RuntimeValue::Label { variant, .. } => Ok(PlotFieldValue::String(variant.to_string())),

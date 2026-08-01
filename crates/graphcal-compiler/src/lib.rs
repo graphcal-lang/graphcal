@@ -5,6 +5,7 @@
 )]
 
 pub mod builtin;
+pub mod complex_value;
 pub mod dag_id;
 pub mod datetime_literal;
 pub mod desugar;

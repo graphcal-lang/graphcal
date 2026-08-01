@@ -6,6 +6,7 @@
 //! domain bounds, CLI overrides) gained a stored HIR form (#765).
 
 mod builtin_call;
+mod complex;
 pub(super) mod hir;
 mod linear_algebra;
 mod rules;

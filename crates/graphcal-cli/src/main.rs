@@ -881,6 +881,39 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
                 }
                 serde_json::Value::Object(map)
             }
+            Value::Complex {
+                si_value,
+                display_unit,
+                ..
+            } => {
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "si_value".to_string(),
+                    serde_json::json!({ "re": si_value.re(), "im": si_value.im() }),
+                );
+                if let Some(du) = display_unit {
+                    map.insert(
+                        "display_value".to_string(),
+                        serde_json::json!({
+                            "re": graphcal_eval::eval::quantity_display_value(
+                                si_value.re(),
+                                Some(du),
+                            ),
+                            "im": graphcal_eval::eval::quantity_display_value(
+                                si_value.im(),
+                                Some(du),
+                            ),
+                        }),
+                    );
+                    map.insert("unit".to_string(), serde_json::json!(du.label));
+                }
+                if display_unit.is_none()
+                    && let Some(si_unit) = v.display_label(symbols)
+                {
+                    map.insert("unit".to_string(), serde_json::json!(si_unit));
+                }
+                serde_json::Value::Object(map)
+            }
             Value::Bool(b) => serde_json::Value::Bool(*b),
             Value::Int(i) => serde_json::Value::Number((*i).into()),
             Value::Label {

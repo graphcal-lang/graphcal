@@ -284,6 +284,15 @@ and type/dimension checking reports whether the value is valid for that target:
 }
 ```
 
+Complex parameters use the same expression-string leaf form as other
+quantities, keeping dimensions and units explicit:
+
+```json
+{
+  "displacement": "complex(3.0 m, 4.0 m)"
+}
+```
+
 ```bash
 # JSON output
 $ graphcal eval rocket.gcl --format json
@@ -310,6 +319,17 @@ $ graphcal eval rocket.gcl --format json
     },
     ...
   }
+}
+```
+
+A complex output represents each component explicitly. `si_value` always uses
+SI base units; `display_value` is included when `->` selected a display unit:
+
+```json
+{
+  "si_value": { "re": 3.0, "im": 4.0 },
+  "display_value": { "re": 300.0, "im": 400.0 },
+  "unit": "cm"
 }
 ```
 

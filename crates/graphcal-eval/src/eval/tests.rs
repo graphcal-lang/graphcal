@@ -107,6 +107,60 @@ fn eval_constants_ksr() {
 }
 
 #[test]
+fn eval_complex_milestone() {
+    let source = include_str!("../../../../tests/fixtures/valid/complex.gcl");
+    let result = compile_and_eval(source).unwrap();
+    let find = |name: &str| {
+        result
+            .nodes
+            .iter()
+            .find(|(candidate, _)| candidate.to_string() == name)
+            .unwrap_or_else(|| panic!("value `{name}` not found"))
+            .1
+            .as_ref()
+            .unwrap_or_else(|error| panic!("value `{name}` has error: {error}"))
+    };
+
+    match find("a") {
+        Value::Complex {
+            si_value,
+            dimension,
+            display_unit,
+        } => {
+            assert_eq!((si_value.re(), si_value.im()), (3.0, 4.0));
+            assert!(!dimension.is_dimensionless());
+            assert!(display_unit.is_none());
+        }
+        other => panic!("expected a complex value, got {other:?}"),
+    }
+    match find("product") {
+        Value::Complex { si_value, .. } => {
+            assert_eq!((si_value.re(), si_value.im()), (-9.0, 38.0));
+        }
+        other => panic!("expected a complex value, got {other:?}"),
+    }
+    for name in ["display_cm", "copied_cm"] {
+        match find(name) {
+            Value::Complex {
+                si_value,
+                display_unit: Some(display_unit),
+                ..
+            } => {
+                assert_eq!((si_value.re(), si_value.im()), (3.0, 4.0));
+                assert_eq!(display_unit.label, "cm");
+            }
+            other => panic!("expected a converted complex value, got {other:?}"),
+        }
+    }
+    assert!(
+        result
+            .assertions
+            .iter()
+            .all(|(_, assertion, _)| *assertion == AssertResult::Pass)
+    );
+}
+
+#[test]
 fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
     let source = "node y: Dimensionless = sqrt(4.0);";
     let mut tir = compile_to_tir(source, "test.gcl").unwrap();
