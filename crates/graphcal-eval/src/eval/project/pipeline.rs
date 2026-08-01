@@ -34,6 +34,7 @@ fn compile_single_file_in_project(
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
         deferred_dag_includes: Vec::new(),
+        included_debug_values: Vec::new(),
         included_plot_specs: Vec::new(),
     };
 
@@ -295,6 +296,73 @@ fn top_level_const_values(
         .collect()
 }
 
+const fn output_decl_type(category: DeclCategory) -> Option<DeclType> {
+    match category {
+        DeclCategory::Const => Some(DeclType::Const),
+        DeclCategory::Param => Some(DeclType::Param),
+        DeclCategory::Node => Some(DeclType::Node),
+        DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure | DeclCategory::Layer => {
+            None
+        }
+    }
+}
+
+fn push_output_value(
+    (name, result, decl_type): EvaluatedOutputValue,
+    consts: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
+    params: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
+    nodes: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
+    all: &mut Vec<EvaluatedOutputValue>,
+) {
+    match decl_type {
+        DeclType::Const => consts.push((name.clone(), result.clone())),
+        DeclType::Param => params.push((name.clone(), result.clone())),
+        DeclType::Node => nodes.push((name.clone(), result.clone())),
+    }
+    all.push((name, result, decl_type));
+}
+
+/// Assemble the complete evaluated state retained at a project-file boundary.
+///
+/// The direct result contains this file's own and merged values. Empty-argument
+/// file includes remain pre-evaluated artifacts, so their complete debug values
+/// and their selected imported aliases are added here without changing runtime
+/// semantics.
+fn assemble_file_output_values(
+    compiled: &CompiledFile,
+    eval_result: &EvalResult,
+) -> Vec<EvaluatedOutputValue> {
+    let mut values = eval_result.all.clone();
+    let mut seen: HashSet<ScopedName> = values.iter().map(|(name, _, _)| name.clone()).collect();
+
+    values.extend(
+        compiled
+            .included_debug_values
+            .iter()
+            .filter(|(name, _, _)| seen.insert(name.clone()))
+            .cloned(),
+    );
+    values.extend(
+        compiled
+            .imported_source_order
+            .iter()
+            .filter_map(|(name, category)| {
+                if !seen.insert(name.clone()) {
+                    return None;
+                }
+                let decl_type = output_decl_type(*category)?;
+                let (runtime, declared_type) = compiled.imported_values.get(name)?;
+                let value = super::super::runtime::runtime_to_value(
+                    runtime,
+                    Some(declared_type),
+                    &compiled.tir.registry,
+                );
+                Some((name.clone(), Ok(value), decl_type))
+            }),
+    );
+    values
+}
+
 /// Store a compiled-but-not-evaluated non-root file for downstream compile-time imports.
 ///
 /// Library files with required params or indexes cannot produce runtime values
@@ -319,6 +387,7 @@ fn store_compiled_file_artifact(
             plots: HashMap::new(),
             values: HashMap::new(),
             const_values: top_level_consts,
+            evaluated_values: Vec::new(),
             declared_types: compiled.declared_types,
             assertions: HashMap::new(),
             registry: compiled.tir.registry,
@@ -377,6 +446,7 @@ fn evaluate_and_store_file(
         .filter(|spec| !spec.name.is_qualified())
         .map(|spec| (DeclName::expect_valid(spec.name.member()), spec.clone()))
         .collect();
+    let evaluated_values = assemble_file_output_values(&compiled, &eval_result);
 
     evaluated_files.insert(
         file_dag_id.clone(),
@@ -385,6 +455,7 @@ fn evaluate_and_store_file(
             plots,
             values: file_runtime_values,
             const_values: top_level_consts,
+            evaluated_values,
             declared_types: compiled.declared_types,
             assertions: eval_result
                 .assertions
@@ -512,57 +583,53 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
             }
             all_assertions.extend(eval_result.assertions);
 
-            // Prepend imported values to the output so they appear in the
-            // result just like in the old single-IR approach.
+            // Pre-evaluated empty-argument includes retain their full instance
+            // state for the debug view. Public module-form entries may also be
+            // present in imported_source_order, so de-duplicate by typed name.
             let mut all_consts = Vec::new();
             let mut all_params = Vec::new();
+            let mut all_nodes = Vec::new();
             let mut all_all = Vec::new();
+            let mut seen = HashSet::new();
 
-            for (name, cat) in &compiled.imported_source_order {
-                if let Some((rv, dt)) = compiled.imported_values.get(name) {
+            for entry in &compiled.included_debug_values {
+                if !seen.insert(entry.0.clone()) {
+                    continue;
+                }
+                push_output_value(
+                    entry.clone(),
+                    &mut all_consts,
+                    &mut all_params,
+                    &mut all_nodes,
+                    &mut all_all,
+                );
+            }
+            for (name, category) in &compiled.imported_source_order {
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                let Some(decl_type) = output_decl_type(*category) else {
+                    continue;
+                };
+                if let Some((runtime, declared_type)) = compiled.imported_values.get(name) {
                     let value = super::super::runtime::runtime_to_value(
-                        rv,
-                        Some(dt),
+                        runtime,
+                        Some(declared_type),
                         &compiled.tir.registry,
                     );
-                    let decl_name = name.clone();
-                    match cat {
-                        DeclCategory::Const => {
-                            all_consts.push((decl_name.clone(), Ok(value.clone())));
-                            all_all.push((
-                                decl_name,
-                                Ok(value),
-                                super::super::types::DeclType::Const,
-                            ));
-                        }
-                        DeclCategory::Param => {
-                            all_params.push((decl_name.clone(), Ok(value.clone())));
-                            all_all.push((
-                                decl_name,
-                                Ok(value),
-                                super::super::types::DeclType::Param,
-                            ));
-                        }
-                        DeclCategory::Node => {
-                            // Imported nodes appear as params in the output.
-                            all_params.push((decl_name.clone(), Ok(value.clone())));
-                            all_all.push((
-                                decl_name,
-                                Ok(value),
-                                super::super::types::DeclType::Node,
-                            ));
-                        }
-                        DeclCategory::Assert
-                        | DeclCategory::Plot
-                        | DeclCategory::Figure
-                        | DeclCategory::Layer => {}
-                    }
+                    push_output_value(
+                        (name.clone(), Ok(value), decl_type),
+                        &mut all_consts,
+                        &mut all_params,
+                        &mut all_nodes,
+                        &mut all_all,
+                    );
                 }
             }
 
             all_consts.extend(eval_result.consts);
             all_params.extend(eval_result.params);
-            let all_nodes = eval_result.nodes;
+            all_nodes.extend(eval_result.nodes);
             all_all.extend(eval_result.all);
 
             // Plots requested from standalone-evaluated dependencies render
@@ -575,6 +642,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                 params: all_params,
                 nodes: all_nodes,
                 all: all_all,
+                output_surface: compiled.output_surface,
                 assertions: all_assertions,
                 plots: all_plots,
                 plot_errors: eval_result.plot_errors,

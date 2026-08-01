@@ -6,6 +6,7 @@
     reason = "submodule of project/ uses parent types extensively"
 )]
 use super::*;
+use crate::import_surface::{ProjectDeclIdentity, ProjectDeclKind, decl_identity};
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
 
@@ -138,19 +139,83 @@ fn runtime_artifact_unavailable_error(
 fn include_value_decl(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     boundary: IncludeVisibilityBoundary,
-) -> Option<(String, bool)> {
+) -> Option<(DeclName, bool)> {
     match &decl.kind {
-        DeclKind::Param(p) => Some((p.name.value.to_string(), false)),
+        DeclKind::Param(p) => Some((p.name.value.clone(), false)),
         DeclKind::ConstNode(c)
             if !boundary.crosses_module_boundary() || c.visibility.is_public() =>
         {
-            Some((c.name.value.to_string(), true))
+            Some((c.name.value.clone(), true))
         }
         DeclKind::Node(n) if !boundary.crosses_module_boundary() || n.visibility.is_public() => {
-            Some((n.name.value.to_string(), false))
+            Some((n.name.value.clone(), false))
         }
         _ => None,
     }
+}
+
+fn value_decl_identity(
+    decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
+) -> Option<ProjectDeclIdentity<'_>> {
+    decl_identity(decl).filter(|identity| {
+        matches!(
+            identity.kind,
+            ProjectDeclKind::Param | ProjectDeclKind::Node | ProjectDeclKind::Const
+        )
+    })
+}
+
+/// Classify the values an include intentionally exposes to its consumer.
+///
+/// A brace include exposes exactly its selected value aliases. A whole-instance
+/// include exposes param ports and explicitly exported consts/nodes under the
+/// instance prefix. Private merged declarations remain debug-only even when a
+/// same-module caller could name them.
+fn include_surface_outputs(
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    prefix: &ModuleAliasName,
+    selective: Option<&[ImportAlias]>,
+) -> Vec<ScopedName> {
+    selective.map_or_else(
+        || {
+            declarations
+                .iter()
+                .filter(|decl| decl_has_external_role(decl))
+                .filter_map(value_decl_identity)
+                .map(|identity| ScopedName::qualified(prefix.as_str(), identity.name))
+                .collect()
+        },
+        |aliases| {
+            aliases
+                .iter()
+                .filter(|alias| {
+                    declarations.iter().any(|decl| {
+                        value_decl_identity(decl)
+                            .is_some_and(|identity| identity.name == alias.original.as_str())
+                    })
+                })
+                .map(|alias| ScopedName::local(alias.local.as_str()))
+                .collect()
+        },
+    )
+}
+
+fn qualify_debug_values(
+    values: &[EvaluatedOutputValue],
+    prefix: &ModuleAliasName,
+) -> Vec<EvaluatedOutputValue> {
+    values
+        .iter()
+        .map(|(name, result, decl_type)| {
+            let qualifier = std::iter::once(prefix.as_str())
+                .chain(name.qualifier().iter().map(std::convert::AsRef::as_ref));
+            (
+                ScopedName::qualified_path(qualifier, name.member()),
+                result.clone(),
+                *decl_type,
+            )
+        })
+        .collect()
 }
 
 /// Validate an include/import item's attributes and return whether it carries
@@ -365,7 +430,7 @@ fn classify_param_bindings(
     Ok(out)
 }
 
-/// Process an instantiated include (one with param bindings), deferring it for
+/// Process a file-root DAG include with bindings, deferring the instance for
 /// post-lowering IR merging.
 #[expect(
     clippy::too_many_lines,
@@ -657,6 +722,11 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             None
         }
     };
+    let surface_outputs = include_surface_outputs(
+        &dep_loaded.ast.declarations,
+        &prefix,
+        selective_names.as_deref(),
+    );
 
     // Required indexes must always be bound.
     for dep_decl in &dep_loaded.ast.declarations {
@@ -694,6 +764,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         type_bindings,
         dim_bindings,
         selective_names,
+        surface_outputs,
         requested_plots,
         import_span: decl.span,
         import_item_attributes,
@@ -876,6 +947,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
             None
         }
     };
+    let surface_outputs =
+        include_surface_outputs(&dag_body.declarations, &prefix, selective_names.as_deref());
 
     // Strict binding check: all required params/indexes must be bound.
     for dep_decl in &dag_body.declarations {
@@ -916,6 +989,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         type_bindings,
         dim_bindings,
         selective_names,
+        surface_outputs,
         requested_plots,
         import_span: decl.span,
         import_item_attributes,
@@ -1226,6 +1300,22 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                 });
         }
     }
+
+    if !is_import {
+        let prefix = match import_kind {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
+                alias.as_ref().map_or_else(
+                    || derive_module_name_from_import_path(import_path),
+                    |alias_ident| alias_ident.value.clone(),
+                )
+            }
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(_) => {
+                derive_module_name_from_import_path(import_path)
+            }
+        };
+        ctx.included_debug_values
+            .extend(qualify_debug_values(&dep.evaluated_values, &prefix));
+    }
     Ok(())
 }
 
@@ -1344,10 +1434,27 @@ pub(in crate::eval::project) fn import_selective_item(
         Ok(SelectiveImportResult::Const)
     } else if let Some(rv) = dep.values.get(&orig_decl) {
         let dt = imported_declared_type(dep, &orig_decl, src, span)?;
+        let category = imported_runtime_category(dep, &orig_decl, src, span)?;
         let scoped = ScopedName::local(local_name);
-        imported_names.param_names.push((scoped.clone(), span));
+        match category {
+            DeclCategory::Param => imported_names.param_names.push((scoped.clone(), span)),
+            DeclCategory::Node => imported_names.node_names.push((scoped.clone(), span)),
+            DeclCategory::Const
+            | DeclCategory::Assert
+            | DeclCategory::Plot
+            | DeclCategory::Figure
+            | DeclCategory::Layer => {
+                return Err(CompileError::Eval(GraphcalError::InternalError {
+                    message: format!(
+                        "runtime import `{orig_decl}` has non-runtime category `{category:?}`"
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                }));
+            }
+        }
         if let Some(source_order) = imported_source_order {
-            source_order.push((scoped.clone(), DeclCategory::Param));
+            source_order.push((scoped.clone(), category));
         }
         imported_values.insert(scoped, (rv.clone(), dt));
         Ok(SelectiveImportResult::Runtime)
@@ -1356,6 +1463,31 @@ pub(in crate::eval::project) fn import_selective_item(
     } else {
         Ok(SelectiveImportResult::NotFound)
     }
+}
+
+fn imported_runtime_category(
+    dep: &EvaluatedFile,
+    name: &DeclName,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<DeclCategory, CompileError> {
+    dep.evaluated_values
+        .iter()
+        .find(|(evaluated_name, _, _)| {
+            !evaluated_name.is_qualified() && evaluated_name.member() == name.as_str()
+        })
+        .and_then(|(_, _, decl_type)| match decl_type {
+            DeclType::Param => Some(DeclCategory::Param),
+            DeclType::Node => Some(DeclCategory::Node),
+            DeclType::Const => None,
+        })
+        .ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: format!("runtime import `{name}` is missing its declaration category"),
+                src: src.clone(),
+                span: span.into(),
+            })
+        })
 }
 
 fn imported_declared_type(
@@ -1432,12 +1564,31 @@ pub(in crate::eval::project) fn import_module_values(
         }
         let rv = &dep.values[name];
         let scoped = ScopedName::qualified(module_name.as_str(), name.as_str());
-        imported_names
-            .param_names
-            .push((scoped.clone(), import_span));
+        let category = imported_runtime_category(dep, name, src, import_span)?;
+        match category {
+            DeclCategory::Param => imported_names
+                .param_names
+                .push((scoped.clone(), import_span)),
+            DeclCategory::Node => imported_names
+                .node_names
+                .push((scoped.clone(), import_span)),
+            DeclCategory::Const
+            | DeclCategory::Assert
+            | DeclCategory::Plot
+            | DeclCategory::Figure
+            | DeclCategory::Layer => {
+                return Err(CompileError::Eval(GraphcalError::InternalError {
+                    message: format!(
+                        "runtime import `{name}` has non-runtime category `{category:?}`"
+                    ),
+                    src: src.clone(),
+                    span: import_span.into(),
+                }));
+            }
+        }
         let dt = imported_declared_type(dep, name, src, import_span)?;
         if let Some(ref mut source_order) = imported_source_order {
-            source_order.push((scoped.clone(), DeclCategory::Param));
+            source_order.push((scoped.clone(), category));
         }
         imported_values.insert(scoped, (rv.clone(), dt));
     }
@@ -1453,6 +1604,7 @@ mod tests {
             runtime_available: true,
             values: HashMap::new(),
             const_values: HashMap::new(),
+            evaluated_values: Vec::new(),
             declared_types: HashMap::new(),
             assertions: HashMap::new(),
             plots: HashMap::new(),

@@ -25,7 +25,7 @@ use std::process;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
-    CompileError, EvalResult, compile_and_eval_from_project_with_host_fns,
+    CompileError, EvalOutputView, EvalResult, compile_and_eval_from_project_with_host_fns,
     compile_to_tir_from_project_with_host_fns, format_number,
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
@@ -81,6 +81,9 @@ enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value = "text")]
         format: OutputFormat,
+        /// Values to display: the entry surface or every included-DAG value
+        #[arg(long, value_enum, default_value = "surface")]
+        output_view: OutputView,
         /// Override a param value: --set 'name=expr'
         #[arg(long)]
         set: Vec<String>,
@@ -187,6 +190,23 @@ enum OutputFormat {
     Json,
 }
 
+#[derive(ValueEnum, Clone, Copy)]
+enum OutputView {
+    /// Entry-DAG values and selected/projectable include outputs
+    Surface,
+    /// Every instantiated value, including included-DAG internals
+    All,
+}
+
+impl From<OutputView> for EvalOutputView {
+    fn from(view: OutputView) -> Self {
+        match view {
+            OutputView::Surface => Self::Surface,
+            OutputView::All => Self::All,
+        }
+    }
+}
+
 /// Plot output destination selected by `--plot`.
 #[derive(Clone)]
 enum PlotOutput {
@@ -281,6 +301,7 @@ fn run_command(cli: Cli) {
         Commands::Eval {
             file,
             format,
+            output_view,
             set,
             input,
             input_max_bytes,
@@ -294,6 +315,7 @@ fn run_command(cli: Cli) {
             handle_eval(
                 &file,
                 &format,
+                output_view.into(),
                 &overrides,
                 root.as_deref(),
                 plot_output.as_ref(),
@@ -450,6 +472,7 @@ fn report_override_error(e: &OverrideParseError) -> ! {
 fn handle_eval(
     file: &Path,
     format: &OutputFormat,
+    output_view: EvalOutputView,
     overrides: &std::collections::HashMap<
         DeclName,
         graphcal_compiler::desugar::desugared_ast::Expr,
@@ -470,9 +493,9 @@ fn handle_eval(
             let plot_json_only = matches!(plot_output, Some(PlotOutput::Json));
             if !plot_json_only {
                 match format {
-                    OutputFormat::Text => print_text(&result),
+                    OutputFormat::Text => print_text(&result, output_view),
                     OutputFormat::Json => {
-                        if let Err(e) = print_json(&result) {
+                        if let Err(e) = print_json(&result, output_view) {
                             eprintln!("JSON serialization error: {e}");
                             process::exit(2);
                         }
@@ -727,14 +750,13 @@ fn run_format(paths: &[PathBuf], check: bool) {
     }
 }
 
-fn print_text(result: &EvalResult) {
+fn print_text(result: &EvalResult, output_view: EvalOutputView) {
     use graphcal_eval::eval::Value;
 
     // Build output blocks preserving source order. Names render their full
     // alias-qualified path so multiple instantiations stay distinct (#813).
     let rendered_names: Vec<(String, &Result<Value, graphcal_eval::eval::NodeError>)> = result
-        .all
-        .iter()
+        .output_values(output_view)
         .map(|(name, r, _)| (name.to_string(), r))
         .collect();
     let items = rendered_names.iter().map(|(n, r)| (n.as_str(), *r));
@@ -855,7 +877,7 @@ fn format_assertion_line(
     clippy::too_many_lines,
     reason = "JSON output formatting is clearest as a single function"
 )]
-fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
+fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), serde_json::Error> {
     use graphcal_eval::eval::{NodeError, Value};
 
     fn value_to_json(
@@ -1021,18 +1043,15 @@ fn print_json(result: &EvalResult) -> Result<(), serde_json::Error> {
     let mut output = serde_json::Map::new();
 
     let consts: serde_json::Map<String, serde_json::Value> = result
-        .consts
-        .iter()
+        .output_consts(output_view)
         .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
         .collect();
     let params: serde_json::Map<String, serde_json::Value> = result
-        .params
-        .iter()
+        .output_params(output_view)
         .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
         .collect();
     let nodes: serde_json::Map<String, serde_json::Value> = result
-        .nodes
-        .iter()
+        .output_nodes(output_view)
         .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
         .collect();
 

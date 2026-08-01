@@ -17,9 +17,10 @@ pub use project::{
     compile_to_tir_from_project_with_host_fns, compile_to_tir_project,
 };
 pub use types::{
-    AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit, EvalResult,
-    FigureSpec, LayerSpec, MarkProperty, NodeError, PlotError, PlotFieldValue, PlotProperty,
-    PlotSpec, Value, ValueError, format_epoch_with_tz, quantity_display_value,
+    AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit,
+    EvalOutputView, EvalResult, FigureSpec, LayerSpec, MarkProperty, NodeError, PlotError,
+    PlotFieldValue, PlotProperty, PlotSpec, Value, ValueError, format_epoch_with_tz,
+    quantity_display_value,
 };
 
 pub fn compile_and_eval(source: &str) -> Result<EvalResult, CompileError> {

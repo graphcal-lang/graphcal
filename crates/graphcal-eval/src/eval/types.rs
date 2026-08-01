@@ -647,6 +647,20 @@ pub enum AssertResult {
     },
 }
 
+/// Which evaluated values a presentation boundary should expose.
+///
+/// Evaluation always retains every instantiated value so errors, assertions,
+/// and debugging remain complete. This view controls presentation only; it
+/// never changes name resolution or evaluation semantics.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EvalOutputView {
+    /// Entry-DAG declarations and outputs selected from included DAGs.
+    #[default]
+    Surface,
+    /// Every value in every instantiated DAG, including internal helpers.
+    All,
+}
+
 /// The result of evaluating a `.gcl` file.
 ///
 /// Entries are keyed by [`ScopedName`]: a top-level declaration is a bare
@@ -666,6 +680,11 @@ pub struct EvalResult {
     pub nodes: Vec<(ScopedName, Result<Value, NodeError>)>,
     /// All values in source order with their declaration type.
     pub all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)>,
+    /// Values belonging to the entry DAG's consumer-facing output surface.
+    ///
+    /// Internal include-instance values remain in [`Self::all`] for the
+    /// [`EvalOutputView::All`] debug view and for complete error accounting.
+    pub(crate) output_surface: std::collections::HashSet<ScopedName>,
     /// Assertion results in source order: (name, result, span).
     pub assertions: Vec<(ScopedName, AssertResult, Span)>,
     /// Evaluated plot specifications in source order.
@@ -687,6 +706,61 @@ pub struct EvalResult {
 }
 
 impl EvalResult {
+    fn should_output(
+        &self,
+        name: &ScopedName,
+        result: &Result<Value, NodeError>,
+        view: EvalOutputView,
+    ) -> bool {
+        matches!(view, EvalOutputView::All)
+            || self.output_surface.contains(name)
+            // A hidden failure must still explain the command's non-zero exit.
+            || result.is_err()
+    }
+
+    /// Iterate over values selected by `view` in source order.
+    ///
+    /// Failed internal values are included even in the surface view so a
+    /// non-zero evaluation result is never unexplained.
+    pub fn output_values(
+        &self,
+        view: EvalOutputView,
+    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>, DeclType)> {
+        self.all
+            .iter()
+            .filter(move |(name, result, _)| self.should_output(name, result, view))
+    }
+
+    /// Iterate over const values selected by `view` in source order.
+    pub fn output_consts(
+        &self,
+        view: EvalOutputView,
+    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>)> {
+        self.consts
+            .iter()
+            .filter(move |(name, result)| self.should_output(name, result, view))
+    }
+
+    /// Iterate over param values selected by `view` in source order.
+    pub fn output_params(
+        &self,
+        view: EvalOutputView,
+    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>)> {
+        self.params
+            .iter()
+            .filter(move |(name, result)| self.should_output(name, result, view))
+    }
+
+    /// Iterate over node values selected by `view` in source order.
+    pub fn output_nodes(
+        &self,
+        view: EvalOutputView,
+    ) -> impl Iterator<Item = &(ScopedName, Result<Value, NodeError>)> {
+        self.nodes
+            .iter()
+            .filter(move |(name, result)| self.should_output(name, result, view))
+    }
+
     /// Returns `true` if any const/param/node/plot evaluation failed or any assertion failed.
     #[must_use]
     pub fn has_errors(&self) -> bool {
@@ -843,6 +917,7 @@ mod tests {
             params: Vec::new(),
             nodes: Vec::new(),
             all: Vec::new(),
+            output_surface: std::collections::HashSet::new(),
             assertions: Vec::new(),
             plots: Vec::new(),
             plot_errors: Vec::new(),

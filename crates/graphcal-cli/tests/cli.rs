@@ -846,6 +846,145 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
 }
 
 #[test]
+fn eval_output_view_selects_surface_or_all_include_values() {
+    // #394/#480/#909: normal output follows the consumer surface while the
+    // explicit debug view retains private instance state.
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+dag calc {
+    param x: Dimensionless;
+    node internal: Dimensionless = @x + 1.0;
+    pub node out: Dimensionless = @internal * 2.0;
+}
+
+param x: Dimensionless = 1.0;
+include calc(x: @x).{ out };
+",
+    );
+
+    let surface = graphcal_bin()
+        .args(["eval", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        surface.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&surface.stderr)
+    );
+    let surface_stdout = String::from_utf8(surface.stdout).unwrap();
+    assert!(surface_stdout.contains("x   = 1"), "{surface_stdout}");
+    assert!(surface_stdout.contains("out = 4"), "{surface_stdout}");
+    assert!(!surface_stdout.contains("calc."), "{surface_stdout}");
+
+    let all = graphcal_bin()
+        .args(["eval", root.to_str().unwrap(), "--output-view", "all"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        all.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&all.stderr)
+    );
+    let all_stdout = String::from_utf8(all.stdout).unwrap();
+    for expected in ["calc.x", "calc.internal", "calc.out", "out"] {
+        assert!(
+            all_stdout.contains(expected),
+            "missing `{expected}`:\n{all_stdout}"
+        );
+    }
+}
+
+#[test]
+fn eval_output_view_is_consistent_for_empty_file_include_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("src/pkg");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"pkg\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("lib.gcl"),
+        "node internal: Dimensionless = 2.0;\n\
+         pub node out: Dimensionless = @internal * 2.0;\n",
+    )
+    .unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "src/pkg/main.gcl",
+        "include pkg.lib().{ out };\n",
+    );
+
+    let run_json = |extra: &[&str]| {
+        let mut command = graphcal_bin();
+        command.args(["eval", root.to_str().unwrap(), "--format", "json"]);
+        command.args(extra);
+        let output = command.output().expect("failed to run graphcal");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).expect("invalid JSON")
+    };
+
+    let surface = run_json(&[]);
+    assert_eq!(surface["node"]["out"]["si_value"].as_f64(), Some(4.0));
+    assert!(surface["node"].get("lib.internal").is_none());
+    assert!(surface["param"].get("out").is_none());
+
+    let all = run_json(&["--output-view", "all"]);
+    assert_eq!(all["node"]["lib.internal"]["si_value"].as_f64(), Some(2.0));
+    assert_eq!(all["node"]["lib.out"]["si_value"].as_f64(), Some(4.0));
+    assert_eq!(all["node"]["out"]["si_value"].as_f64(), Some(4.0));
+}
+
+#[test]
+fn eval_surface_still_reports_hidden_internal_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "main.gcl",
+        r"
+dag calc {
+    param x: Dimensionless;
+    node broken: Dimensionless = 1.0 / 0.0;
+    pub node out: Dimensionless = @x;
+}
+
+param x: Dimensionless = 1.0;
+include calc(x: @x).{ out };
+",
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", root.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("x ") && line.ends_with("= 1")),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("out ") && line.ends_with("= 1")),
+        "stdout: {stdout}"
+    );
+    assert!(stderr.contains("calc.broken"), "stderr: {stderr}");
+    assert!(stderr.contains("division by zero"), "stderr: {stderr}");
+}
+
+#[test]
 fn eval_multiple_includes_qualified_output() {
     // #813: multiple instantiations of the same dag must stay distinct in
     // both text and JSON output, keyed by their include alias path.
@@ -856,7 +995,8 @@ fn eval_multiple_includes_qualified_output() {
         r"
 dag checked {
     param v: Dimensionless;
-    pub node out: Dimensionless = @v * 2.0;
+    node internal: Dimensionless = @v;
+    pub node out: Dimensionless = @internal * 2.0;
     assert v_positive = @v > 0.0;
 }
 
@@ -894,6 +1034,8 @@ node sum2: Dimensionless = @good.out + @bad.out;
         combined.contains("bad.v_positive   FAIL"),
         "bad instance should fail:\n{combined}"
     );
+    assert!(!combined.contains("good.internal"), "output:\n{combined}");
+    assert!(!combined.contains("bad.internal"), "output:\n{combined}");
 
     let output = graphcal_bin()
         .args(["eval", root.to_str().unwrap(), "--format", "json"])

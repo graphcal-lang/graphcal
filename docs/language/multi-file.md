@@ -246,6 +246,12 @@ each output selected through a brace list or reached through an include alias
 must be public. Renaming an output does not change its visibility. Private
 nodes inside the included DAG remain implementation details.
 
+`graphcal eval` therefore shows only the entry DAG and the include's selected
+or projectable outputs by default. Use `--output-view all` when debugging to
+also print each instance's bound params and private helper values. This option
+changes presentation only; it does not make private names accessible to the
+including DAG.
+
 A brace-list item may also name a `pub plot` of the included file: that is
 the consumer's request to display the library's chart of this instance. The
 plot enters the root namespace under its local alias; `#[hidden]` on the

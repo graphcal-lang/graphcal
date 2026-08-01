@@ -499,7 +499,7 @@ pub(super) fn evaluate_plan_with_values(
         .map(|e| (e.name.clone(), make_result(&e.name)))
         .collect();
 
-    let all = tir
+    let all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)> = tir
         .root()
         .source_order
         .iter()
@@ -527,6 +527,10 @@ pub(super) fn evaluate_plan_with_values(
             Some((name.clone(), result, decl_type))
         })
         .collect();
+    // A directly evaluated DAG is its own entry surface. Project evaluation
+    // replaces this set with include-aware classification after assembling the
+    // root result.
+    let output_surface = all.iter().map(|(name, _, _)| name.clone()).collect();
 
     // Evaluate assertions in source order, applying expected_fail inversion.
     // An assertion whose body references a failed declaration reports the
@@ -648,6 +652,7 @@ pub(super) fn evaluate_plan_with_values(
         params,
         nodes,
         all,
+        output_surface,
         assertions,
         plots,
         plot_errors,

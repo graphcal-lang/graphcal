@@ -30,7 +30,7 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{PositiveFiniteScale, Registry, RegistryBuilder};
 
 use super::runtime::evaluate_plan;
-use super::types::{AssertResult, CompileError, EvalResult};
+use super::types::{AssertResult, CompileError, DeclType, EvalResult, NodeError, Value};
 
 mod imports;
 mod lowering;
@@ -46,6 +46,10 @@ mod pipeline;
 /// directional convention discoverable everywhere the map shape appears in a
 /// signature.
 type DepToImporter<T> = HashMap<T, T>;
+
+/// One evaluated value retained for output assembly across project-file
+/// boundaries.
+type EvaluatedOutputValue = (ScopedName, Result<Value, NodeError>, DeclType);
 
 /// A selective import/include alias.
 ///
@@ -150,6 +154,10 @@ struct EvaluatedFile {
     values: HashMap<DeclName, RuntimeValue>,
     /// Evaluated const values: name → `RuntimeValue`.
     const_values: HashMap<DeclName, RuntimeValue>,
+    /// Complete evaluated values in source order, retained so an empty-argument
+    /// file include can expose its instance internals in the all-values view
+    /// without changing the include's pre-evaluated execution path.
+    evaluated_values: Vec<EvaluatedOutputValue>,
     /// Declared types for all consts/params/nodes in this file.
     declared_types: HashMap<ScopedName, DeclaredType>,
     /// Assertion results from this file: name → (result, span).
@@ -206,6 +214,14 @@ struct CompiledFile {
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     /// Imported value categories in source order (for root output).
     imported_source_order: Vec<(ScopedName, DeclCategory)>,
+    /// Values belonging to this file's consumer-facing output surface.
+    ///
+    /// The set contains the file's own declarations, imported names, selected
+    /// include aliases, and projectable outputs of whole-instance includes.
+    output_surface: HashSet<ScopedName>,
+    /// Complete values from pre-evaluated empty-argument file includes. These
+    /// are hidden from the surface view but retained for `EvalOutputView::All`.
+    included_debug_values: Vec<EvaluatedOutputValue>,
     /// Plot specs requested from standalone-evaluated dependencies via
     /// include brace lists, renamed to their local aliases (#847).
     included_plots: Vec<super::types::PlotSpec>,
@@ -243,6 +259,10 @@ struct DeferredDagInclude {
     /// For selective includes: the selected names and their local aliases.
     /// `None` for module-form includes (all names accessible via `prefix::`).
     selective_names: Option<Vec<ImportAlias>>,
+    /// Values this include intentionally exposes on the importer's output
+    /// surface. Merged implementation values not listed here remain available
+    /// to the all-values debug view.
+    surface_outputs: Vec<ScopedName>,
     /// Plots requested by the include brace list, keyed by the dep-side
     /// plot name (#847).
     requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
@@ -324,6 +344,9 @@ struct ImportContext<'a> {
     /// importer's registry builder before its own declarations register.
     extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
     deferred_dag_includes: Vec<DeferredDagInclude>,
+    /// Complete values from empty-argument file includes, qualified by their
+    /// logical instance prefix for the all-values output view.
+    included_debug_values: Vec<EvaluatedOutputValue>,
     /// Plot specs requested from standalone-evaluated dependencies via
     /// include brace lists, renamed to their local aliases (#847).
     included_plot_specs: Vec<super::types::PlotSpec>,

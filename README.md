@@ -71,8 +71,9 @@ graphcal eval rocket.gcl
 # Override params (rest keep their defaults); override names are entry-file param names
 graphcal eval rocket.gcl --set 'isp=450.0 s'
 
-# Override from JSON, emit JSON, or open an interactive plot
+# Override from JSON, emit JSON, or inspect included-DAG internals
 graphcal eval analysis.gcl --input params.json --format json
+graphcal eval analysis.gcl --output-view all
 graphcal eval analysis.gcl --plot browser
 
 # Export the dependency graph as Graphviz DOT (experimental)

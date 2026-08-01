@@ -213,6 +213,7 @@ graphcal eval [OPTIONS] <FILE>
 | Option | Description |
 |--------|-------------|
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
+| `--output-view <VIEW>` | Values to display: `surface` (default) or `all` |
 | `--set <SET>` | Override or provide a param value: `--set 'name=expr'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
 | `--plot <MODE>` | Plot output mode: `browser` (open in browser), `json` (print only plot JSON to stdout), or a path ending in `.html` (write a self-contained HTML page) |
@@ -228,11 +229,30 @@ Entry-file params are the entry DAG's named input ports. Ports not supplied via
 `--set` or `--input` keep their declared defaults; ports without a default are
 required and must be supplied.
 
+The default `--output-view surface` prints every const, param, and node declared
+by the entry DAG plus the outputs intentionally exposed by each include. A
+brace include contributes only its selected local aliases. A whole-instance
+include (`include ... as alias`) contributes its param ports and public
+consts/nodes under that alias. Successful private implementation values and
+producer-side duplicates are omitted.
+
+Use `--output-view all` to debug an included DAG's complete instantiated state,
+including bound params, private helper nodes, and producer-side values:
+
+```bash
+graphcal eval mission.gcl --output-view all
+```
+
+The view changes presentation only; it never makes a private declaration
+referenceable from Graphcal source. Assertions are always reported, and a
+failed internal value is shown even in `surface` view so a non-zero exit is
+never unexplained.
+
 Output entries (text and JSON) are keyed by the full alias-qualified path for
-declarations instantiated through `include ... as alias` (e.g. `good.out`,
-`good.v_positive`), so multiple instantiations of the same dag never collide
-and JSON output never silently drops an instance. This qualification applies
-only to output names — the `--set` override surface is unaffected.
+whole-instance includes (e.g. `good.out`, `good.v_positive`), so multiple
+instantiations of the same DAG never collide and JSON output never silently
+drops an instance. This qualification applies only to output names — the
+`--set` override surface is unaffected.
 
 **Exit codes:**
 
