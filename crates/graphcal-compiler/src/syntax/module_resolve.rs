@@ -26,9 +26,10 @@ use thiserror::Error;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::syntax::ast::{IdentPath, ImportItem, ImportItemNamespace, ImportKind, ModulePath};
+use crate::syntax::ast::{IdentPath, ImportItem, ImportKind, ModulePath};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
+use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
 use crate::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::module_name::{ModuleAliasName, ModuleAliasNameNamespace};
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath, ResolvedName};
@@ -100,6 +101,23 @@ enum ExclusiveNameKind {
     Dimension,
     StructType,
     Index,
+    Constructor,
+}
+
+impl ExclusiveNameKind {
+    /// Whether two namespaces can collide at a source use site.
+    ///
+    /// Values, dimensions, types, and indexes share sort-inferred positions
+    /// and are mutually exclusive. Constructors are term-sorted and therefore
+    /// collide with values, but may coexist with their owning type (and with
+    /// names confined to other sort-fixed positions).
+    fn conflicts_with(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Constructor, Self::Value) | (Self::Value, Self::Constructor) => true,
+            (Self::Constructor, _) | (_, Self::Constructor) => false,
+            _ => self != other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -631,6 +649,12 @@ impl ModuleSymbols {
         )?;
         if let ast::TypeDeclBody::Constructors(members) = &type_decl.body {
             for member in members {
+                self.insert_exclusive_name(
+                    exclusive_names,
+                    member.name.value.atom(),
+                    ExclusiveNameKind::Constructor,
+                    member.name.span,
+                )?;
                 self.insert_constructor(
                     &member.name,
                     visibility,
@@ -664,17 +688,27 @@ impl ModuleSymbols {
         span: Span,
     ) -> Result<(), ModuleResolveError> {
         match occupied.get(atom) {
-            Some(first) if first.kind != kind => Err(ModuleResolveError::DuplicateSymbol {
-                owner: self.owner.clone(),
-                namespace: "name",
-                name: atom.to_string(),
-                first: first.span,
-                duplicate: span,
-            }),
+            Some(first) if first.kind.conflicts_with(kind) => {
+                Err(ModuleResolveError::DuplicateSymbol {
+                    owner: self.owner.clone(),
+                    namespace: "name",
+                    name: atom.to_string(),
+                    first: first.span,
+                    duplicate: span,
+                })
+            }
             _ => {
-                occupied
-                    .entry(atom.clone())
-                    .or_insert(ExclusiveNameBinding { kind, span });
+                let should_replace_constructor = occupied
+                    .get(atom)
+                    .is_some_and(|binding| binding.kind == ExclusiveNameKind::Constructor)
+                    && kind != ExclusiveNameKind::Constructor;
+                if should_replace_constructor {
+                    occupied.insert(atom.clone(), ExclusiveNameBinding { kind, span });
+                } else {
+                    occupied
+                        .entry(atom.clone())
+                        .or_insert(ExclusiveNameBinding { kind, span });
+                }
                 Ok(())
             }
         }
@@ -1009,6 +1043,56 @@ impl ModuleScope {
     }
 }
 
+/// Semantic category of one exported symbol as seen by import tooling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExportedImportItemKind {
+    Decl(DeclSymbolKind),
+    Constructor,
+    Dimension,
+    Unit,
+    Type,
+    Index,
+}
+
+impl ExportedImportItemKind {
+    /// Selective-import namespace required for this symbol.
+    #[must_use]
+    pub const fn namespace(self) -> ImportItemNamespace {
+        match self {
+            Self::Decl(_) | Self::Constructor => ImportItemNamespace::Term,
+            Self::Dimension => ImportItemNamespace::Dimension,
+            Self::Unit => ImportItemNamespace::Unit,
+            Self::Type => ImportItemNamespace::Type,
+            Self::Index => ImportItemNamespace::Index,
+        }
+    }
+
+    const fn sort_rank(self) -> u8 {
+        match self.namespace() {
+            ImportItemNamespace::Term => 0,
+            ImportItemNamespace::Type => 1,
+            ImportItemNamespace::Dimension => 2,
+            ImportItemNamespace::Unit => 3,
+            ImportItemNamespace::Index => 4,
+        }
+    }
+}
+
+/// One public symbol rendered in the exact category used by selective imports.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExportedImportItem {
+    pub name: NameAtom,
+    pub kind: ExportedImportItemKind,
+}
+
+impl ExportedImportItem {
+    /// Canonical source spelling that can be pasted into an import brace list.
+    #[must_use]
+    pub fn render(&self) -> String {
+        self.kind.namespace().render_item(self.name.as_str())
+    }
+}
+
 /// Surface category for diagnostics that cross namespace boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceNameKind {
@@ -1019,7 +1103,6 @@ pub enum SurfaceNameKind {
     Index,
     IndexLabel,
     Constructor,
-    DefaultImportItem,
 }
 
 impl std::fmt::Display for SurfaceNameKind {
@@ -1032,7 +1115,6 @@ impl std::fmt::Display for SurfaceNameKind {
             Self::Index => "an index",
             Self::IndexLabel => "an index label",
             Self::Constructor => "a constructor",
-            Self::DefaultImportItem => "a default import item",
         };
         f.write_str(text)
     }
@@ -1191,6 +1273,98 @@ impl ModuleResolver {
     #[must_use]
     pub const fn scopes(&self) -> &HashMap<DagId, ModuleScope> {
         &self.scopes
+    }
+
+    /// List the module's public surface in canonical selective-import categories.
+    ///
+    /// Native declarations and selective re-exports are indistinguishable here:
+    /// callers receive the local exported spelling and the marker required to
+    /// import it. Whole-module re-export chains have already been expanded into
+    /// the module scope by import registration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError`] if `owner` or a re-exported declaration's
+    /// canonical owner is missing.
+    pub fn exported_import_items(
+        &self,
+        owner: &DagId,
+    ) -> Result<Vec<ExportedImportItem>, ModuleResolveError> {
+        let symbols = self.module_symbols(owner)?;
+        let scope = self.module_scope(owner)?;
+        let mut items = Vec::new();
+
+        for (name, symbol) in &symbols.decls {
+            if symbol.visibility().is_public() {
+                items.push(ExportedImportItem {
+                    name: name.atom().clone(),
+                    kind: ExportedImportItemKind::Decl(symbol.kind()),
+                });
+            }
+        }
+        for (name, symbol) in &scope.selected_decls {
+            if symbol.visibility().is_public() {
+                items.push(ExportedImportItem {
+                    name: name.atom().clone(),
+                    kind: ExportedImportItemKind::Decl(self.decl_symbol_kind(symbol.resolved())?),
+                });
+            }
+        }
+
+        macro_rules! push_namespace {
+            ($local:expr, $selected:expr, $kind:expr) => {
+                for (name, symbol) in $local {
+                    if symbol.visibility().is_public() {
+                        items.push(ExportedImportItem {
+                            name: name.atom().clone(),
+                            kind: $kind,
+                        });
+                    }
+                }
+                for (name, symbol) in $selected {
+                    if symbol.visibility().is_public() {
+                        items.push(ExportedImportItem {
+                            name: name.atom().clone(),
+                            kind: $kind,
+                        });
+                    }
+                }
+            };
+        }
+
+        push_namespace!(
+            &symbols.constructors,
+            &scope.selected_constructors,
+            ExportedImportItemKind::Constructor
+        );
+        push_namespace!(
+            &symbols.struct_types,
+            &scope.selected_struct_types,
+            ExportedImportItemKind::Type
+        );
+        push_namespace!(
+            &symbols.dimensions,
+            &scope.selected_dimensions,
+            ExportedImportItemKind::Dimension
+        );
+        push_namespace!(
+            &symbols.units,
+            &scope.selected_units,
+            ExportedImportItemKind::Unit
+        );
+        push_namespace!(
+            &symbols.indexes,
+            &scope.selected_indexes,
+            ExportedImportItemKind::Index
+        );
+
+        items.sort_by(|left, right| {
+            left.kind
+                .sort_rank()
+                .cmp(&right.kind.sort_rank())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        Ok(items)
     }
 
     /// Return selectively imported DAG bindings as local name → canonical DAG.
@@ -1783,6 +1957,11 @@ impl ModuleResolver {
         seed_exclusive_names(&mut occupied, &local.indexes, ExclusiveNameKind::Index);
         seed_exclusive_names(
             &mut occupied,
+            &local.constructors,
+            ExclusiveNameKind::Constructor,
+        );
+        seed_exclusive_names(
+            &mut occupied,
             &scope.selected_decls,
             ExclusiveNameKind::Value,
         );
@@ -1801,180 +1980,240 @@ impl ModuleResolver {
             &scope.selected_indexes,
             ExclusiveNameKind::Index,
         );
+        seed_exclusive_names(
+            &mut occupied,
+            &scope.selected_constructors,
+            ExclusiveNameKind::Constructor,
+        );
 
         check_same_namespace_import_collisions(owner, local, scope, additions)?;
         check_import_addition_exclusive_names(owner, &mut occupied, additions)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "import namespace expansion is kept together"
-    )]
     fn import_item_additions(
         &self,
         target: &DagId,
         item: &ImportItem,
         access: ModuleAccess,
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
-        let source_atom = &item.name.name;
         let local_atom = item
             .alias
             .as_ref()
             .map_or_else(|| item.name.name.clone(), |alias| alias.name.clone());
         let local_span = item.local_span();
-        let local_visibility = if item.is_pub {
+        let visibility = if item.is_pub {
             SymbolVisibility::Public
         } else {
             SymbolVisibility::Private
         };
 
-        match item.namespace {
+        let additions = match item.namespace {
+            ImportItemNamespace::Term => {
+                return self
+                    .term_import_item_additions(target, item, access, local_atom, visibility);
+            }
             ImportItemNamespace::Type => {
-                match self.exported_symbol_for_import(
+                let target_name = self.required_exported_symbol_for_import(
                     target,
-                    source_atom,
+                    &item.name.name,
                     access,
                     ModuleSymbols::struct_types,
                     |scope| &scope.selected_struct_types,
-                )? {
-                    ExportLookup::Public(target_name) => Ok(vec![ImportAddition::StructType {
-                        local: Spanned::new(StructTypeName::from_atom(local_atom), local_span),
-                        target: target_name,
-                        visibility: local_visibility,
-                    }]),
-                    ExportLookup::Private => Err(ModuleResolveError::PrivateName {
-                        owner: target.clone(),
-                        namespace: StructTypeNameNamespace::DISPLAY_NAME,
-                        name: source_atom.to_string(),
-                    }),
-                    ExportLookup::Missing => {
-                        if let Some(actual) =
-                            self.exported_surface_kind_for_import(target, source_atom, access)?
-                        {
-                            return Err(ModuleResolveError::WrongUniverseName {
-                                owner: target.clone(),
-                                name: source_atom.to_string(),
-                                expected: SurfaceNameKind::Type,
-                                actual,
-                            });
-                        }
-                        Err(ModuleResolveError::UnknownName {
-                            owner: target.clone(),
-                            namespace: StructTypeNameNamespace::DISPLAY_NAME,
-                            name: source_atom.to_string(),
-                        })
-                    }
+                    StructTypeNameNamespace::DISPLAY_NAME,
+                    item.namespace,
+                    item.name.span,
+                )?;
+                ImportAddition::StructType {
+                    local: Spanned::new(StructTypeName::from_atom(local_atom), local_span),
+                    target: target_name,
+                    visibility,
                 }
             }
-            ImportItemNamespace::Default => {
-                let mut additions = Vec::new();
-                let mut saw_private = false;
-
-                match self.exported_symbol_for_import(
+            ImportItemNamespace::Dimension => {
+                let target_name = self.required_exported_symbol_for_import(
                     target,
-                    source_atom,
-                    access,
-                    ModuleSymbols::decls,
-                    |scope| &scope.selected_decls,
-                )? {
-                    ExportLookup::Public(target_name) => additions.push(ImportAddition::Decl {
-                        local: Spanned::new(DeclName::from_atom(local_atom.clone()), local_span),
-                        target: target_name,
-                        visibility: local_visibility,
-                    }),
-                    ExportLookup::Private => saw_private = true,
-                    ExportLookup::Missing => {}
-                }
-                match self.exported_symbol_for_import(
-                    target,
-                    source_atom,
+                    &item.name.name,
                     access,
                     ModuleSymbols::dimensions,
                     |scope| &scope.selected_dimensions,
-                )? {
-                    ExportLookup::Public(target_name) => {
-                        additions.push(ImportAddition::Dimension {
-                            local: Spanned::new(DimName::from_atom(local_atom.clone()), local_span),
-                            target: target_name,
-                            visibility: local_visibility,
-                        });
-                    }
-                    ExportLookup::Private => saw_private = true,
-                    ExportLookup::Missing => {}
+                    DimNameNamespace::DISPLAY_NAME,
+                    item.namespace,
+                    item.name.span,
+                )?;
+                ImportAddition::Dimension {
+                    local: Spanned::new(DimName::from_atom(local_atom), local_span),
+                    target: target_name,
+                    visibility,
                 }
-                match self.exported_symbol_for_import(
+            }
+            ImportItemNamespace::Unit => {
+                let target_name = self.required_exported_symbol_for_import(
                     target,
-                    source_atom,
+                    &item.name.name,
                     access,
                     ModuleSymbols::units,
                     |scope| &scope.selected_units,
-                )? {
-                    ExportLookup::Public(target_name) => additions.push(ImportAddition::Unit {
-                        local: Spanned::new(UnitName::from_atom(local_atom.clone()), local_span),
-                        target: target_name,
-                        visibility: local_visibility,
-                    }),
-                    ExportLookup::Private => saw_private = true,
-                    ExportLookup::Missing => {}
+                    UnitNameNamespace::DISPLAY_NAME,
+                    item.namespace,
+                    item.name.span,
+                )?;
+                ImportAddition::Unit {
+                    local: Spanned::new(UnitName::from_atom(local_atom), local_span),
+                    target: target_name,
+                    visibility,
                 }
-                match self.exported_symbol_for_import(
+            }
+            ImportItemNamespace::Index => {
+                let target_name = self.required_exported_symbol_for_import(
                     target,
-                    source_atom,
+                    &item.name.name,
                     access,
                     ModuleSymbols::indexes,
                     |scope| &scope.selected_indexes,
-                )? {
-                    ExportLookup::Public(target_name) => additions.push(ImportAddition::Index {
-                        local: Spanned::new(IndexName::from_atom(local_atom.clone()), local_span),
-                        target: target_name,
-                        visibility: local_visibility,
-                    }),
-                    ExportLookup::Private => saw_private = true,
-                    ExportLookup::Missing => {}
-                }
-                match self.exported_symbol_for_import(
-                    target,
-                    source_atom,
-                    access,
-                    ModuleSymbols::constructors,
-                    |scope| &scope.selected_constructors,
-                )? {
-                    ExportLookup::Public(target_name) => {
-                        additions.push(ImportAddition::Constructor {
-                            local: Spanned::new(ConstructorName::from_atom(local_atom), local_span),
-                            target: target_name,
-                            visibility: local_visibility,
-                        });
-                    }
-                    ExportLookup::Private => saw_private = true,
-                    ExportLookup::Missing => {}
-                }
-
-                if !additions.is_empty() {
-                    Ok(additions)
-                } else if saw_private {
-                    Err(ModuleResolveError::PrivateName {
-                        owner: target.clone(),
-                        namespace: "default import namespace",
-                        name: source_atom.to_string(),
-                    })
-                } else if let Some(actual) =
-                    self.exported_surface_kind_for_import(target, source_atom, access)?
-                {
-                    Err(ModuleResolveError::WrongUniverseName {
-                        owner: target.clone(),
-                        name: source_atom.to_string(),
-                        expected: SurfaceNameKind::DefaultImportItem,
-                        actual,
-                    })
-                } else {
-                    Err(ModuleResolveError::UnknownName {
-                        owner: target.clone(),
-                        namespace: "default import namespace",
-                        name: source_atom.to_string(),
-                    })
+                    IndexNameNamespace::DISPLAY_NAME,
+                    item.namespace,
+                    item.name.span,
+                )?;
+                ImportAddition::Index {
+                    local: Spanned::new(IndexName::from_atom(local_atom), local_span),
+                    target: target_name,
+                    visibility,
                 }
             }
+        };
+        Ok(vec![additions])
+    }
+
+    fn term_import_item_additions(
+        &self,
+        target: &DagId,
+        item: &ImportItem,
+        access: ModuleAccess,
+        local_atom: NameAtom,
+        visibility: SymbolVisibility,
+    ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
+        let mut additions = Vec::new();
+        let mut saw_private = false;
+        let source_atom = &item.name.name;
+        let local_span = item.local_span();
+
+        match self.exported_symbol_for_import(
+            target,
+            source_atom,
+            access,
+            ModuleSymbols::decls,
+            |scope| &scope.selected_decls,
+        )? {
+            ExportLookup::Public(target_name) => additions.push(ImportAddition::Decl {
+                local: Spanned::new(DeclName::from_atom(local_atom.clone()), local_span),
+                target: target_name,
+                visibility,
+            }),
+            ExportLookup::Private => saw_private = true,
+            ExportLookup::Missing => {}
+        }
+        match self.exported_symbol_for_import(
+            target,
+            source_atom,
+            access,
+            ModuleSymbols::constructors,
+            |scope| &scope.selected_constructors,
+        )? {
+            ExportLookup::Public(target_name) => additions.push(ImportAddition::Constructor {
+                local: Spanned::new(ConstructorName::from_atom(local_atom), local_span),
+                target: target_name,
+                visibility,
+            }),
+            ExportLookup::Private => saw_private = true,
+            ExportLookup::Missing => {}
+        }
+
+        match (additions.is_empty(), saw_private) {
+            (false, _) => Ok(additions),
+            (true, true) => Err(ModuleResolveError::PrivateName {
+                owner: target.clone(),
+                namespace: "term import namespace",
+                name: source_atom.to_string(),
+            }),
+            (true, false) => self
+                .exported_import_item_categories(target, source_atom, access)?
+                .map_or_else(
+                    || {
+                        Err(ModuleResolveError::UnknownName {
+                            owner: target.clone(),
+                            namespace: "term import namespace",
+                            name: source_atom.to_string(),
+                        })
+                    },
+                    |alternatives| {
+                        Err(ModuleResolveError::WrongImportCategory {
+                            owner: target.clone(),
+                            mismatch: ImportItemCategoryMismatch::new(
+                                source_atom.clone(),
+                                item.namespace,
+                                alternatives,
+                            ),
+                            span: item.name.span,
+                        })
+                    },
+                ),
+        }
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "generic import lookup carries typed namespace accessors and diagnostics"
+    )]
+    fn required_exported_symbol_for_import<Ns, S>(
+        &self,
+        target: &DagId,
+        source_atom: &NameAtom,
+        access: ModuleAccess,
+        local_symbols: fn(&ModuleSymbols) -> &HashMap<NameDef<Ns>, S>,
+        selected_symbols: fn(&ModuleScope) -> &HashMap<NameDef<Ns>, ImportedSymbol<Ns>>,
+        namespace_name: &'static str,
+        expected: ImportItemNamespace,
+        span: Span,
+    ) -> Result<ResolvedName<Ns>, ModuleResolveError>
+    where
+        Ns: ResolvableNamespace,
+        S: ModuleSymbolLookup<Ns>,
+    {
+        match self.exported_symbol_for_import(
+            target,
+            source_atom,
+            access,
+            local_symbols,
+            selected_symbols,
+        )? {
+            ExportLookup::Public(target_name) => Ok(target_name),
+            ExportLookup::Private => Err(ModuleResolveError::PrivateName {
+                owner: target.clone(),
+                namespace: namespace_name,
+                name: source_atom.to_string(),
+            }),
+            ExportLookup::Missing => self
+                .exported_import_item_categories(target, source_atom, access)?
+                .map_or_else(
+                    || {
+                        Err(ModuleResolveError::UnknownName {
+                            owner: target.clone(),
+                            namespace: namespace_name,
+                            name: source_atom.to_string(),
+                        })
+                    },
+                    |alternatives| {
+                        Err(ModuleResolveError::WrongImportCategory {
+                            owner: target.clone(),
+                            mismatch: ImportItemCategoryMismatch::new(
+                                source_atom.clone(),
+                                expected,
+                                alternatives,
+                            ),
+                            span,
+                        })
+                    },
+                ),
         }
     }
 
@@ -2004,45 +2243,53 @@ impl ModuleResolver {
         ))
     }
 
-    fn exported_surface_kind_for_import(
+    fn exported_import_item_categories(
         &self,
         target: &DagId,
         atom: &NameAtom,
         access: ModuleAccess,
-    ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
+    ) -> Result<Option<NonEmpty<ImportItemNamespace>>, ModuleResolveError> {
+        let mut categories = Vec::new();
         macro_rules! probe {
-            ($kind:expr, $local:expr, $selected:expr) => {
-                match self.exported_symbol_for_import(target, atom, access, $local, $selected)? {
-                    ExportLookup::Public(_) | ExportLookup::Private => return Ok(Some($kind)),
-                    ExportLookup::Missing => {}
+            ($category:expr, $local:expr, $selected:expr) => {
+                if matches!(
+                    self.exported_symbol_for_import(target, atom, access, $local, $selected)?,
+                    ExportLookup::Public(_)
+                ) && !categories.contains(&$category)
+                {
+                    categories.push($category);
                 }
             };
         }
 
-        probe!(SurfaceNameKind::Value, ModuleSymbols::decls, |scope| &scope
-            .selected_decls);
-        probe!(
-            SurfaceNameKind::Dimension,
-            ModuleSymbols::dimensions,
-            |scope| &scope.selected_dimensions
-        );
-        probe!(SurfaceNameKind::Unit, ModuleSymbols::units, |scope| &scope
-            .selected_units);
-        probe!(
-            SurfaceNameKind::Type,
-            ModuleSymbols::struct_types,
-            |scope| &scope.selected_struct_types
-        );
-        probe!(SurfaceNameKind::Index, ModuleSymbols::indexes, |scope| {
-            &scope.selected_indexes
+        probe!(ImportItemNamespace::Term, ModuleSymbols::decls, |scope| {
+            &scope.selected_decls
         });
         probe!(
-            SurfaceNameKind::Constructor,
+            ImportItemNamespace::Term,
             ModuleSymbols::constructors,
             |scope| &scope.selected_constructors
         );
+        probe!(
+            ImportItemNamespace::Type,
+            ModuleSymbols::struct_types,
+            |scope| &scope.selected_struct_types
+        );
+        probe!(
+            ImportItemNamespace::Dimension,
+            ModuleSymbols::dimensions,
+            |scope| &scope.selected_dimensions
+        );
+        probe!(ImportItemNamespace::Unit, ModuleSymbols::units, |scope| {
+            &scope.selected_units
+        });
+        probe!(
+            ImportItemNamespace::Index,
+            ModuleSymbols::indexes,
+            |scope| { &scope.selected_indexes }
+        );
 
-        Ok(None)
+        Ok(NonEmpty::try_from_vec(categories).ok())
     }
 
     fn resolve_symbol_path<Ns, S>(
@@ -2537,13 +2784,22 @@ fn seed_exclusive_names<Ns, S>(
     S: ModuleSymbolLookup<Ns>,
 {
     for (name, symbol) in symbols {
-        occupied.insert(
-            name.atom().clone(),
-            ExclusiveNameBinding {
+        occupied
+            .entry(name.atom().clone())
+            .and_modify(|binding| {
+                if binding.kind == ExclusiveNameKind::Constructor
+                    && kind != ExclusiveNameKind::Constructor
+                {
+                    *binding = ExclusiveNameBinding {
+                        kind,
+                        span: symbol.span(),
+                    };
+                }
+            })
+            .or_insert_with(|| ExclusiveNameBinding {
                 kind,
                 span: symbol.span(),
-            },
-        );
+            });
     }
 }
 
@@ -2582,9 +2838,14 @@ fn check_import_addition_exclusive_names(
                 ExclusiveNameKind::Index,
                 local.span,
             )?,
-            ImportAddition::ModuleAlias { .. }
-            | ImportAddition::Unit { .. }
-            | ImportAddition::Constructor { .. } => {}
+            ImportAddition::Constructor { local, .. } => register_import_exclusive_name(
+                owner,
+                occupied,
+                local.value.atom(),
+                ExclusiveNameKind::Constructor,
+                local.span,
+            )?,
+            ImportAddition::ModuleAlias { .. } | ImportAddition::Unit { .. } => {}
         }
     }
     Ok(())
@@ -2661,7 +2922,9 @@ fn register_import_exclusive_name(
     kind: ExclusiveNameKind,
     span: Span,
 ) -> Result<(), ModuleResolveError> {
-    if let Some(first) = occupied.get(atom) {
+    if let Some(first) = occupied.get(atom)
+        && (first.kind == kind || first.kind.conflicts_with(kind))
+    {
         return Err(ModuleResolveError::DuplicateImportName {
             owner: owner.clone(),
             namespace: "name",
@@ -2670,7 +2933,17 @@ fn register_import_exclusive_name(
             duplicate: span,
         });
     }
-    occupied.insert(atom.clone(), ExclusiveNameBinding { kind, span });
+    let should_replace_constructor = occupied
+        .get(atom)
+        .is_some_and(|binding| binding.kind == ExclusiveNameKind::Constructor)
+        && kind != ExclusiveNameKind::Constructor;
+    if should_replace_constructor {
+        occupied.insert(atom.clone(), ExclusiveNameBinding { kind, span });
+    } else {
+        occupied
+            .entry(atom.clone())
+            .or_insert(ExclusiveNameBinding { kind, span });
+    }
     Ok(())
 }
 
@@ -2793,6 +3066,13 @@ pub enum ModuleResolveError {
         owner: DagId,
         namespace: &'static str,
         name: String,
+    },
+    /// A selective import name exists, but not under the marked category.
+    #[error("in module `{owner}`, {mismatch}")]
+    WrongImportCategory {
+        owner: DagId,
+        mismatch: ImportItemCategoryMismatch,
+        span: Span,
     },
     /// A name exists, but in a semantic universe that is not valid here.
     #[error("in module `{owner}`, `{name}` is {actual}, not {expected}")]
@@ -2949,7 +3229,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub index Phase = { Burn, Coast };");
-        let main = desugared_source("import lib.{ Phase, Phase as P };");
+        let main = desugared_source("import lib.{ index Phase, index Phase as P };");
         let imports = imports(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -2982,11 +3262,67 @@ mod tests {
     }
 
     #[test]
+    fn exported_surface_uses_canonical_import_item_spellings() {
+        let owner = DagId::root_in_package("test", "main");
+        let file = desugared_source(
+            "pub const node JPY: Dimensionless = 1.0;\n\
+             pub base unit JPY: Dimensionless;\n\
+             pub type Student { Student }\n\
+             pub dim Information = Dimensionless;\n\
+             pub index Category = { A };",
+        );
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(owner.clone(), &file.declarations)
+            .unwrap();
+
+        let rendered = resolver
+            .exported_import_items(&owner)
+            .unwrap()
+            .iter()
+            .map(ExportedImportItem::render)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rendered,
+            [
+                "JPY",
+                "Student",
+                "type Student",
+                "dim Information",
+                "unit JPY",
+                "index Category",
+            ]
+        );
+    }
+
+    #[test]
+    fn local_value_constructor_name_collision_is_rejected_in_either_order() {
+        let owner = DagId::root_in_package("test", "main");
+        for source in [
+            "type Choice { Red }\nconst node Red: Dimensionless = 1.0;",
+            "const node Red: Dimensionless = 1.0;\ntype Choice { Red }",
+        ] {
+            let file = desugared_source(source);
+            let err =
+                ModuleSymbols::from_declarations(owner.clone(), &file.declarations).unwrap_err();
+            assert!(matches!(
+                err,
+                ModuleResolveError::DuplicateSymbol {
+                    owner: err_owner,
+                    namespace: "name",
+                    name,
+                    ..
+                } if err_owner == owner && name == "Red"
+            ));
+        }
+    }
+
+    #[test]
     fn unit_import_colliding_with_local_unit_is_rejected() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub base unit m: Dimensionless;");
-        let main = desugared_source("base unit m: Dimensionless;\nimport lib.{ m };");
+        let main = desugared_source("base unit m: Dimensionless;\nimport lib.{ unit m };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3042,6 +3378,47 @@ mod tests {
     }
 
     #[test]
+    fn imported_value_constructor_collisions_are_rejected_in_either_direction() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+
+        for (lib_source, main_source) in [
+            (
+                "pub type Foreign { Red }",
+                "const node Red: Dimensionless = 1.0;\nimport lib.{ Red };",
+            ),
+            (
+                "pub const node Red: Dimensionless = 1.0;",
+                "type Local { Red }\nimport lib.{ Red };",
+            ),
+        ] {
+            let lib = desugared_source(lib_source);
+            let main = desugared_source(main_source);
+            let (import_path, import_kind) = first_import(&main);
+            let mut resolver = ModuleResolver::default();
+            resolver
+                .add_module(lib_id.clone(), &lib.declarations)
+                .unwrap();
+            resolver
+                .add_module(main_id.clone(), &main.declarations)
+                .unwrap();
+
+            let err = resolver
+                .register_import(&main_id, import_path, import_kind, &lib_id)
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                ModuleResolveError::DuplicateImportName {
+                    owner,
+                    namespace: "name",
+                    name,
+                    ..
+                } if owner == main_id && name == "Red"
+            ));
+        }
+    }
+
+    #[test]
     fn inline_include_index_collision_is_rejected() {
         let main_id = DagId::root_in_package("test", "main");
         let first_id = main_id.child("first");
@@ -3086,7 +3463,7 @@ mod tests {
         let main_id = DagId::root_in_package("test", "main");
         let a = desugared_source("pub index AIndex = { Shared };");
         let z = desugared_source("pub index ZIndex = { Shared };");
-        let main = desugared_source("import z.{ ZIndex };\nimport a.{ AIndex };");
+        let main = desugared_source("import z.{ index ZIndex };\nimport a.{ index AIndex };");
         let imports = imports(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3122,7 +3499,7 @@ mod tests {
         let index_lib = desugared_source("pub index M = { A, B };");
         let main = desugared_source(
             "import type_lib.{ type M };
-             import index_lib.{ M };",
+             import index_lib.{ index M };",
         );
         let imports = imports(&main);
 
@@ -3254,6 +3631,7 @@ mod tests {
                 name,
                 expected: SurfaceNameKind::Constructor,
                 actual: SurfaceNameKind::Type,
+                ..
             } if owner == child_id && name == "TransferResult"
         ));
     }
@@ -3277,20 +3655,23 @@ mod tests {
         let err = resolver
             .register_import(&main_id, import_path, import_kind, &lib_id)
             .unwrap_err();
+        assert!(err.to_string().contains("did you mean `index M`?"));
 
         assert!(matches!(
             err,
-            ModuleResolveError::WrongUniverseName {
+            ModuleResolveError::WrongImportCategory {
                 owner,
-                name,
-                expected: SurfaceNameKind::Type,
-                actual: SurfaceNameKind::Index,
-            } if owner == lib_id && name == "M"
+                mismatch,
+                ..
+            } if owner == lib_id
+                && mismatch.name().as_str() == "M"
+                && mismatch.expected() == ImportItemNamespace::Type
+                && mismatch.alternatives().as_slice() == [ImportItemNamespace::Index]
         ));
     }
 
     #[test]
-    fn default_importing_type_reports_wrong_universe() {
+    fn bare_importing_type_reports_wrong_category() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type Foo { MkFoo }");
@@ -3308,15 +3689,52 @@ mod tests {
         let err = resolver
             .register_import(&main_id, import_path, import_kind, &lib_id)
             .unwrap_err();
+        assert!(err.to_string().contains("did you mean `type Foo`?"));
 
         assert!(matches!(
             err,
-            ModuleResolveError::WrongUniverseName {
+            ModuleResolveError::WrongImportCategory {
                 owner,
-                name,
-                expected: SurfaceNameKind::DefaultImportItem,
-                actual: SurfaceNameKind::Type,
-            } if owner == lib_id && name == "Foo"
+                mismatch,
+                ..
+            } if owner == lib_id
+                && mismatch.name().as_str() == "Foo"
+                && mismatch.expected() == ImportItemNamespace::Term
+                && mismatch.alternatives().as_slice() == [ImportItemNamespace::Type]
+        ));
+    }
+
+    #[test]
+    fn wrong_import_category_lists_all_legal_same_name_alternatives() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source(
+            "pub const node JPY: Dimensionless = 1.0;\n\
+             pub base unit JPY: Dimensionless;",
+        );
+        let main = desugared_source("import lib.{ dim JPY };");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
+        let err = resolver
+            .register_import(&main_id, import_path, import_kind, &lib_id)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("did you mean `JPY` or `unit JPY`?")
+        );
+        assert!(matches!(
+            err,
+            ModuleResolveError::WrongImportCategory { mismatch, .. }
+                if mismatch.alternatives().as_slice()
+                    == [ImportItemNamespace::Term, ImportItemNamespace::Unit]
         ));
     }
 
@@ -3736,8 +4154,8 @@ mod tests {
         let middle_id = DagId::root_in_package("test", "middle");
         let main_id = DagId::root_in_package("test", "main");
         let leaf = desugared_source("pub dim Acceleration = Length / Time^2;");
-        let middle = desugared_source("import leaf.{ pub Acceleration };");
-        let main = desugared_source("import middle.{ Acceleration };");
+        let middle = desugared_source("import leaf.{ pub dim Acceleration };");
+        let main = desugared_source("import middle.{ dim Acceleration };");
         let (middle_import_path, middle_import_kind) = first_import(&middle);
         let (main_import_path, main_import_kind) = first_import(&main);
 
@@ -3757,6 +4175,15 @@ mod tests {
         resolver
             .register_import(&main_id, main_import_path, main_import_kind, &middle_id)
             .unwrap();
+        assert_eq!(
+            resolver
+                .exported_import_items(&middle_id)
+                .unwrap()
+                .iter()
+                .map(ExportedImportItem::render)
+                .collect::<Vec<_>>(),
+            ["dim Acceleration"]
+        );
 
         let resolved_name = resolver
             .resolve_dimension_path(&main_id, &path(&["Acceleration"]))

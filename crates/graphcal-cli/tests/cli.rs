@@ -575,9 +575,9 @@ fn package_instance_identities_distinguish_aliases_and_revisions() {
             units_repo.display(),
             units_repo.display()
         ),
-        "import units_a.lib.{ Money as MoneyA, price as price_a };\n\
+        "import units_a.lib.{ dim Money as MoneyA, price as price_a };\n\
          import units_b.lib.{ price as price_b };\n\
-         import units_v2.lib.{ Money as MoneyV2, price as price_v2 };\n\
+         import units_v2.lib.{ dim Money as MoneyV2, price as price_v2 };\n\
          node shared_sum: MoneyA = @price_a + @price_b;\n\
          node keep_v2: MoneyV2 = @price_v2;\n",
     );
@@ -611,7 +611,7 @@ fn package_instance_identities_distinguish_aliases_and_revisions() {
     let bad_main = project.join("src/mission/bad_money.gcl");
     std::fs::write(
         &bad_main,
-        "import units_a.lib.{ Money as MoneyA, price as price_a };\n\
+        "import units_a.lib.{ dim Money as MoneyA, price as price_a };\n\
          import units_v2.lib.{ price as price_v2 };\n\
          node bad_sum: MoneyA = @price_a + @price_v2;\n",
     )
@@ -2140,7 +2140,7 @@ fn eval_assertions_compile_error_exit_code() {
 }
 #[test]
 fn eval_explicit_index_import() {
-    // Bug 3: `import "./lib.gcl" { Color }` should import the Color index explicitly.
+    // Bug 3: `import lib.lib.{ index Color };` imports the Color index explicitly.
     let output = graphcal_bin()
         .args([
             "eval",

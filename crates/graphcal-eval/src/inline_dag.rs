@@ -20,7 +20,9 @@ use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type};
 
-use crate::import_surface::{ImportItemPresence, file_import_item_presence};
+use crate::import_surface::{
+    ImportItemPresence, file_import_item_presence, import_item_not_found_error,
+};
 
 /// Parent-file value declarations externally nameable by an inline DAG
 /// self-import classifier. Runtime entries include exported nodes and param
@@ -47,20 +49,20 @@ impl ParentValueDecls {
 /// `body_resolved_imports` to `parent_dag_id` — i.e. the loader resolved
 /// the path back to the dag's own enclosing parent DAG. For each
 /// self-import, every brace-list item is classified in the namespace it
-/// requested (`type` or default) against the parent AST.
+/// requested against the parent AST.
 ///
-/// - `type` items are visibility-checked as struct/tagged-union type names
-///   only. They do not import same-named constructors.
-/// - Default `const` items are added to `ImportedValueNames::const_names`, to
+/// - Marked `type`, `dim`, `unit`, and `index` items are visibility-checked in
+///   exactly that namespace. A type item does not import a same-named constructor.
+/// - Bare term `const` items are added to `ImportedValueNames::const_names`, to
 ///   `imported_decl_types` with the parent's declared type, and to
 ///   `imported_value_sources` so evaluation can copy the concrete value
 ///   from the caller or the owning dependency.
-/// - Default `param` / non-const `node` items are rejected with
+/// - Bare term `param` / non-const `node` items are rejected with
 ///   `ImportRuntimeItem` — runtime values must be passed via the dag's own
 ///   params.
-/// - Other default compile-time items (dim/unit/index/constructor/dag/assert)
-///   require no value resolver registration here; module-aware lowering uses
-///   the loader-built import scope for those namespaces.
+/// - Other compile-time items require no value resolver registration here;
+///   module-aware lowering uses the loader-built import scope for their typed
+///   namespaces.
 /// - Items that exist in the requested namespace but are not `pub` are
 ///   rejected with `ImportPrivateItem`, identical to the cross-file path.
 /// - Names not found in the requested namespace are rejected with
@@ -120,12 +122,14 @@ pub fn preprocess_dag_body_self_imports(
                     match file_import_item_presence(parent_ast, orig_name.as_str(), item.namespace)
                     {
                         ImportItemPresence::Missing => {
-                            return Err(GraphcalError::ImportNameNotFound {
-                                name: orig_name.to_string(),
-                                file_path: import_decl.path.display_path(),
-                                src: src.clone(),
-                                span: span.into(),
-                            });
+                            return Err(import_item_not_found_error(
+                                parent_ast,
+                                orig_name,
+                                item.namespace,
+                                &import_decl.path.display_path(),
+                                src,
+                                span,
+                            ));
                         }
                         ImportItemPresence::Private => {
                             return Err(GraphcalError::ImportPrivateItem {
@@ -139,12 +143,15 @@ pub fn preprocess_dag_body_self_imports(
                     }
 
                     match item.namespace {
-                        ImportItemNamespace::Type => {
-                            // Type imports affect only the type namespace. A
-                            // same-named constructor must be imported as a
-                            // separate default item.
+                        ImportItemNamespace::Type
+                        | ImportItemNamespace::Dimension
+                        | ImportItemNamespace::Unit
+                        | ImportItemNamespace::Index => {
+                            // Type-system imports are registered by the project
+                            // pipeline. A same-named constructor is a separate
+                            // bare term item.
                         }
-                        ImportItemNamespace::Default => {
+                        ImportItemNamespace::Term => {
                             match parent_values.external_const_type(orig_name.as_str()) {
                                 Some(dt) => {
                                     let scoped = ScopedName::local(local_name);

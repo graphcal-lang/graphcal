@@ -12,7 +12,7 @@ impl Parser<'_> {
     /// Parse an import declaration:
     ///   `import nasa.rocket;`
     ///   `import nasa.rocket as nr;`
-    ///   `import nasa.rocket.{Orbit, compute_thrust as ct};`
+    ///   `import nasa.rocket.{type Orbit, compute_thrust as ct};`
     pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
@@ -263,7 +263,7 @@ impl Parser<'_> {
     fn parse_import_tail(
         &mut self,
         hint: &str,
-        allow_type_marker: bool,
+        allow_category_marker: bool,
     ) -> Result<(ImportKind, crate::syntax::span::Span), ParseError> {
         match self.lexer.peek() {
             Some(Token::Dot) => {
@@ -281,7 +281,7 @@ impl Parser<'_> {
                         span,
                     ));
                 }
-                let names = self.parse_import_brace_list(allow_type_marker)?;
+                let names = self.parse_import_brace_list(allow_category_marker)?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 Ok((ImportKind::Selective(names), end_span))
             }
@@ -307,7 +307,7 @@ impl Parser<'_> {
     /// Parse the `{ X, Y as Z, ... }` body of a brace-list selector.
     fn parse_import_brace_list(
         &mut self,
-        allow_type_marker: bool,
+        allow_category_marker: bool,
     ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
@@ -334,19 +334,37 @@ impl Parser<'_> {
                 false
             };
 
-            let namespace = if p.lexer.peek() == Some(&Token::Type) {
-                let (_, type_span) = p.advance()?;
-                if !allow_type_marker {
-                    return Err(p.unexpected_token(
-                        "an identifier (`type` import items are only allowed in `import`, not `include`)",
-                        "type",
-                        type_span,
-                    ));
+            let (namespace, marker_span) = match p.lexer.peek() {
+                Some(Token::Type) => {
+                    let (_, span) = p.advance()?;
+                    (crate::syntax::ast::ImportItemNamespace::Type, Some(span))
                 }
-                crate::syntax::ast::ImportItemNamespace::Type
-            } else {
-                crate::syntax::ast::ImportItemNamespace::Default
+                Some(Token::Dimension) => {
+                    let (_, span) = p.advance()?;
+                    (
+                        crate::syntax::ast::ImportItemNamespace::Dimension,
+                        Some(span),
+                    )
+                }
+                Some(Token::Unit) => {
+                    let (_, span) = p.advance()?;
+                    (crate::syntax::ast::ImportItemNamespace::Unit, Some(span))
+                }
+                Some(Token::Index) => {
+                    let (_, span) = p.advance()?;
+                    (crate::syntax::ast::ImportItemNamespace::Index, Some(span))
+                }
+                _ => (crate::syntax::ast::ImportItemNamespace::Term, None),
             };
+            if !allow_category_marker
+                && let (Some(marker), Some(span)) = (namespace.marker(), marker_span)
+            {
+                return Err(p.unexpected_token(
+                    "an identifier (category markers are only allowed in `import`, not `include`)",
+                    marker,
+                    span,
+                ));
+            }
 
             // Accept any identifier (imports can be any casing).
             let name = p.parse_any_ident()?;

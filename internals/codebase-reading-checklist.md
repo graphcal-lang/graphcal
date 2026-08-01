@@ -27,6 +27,7 @@ All Rust files in the workspace, in library-consumer order: every `use`d file ap
 Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 
 - [ ] `crates/graphcal-compiler/src/syntax/names.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/import_category.rs`
 - [ ] `crates/graphcal-compiler/src/stack.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/ast/plot_props.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/decl_name.rs`

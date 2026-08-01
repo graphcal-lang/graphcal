@@ -248,6 +248,16 @@ fn module_resolve_compile_error(
             src: src.clone(),
             span: Span::new(0, 0).into(),
         }),
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError::WrongImportCategory {
+            owner,
+            mismatch,
+            span,
+        } => CompileError::Eval(GraphcalError::ImportCategoryMismatch {
+            file_path: owner.to_string(),
+            mismatch,
+            src: src.clone(),
+            span: span.into(),
+        }),
         graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateSymbol {
             duplicate,
             ..
@@ -1383,7 +1393,7 @@ fn replace_dynamic_units_with_resolved_scales(
     >,
 ) {
     use graphcal_compiler::registry::types::UnitScale;
-    for name in &names.default {
+    for name in names.units() {
         let unit_ref = graphcal_compiler::syntax::dimension::UnitRef::local(name.clone());
         let Some(resolved) = resolved_scales.get(&unit_ref) else {
             continue;

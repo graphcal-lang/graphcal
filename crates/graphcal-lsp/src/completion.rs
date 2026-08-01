@@ -3,8 +3,8 @@
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::cursor_context::{
-    CompletionContext, CoordinateIndexCompletionContext, determine_completion_context,
-    determine_coordinate_index_completion_context,
+    CompletionContext, CoordinateIndexCompletionContext, ImportItemCompletionContext,
+    determine_completion_context, determine_coordinate_index_completion_context,
 };
 use crate::server::AnalysisResult;
 use crate::symbol_table::{DefinitionInfo, SymbolCategory, SymbolKey};
@@ -61,6 +61,7 @@ pub fn completion(
 
     let context = determine_completion_context(source, offset);
     let items = match context {
+        CompletionContext::ImportItem(context) => complete_import_items(analysis, &context),
         CompletionContext::GraphRef => complete_graph_refs(analysis, offset),
         CompletionContext::TypeAnnotation => complete_types(analysis),
         CompletionContext::ConversionTarget => complete_conversion_targets(analysis),
@@ -69,6 +70,60 @@ pub fn completion(
     };
 
     if items.is_empty() { None } else { Some(items) }
+}
+
+/// Completion kind for one exported import-surface category.
+const fn exported_import_item_kind(
+    kind: graphcal_compiler::syntax::module_resolve::ExportedImportItemKind,
+) -> CompletionItemKind {
+    use graphcal_compiler::syntax::module_resolve::{DeclSymbolKind, ExportedImportItemKind};
+
+    match kind {
+        ExportedImportItemKind::Decl(DeclSymbolKind::Const) => CompletionItemKind::CONSTANT,
+        ExportedImportItemKind::Decl(DeclSymbolKind::Dag) => CompletionItemKind::FUNCTION,
+        ExportedImportItemKind::Decl(DeclSymbolKind::Assert) => CompletionItemKind::EVENT,
+        ExportedImportItemKind::Decl(
+            DeclSymbolKind::Param | DeclSymbolKind::Node | DeclSymbolKind::Plot,
+        ) => CompletionItemKind::VARIABLE,
+        ExportedImportItemKind::Decl(DeclSymbolKind::Figure | DeclSymbolKind::Layer) => {
+            CompletionItemKind::MODULE
+        }
+        ExportedImportItemKind::Constructor => CompletionItemKind::CONSTRUCTOR,
+        ExportedImportItemKind::Dimension => CompletionItemKind::CLASS,
+        ExportedImportItemKind::Unit => CompletionItemKind::UNIT,
+        ExportedImportItemKind::Type => CompletionItemKind::STRUCT,
+        ExportedImportItemKind::Index => CompletionItemKind::ENUM,
+    }
+}
+
+/// Complete a selective import with canonical marker-bearing insert text.
+fn complete_import_items(
+    analysis: &AnalysisResult,
+    context: &ImportItemCompletionContext,
+) -> Vec<CompletionItem> {
+    analysis
+        .import_surfaces
+        .get(&context.module_path)
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            context
+                .namespace
+                .is_none_or(|namespace| item.kind.namespace() == namespace)
+        })
+        .map(|item| {
+            let insert = context
+                .namespace
+                .map_or_else(|| item.render(), |_| item.name.to_string());
+            CompletionItem {
+                label: insert.clone(),
+                kind: Some(exported_import_item_kind(item.kind)),
+                detail: Some(item.kind.namespace().to_string()),
+                insert_text: Some(insert),
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 
 /// Build completion items for definitions whose category maps to a kind
@@ -324,6 +379,62 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["points"]
         );
+    }
+
+    #[test]
+    fn selective_import_completion_inserts_and_filters_category_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("src/app/lib.gcl"),
+            "pub const node JPY: Dimensionless = 1.0;\n\
+             pub base unit JPY: Dimensionless;\n\
+             pub dim Information = Dimensionless;\n\
+             pub type Student { Student }\n\
+             pub index Category = { A };\n",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/app/main.gcl");
+        let analyzed_source = "import app.lib.{ JPY };\n";
+        std::fs::write(&main_path, analyzed_source).unwrap();
+        let uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, analyzed_source);
+
+        let unmarked = "import app.lib.{ ";
+        let labels = completion(&analysis, unmarked, unmarked.len())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+        for expected in [
+            "JPY",
+            "Student",
+            "type Student",
+            "dim Information",
+            "unit JPY",
+            "index Category",
+        ] {
+            assert!(
+                labels.iter().any(|label| label == expected),
+                "missing canonical import completion `{expected}`: {labels:?}"
+            );
+        }
+
+        let marked = "import app.lib.{ unit ";
+        let items = completion(&analysis, marked, marked.len()).unwrap_or_default();
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            ["JPY"]
+        );
+        assert_eq!(items[0].insert_text.as_deref(), Some("JPY"));
     }
 
     #[test]

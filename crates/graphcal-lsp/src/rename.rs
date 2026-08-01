@@ -237,6 +237,7 @@ mod tests {
             source: Arc::new(source.to_string()),
             symbol_table,
             imported_definitions: HashMap::new(),
+            import_surfaces: HashMap::new(),
             diagnostics: Arc::new(HashMap::new()),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),

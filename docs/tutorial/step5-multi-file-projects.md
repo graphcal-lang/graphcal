@@ -139,18 +139,20 @@ node y: Length = @p.helper(...).result;
 
 ## What Gets Imported
 
-`import` brings only **compile-time** names. To use a runtime value
-(like a `param` or non-`const` `node`) from another file, *include*
-the producing DAG instead of importing the value (see
+`import` brings only **compile-time** names. Selective dimensions, units,
+types, and indexes use the explicit `dim`, `unit`, `type`, and `index`
+markers; bare items select terms such as constants, DAGs, assertions, and
+constructors. To use a runtime value (like a `param` or non-`const` `node`)
+from another file, *include* the producing DAG instead of importing the value (see
 [Multi-File Projects](../language/multi-file.md#the-include-form)).
 
 | Declaration kind | How to import                       | How to reference |
 |------------------|-------------------------------------|------------------|
 | `const node`     | `import package.file.{name}`                | `@name`          |
-| `dim`            | `import package.file.{DimName}`             | `DimName`        |
-| `unit`           | `import package.file.{unit_name}`           | `unit_name`      |
+| `dim`            | `import package.file.{dim DimName}`         | `DimName`        |
+| `unit`           | `import package.file.{unit unit_name}`      | `unit_name`      |
 | `type`           | `import package.file.{type TypeName}`       | `TypeName`       |
-| `index`          | `import package.file.{IndexName}`           | `IndexName`      |
+| `index`          | `import package.file.{index IndexName}`     | `IndexName`      |
 | `dag`            | `import package.file.{dag_name}`            | `include`-d, or called as `@dag_name(...).out` |
 | `assert`         | `import package.file.{assert_name}`         | `#[assumes(assert_name)]` |
 

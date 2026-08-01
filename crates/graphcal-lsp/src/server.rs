@@ -76,6 +76,12 @@ pub(crate) struct AnalysisResult {
     pub(crate) symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
     pub(crate) imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
+    /// Public symbols of each loader-resolved import path, categorized by the
+    /// exact marker required in a selective import item.
+    pub(crate) import_surfaces: HashMap<
+        graphcal_compiler::syntax::non_empty::NonEmpty<String>,
+        Vec<graphcal_compiler::syntax::module_resolve::ExportedImportItem>,
+    >,
     /// Diagnostics to publish, grouped by the URI they belong to. The active
     /// document's URI is always present (with an empty Vec when clean) so a
     /// previously-published diagnostic can be cleared. Shared via `Arc` so
@@ -318,6 +324,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
             .field("imported_defs", &self.imported_definitions.len())
+            .field("import_surfaces", &self.import_surfaces.len())
             .field(
                 "diagnostics_count",
                 &self.diagnostics.values().map(Vec::len).sum::<usize>(),
@@ -832,6 +839,7 @@ fn run_analysis_with_cancellation(
                 source: Arc::new(text.to_string()),
                 symbol_table: parsed_buffer_table.unwrap_or_default(),
                 imported_definitions: HashMap::new(),
+                import_surfaces: HashMap::new(),
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
@@ -901,6 +909,7 @@ fn run_analysis_with_cancellation(
                 source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
+                import_surfaces: collect_import_surfaces(&project, &module_resolver, cancellation)?,
                 diagnostics: Arc::new(diagnostics),
                 eval_values,
                 fn_signatures,
@@ -925,6 +934,7 @@ fn run_analysis_with_cancellation(
                 source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
+                import_surfaces: collect_import_surfaces(&project, &module_resolver, cancellation)?,
                 diagnostics: Arc::new(diagnostics),
                 eval_values: HashMap::new(),
                 fn_signatures: build_fn_signatures(),
@@ -1463,6 +1473,42 @@ fn format_tuple_keyed_entries(
     )
 }
 
+/// Collect canonical export surfaces for every import path in the root file.
+fn collect_import_surfaces(
+    project: &graphcal_eval::loader::LoadedProject,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    cancellation: &CancellationToken,
+) -> std::result::Result<
+    HashMap<
+        graphcal_compiler::syntax::non_empty::NonEmpty<String>,
+        Vec<graphcal_compiler::syntax::module_resolve::ExportedImportItem>,
+    >,
+    Cancelled,
+> {
+    cancellation.checkpoint()?;
+    let mut surfaces = HashMap::new();
+    let Some(root_file) = project.files.get(&project.root) else {
+        return Ok(surfaces);
+    };
+
+    for (_, import, dag_id) in root_file.imports_with_dag_ids() {
+        cancellation.checkpoint()?;
+        let Ok(target) = project.resolved_module_target(&import.path, dag_id) else {
+            continue;
+        };
+        let Ok(items) = module_resolver.exported_import_items(target.target()) else {
+            continue;
+        };
+        let path = import
+            .path
+            .segments
+            .clone()
+            .map(|segment| segment.name.to_string());
+        surfaces.insert(path, items);
+    }
+    Ok(surfaces)
+}
+
 /// Collect imported definitions from a loaded project.
 ///
 /// For each `import` and `include` declaration in the root file, uses the
@@ -1675,14 +1721,36 @@ const fn selective_import_allows_category(
     category: SymbolCategory,
 ) -> bool {
     match namespace {
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Term => matches!(
+            category,
+            SymbolCategory::Param
+                | SymbolCategory::Node
+                | SymbolCategory::Const
+                | SymbolCategory::Constructor
+                | SymbolCategory::Field
+                | SymbolCategory::Assert
+                | SymbolCategory::Plot
+                | SymbolCategory::Figure
+                | SymbolCategory::Layer
+                | SymbolCategory::Dag
+                | SymbolCategory::LocalVar
+        ),
         graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Type => matches!(
             category,
             SymbolCategory::StructType | SymbolCategory::Field | SymbolCategory::GenericParam
         ),
-        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Default => !matches!(
-            category,
-            SymbolCategory::StructType | SymbolCategory::GenericParam
-        ),
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Dimension => {
+            matches!(category, SymbolCategory::Dimension)
+        }
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Unit => {
+            matches!(category, SymbolCategory::Unit)
+        }
+        graphcal_compiler::desugar::desugared_ast::ImportItemNamespace::Index => {
+            matches!(
+                category,
+                SymbolCategory::Index | SymbolCategory::IndexVariant
+            )
+        }
     }
 }
 
@@ -2946,7 +3014,7 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "import lib.lib.{ Color };\n\
+                "import lib.lib.{ index Color };\n\
                  param favorite: Dimensionless[Color] = {\n    \
                      Color.Red: 1.0,\n    \
                      Color.Green: 2.0,\n    \
@@ -3045,7 +3113,7 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "import lib.lib.{ Color as Palette };\n\
+                "import lib.lib.{ index Color as Palette };\n\
                  param favorite: Dimensionless[Palette] = {\n    \
                      Palette.Red: 1.0,\n    \
                      Palette.Green: 2.0,\n    \
@@ -3120,6 +3188,7 @@ node bad: Mass = mass + length;
             source: Arc::new(String::new()),
             symbol_table: SymbolTable::default(),
             imported_definitions: HashMap::new(),
+            import_surfaces: HashMap::new(),
             diagnostics: Arc::new(diags),
             eval_values: HashMap::new(),
             fn_signatures: build_fn_signatures(),

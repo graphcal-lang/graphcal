@@ -8,9 +8,15 @@
 use graphcal_compiler::desugar::desugared_ast::{
     DeclKind, Declaration, File, TypeDecl, TypeDeclBody,
 };
+use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
+use graphcal_compiler::syntax::names::NameAtom;
+use graphcal_compiler::syntax::span::Span;
+use miette::NamedSource;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProjectDeclKind {
@@ -189,7 +195,7 @@ fn decl_import_item_presence(
                 ImportItemPresence::Private
             }
         }),
-        DeclKind::Param(param) => (namespace == ImportItemNamespace::Default
+        DeclKind::Param(param) => (namespace == ImportItemNamespace::Term
             && param.name.value.as_str() == name)
             .then_some(ImportItemPresence::InputPort),
         DeclKind::Node(_)
@@ -216,7 +222,7 @@ fn decl_import_item_presence(
             }),
         DeclKind::Import(d) => selective_reexport_matches(&d.kind, name, namespace)
             .then_some(ImportItemPresence::ExplicitExport),
-        DeclKind::Include(d) => (namespace == ImportItemNamespace::Default
+        DeclKind::Include(d) => (namespace == ImportItemNamespace::Term
             && selective_include_reexport_matches(&d.kind, name))
         .then_some(ImportItemPresence::ExplicitExport),
         DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
@@ -229,7 +235,7 @@ fn type_decl_import_item_matches(
     namespace: ImportItemNamespace,
 ) -> bool {
     (namespace == ImportItemNamespace::Type && type_decl.name.value.as_str() == name)
-        || (namespace == ImportItemNamespace::Default
+        || (namespace == ImportItemNamespace::Term
             && match &type_decl.body {
                 TypeDeclBody::Required => false,
                 TypeDeclBody::Constructors(members) => members
@@ -263,6 +269,48 @@ fn selective_include_reexport_matches(
     )
 }
 
+/// Import categories in which `name` exists, in canonical marker order.
+pub fn file_import_item_namespaces(
+    file: &File,
+    name: &str,
+) -> Option<graphcal_compiler::syntax::non_empty::NonEmpty<ImportItemNamespace>> {
+    let namespaces = [
+        ImportItemNamespace::Term,
+        ImportItemNamespace::Type,
+        ImportItemNamespace::Dimension,
+        ImportItemNamespace::Unit,
+        ImportItemNamespace::Index,
+    ]
+    .into_iter()
+    .filter(|namespace| file_import_item_presence(file, name, *namespace).is_present())
+    .collect();
+    graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(namespaces).ok()
+}
+
+pub fn import_item_not_found_error(
+    file: &File,
+    name: &NameAtom,
+    expected: ImportItemNamespace,
+    file_path: &str,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    file_import_item_namespaces(file, name.as_str()).map_or_else(
+        || GraphcalError::ImportNameNotFound {
+            name: name.to_string(),
+            file_path: file_path.to_string(),
+            src: src.clone(),
+            span: span.into(),
+        },
+        |alternatives| GraphcalError::ImportCategoryMismatch {
+            file_path: file_path.to_string(),
+            mismatch: ImportItemCategoryMismatch::new(name.clone(), expected, alternatives),
+            src: src.clone(),
+            span: span.into(),
+        },
+    )
+}
+
 pub fn file_has_import_item(file: &File, name: &str, namespace: ImportItemNamespace) -> bool {
     file_import_item_presence(file, name, namespace).is_present()
 }
@@ -273,8 +321,21 @@ pub fn file_exposes_import_item(file: &File, name: &str, namespace: ImportItemNa
 
 const fn import_namespace_matches(kind: ProjectDeclKind, namespace: ImportItemNamespace) -> bool {
     match namespace {
+        ImportItemNamespace::Term => matches!(
+            kind,
+            ProjectDeclKind::Param
+                | ProjectDeclKind::Node
+                | ProjectDeclKind::Const
+                | ProjectDeclKind::Assert
+                | ProjectDeclKind::Plot
+                | ProjectDeclKind::Figure
+                | ProjectDeclKind::Layer
+                | ProjectDeclKind::Dag
+        ),
         ImportItemNamespace::Type => matches!(kind, ProjectDeclKind::Type),
-        ImportItemNamespace::Default => !matches!(kind, ProjectDeclKind::Type),
+        ImportItemNamespace::Dimension => matches!(kind, ProjectDeclKind::Dimension),
+        ImportItemNamespace::Unit => matches!(kind, ProjectDeclKind::Unit),
+        ImportItemNamespace::Index => matches!(kind, ProjectDeclKind::Index),
     }
 }
 
@@ -286,6 +347,28 @@ mod tests {
     fn parse(source: &str) -> File {
         let parsed = Parser::new(source).parse_file().expect("source parses");
         graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(parsed)
+    }
+
+    #[test]
+    fn import_item_namespaces_preserve_legal_same_name_categories() {
+        let file = parse(
+            "pub const node JPY: Dimensionless = 1.0;\n\
+             pub base unit JPY: Dimensionless;\n\
+             pub type Student { Student }\n",
+        );
+
+        assert_eq!(
+            file_import_item_namespaces(&file, "JPY")
+                .expect("JPY categories")
+                .as_slice(),
+            &[ImportItemNamespace::Term, ImportItemNamespace::Unit]
+        );
+        assert_eq!(
+            file_import_item_namespaces(&file, "Student")
+                .expect("Student categories")
+                .as_slice(),
+            &[ImportItemNamespace::Term, ImportItemNamespace::Type]
+        );
     }
 
     #[test]
@@ -310,15 +393,15 @@ mod tests {
         assert!(!surface.is_externally_nameable(&helper));
 
         assert_eq!(
-            file_import_item_presence(&file, "input", ImportItemNamespace::Default),
+            file_import_item_presence(&file, "input", ImportItemNamespace::Term),
             ImportItemPresence::InputPort
         );
         assert_eq!(
-            file_import_item_presence(&file, "output", ImportItemNamespace::Default),
+            file_import_item_presence(&file, "output", ImportItemNamespace::Term),
             ImportItemPresence::ExplicitExport
         );
         assert_eq!(
-            file_import_item_presence(&file, "helper", ImportItemNamespace::Default),
+            file_import_item_presence(&file, "helper", ImportItemNamespace::Term),
             ImportItemPresence::Private
         );
     }

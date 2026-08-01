@@ -279,7 +279,7 @@ pub struct LayerDecl<P: Phase = Raw> {
 ///
 /// `import nasa.rocket;` — brings the leaf module into scope.
 /// `import nasa.rocket as nr;` — brings the leaf module under an alias.
-/// `import nasa.rocket.{Orbit, compute_thrust};` — brings only the listed names.
+/// `import nasa.rocket.{type Orbit, compute_thrust};` — brings only the listed names.
 ///
 /// No param bindings — for DAG instantiation with param bindings, use `include`.
 #[derive(Debug, Clone)]

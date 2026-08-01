@@ -1,5 +1,5 @@
 import lib.lib as lib;
-import lib.lib.{ Region };
+import lib.lib.{ index Region };
 
 param dist: Length[Region] = {
     Region.A: 1.0 m,

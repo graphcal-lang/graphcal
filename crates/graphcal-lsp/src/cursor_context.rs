@@ -16,8 +16,19 @@ pub struct FnCallContext {
     pub active_param: usize,
 }
 
+/// Cursor inside one selective-import brace-list item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportItemCompletionContext {
+    /// Structured module path preceding `.{`.
+    pub module_path: graphcal_compiler::syntax::non_empty::NonEmpty<String>,
+    /// Explicit marker already typed for the current item, if any.
+    pub namespace: Option<graphcal_compiler::syntax::ast::ImportItemNamespace>,
+}
+
 /// The broad completion context at the cursor position.
 pub enum CompletionContext {
+    /// Inside `import module.{ ... }`.
+    ImportItem(ImportItemCompletionContext),
     /// After `@` — complete param and node names.
     GraphRef,
     /// After `:` in a declaration context — complete type names.
@@ -234,9 +245,112 @@ fn is_in_table_index_list(tokens: &[(Token, Span)], idx: usize) -> bool {
     false
 }
 
+/// Detect a cursor in a selective import and recover its module path and
+/// current category marker without requiring a complete parse.
+fn selective_import_completion_context(
+    source: &str,
+    offset: usize,
+    tokens: &[(Token, Span)],
+) -> Option<ImportItemCompletionContext> {
+    let end = find_token_before(tokens, offset, Boundary::Exclusive)?;
+    let mut brace_depth = 0_usize;
+    let open = (0..=end).rev().find(|position| match tokens[*position].0 {
+        Token::RBrace => {
+            brace_depth += 1;
+            false
+        }
+        Token::LBrace | Token::Semicolon if brace_depth == 0 => true,
+        Token::LBrace => {
+            brace_depth -= 1;
+            false
+        }
+        _ => false,
+    })?;
+    if tokens[open].0 != Token::LBrace || open < 3 || tokens[open - 1].0 != Token::Dot {
+        return None;
+    }
+
+    let mut reversed_segments = Vec::new();
+    let mut position = open - 2;
+    loop {
+        let (token, span) = &tokens[position];
+        if !token.is_identifier() {
+            return None;
+        }
+        reversed_segments.push(source[span.offset()..span.offset() + span.len()].to_string());
+        if position == 0 {
+            return None;
+        }
+        match tokens[position - 1].0 {
+            Token::Import => break,
+            Token::Dot if position >= 2 => position -= 2,
+            _ => return None,
+        }
+    }
+    reversed_segments.reverse();
+    let module_path =
+        graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(reversed_segments).ok()?;
+
+    let mut item_start = open + 1;
+    let mut nested_depth = 0_usize;
+    for (position, (token, _)) in tokens.iter().enumerate().take(end + 1).skip(open + 1) {
+        match token {
+            Token::LParen | Token::LBracket | Token::LBrace => nested_depth += 1,
+            Token::RParen | Token::RBracket | Token::RBrace if nested_depth > 0 => {
+                nested_depth -= 1;
+            }
+            Token::Comma if nested_depth == 0 => item_start = position + 1,
+            _ => {}
+        }
+    }
+
+    let namespace = if item_start <= end {
+        let mut attribute_depth = 0_usize;
+        tokens[item_start..=end]
+            .iter()
+            .find_map(|(token, _)| match token {
+                Token::LBracket => {
+                    attribute_depth += 1;
+                    None
+                }
+                Token::RBracket if attribute_depth > 0 => {
+                    attribute_depth -= 1;
+                    None
+                }
+                _ if attribute_depth > 0 => None,
+                Token::Type => Some(Some(
+                    graphcal_compiler::syntax::ast::ImportItemNamespace::Type,
+                )),
+                Token::Dimension => Some(Some(
+                    graphcal_compiler::syntax::ast::ImportItemNamespace::Dimension,
+                )),
+                Token::Unit => Some(Some(
+                    graphcal_compiler::syntax::ast::ImportItemNamespace::Unit,
+                )),
+                Token::Index => Some(Some(
+                    graphcal_compiler::syntax::ast::ImportItemNamespace::Index,
+                )),
+                token if token.is_identifier() => Some(None),
+                _ => None,
+            })
+            .flatten()
+    } else {
+        None
+    };
+
+    Some(ImportItemCompletionContext {
+        module_path,
+        namespace,
+    })
+}
+
 /// Determine the completion context at the given cursor offset.
 pub fn determine_completion_context(source: &str, offset: usize) -> CompletionContext {
     let tokens = tokenize(source);
+
+    if let Some(context) = selective_import_completion_context(source, offset, &tokens) {
+        return CompletionContext::ImportItem(context);
+    }
 
     if tokens.is_empty() {
         return CompletionContext::TopLevel;
@@ -294,6 +408,38 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selective_import_completion_recovers_path_and_category_marker() {
+        for (source, expected) in [
+            ("import finance.units.{ ", None),
+            (
+                "import finance.units.{ unit ",
+                Some(graphcal_compiler::syntax::ast::ImportItemNamespace::Unit),
+            ),
+            (
+                "import finance.units.{ JPY, index ",
+                Some(graphcal_compiler::syntax::ast::ImportItemNamespace::Index),
+            ),
+        ] {
+            let CompletionContext::ImportItem(context) =
+                determine_completion_context(source, source.len())
+            else {
+                panic!("expected import completion context for `{source}`");
+            };
+            assert_eq!(
+                context.module_path.as_slice(),
+                &["finance".to_string(), "units".to_string()]
+            );
+            assert_eq!(context.namespace, expected);
+        }
+
+        let include = "include finance.units().{ ";
+        assert!(!matches!(
+            determine_completion_context(include, include.len()),
+            CompletionContext::ImportItem(_)
+        ));
+    }
 
     #[test]
     fn coordinate_index_completion_positions_are_contextual() {
