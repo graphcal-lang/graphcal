@@ -154,6 +154,41 @@ param value:Matrix<2,3> =Matrix<2,3>(value:1.0);\n";
 }
 
 #[test]
+fn short_constructor_payload_stays_inline_without_magic_trailing_comma() {
+    // The comma after `)` separates constructors and must not be mistaken for
+    // the payload's magic trailing comma.
+    let source = "type Vec3<D: Dim> { Vec3(x: D, y: D, z: D), }\n";
+    let formatted = format_source(source).expect("short constructor payload should format");
+    assert_eq!(
+        formatted,
+        "type Vec3<D: Dim> {\n    Vec3(x: D, y: D, z: D),\n}\n"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn magic_trailing_comma_expands_short_constructor_payload() {
+    let source = "type Vec3<D: Dim> { Vec3(x: D, y: D, z: D,), }\n";
+    let formatted = format_source(source).expect("magic trailing comma should format");
+    assert_eq!(
+        formatted,
+        "type Vec3<D: Dim> {\n    Vec3(\n        x: D,\n        y: D,\n        z: D,\n    ),\n}\n"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn long_constructor_payload_expands_and_adds_magic_trailing_comma() {
+    let source = "type TelemetryPacket { TelemetryPacket(position_x_coordinate: Length, position_y_coordinate: Length, position_z_coordinate: Length), }\n";
+    let formatted = format_source(source).expect("long constructor payload should format");
+    assert_eq!(
+        formatted,
+        "type TelemetryPacket {\n    TelemetryPacket(\n        position_x_coordinate: Length,\n        position_y_coordinate: Length,\n        position_z_coordinate: Length,\n    ),\n}\n"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn epoch_static_time_scale_argument_round_trips() {
     let source = "node t:Datetime<TT> =epoch<TT>(\"2024-11-05T12:00:00\");\n";
     let formatted = format_source(source).expect("epoch static argument should format");
