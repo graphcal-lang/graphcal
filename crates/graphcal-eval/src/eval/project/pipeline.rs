@@ -97,7 +97,6 @@ fn compile_single_file_in_project(
         } else {
             imports::process_instantiated_include(
                 project,
-                file_dag_id,
                 &include_canonical,
                 include_decl,
                 decl,

@@ -10,8 +10,8 @@ impl Parser<'_> {
     /// - `index Maneuver = { Departure, Correction, Insertion };` (named with variants)
     /// - `index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);` (exact increment)
     /// - `index Samples = linspace(0.0 s, 1.0 s, points: 11);` (exact count)
-    /// - `index Foo;` (required named — must be bound via parameterized import)
-    /// - `index Foo: Time;` (required coordinate — bound via parameterized import)
+    /// - `index Foo;` (required named — must be bound via parameterized include)
+    /// - `index Foo: Time;` (required coordinate — bound via parameterized include)
     pub(super) fn parse_index_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Index)?;
         let name = self.parse_any_ident()?.into_spanned::<IndexName>();

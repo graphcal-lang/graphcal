@@ -901,7 +901,7 @@ If a required param is not provided, the compiler emits error `O003`.
 ### Index bindings
 
 Bind a [required index](indexes.md#required-indexes) by name; the
-right-hand side must be the **name of a concrete index**, not an
+right-hand side must be the **name of a compatible index**, not an
 expression:
 
 ```graphcal
@@ -932,7 +932,7 @@ compile error.
 
 #### Dimension matching for coordinate indexes
 
-When binding a required coordinate index, the concrete coordinate index must have
+When binding a required coordinate index, the supplied coordinate index must have
 the **same dimension**:
 
 ```graphcal
@@ -973,12 +973,14 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
   required input ports of the entry DAG must be provided by `--set` or
   `--input`.
 - All required indexes must be provided by bindings.
-- Index binding values must be the name of a concrete index in the
-  importer's scope.
+- Index binding values must be the name of a compatible index in the
+  importer's scope. An outer generic DAG may forward a required index; the
+  include chain must eventually supply a concrete index.
 - Named indexes can only be bound to named indexes; coordinate indexes can
-  only be bound to coordinate indexes. Coordinate-index dimensions must match.
-- Dimension mismatches are caught by the dimension checker after
-  merging.
+  only be bound to coordinate indexes. Coordinate-index dimensions must match
+  after applying simultaneous dimension bindings.
+- Coordinate-index binding dimensions are checked after simultaneous
+  type-level substitutions have been applied.
 
 ## Circular Imports
 

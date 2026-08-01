@@ -14,8 +14,8 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
 use crate::desugar::desugared_ast::{
-    AssertBody, DeclKind, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl, PlotDecl,
-    TypeExpr,
+    AssertBody, DeclKind, DimExpr, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl,
+    PlotDecl, TypeExpr,
 };
 use crate::dimension::Rational;
 use crate::ir::resolve::{
@@ -2555,6 +2555,28 @@ pub fn substitute_type_expr_index_names(
     }
 }
 
+/// Rewrite bare dimension names within a dimension expression.
+///
+/// This is the shared syntactic substitution used by include-time dimension
+/// bindings. Qualified references retain their producer-owned path; only a bare
+/// bindable declaration name can be replaced by an importer-side binding.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "internal API always uses default hasher"
+)]
+pub fn substitute_dim_expr_names<K>(dim_expr: &mut DimExpr, bindings: &HashMap<K, K>)
+where
+    K: std::hash::Hash + Eq + std::borrow::Borrow<str> + AsRef<str>,
+{
+    for item in &mut dim_expr.terms {
+        if let Some(atom) = item.term.name.value.as_bare()
+            && let Some(new_name) = bindings.get(atom.as_str())
+        {
+            item.term.name.value = crate::syntax::names::NamePath::expect_local(new_name.as_ref());
+        }
+    }
+}
+
 /// Rewrite nominally-tied names (types or dimensions) within a type expression.
 ///
 /// `TypeExpr` uses `DimExpr` to carry single-identifier type references (the
@@ -2577,16 +2599,7 @@ where
         return;
     }
     match &mut type_expr.kind {
-        TypeExprKind::DimExpr(dim_expr) => {
-            for item in &mut dim_expr.terms {
-                if let Some(atom) = item.term.name.value.as_bare()
-                    && let Some(new_name) = bindings.get(atom.as_str())
-                {
-                    item.term.name.value =
-                        crate::syntax::names::NamePath::expect_local(new_name.as_ref());
-                }
-            }
-        }
+        TypeExprKind::DimExpr(dim_expr) => substitute_dim_expr_names(dim_expr, bindings),
         TypeExprKind::Indexed { base, .. } => {
             substitute_type_expr_nominal_names(base, bindings);
         }

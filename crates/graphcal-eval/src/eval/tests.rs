@@ -3746,6 +3746,244 @@ fn setup_inline_semantics_project(
 }
 
 #[test]
+fn inline_dag_required_coordinate_index_rejects_dimension_mismatch() {
+    let source = r"
+dag pass_through {
+    pub(bind) index Step: Time;
+    param samples: Length[Step];
+    pub node result: Length[Step] = @samples;
+}
+
+pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
+include pass_through(
+    Step: DistanceStep,
+    samples: for distance: DistanceStep { distance },
+) as output;
+";
+
+    let result = compile_and_eval(source);
+    match result {
+        Err(CompileError::Eval(GraphcalError::IndexBindingDimensionMismatch {
+            dep_index,
+            expected_dim,
+            bound_index,
+            found_dim,
+            ..
+        })) => {
+            assert_eq!(dep_index, "Step");
+            assert_eq!(expected_dim, "Time");
+            assert_eq!(bound_index, "DistanceStep");
+            assert_eq!(found_dim, "Length");
+        }
+        other => panic!("expected IndexBindingDimensionMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_dag_required_coordinate_index_rejects_named_index() {
+    let source = r"
+dag pass_through {
+    pub(bind) index Step: Time;
+    param samples: Length[Step];
+    pub node result: Length[Step] = @samples;
+}
+
+pub index Phase = { Start, End };
+include pass_through(
+    Step: Phase,
+    samples: {
+        Phase.Start: 1.0 m,
+        Phase.End: 2.0 m,
+    },
+) as output;
+";
+
+    let result = compile_and_eval(source);
+    match result {
+        Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
+            dep_index,
+            dep_kind,
+            bound_index,
+            bound_kind,
+            ..
+        })) => {
+            assert_eq!(dep_index, "Step");
+            assert_eq!(dep_kind, "coordinate");
+            assert_eq!(bound_index, "Phase");
+            assert_eq!(bound_kind, "named");
+        }
+        other => panic!("expected IndexKindMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_dag_required_index_missing_binding_uses_index_diagnostic() {
+    let source = r"
+dag pass_through {
+    pub(bind) index Step: Time;
+    param samples: Length[Step];
+    pub node result: Length[Step] = @samples;
+}
+
+include pass_through(samples: 1.0 m) as output;
+";
+
+    let result = compile_and_eval(source);
+    match result {
+        Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound { name, .. })) => {
+            assert_eq!(name, "Step");
+        }
+        other => panic!("expected RequiredIndexNotBound, got {other:?}"),
+    }
+}
+
+#[test]
+fn inline_dag_coordinate_contract_applies_simultaneous_dimension_binding() {
+    let source = r"
+dag pass_through {
+    pub(bind) dim AxisDim;
+    pub(bind) index Step: AxisDim;
+    param samples: AxisDim[Step];
+    pub node result: AxisDim[Step] = @samples;
+}
+
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+include pass_through(
+    AxisDim: Time,
+    Step: TimeStep,
+    samples: for time: TimeStep { time },
+) as output;
+";
+
+    compile_and_eval(source).unwrap();
+}
+
+#[test]
+fn nested_dag_can_forward_compatible_required_coordinate_index() {
+    let source = r"
+dag inner {
+    pub(bind) index InnerStep: Time;
+    pub node n: Int = count(for step: InnerStep { step });
+}
+
+dag outer {
+    pub(bind) index OuterStep: Time;
+    include inner(InnerStep: OuterStep) as inner_run;
+    pub node n: Int = 1;
+}
+
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+include outer(OuterStep: TimeStep) as output;
+";
+
+    compile_and_eval(source).unwrap();
+}
+
+#[test]
+fn file_dag_coordinate_contract_applies_simultaneous_dimension_binding() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/library.gcl",
+                r"
+pub(bind) dim AxisDim;
+pub(bind) index Step: AxisDim;
+param samples: AxisDim[Step];
+pub node result: AxisDim[Step] = @samples;
+",
+            ),
+            (
+                "src/sem/main.gcl",
+                r"
+pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+include sem.library(
+    AxisDim: Time,
+    Step: TimeStep,
+    samples: for time: TimeStep { time },
+) as output;
+",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+}
+
+#[test]
+fn cross_file_inline_dag_rejects_coordinate_dimension_mismatch() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/library.gcl",
+                r"
+pub dag pass_through {
+    pub(bind) index Step: Time;
+    param samples: Length[Step];
+    pub node result: Length[Step] = @samples;
+}
+",
+            ),
+            (
+                "src/sem/main.gcl",
+                r"
+pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
+include sem.library.pass_through(
+    Step: DistanceStep,
+    samples: for distance: DistanceStep { distance },
+) as output;
+",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
+    assert!(
+        matches!(
+            result,
+            Err(CompileError::Eval(
+                GraphcalError::IndexBindingDimensionMismatch { .. }
+            ))
+        ),
+        "expected coordinate dimension mismatch, got {result:?}"
+    );
+}
+
+#[test]
+fn file_dag_index_dimension_diagnostic_uses_importer_source_span() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/library.gcl",
+                "pub(bind) index Step: Time;\nparam samples: Length[Step];\n",
+            ),
+            (
+                "src/sem/main.gcl",
+                r"
+pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
+include sem.library(
+    Step: DistanceStep,
+    samples: for distance: DistanceStep { distance },
+) as output;
+",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    let diagnostic: &dyn miette::Diagnostic = &error;
+    let mut rendered = String::new();
+    miette::NarratableReportHandler::new()
+        .render_report(&mut rendered, diagnostic)
+        .unwrap();
+
+    assert!(rendered.contains("Step: DistanceStep"), "{rendered}");
+    assert!(!rendered.contains("OutOfBounds"), "{rendered}");
+}
+
+#[test]
 fn inline_dag_rejects_parent_type_without_import() {
     let source = "\
 pub dim Speed = Length / Time;

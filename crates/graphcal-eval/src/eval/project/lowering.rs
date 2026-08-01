@@ -513,7 +513,6 @@ fn process_dag_body_include_declarations<'a>(
             } else {
                 imports::process_instantiated_include(
                     project,
-                    &loaded_dag.parent_dag_id,
                     target_dag_id,
                     include_decl,
                     decl,
@@ -658,9 +657,8 @@ fn merge_dep_dag_tirs(
 ///    DAG's `<self>` is its file of definition, regardless of where the
 ///    include sits).
 /// 2. Compile the body to IR with imported names/values set up.
-/// 3. Merge the body's registry into the importer's; validate coordinate-index
-///    dimension matching (file include only — inline DAGs share the
-///    file's registry).
+/// 3. Capture importer-owned index binding candidates, merge the body's registry,
+///    then validate every candidate against the body's effective typed contract.
 /// 4. Run `check_include_reconciles_overrides` (A8/V005) and
 ///    `check_generics_leakage` (A9/V006).
 /// 5. Merge the body's IR into the importer's IR with prefix/bindings.
@@ -876,6 +874,17 @@ fn process_deferred_dag_includes(
             }
         };
 
+        // Capture importer-owned candidates before the dependency registry is
+        // merged, so a dependency declaration with the same leaf name cannot
+        // accidentally satisfy its own binding.
+        let index_binding_candidates = capture_index_binding_candidates(
+            builder,
+            &deferred.index_bindings,
+            &deferred.index_binding_spans,
+            importer_src,
+            deferred.import_span,
+        )?;
+
         // ---- 2. Merge dep registry into importer's --------------------
         merge_registry_into_builder(
             builder,
@@ -892,40 +901,18 @@ fn process_deferred_dag_includes(
             })
         })?;
 
-        // ---- 3. Validate coordinate-index dimension matching (file include
-        // only — inline DAGs share the file's registry, so there are no
-        // separate dep-side coordinate indexes to reconcile). --------------------
-        if matches!(deferred.source, DeferredDagSource::File { .. }) {
-            for (dep_idx_name, importer_idx_name) in &deferred.index_bindings {
-                if let Some(dep_idx_def) = dep_registry.indexes.get_index(dep_idx_name.as_str())
-                    && let graphcal_compiler::registry::types::IndexKind::RequiredCoordinate {
-                        dimension: dep_dim,
-                    } = &dep_idx_def.kind
-                    && let Some(imp_idx_def) = builder.get_index(importer_idx_name.as_str())
-                    && let graphcal_compiler::registry::types::IndexKind::Coordinate(
-                        graphcal_compiler::registry::types::CoordinateIndexData {
-                            dimension: imp_dim,
-                            ..
-                        },
-                    )
-                    | graphcal_compiler::registry::types::IndexKind::RequiredCoordinate {
-                        dimension: imp_dim,
-                    } = &imp_idx_def.kind
-                    && dep_dim != imp_dim
-                {
-                    return Err(CompileError::Eval(
-                        GraphcalError::IndexBindingDimensionMismatch {
-                            dep_index: dep_idx_name.as_str().to_string(),
-                            expected_dim: dep_registry.dimensions.format_dimension(dep_dim),
-                            bound_index: importer_idx_name.as_str().to_string(),
-                            found_dim: builder.format_dimension(imp_dim),
-                            src: dep_src,
-                            span: deferred.import_span.into(),
-                        },
-                    ));
-                }
-            }
-        }
+        // ---- 3. Validate typed index binding contracts -------------------
+        validate_index_binding_contracts(
+            body_decls_for_aliases,
+            &dep_registry,
+            &deferred.index_bindings,
+            &deferred.index_binding_spans,
+            &deferred.dim_bindings,
+            &index_binding_candidates,
+            builder,
+            importer_src,
+            deferred.import_span,
+        )?;
 
         // ---- 4. Validation checks -----------------------------------------
         let mut dep_names: HashSet<DeclName> = HashSet::new();
@@ -989,6 +976,190 @@ fn process_deferred_dag_includes(
         }
     }
     Ok(())
+}
+
+fn index_binding_span(
+    dep_index: &IndexName,
+    spans: &HashMap<IndexName, Span>,
+    include_span: Span,
+) -> Span {
+    spans.get(dep_index).copied().unwrap_or(include_span)
+}
+
+/// Capture candidates from the importer before dependency declarations are merged.
+fn capture_index_binding_candidates(
+    builder: &RegistryBuilder,
+    bindings: &HashMap<IndexName, IndexName>,
+    spans: &HashMap<IndexName, Span>,
+    importer_src: &NamedSource<Arc<String>>,
+    include_span: Span,
+) -> Result<HashMap<IndexName, graphcal_compiler::registry::types::IndexDef>, CompileError> {
+    bindings
+        .iter()
+        .map(|(dep_index, importer_index)| {
+            builder
+                .get_index(importer_index.as_str())
+                .cloned()
+                .map(|candidate| (dep_index.clone(), candidate))
+                .ok_or_else(|| {
+                    CompileError::Eval(GraphcalError::IndexBindingNotAnIndex {
+                        dep_index: dep_index.to_string(),
+                        value: importer_index.to_string(),
+                        src: importer_src.clone(),
+                        span: index_binding_span(dep_index, spans, include_span).into(),
+                    })
+                })
+        })
+        .collect()
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "validation needs both module contracts, binding substitutions, candidates, and diagnostic provenance"
+)]
+fn validate_index_binding_contracts(
+    dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    dep_registry: &Registry,
+    bindings: &HashMap<IndexName, IndexName>,
+    spans: &HashMap<IndexName, Span>,
+    dim_bindings: &HashMap<DimName, DimName>,
+    candidates: &HashMap<IndexName, graphcal_compiler::registry::types::IndexDef>,
+    builder: &RegistryBuilder,
+    importer_src: &NamedSource<Arc<String>>,
+    include_span: Span,
+) -> Result<(), CompileError> {
+    use graphcal_compiler::registry::types::IndexBindingContractError;
+
+    for (dep_index, importer_index) in bindings {
+        let span = index_binding_span(dep_index, spans, include_span);
+        let contract = effective_index_binding_contract(
+            dep_index,
+            dep_declarations,
+            dep_registry,
+            dim_bindings,
+            builder,
+            importer_src,
+            span,
+        )?;
+        let candidate = candidates.get(dep_index).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: format!("captured index binding candidate for `{dep_index}` was lost"),
+                src: importer_src.clone(),
+                span: span.into(),
+            })
+        })?;
+
+        match contract.validate(candidate) {
+            Ok(()) => {}
+            Err(IndexBindingContractError::KindMismatch { expected, found }) => {
+                return Err(CompileError::Eval(GraphcalError::IndexKindMismatch {
+                    dep_index: dep_index.to_string(),
+                    dep_kind: expected.to_string(),
+                    bound_index: importer_index.to_string(),
+                    bound_kind: found.to_string(),
+                    src: importer_src.clone(),
+                    span: span.into(),
+                }));
+            }
+            Err(IndexBindingContractError::DimensionMismatch { expected, found }) => {
+                return Err(CompileError::Eval(
+                    GraphcalError::IndexBindingDimensionMismatch {
+                        dep_index: dep_index.to_string(),
+                        expected_dim: builder.format_dimension(&expected),
+                        bound_index: importer_index.to_string(),
+                        found_dim: builder.format_dimension(&found),
+                        src: importer_src.clone(),
+                        span: span.into(),
+                    },
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn effective_index_binding_contract(
+    dep_index: &IndexName,
+    dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    dep_registry: &Registry,
+    dim_bindings: &HashMap<DimName, DimName>,
+    builder: &RegistryBuilder,
+    importer_src: &NamedSource<Arc<String>>,
+    binding_span: Span,
+) -> Result<graphcal_compiler::registry::types::IndexBindingContract, CompileError> {
+    use graphcal_compiler::desugar::desugared_ast::{DeclKind, IndexDeclKind};
+    use graphcal_compiler::registry::dimension_registry::DimensionResolveError;
+    use graphcal_compiler::registry::types::{IndexBindingContract, IndexKind};
+
+    let definition = dep_registry
+        .indexes
+        .get_index(dep_index.as_str())
+        .ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: format!(
+                    "bound dependency index `{dep_index}` is missing from its registry"
+                ),
+                src: importer_src.clone(),
+                span: binding_span.into(),
+            })
+        })?;
+
+    match &definition.kind {
+        IndexKind::Named { .. } | IndexKind::RequiredNamed => Ok(IndexBindingContract::Named),
+        IndexKind::Coordinate(data) => Ok(IndexBindingContract::Coordinate {
+            dimension: data.dimension.clone(),
+        }),
+        IndexKind::RequiredCoordinate { .. } => {
+            let mut dimension_expr = dep_declarations
+                .iter()
+                .find_map(|declaration| match &declaration.kind {
+                    DeclKind::Index(index) if index.name.value == *dep_index => match &index.kind {
+                        IndexDeclKind::RequiredCoordinate { dimension } => Some(dimension.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    CompileError::Eval(GraphcalError::InternalError {
+                        message: format!(
+                            "required coordinate index `{dep_index}` has no source declaration"
+                        ),
+                        src: importer_src.clone(),
+                        span: binding_span.into(),
+                    })
+                })?;
+            graphcal_compiler::ir::lower::substitute_dim_expr_names(
+                &mut dimension_expr,
+                dim_bindings,
+            );
+            let dimension =
+                builder
+                    .resolve_dim_expr_detailed(&dimension_expr)
+                    .map_err(|error| {
+                        CompileError::Eval(match error {
+                            DimensionResolveError::UnknownDimension { name } => {
+                                GraphcalError::UnknownDimension {
+                                    name,
+                                    src: importer_src.clone(),
+                                    span: binding_span.into(),
+                                }
+                            }
+                            DimensionResolveError::Overflow(_) => {
+                                GraphcalError::DimensionOverflow {
+                                    src: importer_src.clone(),
+                                    span: binding_span.into(),
+                                }
+                            }
+                        })
+                    })?;
+            Ok(IndexBindingContract::Coordinate { dimension })
+        }
+        IndexKind::Finite { .. } => Err(CompileError::Eval(GraphcalError::InternalError {
+            message: format!("declared dependency index `{dep_index}` became structural"),
+            src: importer_src.clone(),
+            span: binding_span.into(),
+        })),
+    }
 }
 
 /// Bindings that an alias's type annotation must be rewritten through before
