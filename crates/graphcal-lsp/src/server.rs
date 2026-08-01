@@ -2628,6 +2628,23 @@ node bad: Mass = mass + length;
         );
     }
 
+    #[test]
+    fn non_integer_const_to_int_reports_diagnostic() {
+        let uri = untitled_uri();
+        let text = "const node invalid: Int = to_int(3.7);\n";
+        let analysis = run_analysis(&uri, text, &[], test_plugin_host());
+        let diagnostics = analysis
+            .diagnostics
+            .get(&uri)
+            .expect("the active URI should always have a diagnostic entry");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("is not integer-valued")),
+            "expected exact-conversion diagnostic, got: {diagnostics:?}",
+        );
+    }
+
     fn write_project(files: &[(&str, &str)]) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         for (name, content) in files {

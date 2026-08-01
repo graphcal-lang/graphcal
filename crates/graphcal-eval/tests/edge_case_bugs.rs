@@ -92,11 +92,37 @@ fn get_node_error_message(result: &EvalResult, name: &str) -> Option<String> {
 }
 
 // ============================================================================
-// to_int() range checking (#85, fixed)
+// Exact to_int() conversion and range checking (#85, #398)
 //
-// `to_int(x)` now rejects values outside i64 range with a clear error,
-// instead of silently saturating via `f as i64`.
+// `to_int(x)` rejects non-integer and out-of-range values instead of silently
+// selecting a rounding policy or saturating via `f as i64`.
 // ============================================================================
+
+#[test]
+fn to_int_rejects_non_integer_values() {
+    for value in [3.7, -3.7] {
+        let source = format!("node x: Int = to_int({value});");
+        let result = compile_and_eval(&source).unwrap();
+        let message = get_node_error_message(&result, "x").expect("x should fail");
+        assert!(
+            message.contains("is not integer-valued"),
+            "unexpected error for {value}: {message}"
+        );
+        assert!(
+            message.contains("apply trunc(), floor(), ceil(), or round() explicitly"),
+            "missing explicit-rounding guidance for {value}: {message}"
+        );
+    }
+}
+
+#[test]
+fn to_int_accepts_an_explicit_truncation_policy() {
+    let source = "node positive: Int = to_int(trunc(3.7));\n\
+                  node negative: Int = to_int(trunc(-3.7));";
+    let result = compile_and_eval(source).unwrap();
+    assert_eq!(find_int_value(&result, "positive"), 3);
+    assert_eq!(find_int_value(&result, "negative"), -3);
+}
 
 #[test]
 fn to_int_of_large_positive_float_should_error_or_be_exact() {

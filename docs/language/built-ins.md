@@ -124,7 +124,19 @@ These selectors always take exactly two values. To reduce an indexed value, use
 | Function | Signature | Description |
 |----------|-----------|-------------|
 | `to_float(x)` | `Int -> Dimensionless` | Convert an integer to a binary64 `Dimensionless` quantity |
-| `to_int(x)` | `Dimensionless -> Int` | Convert a finite `Dimensionless` quantity to an integer (truncates toward zero; rejects values outside `i64` range) |
+| `to_int(x)` | `Dimensionless -> Int` | Convert an integer-valued `Dimensionless` quantity exactly; reject fractional, non-finite, or out-of-range values |
+
+`to_int` never chooses a rounding policy implicitly. Apply `trunc`, `floor`,
+`ceil`, or `round` before converting when that is the intended policy:
+
+```graphcal
+node exact: Int = to_int(3.0);
+node toward_zero: Int = to_int(trunc(3.7));
+node nearest: Int = to_int(round(3.7));
+```
+
+Integrality is checked on the represented binary64 value. A conversion cannot
+detect precision that was already lost while computing that value.
 
 ### Datetime Functions
 

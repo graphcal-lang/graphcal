@@ -1,0 +1,2 @@
+// Const conversion errors during checking because the value is known.
+const node invalid: Int = to_int(3.7);
