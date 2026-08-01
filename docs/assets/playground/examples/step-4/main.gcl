@@ -1,0 +1,39 @@
+pub dim GravParam = Length^3 / Time^2;
+
+dag orbital_velocity {
+    import main.{GravParam};
+
+    param gm: GravParam;
+    param r: Length;
+    node v: Velocity = sqrt(@gm / @r);
+}
+
+dag hohmann_transfer {
+    import main.{GravParam};
+
+    param gm: GravParam;
+    param r1: Length;
+    param r2: Length;
+
+    node v1: Velocity = sqrt(@gm / @r1);
+    node v2: Velocity = sqrt(@gm / @r2);
+    node dv1: Velocity = sqrt(2.0 * @gm * @r2 / (@r1 * (@r1 + @r2))) - @v1;
+    node dv2: Velocity = @v2 - sqrt(2.0 * @gm * @r1 / (@r2 * (@r1 + @r2)));
+    node total_dv: Velocity = @dv1 + @dv2;
+}
+
+const node gm_earth: GravParam = 3.986004418e5 km^3/s^2;
+const node r_earth: Length = 6371.0 km;
+param parking_alt: Length = 200.0 km;
+param target_alt: Length = 35786.0 km;
+
+include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt)
+    .{ v as v_parking };
+
+include hohmann_transfer(
+    gm: @gm_earth,
+    r1: @r_earth + @parking_alt,
+    r2: @r_earth + @target_alt,
+).{ total_dv as transfer_dv, dv1 as departure_dv };
+
+node total: Velocity = @v_parking + @transfer_dv;

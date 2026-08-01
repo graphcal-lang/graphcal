@@ -27,6 +27,16 @@ node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
+Edit the rocket equation and try changing a unit or dimension. Dimension errors are reported against the relevant source range.
+
+<div class="gc-playground-host">
+  <graphcal-playground example="step-2">
+    <p class="gc-playground-fallback">The editable playground requires JavaScript. Read the tutorial above or <a href="../assets/playground/examples/step-2/main.gcl">open the static example source</a>.</p>
+  </graphcal-playground>
+</div>
+
+Expected initial output includes `delta_v = 3778.220768 m/s`.
+
 ```bash
 $ graphcal eval rocket.gcl
 dry_mass   = 1200 kg

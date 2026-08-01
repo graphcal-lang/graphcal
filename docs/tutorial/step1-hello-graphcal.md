@@ -30,7 +30,17 @@ node mass_with_margin: Dimensionless = @total_mass * @margin_factor;
 node mass_ratio: Dimensionless = @total_mass / @dry_mass;
 ```
 
-## Run It
+## Try It in Your Browser
+
+Edit the complete example below. Results update automatically after each change, or press **Run**.
+
+<div class="gc-playground-host">
+  <graphcal-playground example="step-1">
+    <p class="gc-playground-fallback">The editable playground requires JavaScript. Read the tutorial above or <a href="../assets/playground/examples/step-1/main.gcl">open the static example source</a>.</p>
+  </graphcal-playground>
+</div>
+
+## Run It Locally
 
 ```bash
 $ graphcal eval mass_budget.gcl

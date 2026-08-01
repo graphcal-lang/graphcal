@@ -82,6 +82,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
+      - uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094 # v2.85.1
+        with:
+          tool: wasm-pack@0.15.0
+
       - name: Check browser Wasm crates
         run: >-
           cargo check
@@ -89,6 +93,9 @@ jobs:
           --exclude graphcal
           --exclude graphcal-lsp
           --target wasm32-unknown-unknown
+
+      - name: Test browser evaluator on Wasm
+        run: wasm-pack test --node crates/graphcal-wasm
 
   coverage:
     runs-on: ubuntu-latest

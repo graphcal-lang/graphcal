@@ -20,4 +20,5 @@ pub mod plot_props;
 pub mod registry;
 pub mod stack;
 pub mod syntax;
+pub mod text_position;
 pub mod tir;

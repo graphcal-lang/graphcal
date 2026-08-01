@@ -4,30 +4,73 @@ on:
   push:
     branches:
       - main
+  pull_request:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
+
+concurrency:
+  group: documentation-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  build:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - uses: taiki-e/install-action@3d7d7cd5ac7f994c1892ae0c06165095b9139094 # v2.85.1
+        with:
+          tool: wasm-pack@0.15.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: 3.x
+      - run: pip install zensical==0.0.52
+      - name: Build browser playground
+        run: |
+          rm -rf docs/assets/playground/pkg
+          wasm-pack build crates/graphcal-wasm \
+            --target web \
+            --out-dir ../../docs/assets/playground/pkg \
+            --release \
+            --no-typescript \
+            --no-pack
+          rm -f docs/assets/playground/pkg/.gitignore
+      - run: zensical build --clean
+      - name: Verify playground artifacts
+        run: |
+          test -s site/assets/playground/pkg/graphcal_wasm.js
+          test -s site/assets/playground/pkg/graphcal_wasm_bg.wasm
+          test -s site/javascripts/playground-worker.mjs
+          # Keep the initial raw WebAssembly download within the 5 MiB v1 budget.
+          wasm_bytes=$(wc -c < site/assets/playground/pkg/graphcal_wasm_bg.wasm)
+          test "$wasm_bytes" -le 5242880
+          node --check docs/javascripts/playground.mjs
+          node --check docs/javascripts/playground-worker.mjs
+          node internals/playground-worker-smoke.mjs
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
   deploy:
+    name: Deploy documentation
+    if: github.event_name == 'push'
+    needs: build
+    permissions:
+      pages: write # Required to publish the Pages artifact.
+      id-token: write # Required for trusted GitHub Pages deployment.
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: 3.x
-      - run: pip install zensical
-      - run: zensical build --clean
-      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
-        with:
-          path: site
       - uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
         id: deployment

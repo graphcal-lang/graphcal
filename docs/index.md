@@ -60,11 +60,19 @@ delta_v    = 3778.220768 m/s
 
     [:octicons-arrow-right-24: Install Graphcal](installation.md)
 
-- :material-school:{ .lg .middle } **Tutorial**
+- :material-play:{ .lg .middle } **Browser Playground (Experimental)**
 
     ---
 
-    Learn Graphcal step by step with hands-on examples.
+    Try alpha-stage Graphcal immediately—no installation required.
+
+    [:octicons-arrow-right-24: Open the playground](playground.md)
+
+- :material-school:{ .lg .middle } **Interactive Tutorial**
+
+    ---
+
+    Learn Graphcal step by step with editable browser examples.
 
     [:octicons-arrow-right-24: Start the tutorial](tutorial/index.md)
 

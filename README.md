@@ -84,7 +84,7 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 graphcal deps lock --root mission
 ```
 
-See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full surface, including `format`, `check`, `deps lock`, `graph`, and `lsp`.
+Try Graphcal without installing it in the [browser playground](https://graphcal-lang.github.io/graphcal/playground/). See the [CLI reference](https://graphcal-lang.github.io/graphcal/cli-reference/) for the full local surface, including `format`, `check`, `deps lock`, `graph`, and `lsp`.
 
 ## Editor Support
 
@@ -100,13 +100,14 @@ Setup details for each editor are in the [Editor Setup guide](https://graphcal-l
 
 The full tutorial, language reference, and CLI/editor guides are available in the live documentation: <https://graphcal-lang.github.io/graphcal/>.
 
-- **[Tutorial](https://graphcal-lang.github.io/graphcal/tutorial/)** -- learn Graphcal step by step
+- **[Browser Playground (experimental)](https://graphcal-lang.github.io/graphcal/playground/)** -- edit and evaluate alpha-stage Graphcal without installing it
+- **[Interactive Tutorial](https://graphcal-lang.github.io/graphcal/tutorial/)** -- learn Graphcal step by step with editable examples
 - **[Language Reference](https://graphcal-lang.github.io/graphcal/language/)** -- every feature, formally
 - **[Built-in Reference](https://graphcal-lang.github.io/graphcal/language/built-ins/)** -- constants, math, type conversions, aggregations, prelude dimensions and units
 - **[Multi-file Projects](https://graphcal-lang.github.io/graphcal/language/multi-file/)** -- `import`, `include`, package dependencies, and the `pub(bind)` visibility model
 - **[CLI Reference](https://graphcal-lang.github.io/graphcal/cli-reference/)** -- `eval`, `format`, `check`, `deps lock`, `lsp`
 
-The [`docs/`](docs/) directory contains the Zensical source for the site. You can serve it locally with `zensical serve` and open `http://localhost:8000`.
+The [`docs/`](docs/) directory contains the Zensical source for the site. With `wasm-pack` and Zensical installed, run `just docs-serve` and open `http://localhost:8000`; the recipe builds the browser evaluator before starting Zensical. Use `just docs-build` with Node.js available to build the production site and smoke-test the worker bridge.
 
 ## Vision
 
@@ -128,6 +129,7 @@ graphcal/
     graphcal-eval/      # const eval, runtime eval, project loader, exec plan
     graphcal-fmt/       # code formatter
     graphcal-io/        # filesystem abstraction (real, in-memory, overlay)
+    graphcal-wasm/      # unpublished browser WebAssembly adapter
     graphcal-cli/       # CLI binary -- `eval`, `format`, `check`, `lsp`
     graphcal-lsp/       # LSP server (tower-lsp) -- diagnostics, symbols, hover, inlay hints
   grammar.ebnf          # formal grammar (source of truth for tree-sitter / TextMate)

@@ -8,8 +8,10 @@ use crate::FileSystemReader;
 
 /// In-memory filesystem for tests and WASM environments.
 ///
-/// All paths must be absolute. [`canonicalize`](FileSystemReader::canonicalize)
-/// returns the stored path unchanged when it exists; relative inputs are
+/// All paths must be absolute within the virtual tree. On bare Wasm, a path
+/// rooted at `/` satisfies this invariant even though the target has no host
+/// path prefix. [`canonicalize`](FileSystemReader::canonicalize) returns the
+/// stored path unchanged when it exists; relative inputs are
 /// rejected with `ErrorKind::InvalidInput` because an in-memory filesystem
 /// has no current-directory context against which to resolve them. This
 /// matches the absolute-path guarantee that `std::fs::canonicalize` upholds
@@ -18,6 +20,17 @@ use crate::FileSystemReader;
 pub struct InMemoryFileSystem {
     files: HashMap<PathBuf, String>,
     binary_files: HashMap<PathBuf, Vec<u8>>,
+}
+
+/// Whether `path` carries a synthetic filesystem root on this target.
+///
+/// Bare `wasm32-unknown-unknown` paths recognize `/` as a root component but
+/// Rust deliberately reports `Path::is_absolute() == false` because that target
+/// has no operating-system path prefix. The in-memory filesystem supplies the
+/// missing filesystem semantics, so a rooted path is absolute within this
+/// virtual tree.
+fn is_virtual_absolute(path: &Path) -> bool {
+    path.is_absolute() || (cfg!(target_arch = "wasm32") && path.has_root())
 }
 
 impl InMemoryFileSystem {
@@ -31,7 +44,7 @@ impl InMemoryFileSystem {
     /// — see the type-level invariant.
     pub fn add_file(&mut self, path: PathBuf, content: String) {
         debug_assert!(
-            path.is_absolute(),
+            is_virtual_absolute(&path),
             "InMemoryFileSystem requires absolute paths, got `{}`",
             path.display()
         );
@@ -43,7 +56,7 @@ impl InMemoryFileSystem {
     /// invariant.
     pub fn add_binary_file(&mut self, path: PathBuf, content: Vec<u8>) {
         debug_assert!(
-            path.is_absolute(),
+            is_virtual_absolute(&path),
             "InMemoryFileSystem requires absolute paths, got `{}`",
             path.display()
         );
@@ -87,7 +100,7 @@ impl FileSystemReader for InMemoryFileSystem {
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
-        if !path.is_absolute() {
+        if !is_virtual_absolute(path) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
