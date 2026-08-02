@@ -503,17 +503,17 @@ fn type_resolve_rocket() {
     assert!(
         tir.root()
             .resolved_decl_types
-            .contains_key(&ScopedName::local("dry_mass"))
+            .contains_key(&ScopedName::parse("dry_mass").unwrap())
     );
     assert!(
         tir.root()
             .resolved_decl_types
-            .contains_key(&ScopedName::local("delta_v"))
+            .contains_key(&ScopedName::parse("delta_v").unwrap())
     );
     assert!(
         tir.root()
             .resolved_decl_types
-            .contains_key(&ScopedName::local("g0"))
+            .contains_key(&ScopedName::parse("g0").unwrap())
     );
 }
 
@@ -522,7 +522,7 @@ fn type_resolve_indexed() {
     let source = include_str!("../../../../../tests/fixtures/valid/indexed.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
     // delta_v should be Velocity[Maneuver]
-    let dv_type = &tir.root().resolved_decl_types[&ScopedName::local("delta_v")];
+    let dv_type = &tir.root().resolved_decl_types[&ScopedName::parse("delta_v").unwrap()];
     assert!(matches!(dv_type, ResolvedTypeExpr::Indexed { .. }));
 }
 
@@ -532,14 +532,14 @@ fn type_resolve_complex() {
     let tir = parse_and_type_resolve(source).unwrap();
 
     assert!(matches!(
-        &tir.root().resolved_decl_types[&ScopedName::local("a")],
+        &tir.root().resolved_decl_types[&ScopedName::parse("a").unwrap()],
         ResolvedTypeExpr::Complex {
             dimension: ResolvedDimArg::Concrete(dimension),
             ..
         } if *dimension == Dimension::base(BaseDimId::Prelude("Length".to_string()))
     ));
     assert!(matches!(
-        &tir.root().resolved_decl_types[&ScopedName::local("series")],
+        &tir.root().resolved_decl_types[&ScopedName::parse("series").unwrap()],
         ResolvedTypeExpr::Indexed { base, .. }
             if matches!(base.as_ref(), ResolvedTypeExpr::Complex { .. })
     ));
@@ -598,7 +598,7 @@ fn type_resolve_generics() {
     let source = include_str!("../../../../../tests/fixtures/valid/generics.gcl");
     let tir = parse_and_type_resolve(source).unwrap();
     // pos_eci should be a GenericStruct with type args
-    let pos_type = &tir.root().resolved_decl_types[&ScopedName::local("pos_eci")];
+    let pos_type = &tir.root().resolved_decl_types[&ScopedName::parse("pos_eci").unwrap()];
     match pos_type {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
@@ -619,7 +619,7 @@ fn type_resolve_generics() {
     }
     // x_pos should be quantity Length
     assert_eq!(
-        tir.root().resolved_decl_types[&ScopedName::local("x_pos")],
+        tir.root().resolved_decl_types[&ScopedName::parse("x_pos").unwrap()],
         ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude("Length".to_string())))
     );
 }
@@ -630,7 +630,7 @@ fn type_resolve_default_type_params() {
     let tir = parse_and_type_resolve(source).unwrap();
 
     // pos3_eci: Pos3<Length, Eci> — explicit, 2 type args
-    let pos3_eci = &tir.root().resolved_decl_types[&ScopedName::local("pos3_eci")];
+    let pos3_eci = &tir.root().resolved_decl_types[&ScopedName::parse("pos3_eci").unwrap()];
     match pos3_eci {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
@@ -651,7 +651,7 @@ fn type_resolve_default_type_params() {
     }
 
     // pos3_default: Pos3<Length> — default fills in Unframed
-    let pos3_default = &tir.root().resolved_decl_types[&ScopedName::local("pos3_default")];
+    let pos3_default = &tir.root().resolved_decl_types[&ScopedName::parse("pos3_default").unwrap()];
     match pos3_default {
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..

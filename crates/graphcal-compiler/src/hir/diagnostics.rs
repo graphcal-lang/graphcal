@@ -10,7 +10,6 @@ use miette::NamedSource;
 
 use crate::hir;
 use crate::registry::error::GraphcalError;
-use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolveError;
@@ -22,18 +21,14 @@ use crate::syntax::names::NameNamespace;
 /// their qualifier segments, matching the instance modules the loader
 /// registers.
 #[must_use]
-pub fn resolved_decl_key(
-    owner: &crate::dag_id::DagId,
-    name: &ScopedName,
-) -> Option<ResolvedDeclName> {
+pub fn resolved_decl_key(owner: &crate::dag_id::DagId, name: &ScopedName) -> ResolvedDeclName {
     let owner = name
         .qualifier()
         .iter()
         .fold(owner.clone(), |owner, segment| {
             owner.child(segment.as_ref())
         });
-    let name = DeclName::try_new(name.member()).ok()?;
-    Some(ResolvedDeclName::from_def(owner, name))
+    ResolvedDeclName::from_def(owner, name.member().clone())
 }
 
 /// Convert a HIR expression-lowering failure into a spanned diagnostic.
@@ -273,7 +268,6 @@ pub fn expr_lower_error_to_graphcal(
     let span = match err {
         hir::ExprLowerError::Type(err) => return hir_lower_error_to_graphcal(err, src),
         hir::ExprLowerError::ModuleResolve { span, .. }
-        | hir::ExprLowerError::InvalidScopedNameSegment { span, .. }
         | hir::ExprLowerError::UnknownLocalRef { span, .. }
         | hir::ExprLowerError::UnknownGraphRef { span, .. }
         | hir::ExprLowerError::UnknownUnit { span, .. }

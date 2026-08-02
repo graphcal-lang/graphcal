@@ -12,6 +12,7 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitRef};
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::ModuleAliasName;
+use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::span::Spanned;
@@ -102,12 +103,15 @@ impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
             && let ExprKind::GraphRef(qualifier_name) = &inner.kind
             && !qualifier_name.value.is_qualified()
             && self.qualified_pairs.contains(&QualifiedMember {
-                module: ModuleAliasName::expect_valid(qualifier_name.value.member()),
+                module: ModuleAliasName::from_atom(qualifier_name.value.member().atom().clone()),
                 member: DeclName::from_atom(field.value.atom().clone()),
             }) {
             let merged_span = qualifier_name.span.merge(field.span);
             Some(ExprKind::GraphRef(Spanned {
-                value: ScopedName::qualified(qualifier_name.value.member(), field.value.as_str()),
+                value: ScopedName::qualified(
+                    ModuleAliasName::from_atom(qualifier_name.value.member().atom().clone()),
+                    DeclName::from_atom(field.value.atom().clone()),
+                ),
                 span: merged_span,
             }))
         } else {
@@ -201,8 +205,9 @@ struct EvaluatedFile {
 impl EvaluatedFile {
     /// Check whether this file has an evaluated top-level assertion with the
     /// given (bare local) name.
-    fn has_assert(&self, name: &str) -> bool {
-        self.assertions.contains_key(&ScopedName::local(name))
+    fn has_assert(&self, name: &NameAtom) -> bool {
+        self.assertions
+            .contains_key(&ScopedName::from(name.clone()))
     }
 }
 
@@ -433,8 +438,8 @@ fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMe
     for (scoped, _) in entries {
         if let [module] = scoped.qualifier() {
             pairs.insert(QualifiedMember {
-                module: ModuleAliasName::expect_valid(module.as_ref()),
-                member: DeclName::expect_valid(scoped.member()),
+                module: module.clone(),
+                member: scoped.member().clone(),
             });
         }
     }

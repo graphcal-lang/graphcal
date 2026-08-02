@@ -224,13 +224,19 @@ pub struct ImportItem {
 }
 
 impl ImportItem {
-    /// The name that this import introduces into the local scope.
+    /// The validated name atom that this import introduces into local scope.
     /// Returns the alias if present, otherwise the original name.
     #[must_use]
-    pub fn local_name(&self) -> &str {
+    pub fn local_name_atom(&self) -> &crate::syntax::names::NameAtom {
         self.alias
             .as_ref()
-            .map_or(self.name.name.as_str(), |a| a.name.as_str())
+            .map_or(&self.name.name, |alias| &alias.name)
+    }
+
+    /// The spelling of the name that this import introduces into local scope.
+    #[must_use]
+    pub fn local_name(&self) -> &str {
+        self.local_name_atom().as_str()
     }
 
     /// The span of the local name (alias span if aliased, otherwise original name span).

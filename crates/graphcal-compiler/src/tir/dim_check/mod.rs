@@ -1,4 +1,4 @@
-use crate::syntax::decl_name::ResolvedDeclName;
+use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::type_name::ResolvedStructTypeName;
 use std::collections::{HashMap, HashSet};
@@ -345,7 +345,7 @@ impl DimCheckContext<'_> {
         name: &crate::syntax::module_name::ScopedName,
     ) -> Option<&crate::hir::Expr> {
         let dag = self.dag?;
-        let key = dag.resolved_decl_key_for_local(name)?;
+        let key = dag.resolved_decl_key_for_local(name);
         dag.semantic
             .expressions
             .consts
@@ -364,13 +364,7 @@ impl DimCheckContext<'_> {
             src: self.src.clone(),
             span: span.into(),
         })?;
-        let key =
-            dag.resolved_decl_key_for_local(name)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!("semantic declaration key missing for assertion `{name}`"),
-                    src: self.src.clone(),
-                    span: span.into(),
-                })?;
+        let key = dag.resolved_decl_key_for_local(name);
         dag.semantic
             .expressions
             .asserts
@@ -457,7 +451,7 @@ fn check_decl_expr_type(
         })?;
     let inferred = infer::hir::infer_hir_type_with_owner(
         hir_expr,
-        Some(name.member()),
+        Some(name.member().as_str()),
         ctx.declared_types,
         dag,
         ctx.tir,
@@ -1088,9 +1082,8 @@ fn check_domain_constraint_dimensions_dag(
         .chain(dag.nodes.iter().map(|e| (&e.name, &e.src)));
 
     for (name, body_provenance) in decl_iter {
-        let bounds = dag
-            .resolved_decl_key_for_local(name)
-            .and_then(|key| dag.semantic.domain_bounds.get(&key));
+        let key = dag.resolved_decl_key_for_local(name);
+        let bounds = dag.semantic.domain_bounds.get(&key);
         let Some(bounds) = bounds else {
             continue;
         };
@@ -1552,7 +1545,7 @@ fn strip_indexed(
     reason = "internal API always uses default hasher"
 )]
 pub fn check_override_dimension(
-    param_name: &str,
+    param_name: &DeclName,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
@@ -1562,17 +1555,20 @@ pub fn check_override_dimension(
 
     // Override targets are addressed by their bare param name, which is always
     // a top-level local in the file being overridden.
-    let param_key = ScopedName::local(param_name);
+    let param_key = ScopedName::from(param_name);
     let declared =
         declared_types
             .get(&param_key)
             .ok_or_else(|| GraphcalError::OverrideUnknownParam {
-                name: crate::syntax::decl_name::DeclName::expect_valid(param_name.to_string()),
+                name: param_name.clone(),
             })?;
     let dag = tir.root();
+    let key = dag.resolved_decl_key_for_local(&param_key);
     let hir_expr = dag
-        .resolved_decl_key_for_local(&param_key)
-        .and_then(|key| dag.semantic.expressions.param_defaults.get(&key))
+        .semantic
+        .expressions
+        .param_defaults
+        .get(&key)
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!("override for `{param_name}` was not applied to the root DAG"),
             src: src.clone(),
@@ -1580,7 +1576,7 @@ pub fn check_override_dimension(
         })?;
     let inferred = infer::hir::infer_hir_type_with_owner(
         hir_expr,
-        Some(param_name),
+        Some(param_name.as_str()),
         declared_types,
         dag,
         tir,
@@ -1655,22 +1651,6 @@ fn detect_decl_cycles(
 
     type ResolvedDeclKey = ResolvedDeclName;
 
-    fn local_resolved_decl_key(
-        dag: &crate::tir::typed::DagTIR,
-        name: &ScopedName,
-        span: crate::syntax::span::Span,
-        src: &NamedSource<Arc<String>>,
-    ) -> Result<ResolvedDeclKey, GraphcalError> {
-        dag.resolved_decl_key_for_local(name)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "semantic dependency metadata contains no local canonical key for declaration `{name}`"
-                ),
-                src: src.clone(),
-                span: span.into(),
-            })
-    }
-
     fn check_resolved<'a>(
         dag: &crate::tir::typed::DagTIR,
         names_with_spans: impl Iterator<Item = (&'a ScopedName, crate::syntax::span::Span)>,
@@ -1682,7 +1662,7 @@ fn detect_decl_cycles(
         let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
         let mut span_by_key: HashMap<ResolvedDeclKey, crate::syntax::span::Span> = HashMap::new();
         for (name, span) in names_with_spans {
-            let key = local_resolved_decl_key(dag, name, span, src)?;
+            let key = dag.resolved_decl_key_for_local(name);
             let idx = graph.add_node(key.clone());
             index_map.insert(key.clone(), idx);
             local_name_by_key.insert(key.clone(), name.clone());

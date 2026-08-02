@@ -232,9 +232,7 @@ fn topo_order_for_dag_body_resolved(
     let mut key_by_name: HashMap<ScopedName, ResolvedDeclKey> = HashMap::new();
     let mut name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
     for name in &names {
-        let Some(key) = dag_tir.resolved_decl_key_for_local(name) else {
-            continue;
-        };
+        let key = dag_tir.resolved_decl_key_for_local(name);
         key_by_name.insert(name.clone(), key.clone());
         name_by_key.insert(key, name.clone());
     }

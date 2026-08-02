@@ -297,7 +297,7 @@ fn top_level_const_values(
             const_values
                 .get(&key)
                 .cloned()
-                .map(|value| (DeclName::expect_valid(entry.name.member()), value))
+                .map(|value| (entry.name.member().clone(), value))
         })
         .collect()
 }
@@ -461,7 +461,7 @@ fn evaluate_and_store_file(
         .iter()
         .chain(compiled.included_plots.iter())
         .filter(|spec| !spec.name.is_qualified())
-        .map(|spec| (DeclName::expect_valid(spec.name.member()), spec.clone()))
+        .map(|spec| (spec.name.member().clone(), spec.clone()))
         .collect();
     let evaluated_values = assemble_file_output_values(&compiled, &eval_result);
 
@@ -1110,7 +1110,7 @@ fn filter_local_runtime_values(
             values
                 .get(&key)
                 .cloned()
-                .map(|value| (DeclName::expect_valid(name.member()), value))
+                .map(|value| (name.member().clone(), value))
         })
         .collect()
 }

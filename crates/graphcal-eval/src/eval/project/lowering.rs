@@ -220,7 +220,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     for override_name in file_overrides.keys() {
         cancellation.checkpoint()?;
         graphcal_compiler::tir::dim_check::check_override_dimension(
-            override_name.as_str(),
+            override_name,
             &declared_types,
             &tir,
             &tir.registry,
@@ -662,7 +662,7 @@ fn merge_dep_dag_tirs(
                 if let Some(value) = dep_eval.const_values.get(&source.source_name)
                     && let Some(dt) = dep_eval
                         .declared_types
-                        .get(&ScopedName::local(source.source_name.as_str()))
+                        .get(&ScopedName::from(&source.source_name))
                 {
                     cloned
                         .imported_values
@@ -829,7 +829,7 @@ fn process_deferred_dag_includes(
                         let Some(value) = parent_eval.const_values.get(&source.source_name) else {
                             continue;
                         };
-                        let parent_key = ScopedName::local(source.source_name.as_str());
+                        let parent_key = ScopedName::from(&source.source_name);
                         let Some(dt) = parent_eval.declared_types.get(&parent_key) else {
                             continue;
                         };
@@ -944,7 +944,7 @@ fn process_deferred_dag_includes(
         // ---- 4. Validation checks -----------------------------------------
         let mut dep_names: HashSet<DeclName> = HashSet::new();
         for (name, _) in &dep_unfrozen.source_order {
-            dep_names.insert(DeclName::expect_valid(name.member()));
+            dep_names.insert(name.member().clone());
         }
         dep_unfrozen.check_include_reconciles_overrides(
             &deferred.bindings,
@@ -969,7 +969,7 @@ fn process_deferred_dag_includes(
         // ---- 5. Merge dep IR into importer's IR ---------------------------
         unfrozen.merge_dependency(
             dep_unfrozen,
-            deferred.prefix.as_str(),
+            &deferred.prefix,
             &deferred.bindings,
             &dep_names,
             &deferred.index_bindings,
@@ -1242,19 +1242,17 @@ fn add_selective_aliases_inner(
             owners.body.clone()
         };
     for alias in selective {
-        let orig_name = alias.original.as_str();
-        let local_name = alias.local.as_str();
+        let orig_name = &alias.original;
+        let local_name = &alias.local;
         // The alias points at the dep's prefixed declaration: a typed
         // qualified `ScopedName`. No flat `prefix::orig_name` strings are
         // built — the qualification stays structural through the IR.
-        let target = ScopedName::qualified(prefix.as_str(), orig_name);
+        let target = ScopedName::qualified(prefix.clone(), orig_name.clone());
 
         let type_ann = decls.iter().find_map(|d| match &d.kind {
-            DeclKind::Param(p) if p.name.value.as_str() == orig_name => Some(p.type_ann.clone()),
-            DeclKind::Node(n) if n.name.value.as_str() == orig_name => Some(n.type_ann.clone()),
-            DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name => {
-                Some(c.type_ann.clone())
-            }
+            DeclKind::Param(p) if &p.name.value == orig_name => Some(p.type_ann.clone()),
+            DeclKind::Node(n) if &n.name.value == orig_name => Some(n.type_ann.clone()),
+            DeclKind::ConstNode(c) if &c.name.value == orig_name => Some(c.type_ann.clone()),
             _ => None,
         });
 
@@ -1269,29 +1267,21 @@ fn add_selective_aliases_inner(
         );
         graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(&mut type_ann, subs.dim);
 
-        let is_const = decls.iter().any(
-            |d| matches!(&d.kind, DeclKind::ConstNode(c) if c.name.value.as_str() == orig_name),
-        );
+        let is_const = decls
+            .iter()
+            .any(|d| matches!(&d.kind, DeclKind::ConstNode(c) if &c.name.value == orig_name));
         let alias_kind = if is_const {
             // A const alias body is a reference path to the prefixed target;
             // HIR lowering resolves it against the merged entries.
-            let (Ok(prefix_atom), Ok(member_atom)) = (
-                graphcal_compiler::syntax::names::NameAtom::parse(prefix.as_str()),
-                graphcal_compiler::syntax::names::NameAtom::parse(orig_name),
-            ) else {
-                // Alias components come from validated import items; a
-                // non-identifier segment cannot resolve, so skip the alias.
-                continue;
-            };
             ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(
                 graphcal_compiler::syntax::ast::IdentPath::new(
                     graphcal_compiler::syntax::non_empty::NonEmpty::new(
                         graphcal_compiler::syntax::ast::Ident {
-                            name: prefix_atom,
+                            name: prefix.atom().clone(),
                             span: import_span,
                         },
                         vec![graphcal_compiler::syntax::ast::Ident {
-                            name: member_atom,
+                            name: orig_name.atom().clone(),
                             span: import_span,
                         }],
                     ),
@@ -1304,7 +1294,7 @@ fn add_selective_aliases_inner(
 
         if is_const {
             unfrozen.add_const_alias(
-                ScopedName::local(local_name),
+                ScopedName::local(local_name.clone()),
                 type_ann,
                 alias_type_resolution_owner.clone(),
                 alias_expr,
@@ -1313,7 +1303,7 @@ fn add_selective_aliases_inner(
             );
         } else {
             unfrozen.add_node_alias(
-                ScopedName::local(local_name),
+                ScopedName::local(local_name.clone()),
                 type_ann,
                 alias_type_resolution_owner.clone(),
                 alias_expr,
@@ -1822,7 +1812,7 @@ pub(in crate::eval::project) fn build_dep_import_values_for_kind(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
-                let local_name = import_item.local_name().to_string();
+                let local_name = DeclName::from_atom(import_item.local_name_atom().clone());
                 if is_import && trans_dep.values.contains_key(orig_name.as_str()) {
                     // The dep file's own import has already been validated.
                     // For transitive const-only imports, runtime values do not

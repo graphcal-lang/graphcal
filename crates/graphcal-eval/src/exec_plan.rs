@@ -139,16 +139,7 @@ pub fn compile_with_cancellation(
         .asserts
         .iter()
         .map(|entry| {
-            let key = root
-                .resolved_decl_key_for_local(&entry.name)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "semantic declaration key missing for assertion `{}`",
-                        entry.name
-                    ),
-                    src: src.clone(),
-                    span: entry.span.into(),
-                })?;
+            let key = root.resolved_decl_key_for_local(&entry.name);
             let body = root
                 .semantic
                 .expressions
@@ -242,22 +233,6 @@ pub fn compile_with_cancellation(
 }
 
 type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
-
-fn local_resolved_decl_key(
-    dag: &DagTIR,
-    name: &ScopedName,
-    span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedDeclKey, GraphcalError> {
-    dag.resolved_decl_key_for_local(name)
-        .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "semantic dependency metadata contains no local canonical key for declaration `{name}`"
-                ),
-            src: src.clone(),
-            span: span.into(),
-        })
-}
 
 fn visible_values_with_imports(
     dag: &DagTIR,
@@ -355,7 +330,7 @@ fn const_eval_order_resolved(
     sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in &sorted_consts {
         cancellation.checkpoint()?;
-        let key = local_resolved_decl_key(dag, &entry.name, entry.span, src)?;
+        let key = dag.resolved_decl_key_for_local(&entry.name);
         let idx = graph.add_node(key.clone());
         index_map.insert(key.clone(), idx);
         local_name_by_key.insert(key.clone(), entry.name.clone());
@@ -489,7 +464,7 @@ fn runtime_eval_order_resolved(
 
     for (name, span) in decl_spans {
         cancellation.checkpoint()?;
-        let key = local_resolved_decl_key(dag, name, *span, src)?;
+        let key = dag.resolved_decl_key_for_local(name);
         let idx = graph.add_node(key.clone());
         index_map.insert(key.clone(), idx);
         local_name_by_key.insert(key.clone(), name.clone());
@@ -582,10 +557,8 @@ pub fn resolve_domain_constraints_with_cancellation(
 
     for (name, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
-        let domain_bounds = tir
-            .root()
-            .resolved_decl_key_for_local(name)
-            .and_then(|key| tir.root().semantic.domain_bounds.get(&key));
+        let key = tir.root().resolved_decl_key_for_local(name);
+        let domain_bounds = tir.root().semantic.domain_bounds.get(&key);
         let Some(domain_bounds) = domain_bounds else {
             continue;
         };
@@ -936,7 +909,7 @@ pub fn check_const_struct_field_constraints_at_compile_time(
                 .and_then(struct_type_ref_from_resolved_type);
             check_const_struct_field_constraints(
                 value,
-                entry.name.member(),
+                entry.name.member().as_str(),
                 entry.span,
                 owning_type.as_ref(),
                 field_constraints,

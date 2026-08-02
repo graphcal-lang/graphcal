@@ -116,7 +116,7 @@ pub fn preprocess_dag_body_self_imports(
             graphcal_compiler::syntax::ast::ImportKind::Selective(items) => {
                 for item in items {
                     let orig_name = &item.name.name;
-                    let local_name = item.local_name().to_string();
+                    let local_name = DeclName::from_atom(item.local_name_atom().clone());
                     let span = item.name.span;
 
                     match file_import_item_presence(parent_ast, orig_name.as_str(), item.namespace)
@@ -161,7 +161,7 @@ pub fn preprocess_dag_body_self_imports(
                                         scoped,
                                         ImportedValueSource {
                                             dag_id: parent_dag_id.clone(),
-                                            source_name: DeclName::expect_valid(orig_name),
+                                            source_name: DeclName::from_atom(orig_name.clone()),
                                         },
                                     );
                                 }
@@ -249,7 +249,7 @@ pub fn classify_value_decls_in_tir(
     let root = tir.root();
     let mut values = ParentValueDecls::default();
     for entry in &root.consts {
-        let name = DeclName::expect_valid(entry.name.member());
+        let name = entry.name.member().clone();
         if !parent_external_surface.is_explicit_export(&name) {
             continue;
         }
@@ -261,13 +261,13 @@ pub fn classify_value_decls_in_tir(
             .insert(name, resolved_to_declared_type(resolved, src)?);
     }
     for entry in &root.params {
-        let name = DeclName::expect_valid(entry.name.member());
+        let name = entry.name.member().clone();
         if parent_external_surface.is_input_port(&name) {
             values.runtime.insert(name);
         }
     }
     for entry in &root.nodes {
-        let name = DeclName::expect_valid(entry.name.member());
+        let name = entry.name.member().clone();
         if parent_external_surface.is_explicit_export(&name) {
             values.runtime.insert(name);
         }

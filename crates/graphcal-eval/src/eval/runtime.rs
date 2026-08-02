@@ -518,7 +518,7 @@ pub(super) fn evaluate_plan_with_values_and_cancellation(
     // Build a map from name -> HIR expression for display unit extraction.
     // Top-level decls are always `Local`-form names.
     let hir_expr_for = |name: &ScopedName| -> Option<&graphcal_compiler::hir::Expr> {
-        let key = tir.root().resolved_decl_key_for_local(name)?;
+        let key = tir.root().resolved_decl_key_for_local(name);
         let exprs = &tir.root().semantic.expressions;
         exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
     };
@@ -1508,7 +1508,7 @@ fn extract_dimension_from_expr(
     match &expr.kind {
         ExprKind::GraphRef(target) => {
             // Top-level decls are always `Local`-form names in declared_types.
-            let dt = declared_types.get(&ScopedName::local(target.value.as_str()))?;
+            let dt = declared_types.get(&ScopedName::local(target.value.to_unowned_def_name()))?;
             dimension_label_from_declared_type(dt, registry)
         }
         ExprKind::ForComp { body, .. } => {
