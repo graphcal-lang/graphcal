@@ -162,6 +162,17 @@ Compound unit expressions are supported:
 const node gm: GravParam = 3.986e5 km^3/s^2;
 ```
 
+A unit suffix may also begin with the reciprocal shorthand `1/unit` or a
+parenthesized unit group:
+
+```
+param frequency: Frequency = 2.0 1/s;
+param speed: Velocity = 3.0 (m/s);
+```
+
+Only the exact integer `1` is valid as a reciprocal numerator. The formatter
+normalizes redundant grouping, so `3.0 (m/s)` formats as `3.0 m/s`.
+
 The SI value produced by a unit literal must remain finite. For example, a literal whose numeric value times its unit scale overflows is an error rather than `inf`.
 
 ## Unit Conversion

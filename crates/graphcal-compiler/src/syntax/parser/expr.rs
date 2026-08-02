@@ -666,6 +666,26 @@ impl Parser<'_> {
         ))
     }
 
+    /// Return the next token's span when it can begin a unit expression on
+    /// the same line as `literal_span`.
+    ///
+    /// Unit suffixes can begin with a name (`2.0 m`), a group
+    /// (`2.0 (m/s)`), or the exact reciprocal shorthand (`2.0 1/s`). The
+    /// token-based classification keeps ordinary division (`2.0 / ...`) in
+    /// the expression grammar.
+    fn same_line_unit_expr_start(&mut self, literal_span: Span) -> Option<Span> {
+        let (token, start_span) = self.lexer.peek_with_span()?;
+        let token = *token;
+        let starts_unit_expr = token.is_identifier()
+            || token == Token::LParen
+            || (token == Token::Number
+                && self.lexer.slice_at(start_span) == "1"
+                && self.lexer.peek_second() == Some(&Token::Slash));
+
+        (starts_unit_expr && !self.has_line_break_between(literal_span, start_span))
+            .then_some(start_span)
+    }
+
     /// Parse a number literal: integer, float, or float with unit.
     fn parse_number_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
@@ -673,14 +693,8 @@ impl Parser<'_> {
         let is_integer = !text.contains('.') && !text.contains('e') && !text.contains('E');
 
         if is_integer {
-            // Integer literal: no decimal point or scientific notation
-            let next_ident_span = match self.lexer.peek_with_span() {
-                Some((token, next_span)) if token.is_identifier() => Some(next_span),
-                _ => None,
-            };
-            if next_ident_span
-                .is_some_and(|next_span| !self.has_line_break_between(span, next_span))
-            {
+            // Integer literal: no decimal point or scientific notation.
+            if self.same_line_unit_expr_start(span).is_some() {
                 // Integer followed by unit is an error: must use float
                 return Err(ParseError::InvalidNumber {
                     reason: format!("integer literal cannot have units; write `{text}.0` instead"),
@@ -700,17 +714,10 @@ impl Parser<'_> {
             // Floating-point literal: has a decimal point or scientific notation
             let value = self.parse_finite_f64_literal(&text, span)?;
 
-            // Check if followed by an identifier on the same line (unit
-            // literal): `400.0 km`. A newline starts the next syntactic item;
-            // without this guard, a missing comma between match arms could be
-            // misread as `1.0 NextArm`.
-            let next_ident_span = match self.lexer.peek_with_span() {
-                Some((token, next_span)) if token.is_identifier() => Some(next_span),
-                _ => None,
-            };
-            if next_ident_span
-                .is_some_and(|next_span| !self.has_line_break_between(span, next_span))
-            {
+            // A newline starts the next syntactic item; without this guard,
+            // a missing comma between match arms could be misread as a unit
+            // suffix on the preceding literal.
+            if self.same_line_unit_expr_start(span).is_some() {
                 let unit_expr = self.parse_unit_expr()?;
                 let full_span = span.merge(unit_expr.span);
                 Ok(Expr::new(
@@ -1160,6 +1167,54 @@ mod tests {
                 _ => panic!("expected UnitLiteral"),
             },
             _ => panic!("expected const"),
+        }
+    }
+
+    #[test]
+    fn parse_reciprocal_unit_literal() {
+        let expr = Parser::new("2.0 1/s").parse_single_expr().unwrap();
+        let ExprKind::UnitLiteral { value, unit } = &expr.kind else {
+            panic!("expected reciprocal UnitLiteral");
+        };
+        assert!((*value - 2.0).abs() < f64::EPSILON);
+        assert_eq!(unit.terms.len(), 1);
+        assert_eq!(unit.terms[0].op, crate::syntax::ast::MulDivOp::Div);
+        assert_eq!(unit.terms[0].name.value.to_string(), "s");
+    }
+
+    #[test]
+    fn parse_grouped_unit_literal() {
+        let expr = Parser::new("3.0 (m/s)").parse_single_expr().unwrap();
+        let ExprKind::UnitLiteral { value, unit } = &expr.kind else {
+            panic!("expected grouped UnitLiteral");
+        };
+        assert!((*value - 3.0).abs() < f64::EPSILON);
+        assert_eq!(unit.terms.len(), 2);
+        assert_eq!(unit.terms[0].op, crate::syntax::ast::MulDivOp::Mul);
+        assert_eq!(unit.terms[0].name.value.to_string(), "m");
+        assert_eq!(unit.terms[1].op, crate::syntax::ast::MulDivOp::Div);
+        assert_eq!(unit.terms[1].name.value.to_string(), "s");
+    }
+
+    #[test]
+    fn division_by_parenthesized_unit_literal_remains_arithmetic() {
+        let expr = Parser::new("1.0 / (2.0 m)").parse_single_expr().unwrap();
+        let ExprKind::BinOp { op, lhs, rhs } = &expr.kind else {
+            panic!("expected arithmetic division");
+        };
+        assert_eq!(*op, BinOp::Div);
+        assert!(matches!(lhs.kind, ExprKind::Number(value) if (value - 1.0).abs() < f64::EPSILON));
+        assert!(matches!(rhs.kind, ExprKind::UnitLiteral { .. }));
+    }
+
+    #[test]
+    fn reciprocal_unit_literal_requires_exact_integer_one() {
+        for source in ["2.0 1.0/s", "2.0 1_0/s"] {
+            let error = Parser::new(source).parse_single_expr().unwrap_err();
+            assert!(
+                matches!(error, ParseError::UnexpectedToken { .. }),
+                "`{source}` must not be classified as a reciprocal unit suffix: {error:?}"
+            );
         }
     }
 
