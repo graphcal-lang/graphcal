@@ -35,6 +35,7 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 - [ ] `crates/graphcal-compiler/src/syntax/token.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/comments.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/lexer.rs`
+- [ ] `crates/graphcal-compiler/src/syntax/parser/token_stream.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/function_name.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/plugin.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/index_name.rs`
