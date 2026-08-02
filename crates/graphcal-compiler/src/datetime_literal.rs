@@ -15,10 +15,66 @@ use thiserror::Error;
 pub enum ParseOffsetDateTimeLiteralError {
     #[error(transparent)]
     Invalid(#[from] jiff::Error),
+    #[error(
+        "expected RFC 3339 syntax `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)` with components in range"
+    )]
+    InvalidRfc3339,
     #[error("an explicit `Z` or numeric offset is required")]
     MissingOffset,
     #[error("a named timezone annotation is not allowed when the offset determines the instant")]
     TimeZoneAnnotation,
+}
+
+fn validate_rfc3339_syntax(source: &str) -> Result<(), ParseOffsetDateTimeLiteralError> {
+    let bytes = source.as_bytes();
+    if bytes.len() < 20
+        || !bytes[..4].iter().all(u8::is_ascii_digit)
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !matches!(bytes[10], b'T' | b't')
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || !two_ascii_digits_in_range([bytes[5], bytes[6]], 1, 12)
+        || !two_ascii_digits_in_range([bytes[8], bytes[9]], 1, 31)
+        || !two_ascii_digits_in_range([bytes[11], bytes[12]], 0, 23)
+        || !two_ascii_digits_in_range([bytes[14], bytes[15]], 0, 59)
+        || !two_ascii_digits_in_range([bytes[17], bytes[18]], 0, 60)
+    {
+        return Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339);
+    }
+
+    let offset_start = match bytes[19] {
+        b'.' => {
+            let fraction_len = bytes[20..]
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if fraction_len == 0 {
+                return Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339);
+            }
+            20 + fraction_len
+        }
+        _ => 19,
+    };
+
+    match &bytes[offset_start..] {
+        [b'Z' | b'z'] => Ok(()),
+        [sign, hour_tens, hour_ones, b':', minute_tens, minute_ones]
+            if matches!(sign, b'+' | b'-')
+                && two_ascii_digits_in_range([*hour_tens, *hour_ones], 0, 23)
+                && two_ascii_digits_in_range([*minute_tens, *minute_ones], 0, 59) =>
+        {
+            Ok(())
+        }
+        _ => Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339),
+    }
+}
+
+fn two_ascii_digits_in_range(digits: [u8; 2], min: u8, max: u8) -> bool {
+    digits.iter().all(u8::is_ascii_digit) && {
+        let value = (digits[0] - b'0') * 10 + (digits[1] - b'0');
+        (min..=max).contains(&value)
+    }
 }
 
 /// Error returned when parsing an offset/zone-free civil datetime literal.
@@ -90,6 +146,7 @@ impl OffsetDateTimeLiteral {
         if pieces.time_zone_annotation().is_some() {
             return Err(ParseOffsetDateTimeLiteralError::TimeZoneAnnotation);
         }
+        validate_rfc3339_syntax(source)?;
         parser.parse_timestamp(source).map(Self).map_err(Into::into)
     }
 
@@ -245,15 +302,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn offset_literal_accepts_rfc3339_forms() {
+        for source in [
+            "2024-11-05T12:00:00Z",
+            "2024-11-05T12:00:00+09:00",
+            "2024-11-05T12:00:00.123456789Z",
+            "2024-11-05T12:00:00+23:59",
+            "2024-11-05t12:00:00z",
+        ] {
+            assert!(
+                OffsetDateTimeLiteral::parse(source).is_ok(),
+                "expected `{source}` to be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn offset_literal_rejects_forms_outside_rfc3339() {
+        for source in [
+            "20241105T120000Z",
+            "2024-11-05T12:00:00+09:00:30",
+            "2024-11-05T12:00:00+25:00",
+        ] {
+            assert!(
+                matches!(
+                    OffsetDateTimeLiteral::parse(source),
+                    Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339)
+                ),
+                "expected `{source}` to be rejected as non-RFC 3339"
+            );
+        }
+    }
+
+    #[test]
     fn offset_literal_requires_an_explicit_offset() {
-        assert!(OffsetDateTimeLiteral::parse("2024-11-05T12:00:00Z").is_ok());
-        assert!(OffsetDateTimeLiteral::parse("2024-11-05T12:00:00+09:00").is_ok());
-        assert!(OffsetDateTimeLiteral::parse("2024-11-05T12:00:00").is_err());
+        assert!(matches!(
+            OffsetDateTimeLiteral::parse("2024-11-05T12:00:00"),
+            Err(ParseOffsetDateTimeLiteralError::MissingOffset)
+        ));
         for scale in TimeScale::ALL_NAMES {
             let source = format!("2024-11-05T12:00:00 {scale}");
             assert!(OffsetDateTimeLiteral::parse(&source).is_err());
         }
-        assert!(OffsetDateTimeLiteral::parse("2024-11-05T12:00:00+09:00[Asia/Tokyo]").is_err());
+        assert!(matches!(
+            OffsetDateTimeLiteral::parse("2024-11-05T12:00:00+09:00[Asia/Tokyo]"),
+            Err(ParseOffsetDateTimeLiteralError::TimeZoneAnnotation)
+        ));
     }
 
     #[test]
