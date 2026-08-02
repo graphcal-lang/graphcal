@@ -25,7 +25,7 @@ impl Parser<'_> {
 
     /// Parse a type expression: `Dimensionless` or a dimension expression.
     pub(super) fn parse_type_expr(&mut self) -> Result<TypeExpr, ParseError> {
-        self.with_depth(Self::parse_type_expr_inner)
+        self.with_nesting_budget(Self::parse_type_expr_inner)
     }
 
     fn parse_type_expr_inner(&mut self) -> Result<TypeExpr, ParseError> {
@@ -243,6 +243,10 @@ impl Parser<'_> {
     /// Parenthesized groups are flattened: `(A * B / C)^2` becomes `A^2 * B^2 / C^2`,
     /// and `D / (A * B)` becomes `D / A / B`.
     pub(super) fn parse_dim_expr(&mut self) -> Result<DimExpr, ParseError> {
+        self.with_nesting_budget(Self::parse_dim_expr_inner)
+    }
+
+    fn parse_dim_expr_inner(&mut self) -> Result<DimExpr, ParseError> {
         let first_items = self.parse_dim_term_or_group()?;
         self.parse_dim_expr_after_first_items(first_items)
     }
@@ -446,7 +450,7 @@ impl Parser<'_> {
     /// Parenthesized groups are flattened into the term list (operator
     /// combination and power distribution), so the AST stays flat.
     pub(super) fn parse_unit_expr(&mut self) -> Result<UnitExpr, ParseError> {
-        self.with_depth(Self::parse_unit_expr_inner)
+        self.with_nesting_budget(Self::parse_unit_expr_inner)
     }
 
     fn parse_unit_expr_inner(&mut self) -> Result<UnitExpr, ParseError> {
@@ -709,15 +713,19 @@ impl Parser<'_> {
 
         if self.lexer.peek() != Some(&Token::Number) {
             let mut type_candidate = self.clone();
-            if let Ok(type_expr) = type_candidate.parse_type_expr()
-                && matches!(
-                    type_candidate.lexer.peek(),
-                    Some(&Token::Comma | &Token::Gt)
-                )
-            {
-                *self = type_candidate;
-                return Ok(Self::ambiguous_generic_arg(&type_expr)
-                    .map_or(GenericArg::Type(type_expr), GenericArg::Ambiguous));
+            match type_candidate.parse_type_expr() {
+                Ok(type_expr)
+                    if matches!(
+                        type_candidate.lexer.peek(),
+                        Some(&Token::Comma | &Token::Gt)
+                    ) =>
+                {
+                    *self = type_candidate;
+                    return Ok(Self::ambiguous_generic_arg(&type_expr)
+                        .map_or(GenericArg::Type(type_expr), GenericArg::Ambiguous));
+                }
+                Err(error @ ParseError::TooDeeplyNested { .. }) => return Err(error),
+                Ok(_) | Err(_) => {}
             }
         }
 
@@ -931,6 +939,7 @@ impl Parser<'_> {
 mod tests {
     use super::*;
     use crate::syntax::ast::{DeclKind, RawDeclSugar, TypeExprKind};
+    use crate::syntax::parser::MAX_NESTING_DEPTH;
 
     fn dim_expr_name(te: &crate::syntax::ast::TypeExpr) -> &str {
         match &te.kind {
@@ -1037,6 +1046,47 @@ mod tests {
         let source = "param x: Length = 1.0 m/(s^2000000000)^2000000000;";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(err, ParseError::InvalidNumber { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn deeply_nested_dimension_groups_exhaust_the_shared_nesting_budget() {
+        let depth = MAX_NESTING_DEPTH + 1;
+        let source = format!("{}Length{}", "(".repeat(depth), ")".repeat(depth));
+        let error = Parser::new(&source)
+            .parse_standalone_dim_expr()
+            .unwrap_err();
+        assert!(
+            matches!(error, ParseError::TooDeeplyNested { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn deeply_nested_unit_groups_retain_the_nesting_diagnostic() {
+        let depth = MAX_NESTING_DEPTH + 1;
+        let source = format!("{}m{}", "(".repeat(depth), ")".repeat(depth));
+        let error = Parser::new(&source)
+            .parse_standalone_unit_expr()
+            .unwrap_err();
+        assert!(
+            matches!(error, ParseError::TooDeeplyNested { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn deeply_nested_type_applications_retain_the_nesting_diagnostic() {
+        let depth = MAX_NESTING_DEPTH + 1;
+        let source = format!(
+            "param value: {}Dimensionless{};",
+            "Wrapper<".repeat(depth),
+            ">".repeat(depth)
+        );
+        let error = Parser::new(&source).parse_file().unwrap_err();
+        assert!(
+            matches!(error, ParseError::TooDeeplyNested { .. }),
+            "{error:?}"
+        );
     }
 
     #[test]
