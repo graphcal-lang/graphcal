@@ -287,20 +287,16 @@ fn format_hir_nat_expr(nat_expr: &hir::NatExpr) -> String {
     match nat_expr {
         hir::NatExpr::Literal(n, _) => n.to_string(),
         hir::NatExpr::Param(param) => param.value.name.to_string(),
-        hir::NatExpr::Add(lhs, rhs, _) => {
-            format!(
-                "{} + {}",
-                format_hir_nat_expr(lhs),
-                format_hir_nat_expr(rhs)
-            )
-        }
-        hir::NatExpr::Mul(lhs, rhs, _) => {
-            format!(
-                "{} * {}",
-                format_hir_nat_expr(lhs),
-                format_hir_nat_expr(rhs)
-            )
-        }
+        hir::NatExpr::Add(operands, _) => operands
+            .iter()
+            .map(format_hir_nat_expr)
+            .collect::<Vec<_>>()
+            .join(" + "),
+        hir::NatExpr::Mul(operands, _) => operands
+            .iter()
+            .map(format_hir_nat_expr)
+            .collect::<Vec<_>>()
+            .join(" * "),
     }
 }
 
@@ -471,12 +467,16 @@ fn normalize_hir_nat_expr(
     match expr {
         hir::NatExpr::Literal(value, _) => Ok(NatPolyForm::from_constant(*value)),
         hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),
-        hir::NatExpr::Add(lhs, rhs, _) => {
-            normalize_hir_nat_expr(lhs)?.add(&normalize_hir_nat_expr(rhs)?)
-        }
-        hir::NatExpr::Mul(lhs, rhs, _) => {
-            normalize_hir_nat_expr(lhs)?.mul(&normalize_hir_nat_expr(rhs)?)
-        }
+        hir::NatExpr::Add(operands, _) => operands
+            .iter()
+            .try_fold(NatPolyForm::from_constant(0), |sum, operand| {
+                sum.add(&normalize_hir_nat_expr(operand)?)
+            }),
+        hir::NatExpr::Mul(operands, _) => operands
+            .iter()
+            .try_fold(NatPolyForm::from_constant(1), |product, operand| {
+                product.mul(&normalize_hir_nat_expr(operand)?)
+            }),
     }
 }
 

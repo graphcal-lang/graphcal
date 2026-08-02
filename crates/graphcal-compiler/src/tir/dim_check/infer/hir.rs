@@ -1886,12 +1886,16 @@ fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatPolyForm, NatOverflo
     match expr {
         hir::NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
         hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),
-        hir::NatExpr::Add(lhs, rhs, _) => {
-            hir_nat_to_linear_form(lhs)?.add(&hir_nat_to_linear_form(rhs)?)
-        }
-        hir::NatExpr::Mul(lhs, rhs, _) => {
-            hir_nat_to_linear_form(lhs)?.mul(&hir_nat_to_linear_form(rhs)?)
-        }
+        hir::NatExpr::Add(operands, _) => operands
+            .iter()
+            .try_fold(NatPolyForm::from_constant(0), |sum, operand| {
+                sum.add(&hir_nat_to_linear_form(operand)?)
+            }),
+        hir::NatExpr::Mul(operands, _) => operands
+            .iter()
+            .try_fold(NatPolyForm::from_constant(1), |product, operand| {
+                product.mul(&hir_nat_to_linear_form(operand)?)
+            }),
     }
 }
 

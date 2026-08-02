@@ -711,7 +711,7 @@ fn parse_type_decl_nat_generic_defaults() {
     assert!(matches!(
         type_decl.generic_params[1].default,
         Some(crate::syntax::ast::GenericArg::Nat(
-            crate::syntax::ast::NatExpr::Add(_, _, _)
+            crate::syntax::ast::NatExpr::Add(_, _)
         ))
     ));
 }

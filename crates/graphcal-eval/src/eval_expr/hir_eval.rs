@@ -1795,18 +1795,21 @@ fn eval_hir_nat_expr(expr: &hir::NatExpr, ctx: &EvalContext<'_>) -> Result<u64, 
             ),
             param.span,
         )),
-        hir::NatExpr::Add(lhs, rhs, span) => {
-            let l = eval_hir_nat_expr(lhs, ctx)?;
-            let r = eval_hir_nat_expr(rhs, ctx)?;
-            l.checked_add(r)
-                .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} + {r}"), *span))
-        }
-        hir::NatExpr::Mul(lhs, rhs, span) => {
-            let l = eval_hir_nat_expr(lhs, ctx)?;
-            let r = eval_hir_nat_expr(rhs, ctx)?;
-            l.checked_mul(r)
-                .ok_or_else(|| ctx.eval_error(format!("nat arithmetic overflow: {l} * {r}"), *span))
-        }
+        hir::NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
+            let value = eval_hir_nat_expr(operand, ctx)?;
+            sum.checked_add(value).ok_or_else(|| {
+                ctx.eval_error(format!("nat arithmetic overflow: {sum} + {value}"), *span)
+            })
+        }),
+        hir::NatExpr::Mul(operands, span) => operands.iter().try_fold(1_u64, |product, operand| {
+            let value = eval_hir_nat_expr(operand, ctx)?;
+            product.checked_mul(value).ok_or_else(|| {
+                ctx.eval_error(
+                    format!("nat arithmetic overflow: {product} * {value}"),
+                    *span,
+                )
+            })
+        }),
     }
 }
 

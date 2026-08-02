@@ -755,7 +755,7 @@ impl Parser<'_> {
                 span: item.term.name.span,
             });
             let span = lhs.span().merge(rhs.span());
-            Some(AmbiguousGenericArg::Mul(Box::new(lhs), Box::new(rhs), span))
+            Some(AmbiguousGenericArg::mul(lhs, rhs, span))
         })
     }
 
@@ -813,7 +813,7 @@ impl Parser<'_> {
             self.lexer.next_token(); // consume '+'
             let rhs = self.parse_nat_mul_term_in_index()?;
             let full_span = lhs.span().merge(rhs.span());
-            lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), full_span);
+            lhs = NatExpr::add(lhs, rhs, full_span);
         }
 
         if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
@@ -839,7 +839,7 @@ impl Parser<'_> {
             let rhs_atom = self.parse_index_expr_atom()?;
             let rhs = self.index_expr_atom_into_nat_expr(rhs_atom)?;
             let full_span = lhs.span().merge(rhs.span());
-            lhs = NatExpr::Mul(Box::new(lhs), Box::new(rhs), full_span);
+            lhs = NatExpr::mul(lhs, rhs, full_span);
         }
         Ok(lhs)
     }
@@ -1003,11 +1003,11 @@ mod tests {
         };
         assert!(matches!(
             &generic_args[0],
-            GenericArg::Nat(NatExpr::Add(_, _, _))
+            GenericArg::Nat(NatExpr::Add(_, _))
         ));
         assert!(matches!(
             &generic_args[1],
-            GenericArg::Ambiguous(AmbiguousGenericArg::Mul(_, _, _))
+            GenericArg::Ambiguous(AmbiguousGenericArg::Mul(_, _))
         ));
         assert!(matches!(
             &generic_args[2],
@@ -1029,7 +1029,7 @@ mod tests {
         assert!(matches!(
             &generic_args[0],
             GenericArg::Index(IndexExpr::Finite {
-                cardinality: NatExpr::Add(_, _, _),
+                cardinality: NatExpr::Add(_, _),
                 ..
             })
         ));
@@ -1043,7 +1043,7 @@ mod tests {
         assert!(matches!(
             &indexes[0],
             IndexExpr::Finite {
-                cardinality: NatExpr::Mul(_, _, _),
+                cardinality: NatExpr::Mul(_, _),
                 ..
             }
         ));

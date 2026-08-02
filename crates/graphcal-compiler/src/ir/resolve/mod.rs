@@ -962,9 +962,10 @@ fn collect_ambiguous_generic_refs(
             crate::syntax::names::NamePath::local(ident.name.clone()),
             ident.span,
         )),
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            collect_ambiguous_generic_refs(lhs, refs);
-            collect_ambiguous_generic_refs(rhs, refs);
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
+            for operand in operands {
+                collect_ambiguous_generic_refs(operand, refs);
+            }
         }
     }
 }

@@ -556,14 +556,18 @@ fn resolve_ambiguous_field_dimension(
         AmbiguousGenericArg::Name(name) => {
             field_dimension_name(name.name.as_str(), generic_sub, registry)
         }
-        AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            resolve_ambiguous_field_dimension(lhs, generic_sub, registry)?
-                .checked_mul(&resolve_ambiguous_field_dimension(
-                    rhs,
-                    generic_sub,
-                    registry,
-                )?)
-                .ok()
+        AmbiguousGenericArg::Mul(operands, _) => {
+            let mut operands = operands.iter();
+            let first = resolve_ambiguous_field_dimension(operands.next()?, generic_sub, registry)?;
+            operands.try_fold(first, |product, operand| {
+                product
+                    .checked_mul(&resolve_ambiguous_field_dimension(
+                        operand,
+                        generic_sub,
+                        registry,
+                    )?)
+                    .ok()
+            })
         }
     }
 }

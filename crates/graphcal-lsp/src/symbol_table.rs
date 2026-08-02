@@ -1987,9 +1987,10 @@ fn collect_ambiguous_generic_arg_refs(
                     .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.to_string())),
             });
         }
-        graphcal_compiler::syntax::ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            collect_ambiguous_generic_arg_refs(lhs, generic_scope, table);
-            collect_ambiguous_generic_arg_refs(rhs, generic_scope, table);
+        graphcal_compiler::syntax::ast::AmbiguousGenericArg::Mul(operands, _) => {
+            for operand in operands {
+                collect_ambiguous_generic_arg_refs(operand, generic_scope, table);
+            }
         }
     }
 }
@@ -2009,10 +2010,11 @@ fn collect_nat_generic_param_refs(
                 });
             }
         }
-        graphcal_compiler::syntax::ast::NatExpr::Add(lhs, rhs, _)
-        | graphcal_compiler::syntax::ast::NatExpr::Mul(lhs, rhs, _) => {
-            collect_nat_generic_param_refs(lhs, generic_scope, table);
-            collect_nat_generic_param_refs(rhs, generic_scope, table);
+        graphcal_compiler::syntax::ast::NatExpr::Add(operands, _)
+        | graphcal_compiler::syntax::ast::NatExpr::Mul(operands, _) => {
+            for operand in operands {
+                collect_nat_generic_param_refs(operand, generic_scope, table);
+            }
         }
     }
 }
