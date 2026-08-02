@@ -8,7 +8,7 @@ Begin snippet for domain_field_on_bool.gcl starting at line 2, column 1
 
 snippet line 2: type Foo {
 snippet line 3:     Foo(x: Bool(min: 0.0)),
-    label at line 3, columns 12 to 24: constraints not valid here
+    label at line 3, columns 12 to 25: constraints not valid here
 snippet line 4: }
 diagnostic help: domain constraints (min/max) are only valid on quantity, Int, and Datetime types
 diagnostic code: graphcal::C004
