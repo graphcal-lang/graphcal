@@ -168,19 +168,15 @@ impl Parser<'_> {
         let (_, table_span) = self.expect(Token::Table)?;
         self.expect(Token::LBracket)?;
 
-        // Shared axes: one or more, then a trailing tuple of slot axes.
+        // Shared axes: one or more, then a comma and the trailing tuple of slot axes.
         let mut shared_axes: Vec<TableIndexSpec> = Vec::new();
-        loop {
-            // Detect the tuple: next token is `(`.
-            if self.lexer.peek() == Some(&Token::LParen) {
-                break;
-            }
-            shared_axes.push(self.parse_table_index_spec_for_multi()?);
-            match self.lexer.peek() {
-                Some(Token::Comma) => {
-                    self.lexer.next_token();
+        if self.lexer.peek() != Some(&Token::LParen) {
+            loop {
+                shared_axes.push(self.parse_table_index_spec_for_multi()?);
+                self.expect(Token::Comma)?;
+                if self.lexer.peek() == Some(&Token::LParen) {
+                    break;
                 }
-                _ => break,
             }
         }
 
@@ -835,6 +831,30 @@ const node mass_per_unit:     Mass[Component]
         assert_eq!(multi.slots()[0].kind, MultiSlotKind::Param);
         assert_eq!(multi.slots()[1].kind, MultiSlotKind::Node);
         assert_eq!(multi.slots()[2].kind, MultiSlotKind::ConstNode);
+    }
+
+    #[test]
+    fn multi_decl_requires_comma_before_slot_tuple() {
+        let source = r"
+param a: Int[I], param b: Int[I]
+  = table[I (_, _)] {
+      : _, _;
+      X: 1, 2;
+  };
+";
+        let err = Parser::new(source).parse_file().unwrap_err();
+        match err {
+            ParseError::UnexpectedToken {
+                expected, found, ..
+            } => {
+                assert_eq!(expected, "`,`");
+                assert_eq!(found, "(");
+            }
+            other => panic!("expected a missing-comma diagnostic, got {other:?}"),
+        }
+
+        let valid_source = source.replace("table[I (", "table[I, (");
+        Parser::new(&valid_source).parse_file().unwrap();
     }
 
     #[test]
