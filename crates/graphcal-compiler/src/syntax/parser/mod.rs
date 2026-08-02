@@ -5,7 +5,6 @@ use thiserror::Error;
 
 use crate::syntax::ast::{Expr, Ident, IdentPath};
 use crate::syntax::comments::SourceMetadata;
-use crate::syntax::lexer::Lexer;
 use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
@@ -14,7 +13,10 @@ mod compound;
 mod decl;
 mod expr;
 mod table;
+mod token_stream;
 mod type_expr;
+
+use token_stream::ParserTokenStream;
 
 /// Rich parse error with miette diagnostics.
 #[derive(Debug, Clone, Error, Diagnostic)]
@@ -414,7 +416,7 @@ impl ParseError {
 
 #[derive(Clone)]
 pub struct Parser<'src> {
-    lexer: Lexer<'src>,
+    lexer: ParserTokenStream<'src>,
     source: Arc<String>,
     source_name: String,
     /// Current nesting depth of recursive grammar productions; bounded by
@@ -426,7 +428,7 @@ impl<'src> Parser<'src> {
     #[must_use]
     pub fn new(source: &'src str) -> Self {
         Self {
-            lexer: Lexer::new(source),
+            lexer: ParserTokenStream::new(source),
             source: Arc::new(source.to_string()),
             source_name: "input".to_string(),
             depth: 0,
@@ -436,7 +438,7 @@ impl<'src> Parser<'src> {
     #[must_use]
     pub fn with_name(source: &'src str, name: &str) -> Self {
         Self {
-            lexer: Lexer::new(source),
+            lexer: ParserTokenStream::new(source),
             source: Arc::new(source.to_string()),
             source_name: name.to_string(),
             depth: 0,
@@ -644,8 +646,8 @@ impl<'src> Parser<'src> {
         self.finalize(result)
     }
 
-    /// Parse a full source file with cooperative cancellation between
-    /// declarations and while draining lexer errors.
+    /// Parse a full source file with cooperative cancellation at a bounded
+    /// syntax-token interval, including within a single large declaration.
     ///
     /// # Errors
     ///
@@ -655,11 +657,23 @@ impl<'src> Parser<'src> {
         &mut self,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<crate::syntax::ast::File, ParseOperationError> {
-        let result = self.parse_file_inner_with_cancellation(cancellation);
+        self.lexer.enable_cancellation(cancellation);
+        let result = self.parse_file_with_active_cancellation();
+        self.lexer.disable_cancellation();
+        result
+    }
+
+    fn parse_file_with_active_cancellation(
+        &mut self,
+    ) -> Result<crate::syntax::ast::File, ParseOperationError> {
+        self.lexer.checkpoint()?;
+        let result = self.parse_file_inner();
         while self.lexer.peek().is_some() {
-            cancellation.checkpoint()?;
-            self.lexer.next_token();
+            if self.lexer.next_token().is_none() {
+                break;
+            }
         }
+        self.lexer.checkpoint()?;
         if let Some(span) = self.lexer.first_error_span() {
             return Err(ParseError::UnknownToken {
                 src: self.named_source(),
@@ -667,24 +681,12 @@ impl<'src> Parser<'src> {
             }
             .into());
         }
-        result
+        result.map_err(ParseOperationError::from)
     }
 
     fn parse_file_inner(&mut self) -> Result<crate::syntax::ast::File, ParseError> {
         let mut declarations = Vec::new();
         while self.lexer.peek().is_some() {
-            declarations.push(self.parse_declaration()?);
-        }
-        Ok(crate::syntax::ast::File { declarations })
-    }
-
-    fn parse_file_inner_with_cancellation(
-        &mut self,
-        cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<crate::syntax::ast::File, ParseOperationError> {
-        let mut declarations = Vec::new();
-        while self.lexer.peek().is_some() {
-            cancellation.checkpoint()?;
             declarations.push(self.parse_declaration()?);
         }
         Ok(crate::syntax::ast::File { declarations })
@@ -777,7 +779,9 @@ impl<'src> Parser<'src> {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::parser::{ParseError, Parser};
+    use crate::syntax::parser::{
+        ParseError, ParseOperationError, Parser, token_stream::CANCELLATION_CHECKPOINT_INTERVAL,
+    };
 
     #[test]
     fn stray_character_in_source_surfaces_as_unknown_token() {
@@ -806,5 +810,43 @@ mod tests {
             matches!(err, ParseError::UnknownToken { .. }),
             "expected UnknownToken, got {err:?}"
         );
+    }
+
+    #[test]
+    fn cancellation_checkpoints_interrupt_large_single_declarations() {
+        let term_count = CANCELLATION_CHECKPOINT_INTERVAL * 2;
+        let expression = (0..term_count)
+            .map(|_| "1.0")
+            .collect::<Vec<_>>()
+            .join(" + ");
+        let table_rows = (0..term_count)
+            .map(|_| "1.0;")
+            .collect::<Vec<_>>()
+            .join(" ");
+        let nested_dags = (0..term_count)
+            .map(|index| format!("dag d{index} {{"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let closing_braces = "}".repeat(term_count);
+        let cases = [
+            format!("node x: Dimensionless = {expression};"),
+            format!(
+                "param x: Dimensionless[Fin({term_count})] = \
+                 table[Fin({term_count})] {{ {table_rows} }};"
+            ),
+            format!("{nested_dags} {closing_braces}"),
+        ];
+
+        for source in cases {
+            let mut parser = Parser::new(&source);
+            // The operation-boundary checkpoint succeeds, then the next
+            // periodic checkpoint deterministically cancels after tokens from
+            // the sole top-level declaration have already been consumed.
+            parser.lexer.cancel_after_successful_checkpoints(1);
+            let error = parser
+                .parse_file_with_active_cancellation()
+                .expect_err("large declaration should reach an internal checkpoint");
+            assert!(matches!(error, ParseOperationError::Cancelled(_)));
+        }
     }
 }
