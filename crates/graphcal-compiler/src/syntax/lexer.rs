@@ -1,3 +1,4 @@
+use crate::source_line::line_endings;
 use crate::syntax::comments::{BlankLine, Comment, CommentBody, CommentDelimiter, SourceMetadata};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{LexicalItem, LexicalToken, Token, TriviaToken};
@@ -190,48 +191,16 @@ fn comment_delimiter(lexeme: &str) -> CommentDelimiter {
 fn record_blank_lines(source: &str, span: Span, source_metadata: &mut SourceMetadata) {
     let whitespace = &source[span.offset()..span.offset() + span.len()];
     let mut previous_line_ending_start: Option<usize> = None;
-    let mut pos = 0;
-    while pos < whitespace.len() {
-        match line_ending_at(whitespace.as_bytes(), pos) {
-            Some(line_ending) => {
-                if let Some(start) = previous_line_ending_start {
-                    let end = pos + line_ending.len();
-                    source_metadata.push_blank_line(BlankLine::new(Span::new(
-                        span.offset() + start,
-                        end - start,
-                    )));
-                }
-                previous_line_ending_start = Some(pos);
-                pos += line_ending.len();
-            }
-            None => pos += 1,
+    line_endings(whitespace).for_each(|(pos, line_ending)| {
+        if let Some(start) = previous_line_ending_start {
+            let end = pos + line_ending.len();
+            source_metadata.push_blank_line(BlankLine::new(Span::new(
+                span.offset() + start,
+                end - start,
+            )));
         }
-    }
-}
-
-fn line_ending_at(bytes: &[u8], pos: usize) -> Option<LineEnding> {
-    match bytes.get(pos).copied() {
-        Some(b'\n') => Some(LineEnding::Lf),
-        Some(b'\r') if bytes.get(pos + 1) == Some(&b'\n') => Some(LineEnding::CrLf),
-        Some(b'\r') => Some(LineEnding::Cr),
-        _ => None,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LineEnding {
-    Lf,
-    CrLf,
-    Cr,
-}
-
-impl LineEnding {
-    const fn len(self) -> usize {
-        match self {
-            Self::Lf | Self::Cr => 1,
-            Self::CrLf => 2,
-        }
-    }
+        previous_line_ending_start = Some(pos);
+    });
 }
 
 mod peek_cache {

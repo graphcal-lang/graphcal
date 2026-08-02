@@ -4,6 +4,8 @@
 //! use zero-based lines with UTF-16 code-unit columns. This module owns that
 //! conversion independently of any transport protocol.
 
+use crate::source_line::line_endings;
+
 /// Zero-based line and UTF-16 code-unit column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Utf16Position {
@@ -23,29 +25,24 @@ pub struct Utf16Range {
 pub struct Utf16LineIndex<'source> {
     source: &'source str,
     line_starts: Vec<usize>,
+    line_content_ends: Vec<usize>,
 }
 
 impl<'source> Utf16LineIndex<'source> {
-    /// Scan `source` once and record every line's UTF-8 start offset.
+    /// Scan `source` once and record every line's UTF-8 content range.
     #[must_use]
     pub fn new(source: &'source str) -> Self {
-        let mut line_starts = Vec::with_capacity(
-            source
-                .bytes()
-                .filter(|byte| *byte == b'\n')
-                .count()
-                .saturating_add(1),
-        );
-        line_starts.push(0);
-        line_starts.extend(
-            source
-                .bytes()
-                .enumerate()
-                .filter_map(|(offset, byte)| (byte == b'\n').then_some(offset + 1)),
-        );
+        let mut line_starts = vec![0];
+        let mut line_content_ends = Vec::new();
+        line_endings(source).for_each(|(offset, line_ending)| {
+            line_content_ends.push(offset);
+            line_starts.push(offset + line_ending.len());
+        });
+        line_content_ends.push(source.len());
         Self {
             source,
             line_starts,
+            line_content_ends,
         }
     }
 
@@ -75,7 +72,8 @@ impl<'source> Utf16LineIndex<'source> {
             .max(1)
             - 1;
         let line_start = self.line_starts[line_index];
-        let character = self.source[line_start..offset]
+        let content_offset = offset.min(self.line_content_ends[line_index]);
+        let character = self.source[line_start..content_offset]
             .chars()
             .map(char::len_utf16)
             .sum::<usize>();
@@ -84,6 +82,39 @@ impl<'source> Utf16LineIndex<'source> {
             line: u32::try_from(line_index).unwrap_or(u32::MAX),
             character: u32::try_from(character).unwrap_or(u32::MAX),
         }
+    }
+
+    /// Convert a zero-based UTF-16 editor position into a UTF-8 byte offset.
+    ///
+    /// Lines past the source clamp to the source end. Columns past a line's
+    /// content clamp to the start of its line-ending sequence. A column inside
+    /// a surrogate pair snaps down to the preceding UTF-8 character boundary.
+    #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "char::len_utf16() returns 1 or 2, never truncates to u32"
+    )]
+    pub fn byte_offset(&self, position: Utf16Position) -> usize {
+        let Ok(line_index) = usize::try_from(position.line) else {
+            return self.source.len();
+        };
+        let Some(&line_start) = self.line_starts.get(line_index) else {
+            return self.source.len();
+        };
+        let line_end = self.line_content_ends[line_index];
+
+        let mut column = 0_u32;
+        for (relative_offset, ch) in self.source[line_start..line_end].char_indices() {
+            if column >= position.character {
+                return line_start + relative_offset;
+            }
+            let next_column = column + ch.len_utf16() as u32;
+            if next_column > position.character {
+                return line_start + relative_offset;
+            }
+            column = next_column;
+        }
+        line_end
     }
 }
 
@@ -112,9 +143,62 @@ mod tests {
     }
 
     #[test]
-    fn line_starts_cover_empty_and_trailing_lines() {
+    fn line_starts_cover_empty_trailing_and_mixed_ending_lines() {
         assert_eq!(Utf16LineIndex::new("").line_starts, vec![0]);
         assert_eq!(Utf16LineIndex::new("a\nb\n").line_starts, vec![0, 2, 4]);
+        assert_eq!(
+            Utf16LineIndex::new("a\nb\rc\r\nd").line_starts,
+            vec![0, 2, 4, 7]
+        );
+    }
+
+    #[test]
+    fn all_line_endings_produce_the_same_utf16_positions() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let source = format!("a🙂{line_ending}b");
+            let index = Utf16LineIndex::new(&source);
+            let second_line = source.find('b').unwrap();
+            assert_eq!(
+                index.position(second_line),
+                Utf16Position {
+                    line: 1,
+                    character: 0,
+                },
+                "line ending {line_ending:?}"
+            );
+            assert_eq!(
+                index.position(source.find(line_ending).unwrap()),
+                Utf16Position {
+                    line: 0,
+                    character: 3,
+                },
+                "line ending {line_ending:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn utf16_positions_convert_back_across_all_line_endings() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let source = format!("a🙂{line_ending}bc");
+            let index = Utf16LineIndex::new(&source);
+            assert_eq!(
+                index.byte_offset(Utf16Position {
+                    line: 1,
+                    character: 1,
+                }),
+                source.find('c').unwrap(),
+                "line ending {line_ending:?}"
+            );
+            assert_eq!(
+                index.byte_offset(Utf16Position {
+                    line: 0,
+                    character: u32::MAX,
+                }),
+                source.find(line_ending).unwrap(),
+                "line ending {line_ending:?}"
+            );
+        }
     }
 
     #[test]

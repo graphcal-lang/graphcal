@@ -190,11 +190,15 @@ mod tests {
     }
 
     #[test]
-    fn crlf_comment_excludes_line_ending_from_body() {
-        let source = "// first\r\nparam x = 1;";
-        let meta = metadata(source);
-        assert_eq!(meta.comments[0].value.lexeme(), "// first");
-        assert_eq!(meta.comments[0].span, Span::new(0, 8));
+    fn comments_end_before_lf_cr_and_crlf() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let source = format!("// first{line_ending}// second{line_ending}param x = 1;");
+            let meta = metadata(&source);
+            assert_eq!(meta.comments.len(), 2, "line ending {line_ending:?}");
+            assert_eq!(meta.comments[0].value.lexeme(), "// first");
+            assert_eq!(meta.comments[0].span, Span::new(0, 8));
+            assert_eq!(meta.comments[1].value.lexeme(), "// second");
+        }
     }
 
     #[test]
