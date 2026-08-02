@@ -1,4 +1,5 @@
 use crate::exact_rational::{ExactRational, ExactRationalError};
+use crate::source_line::line_ending_at;
 use crate::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, Ident, IndexArg, KeyFormKind, ModulePath, PowerExponent,
     UnaryOp,
@@ -19,7 +20,7 @@ fn skip_ws_and_line_comments(bytes: &[u8], mut pos: usize) -> usize {
             pos += 1;
         }
         if pos + 1 < bytes.len() && bytes[pos] == b'/' && bytes[pos + 1] == b'/' {
-            while pos < bytes.len() && bytes[pos] != b'\n' {
+            while pos < bytes.len() && line_ending_at(bytes, pos).is_none() {
                 pos += 1;
             }
             continue;
@@ -945,7 +946,7 @@ impl Parser<'_> {
                     }
                 }
                 b'/' if bytes.get(pos + 1) == Some(&b'/') => {
-                    while pos < bytes.len() && bytes[pos] != b'\n' {
+                    while pos < bytes.len() && line_ending_at(bytes, pos).is_none() {
                         pos += 1;
                     }
                     continue;
@@ -1408,6 +1409,36 @@ mod tests {
                 matches!(ordinary_call.kind, ExprKind::FnCall { .. }),
                 "`{name}(` must be an ordinary call outside an index declaration"
             );
+        }
+    }
+
+    #[test]
+    fn raw_lookahead_treats_lf_cr_and_crlf_comments_consistently() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let constructor = parse_node_expr(&format!(
+                "Point(// constructor lookahead{line_ending}value: 1.0)"
+            ));
+            assert!(
+                matches!(constructor.kind, ExprKind::ConstructorCall { .. }),
+                "constructor lookahead failed for {line_ending:?}"
+            );
+
+            let generic_call = parse_node_expr(&format!(
+                "make<Length // generic lookahead{line_ending}>(@x)"
+            ));
+            assert!(
+                matches!(generic_call.kind, ExprKind::FnCall { .. }),
+                "generic-call lookahead failed for {line_ending:?}"
+            );
+
+            let tuple_source = format!(
+                "node x: Dimensionless[Phase, Mode] = for p: Phase, m: Mode {{ (p, // tuple lookahead{line_ending}m) => 1.0 }};"
+            );
+            Parser::new(&tuple_source)
+                .parse_file()
+                .unwrap_or_else(|error| {
+                    panic!("tuple-sugar lookahead failed for {line_ending:?}: {error}")
+                });
         }
     }
 

@@ -18,6 +18,7 @@ pub mod ir;
 pub mod nat;
 pub mod plot_props;
 pub mod registry;
+pub(crate) mod source_line;
 pub mod stack;
 pub mod syntax;
 pub mod text_position;
