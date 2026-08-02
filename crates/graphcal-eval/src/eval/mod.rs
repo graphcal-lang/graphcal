@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
 
+mod bindings;
 mod display;
 mod plot_data;
 mod project;
@@ -12,12 +13,19 @@ mod types;
 
 pub use graphcal_compiler::registry::format::format_number;
 pub use project::{
-    compile_and_eval_from_project, compile_and_eval_from_project_with_cancellation,
-    compile_and_eval_from_project_with_host_fns,
+    InclusiveBounds, ModelConstructorSchema, ModelDefinitionError, ModelExecutionError,
+    ModelFieldSchema, ModelIndexKind, ModelIndexSchema, ModelOutputPort, ModelQuantitySchema,
+    ModelRowFailure, ModelRowOutcome, ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder,
+    ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition, ParameterValue,
+    PreparedModel, PreparedProject, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
+    TenaxV2RowOutcome, compile_and_eval_from_project,
+    compile_and_eval_from_project_with_cancellation, compile_and_eval_from_project_with_host_fns,
     compile_and_eval_from_project_with_host_fns_and_cancellation, compile_and_eval_project,
     compile_to_tir, compile_to_tir_from_project, compile_to_tir_from_project_with_cancellation,
     compile_to_tir_from_project_with_host_fns,
     compile_to_tir_from_project_with_host_fns_and_cancellation, compile_to_tir_project,
+    prepare_from_project, prepare_from_project_with_host_fns,
+    prepare_from_project_with_host_fns_and_cancellation,
 };
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit,

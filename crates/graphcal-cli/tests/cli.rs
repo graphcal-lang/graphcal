@@ -5143,3 +5143,227 @@ fn eval_requires_a_lock_pin_in_package_projects() {
         "stderr: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Prepared bindings and Tenax model server
+// ---------------------------------------------------------------------------
+
+#[test]
+fn eval_set_rejects_arbitrary_computation() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "closed.gcl",
+        "param x: Int = 1; pub node positive: Bool = @x > 0;\n",
+    );
+    let output = graphcal_bin()
+        .arg("eval")
+        .arg(&model)
+        .args(["--set", "x=1 + 2"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not a closed value"), "stderr: {stderr}");
+}
+
+#[test]
+fn model_serve_rejects_unsupported_v2_input_before_writing_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "model.gcl",
+        "param enabled: Bool; pub node selected: Bool = @enabled;\n",
+    );
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args(["--output", "selected"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "model preflight failures must not contaminate Arrow stdout"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported Tenax v2 type `Bool`"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one subprocess test must exercise both concatenated IPC streams end to end"
+)]
+fn model_serve_subprocess_exchanges_persistent_arrow_streams() {
+    use std::collections::HashMap;
+    use std::io::Read as _;
+    use std::process::Stdio;
+    use std::sync::Arc;
+
+    use arrow_array::types::Int32Type;
+    use arrow_array::{
+        BooleanArray, DictionaryArray, FixedSizeBinaryArray, Float64Array, Int32Array, Int64Array,
+        StringArray, UInt64Array,
+    };
+    use arrow_ipc::reader::StreamReader;
+    use arrow_ipc::writer::StreamWriter;
+    use arrow_schema::{DataType, Field, Schema};
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "model.gcl",
+        "pub index Mode = { A, B };\n\
+         param load: Length(min: 0.0 m, max: 10.0 m);\n\
+         param count: Int(min: 0, max: 10);\n\
+         param mode: Key<Mode>;\n\
+         pub node failure: Bool = @load > 5.0 m && @count > 0 && @mode == Mode.B;\n",
+    );
+    let mut child = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args(["--output", "failure"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn Graphcal model server");
+    let mut stdout = child.stdout.take().unwrap();
+    let discovery_schema;
+    {
+        let mut discovery = StreamReader::try_new(&mut stdout, None).unwrap();
+        discovery_schema = discovery.schema();
+        assert_eq!(
+            discovery_schema
+                .metadata()
+                .get("tenax.batch.kind")
+                .map(String::as_str),
+            Some("model_schema")
+        );
+        assert_eq!(
+            discovery_schema
+                .field(0)
+                .metadata()
+                .get("tenax.input.unit")
+                .map(String::as_str),
+            Some("m")
+        );
+        assert!(discovery.next().is_none());
+    }
+    let mut results = StreamReader::try_new(&mut stdout, None).unwrap();
+    assert_eq!(
+        results
+            .schema()
+            .metadata()
+            .get("tenax.batch.kind")
+            .map(String::as_str),
+        Some("evaluation_result")
+    );
+
+    let mut fields = discovery_schema.fields()[0..3]
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect::<Vec<_>>();
+    fields.push(
+        Field::new("tenax.evaluation_id", DataType::FixedSizeBinary(16), false).with_metadata(
+            HashMap::from([
+                ("tenax.field.role".to_string(), "context".to_string()),
+                ("tenax.field.kind".to_string(), "evaluation_id".to_string()),
+            ]),
+        ),
+    );
+    fields.push(
+        Field::new("tenax.evaluation_seed", DataType::UInt64, false).with_metadata(HashMap::from(
+            [
+                ("tenax.field.role".to_string(), "context".to_string()),
+                (
+                    "tenax.field.kind".to_string(),
+                    "evaluation_seed".to_string(),
+                ),
+            ],
+        )),
+    );
+    let request_schema = Arc::new(Schema::new_with_metadata(
+        fields,
+        HashMap::from([
+            ("tenax.schema.version".to_string(), "2".to_string()),
+            (
+                "tenax.batch.kind".to_string(),
+                "evaluation_request".to_string(),
+            ),
+        ]),
+    ));
+    let mode = DictionaryArray::<Int32Type>::try_new(
+        Int32Array::from(vec![1, 0]),
+        Arc::new(StringArray::from(vec!["B", "A"])),
+    )
+    .unwrap();
+    let ids = FixedSizeBinaryArray::try_from_iter((0..2).map(|_| [7_u8; 16])).unwrap();
+    let batch = arrow_array::RecordBatch::try_new(
+        request_schema.clone(),
+        vec![
+            Arc::new(Float64Array::from(vec![4.0, 6.0])),
+            Arc::new(Int64Array::from(vec![1, 1])),
+            Arc::new(mode),
+            Arc::new(ids),
+            Arc::new(UInt64Array::from(vec![42, 42])),
+        ],
+    )
+    .unwrap();
+    {
+        let mut stdin = child.stdin.take().unwrap();
+        let mut requests = StreamWriter::try_new(&mut stdin, &request_schema).unwrap();
+        requests.write(&batch).unwrap();
+        requests.finish().unwrap();
+    }
+
+    let result = results.next().unwrap().unwrap();
+    let values = result
+        .column(0)
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .unwrap();
+    assert!(!values.value(0));
+    assert!(values.value(1));
+    assert!(results.next().is_none());
+    drop(results);
+
+    let status = child.wait().unwrap();
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(stderr.is_empty(), "unexpected server stderr: {stderr}");
+}
+
+#[test]
+fn model_serve_rejects_private_output_before_writing_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "model.gcl",
+        "param x: Int(min: 0, max: 1); node selected: Bool = @x > 0;\n",
+    );
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args(["--output", "selected"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("private"), "stderr: {stderr}");
+}

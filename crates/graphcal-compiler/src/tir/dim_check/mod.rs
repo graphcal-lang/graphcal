@@ -1,4 +1,4 @@
-use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
+use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::type_name::ResolvedStructTypeName;
 use std::collections::{HashMap, HashSet};
@@ -33,7 +33,10 @@ mod helpers;
               large match on ExprKind variants is inherently long"
 )]
 mod infer;
+mod model_schema;
 mod plot;
+
+pub use model_schema::{ConcreteModelConstructor, ConcreteModelField, concrete_model_constructors};
 #[cfg(test)]
 mod tests;
 
@@ -957,6 +960,59 @@ pub fn check_dimensions_tir_with_cancellation(
     Ok(())
 }
 
+/// Check one already-lowered external value expression against a concrete
+/// declared type in this TIR's root module.
+///
+/// This is the compiler-facing half of runtime parameter binding: callers may
+/// lower a closed value expression independently of declaration compilation,
+/// then reuse the normal HIR inference rules rather than duplicating unit,
+/// datetime, constructor, generic, key, or indexed type checking.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when the expression is not well typed in the
+/// root module or does not exactly match `expected`.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "the inference core uses the compiler's canonical HashMap type"
+)]
+pub fn check_external_value_expr_type(
+    tir: &crate::tir::typed::TIR,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    expr: &crate::hir::Expr,
+    expected: &DeclaredType,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let builtin_fns = builtin_functions();
+    let inferred = infer::hir::infer_hir_type_with_owner(
+        expr,
+        None,
+        declared_types,
+        tir.root(),
+        tir,
+        &tir.registry,
+        builtin_fns,
+        src,
+    )?;
+    infer::hir::validate_finite_index_obligations(
+        &inferred,
+        tir.root(),
+        &tir.registry,
+        src,
+        expr.span,
+    )?;
+    if types_match(expected, &inferred) {
+        Ok(())
+    } else {
+        Err(GraphcalError::DimensionMismatchInAnnotation {
+            declared: format_declared_type(expected, &tir.registry),
+            inferred: format_inferred_type(&inferred, &tir.registry),
+            src: src.clone(),
+            span: expr.span.into(),
+        })
+    }
+}
+
 /// Dim-check a single [`DagTIR`] against the file's shared registry and
 /// the full flat dag map.
 fn check_dimensions_dag(
@@ -1538,77 +1594,6 @@ fn strip_indexed(
         crate::tir::typed::ResolvedTypeExpr::Indexed { base, .. } => strip_indexed(base),
         other => other,
     }
-}
-
-/// Check that an applied override has the correct dimension for the given param.
-///
-/// Overrides are spliced into the IR as the target param's default expression
-/// before type resolution, so the override's HIR already lives in the root
-/// DAG's semantic expressions; this checks that stored HIR against the param's
-/// declared type.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError::DimensionMismatch`] if the override's inferred
-/// dimension does not match the declared type of the param.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn check_override_dimension(
-    param_name: &DeclName,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    tir: &crate::tir::typed::TIR,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let builtin_fns = builtin_functions();
-
-    // Override targets are addressed by their bare param name, which is always
-    // a top-level local in the file being overridden.
-    let param_key = ScopedName::from(param_name);
-    let declared =
-        declared_types
-            .get(&param_key)
-            .ok_or_else(|| GraphcalError::OverrideUnknownParam {
-                name: param_name.clone(),
-            })?;
-    let dag = tir.root();
-    let key = dag.resolved_decl_key_for_local(&param_key);
-    let hir_expr = dag
-        .semantic
-        .expressions
-        .param_defaults
-        .get(&key)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("override for `{param_name}` was not applied to the root DAG"),
-            src: src.clone(),
-            span: crate::syntax::span::Span::new(0, 0).into(),
-        })?;
-    let inferred = infer::hir::infer_hir_type_with_owner(
-        hir_expr,
-        Some(param_name.as_str()),
-        declared_types,
-        dag,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-    )?;
-
-    if !types_match(declared, &inferred) {
-        return Err(GraphcalError::DimensionMismatch {
-            expected: format_declared_type(declared, registry),
-            found: format_inferred_type(&inferred, registry),
-            help: format!(
-                "override for `{param_name}` must have dimension {}",
-                format_declared_type(declared, registry)
-            ),
-            src: src.clone(),
-            span: hir_expr.span.into(),
-        });
-    }
-    Ok(())
 }
 
 /// Detect cycles in the cross-dag inline-call graph.

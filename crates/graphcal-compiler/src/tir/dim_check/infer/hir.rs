@@ -2626,7 +2626,7 @@ fn substitute_resolved_generic_arg_with_type_params(
     )
 }
 
-fn resolved_field_type(
+pub(in crate::tir::dim_check) fn resolved_field_type(
     owning_type: &ResolvedStructTypeName,
     constructor: &UnionMemberDef,
     field: &FieldName,

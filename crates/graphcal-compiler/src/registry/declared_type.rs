@@ -371,7 +371,7 @@ pub enum DeclaredType {
 impl DeclaredType {
     /// Format as a human-readable string for diagnostics (e.g. `"Length / Time"`, `"Bool"`).
     #[must_use]
-    pub(crate) fn format(&self, dims: &DimensionRegistry) -> String {
+    pub fn format(&self, dims: &DimensionRegistry) -> String {
         match self {
             Self::Quantity(d) => dims.format_dimension(d),
             Self::Complex(d) => format!("Complex<{}>", dims.format_dimension(d)),

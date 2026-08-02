@@ -3,7 +3,8 @@
 //! Inference walks module-aware HIR exclusively (see [`hir`]); the shared
 //! typing-rule kernels live in [`rules`]. The former resolved-syntax-AST
 //! walker was retired once every boundary expression (declaration bodies,
-//! domain bounds, CLI overrides) gained a stored HIR form (#765).
+//! domain bounds) gained a stored HIR form (#765). Closed external binding
+//! values are lowered independently and checked through the same HIR rules.
 
 mod builtin_call;
 mod complex;

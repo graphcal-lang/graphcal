@@ -4,7 +4,7 @@ icon: material/console
 
 # CLI Reference
 
-The `graphcal` command-line tool provides subcommands for evaluating, formatting, and checking `.gcl` files, as well as starting the LSP server.
+The `graphcal` command-line tool provides subcommands for evaluating, serving, formatting, and checking `.gcl` files, as well as starting the LSP server.
 
 ## Global Options
 
@@ -25,6 +25,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`format`](#graphcal-format) | Format `.gcl` files |
 | [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
+| [`model serve`](#graphcal-model-serve) | Serve a prepared model over Tenax stdio Arrow IPC |
 | [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
 | [`plugin new`](#graphcal-plugin-new) | Scaffold a WASM plugin crate using the Rust SDK (experimental) |
 | [`plugin test`](#graphcal-plugin-test) | Validate a built `.wasm` plugin module and call its functions (experimental) |
@@ -59,7 +60,7 @@ pins each referenced `.wasm` file's SHA-256 as a `[[plugin]]` entry. Loading
 enforces the pins: an unpinned or hash-mismatched plugin is a hard error, so
 plugin binaries can only change together with a reviewable lockfile diff.
 
-Dependency-consuming commands (`check`, `eval`, `graph`, and the LSP) are
+Dependency-consuming commands (`check`, `eval`, `graph`, `model serve`, and the LSP) are
 read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
@@ -214,20 +215,30 @@ graphcal eval [OPTIONS] <FILE>
 |--------|-------------|
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--output-view <VIEW>` | Values to display: `surface` (default) or `all` |
-| `--set <SET>` | Override or provide a param value: `--set 'name=expr'` (repeatable) |
+| `--set <SET>` | Bind a param to a closed value: `--set 'name=value'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
 | `--plot <MODE>` | Plot output mode: `browser` (open in browser), `json` (print only plot JSON to stdout), or a path ending in `.html` (write a self-contained HTML page) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 
-Override names are unqualified parameter names in the entry file (or the local
-alias of a selectively included/imported parameter). Qualified strings such as
-`module.x=...` are rejected at the CLI boundary instead of being interpreted as
-leaf names; the override key never carries module identity.
+Binding names are unqualified parameter names declared directly in the entry
+file. Imported and included implementation parameters are not independently
+addressable; expose an entry parameter and pass it into the dependency instead.
+Qualified strings such as `module.x=...` are rejected at the CLI boundary
+instead of being interpreted as leaf names.
 
 Entry-file params are the entry DAG's named input ports. Ports not supplied via
 `--set` or `--input` keep their declared defaults; ports without a default are
 required and must be supplied.
+
+Values are recursively **closed**. Accepted forms include finite quantities,
+`Int`, `Bool`, `datetime(...)`, `epoch<S>(...)`, Cartesian `complex(...)`,
+named/key literals, complete algebraic constructors, and complete fixed-axis
+map literals, with arbitrary nesting. Graph references, arithmetic such as
+`2 * PI`, constants, ordinary function/plugin calls, dynamic units,
+conditionals, comprehensions, matches, scans, and unfolds are rejected. This
+keeps CLI input as typed data rather than injecting a second computation into
+the prepared DAG.
 
 The default `--output-view surface` prints every const, param, and node declared
 by the entry DAG plus the outputs intentionally exposed by each include. A
@@ -294,8 +305,9 @@ graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
 ```
 
 The JSON parser preserves module-qualified constructor and index paths inside
-structured value payloads. The top-level JSON keys are still parameter names,
-and type/dimension checking reports whether the value is valid for that target:
+structured value payloads. The top-level JSON keys are still entry parameter
+names, and the same closed-value compiler recursively checks every field and
+indexed entry against that parameter's concrete type:
 
 ```json
 {
@@ -445,6 +457,80 @@ opens nothing.
 
 See the [Plot Declarations](language/plots.md) reference for the language
 syntax.
+
+---
+
+## `graphcal model serve`
+
+Prepare a Graphcal project once and expose it as a persistent Tenax model over
+stdio Arrow IPC.
+
+```bash
+graphcal model serve <FILE> --output <NAME> [--output <NAME> ...] [--root <ROOT>]
+```
+
+**Arguments and options:**
+
+| Item | Description |
+|------|-------------|
+| `<FILE>` | Entry `.gcl` file |
+| `--output <NAME>` | Public scalar `Bool` node declared directly in the entry file; repeatable and required |
+| `--root <ROOT>` | Explicit project root |
+
+The initial integration implements Tenax stdio protocol version 1 and Arrow
+schema contract version 2. It compiles the project and plugins once, emits a
+schema-only discovery stream followed by one persistent result stream on
+stdout, reads one persistent request stream from stdin, and evaluates request
+rows sequentially. Stdout contains Arrow IPC only; human diagnostics and logs
+go to stderr.
+
+Tenax v2 exposes every entry parameter, including parameters with defaults.
+The complete interface must contain at least one input and one selected output:
+
+| Graphcal input | Tenax v2 requirement |
+|----------------|----------------------|
+| Real quantity / `Dimensionless` | Finite inclusive `min` and `max`, with finite interval width; dimensioned values carry a canonical SI unit |
+| `Int` | Inclusive `min` and `max` representable as `i64` |
+| `Key<I>` | `I` is a concrete, non-empty named index; categories are transmitted lexically and decoded by dictionary value |
+
+`Bool`, datetime, complex, algebraic, indexed, coordinate-key, and finite-key
+inputs are supported by Graphcal's prepared binding core but are not
+representable by Tenax schema v2. They cause model preparation to fail rather
+than being flattened or coerced. Selected outputs must currently be explicitly
+`pub`, scalar `Bool` nodes; unknown, private, duplicate, and non-Boolean
+selections fail before any IPC bytes are written.
+
+Example model:
+
+```graphcal
+pub index Mode = { Nominal, Degraded };
+
+param load: Force(min: 0.0 N, max: 10_000.0 N);
+param cycles: Int(min: 0, max: 100_000);
+param mode: Key<Mode>;
+
+pub node failure: Bool =
+    @load > 8_000.0 N && @cycles > 50_000 && @mode == Mode.Degraded;
+```
+
+```bash
+graphcal model serve reliability.gcl --output failure
+```
+
+A model/runtime/domain/assertion failure becomes a failed result row with null
+outputs and a diagnostic. Malformed Arrow, schema mismatches, invalid shared
+input-domain values, duplicate evaluation IDs, broken pipes, and internal
+invariant failures invalidate the process. Clean request-stream EOS finishes
+the result stream and exits successfully. See [Tenax Integration](tenax-integration.md)
+for lifecycle diagrams and client guidance.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Clean request EOS and result-stream shutdown |
+| `1` | Protocol/process failure after serving began |
+| `2` | Project/model configuration failed before IPC startup |
 
 ---
 

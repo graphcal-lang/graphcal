@@ -1,0 +1,23 @@
+[package]
+name = "graphcal-tenax"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+readme.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+arrow-array = { workspace = true }
+arrow-ipc = { workspace = true }
+arrow-schema = { workspace = true }
+graphcal-compiler = { version = "0.0.1-alpha.18", path = "../graphcal-compiler" }
+graphcal-eval = { version = "0.0.1-alpha.18", path = "../graphcal-eval" }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

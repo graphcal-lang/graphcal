@@ -2,14 +2,15 @@
 //!
 //! The JSON schema uses expression strings for leaf values and
 //! JSON objects for structs, tagged unions, and named-label indexed params.
-//! All type information is provided explicitly in the JSON — no AST lookup is needed.
-//! Type and dimension validation is deferred to the evaluator.
+//! Nominal constructor/index spellings are explicit in JSON. The prepared
+//! evaluator supplies the expected parameter type and recursively validates the
+//! resulting closed value; JSON never introduces an independent computation.
 //!
 //! ## Schema
 //!
 //! | JSON shape | Interpretation |
 //! |---|---|
-//! | `string` | Parsed as GCL expression via `parse_single_expr()` |
+//! | `string` | Parsed as closed GCL value syntax via `parse_single_expr()` |
 //! | `bool` | `ExprKind::Bool` |
 //! | `number` (integer) | `ExprKind::Integer` |
 //! | `number` (float) | `ExprKind::Number` (dimensionless) |
@@ -216,8 +217,8 @@ impl From<serde_json::Error> for JsonInputError {
 
 /// Convert a JSON input string into a `HashMap` of parameter overrides.
 ///
-/// All type information (struct type names, index names) must be provided
-/// explicitly in the JSON. Type and dimension validation is deferred to the evaluator.
+/// Constructor and index spellings must be explicit in JSON. Concrete expected
+/// types, dimensions, completeness, and constraints are checked by the prepared evaluator.
 pub fn json_to_overrides(json_str: &str) -> Result<HashMap<DeclName, Expr>, JsonInputError> {
     let json: serde_json::Value = serde_json::from_str(json_str)?;
     let obj = json.as_object().ok_or(JsonInputError::TopLevelNotObject)?;
@@ -259,7 +260,8 @@ fn convert_value(value: &serde_json::Value, param_name: &str) -> Result<Expr, Js
     }
 }
 
-/// Parse a string as a GCL expression.
+/// Parse a string as GCL value syntax; the prepared binding compiler later
+/// rejects references, computations, and other non-closed forms.
 fn convert_string(s: &str, param_name: &str) -> Result<Expr, JsonInputError> {
     graphcal_compiler::syntax::parser::Parser::new(s)
         .parse_single_expr()

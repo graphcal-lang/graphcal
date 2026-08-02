@@ -32,6 +32,48 @@ use crate::syntax::module_resolve::ModuleResolver;
 mod model;
 pub use model::*;
 
+impl TIR {
+    /// Complete constructor targets needed by independently lowered closed
+    /// external values.
+    ///
+    /// Normal source expressions collect only the constructors they mention.
+    /// A prepared evaluator can later receive a constructor value that was not
+    /// present in the source text, so every constructor of every concrete type
+    /// visible in the entry DAG must be available to checking and evaluation.
+    pub fn prepare_external_value_constructors(&mut self) {
+        let targets = self
+            .root()
+            .semantic
+            .type_defs
+            .struct_types
+            .iter()
+            .flat_map(|(owning_type, type_def)| {
+                let members = match &type_def.kind {
+                    crate::registry::type_def::TypeDefKind::Required => &[][..],
+                    crate::registry::type_def::TypeDefKind::Union { members } => members.as_slice(),
+                };
+                members.iter().map(|variant| {
+                    let constructor = crate::syntax::type_name::ResolvedConstructorName::new(
+                        owning_type.owner().clone(),
+                        variant.name.atom().clone(),
+                    );
+                    let target = ResolvedConstructorTarget {
+                        owning_type: owning_type.clone(),
+                        type_def: type_def.clone(),
+                        variant: variant.clone(),
+                    };
+                    (constructor, target)
+                })
+            })
+            .collect::<Vec<_>>();
+        self.root_mut()
+            .semantic
+            .constructor_refs
+            .constructor_defs
+            .extend(targets);
+    }
+}
+
 impl DagTIR {
     /// Build a concrete `DeclaredType` map from this DAG's resolved types
     /// plus its imported-value metadata. Adds builtin constants as

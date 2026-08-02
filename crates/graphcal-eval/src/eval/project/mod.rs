@@ -37,6 +37,16 @@ use super::types::{AssertResult, CompileError, DeclType, EvalResult, NodeError, 
 mod imports;
 mod lowering;
 mod pipeline;
+mod prepared;
+
+pub use prepared::{
+    InclusiveBounds, ModelConstructorSchema, ModelDefinitionError, ModelExecutionError,
+    ModelFieldSchema, ModelIndexKind, ModelIndexSchema, ModelOutputPort, ModelQuantitySchema,
+    ModelRowFailure, ModelRowOutcome, ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder,
+    ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition, ParameterValue,
+    PreparedModel, PreparedProject, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
+    TenaxV2RowOutcome,
+};
 
 // ---------------------------------------------------------------------------
 // Project-based compilation: `LoadedProject` → TIR / EvalResult
@@ -625,50 +635,6 @@ fn field_dimension_name(
         .or_else(|| registry.dimensions.get_dimension(name).cloned())
 }
 
-/// Validate and apply parameter overrides to an IR.
-fn apply_overrides(
-    ir: &mut graphcal_compiler::ir::lower::UnfrozenIR,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-) -> Result<(), CompileError> {
-    for (override_name, override_expr) in overrides {
-        let name_str = override_name.as_str();
-        let matches = ir
-            .source_order
-            .iter()
-            .filter(|(name, _)| name.member() == name_str)
-            .collect::<Vec<_>>();
-        let param_matches = matches
-            .iter()
-            .filter_map(|(name, cat)| matches!(cat, DeclCategory::Param).then_some((*name).clone()))
-            .collect::<Vec<_>>();
-        let target_name = match param_matches.as_slice() {
-            [name] => name,
-            [] => {
-                if let Some((_, non_param_cat)) = matches.first() {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind: *non_param_cat,
-                    }));
-                }
-                return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
-                    name: override_name.clone(),
-                }));
-            }
-            candidates => {
-                return Err(CompileError::Eval(GraphcalError::OverrideAmbiguousParam {
-                    name: override_name.clone(),
-                    candidates: candidates.to_vec(),
-                }));
-            }
-        };
-
-        // Runtime dependencies are recomputed from the lowered HIR at the
-        // freeze boundary, so the replaced default needs no dep bookkeeping.
-        ir.override_param_default(target_name, override_expr.clone());
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Public API functions
 // ---------------------------------------------------------------------------
@@ -743,6 +709,39 @@ pub fn compile_to_tir_from_project_with_host_fns_and_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     pipeline::compile_to_tir_project_perfile(project, host_fns, cancellation)
+}
+
+/// Prepare a loaded project once for repeated typed evaluation.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for loading-independent compilation, type, plan,
+/// plugin, or cancellation failures.
+pub fn prepare_from_project(
+    project: &crate::loader::LoadedProject,
+) -> Result<PreparedProject, CompileError> {
+    prepare_from_project_with_host_fns(project, &crate::host_fns::demo_registry())
+}
+
+/// Prepare with an embedder-supplied host-function registry.
+pub fn prepare_from_project_with_host_fns(
+    project: &crate::loader::LoadedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+) -> Result<PreparedProject, CompileError> {
+    prepare_from_project_with_host_fns_and_cancellation(
+        project,
+        host_fns,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Prepare with host functions and cooperative cancellation.
+pub fn prepare_from_project_with_host_fns_and_cancellation(
+    project: &crate::loader::LoadedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<PreparedProject, CompileError> {
+    pipeline::prepare_project_perfile(project, host_fns, cancellation)
 }
 
 /// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
@@ -841,7 +840,14 @@ pub fn compile_and_eval_from_project_with_host_fns_and_cancellation(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalResult, CompileError> {
-    pipeline::evaluate_project_perfile(project, overrides, host_fns, cancellation)
+    let prepared = pipeline::prepare_project_perfile(project, host_fns, cancellation)?;
+    let mut bindings = prepared.binding_builder();
+    for (name, expression) in overrides {
+        cancellation.checkpoint()?;
+        bindings.bind_expression(name, expression)?;
+    }
+    let row = bindings.finish()?;
+    prepared.evaluate_with_cancellation(&row, cancellation)
 }
 
 /// Full pipeline for multi-file projects with parameter overrides.

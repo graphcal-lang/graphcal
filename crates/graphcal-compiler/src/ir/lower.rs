@@ -1407,19 +1407,6 @@ impl UnfrozenIR {
         })
     }
 
-    /// Replace a param's default expression with an override.
-    ///
-    /// Returns `false` when no param entry with that scoped name exists.
-    pub fn override_param_default(&mut self, name: &ScopedName, expr: Expr) -> bool {
-        match self.params.iter_mut().find(|entry| &entry.name == name) {
-            Some(entry) => {
-                entry.default_expr = Some(expr);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Retarget the resolution scope of declarations already present in this
     /// unfrozen IR.
     ///

@@ -61,10 +61,13 @@ graphcal --version  # prints the package version and, when available, the build 
 # Evaluate a file
 graphcal eval rocket.gcl
 
-# Override params (rest keep their defaults); override names are entry-file param names
+# Bind entry-file params to closed values (rest keep their defaults)
 graphcal eval rocket.gcl --set 'isp=450.0 s'
 
-# Override from JSON, emit JSON, or inspect included-DAG internals
+# Serve bounded scalar inputs and public Bool outputs to Tenax over Arrow IPC
+graphcal model serve reliability.gcl --output failure
+
+# Bind from JSON, emit JSON, or inspect included-DAG internals
 graphcal eval analysis.gcl --input params.json --format json
 graphcal eval analysis.gcl --output-view all
 graphcal eval analysis.gcl --plot browser
@@ -76,7 +79,7 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 graphcal deps lock --root mission
 ```
 
-See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
+See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface and the [Tenax integration guide](https://graphcal.org/docs/tenax-integration/) for persistent model serving. `--set` and `--input` accept recursively closed values, not references or computations. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
 
 ## Editor Support
 

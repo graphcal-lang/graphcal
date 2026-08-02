@@ -146,6 +146,7 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
 - [ ] `crates/graphcal-compiler/src/plot_props.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+- [ ] `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
 
 ## Stage 9 - Filesystem abstraction (`graphcal-io`)
 
@@ -194,6 +195,7 @@ Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_exp
 - [ ] `crates/graphcal-eval/src/lib.rs`
 - [ ] `crates/graphcal-eval/src/host_fns.rs`
 - [ ] `crates/graphcal-eval/src/domain_check.rs`
+- [ ] `crates/graphcal-eval/src/eval/bindings.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/complex.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/builtin_call.rs`
 - [ ] `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
@@ -206,7 +208,7 @@ Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_exp
 
 ## Stage 14 - Project loading and runtime orchestration
 
-Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/plot_data.rs`, `eval/runtime.rs`, `eval/project/mod.rs`, and `eval/mod.rs` form a mutually dependent group.
+Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/plot_data.rs`, `eval/runtime.rs`, `eval/project/pipeline.rs`, `eval/project/prepared.rs`, `eval/project/mod.rs`, and `eval/mod.rs` form a mutually dependent group.
 
 - [ ] `crates/graphcal-eval/src/eval/types.rs`
 - [ ] `crates/graphcal-eval/src/eval/display.rs`
@@ -219,11 +221,16 @@ Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/plot_data.rs`, `eva
 - [ ] `crates/graphcal-eval/src/eval/project/lowering.rs`
 - [ ] `crates/graphcal-eval/src/eval/project/imports.rs`
 - [ ] `crates/graphcal-eval/src/eval/project/pipeline.rs`
+- [ ] `crates/graphcal-eval/src/eval/project/prepared.rs`
 - [ ] `crates/graphcal-eval/src/eval/tests.rs`
 - [ ] `crates/graphcal-eval/src/graph_ir/mod.rs`
 - [ ] `crates/graphcal-eval/src/graph_ir/dot.rs`
 
-## Stage 15 - Browser WASM adapter (`graphcal-wasm`)
+## Stage 15 - Tenax Arrow transport (`graphcal-tenax`)
+
+- [ ] `crates/graphcal-tenax/src/lib.rs`
+
+## Stage 16 - Browser WASM adapter (`graphcal-wasm`)
 
 Note: the order tool groups these files because `lib.rs` re-exports the browser transport types. The practical review order remains project validation, value conversion, diagnostic conversion, then the imperative adapter shell.
 
@@ -232,7 +239,7 @@ Note: the order tool groups these files because `lib.rs` re-exports the browser 
 - [ ] `crates/graphcal-wasm/src/diagnostics.rs`
 - [ ] `crates/graphcal-wasm/src/lib.rs`
 
-## Stage 16 - WASM plugin host (`graphcal-plugin-host`)
+## Stage 17 - WASM plugin host (`graphcal-plugin-host`)
 
 Note: all five host files are mutually dependent. `convert.rs` is the untrusted-boundary leaf; `host.rs` and `module.rs` wrap engine/module loading; `registry.rs` bridges loaded projects to the evaluator; `lib.rs` re-exports the public surface.
 
@@ -242,7 +249,7 @@ Note: all five host files are mutually dependent. `convert.rs` is the untrusted-
 - [ ] `crates/graphcal-plugin-host/src/registry.rs`
 - [ ] `crates/graphcal-plugin-host/src/lib.rs`
 
-## Stage 17 - Formatter (`graphcal-fmt`)
+## Stage 18 - Formatter (`graphcal-fmt`)
 
 Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod.rs` form a mutually dependent group. `lib.rs` is the public formatting API shell and appears first in the generated order.
 
@@ -252,7 +259,7 @@ Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod
 - [ ] `crates/graphcal-fmt/src/format/decl.rs`
 - [ ] `crates/graphcal-fmt/src/format/mod.rs`
 
-## Stage 18 - LSP prelude and CLI shell
+## Stage 19 - LSP prelude and CLI shell
 
 Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent group. `main.rs` consumes the `graphcal` library target's `format` module as well as binary-local modules, so the CLI package is ordered as one shell group here.
 
@@ -266,11 +273,12 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 - [ ] `crates/graphcal-cli/src/format.rs`
 - [ ] `crates/graphcal-cli/src/json_input.rs`
 - [ ] `crates/graphcal-cli/src/overrides.rs`
+- [ ] `crates/graphcal-cli/src/model.rs`
 - [ ] `crates/graphcal-cli/src/main.rs`
 - [ ] `crates/graphcal-cli/src/deps.rs`
 - [ ] `crates/graphcal-cli/src/lib.rs`
 
-## Stage 19 - Language server (`graphcal-lsp`)
+## Stage 20 - Language server (`graphcal-lsp`)
 
 Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually dependent (each feature references `server::Backend`); the features come first because `server.rs` orchestrates them all.
 
@@ -288,7 +296,7 @@ Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually 
 - [ ] `crates/graphcal-lsp/src/hover.rs`
 - [ ] `crates/graphcal-lsp/src/server.rs`
 
-## Stage 20 - CLI plugin support and integration tests
+## Stage 21 - CLI plugin support and integration tests
 
 - [ ] `crates/graphcal-cli/build.rs`
 - [ ] `crates/graphcal-cli/src/plugin.rs`

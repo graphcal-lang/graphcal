@@ -37,6 +37,7 @@ nav = [
     { "Built-in Reference" = "language/built-ins.md" },
   ] },
   { "CLI Reference" = "cli-reference.md" },
+  { "Tenax Integration" = "tenax-integration.md" },
   { "Plugin Authoring" = "authoring-plugins.md" },
   { "Editor Setup" = "editor-setup.md" },
 ]

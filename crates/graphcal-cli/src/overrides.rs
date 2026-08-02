@@ -2,13 +2,14 @@
 //!
 //! The Eval subcommand accepts two override sources:
 //!
-//! * `--set name=expr` — one expression per `--set` flag, parsed as a GCL
-//!   single expression.
+//! * `--set name=value` — one value per `--set` flag, parsed with the GCL
+//!   expression parser and then restricted by the prepared closed-value compiler.
 //! * `--input path.json` — a JSON file with a [`json_input`] schema.
 //!
 //! `--set` takes precedence over `--input` on name collision. Both sources are
-//! resolved into a `HashMap<DeclName, Expr>` here; type/dimension checking
-//! happens later in the evaluator.
+//! resolved into a temporary `HashMap<DeclName, Expr>` at this I/O boundary;
+//! closed-shape, type, dimension, completeness, and constraint checks happen
+//! later against the prepared entry ports.
 //!
 //! [`json_input`]: crate::json_input
 
@@ -36,7 +37,7 @@ pub const DEFAULT_INPUT_MAX_BYTES: u64 = 1024 * 1024;
 #[derive(Debug, Error, Diagnostic)]
 pub enum OverrideParseError {
     /// A `--set` argument is missing the `=` separator.
-    #[error("invalid --set format: {raw:?} (expected 'name=expr')")]
+    #[error("invalid --set format: {raw:?} (expected 'name=value')")]
     #[diagnostic(code(graphcal::cli::O001))]
     InvalidFormat {
         /// The raw string as received from the command line.
@@ -73,7 +74,7 @@ pub enum OverrideParseError {
         reason: NameAtomError,
     },
 
-    /// A `--set` expression failed to parse as a GCL expression.
+    /// A `--set` value failed to parse as GCL value syntax.
     #[error("failed to parse --set value for `{name}`: {source}")]
     #[diagnostic(code(graphcal::cli::O004))]
     ExpressionParse {

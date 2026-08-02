@@ -9,9 +9,9 @@ use super::*;
 
 /// Compile a single file within a project, using dependency artifacts for imports.
 ///
-/// Builds import bindings, lowers to IR, applies overrides, and type-resolves to TIR.
-/// Both [`evaluate_project_perfile`] and [`compile_to_tir_project_perfile`] call this
-/// for each file in the project.
+/// Builds import bindings, lowers to IR, applies any compile-time include
+/// bindings, and type-resolves to TIR. Both [`prepare_project_perfile`] and
+/// [`compile_to_tir_project_perfile`] call this for each file in the project.
 #[expect(
     clippy::too_many_lines,
     reason = "import processing, inline DAG handling, and cross-file DAG handling form a cohesive pipeline"
@@ -20,8 +20,6 @@ fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
@@ -221,8 +219,6 @@ fn compile_single_file_in_project(
         &file_ast,
         ctx,
         evaluated_files,
-        overrides,
-        override_targets,
         cancellation,
     )
 }
@@ -302,7 +298,7 @@ fn top_level_const_values(
         .collect()
 }
 
-const fn output_decl_type(category: DeclCategory) -> Option<DeclType> {
+pub(super) const fn output_decl_type(category: DeclCategory) -> Option<DeclType> {
     match category {
         DeclCategory::Const => Some(DeclType::Const),
         DeclCategory::Param => Some(DeclType::Param),
@@ -313,7 +309,7 @@ const fn output_decl_type(category: DeclCategory) -> Option<DeclType> {
     }
 }
 
-fn push_output_value(
+pub(super) fn push_output_value(
     (name, result, decl_type): EvaluatedOutputValue,
     consts: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
     params: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
@@ -489,109 +485,51 @@ fn evaluate_and_store_file(
     Ok(())
 }
 
-/// Evaluate a project using per-file evaluation.
+/// Compile a complete project into one reusable root prepared plan.
 ///
-/// Each file is compiled in topological order (dependencies first). Files that
-/// can run standalone are also evaluated; library files with required runtime
-/// inputs keep compile-time artifacts only. Import declarations bind evaluated
-/// values from dependency files into the importing file's scope when available.
-///
-/// All assertions in all files are evaluated and aggregated.
-#[expect(
-    clippy::too_many_lines,
-    reason = "sequential per-file evaluation steps"
-)]
-pub(in crate::eval::project) fn evaluate_project_perfile(
+/// Dependencies are still compiled/evaluated in topological order so imported
+/// constants and standalone library values retain their existing semantics.
+/// The root file stops after plan construction and output-assembly capture.
+pub(in crate::eval::project) fn prepare_project_perfile(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<EvalResult, CompileError> {
+) -> Result<super::prepared::PreparedProject, CompileError> {
     cancellation.checkpoint()?;
-    // Pre-compute override routing: map each override name to the file that owns
-    // the param. Walk root file's imports to find the owning file for each override.
-    let override_targets = route_overrides_to_files(project, overrides)?;
-
     let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
     for file_dag_id in &project.load_order {
         cancellation.checkpoint()?;
         let is_root = *file_dag_id == project.root;
-        let compiled = compile_single_file_in_project(
-            project,
-            file_dag_id,
-            &evaluated_files,
-            overrides,
-            &override_targets,
-            cancellation,
-        )?;
-
-        // Load-time verification: every declared extern function must have a
-        // host registry entry, and wasm-plugin declarations must match the
-        // module's embedded manifest.
+        let compiled =
+            compile_single_file_in_project(project, file_dag_id, &evaluated_files, cancellation)?;
+        let file_src = &project.files[file_dag_id].named_source;
         verify_host_functions(
             project,
             file_dag_id,
             &compiled.tir,
-            &project.files[file_dag_id].named_source,
+            file_src,
             host_fns,
             cancellation,
         )?;
 
-        // Files with required params (no default) or required indexes cannot be
-        // evaluated standalone. They are only consumed via instantiated imports
-        // where `merge_dependency` provides the bindings.
-        let is_library = tir_requires_runtime_inputs(&compiled.tir);
-        let has_required_indexes = tir_has_required_indexes(&compiled.tir);
-
-        if !is_root && is_library {
-            let file_src = &project.files[file_dag_id].named_source;
-            let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
-            store_compiled_file_artifact(
-                compiled,
-                file_dag_id,
-                file_src,
-                external_surface,
-                &mut evaluated_files,
-                cancellation,
-            )?;
-            continue;
-        }
-
         if is_root {
-            // Reject standalone evaluation of files with required indexes.
-            if has_required_indexes {
-                let file_src = &project.files[file_dag_id].named_source;
-                if let Some((name, span)) =
+            if tir_has_required_indexes(&compiled.tir)
+                && let Some((name, span)) =
                     first_required_index_diagnostic(&compiled.tir, &project.files[file_dag_id].ast)
-                {
-                    return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-                        name,
-                        src: file_src.clone(),
-                        span,
-                    }));
-                }
+            {
+                return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
+                    name,
+                    src: file_src.clone(),
+                    span,
+                }));
             }
-            let file_src = &project.files[file_dag_id].named_source;
+
             let plan =
                 crate::exec_plan::compile_with_cancellation(&compiled.tir, file_src, cancellation)?;
-            let eval_result = super::super::runtime::evaluate_plan_with_cancellation(
-                &compiled.tir,
-                &plan,
-                &compiled.declared_types,
-                file_src,
-                host_fns,
-                cancellation,
-            )?;
-
-            // Build a mapping from each dependency file path to the root-level
-            // import statement span that (directly or transitively) brought it in.
             let dep_import_spans = build_dep_import_spans(project);
-
-            // Aggregate assertions from all dependency files, replacing the
-            // assertion's original span with the root file's import statement span.
-            let mut all_assertions: Vec<(ScopedName, AssertResult, Span)> = Vec::new();
+            let mut dependency_assertions = Vec::new();
             for dep_dag_id in &project.load_order {
                 cancellation.checkpoint()?;
                 if *dep_dag_id == project.root {
@@ -602,105 +540,59 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                         .get(dep_dag_id)
                         .copied()
                         .unwrap_or(Span::new(0, 0));
-                    all_assertions.extend(dep_eval.assertions.iter().map(
-                        |(name, (result, _span))| (name.clone(), result.clone(), import_span),
-                    ));
-                }
-            }
-            all_assertions.extend(eval_result.assertions);
-
-            // Pre-evaluated empty-argument includes retain their full instance
-            // state for the debug view. Public module-form entries may also be
-            // present in imported_source_order, so de-duplicate by typed name.
-            let mut all_consts = Vec::new();
-            let mut all_params = Vec::new();
-            let mut all_nodes = Vec::new();
-            let mut all_all = Vec::new();
-            let mut seen = HashSet::new();
-
-            for entry in &compiled.included_debug_values {
-                cancellation.checkpoint()?;
-                if !seen.insert(entry.0.clone()) {
-                    continue;
-                }
-                push_output_value(
-                    entry.clone(),
-                    &mut all_consts,
-                    &mut all_params,
-                    &mut all_nodes,
-                    &mut all_all,
-                );
-            }
-            for (name, category) in &compiled.imported_source_order {
-                cancellation.checkpoint()?;
-                if !seen.insert(name.clone()) {
-                    continue;
-                }
-                let Some(decl_type) = output_decl_type(*category) else {
-                    continue;
-                };
-                if let Some((runtime, declared_type)) = compiled.imported_values.get(name) {
-                    let value = super::super::runtime::runtime_to_value(
-                        runtime,
-                        Some(declared_type),
-                        &compiled.tir,
-                    );
-                    push_output_value(
-                        (name.clone(), Ok(value), decl_type),
-                        &mut all_consts,
-                        &mut all_params,
-                        &mut all_nodes,
-                        &mut all_all,
+                    dependency_assertions.extend(
+                        dep_eval
+                            .assertions
+                            .iter()
+                            .map(|(name, (result, _))| (name.clone(), result.clone(), import_span)),
                     );
                 }
             }
-
-            all_consts.extend(eval_result.consts);
-            all_params.extend(eval_result.params);
-            all_nodes.extend(eval_result.nodes);
-            all_all.extend(eval_result.all);
-
-            // Plots requested from standalone-evaluated dependencies render
-            // alongside this file's own plots (#847).
-            let mut all_plots = compiled.included_plots;
-            all_plots.extend(eval_result.plots);
-
-            return Ok(EvalResult {
-                consts: all_consts,
-                params: all_params,
-                nodes: all_nodes,
-                all: all_all,
-                output_surface: compiled.output_surface,
-                assertions: all_assertions,
-                plots: all_plots,
-                plot_errors: eval_result.plot_errors,
-                figures: eval_result.figures,
-                layers: eval_result.layers,
-                assumes_map: eval_result.assumes_map,
-                base_dim_symbols: eval_result.base_dim_symbols,
-                domain_constraints: eval_result.domain_constraints,
-            });
+            let module_resolver = project.build_module_resolver().map_err(|error| {
+                CompileError::Eval(GraphcalError::EvalError {
+                    message: error.to_string(),
+                    src: file_src.clone(),
+                    span: Span::new(0, 0).into(),
+                })
+            })?;
+            return super::prepared::PreparedProject::from_compiled(
+                compiled,
+                plan,
+                file_src.clone(),
+                host_fns.clone(),
+                module_resolver,
+                &project.files[file_dag_id].ast,
+                dependency_assertions,
+            );
         }
 
-        let file_src = &project.files[file_dag_id].named_source;
         let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
-        evaluate_and_store_file(
-            compiled,
-            file_dag_id,
-            file_src,
-            external_surface,
-            &mut evaluated_files,
-            host_fns,
-            cancellation,
-        )?;
+        if tir_requires_runtime_inputs(&compiled.tir) {
+            store_compiled_file_artifact(
+                compiled,
+                file_dag_id,
+                file_src,
+                external_surface,
+                &mut evaluated_files,
+                cancellation,
+            )?;
+        } else {
+            evaluate_and_store_file(
+                compiled,
+                file_dag_id,
+                file_src,
+                external_surface,
+                &mut evaluated_files,
+                host_fns,
+                cancellation,
+            )?;
+        }
     }
 
-    // Should not reach here — root file should have returned above.
-    let internal_src = NamedSource::new("internal", Arc::new(String::new()));
-    Err(CompileError::Eval(GraphcalError::EvalError {
-        message: "internal: root file not found in load_order".to_string(),
-        src: internal_src,
-        span: (0, 0).into(),
+    Err(CompileError::Eval(GraphcalError::InternalError {
+        message: "root file not found in project load order".to_string(),
+        src: NamedSource::new("internal", Arc::new(String::new())),
+        span: Span::new(0, 0).into(),
     }))
 }
 
@@ -909,22 +801,14 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
     cancellation.checkpoint()?;
-    let empty_overrides = HashMap::new();
-    let empty_targets = HashMap::new();
     let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
     for file_dag_id in &project.load_order {
         cancellation.checkpoint()?;
         let is_root = *file_dag_id == project.root;
-        let compiled = compile_single_file_in_project(
-            project,
-            file_dag_id,
-            &evaluated_files,
-            &empty_overrides,
-            &empty_targets,
-            cancellation,
-        )?;
+        let compiled =
+            compile_single_file_in_project(project, file_dag_id, &evaluated_files, cancellation)?;
 
         // Compile-only consumers (`graphcal check`, LSP analysis) must
         // report the same load-time extern diagnostics evaluation does
@@ -979,115 +863,6 @@ pub(in crate::eval::project) fn compile_to_tir_project_perfile(
         src: internal_src,
         span: (0, 0).into(),
     }))
-}
-
-/// Route `--set` / `--input` overrides to the files that own the targeted params.
-///
-/// Returns a map: `override_name` → (`owning_dag_id`, `original_param_name`).
-/// The `original_param_name` may differ from `override_name` when an alias is used.
-fn route_overrides_to_files(
-    project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-) -> Result<HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>, CompileError> {
-    if overrides.is_empty() {
-        return Ok(HashMap::new());
-    }
-
-    let root_file = &project.files[&project.root];
-
-    let mut result: HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)> =
-        HashMap::new();
-
-    for override_name in overrides.keys() {
-        let name_str = override_name.as_str();
-
-        // Check if the root file itself declares this param.
-        let found_in_root =
-            root_file.ast.declarations.iter().any(
-                |d| matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == name_str),
-            );
-        if found_in_root {
-            result.insert(
-                override_name.clone(),
-                (project.root.clone(), override_name.clone()),
-            );
-            continue;
-        }
-
-        // Check if the root file imports/includes this param from a dependency.
-        let mut found = false;
-        let selective_decls: Vec<_> = root_file
-            .imports_with_dag_ids()
-            .map(|(_, d, c)| (&d.kind, c))
-            .chain(
-                root_file
-                    .includes_with_dag_ids()
-                    .map(|(_, d, c)| (&d.kind, c)),
-            )
-            .collect();
-        for (import_kind, import_canonical) in selective_decls {
-            if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) =
-                import_kind
-            {
-                for item in names {
-                    let local_name = item.local_name().to_string();
-                    if local_name == name_str {
-                        let orig_name = &item.name.name;
-
-                        // Verify it's actually a param in the source file.
-                        let dep_file = &project.files[import_canonical];
-                        let is_param = dep_file.ast.declarations.iter().any(|d| {
-                            matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name.as_str())
-                        });
-                        if is_param {
-                            result.insert(
-                                override_name.clone(),
-                                (
-                                    import_canonical.clone(),
-                                    DeclName::expect_valid(orig_name.clone()),
-                                ),
-                            );
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if found {
-                break;
-            }
-        }
-
-        if !found {
-            // Check if the name matches a non-param declaration (node, const, assert)
-            // in the root file to provide a better error message.
-            for decl in &root_file.ast.declarations {
-                let kind = match &decl.kind {
-                    DeclKind::ConstNode(c) if c.name.value.as_str() == name_str => {
-                        Some(DeclCategory::Const)
-                    }
-                    DeclKind::Node(n) if n.name.value.as_str() == name_str => {
-                        Some(DeclCategory::Node)
-                    }
-                    DeclKind::Assert(a) if a.name.value.as_str() == name_str => {
-                        Some(DeclCategory::Assert)
-                    }
-                    _ => None,
-                };
-                if let Some(actual_kind) = kind {
-                    return Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
-                        name: override_name.clone(),
-                        actual_kind,
-                    }));
-                }
-            }
-            return Err(CompileError::Eval(GraphcalError::OverrideUnknownParam {
-                name: override_name.clone(),
-            }));
-        }
-    }
-
-    Ok(result)
 }
 
 /// Filter an evaluated runtime-value map to only locally-defined param/node
