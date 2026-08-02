@@ -536,22 +536,13 @@ where
     }
 }
 
-#[expect(
-    unsafe_code,
-    reason = "manual Drop must move the recursive field under the stack-growth guard"
-)]
 impl<P: Phase> Drop for Expr<P> {
     fn drop(&mut self) {
-        // SAFETY: `kind` is moved out and immediately replaced with the
-        // non-recursive `Number` placeholder before the moved value is dropped.
-        // Rust then drops only the placeholder after this `Drop` impl returns,
-        // avoiding a double-drop while letting recursive child drops run under
-        // the stack-growth guard.
-        unsafe {
-            let kind = std::ptr::read(std::ptr::addr_of!(self.kind));
-            std::ptr::write(std::ptr::addr_of_mut!(self.kind), ExprKind::Number(0.0));
-            crate::stack::with_stack_growth(|| drop(kind));
-        }
+        // Move `kind` out under a non-recursive placeholder so Rust drops only
+        // the placeholder after this impl returns. Recursive child drops then
+        // run under the stack-growth guard.
+        let kind = self.take_kind();
+        crate::stack::with_stack_growth(|| drop(kind));
     }
 }
 
@@ -564,6 +555,21 @@ impl<P: Phase> Expr<P> {
             span,
             _phase: PhantomData,
         }
+    }
+
+    /// Consume this expression into its kind and span without cloning the
+    /// recursive expression tree.
+    ///
+    /// The recursive kind is replaced with a non-recursive placeholder before
+    /// this expression's custom [`Drop`] implementation runs.
+    #[must_use]
+    pub fn into_parts(mut self) -> (ExprKind<P>, Span) {
+        let kind = self.take_kind();
+        (kind, self.span)
+    }
+
+    const fn take_kind(&mut self) -> ExprKind<P> {
+        std::mem::replace(&mut self.kind, ExprKind::Number(0.0))
     }
 
     /// Reclassify an include-binding RHS that has index-argument syntax.
