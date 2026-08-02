@@ -1960,9 +1960,10 @@ fn collect_ambiguous_generic_names(
         graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
             refs.push(ident.name.to_string());
         }
-        graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            collect_ambiguous_generic_names(lhs, refs);
-            collect_ambiguous_generic_names(rhs, refs);
+        graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
+            for operand in operands {
+                collect_ambiguous_generic_names(operand, refs);
+            }
         }
     }
 }

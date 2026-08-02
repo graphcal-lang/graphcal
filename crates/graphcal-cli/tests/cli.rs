@@ -2852,6 +2852,58 @@ fn format_in_place_then_check() {
 }
 
 #[test]
+fn long_nat_chains_survive_formatting_lowering_and_drop() {
+    // Run this regression through subprocesses: before Nat operator chains were
+    // stored flat, dropping the parsed AST could abort the whole test process.
+    const TERM_COUNT: usize = 100_000;
+
+    let dir = tempfile::tempdir().unwrap();
+    let additive_expr = vec!["N"; TERM_COUNT].join(" + ");
+    let multiplicative_expr = vec!["N"; TERM_COUNT].join(" * ");
+    let additive = write_temp_file(
+        dir.path(),
+        "additive.gcl",
+        &format!(
+            "pub type Additive<N: Nat> {{ Additive(values: Dimensionless[Fin({additive_expr})]) }}\n"
+        ),
+    );
+    let multiplicative = write_temp_file(
+        dir.path(),
+        "multiplicative.gcl",
+        &format!(
+            "pub type Multiplicative<N: Nat> {{ Multiplicative(values: Dimensionless[Fin({multiplicative_expr})]) }}\n"
+        ),
+    );
+    let ambiguous = write_temp_file(
+        dir.path(),
+        "ambiguous.gcl",
+        &format!(
+            "pub type Vector<N: Nat> {{ Vector(values: Dimensionless[Fin(N)]) }}\n\
+             pub type Product<N: Nat> {{ Product(value: Vector<{multiplicative_expr}>) }}\n"
+        ),
+    );
+    let paths = [&additive, &multiplicative, &ambiguous];
+
+    let mut format = graphcal_bin();
+    format.arg("format").args(paths);
+    let output = format.output().expect("failed to run graphcal format");
+    assert!(
+        output.status.success(),
+        "long Nat chains must format and pass format-equivalence without aborting: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mut check = graphcal_bin();
+    check.arg("check").args(paths);
+    let output = check.output().expect("failed to run graphcal check");
+    assert!(
+        output.status.success(),
+        "long Nat chains must survive semantic lowering and drop without aborting: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn format_check_recursive_directory() {
     // --check on a directory should recursively find .gcl files
     let output = graphcal_bin()

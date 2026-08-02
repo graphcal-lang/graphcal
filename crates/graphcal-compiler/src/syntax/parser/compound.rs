@@ -264,7 +264,7 @@ impl Parser<'_> {
             self.lexer.next_token(); // consume '+'
             let rhs = self.parse_nat_mul_term()?;
             let span = lhs.span().merge(rhs.span());
-            lhs = NatExpr::Add(Box::new(lhs), Box::new(rhs), span);
+            lhs = NatExpr::add(lhs, rhs, span);
         }
         if let Some((&Token::Minus, span)) = self.lexer.peek_with_span() {
             return Err(self.nat_subtraction_unsupported(span));
@@ -279,7 +279,7 @@ impl Parser<'_> {
             self.lexer.next_token(); // consume '*'
             let rhs = self.parse_nat_atom()?;
             let span = lhs.span().merge(rhs.span());
-            lhs = NatExpr::Mul(Box::new(lhs), Box::new(rhs), span);
+            lhs = NatExpr::mul(lhs, rhs, span);
         }
         Ok(lhs)
     }
@@ -603,7 +603,7 @@ node x: Dimensionless = match @r {
         assert!(matches!(
             &bindings[0].index,
             ForBindingIndex::Finite {
-                cardinality: crate::syntax::ast::NatExpr::Add(_, _, _),
+                cardinality: crate::syntax::ast::NatExpr::Add(_, _),
                 ..
             }
         ));

@@ -2440,9 +2440,10 @@ fn ambiguous_generic_arg_idents(
             crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
                 idents.push(ident);
             }
-            crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-                collect(lhs, idents);
-                collect(rhs, idents);
+            crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
+                for operand in operands {
+                    collect(operand, idents);
+                }
             }
         }
     }
@@ -2466,9 +2467,10 @@ fn rewrite_ambiguous_generic_arg_names<K>(
                 ident.name = atom;
             }
         }
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            rewrite_ambiguous_generic_arg_names(lhs, bindings);
-            rewrite_ambiguous_generic_arg_names(rhs, bindings);
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
+            for operand in operands {
+                rewrite_ambiguous_generic_arg_names(operand, bindings);
+            }
         }
     }
 }
@@ -2486,9 +2488,10 @@ fn rewrite_ambiguous_index_arg_declared_names(
                 ident.name = name.atom().clone();
             }
         }
-        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            rewrite_ambiguous_index_arg_declared_names(lhs, bindings);
-            rewrite_ambiguous_index_arg_declared_names(rhs, bindings);
+        crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
+            for operand in operands {
+                rewrite_ambiguous_index_arg_declared_names(operand, bindings);
+            }
         }
     }
 }
@@ -3525,22 +3528,28 @@ fn concrete_nat_value(
     match expr {
         NatExpr::Literal(value, _) => Ok(Some(*value)),
         NatExpr::Var(_) => Ok(None),
-        NatExpr::Add(lhs, rhs, span) => {
-            match (concrete_nat_value(lhs, src)?, concrete_nat_value(rhs, src)?) {
-                (Some(lhs), Some(rhs)) => lhs
-                    .checked_add(rhs)
-                    .map(Some)
-                    .ok_or_else(|| eval_error("Fin cardinality addition overflow", src, *span)),
-                _ => Ok(None),
-            }
+        NatExpr::Add(operands, span) => {
+            operands.iter().try_fold(Some(0_u64), |sum, operand| {
+                match (sum, concrete_nat_value(operand, src)?) {
+                    (Some(sum), Some(value)) => sum
+                        .checked_add(value)
+                        .map(Some)
+                        .ok_or_else(|| eval_error("Fin cardinality addition overflow", src, *span)),
+                    _ => Ok(None),
+                }
+            })
         }
-        NatExpr::Mul(lhs, rhs, span) => {
-            match (concrete_nat_value(lhs, src)?, concrete_nat_value(rhs, src)?) {
-                (Some(lhs), Some(rhs)) => lhs.checked_mul(rhs).map(Some).ok_or_else(|| {
-                    eval_error("Fin cardinality multiplication overflow", src, *span)
-                }),
-                _ => Ok(None),
-            }
+        NatExpr::Mul(operands, span) => {
+            operands.iter().try_fold(Some(1_u64), |product, operand| {
+                match (product, concrete_nat_value(operand, src)?) {
+                    (Some(product), Some(value)) => {
+                        product.checked_mul(value).map(Some).ok_or_else(|| {
+                            eval_error("Fin cardinality multiplication overflow", src, *span)
+                        })
+                    }
+                    _ => Ok(None),
+                }
+            })
         }
     }
 }
@@ -3889,9 +3898,10 @@ fn find_non_earlier_ambiguous_reference(
         crate::syntax::ast::AmbiguousGenericArg::Name(ident) => {
             non_earlier_generic_reference(&ident.name, ident.span, current_index, positions)
         }
-        crate::syntax::ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            find_non_earlier_ambiguous_reference(lhs, current_index, positions)
-                .or_else(|| find_non_earlier_ambiguous_reference(rhs, current_index, positions))
+        crate::syntax::ast::AmbiguousGenericArg::Mul(operands, _) => {
+            operands.iter().find_map(|operand| {
+                find_non_earlier_ambiguous_reference(operand, current_index, positions)
+            })
         }
     }
 }
@@ -3906,11 +3916,10 @@ fn find_non_earlier_nat_reference(
         crate::syntax::ast::NatExpr::Var(ident) => {
             non_earlier_generic_reference(&ident.name, ident.span, current_index, positions)
         }
-        crate::syntax::ast::NatExpr::Add(lhs, rhs, _)
-        | crate::syntax::ast::NatExpr::Mul(lhs, rhs, _) => {
-            find_non_earlier_nat_reference(lhs, current_index, positions)
-                .or_else(|| find_non_earlier_nat_reference(rhs, current_index, positions))
-        }
+        crate::syntax::ast::NatExpr::Add(operands, _)
+        | crate::syntax::ast::NatExpr::Mul(operands, _) => operands
+            .iter()
+            .find_map(|operand| find_non_earlier_nat_reference(operand, current_index, positions)),
     }
 }
 
@@ -4277,12 +4286,17 @@ fn eval_static_nat_expr(
             src: src.clone(),
             span: ident.span.into(),
         }),
-        NatExpr::Add(lhs, rhs, span) => eval_static_nat_expr(lhs, src)?
-            .checked_add(eval_static_nat_expr(rhs, src)?)
-            .ok_or_else(|| eval_error("linspace point-count addition overflow", src, *span)),
-        NatExpr::Mul(lhs, rhs, span) => eval_static_nat_expr(lhs, src)?
-            .checked_mul(eval_static_nat_expr(rhs, src)?)
-            .ok_or_else(|| eval_error("linspace point-count multiplication overflow", src, *span)),
+        NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
+            sum.checked_add(eval_static_nat_expr(operand, src)?)
+                .ok_or_else(|| eval_error("linspace point-count addition overflow", src, *span))
+        }),
+        NatExpr::Mul(operands, span) => operands.iter().try_fold(1_u64, |product, operand| {
+            product
+                .checked_mul(eval_static_nat_expr(operand, src)?)
+                .ok_or_else(|| {
+                    eval_error("linspace point-count multiplication overflow", src, *span)
+                })
+        }),
     }
 }
 

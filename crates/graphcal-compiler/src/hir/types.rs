@@ -11,6 +11,7 @@ use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{GenericConstraint, MulDivOp};
 use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::ResolvedIndexName;
+use crate::syntax::non_empty::AtLeastTwo;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use crate::syntax::type_name::ResolvedStructTypeName;
@@ -219,10 +220,10 @@ pub enum NatExpr {
     Literal(u64, Span),
     /// Generic natural-number parameter (`N: Nat`).
     Param(Spanned<GenericParamId>),
-    /// Addition.
-    Add(Box<Self>, Box<Self>, Span),
-    /// Multiplication.
-    Mul(Box<Self>, Box<Self>, Span),
+    /// Addition of two or more operands.
+    Add(AtLeastTwo<Self>, Span),
+    /// Multiplication of two or more operands.
+    Mul(AtLeastTwo<Self>, Span),
 }
 
 impl NatExpr {
@@ -230,7 +231,7 @@ impl NatExpr {
     #[must_use]
     pub(crate) const fn span(&self) -> Span {
         match self {
-            Self::Literal(_, span) | Self::Add(_, _, span) | Self::Mul(_, _, span) => *span,
+            Self::Literal(_, span) | Self::Add(_, span) | Self::Mul(_, span) => *span,
             Self::Param(param) => param.span,
         }
     }

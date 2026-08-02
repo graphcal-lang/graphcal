@@ -1487,17 +1487,25 @@ impl FormatEquivalent for NatExpr {
                 };
                 ident.format_equivalent(other_ident)
             }
-            Self::Add(lhs, rhs, _span) => {
-                let Self::Add(other_lhs, other_rhs, _other_span) = other else {
+            Self::Add(operands, _span) => {
+                let Self::Add(other_operands, _other_span) = other else {
                     return false;
                 };
-                lhs.format_equivalent(other_lhs) && rhs.format_equivalent(other_rhs)
+                operands.len() == other_operands.len()
+                    && operands
+                        .iter()
+                        .zip(other_operands)
+                        .all(|(operand, other_operand)| operand.format_equivalent(other_operand))
             }
-            Self::Mul(lhs, rhs, _span) => {
-                let Self::Mul(other_lhs, other_rhs, _other_span) = other else {
+            Self::Mul(operands, _span) => {
+                let Self::Mul(other_operands, _other_span) = other else {
                     return false;
                 };
-                lhs.format_equivalent(other_lhs) && rhs.format_equivalent(other_rhs)
+                operands.len() == other_operands.len()
+                    && operands
+                        .iter()
+                        .zip(other_operands)
+                        .all(|(operand, other_operand)| operand.format_equivalent(other_operand))
             }
         }
     }
@@ -1512,11 +1520,15 @@ impl FormatEquivalent for AmbiguousGenericArg {
                 };
                 ident.format_equivalent(other_ident)
             }
-            Self::Mul(lhs, rhs, _span) => {
-                let Self::Mul(other_lhs, other_rhs, _other_span) = other else {
+            Self::Mul(operands, _span) => {
+                let Self::Mul(other_operands, _other_span) = other else {
                     return false;
                 };
-                lhs.format_equivalent(other_lhs) && rhs.format_equivalent(other_rhs)
+                operands.len() == other_operands.len()
+                    && operands
+                        .iter()
+                        .zip(other_operands)
+                        .all(|(operand, other_operand)| operand.format_equivalent(other_operand))
             }
         }
     }

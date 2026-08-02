@@ -9,7 +9,7 @@ use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
-use crate::syntax::non_empty::NonEmpty;
+use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::ContextualKeyword;
@@ -621,11 +621,11 @@ fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
             path.as_bare().cloned().map(NatExpr::Var)
         }
         ExprKind::BinOp { op, lhs, rhs } => {
-            let lhs = Box::new(nat_expr_from_binding_expr(lhs)?);
-            let rhs = Box::new(nat_expr_from_binding_expr(rhs)?);
+            let lhs = nat_expr_from_binding_expr(lhs)?;
+            let rhs = nat_expr_from_binding_expr(rhs)?;
             match op {
-                BinOp::Add => Some(NatExpr::Add(lhs, rhs, expr.span)),
-                BinOp::Mul => Some(NatExpr::Mul(lhs, rhs, expr.span)),
+                BinOp::Add => Some(NatExpr::add(lhs, rhs, expr.span)),
+                BinOp::Mul => Some(NatExpr::mul(lhs, rhs, expr.span)),
                 BinOp::Sub
                 | BinOp::Div
                 | BinOp::Mod
@@ -1004,30 +1004,56 @@ pub enum ForBindingIndex {
 /// A Nat expression (type-level natural number).
 ///
 /// Supports literals, variables, addition (Level 1), and multiplication (Level 2).
+/// Operator chains use flat, two-or-more operand lists so ordinary long source
+/// chains do not create recursively cloned, formatted, compared, or dropped trees.
 #[derive(Debug, Clone)]
 pub enum NatExpr {
     /// An integer literal, e.g., `3`
     Literal(u64, Span),
     /// A variable (generic Nat parameter), e.g., `N`
     Var(Ident),
-    /// Addition of two nat expressions, e.g., `N + 1`, `M + N`
-    Add(Box<Self>, Box<Self>, Span),
-    /// Multiplication of two nat expressions, e.g., `N * 3`, `M * N`
-    Mul(Box<Self>, Box<Self>, Span),
+    /// Addition of two or more Nat expressions, e.g., `N + 1`, `M + N + 1`.
+    Add(AtLeastTwo<Self>, Span),
+    /// Multiplication of two or more Nat expressions, e.g., `N * 3`, `M * N * 2`.
+    Mul(AtLeastTwo<Self>, Span),
 }
 
 impl NatExpr {
+    /// Construct an addition, extending an existing left-hand addition instead
+    /// of creating a left-deep tree.
+    #[must_use]
+    pub fn add(lhs: Self, rhs: Self, span: Span) -> Self {
+        match lhs {
+            Self::Add(mut operands, _) => {
+                operands.push(rhs);
+                Self::Add(operands, span)
+            }
+            lhs => Self::Add(AtLeastTwo::new(lhs, rhs), span),
+        }
+    }
+
+    /// Construct a multiplication, extending an existing left-hand product
+    /// instead of creating a left-deep tree.
+    #[must_use]
+    pub fn mul(lhs: Self, rhs: Self, span: Span) -> Self {
+        match lhs {
+            Self::Mul(mut operands, _) => {
+                operands.push(rhs);
+                Self::Mul(operands, span)
+            }
+            lhs => Self::Mul(AtLeastTwo::new(lhs, rhs), span),
+        }
+    }
+
     /// Get the source span.
     #[must_use]
     pub(crate) const fn span(&self) -> Span {
         match self {
-            Self::Literal(_, span) | Self::Add(_, _, span) | Self::Mul(_, _, span) => *span,
+            Self::Literal(_, span) | Self::Add(_, span) | Self::Mul(_, span) => *span,
             Self::Var(ident) => ident.span,
         }
     }
-}
 
-impl NatExpr {
     const fn precedence(&self) -> u8 {
         match self {
             Self::Add(..) => 1,
@@ -1036,27 +1062,39 @@ impl NatExpr {
         }
     }
 
+    fn fmt_operands(
+        operands: &AtLeastTwo<Self>,
+        separator: &str,
+        precedence: u8,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        for (index, operand) in operands.iter().enumerate() {
+            if index > 0 {
+                f.write_str(separator)?;
+            }
+            operand.fmt_with_min_precedence(f, precedence)?;
+        }
+        Ok(())
+    }
+
     fn fmt_with_min_precedence(
         &self,
         f: &mut std::fmt::Formatter<'_>,
         min_precedence: u8,
     ) -> std::fmt::Result {
-        let needs_parens = self.precedence() < min_precedence;
+        let precedence = self.precedence();
+        let needs_parens = precedence < min_precedence;
         if needs_parens {
             f.write_str("(")?;
         }
         match self {
             Self::Literal(n, _) => write!(f, "{n}")?,
             Self::Var(ident) => f.write_str(&ident.name)?,
-            Self::Add(lhs, rhs, _) => {
-                lhs.fmt_with_min_precedence(f, self.precedence())?;
-                f.write_str(" + ")?;
-                rhs.fmt_with_min_precedence(f, self.precedence())?;
+            Self::Add(operands, _) => {
+                Self::fmt_operands(operands, " + ", precedence, f)?;
             }
-            Self::Mul(lhs, rhs, _) => {
-                lhs.fmt_with_min_precedence(f, self.precedence())?;
-                f.write_str(" * ")?;
-                rhs.fmt_with_min_precedence(f, self.precedence())?;
+            Self::Mul(operands, _) => {
+                Self::fmt_operands(operands, " * ", precedence, f)?;
             }
         }
         if needs_parens {
@@ -1079,13 +1117,9 @@ mod nat_expr_display_tests {
     #[test]
     fn display_parenthesizes_addition_under_multiplication() {
         let span = Span::new(0, 0);
-        let expr = NatExpr::Mul(
-            Box::new(NatExpr::Add(
-                Box::new(NatExpr::Literal(1, span)),
-                Box::new(NatExpr::Literal(2, span)),
-                span,
-            )),
-            Box::new(NatExpr::Literal(3, span)),
+        let expr = NatExpr::mul(
+            NatExpr::add(NatExpr::Literal(1, span), NatExpr::Literal(2, span), span),
+            NatExpr::Literal(3, span),
             span,
         );
         assert_eq!(expr.to_string(), "(1 + 2) * 3");
@@ -1103,17 +1137,30 @@ mod nat_expr_display_tests {
 pub enum AmbiguousGenericArg {
     /// A bare type-level name.
     Name(Ident),
-    /// A product of ambiguous arguments.
-    Mul(Box<Self>, Box<Self>, Span),
+    /// A product of two or more ambiguous arguments.
+    Mul(AtLeastTwo<Self>, Span),
 }
 
 impl AmbiguousGenericArg {
+    /// Construct a product, extending an existing left-hand product instead of
+    /// creating a left-deep tree.
+    #[must_use]
+    pub fn mul(lhs: Self, rhs: Self, span: Span) -> Self {
+        match lhs {
+            Self::Mul(mut operands, _) => {
+                operands.push(rhs);
+                Self::Mul(operands, span)
+            }
+            lhs @ Self::Name(_) => Self::Mul(AtLeastTwo::new(lhs, rhs), span),
+        }
+    }
+
     /// Get the source span.
     #[must_use]
     pub(crate) const fn span(&self) -> Span {
         match self {
             Self::Name(ident) => ident.span,
-            Self::Mul(_, _, span) => *span,
+            Self::Mul(_, span) => *span,
         }
     }
 
@@ -1132,10 +1179,13 @@ impl AmbiguousGenericArg {
         }
         match self {
             Self::Name(ident) => f.write_str(&ident.name)?,
-            Self::Mul(lhs, rhs, _) => {
-                lhs.fmt_with_min_precedence(f, precedence)?;
-                f.write_str(" * ")?;
-                rhs.fmt_with_min_precedence(f, precedence)?;
+            Self::Mul(operands, _) => {
+                for (index, operand) in operands.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" * ")?;
+                    }
+                    operand.fmt_with_min_precedence(f, precedence)?;
+                }
             }
         }
         if needs_parens {

@@ -641,8 +641,9 @@ fn non_nat_sort_for_ambiguous_arg(
             }
             None
         }
-        ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => non_nat_sort_for_ambiguous_arg(lhs, ctx)
-            .or_else(|| non_nat_sort_for_ambiguous_arg(rhs, ctx)),
+        ast::AmbiguousGenericArg::Mul(operands, _) => operands
+            .iter()
+            .find_map(|operand| non_nat_sort_for_ambiguous_arg(operand, ctx)),
     }
 }
 
@@ -663,11 +664,9 @@ fn generic_arg_sort_mismatch(
 pub(crate) fn ambiguous_generic_arg_as_nat(arg: &ast::AmbiguousGenericArg) -> ast::NatExpr {
     match arg {
         ast::AmbiguousGenericArg::Name(ident) => ast::NatExpr::Var(ident.clone()),
-        ast::AmbiguousGenericArg::Mul(lhs, rhs, span) => ast::NatExpr::Mul(
-            Box::new(ambiguous_generic_arg_as_nat(lhs)),
-            Box::new(ambiguous_generic_arg_as_nat(rhs)),
-            *span,
-        ),
+        ast::AmbiguousGenericArg::Mul(operands, span) => {
+            ast::NatExpr::Mul(operands.map_ref(ambiguous_generic_arg_as_nat), *span)
+        }
     }
 }
 
@@ -694,9 +693,10 @@ fn collect_ambiguous_dim_terms(arg: &ast::AmbiguousGenericArg, terms: &mut Vec<a
                 span: ident.span,
             },
         }),
-        ast::AmbiguousGenericArg::Mul(lhs, rhs, _) => {
-            collect_ambiguous_dim_terms(lhs, terms);
-            collect_ambiguous_dim_terms(rhs, terms);
+        ast::AmbiguousGenericArg::Mul(operands, _) => {
+            for operand in operands {
+                collect_ambiguous_dim_terms(operand, terms);
+            }
         }
     }
 }
@@ -1006,14 +1006,12 @@ pub(crate) fn lower_nat_expr(
             }
             Ok(NatExpr::Param(binding.spanned_id(ident.span)))
         }
-        ast::NatExpr::Add(lhs, rhs, span) => Ok(NatExpr::Add(
-            Box::new(lower_nat_expr(lhs, ctx)?),
-            Box::new(lower_nat_expr(rhs, ctx)?),
+        ast::NatExpr::Add(operands, span) => Ok(NatExpr::Add(
+            operands.try_map_ref(|operand| lower_nat_expr(operand, ctx))?,
             *span,
         )),
-        ast::NatExpr::Mul(lhs, rhs, span) => Ok(NatExpr::Mul(
-            Box::new(lower_nat_expr(lhs, ctx)?),
-            Box::new(lower_nat_expr(rhs, ctx)?),
+        ast::NatExpr::Mul(operands, span) => Ok(NatExpr::Mul(
+            operands.try_map_ref(|operand| lower_nat_expr(operand, ctx))?,
             *span,
         )),
     }

@@ -343,15 +343,24 @@ pub fn normalize_nat_expr(
                 })?;
             Ok(NatPolyForm::from_var(gp.clone()))
         }
-        NatExpr::Add(lhs, rhs, span) => {
-            let l = normalize_nat_expr(lhs, nat_params, src)?;
-            let r = normalize_nat_expr(rhs, nat_params, src)?;
-            l.add(&r).map_err(|err| nat_overflow_error(err, src, *span))
+        NatExpr::Add(operands, span) => {
+            operands
+                .iter()
+                .try_fold(NatPolyForm::from_constant(0), |sum, operand| {
+                    let value = normalize_nat_expr(operand, nat_params, src)?;
+                    sum.add(&value)
+                        .map_err(|err| nat_overflow_error(err, src, *span))
+                })
         }
-        NatExpr::Mul(lhs, rhs, span) => {
-            let l = normalize_nat_expr(lhs, nat_params, src)?;
-            let r = normalize_nat_expr(rhs, nat_params, src)?;
-            l.mul(&r).map_err(|err| nat_overflow_error(err, src, *span))
+        NatExpr::Mul(operands, span) => {
+            operands
+                .iter()
+                .try_fold(NatPolyForm::from_constant(1), |product, operand| {
+                    let value = normalize_nat_expr(operand, nat_params, src)?;
+                    product
+                        .mul(&value)
+                        .map_err(|err| nat_overflow_error(err, src, *span))
+                })
         }
     }
 }
