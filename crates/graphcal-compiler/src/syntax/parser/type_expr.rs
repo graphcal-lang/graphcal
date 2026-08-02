@@ -58,12 +58,11 @@ impl Parser<'_> {
                         // Datetime<TT> — built-in parameterized type, kept in
                         // its own variant so TIR resolution doesn't need to
                         // string-match the built-in type name.
-                        let type_args = self.parse_type_arg_list()?;
-                        let end_span = type_args.last().span;
+                        let (type_args, closing_span) = self.parse_type_arg_list()?;
                         TypeExpr {
                             kind: TypeExprKind::DatetimeApplication { type_args },
                             constraints: vec![],
-                            span: path_span.merge(end_span),
+                            span: path_span.merge(closing_span),
                         }
                     } else {
                         // Bare Datetime (= Datetime<UTC>)
@@ -83,9 +82,8 @@ impl Parser<'_> {
                     // ASCII-uppercase check silently misparsed non-ASCII
                     // type names into dim expressions.
                     let name = path.into_spanned_name_path();
-                    let generic_args = self.parse_generic_arg_list()?;
-                    let end_span = generic_args.last().span();
-                    let span = name.span.merge(end_span);
+                    let (generic_args, closing_span) = self.parse_generic_arg_list()?;
+                    let span = name.span.merge(closing_span);
                     TypeExpr {
                         kind: TypeExprKind::TypeApplication { name, generic_args },
                         constraints: vec![],
@@ -114,10 +112,8 @@ impl Parser<'_> {
 
         // Check for optional domain constraints: `(min: expr, max: expr)`
         if self.lexer.peek() == Some(&Token::LParen) {
-            let constraints = self.parse_domain_constraints()?;
-            if let Some(last) = constraints.last() {
-                base.span = base.span.merge(last.span);
-            }
+            let (constraints, closing_span) = self.parse_domain_constraints()?;
+            base.span = base.span.merge(closing_span);
             base.constraints = constraints;
         }
 
@@ -146,12 +142,12 @@ impl Parser<'_> {
     fn parse_complex_type(&mut self, name_span: Span) -> Result<TypeExpr, ParseError> {
         // Bare `Complex` is retained with zero arguments so HIR can report the
         // missing mandatory dimension with a targeted arity diagnostic.
-        let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
-            self.parse_generic_arg_list()?.into_vec()
+        let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
+            let (generic_args, closing_span) = self.parse_generic_arg_list()?;
+            (generic_args.into_vec(), closing_span)
         } else {
-            Vec::new()
+            (Vec::new(), name_span)
         };
-        let end_span = generic_args.last().map_or(name_span, GenericArg::span);
         Ok(TypeExpr {
             kind: TypeExprKind::ComplexApplication { generic_args },
             constraints: vec![],
@@ -163,12 +159,12 @@ impl Parser<'_> {
     fn parse_key_type(&mut self, name_span: Span) -> Result<TypeExpr, ParseError> {
         // Bare `Key` is retained with zero arguments so HIR can report the
         // missing mandatory index axis with a targeted arity diagnostic.
-        let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
-            self.parse_generic_arg_list()?.into_vec()
+        let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
+            let (generic_args, closing_span) = self.parse_generic_arg_list()?;
+            (generic_args.into_vec(), closing_span)
         } else {
-            Vec::new()
+            (Vec::new(), name_span)
         };
-        let end_span = generic_args.last().map_or(name_span, GenericArg::span);
         Ok(TypeExpr {
             kind: TypeExprKind::KeyApplication { generic_args },
             constraints: vec![],
@@ -182,7 +178,7 @@ impl Parser<'_> {
     /// Each constraint is `name: expr` where `name` is an identifier like `min` or `max`.
     fn parse_domain_constraints(
         &mut self,
-    ) -> Result<Vec<crate::syntax::ast::DomainBound>, ParseError> {
+    ) -> Result<(Vec<crate::syntax::ast::DomainBound>, Span), ParseError> {
         let (_, _lparen_span) = self.expect(Token::LParen)?;
         let mut constraints = Vec::new();
         let mut min_span = None;
@@ -231,7 +227,6 @@ impl Parser<'_> {
             }
         }
         let (_, rparen_span) = self.expect(Token::RParen)?;
-        // Update span of last constraint to include rparen for better error reporting
         if constraints.is_empty() {
             return Err(self.unexpected_token(
                 "at least one domain constraint (e.g., `min: 0`)",
@@ -239,7 +234,7 @@ impl Parser<'_> {
                 rparen_span,
             ));
         }
-        Ok(constraints)
+        Ok((constraints, rparen_span))
     }
 
     /// Parse a dimension expression: `DimTermOrGroup (("*" | "/") DimTermOrGroup)*`
@@ -675,22 +670,27 @@ impl Parser<'_> {
 
     /// Parse a type-only argument list: `<TypeExpr, TypeExpr, ...>`.
     ///
+    /// Returns the arguments and the closing `>` span so the owning type can
+    /// include the complete delimited form in its source span.
     /// This is used by closed built-in forms such as `Datetime<Scale>`. User-
     /// defined type and constructor applications use [`Self::parse_generic_arg_list`].
-    fn parse_type_arg_list(&mut self) -> Result<NonEmpty<TypeExpr>, ParseError> {
+    fn parse_type_arg_list(&mut self) -> Result<(NonEmpty<TypeExpr>, Span), ParseError> {
         self.expect(Token::Lt)?;
         let args = self.parse_non_empty_comma_separated(Token::Gt, Self::parse_type_expr)?;
-        self.expect(Token::Gt)?;
-        Ok(args)
+        let (_, closing_span) = self.expect(Token::Gt)?;
+        Ok((args, closing_span))
     }
 
     /// Parse the generic-argument surface shared by user-defined type and
-    /// constructor applications.
-    pub(super) fn parse_generic_arg_list(&mut self) -> Result<NonEmpty<GenericArg>, ParseError> {
+    /// constructor applications, returning the closing `>` span with the
+    /// arguments.
+    pub(super) fn parse_generic_arg_list(
+        &mut self,
+    ) -> Result<(NonEmpty<GenericArg>, Span), ParseError> {
         self.expect(Token::Lt)?;
         let args = self.parse_non_empty_comma_separated(Token::Gt, Self::parse_generic_arg)?;
-        self.expect(Token::Gt)?;
-        Ok(args)
+        let (_, closing_span) = self.expect(Token::Gt)?;
+        Ok((args, closing_span))
     }
 
     /// Parse one generic argument without guessing its semantic sort.
@@ -930,7 +930,7 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::ast::{DeclKind, TypeExprKind};
+    use crate::syntax::ast::{DeclKind, RawDeclSugar, TypeExprKind};
 
     fn dim_expr_name(te: &crate::syntax::ast::TypeExpr) -> &str {
         match &te.kind {
@@ -947,6 +947,79 @@ mod tests {
             GenericArg::Ambiguous(AmbiguousGenericArg::Name(ident)) => ident.name.as_str(),
             other => panic!("expected ambiguous bare-name argument, got {other:?}"),
         }
+    }
+
+    fn type_annotation_source(source: &str) -> &str {
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected param");
+        };
+        let start = param.type_ann.span.offset();
+        let end = start + param.type_ann.span.len();
+        &source[start..end]
+    }
+
+    fn unexpected_token_source(source: &str) -> &str {
+        let error = Parser::new(source).parse_file().unwrap_err();
+        let ParseError::UnexpectedToken { span, .. } = error else {
+            panic!("expected unexpected-token error, got {error:?}");
+        };
+        let start = span.offset();
+        let end = start + span.len();
+        &source[start..end]
+    }
+
+    #[test]
+    fn type_expression_spans_include_all_closing_delimiters() {
+        for (source, expected) in [
+            ("param value: Int;", "Int"),
+            ("param value: Wrapper<Int>;", "Wrapper<Int>"),
+            ("param value: Datetime<TT>;", "Datetime<TT>"),
+            ("param value: Complex<Length>;", "Complex<Length>"),
+            ("param value: Int(min: 0);", "Int(min: 0)"),
+            ("param value: Wrapper<Int(min: 0)>;", "Wrapper<Int(min: 0)>"),
+            (
+                "param value: Wrapper<Int>[Row, Col];",
+                "Wrapper<Int>[Row, Col]",
+            ),
+        ] {
+            assert_eq!(type_annotation_source(source), expected, "source: {source}");
+        }
+    }
+
+    #[test]
+    fn malformed_type_argument_lists_report_the_offending_delimiter() {
+        for (source, offending_delimiter) in [
+            ("param value: Wrapper<>;", ">"),
+            ("param value: Wrapper<Int];", "]"),
+        ] {
+            assert_eq!(unexpected_token_source(source), offending_delimiter);
+        }
+    }
+
+    #[test]
+    fn multi_declaration_header_spans_include_complete_type_annotations() {
+        let source = concat!(
+            "param a: Wrapper<Int>[Fin(1)],\n",
+            "param b: Int[Fin(1)]\n",
+            "= table[Fin(1), (_, _)] {\n",
+            ": _, _;\n",
+            "1, 2;\n",
+            "};",
+        );
+        let file = Parser::new(source).parse_file().unwrap();
+        let DeclKind::Sugar(RawDeclSugar::Multi(multi)) = &file.declarations[0].kind else {
+            panic!("expected multi-declaration");
+        };
+        let header_sources = multi.slots().iter().map(|slot| {
+            let start = slot.header_span.offset();
+            let end = start + slot.header_span.len();
+            &source[start..end]
+        });
+        assert_eq!(
+            header_sources.collect::<Vec<_>>(),
+            ["param a: Wrapper<Int>[Fin(1)]", "param b: Int[Fin(1)]"]
+        );
     }
 
     #[test]
