@@ -302,6 +302,43 @@ fn resolve_velocity_derived_dimension() {
 
 // --- module-aware type resolution integration tests ---
 
+#[test]
+fn field_constraint_resolution_error_uses_definition_source() {
+    let schema_source = "pub base dim Currency;\n\
+                         pub type Price { Price(amount: Currency(min: 0.0 missing)) }\n";
+    let raw_file = Parser::new(schema_source).parse_file().unwrap();
+    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let schema_src = NamedSource::new("schema.gcl", Arc::new(schema_source.to_string()));
+    let schema_id = crate::dag_id::DagId::root_in_package("test", "schema");
+    let ir = crate::ir::lower::lower(&file, &schema_src).unwrap();
+    let mut resolver = ModuleResolver::default();
+    resolver
+        .add_module(schema_id.clone(), &file.declarations)
+        .unwrap();
+    let mut module_types = ModuleTypeRegistry::default();
+    module_types.insert_graphcal_prelude().unwrap();
+    module_types.insert_registry(&schema_id, &ir.registry, schema_src);
+
+    // Emulate an importer whose ambient source is unrelated to the imported
+    // type definition. The diagnostic must still use `schema_src`.
+    let consumer_src = NamedSource::new("consumer.gcl", Arc::new("param p: Price;".to_string()));
+    let error = type_resolve_with_modules(ir, schema_id, &consumer_src, &resolver, &module_types)
+        .unwrap_err();
+
+    match error {
+        GraphcalError::UnknownUnit { name, src, span } => {
+            assert_eq!(name.to_string(), "missing");
+            assert_eq!(src.name(), "schema.gcl");
+            assert!(span.offset() + span.len() <= src.inner().len());
+            assert_eq!(
+                &src.inner()[span.offset()..span.offset() + span.len()],
+                "missing"
+            );
+        }
+        other => panic!("expected UnknownUnit against schema.gcl, got {other:?}"),
+    }
+}
+
 /// Single-file integration helper: lower + type-resolve + compile each
 /// inline dag body using the dumb `lower_dag_body_to_ir` primitive
 /// directly (no self-import preprocessing — fixtures exercised here
@@ -349,7 +386,7 @@ fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
             Span::new(0, 0),
         )
     })?;
-    module_types.insert_registry(&parent_dag_id, &ir.registry);
+    module_types.insert_registry(&parent_dag_id, &ir.registry, src.clone());
     let mut tir =
         type_resolve_with_modules(ir, parent_dag_id.clone(), &src, &resolver, &module_types)?;
     compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id, &file.declarations)?;
@@ -400,7 +437,7 @@ fn compile_inline_dag_bodies_test(
             Span::new(0, 0),
         )
     })?;
-    module_types.insert_registry(parent_dag_id, &tir.registry);
+    module_types.insert_registry(parent_dag_id, &tir.registry, src.clone());
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
@@ -442,7 +479,7 @@ fn module_aware_type_resolve_records_semantic_deps() {
         .unwrap();
     let mut module_types = ModuleTypeRegistry::default();
     module_types.insert_graphcal_prelude().unwrap();
-    module_types.insert_registry(&dag_id, &ir.registry);
+    module_types.insert_registry(&dag_id, &ir.registry, src.clone());
 
     let tir =
         type_resolve_with_modules(ir, dag_id.clone(), &src, &resolver, &module_types).unwrap();

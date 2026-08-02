@@ -201,7 +201,7 @@ mod tests {
             .unwrap();
         let mut module_types = ModuleTypeRegistry::default();
         module_types.insert_graphcal_prelude().unwrap();
-        module_types.insert_registry(&dag_id, &ir.registry);
+        module_types.insert_registry(&dag_id, &ir.registry, src.clone());
         type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types).unwrap()
     }
 

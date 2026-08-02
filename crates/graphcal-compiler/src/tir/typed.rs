@@ -218,17 +218,12 @@ fn type_resolve_impl(
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut root_dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut root_dag.semantic);
     cancellation.checkpoint()?;
-    check_hir_body_policies(
-        &root_dag.semantic,
-        &ir.registry,
-        &ir.external_surface,
-        module_ctx,
-        src,
-    )?;
+    check_hir_body_policies(&root_dag.semantic, &ir.external_surface, module_ctx, src)?;
     let mut dags = DagRegistry::new();
     dags.insert(root_dag_id.clone(), root_dag);
     Ok(TIR {
         registry: ir.registry,
+        module_types: module_ctx.types.clone(),
         root_dag_id,
         dags,
         module_aliases: HashMap::new(),
@@ -316,13 +311,7 @@ fn type_resolve_single_impl(
     lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
     cancellation.checkpoint()?;
-    check_hir_body_policies(
-        &dag.semantic,
-        &ir.registry,
-        &ir.external_surface,
-        module_ctx,
-        src,
-    )?;
+    check_hir_body_policies(&dag.semantic, &ir.external_surface, module_ctx, src)?;
     Ok(dag)
 }
 
@@ -347,6 +336,7 @@ fn lower_dynamic_unit_scales(
         &registry.time_zones,
     )
     .with_prelude(&prelude)
+    .with_unit_registry(&registry.units)
     .with_decl_bindings(&semantic.decl_bindings);
     for (name, _dim, scale) in registry.units.all_units() {
         if let crate::registry::types::UnitScale::Dynamic { scale_expr, .. } = scale
@@ -624,11 +614,18 @@ fn record_resolved_struct_type_def(
     let Some(type_def) = ctx.types.get_struct_type(name) else {
         return Ok(());
     };
+    let definition_src = ctx.types.source_for_owner(name.owner()).unwrap_or(src);
 
     for param in &type_def.generic_params {
         if let Some(default) = &param.default {
             let resolved = resolve_generic_default_in_struct_scope(
-                default, param, name, type_def, ctx, registry, src,
+                default,
+                param,
+                name,
+                type_def,
+                ctx,
+                registry,
+                definition_src,
             )?;
             defs.generic_defaults
                 .insert((name.clone(), param.name.clone()), resolved);
@@ -636,7 +633,7 @@ fn record_resolved_struct_type_def(
     }
 
     if let Some(members) = type_def.union_members() {
-        let generic_scope = generic_scope_for_type_def(name, type_def, src)?;
+        let generic_scope = generic_scope_for_type_def(name, type_def, definition_src)?;
         let prelude = hir::PreludeTypeScope::graphcal();
         let bound_expr_ctx = hir::ExprLoweringContext::new(
             name.owner(),
@@ -644,7 +641,8 @@ fn record_resolved_struct_type_def(
             &generic_scope,
             &registry.time_zones,
         )
-        .with_prelude(&prelude);
+        .with_prelude(&prelude)
+        .with_unit_registry(&registry.units);
         for member in members {
             for field in &member.fields {
                 let key = ResolvedStructFieldTypeKey {
@@ -658,9 +656,9 @@ fn record_resolved_struct_type_def(
                     type_def,
                     ctx,
                     registry,
-                    src,
+                    definition_src,
                 )?;
-                let bounds = lower_domain_bounds(&field.type_ann, bound_expr_ctx, src)?;
+                let bounds = lower_domain_bounds(&field.type_ann, bound_expr_ctx, definition_src)?;
                 if !bounds.is_empty() {
                     defs.field_bounds.insert(key.clone(), bounds);
                 }
@@ -745,6 +743,7 @@ fn lower_resolved_expressions(
             &registry.time_zones,
         )
         .with_prelude(&prelude)
+        .with_unit_registry(&registry.units)
         .with_decl_bindings(&decl_bindings);
         lower_domain_bounds(type_ann, expr_ctx, body_src)
     };
@@ -901,6 +900,7 @@ fn lower_domain_bounds(
                 kind: bound.kind,
                 value,
                 span: bound.span,
+                src: src.clone(),
             })
         })
         .collect()
@@ -927,12 +927,11 @@ struct LoweredDagExpressions {
 ///   sink kinds (assert/plot/figure/layer) are checked only when `pub`.
 fn check_hir_body_policies(
     semantic: &DagSemanticBody,
-    registry: &Registry,
     external_surface: &ExternalDeclSurface,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let checker = HirPolicyChecker { registry, ctx, src };
+    let checker = HirPolicyChecker { ctx, src };
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
     let is_explicit_export =
         |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
@@ -944,13 +943,17 @@ fn check_hir_body_policies(
                                check_pub_bind_literals: bool|
      -> Result<(), GraphcalError> {
         for bound in bounds {
-            checker.check_expr(&bound.value, true, check_pub_bind_literals)?;
+            let bound_checker = HirPolicyChecker {
+                ctx,
+                src: &bound.src,
+            };
+            bound_checker.check_expr(&bound.value, true, check_pub_bind_literals)?;
             // Domain bounds are evaluated without a host function registry.
             if let Some((external, span)) = hir::find_extern_call(&bound.value) {
                 return Err(GraphcalError::ExternCallNotAllowed {
                     name: external.to_string(),
                     context: "domain bound".to_string(),
-                    src: src.clone(),
+                    src: bound.src.clone(),
                     span: span.into(),
                 });
             }
@@ -1023,7 +1026,6 @@ fn check_hir_body_policies(
 }
 
 struct HirPolicyChecker<'a> {
-    registry: &'a Registry,
     ctx: ModuleTypeContext<'a>,
     src: &'a NamedSource<Arc<String>>,
 }
@@ -1166,20 +1168,21 @@ impl HirPolicyChecker<'_> {
 
     fn check_const_unit_expr(
         &self,
-        unit: &crate::desugar::desugared_ast::UnitExpr,
+        unit: &hir::ResolvedUnitExpr,
         const_body: bool,
     ) -> Result<(), GraphcalError> {
         if !const_body {
             return Ok(());
         }
         for term in &unit.terms {
-            let Some(info) = self.registry.units.get_unit(&term.name.value) else {
-                // Unknown units get their own diagnostics from dimension checking.
+            let Some(info) = self.ctx.types.get_unit(term.name.value.resolved()) else {
+                // Missing semantic unit definitions get their own diagnostics
+                // from dimension checking.
                 continue;
             };
             if !info.constness.is_const() {
                 return Err(GraphcalError::NonConstUnitInConst {
-                    name: term.name.value.clone(),
+                    name: term.name.value.spelling().clone(),
                     src: self.src.clone(),
                     span: term.name.span.into(),
                 });

@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use graphcal_compiler::desugar::desugared_ast::{MulDivOp, UnitExpr};
+use graphcal_compiler::hir::ResolvedUnitExpr;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{PositiveFiniteScale, UnitScale};
+use graphcal_compiler::syntax::ast::MulDivOp;
 use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 
@@ -97,19 +98,18 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 /// Returns a [`GraphcalError`] if a unit is unknown or a dynamic scale expression
 /// fails to evaluate to a quantity.
 pub fn resolve_unit_scale(
-    unit: &UnitExpr,
+    unit: &ResolvedUnitExpr,
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {
     let mut compound_scale = 1.0;
     for item in &unit.terms {
         let info = ctx
-            .registry
-            .units
-            .get_unit(&item.name.value)
+            .tir
+            .unit_info(item.name.value.resolved())
             .ok_or_else(|| {
                 ctx.eval_error(
-                    format!("unknown unit `{}`", item.name.value),
+                    format!("unknown unit `{}`", item.name.value.spelling()),
                     item.name.span,
                 )
             })?;
@@ -125,12 +125,12 @@ pub fn resolve_unit_scale(
                     .root()
                     .semantic
                     .dynamic_unit_scales
-                    .get(&item.name.value)
+                    .get(item.name.value.spelling())
                     .ok_or_else(|| {
                         ctx.eval_error(
                             format!(
                                 "dynamic unit scale for `{}` could not be resolved",
-                                item.name.value
+                                item.name.value.spelling()
                             ),
                             item.name.span,
                         )

@@ -59,7 +59,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    module_types.insert_registry(&parent_dag_id, &ir.registry);
+    module_types.insert_registry(&parent_dag_id, &ir.registry, src.clone());
     let mut tir = crate::tir::typed::type_resolve_with_modules(
         ir,
         parent_dag_id.clone(),
@@ -86,7 +86,7 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
         .unwrap();
     let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
     module_types.insert_graphcal_prelude().unwrap();
-    module_types.insert_registry(&dag_id, &ir.registry);
+    module_types.insert_registry(&dag_id, &ir.registry, src.clone());
     let tir =
         crate::tir::typed::type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types)
             .unwrap();
@@ -150,7 +150,7 @@ fn compile_inline_dag_bodies_test(
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    module_types.insert_registry(parent_dag_id, &tir.registry);
+    module_types.insert_registry(parent_dag_id, &tir.registry, src.clone());
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(

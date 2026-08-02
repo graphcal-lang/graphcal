@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::syntax::module_name::ModuleAliasName;
-use crate::syntax::names::{NameAtom, NameDef, NameNamespace, ResolvedName};
+use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath, ResolvedName};
 
 /// Dimension namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -39,7 +39,7 @@ pub type ResolvedDimName = ResolvedName<DimNameNamespace>;
 pub type UnitName = NameDef<UnitNameNamespace>;
 
 /// Module-resolved unit name.
-pub(crate) type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
+pub type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
 
 /// Name of a dimension variable in a built-in function signature (e.g., `"D"`).
 ///
@@ -85,10 +85,24 @@ impl UnitRef {
     }
 
     /// The module alias qualifying this reference, if any.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) const fn qualifier(&self) -> Option<&ModuleAliasName> {
+    pub const fn qualifier(&self) -> Option<&ModuleAliasName> {
         self.qualifier.as_ref()
+    }
+
+    /// Convert this syntax reference to the generic path shape consumed by the
+    /// module resolver.
+    #[must_use]
+    pub(crate) fn to_name_path(&self) -> NamePath {
+        self.qualifier.as_ref().map_or_else(
+            || NamePath::local(self.name.atom().clone()),
+            |qualifier| {
+                NamePath::qualified_path(
+                    std::iter::once(qualifier.atom().clone()),
+                    self.name.atom().clone(),
+                )
+            },
+        )
     }
 
     /// The unit leaf name.

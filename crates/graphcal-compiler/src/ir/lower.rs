@@ -1220,6 +1220,7 @@ impl UnfrozenIR {
                 &registry.time_zones,
             )
             .with_prelude(&prelude)
+            .with_unit_registry(&registry.units)
             .with_decl_bindings(&decl_bindings);
             crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
                 crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
@@ -1308,6 +1309,7 @@ impl UnfrozenIR {
                             &registry.time_zones,
                         )
                         .with_prelude(&prelude)
+                        .with_unit_registry(&registry.units)
                         .with_decl_bindings(&decl_bindings);
                         crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
                             crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
@@ -1330,6 +1332,7 @@ impl UnfrozenIR {
                 &registry.time_zones,
             )
             .with_prelude(&prelude)
+            .with_unit_registry(&registry.units)
             .with_decl_bindings(&decl_bindings);
             crate::hir::lower_expr(expr, expr_ctx).ok()
         };

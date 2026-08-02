@@ -2192,6 +2192,29 @@ fn write_same_leaf_same_field_constrained_record_type_project(
     (dir, root)
 }
 
+fn write_custom_unit_constrained_record_type_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/record_scope");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"record_scope\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("schema.gcl"),
+        "pub base dim Currency;\n\
+         pub base unit credit: Currency;\n\
+         pub type Price { Price(amount: Currency(min: 0.0 credit)) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
 fn loaded_file_dag_id(
     project: &crate::loader::LoadedProject,
     file_name: &str,
@@ -2204,6 +2227,33 @@ fn loaded_file_dag_id(
             || panic!("loaded file `{file_name}` not found"),
             |file| file.dag_id.clone(),
         )
+}
+
+// #1087: imported type constraints retain the defining module's unit scope.
+#[test]
+fn imported_record_field_constraint_uses_defining_unit_scope_through_module_alias() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema as schema;\n\
+         base dim ConsumerCurrency;\n\
+         base unit credit: ConsumerCurrency;\n\
+         param price: schema.Price;\n\
+         node result: Dimensionless = 1.0;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn imported_record_field_constraint_uses_defining_unit_scope_through_selective_type_import() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema.{type Price};\n\
+         base dim ConsumerCurrency;\n\
+         base unit credit: ConsumerCurrency;\n\
+         param price: Price;\n\
+         node result: Dimensionless = 1.0;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
 }
 
 #[test]

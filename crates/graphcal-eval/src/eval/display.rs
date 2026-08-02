@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
 
 use super::types::{DisplayUnit, Value};
-use graphcal_compiler::registry::format::{format_number, format_unit_expr_canonical};
+use graphcal_compiler::registry::format::{format_number, format_unit_terms_canonical};
 
 /// Maximum number of value reads (`@x`, field/index access, if/match
 /// selection) followed when propagating display metadata. Read chains track
@@ -269,13 +269,17 @@ fn find_static_map_entry<'a>(
 /// Returns a [`GraphcalError`] when the scale cannot be resolved; see
 /// [`attach_display_units`].
 fn resolve_unit_to_display(
-    unit: &graphcal_compiler::desugar::desugared_ast::UnitExpr,
+    unit: &graphcal_compiler::hir::ResolvedUnitExpr,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Result<DisplayUnit, GraphcalError> {
     let scale = crate::eval_expr::resolve_unit_scale(unit, values, ctx)?;
     Ok(DisplayUnit {
-        label: format_unit_expr_canonical(unit),
+        label: format_unit_terms_canonical(
+            unit.terms
+                .iter()
+                .map(|item| (item.op, item.name.value.to_string(), item.power)),
+        ),
         scale,
     })
 }

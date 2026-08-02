@@ -294,6 +294,18 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
+    fn collect_unit_expr_refs(&self, unit: &hir::ResolvedUnitExpr, table: &mut SymbolTable) {
+        for item in &unit.terms {
+            table.references.push(ReferenceInfo {
+                span: item.name.span,
+                target: self.name_key(
+                    item.name.value.resolved().owner(),
+                    item.name.value.resolved().as_str(),
+                ),
+            });
+        }
+    }
+
     fn variant_key(
         &self,
         variant: &graphcal_compiler::syntax::index_name::ResolvedIndexVariant,
@@ -345,6 +357,16 @@ impl<'a> HirRefCollector<'a> {
             }
             hir::ExprLowerError::UnknownLocalRef { name, span } => {
                 (SymbolKey::TopLevel(name.to_string()), *span)
+            }
+            hir::ExprLowerError::UnknownUnit { name, span } => {
+                let target = name.qualifier().map_or_else(
+                    || SymbolKey::TopLevel(name.name().to_string()),
+                    |qualifier| SymbolKey::Qualified {
+                        module: vec![qualifier.to_string()],
+                        name: name.name().to_string(),
+                    },
+                );
+                (target, *span)
             }
             hir::ExprLowerError::UnknownFunction { path, span }
                 if NameAtom::parse(path).is_ok() =>
@@ -521,13 +543,15 @@ impl<'a> HirRefCollector<'a> {
                 self.walk(then_branch, table);
                 self.walk(else_branch, table);
             }
-            hir::ExprKind::UnitLiteral { unit, .. } => collect_unit_expr_refs(unit, table),
+            hir::ExprKind::UnitLiteral { unit, .. } => {
+                self.collect_unit_expr_refs(unit, table);
+            }
             hir::ExprKind::Convert {
                 expr: inner,
                 target,
             } => {
                 self.walk(inner, table);
-                collect_unit_expr_refs(target, table);
+                self.collect_unit_expr_refs(target, table);
             }
             hir::ExprKind::ConstructorCall {
                 callee,
@@ -2041,7 +2065,7 @@ fn collect_dim_expr_refs_in_scope(
     }
 }
 
-/// Collect references from a unit expression.
+/// Collect references from a syntax-layer unit expression.
 fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
     for item in &unit_expr.terms {
         table.references.push(ReferenceInfo {

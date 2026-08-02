@@ -763,6 +763,11 @@ pub type ManeuverResult {
 }
 ```
 
+Field constraints are resolved in the module that defines the type. Importing
+an exported type is therefore sufficient even when its bounds use custom
+units and dimensions from that defining module; consumers do not need
+redundant imports for those implementation dependencies.
+
 Field constraints fire at **construction time** for each
 `Ctor(field: ...)` call:
 

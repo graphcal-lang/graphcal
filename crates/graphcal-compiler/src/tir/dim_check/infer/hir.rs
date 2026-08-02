@@ -149,7 +149,7 @@ fn infer_hir_type_inner(
                 span: name.span.into(),
             });
         }
-        hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, registry, src)?,
+        hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, tir, src)?,
         hir::ExprKind::VariantLiteral(variant) => {
             // A qualified label is self-typed: `Maneuver.Departure` is a
             // constant of type `Key<Maneuver>` — the axis is in the spelling.
@@ -418,11 +418,11 @@ fn infer_hir_type_inner(
 }
 
 fn infer_hir_unit_literal(
-    unit: &crate::desugar::desugared_ast::UnitExpr,
-    registry: &Registry,
+    unit: &hir::ResolvedUnitExpr,
+    tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let dim = rules::resolve_unit_dimension_or_diagnose(unit, registry, src)?;
+    let dim = rules::resolve_unit_dimension_or_diagnose(unit, tir, src)?;
     Ok(InferredType::Quantity(dim))
 }
 
@@ -2416,7 +2416,7 @@ fn reject_nested_conversion(
 #[expect(clippy::too_many_arguments, reason = "conversion expression context")]
 fn infer_hir_convert(
     inner: &hir::Expr,
-    target: &crate::desugar::desugared_ast::UnitExpr,
+    target: &hir::ResolvedUnitExpr,
     owner_decl_name: Option<&str>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
@@ -2452,7 +2452,7 @@ fn infer_hir_convert(
         Some(dimension) => dimension.clone(),
         None => expect_quantity(element, registry, src, inner.span)?,
     };
-    let target_dim = rules::resolve_unit_dimension_or_diagnose(target, registry, src)?;
+    let target_dim = rules::resolve_unit_dimension_or_diagnose(target, tir, src)?;
 
     if expr_dim != target_dim {
         return Err(GraphcalError::ConversionDimensionMismatch {

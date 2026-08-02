@@ -67,19 +67,36 @@ pub fn format_unit_expr_with_config(
     expr: &crate::syntax::ast::UnitExpr,
     parenthesize_multi_denom: bool,
 ) -> String {
+    format_unit_terms_with_config(
+        expr.terms
+            .iter()
+            .map(|item| (item.op, item.name.value.to_string(), item.power)),
+        parenthesize_multi_denom,
+    )
+}
+
+/// Format already-selected unit term spellings.
+///
+/// This is the representation-independent boundary used by syntax and HIR
+/// callers without making either semantic layer depend on the other.
+#[must_use]
+pub fn format_unit_terms_with_config(
+    terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Option<Rational>)>,
+    parenthesize_multi_denom: bool,
+) -> String {
     use crate::syntax::ast::MulDivOp;
 
     let mut numerator = Vec::new();
     let mut denominator = Vec::new();
 
-    for item in &expr.terms {
-        let mut part = item.name.value.to_string();
-        if let Some(pow) = item.power
-            && pow != Rational::ONE
+    for (op, name, power) in terms {
+        let mut part = name;
+        if let Some(power) = power
+            && power != Rational::ONE
         {
-            part = format!("{part}{}", format_exponent(pow));
+            part = format!("{part}{}", format_exponent(power));
         }
-        match item.op {
+        match op {
             MulDivOp::Mul => numerator.push(part),
             MulDivOp::Div => denominator.push(part),
         }
@@ -120,37 +137,49 @@ pub fn format_unit_expr(expr: &crate::syntax::ast::UnitExpr) -> String {
 /// through this function instead.
 #[must_use]
 pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String {
+    format_unit_terms_canonical(
+        expr.terms
+            .iter()
+            .map(|item| (item.op, item.name.value.to_string(), item.power)),
+    )
+}
+
+/// Normalize and format already-selected unit term spellings.
+#[must_use]
+pub fn format_unit_terms_canonical(
+    terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Option<Rational>)>,
+) -> String {
     use crate::syntax::ast::MulDivOp;
     use std::collections::BTreeMap;
 
-    let mut exponents: BTreeMap<crate::syntax::dimension::UnitRef, Rational> = BTreeMap::new();
-    for item in &expr.terms {
-        let pow = item.power.unwrap_or(Rational::ONE);
-        let signed = match item.op {
-            MulDivOp::Mul => pow,
-            MulDivOp::Div => negate_exponent(pow),
+    let mut exponents: BTreeMap<String, Rational> = BTreeMap::new();
+    for (op, name, power) in terms {
+        let power = power.unwrap_or(Rational::ONE);
+        let signed = match op {
+            MulDivOp::Mul => power,
+            MulDivOp::Div => negate_exponent(power),
         };
-        let entry = exponents
-            .entry(item.name.value.clone())
-            .or_insert(Rational::ZERO);
+        let entry = exponents.entry(name).or_insert(Rational::ZERO);
         // Saturate on overflow: this is a display label, not a value.
         *entry = (*entry + signed).unwrap_or(*entry);
     }
 
-    let render = |name: &crate::syntax::dimension::UnitRef, exp: Rational| -> String {
-        if exp == Rational::ONE {
+    let render = |name: &str, exponent: Rational| -> String {
+        if exponent == Rational::ONE {
             name.to_string()
         } else {
-            format!("{name}{}", format_exponent(exp))
+            format!("{name}{}", format_exponent(exponent))
         }
     };
 
     let mut numerator: Vec<String> = Vec::new();
     let mut denominator: Vec<String> = Vec::new();
-    for (name, exp) in &exponents {
-        match exp.num().cmp(&0) {
-            std::cmp::Ordering::Greater => numerator.push(render(name, *exp)),
-            std::cmp::Ordering::Less => denominator.push(render(name, negate_exponent(*exp))),
+    for (name, exponent) in &exponents {
+        match exponent.num().cmp(&0) {
+            std::cmp::Ordering::Greater => numerator.push(render(name, *exponent)),
+            std::cmp::Ordering::Less => {
+                denominator.push(render(name, negate_exponent(*exponent)));
+            }
             std::cmp::Ordering::Equal => {}
         }
     }

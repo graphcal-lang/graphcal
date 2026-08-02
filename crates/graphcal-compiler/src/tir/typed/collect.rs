@@ -71,7 +71,7 @@ fn collect_unit_names_from_hir(
     crate::stack::with_stack_growth(|| match &expr.kind {
         hir::ExprKind::UnitLiteral { unit, .. } => {
             for term in &unit.terms {
-                names.insert(term.name.value.clone());
+                names.insert(term.name.value.spelling().clone());
             }
         }
         hir::ExprKind::Convert {
@@ -79,7 +79,7 @@ fn collect_unit_names_from_hir(
             target,
         } => {
             for term in &target.terms {
-                names.insert(term.name.value.clone());
+                names.insert(term.name.value.spelling().clone());
             }
             collect_unit_names_from_hir(inner, names);
         }

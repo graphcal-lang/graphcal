@@ -7,7 +7,9 @@
 //! ([`crate::syntax::ast::UnresolvedRef`]) are classified and resolved here,
 //! in one pass, against the lexical scope and the module-aware resolver.
 //! Source paths (`NamePath` / `IdentPath` / `ScopedName`) are consumed at
-//! this boundary and are not stored in HIR reference fields.
+//! this boundary. Unit references retain their structured source spelling only
+//! for diagnostics and display labels, alongside a canonical resolved target;
+//! semantic lookup never uses that spelling.
 //!
 //! Lowering is diagnostic-accumulating: a reference that cannot be resolved
 //! becomes an explicit [`ExprKind::Error`] node and its diagnostic is
@@ -16,7 +18,7 @@
 //! contains an error node, so the batch pipeline never sees one.
 
 use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
-use crate::syntax::dimension::ResolvedDimName;
+use crate::syntax::dimension::{ResolvedDimName, ResolvedUnitName, UnitRef as SyntaxUnitRef};
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::{BTreeSet, HashMap};
@@ -32,6 +34,7 @@ use crate::datetime_literal::{
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
+use crate::registry::types::UnitRegistry;
 use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
@@ -171,6 +174,9 @@ pub enum ExprLowerError {
         reason: String,
         span: Span,
     },
+    /// A unit reference was not found in the defining module's unit scope.
+    #[error("unknown unit `{name}`")]
+    UnknownUnit { name: SyntaxUnitRef, span: Span },
     /// A path-pattern could not be resolved to a constructor or index label.
     #[error("unknown match pattern `{path}`")]
     UnknownPattern { path: String, span: Span },
@@ -184,6 +190,7 @@ pub struct ExprLoweringContext<'a> {
     generic_scope: &'a GenericScope,
     time_zones: &'a TimeZoneRegistry,
     prelude: Option<&'a PreludeTypeScope>,
+    unit_registry: Option<&'a UnitRegistry>,
     decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
 }
 
@@ -202,11 +209,12 @@ impl<'a> ExprLoweringContext<'a> {
             generic_scope,
             time_zones,
             prelude: None,
+            unit_registry: None,
             decl_bindings: None,
         }
     }
 
-    /// Add implicit prelude type symbols for lowering generic arguments.
+    /// Add implicit prelude type-system symbols for unit and generic-argument lowering.
     #[must_use]
     pub const fn with_prelude(self, prelude: &'a PreludeTypeScope) -> Self {
         Self {
@@ -215,6 +223,22 @@ impl<'a> ExprLoweringContext<'a> {
             generic_scope: self.generic_scope,
             time_zones: self.time_zones,
             prelude: Some(prelude),
+            unit_registry: self.unit_registry,
+            decl_bindings: self.decl_bindings,
+        }
+    }
+
+    /// Add the frozen unit scope used for registry-created synthetic bindings
+    /// that do not have a source module symbol.
+    #[must_use]
+    pub(crate) const fn with_unit_registry(self, unit_registry: &'a UnitRegistry) -> Self {
+        Self {
+            owner: self.owner,
+            resolver: self.resolver,
+            generic_scope: self.generic_scope,
+            time_zones: self.time_zones,
+            prelude: self.prelude,
+            unit_registry: Some(unit_registry),
             decl_bindings: self.decl_bindings,
         }
     }
@@ -232,6 +256,7 @@ impl<'a> ExprLoweringContext<'a> {
             generic_scope: self.generic_scope,
             time_zones: self.time_zones,
             prelude: self.prelude,
+            unit_registry: self.unit_registry,
             decl_bindings: Some(decl_bindings),
         }
     }
@@ -242,6 +267,22 @@ impl<'a> ExprLoweringContext<'a> {
             Some(prelude) => ctx.with_prelude(prelude),
             None => ctx,
         }
+    }
+
+    fn resolve_prelude_unit_ref(self, reference: &SyntaxUnitRef) -> Option<ResolvedUnitName> {
+        self.prelude
+            .and_then(|prelude| prelude.resolve_unit_ref(reference))
+    }
+
+    fn resolve_registry_unit_ref(self, reference: &SyntaxUnitRef) -> Option<ResolvedUnitName> {
+        if reference.is_qualified() {
+            return None;
+        }
+        self.unit_registry?.get_unit(reference)?;
+        Some(ResolvedUnitName::from_def(
+            self.owner.clone(),
+            reference.name().clone(),
+        ))
     }
 }
 
@@ -501,6 +542,56 @@ impl IndexVariantRef {
     }
 }
 
+/// A unit reference after module-aware resolution.
+///
+/// `spelling` preserves the source alias for diagnostics and display labels;
+/// `resolved` is the canonical definition identity used by the compiler core.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedUnitRef {
+    spelling: SyntaxUnitRef,
+    resolved: ResolvedUnitName,
+}
+
+impl ResolvedUnitRef {
+    #[must_use]
+    pub const fn new(spelling: SyntaxUnitRef, resolved: ResolvedUnitName) -> Self {
+        Self { spelling, resolved }
+    }
+
+    /// Return the source spelling, including any module alias.
+    #[must_use]
+    pub const fn spelling(&self) -> &SyntaxUnitRef {
+        &self.spelling
+    }
+
+    /// Return the canonical owner-qualified unit identity.
+    #[must_use]
+    pub const fn resolved(&self) -> &ResolvedUnitName {
+        &self.resolved
+    }
+}
+
+impl std::fmt::Display for ResolvedUnitRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.spelling.fmt(f)
+    }
+}
+
+/// One term in a module-resolved unit expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedUnitExprItem {
+    pub op: ast::MulDivOp,
+    pub name: Spanned<ResolvedUnitRef>,
+    pub power: Option<crate::dimension::Rational>,
+}
+
+/// A unit expression whose terms retain canonical defining-module identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedUnitExpr {
+    pub terms: Vec<ResolvedUnitExprItem>,
+    pub span: Span,
+}
+
 /// Resolved expression shape.
 #[derive(Debug, Clone)]
 pub enum ExprKind {
@@ -546,11 +637,11 @@ pub enum ExprKind {
     },
     UnitLiteral {
         value: f64,
-        unit: ast::UnitExpr,
+        unit: ResolvedUnitExpr,
     },
     Convert {
         expr: Box<Expr>,
-        target: ast::UnitExpr,
+        target: ResolvedUnitExpr,
     },
     DisplayTimezone {
         expr: Box<Expr>,
@@ -1115,11 +1206,11 @@ impl<'a> ExprLowerer<'a> {
             },
             ast::ExprKind::UnitLiteral { value, unit } => ExprKind::UnitLiteral {
                 value: *value,
-                unit: unit.clone(),
+                unit: self.lower_unit_expr(unit)?,
             },
             ast::ExprKind::Convert { expr, target } => ExprKind::Convert {
                 expr: Box::new(self.lower_expr(expr)),
-                target: target.clone(),
+                target: self.lower_unit_expr(target)?,
             },
             ast::ExprKind::DisplayTimezone {
                 expr: operand,
@@ -1339,6 +1430,52 @@ impl<'a> ExprLowerer<'a> {
             ast::ExprKind::Sugar(s) => never(*s),
         };
         Ok(Expr::new(kind, expr.span))
+    }
+
+    fn lower_unit_expr(&self, unit: &ast::UnitExpr) -> Result<ResolvedUnitExpr, ExprLowerError> {
+        let terms = unit
+            .terms
+            .iter()
+            .map(|item| {
+                let reference = &item.name.value;
+                let path = reference.to_name_path();
+                let resolved = match self.ctx.resolver.resolve_unit_path(self.ctx.owner, &path) {
+                    Ok(resolved) => resolved,
+                    Err(source) => self
+                        .ctx
+                        .resolve_prelude_unit_ref(reference)
+                        .or_else(|| self.ctx.resolve_registry_unit_ref(reference))
+                        .map_or_else(
+                            || {
+                                if matches!(source, ModuleResolveError::UnknownName { .. }) {
+                                    Err(ExprLowerError::UnknownUnit {
+                                        name: reference.clone(),
+                                        span: item.name.span,
+                                    })
+                                } else {
+                                    Err(ExprLowerError::ModuleResolve {
+                                        source,
+                                        span: item.name.span,
+                                    })
+                                }
+                            },
+                            Ok,
+                        )?,
+                };
+                Ok(ResolvedUnitExprItem {
+                    op: item.op,
+                    name: Spanned::new(
+                        ResolvedUnitRef::new(reference.clone(), resolved),
+                        item.name.span,
+                    ),
+                    power: item.power,
+                })
+            })
+            .collect::<Result<Vec<_>, ExprLowerError>>()?;
+        Ok(ResolvedUnitExpr {
+            terms,
+            span: unit.span,
+        })
     }
 
     /// Resolve a syntactic reference path in value position.
@@ -2432,6 +2569,34 @@ mod tests {
             slice(variant.index_span.expect("written index path")),
             "mission.Phase"
         );
+    }
+
+    #[test]
+    fn lowers_qualified_unit_literal_to_canonical_owner() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source("pub base dim Currency; pub base unit credit: Currency;");
+        let main = desugared_source(
+            "import lib as schema; node amount: Dimensionless = 1.0 schema.credit;",
+        );
+        let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
+        let scope = GenericScope::new();
+
+        let expr = lower_expr(
+            node_value(&main, "amount"),
+            ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        )
+        .unwrap();
+
+        let ExprKind::UnitLiteral { unit, .. } = expr.kind else {
+            panic!("expected unit literal, got {expr:?}");
+        };
+        let [term] = unit.terms.as_slice() else {
+            panic!("expected one unit term, got {:?}", unit.terms);
+        };
+        assert_eq!(term.name.value.spelling().to_string(), "schema.credit");
+        assert_eq!(term.name.value.resolved().owner(), &lib_id);
+        assert_eq!(term.name.value.resolved().as_str(), "credit");
     }
 
     #[test]

@@ -140,11 +140,17 @@ pub(in crate::eval::project) fn lower_and_finalize(
             src: file_src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    module_types.insert_registry(file_dag_id, &ir.registry);
+    module_types.insert_registry(file_dag_id, &ir.registry, file_src.clone());
     for (dep_dag_id, evaluated) in evaluated_files {
         cancellation.checkpoint()?;
-        module_types.insert_registry(dep_dag_id, &evaluated.registry);
+        let dep_src = &project.files[dep_dag_id].named_source;
+        module_types.insert_registry(dep_dag_id, &evaluated.registry, dep_src.clone());
     }
+    // The aggregate root registry may expose dependency units under aliases or
+    // selective-import spellings. Overlay those entries last so dynamic units
+    // retain any dependency-evaluated static scale while their HIR identity
+    // remains canonical.
+    module_types.overlay_visible_units(file_dag_id, &ir.registry, &module_resolver);
 
     let parent_external_surface = ir.external_surface.clone();
     let mut tir = graphcal_compiler::tir::typed::type_resolve_with_modules_and_cancellation(
@@ -314,7 +320,18 @@ fn compile_inline_dag_modules<'a>(
         // required `pub(bind)` dimensions, types, and indexes). Add that local
         // registry under the child DAG identity before resolving its annotations.
         let mut dag_module_types = module_types.clone();
-        dag_module_types.insert_registry(&loaded_dag.dag_id, &dag_ir.registry);
+        dag_module_types.insert_registry(&loaded_dag.dag_id, &dag_ir.registry, file_src.clone());
+        dag_module_types.overlay_visible_units(
+            &loaded_dag.dag_id,
+            &dag_ir.registry,
+            module_resolver,
+        );
+        tir.insert_module_registry(
+            &loaded_dag.dag_id,
+            &dag_ir.registry,
+            file_src.clone(),
+            module_resolver,
+        );
         let mut compiled_dag =
             graphcal_compiler::tir::typed::type_resolve_single_with_modules_and_cancellation(
                 dag_ir,
