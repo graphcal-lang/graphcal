@@ -1,0 +1,5 @@
+// Extern functions use positional arguments.
+import plugin "graphcal:demo" as demo {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+}
+node value: Dimensionless = demo.lerp(a: 1.0, b: 2.0, t: 0.5);

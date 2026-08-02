@@ -61,6 +61,24 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::NamedArgumentsOnFunction {
+            function,
+            argument_names,
+            span,
+        } => {
+            let name = function.to_string();
+            let positional_args = argument_names
+                .iter()
+                .map(|argument| format!("{argument}_value"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return GraphcalError::NamedArgumentsOnFunction {
+                positional_call: format!("{name}({positional_args})"),
+                name,
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::WrongArity {
             name,
             expected,
@@ -266,6 +284,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownPattern { span, .. }
         | hir::ExprLowerError::UnknownFunction { span, .. }
         | hir::ExprLowerError::UnknownExternFunction { span, .. }
+        | hir::ExprLowerError::NamedArgumentsOnFunction { span, .. }
         | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
         | hir::ExprLowerError::WrongArity { span, .. }
         | hir::ExprLowerError::InvalidTimezone { span, .. }

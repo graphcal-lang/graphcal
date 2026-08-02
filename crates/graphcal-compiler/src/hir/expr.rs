@@ -113,6 +113,13 @@ pub enum ExprLowerError {
         name: crate::syntax::function_name::FnName,
         span: Span,
     },
+    /// Named constructor-style arguments were supplied to a resolved function.
+    #[error("function `{function}` uses positional arguments")]
+    NamedArgumentsOnFunction {
+        function: FunctionRef,
+        argument_names: Vec<FieldName>,
+        span: Span,
+    },
     /// A function call supplied generic arguments that no function signature consumes.
     #[error("function `{path}` does not accept generic arguments")]
     UnsupportedFunctionGenericArgs { path: String, span: Span },
@@ -892,6 +899,17 @@ impl FunctionRef {
     }
 }
 
+impl std::fmt::Display for FunctionRef {
+    /// Render source-like function spelling at diagnostic and display boundaries.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Builtin(name) => std::fmt::Display::fmt(name, f),
+            Self::Epoch { scale } => write!(f, "epoch<{}>", scale.value),
+            Self::External(extern_ref) => std::fmt::Display::fmt(extern_ref, f),
+        }
+    }
+}
+
 /// A resolved reference to an extern (plugin) function.
 ///
 /// Carries the canonical plugin identity plus the source alias the call was
@@ -1236,14 +1254,37 @@ impl<'a> ExprLowerer<'a> {
                 generic_args,
                 fields,
             } => {
-                let resolved = self
+                // Named-call syntax is ambiguous until name resolution. A real
+                // constructor wins; otherwise reclassify only a callee that is
+                // known to be a function, preserving the constructor lookup
+                // error for genuinely unknown constructor-shaped calls.
+                let resolved = match self
                     .ctx
                     .resolver
                     .resolve_constructor_ident_path(self.ctx.owner, callee)
-                    .map_err(|source| ExprLowerError::ModuleResolve {
-                        source,
-                        span: callee.span(),
-                    })?;
+                {
+                    Ok(resolved) => resolved,
+                    Err(constructor_error) => {
+                        return self.lower_function_ref(callee).map_or_else(
+                            |_| {
+                                Err(ExprLowerError::ModuleResolve {
+                                    source: constructor_error,
+                                    span: callee.span(),
+                                })
+                            },
+                            |function| {
+                                Err(ExprLowerError::NamedArgumentsOnFunction {
+                                    function,
+                                    argument_names: fields
+                                        .iter()
+                                        .map(|field| field.name.value.clone())
+                                        .collect(),
+                                    span: expr.span,
+                                })
+                            },
+                        );
+                    }
+                };
                 let params = self
                     .ctx
                     .resolver

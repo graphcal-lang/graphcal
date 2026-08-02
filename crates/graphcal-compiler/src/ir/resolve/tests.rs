@@ -223,6 +223,51 @@ fn resolve_unknown_function() {
 }
 
 #[test]
+fn named_arguments_on_builtin_report_positional_call_syntax() {
+    let err = compile_to_tir("node angle: Angle = atan2(y: 1.0 m, x: 2.0 m);").unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::NamedArgumentsOnFunction {
+            ref name,
+            ref positional_call,
+            ..
+        } if name == "atan2" && positional_call == "atan2(y_value, x_value)"
+    ));
+}
+
+#[test]
+fn named_arguments_on_extern_report_positional_call_syntax() {
+    let err = compile_to_tir(
+        r#"
+import plugin "graphcal:demo" as demo {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+}
+node x: Dimensionless = demo.lerp(a: 1.0, b: 2.0, t: 0.5);
+"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::NamedArgumentsOnFunction {
+            ref name,
+            ref positional_call,
+            ..
+        } if name == "demo.lerp"
+            && positional_call == "demo.lerp(a_value, b_value, t_value)"
+    ));
+}
+
+#[test]
+fn unknown_constructor_shaped_call_keeps_constructor_diagnostic() {
+    let err = compile_to_tir("node x: Dimensionless = Missing(value: 1.0);").unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::EvalError { ref message, .. }
+            if message.contains("unknown ConstructorName `Missing`")
+    ));
+}
+
+#[test]
 fn obsolete_extremum_function_names_are_rejected() {
     for obsolete in ["min", "max"] {
         let source = format!("node x: Dimensionless = {obsolete}(1.0, 2.0);");

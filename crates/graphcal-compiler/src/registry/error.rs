@@ -247,6 +247,17 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("function `{name}` uses positional arguments")]
+    #[diagnostic(code(graphcal::N015), help("write `{positional_call}`"))]
+    NamedArgumentsOnFunction {
+        name: String,
+        positional_call: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("named arguments are not allowed in function calls")]
+        span: SourceSpan,
+    },
+
     #[error("invalid extern function signature: {message}")]
     #[diagnostic(
         code(graphcal::P001),
@@ -2103,6 +2114,7 @@ impl GraphcalError {
             | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
             | Self::UnknownExternFunction { src, .. }
+            | Self::NamedArgumentsOnFunction { src, .. }
             | Self::ExternSignatureMismatch { src, .. }
             | Self::PluginLoadFailed { src, .. }
             | Self::PluginForbiddenImport { src, .. }

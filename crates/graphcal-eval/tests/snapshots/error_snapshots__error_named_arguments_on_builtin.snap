@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+function `atan2` uses positional arguments
+    Diagnostic severity: error
+Begin snippet for named_arguments_on_builtin.gcl starting at line 1, column 1
+
+snippet line 1: // Functions use positional arguments.
+snippet line 2: node angle: Angle = atan2(y: 1.0 m, x: 2.0 m);
+    label at line 2, columns 21 to 45: named arguments are not allowed in function calls
+diagnostic help: write `atan2(y_value, x_value)`
+diagnostic code: graphcal::N015
