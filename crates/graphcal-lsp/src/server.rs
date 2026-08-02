@@ -2426,6 +2426,47 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hints_render_coordinate_keys_with_axis_display_unit() {
+        let text = "index TimeStep = range(1.0 h, 3.0 h, step: 1.0 h);\n\
+                    node samples: Time[TimeStep] = for t: TimeStep { coord(t) };\n\
+                    node peak: Key<TimeStep> = argmax(@samples);\n\
+                    node copies: Key<TimeStep>[Fin(2)] = for i: Fin(2) { @peak };\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+
+        let hints = crate::inlay_hints::inlay_hints(
+            &analysis,
+            Range::new(
+                tower_lsp::lsp_types::Position::new(0, 0),
+                tower_lsp::lsp_types::Position::new(u32::MAX, u32::MAX),
+            ),
+        )
+        .expect("expected inlay hints for coordinate keys");
+        let labels = hints
+            .into_iter()
+            .filter_map(|hint| match hint.label {
+                tower_lsp::lsp_types::InlayHintLabel::String(label) => Some(label),
+                tower_lsp::lsp_types::InlayHintLabel::LabelParts(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.iter().any(|label| label == " = 3 [h]"),
+            "expected axis display unit on scalar coordinate key: {labels:?}"
+        );
+        assert!(
+            labels
+                .iter()
+                .any(|label| label == " = { #0: 3 [h], #1: 3 [h] }"),
+            "expected axis display unit on indexed coordinate keys: {labels:?}"
+        );
+    }
+
+    #[test]
     fn inlay_hints_use_declared_scale_datetime_extractors() {
         let text = "node tt: Datetime<TT> = epoch<TT>(\"2024-01-01T00:00:30\");\n\
                     node utc: Datetime = to_utc(@tt);\n\

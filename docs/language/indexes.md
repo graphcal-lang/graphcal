@@ -379,9 +379,12 @@ arithmetic instead.
 
 !!! note "Rendering and boundaries"
     Keys render at output boundaries as their label, position, or coordinate
-    (presentation only), and boundary inputs encode named keys by label,
-    `Fin` keys by position, and coordinate keys by coordinate. Keys do not
-    cross the experimental plugin ABI (same posture as `Complex`).
+    (presentation only). Coordinate keys use their axis's display scale and
+    unit—for example, a key on an axis declared in seconds renders as `2 s`,
+    not as position `2`. JSON and boundary inputs likewise encode coordinate
+    keys by coordinate rather than position. Boundary inputs encode named keys
+    by label and `Fin` keys by position. Keys do not cross the experimental
+    plugin ABI (same posture as `Complex`).
 
 ## `scan` (Cumulative Fold)
 

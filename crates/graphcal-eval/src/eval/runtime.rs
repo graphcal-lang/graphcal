@@ -25,15 +25,32 @@ use graphcal_compiler::registry::declared_type::{
     DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
 };
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::Registry;
+use graphcal_compiler::registry::types::{IndexDef, Registry};
 
 use super::display::{
     attach_display_units, extract_flat_display_unit, format_coordinate, format_coordinate_exact,
 };
 use super::project::resolve_field_declared_type;
 use super::types::{
-    AssertResult, AxisMeta, DeclType, EvalResult, NodeError, PlotFieldValue, PlotSpec, Value,
+    AssertResult, AxisMeta, DeclType, DisplayUnit, EvalResult, NodeError, PlotFieldValue, PlotSpec,
+    Value,
 };
+
+fn index_def_for_value_ref<'a>(
+    index_name: &IndexTypeRef,
+    tir: &'a graphcal_compiler::tir::typed::TIR,
+) -> Option<&'a IndexDef> {
+    index_name.finite_index().map_or_else(
+        || {
+            tir.root()
+                .semantic
+                .collection_refs
+                .index_defs
+                .get(index_name.declared_resolved()?)
+        },
+        |index| tir.registry.indexes.get_finite_index(index),
+    )
+}
 
 const fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Option<&StructTypeRef> {
     match declared_type {
@@ -49,8 +66,9 @@ const fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Optio
 pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
-    registry: &Registry,
+    tir: &graphcal_compiler::tir::typed::TIR,
 ) -> Value {
+    let registry = &tir.registry;
     match rv {
         RuntimeValue::Quantity(si_value) => {
             let dimension = match declared_type {
@@ -126,7 +144,7 @@ pub(super) fn runtime_to_value(
                             .find(|f| f.name == *field_name)
                             .and_then(|f| resolve_field_declared_type(f, &generic_sub, registry))
                     });
-                    let val = runtime_to_value(field_rv, field_declared.as_ref(), registry);
+                    let val = runtime_to_value(field_rv, field_declared.as_ref(), tir);
                     (field_name.clone(), val)
                 })
                 .collect();
@@ -145,9 +163,7 @@ pub(super) fn runtime_to_value(
             };
             // Coordinate indexes retain typed positions in the public value;
             // formatted coordinates are presentation-only metadata.
-            let idx_def = index_name
-                .declared_name()
-                .and_then(|name| registry.indexes.get_index(name.as_str()));
+            let idx_def = index_def_for_value_ref(index_name, tir);
             let entry_display_names = idx_def.filter(|def| def.is_coordinate()).map(|def| {
                 let labels = entries
                     .keys()
@@ -184,7 +200,7 @@ pub(super) fn runtime_to_value(
             let converted_entries = entries
                 .iter()
                 .map(|(variant, entry_rv)| {
-                    let val = runtime_to_value(entry_rv, element_declared, registry);
+                    let val = runtime_to_value(entry_rv, element_declared, tir);
                     (variant.clone(), val)
                 })
                 .collect();
@@ -194,20 +210,29 @@ pub(super) fn runtime_to_value(
                 entry_display_names,
             }
         }
-        RuntimeValue::CoordinateLabel { value, .. } => {
-            // CoordinateLabel is an intermediate value used during coordinate-index
-            // iteration, but it can surface in final output when a body
-            // returns its loop variable (e.g. `for i: Step { i }`). Expose it
-            // as a plain quantity, consistent with `expect_quantity` which
-            // already treats it as one.
+        RuntimeValue::CoordinateLabel {
+            index_name, value, ..
+        } => {
+            // CoordinateLabel also represents a first-class coordinate-axis key.
+            // Keep exposing its coordinate through the quantity-shaped I/O value,
+            // but carry the axis's own display unit so every presentation boundary
+            // renders the key exactly like that axis's indexed-entry headers.
             let dimension = match declared_type {
                 Some(DeclaredType::Quantity(d)) => d.clone(),
                 _ => Dimension::dimensionless(),
             };
+            let display_unit = index_def_for_value_ref(index_name, tir)
+                .and_then(|index| index.coordinate_data())
+                .and_then(|data| {
+                    data.display_label.as_ref().map(|label| DisplayUnit {
+                        label: label.clone(),
+                        scale: data.display_scale,
+                    })
+                });
             Value::Quantity {
                 si_value: *value,
                 dimension,
-                display_unit: None,
+                display_unit,
             }
         }
         RuntimeValue::Datetime(epoch) => {
@@ -510,7 +535,7 @@ pub(super) fn evaluate_plan_with_values_and_cancellation(
     let local_key = |name: &ScopedName| RuntimeDeclKey::for_local_decl(tir.root(), name);
 
     let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Result<Value, NodeError> {
-        let mut value = runtime_to_value(rv, declared_types.get(name), &tir.registry);
+        let mut value = runtime_to_value(rv, declared_types.get(name), tir);
         if let Some(expr) = expr_map.get(name) {
             // A display unit that fails to resolve (e.g. a dynamic conversion
             // target whose scale became non-positive) is a per-node error, not
