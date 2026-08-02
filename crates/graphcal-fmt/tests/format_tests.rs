@@ -104,6 +104,16 @@ fn preserves_multiple_comments() {
 }
 
 #[test]
+fn named_index_with_internal_line_comment_round_trips() {
+    let source = "index Maneuver = {\n    Departure,\n    // Final variant\n    Insertion\n};\n";
+    let formatted = format_source(source).expect("commented index declaration should format");
+    assert_eq!(formatted, source);
+    graphcal_compiler::syntax::parser::Parser::new(&formatted)
+        .parse_file()
+        .expect("formatted index declaration should parse");
+}
+
+#[test]
 fn preserves_blank_line_between_declarations() {
     let source = "param x: Dimensionless = 1.0;\n\nparam y: Dimensionless = 2.0;\n";
     let formatted = format_source(source).unwrap();

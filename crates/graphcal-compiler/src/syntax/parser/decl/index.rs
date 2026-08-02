@@ -63,8 +63,8 @@ impl Parser<'_> {
         let variants = self.parse_non_empty_comma_separated(Token::RBrace, |parser| {
             Ok(parser.parse_any_ident()?.into_spanned::<IndexVariantName>())
         })?;
-        let (_, end_span) = self.expect(Token::RBrace)?;
-        self.expect(Token::Semicolon)?;
+        self.expect(Token::RBrace)?;
+        let (_, end_span) = self.expect(Token::Semicolon)?;
         Ok((
             IndexDeclKind::Named {
                 variants: variants.into_vec(),
@@ -83,8 +83,8 @@ impl Parser<'_> {
         self.expect(Token::ContextualKeyword(ContextualKeyword::Step))?;
         self.expect(Token::Colon)?;
         let step = self.parse_expr()?;
-        let (_, end_span) = self.expect(Token::RParen)?;
-        self.expect(Token::Semicolon)?;
+        self.expect(Token::RParen)?;
+        let (_, end_span) = self.expect(Token::Semicolon)?;
         Ok((
             IndexDeclKind::Range {
                 start: Box::new(start),
@@ -105,8 +105,8 @@ impl Parser<'_> {
         self.expect(Token::ContextualKeyword(ContextualKeyword::Points))?;
         self.expect(Token::Colon)?;
         let points = self.parse_nat_expr()?;
-        let (_, end_span) = self.expect(Token::RParen)?;
-        self.expect(Token::Semicolon)?;
+        self.expect(Token::RParen)?;
+        let (_, end_span) = self.expect(Token::Semicolon)?;
         Ok((
             IndexDeclKind::Linspace {
                 start: Box::new(start),
