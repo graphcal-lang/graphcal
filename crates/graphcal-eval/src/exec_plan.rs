@@ -414,18 +414,7 @@ fn build_runtime_dag(
 
     for decl in &all_decls {
         cancellation.checkpoint()?;
-        let name = decl.name().clone();
-        decl_spans.push((name.clone(), decl.span()));
-        match decl {
-            DeclRef::Param(entry) if entry.default_expr.is_none() => {
-                return Err(GraphcalError::RequiredParamNotProvided {
-                    name: name.to_string(),
-                    src: src.clone(),
-                    span: entry.span.into(),
-                });
-            }
-            DeclRef::Param(_) | DeclRef::Node(_) => {}
-        }
+        decl_spans.push((decl.name().clone(), decl.span()));
     }
 
     Ok(runtime_eval_order(dag, &decl_spans, src, cancellation)?

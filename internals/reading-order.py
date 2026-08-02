@@ -45,6 +45,7 @@ CRATE_ORDER = [
     "graphcal-plugin-macros",
     "graphcal-plugin",
     "graphcal-eval",
+    "graphcal-tenax",
     "graphcal-wasm",
     "graphcal-plugin-host",
     "graphcal-fmt",

@@ -480,7 +480,7 @@ pub fn quantity_display_value(si_value: f64, display_unit: Option<&DisplayUnit>)
 /// `Dimension`: dimensions describe physical semantics; unit labels are a
 /// presentation concern derived from registry metadata.
 #[must_use]
-fn default_unit_label(
+pub(super) fn default_unit_label(
     dimension: &Dimension,
     symbols: &BTreeMap<BaseDimId, String>,
 ) -> Option<String> {

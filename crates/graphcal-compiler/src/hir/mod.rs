@@ -29,6 +29,7 @@ pub mod expr;
 pub mod lower;
 pub mod types;
 
+pub use diagnostics::expr_lower_error_to_graphcal;
 pub use expr::{
     AssertBody, ConstRef, Expr, ExprDependencies, ExprKind, ExprLowerError, ExprLoweringContext,
     ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, ResolvedUnitExpr, ResolvedUnitExprItem,

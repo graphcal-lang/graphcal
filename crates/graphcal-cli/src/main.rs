@@ -15,6 +15,7 @@
 mod deps;
 mod display;
 mod json_input;
+mod model;
 mod overrides;
 mod plot;
 mod plugin;
@@ -84,7 +85,7 @@ enum Commands {
         /// Values to display: the entry surface or every included-DAG value
         #[arg(long, value_enum, default_value = "surface")]
         output_view: OutputView,
-        /// Override a param value: --set 'name=expr'
+        /// Bind a param to a closed value: --set 'name=value'
         #[arg(long)]
         set: Vec<String>,
         /// JSON input file for param values
@@ -129,6 +130,11 @@ enum Commands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Expose Graphcal files as persistent external models
+    Model {
+        #[command(subcommand)]
+        command: ModelCommands,
+    },
     /// Manage package dependencies
     Deps {
         #[command(subcommand)]
@@ -141,6 +147,21 @@ enum Commands {
     },
     /// Start the Language Server Protocol (LSP) server
     Lsp,
+}
+
+#[derive(Subcommand)]
+enum ModelCommands {
+    /// Serve a compiled model over Tenax stdio Arrow IPC v1/schema v2
+    Serve {
+        /// Path to the entry .gcl file
+        file: PathBuf,
+        /// Public Boolean root node to expose; repeat for multiple outputs
+        #[arg(long, required = true, value_name = "NAME")]
+        output: Vec<String>,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -271,6 +292,11 @@ fn run_command(cli: Cli) {
         Commands::Graph { file, format, root } => {
             run_graph(&file, &format, root.as_deref());
         }
+        Commands::Model { command } => match command {
+            ModelCommands::Serve { file, output, root } => {
+                run_model_serve(&file, &output, root.as_deref());
+            }
+        },
         Commands::Deps { command } => match command {
             DepsCommands::Lock { root } => {
                 run_deps_lock(root.as_deref());
@@ -467,6 +493,13 @@ fn run_deps_lock(root: Option<&Path>) {
 fn report_override_error(e: &OverrideParseError) -> ! {
     eprintln!("error: {e}");
     process::exit(2);
+}
+
+fn run_model_serve(file: &Path, outputs: &[String], root: Option<&Path>) {
+    if let Err(error) = model::serve(file, outputs, root) {
+        eprintln!("error: {error}");
+        process::exit(error.exit_code());
+    }
 }
 
 fn handle_eval(

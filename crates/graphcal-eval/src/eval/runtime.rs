@@ -265,8 +265,36 @@ pub(super) struct EvalLoopResult {
 /// Returns all computed values and any per-node errors. Internal invariant
 /// violations are returned immediately rather than being fault-isolated as
 /// ordinary user evaluation failures.
+#[cfg(test)]
 pub(super) fn run_eval_loop(
     plan: &crate::exec_plan::ExecPlan,
+    tir: &graphcal_compiler::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    builtin_consts: &HashMap<&str, f64>,
+    builtin_fns: &HashMap<&str, BuiltinFunction>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<EvalLoopResult, GraphcalError> {
+    run_eval_loop_with_bindings(
+        plan,
+        &super::bindings::RuntimeParameterBindings::new(),
+        tir,
+        src,
+        builtin_consts,
+        builtin_fns,
+        host_fns,
+        cancellation,
+    )
+}
+
+/// Run the core loop with one plan-validated row of runtime parameter bindings.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the evaluator context remains explicit at this functional-core boundary"
+)]
+pub(super) fn run_eval_loop_with_bindings(
+    plan: &crate::exec_plan::ExecPlan,
+    bindings: &super::bindings::RuntimeParameterBindings,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     builtin_consts: &HashMap<&str, f64>,
@@ -286,16 +314,34 @@ pub(super) fn run_eval_loop(
         values.insert(name.clone(), val.clone());
     }
 
-    // Insert const values into the lookup table
+    // Insert const values into the lookup table.
     for (name, val) in &plan.const_values {
         values.insert(name.clone(), val.clone());
+    }
+
+    // Inject supplied params before evaluating defaults or dependent nodes.
+    // Bound and defaulted params share the same resolved domain constraints.
+    for (name, binding) in bindings {
+        if let Some(constraint) = plan.domain_constraints.get(name)
+            && let Err(violation) =
+                crate::domain_check::check_domain_constraint(&binding.value, constraint)
+        {
+            errors.insert(
+                name.clone(),
+                NodeError::EvalFailed {
+                    message: violation.message,
+                },
+            );
+            continue;
+        }
+        values.insert(name.clone(), binding.value.clone());
     }
 
     // Evaluate in topological order (params first, then nodes that depend on them).
     // Top-level declarations in a single file are always `Local`-form names.
     for name in &plan.topo_order {
         cancellation.checkpoint()?;
-        if values.contains_key(name) {
+        if values.contains_key(name) || errors.contains_key(name) {
             continue;
         }
 
@@ -452,6 +498,7 @@ pub(super) fn evaluate_plan(
     )
 }
 
+#[cfg(test)]
 pub(super) fn evaluate_plan_with_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
@@ -460,9 +507,31 @@ pub(super) fn evaluate_plan_with_cancellation(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalResult, GraphcalError> {
-    evaluate_plan_with_values_and_cancellation(
+    evaluate_plan_with_bindings_and_cancellation(
         tir,
         plan,
+        &super::bindings::RuntimeParameterBindings::new(),
+        declared_types,
+        src,
+        host_fns,
+        cancellation,
+    )
+}
+
+/// Evaluate a plan with one row of runtime parameter bindings.
+pub(super) fn evaluate_plan_with_bindings_and_cancellation(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    plan: &crate::exec_plan::ExecPlan,
+    bindings: &super::bindings::RuntimeParameterBindings,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
+    src: &NamedSource<Arc<String>>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<EvalResult, GraphcalError> {
+    evaluate_plan_with_values_and_bindings_and_cancellation(
+        tir,
+        plan,
+        bindings,
         declared_types,
         src,
         host_fns,
@@ -474,13 +543,33 @@ pub(super) fn evaluate_plan_with_cancellation(
 /// Like [`evaluate_plan`], but also returns the raw runtime-value map so
 /// callers that need both (per-file project evaluation exporting values to
 /// downstream imports) do not have to run the eval loop a second time.
+pub(super) fn evaluate_plan_with_values_and_cancellation(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    plan: &crate::exec_plan::ExecPlan,
+    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
+    src: &NamedSource<Arc<String>>,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<(EvalResult, RuntimeValueMap), GraphcalError> {
+    evaluate_plan_with_values_and_bindings_and_cancellation(
+        tir,
+        plan,
+        &super::bindings::RuntimeParameterBindings::new(),
+        declared_types,
+        src,
+        host_fns,
+        cancellation,
+    )
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "linear evaluation pipeline is clearest as a single function"
 )]
-pub(super) fn evaluate_plan_with_values_and_cancellation(
+pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
+    bindings: &super::bindings::RuntimeParameterBindings,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
@@ -491,8 +580,9 @@ pub(super) fn evaluate_plan_with_values_and_cancellation(
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
 
-    let EvalLoopResult { values, errors } = run_eval_loop(
+    let EvalLoopResult { values, errors } = run_eval_loop_with_bindings(
         plan,
+        bindings,
         tir,
         src,
         builtin_consts,
@@ -518,6 +608,13 @@ pub(super) fn evaluate_plan_with_values_and_cancellation(
     // Build a map from name -> HIR expression for display unit extraction.
     // Top-level decls are always `Local`-form names.
     let hir_expr_for = |name: &ScopedName| -> Option<&graphcal_compiler::hir::Expr> {
+        let runtime_key = RuntimeDeclKey::for_local_decl(tir.root(), name);
+        if let Some(expr) = bindings
+            .get(&runtime_key)
+            .and_then(|binding| binding.display_expr.as_ref())
+        {
+            return Some(expr);
+        }
         let key = tir.root().resolved_decl_key_for_local(name);
         let exprs = &tir.root().semantic.expressions;
         exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))

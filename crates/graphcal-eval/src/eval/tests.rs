@@ -1,5 +1,6 @@
 use super::*;
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_io::RealFileSystem;
 
@@ -1586,6 +1587,287 @@ fn override_unknown_param_errors() {
         }
         other => panic!("expected OverrideUnknownParam, got {other:?}"),
     }
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one end-to-end row-binding test covers every recursive value family"
+)]
+fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
+    let source = r"
+        pub type Choice {
+            A,
+            B(value: Int),
+        }
+        pub index Axis = { X, Y };
+        param distance: Length;
+        param count: Int;
+        param enabled: Bool;
+        param axis_key: Key<Axis>;
+        param when: Datetime;
+        param impedance: Complex<Length>;
+        param choice: Choice;
+        param samples: Int[Axis];
+        param choices: Choice[Axis];
+        node total: Int = @samples[Axis.X] + @samples[Axis.Y];
+        pub node accepted: Bool = @total == 3;
+        pub node echo: Choice = @choice;
+    ";
+    let project = crate::loader::LoadedProject::from_source(source, "prepared.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    assert_eq!(prepared.parameter_ports().len(), 9);
+    assert!(matches!(
+        prepared.parameter_ports()[3].value_schema(),
+        ModelValueSchema::Key(index)
+            if matches!(index.kind(), ModelIndexKind::Named { .. })
+    ));
+
+    let mut first = prepared.binding_builder();
+    first
+        .bind_expression(&DeclName::expect_valid("distance"), &parse_expr("2.0 m"))
+        .unwrap();
+    first
+        .bind_expression(&DeclName::expect_valid("count"), &parse_expr("5"))
+        .unwrap();
+    first
+        .bind_expression(&DeclName::expect_valid("enabled"), &parse_expr("true"))
+        .unwrap();
+    first
+        .bind_expression(&DeclName::expect_valid("axis_key"), &parse_expr("Axis.X"))
+        .unwrap();
+    first
+        .bind_expression(
+            &DeclName::expect_valid("when"),
+            &parse_expr("datetime(\"2025-01-02T03:04:05Z\")"),
+        )
+        .unwrap();
+    first
+        .bind_expression(
+            &DeclName::expect_valid("impedance"),
+            &parse_expr("complex(3.0 m, 4.0 m)"),
+        )
+        .unwrap();
+    first
+        .bind_expression(
+            &DeclName::expect_valid("choice"),
+            &parse_expr("B(value: 2)"),
+        )
+        .unwrap();
+    first
+        .bind_expression(
+            &DeclName::expect_valid("samples"),
+            &parse_expr("{ Axis.X: 1, Axis.Y: 2 }"),
+        )
+        .unwrap();
+    first
+        .bind_expression(
+            &DeclName::expect_valid("choices"),
+            &parse_expr("{ Axis.X: A, Axis.Y: B(value: 9) }"),
+        )
+        .unwrap();
+    let first_row = first.finish().unwrap();
+    let first_result = prepared.evaluate(&first_row).unwrap();
+    assert_eq!(find_int_value(&first_result, "total"), 3);
+    let recursive_model = prepared.model(&[DeclName::expect_valid("echo")]).unwrap();
+    let ModelValueSchema::Algebraic { constructors, .. } =
+        recursive_model.outputs()[0].value_schema()
+    else {
+        panic!("echo schema was not algebraic");
+    };
+    assert_eq!(constructors.len(), 2);
+    assert_eq!(constructors[1].fields()[0].value(), &ModelValueSchema::Int);
+    let ModelRowOutcome::Success(recursive_outputs) = prepared
+        .evaluate_model_row(&first_row, &recursive_model)
+        .unwrap()
+    else {
+        panic!("recursive model row unexpectedly failed");
+    };
+    assert!(matches!(
+        recursive_outputs.as_slice(),
+        [Value::Struct { .. }]
+    ));
+
+    let mut second = prepared.binding_builder();
+    second
+        .bind_expression(&DeclName::expect_valid("distance"), &parse_expr("4.0 m"))
+        .unwrap();
+    second
+        .bind_expression(&DeclName::expect_valid("count"), &parse_expr("6"))
+        .unwrap();
+    second
+        .bind_expression(&DeclName::expect_valid("enabled"), &parse_expr("false"))
+        .unwrap();
+    second
+        .bind_expression(&DeclName::expect_valid("axis_key"), &parse_expr("Axis.Y"))
+        .unwrap();
+    second
+        .bind_expression(
+            &DeclName::expect_valid("when"),
+            &parse_expr("datetime(\"2026-01-02T03:04:05Z\")"),
+        )
+        .unwrap();
+    second
+        .bind_expression(
+            &DeclName::expect_valid("impedance"),
+            &parse_expr("complex(5.0 m, 12.0 m)"),
+        )
+        .unwrap();
+    second
+        .bind_expression(&DeclName::expect_valid("choice"), &parse_expr("A"))
+        .unwrap();
+    second
+        .bind_expression(
+            &DeclName::expect_valid("samples"),
+            &parse_expr("{ Axis.X: 10, Axis.Y: 20 }"),
+        )
+        .unwrap();
+    second
+        .bind_expression(
+            &DeclName::expect_valid("choices"),
+            &parse_expr("{ Axis.X: B(value: 8), Axis.Y: A }"),
+        )
+        .unwrap();
+    let second_result = prepared.evaluate(&second.finish().unwrap()).unwrap();
+    assert_eq!(find_int_value(&second_result, "total"), 30);
+}
+
+#[test]
+fn prepared_project_binds_coordinate_and_finite_keys() {
+    let project = crate::loader::LoadedProject::from_source(
+        "pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s); \
+         param at: Key<TimeStep>; param slot: Key<Fin(3)>;",
+        "key-bindings.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    assert!(matches!(
+        prepared.parameter_ports()[0].value_schema(),
+        ModelValueSchema::Key(index)
+            if matches!(index.kind(), ModelIndexKind::Coordinate { .. })
+    ));
+    assert!(matches!(
+        prepared.parameter_ports()[1].value_schema(),
+        ModelValueSchema::Key(index)
+            if matches!(index.kind(), ModelIndexKind::Finite { cardinality: 3 })
+    ));
+
+    let mut bindings = prepared.binding_builder();
+    bindings
+        .bind_expression(
+            &DeclName::expect_valid("at"),
+            &parse_expr("nearest_key(TimeStep, 1.1 s)"),
+        )
+        .unwrap();
+    bindings
+        .bind_expression(
+            &DeclName::expect_valid("slot"),
+            &parse_expr("fin_key(Fin(3), 2)"),
+        )
+        .unwrap();
+    let result = prepared.evaluate(&bindings.finish().unwrap()).unwrap();
+    assert!(result.params.iter().all(|(_, value)| value.is_ok()));
+}
+
+#[test]
+fn prepared_binding_literals_use_the_expected_numeric_type_exactly() {
+    let project = crate::loader::LoadedProject::from_source(
+        "param ratio: Dimensionless; param count: Int;",
+        "numeric-bindings.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let mut bindings = prepared.binding_builder();
+    bindings
+        .bind_expression(&DeclName::expect_valid("ratio"), &parse_expr("1"))
+        .unwrap();
+    bindings
+        .bind_expression(&DeclName::expect_valid("count"), &parse_expr("2.0"))
+        .unwrap();
+    let result = prepared.evaluate(&bindings.finish().unwrap()).unwrap();
+    assert!((find_value(&result, "ratio") - 1.0).abs() < f64::EPSILON);
+    assert_eq!(find_int_value(&result, "count"), 2);
+}
+
+#[test]
+fn prepared_bindings_reject_computations_and_cross_plan_positions() {
+    let first_project = crate::loader::LoadedProject::from_source(
+        "param x: Int; pub node positive: Bool = @x > 0;",
+        "first.gcl",
+    )
+    .unwrap();
+    let second_project = crate::loader::LoadedProject::from_source(
+        "param x: Int; pub node positive: Bool = @x > 0;",
+        "second.gcl",
+    )
+    .unwrap();
+    let first = prepare_from_project(&first_project).unwrap();
+    let second = prepare_from_project(&second_project).unwrap();
+
+    let mut bindings = first.binding_builder();
+    let error = bindings
+        .bind_expression(&DeclName::expect_valid("x"), &parse_expr("1 + 2"))
+        .unwrap_err();
+    assert!(error.to_string().contains("not a closed value"));
+
+    let mut wrong_plan = second.binding_builder();
+    let error = wrong_plan
+        .bind_integer(first.parameter_ports()[0].position(), 1)
+        .unwrap_err();
+    assert!(error.to_string().contains("another prepared project"));
+}
+
+#[test]
+fn tenax_v2_projection_is_strict_and_preserves_typed_domains() {
+    let source = r"
+        pub index Mode = { Zulu, Alpha };
+        param length: Length(min: 0.0 m, max: 10.0 m);
+        param ratio: Dimensionless(min: -1.0, max: 1.0);
+        param count: Int(min: -2, max: 2);
+        param mode: Key<Mode>;
+        pub node selected: Bool = true;
+    ";
+    let project = crate::loader::LoadedProject::from_source(source, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let model = prepared
+        .tenax_v2_model(&[DeclName::expect_valid("selected")])
+        .unwrap();
+    assert_eq!(model.inputs().len(), 4);
+    assert_eq!(
+        model.inputs()[0].kind().continuous(),
+        Some((0.0, 10.0, Some("m"), 1.0))
+    );
+    assert_eq!(
+        model.inputs()[1].kind().continuous(),
+        Some((-1.0, 1.0, None, 1.0))
+    );
+    assert_eq!(model.inputs()[2].kind().integer(), Some((-2, 2)));
+    assert_eq!(
+        model.inputs()[3]
+            .kind()
+            .categories()
+            .unwrap()
+            .iter()
+            .map(IndexVariantName::as_str)
+            .collect::<Vec<_>>(),
+        ["Alpha", "Zulu"]
+    );
+}
+
+#[test]
+fn tenax_v2_limits_do_not_restrict_the_generic_model_interface() {
+    let project = crate::loader::LoadedProject::from_source(
+        "param enabled: Bool; pub node selected: Bool = @enabled;",
+        "generic-model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let outputs = [DeclName::expect_valid("selected")];
+    assert!(prepared.model(&outputs).is_ok());
+    assert!(matches!(
+        prepared.tenax_v2_model(&outputs),
+        Err(ModelDefinitionError::UnsupportedInputType { .. })
+    ));
 }
 
 #[test]
@@ -4741,7 +5023,7 @@ fn eval_selective_import_aliases_with_colliding_leaf_names() {
 }
 
 #[test]
-fn eval_overrides_route_selective_same_leaf_params_by_owner() {
+fn eval_overrides_reject_included_implementation_params() {
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/collide");
     std::fs::create_dir_all(&root_dir).unwrap();
@@ -4772,9 +5054,13 @@ fn eval_overrides_route_selective_same_leaf_params_by_owner() {
     let mut overrides = HashMap::new();
     overrides.insert(DeclName::expect_valid("a_shared"), parse_expr("20.0"));
     overrides.insert(DeclName::expect_valid("b_shared"), parse_expr("30.0"));
-    let result = compile_and_eval_project(&root, &overrides, None, &fs()).unwrap();
-    let total = find_value(&result, "total");
-    assert!((total - 50.0).abs() < 1e-10, "total = {total}");
+    let result = compile_and_eval_project(&root, &overrides, None, &fs());
+    match result {
+        Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
+            assert!(name.as_str() == "a_shared" || name.as_str() == "b_shared");
+        }
+        other => panic!("expected imported parameter override rejection, got {other:?}"),
+    }
 }
 
 #[test]

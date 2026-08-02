@@ -7,12 +7,8 @@
 )]
 use super::*;
 
-/// Lower the AST to IR, process deferred instantiated imports, apply overrides,
-/// and type-resolve to produce the final `CompiledFile`.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "pipeline function threading project context through IR lowering stages"
-)]
+/// Lower the AST to IR, process deferred instantiated imports, and type-resolve
+/// the final `CompiledFile`.
 #[expect(
     clippy::too_many_lines,
     reason = "project lowering coordinates resolver, TIR, and plan construction"
@@ -24,8 +20,6 @@ pub(in crate::eval::project) fn lower_and_finalize(
     file_ast: &graphcal_compiler::desugar::desugared_ast::File,
     ctx: ImportContext<'_>,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    override_targets: &HashMap<DeclName, (graphcal_compiler::dag_id::DagId, DeclName)>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
@@ -96,19 +90,6 @@ pub(in crate::eval::project) fn lower_and_finalize(
         &mut unfrozen,
         cancellation,
     )?;
-
-    cancellation.checkpoint()?;
-    // Apply overrides routed to this file (using original param names)
-    // before the freeze boundary lowers every body to HIR.
-    let file_overrides: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr> =
-        override_targets
-            .iter()
-            .filter(|(_, (target_dag_id, _))| target_dag_id == file_dag_id)
-            .map(|(name, (_, orig_name))| (orig_name.clone(), overrides[name].clone()))
-            .collect();
-    if !file_overrides.is_empty() {
-        apply_overrides(&mut unfrozen, &file_overrides)?;
-    }
 
     cancellation.checkpoint()?;
     let module_resolver = project
@@ -216,17 +197,6 @@ pub(in crate::eval::project) fn lower_and_finalize(
     }
 
     let declared_types = tir.build_declared_types(file_src)?;
-
-    for override_name in file_overrides.keys() {
-        cancellation.checkpoint()?;
-        graphcal_compiler::tir::dim_check::check_override_dimension(
-            override_name,
-            &declared_types,
-            &tir,
-            &tir.registry,
-            file_src,
-        )?;
-    }
 
     Ok(CompiledFile {
         tir,

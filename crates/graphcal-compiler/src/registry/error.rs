@@ -1396,16 +1396,6 @@ pub enum GraphcalError {
     )]
     OverrideUnknownParam { name: DeclName },
 
-    #[error("ambiguous parameter `{name}` in --set override")]
-    #[diagnostic(
-        code(graphcal::O004),
-        help("the override name matches multiple merged parameter instances")
-    )]
-    OverrideAmbiguousParam {
-        name: DeclName,
-        candidates: Vec<crate::syntax::module_name::ScopedName>,
-    },
-
     #[error("required param `{name}` has no value")]
     #[diagnostic(
         code(graphcal::O003),
@@ -2097,8 +2087,7 @@ impl GraphcalError {
             | Self::CircularImport { .. }
             | Self::ManifestError { .. }
             | Self::OverrideNotAParam { .. }
-            | Self::OverrideUnknownParam { .. }
-            | Self::OverrideAmbiguousParam { .. } => return None,
+            | Self::OverrideUnknownParam { .. } => return None,
             Self::DuplicateName { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
             | Self::ConflictingImportedUnit { src, .. }

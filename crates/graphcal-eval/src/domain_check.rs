@@ -67,9 +67,13 @@ impl<T> ResolvedDomainBounds<T> {
 /// while the private constructor prevents a cross-scale bound from entering a
 /// datetime constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct DomainInstant(hifitime::Duration);
+pub struct DomainInstant(hifitime::Duration);
 
 impl DomainInstant {
+    pub(crate) const fn duration(self) -> hifitime::Duration {
+        self.0
+    }
+
     fn from_epoch(
         epoch: hifitime::Epoch,
         expected_scale: TimeScale,
@@ -115,6 +119,16 @@ pub struct ResolvedDomainConstraint {
     kind: ResolvedDomainConstraintKind,
 }
 
+/// Borrowed typed view used by model-interface projections.
+pub enum ResolvedDomainConstraintRef<'constraint> {
+    Quantity(&'constraint ResolvedDomainBounds<f64>),
+    Int(&'constraint ResolvedDomainBounds<i64>),
+    Datetime {
+        scale: TimeScale,
+        bounds: &'constraint ResolvedDomainBounds<DomainInstant>,
+    },
+}
+
 impl ResolvedDomainConstraint {
     pub const fn quantity(bounds: ResolvedDomainBounds<f64>) -> Self {
         Self {
@@ -125,6 +139,21 @@ impl ResolvedDomainConstraint {
     pub const fn int(bounds: ResolvedDomainBounds<i64>) -> Self {
         Self {
             kind: ResolvedDomainConstraintKind::Int(bounds),
+        }
+    }
+
+    pub(crate) const fn as_ref(&self) -> ResolvedDomainConstraintRef<'_> {
+        match &self.kind {
+            ResolvedDomainConstraintKind::Quantity(bounds) => {
+                ResolvedDomainConstraintRef::Quantity(bounds)
+            }
+            ResolvedDomainConstraintKind::Int(bounds) => ResolvedDomainConstraintRef::Int(bounds),
+            ResolvedDomainConstraintKind::Datetime { scale, bounds } => {
+                ResolvedDomainConstraintRef::Datetime {
+                    scale: *scale,
+                    bounds,
+                }
+            }
         }
     }
 

@@ -230,7 +230,7 @@ impl<'a> ExprLoweringContext<'a> {
     /// Add the frozen unit scope used for registry-created synthetic bindings
     /// that do not have a source module symbol.
     #[must_use]
-    pub(crate) const fn with_unit_registry(self, unit_registry: &'a UnitRegistry) -> Self {
+    pub const fn with_unit_registry(self, unit_registry: &'a UnitRegistry) -> Self {
         Self {
             owner: self.owner,
             resolver: self.resolver,

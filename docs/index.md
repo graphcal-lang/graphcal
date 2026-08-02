@@ -92,6 +92,14 @@ delta_v    = 3778.220768 m/s
 
     [:octicons-arrow-right-24: CLI commands](cli-reference.md)
 
+- :material-transit-connection-variant:{ .lg .middle } **Tenax Integration**
+
+    ---
+
+    Compile once and serve typed engineering models over persistent Arrow IPC.
+
+    [:octicons-arrow-right-24: Connect Graphcal to Tenax](tenax-integration.md)
+
 - :material-puzzle:{ .lg .middle } **Editor Setup**
 
     ---

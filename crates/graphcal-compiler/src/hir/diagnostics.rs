@@ -36,6 +36,7 @@ pub fn resolved_decl_key(owner: &crate::dag_id::DagId, name: &ScopedName) -> Res
     clippy::too_many_lines,
     reason = "exhaustive mapping from lowering diagnostics to spanned errors"
 )]
+#[must_use]
 pub fn expr_lower_error_to_graphcal(
     err: &hir::ExprLowerError,
     src: &NamedSource<Arc<String>>,
