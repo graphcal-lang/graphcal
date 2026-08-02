@@ -1129,6 +1129,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_same_line_unicode_string_literal() {
+        let expr = parse_node_expr(r#""Δv 🚀""#);
+        assert!(matches!(
+            expr.kind,
+            ExprKind::StringLiteral(ref text) if text == "Δv 🚀"
+        ));
+    }
+
+    #[test]
+    fn reject_string_literals_with_physical_line_breaks() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let source = format!("node label: Dimensionless = \"first{line_ending}second\";");
+            let error = Parser::new(&source).parse_file().unwrap_err();
+            assert!(
+                matches!(error, ParseError::UnknownToken { .. }),
+                "line ending {line_ending:?} produced {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_unit_literal() {
         let file = Parser::new("param alt: Length = 400.0 km;")
             .parse_file()

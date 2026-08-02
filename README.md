@@ -76,7 +76,7 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 graphcal deps lock --root mission
 ```
 
-See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface.
+See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
 
 ## Editor Support
 

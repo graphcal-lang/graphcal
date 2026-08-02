@@ -102,7 +102,7 @@ pub(crate) enum LexicalToken {
     Pub,
 
     // Literals
-    #[regex(r#""[^"]*""#)]
+    #[regex(r#""[^"\r\n]*""#)]
     StringLiteral,
 
     // Operators
@@ -950,9 +950,30 @@ mod tests {
     }
 
     #[test]
-    fn lex_string_literal() {
-        // String literals survive in non-import contexts (e.g., timezone names).
-        assert_single_token(r#""UTC""#, Token::StringLiteral);
+    fn lex_same_line_unicode_string_literal() {
+        // String literals survive in non-import contexts (e.g., plot labels).
+        assert_single_token(r#""Δv 🚀""#, Token::StringLiteral);
+    }
+
+    #[test]
+    fn physical_line_breaks_are_not_part_of_string_literals() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let input = format!("\"first{line_ending}second\"");
+            let mut lexer = crate::syntax::lexer::Lexer::new(&input);
+            let mut tokens = Vec::new();
+            while let Some((token, _)) = lexer.next_token() {
+                tokens.push(token);
+            }
+
+            assert!(
+                lexer.first_error_span().is_some(),
+                "line ending {line_ending:?} should produce a lexical error"
+            );
+            assert!(
+                !tokens.contains(&Token::StringLiteral),
+                "line ending {line_ending:?} was swallowed by a string token"
+            );
+        }
     }
 
     #[test]

@@ -414,7 +414,7 @@ or exist only at construction and rendering boundaries:
 | `match` binding | `field: name` in a pattern | the bound field's type | the arm expression |
 | Closure variables | `scan` binders `acc`, `item`; `unfold` binders `prev_state`, `prev_i`, `i` | accumulator / element values; `unfold`'s `prev_i`, `i` are `Key(I)` | the `scan` / `unfold` body |
 | Attributes | `#[...]` before a declaration | closed set: `assumes`, `expected_fail`, `hidden`, `lazy` | declaration metadata |
-| String literals | quoted text | — (there is no `String` ValueType) | `datetime`/`epoch` arguments, timezone display targets, plot properties, plugin paths |
+| String literals | single-line quoted text | — (there is no `String` ValueType) | `datetime`/`epoch` arguments, timezone display targets, plot properties, plugin paths |
 | Timezone | quoted IANA name | validated against the bundled tzdb | `datetime(..., tz)` construction, `-> "Area/Location"` display |
 | Module / package | directory tree and `import` | — | dot-separated path prefixes |
 
@@ -1611,7 +1611,7 @@ stays a selector; use `match` over a `Key<X>` value for case analysis.
 | Timezone | No (display metadata) | No | No | No | In `datetime(...)` arguments and `-> "Area/Location"` targets |
 | Index axis | No; inhabits `Index` | No | As generic `<I: Index>` | As generic | In indexed type syntax |
 | Natural number | No; inhabits `Nat` | No | As generic `<N: Nat>` | As generic | In Nat expressions and `Fin(N)` cardinalities |
-| String literal | No (no `String` type) | No | No | No | Boundary syntax: datetime arguments, timezone targets, plot properties, plugin paths |
+| String literal | No (no `String` type) | No | No | No | Single-line boundary syntax: datetime arguments, timezone targets, plot properties, plugin paths |
 | Attribute | No | No | No | No | Declaration metadata only |
 
 Named index labels use qualified syntax (`Maneuver.Departure`) while algebraic
