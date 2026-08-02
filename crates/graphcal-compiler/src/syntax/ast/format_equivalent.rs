@@ -995,26 +995,10 @@ impl FormatEquivalent for LayerDecl {
 
 impl FormatEquivalent for MultiDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self {
-            slots,
-            shared_axes,
-            slot_axes,
-            slices,
-            span: _,
-            table_expr_span: _,
-        } = self;
-        let Self {
-            slots: other_slots,
-            shared_axes: other_shared_axes,
-            slot_axes: other_slot_axes,
-            slices: other_slices,
-            span: _,
-            table_expr_span: _,
-        } = other;
-        slots.format_equivalent(other_slots)
-            && shared_axes.format_equivalent(other_shared_axes)
-            && slot_axes.format_equivalent(other_slot_axes)
-            && slices.format_equivalent(other_slices)
+        self.slots().format_equivalent(other.slots())
+            && self.shared_axes().format_equivalent(other.shared_axes())
+            && self.slot_axes().format_equivalent(other.slot_axes())
+            && self.slices().format_equivalent(other.slices())
     }
 }
 
@@ -1087,22 +1071,12 @@ impl FormatEquivalent for MultiSlotColumnSpan {
 
 impl FormatEquivalent for MultiDeclSlice {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self {
-            prefix_keys,
-            header_cells,
-            column_layout,
-            rows,
-        } = self;
-        let Self {
-            prefix_keys: other_prefix_keys,
-            header_cells: other_header_cells,
-            column_layout: other_column_layout,
-            rows: other_rows,
-        } = other;
-        prefix_keys.format_equivalent(other_prefix_keys)
-            && header_cells.format_equivalent(other_header_cells)
-            && column_layout.format_equivalent(other_column_layout)
-            && rows.format_equivalent(other_rows)
+        self.prefix_keys().format_equivalent(other.prefix_keys())
+            && self.header_cells().format_equivalent(other.header_cells())
+            && self
+                .column_layout()
+                .format_equivalent(other.column_layout())
+            && self.rows().format_equivalent(other.rows())
     }
 }
 
@@ -1131,12 +1105,8 @@ impl FormatEquivalent for MultiHeaderCell {
 
 impl FormatEquivalent for MultiDataRow {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self { label, values } = self;
-        let Self {
-            label: other_label,
-            values: other_values,
-        } = other;
-        label.format_equivalent(other_label) && values.format_equivalent(other_values)
+        self.label().format_equivalent(other.label())
+            && self.values().format_equivalent(other.values())
     }
 }
 

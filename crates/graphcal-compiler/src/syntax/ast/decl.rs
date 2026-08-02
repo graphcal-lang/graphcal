@@ -423,26 +423,133 @@ pub struct ParamDecl<P: Phase = Raw> {
 // consumers that want the surface form (formatter, surface-aware LSP
 // features) read the AST variant directly.
 
+/// Error returned when correlated multi-declaration collections do not have a
+/// shape that can be desugared safely.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MultiDeclShapeError {
+    #[error("multi-declaration requires at least two slots, but received {slot_count}")]
+    TooFewSlots { slot_count: usize },
+    #[error("multi-declaration has {slot_count} slots but {slot_axis_count} slot-axis entries")]
+    SlotAxisArity {
+        slot_count: usize,
+        slot_axis_count: usize,
+    },
+    #[error(
+        "multi-declaration slice {slice_index} has {layout_count} column-layout entries but {slot_count} slots"
+    )]
+    SliceLayoutArity {
+        slice_index: usize,
+        slot_count: usize,
+        layout_count: usize,
+    },
+    #[error(
+        "multi-declaration row {row_index} has {value_count} values but its header has {header_count} columns"
+    )]
+    RowWidth {
+        row_index: usize,
+        header_count: usize,
+        value_count: usize,
+    },
+    #[error(
+        "multi-declaration column layout {layout_index} selects column {column_index}, but its header has {header_count} columns"
+    )]
+    ColumnOutOfBounds {
+        layout_index: usize,
+        column_index: usize,
+        header_count: usize,
+    },
+    #[error(
+        "multi-declaration column layout {layout_index} has invalid range {start}..{end} for a header with {header_count} columns"
+    )]
+    InvalidColumnRange {
+        layout_index: usize,
+        start: usize,
+        end: usize,
+        header_count: usize,
+    },
+}
+
 /// The surface form of a multi-decl: parallel declaration slots sharing a
 /// single `table[…] {…}` initializer.
+///
+/// Its correlated collections are private so a valid parser-produced value
+/// cannot later be mutated into a shape that panics during desugaring. Use
+/// [`MultiDecl::new`] for construction and the read-only accessors for
+/// inspection.
 #[derive(Debug, Clone)]
 pub struct MultiDecl<P: Phase = Raw> {
-    /// Slot headers in declaration order. Length = number of declarations
-    /// this multi-decl expanded into.
-    pub slots: Vec<MultiDeclSlot<P>>,
-    /// Shared axes from the bracket prefix `table[A, B, …, (…)]`.
-    pub shared_axes: MultiDeclSharedAxes,
-    /// Per-slot extra-axis annotation from the slot tuple. Same length
-    /// as `slots`.
-    pub slot_axes: Vec<MultiSlotAxis>,
-    /// Body slices. Exactly one slice for single-shared-axis multi-decls;
-    /// multiple slices for N-D shared-axis prefixes (v3).
-    pub slices: Vec<MultiDeclSlice<P>>,
+    slots: Vec<MultiDeclSlot<P>>,
+    shared_axes: MultiDeclSharedAxes,
+    slot_axes: Vec<MultiSlotAxis>,
+    slices: Vec<MultiDeclSlice<P>>,
     /// Full surface span: from the first slot's kind keyword through the
     /// closing `;`.
     pub(crate) span: Span,
     /// Span of the `table[…] {…}` sub-expression.
     pub(crate) table_expr_span: Span,
+}
+
+impl<P: Phase> MultiDecl<P> {
+    /// Constructs a multi-declaration after validating all cross-collection
+    /// arity invariants used by desugaring.
+    pub fn new(
+        slots: Vec<MultiDeclSlot<P>>,
+        shared_axes: MultiDeclSharedAxes,
+        slot_axes: Vec<MultiSlotAxis>,
+        slices: Vec<MultiDeclSlice<P>>,
+        span: Span,
+        table_expr_span: Span,
+    ) -> Result<Self, MultiDeclShapeError> {
+        let slot_count = slots.len();
+        if slot_count < 2 {
+            return Err(MultiDeclShapeError::TooFewSlots { slot_count });
+        }
+        if slot_axes.len() != slot_count {
+            return Err(MultiDeclShapeError::SlotAxisArity {
+                slot_count,
+                slot_axis_count: slot_axes.len(),
+            });
+        }
+        if let Some((slice_index, slice)) = slices
+            .iter()
+            .enumerate()
+            .find(|(_, slice)| slice.column_layout.len() != slot_count)
+        {
+            return Err(MultiDeclShapeError::SliceLayoutArity {
+                slice_index,
+                slot_count,
+                layout_count: slice.column_layout.len(),
+            });
+        }
+        Ok(Self {
+            slots,
+            shared_axes,
+            slot_axes,
+            slices,
+            span,
+            table_expr_span,
+        })
+    }
+
+    #[must_use]
+    pub fn slots(&self) -> &[MultiDeclSlot<P>] {
+        &self.slots
+    }
+
+    #[must_use]
+    pub const fn shared_axes(&self) -> &MultiDeclSharedAxes {
+        &self.shared_axes
+    }
+
+    #[must_use]
+    pub fn slot_axes(&self) -> &[MultiSlotAxis] {
+        &self.slot_axes
+    }
+
+    #[must_use]
+    pub fn slices(&self) -> &[MultiDeclSlice<P>] {
+        &self.slices
+    }
 }
 
 /// One slot in a multi-decl: kind keyword, name, type annotation, visibility.
@@ -491,19 +598,86 @@ pub enum MultiSlotColumnSpan {
 }
 
 /// One slice of a multi-decl body: optional slice-label prefix + header + rows.
+///
+/// Header cells, column layouts, and row values are validated together during
+/// construction and exposed read-only.
 #[derive(Debug, Clone)]
 pub struct MultiDeclSlice<P: Phase = Raw> {
-    /// Slice labels covering the shared-axis prefix except the row axis.
-    /// Empty for single-shared-axis bodies.
-    pub prefix_keys: Vec<MapEntryKey>,
-    /// Header row cells, in left-to-right order.
-    pub header_cells: Vec<MultiHeaderCell>,
-    /// Per-slot column span into this slice's `header_cells` and `rows`
-    /// values. Same length as `MultiDecl::slots`. May differ between
-    /// slices if their header rows list variants in different orders.
-    pub(crate) column_layout: Vec<MultiSlotColumnSpan>,
-    /// Data rows for this slice.
-    pub rows: Vec<MultiDataRow<P>>,
+    prefix_keys: Vec<MapEntryKey>,
+    header_cells: Vec<MultiHeaderCell>,
+    column_layout: Vec<MultiSlotColumnSpan>,
+    rows: Vec<MultiDataRow<P>>,
+}
+
+impl<P: Phase> MultiDeclSlice<P> {
+    /// Constructs a slice whose row widths and layout ranges match its header.
+    pub fn new(
+        prefix_keys: Vec<MapEntryKey>,
+        header_cells: Vec<MultiHeaderCell>,
+        column_layout: Vec<MultiSlotColumnSpan>,
+        rows: Vec<MultiDataRow<P>>,
+    ) -> Result<Self, MultiDeclShapeError> {
+        let header_count = header_cells.len();
+        if let Some((row_index, row)) = rows
+            .iter()
+            .enumerate()
+            .find(|(_, row)| row.values.len() != header_count)
+        {
+            return Err(MultiDeclShapeError::RowWidth {
+                row_index,
+                header_count,
+                value_count: row.values.len(),
+            });
+        }
+        for (layout_index, layout) in column_layout.iter().enumerate() {
+            match layout {
+                MultiSlotColumnSpan::Single(column_index) if *column_index >= header_count => {
+                    return Err(MultiDeclShapeError::ColumnOutOfBounds {
+                        layout_index,
+                        column_index: *column_index,
+                        header_count,
+                    });
+                }
+                MultiSlotColumnSpan::Range { start, end, .. }
+                    if start >= end || *end > header_count =>
+                {
+                    return Err(MultiDeclShapeError::InvalidColumnRange {
+                        layout_index,
+                        start: *start,
+                        end: *end,
+                        header_count,
+                    });
+                }
+                MultiSlotColumnSpan::Single(_) | MultiSlotColumnSpan::Range { .. } => {}
+            }
+        }
+        Ok(Self {
+            prefix_keys,
+            header_cells,
+            column_layout,
+            rows,
+        })
+    }
+
+    #[must_use]
+    pub fn prefix_keys(&self) -> &[MapEntryKey] {
+        &self.prefix_keys
+    }
+
+    #[must_use]
+    pub fn header_cells(&self) -> &[MultiHeaderCell] {
+        &self.header_cells
+    }
+
+    #[must_use]
+    pub fn column_layout(&self) -> &[MultiSlotColumnSpan] {
+        &self.column_layout
+    }
+
+    #[must_use]
+    pub fn rows(&self) -> &[MultiDataRow<P>] {
+        &self.rows
+    }
 }
 
 /// One cell of a multi-decl header row.
@@ -531,10 +705,180 @@ impl MultiHeaderCell {
 }
 
 /// One data row of a multi-decl body: label + value per column.
+///
+/// The values are private because their width is validated by
+/// [`MultiDeclSlice::new`].
 #[derive(Debug, Clone)]
 pub struct MultiDataRow<P: Phase = Raw> {
-    pub label: Spanned<IndexEntryKey>,
-    pub values: Vec<Expr<P>>,
+    label: Spanned<IndexEntryKey>,
+    values: Vec<Expr<P>>,
+}
+
+impl<P: Phase> MultiDataRow<P> {
+    #[must_use]
+    pub const fn new(label: Spanned<IndexEntryKey>, values: Vec<Expr<P>>) -> Self {
+        Self { label, values }
+    }
+
+    #[must_use]
+    pub const fn label(&self) -> &Spanned<IndexEntryKey> {
+        &self.label
+    }
+
+    #[must_use]
+    pub fn values(&self) -> &[Expr<P>] {
+        &self.values
+    }
+}
+
+#[cfg(test)]
+mod multi_decl_shape_tests {
+    use super::*;
+    use crate::syntax::parser::Parser;
+
+    fn parsed_multi_decl() -> MultiDecl {
+        let source = r"
+param a: Int[I],
+param b: Bool[I, J]
+  = table[I, (_, J)] {
+      : _, J.X;
+      X: 1, true;
+  };
+";
+        let file = Parser::new(source).parse_file().expect("valid multi-decl");
+        let declaration = file
+            .declarations
+            .into_iter()
+            .next()
+            .expect("one declaration");
+        match declaration.kind {
+            DeclKind::Sugar(RawDeclSugar::Multi(multi)) => multi,
+            other => panic!("expected multi-decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multi_decl_rejects_too_few_slots() {
+        let MultiDecl {
+            mut slots,
+            shared_axes,
+            slot_axes,
+            slices,
+            span,
+            table_expr_span,
+        } = parsed_multi_decl();
+        slots.pop();
+
+        let error = MultiDecl::new(slots, shared_axes, slot_axes, slices, span, table_expr_span)
+            .unwrap_err();
+
+        assert_eq!(error, MultiDeclShapeError::TooFewSlots { slot_count: 1 });
+    }
+
+    #[test]
+    fn multi_decl_rejects_slot_axis_arity_mismatch() {
+        let MultiDecl {
+            slots,
+            shared_axes,
+            mut slot_axes,
+            slices,
+            span,
+            table_expr_span,
+        } = parsed_multi_decl();
+        slot_axes.pop();
+
+        let error = MultiDecl::new(slots, shared_axes, slot_axes, slices, span, table_expr_span)
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            MultiDeclShapeError::SlotAxisArity {
+                slot_count: 2,
+                slot_axis_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn multi_decl_rejects_slice_layout_arity_mismatch() {
+        let MultiDecl {
+            slots,
+            shared_axes,
+            slot_axes,
+            mut slices,
+            span,
+            table_expr_span,
+        } = parsed_multi_decl();
+        slices[0].column_layout.pop();
+
+        let error = MultiDecl::new(slots, shared_axes, slot_axes, slices, span, table_expr_span)
+            .unwrap_err();
+
+        assert_eq!(
+            error,
+            MultiDeclShapeError::SliceLayoutArity {
+                slice_index: 0,
+                slot_count: 2,
+                layout_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn multi_decl_slice_rejects_row_width_mismatch() {
+        let mut slices = parsed_multi_decl().slices;
+        let MultiDeclSlice {
+            prefix_keys,
+            header_cells,
+            column_layout,
+            mut rows,
+        } = slices.pop().expect("one slice");
+        rows[0].values.pop();
+
+        let error =
+            MultiDeclSlice::new(prefix_keys, header_cells, column_layout, rows).unwrap_err();
+
+        assert_eq!(
+            error,
+            MultiDeclShapeError::RowWidth {
+                row_index: 0,
+                header_count: 2,
+                value_count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn multi_decl_slice_rejects_invalid_column_range() {
+        let mut slices = parsed_multi_decl().slices;
+        let MultiDeclSlice {
+            prefix_keys,
+            header_cells,
+            mut column_layout,
+            rows,
+        } = slices.pop().expect("one slice");
+        let MultiSlotColumnSpan::Range { extra_axis, .. } = &column_layout[1] else {
+            panic!("expected ranged second slot")
+        };
+        column_layout[1] = MultiSlotColumnSpan::Range {
+            start: 1,
+            end: 3,
+            extra_axis: extra_axis.clone(),
+        };
+
+        let error =
+            MultiDeclSlice::new(prefix_keys, header_cells, column_layout, rows).unwrap_err();
+
+        assert_eq!(
+            error,
+            MultiDeclShapeError::InvalidColumnRange {
+                layout_index: 1,
+                start: 1,
+                end: 3,
+                header_count: 2,
+            }
+        );
+    }
 }
 
 /// Shared shape for value declarations with an expression body.
