@@ -12,7 +12,8 @@ use graphcal_compiler::desugar::desugared_ast::{
 };
 use graphcal_compiler::hir;
 use graphcal_compiler::syntax::attribute::AttributeName;
-use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::span::Span;
@@ -872,11 +873,17 @@ impl SymbolKey {
 
     pub fn to_scoped_name(&self) -> Option<ScopedName> {
         match self {
-            Self::TopLevel(name) => Some(ScopedName::local(name.clone())),
-            Self::Qualified { module, name } => Some(ScopedName::qualified_path(
-                module.iter().map(String::as_str),
-                name.clone(),
-            )),
+            Self::TopLevel(name) => DeclName::try_new(name.clone()).ok().map(ScopedName::local),
+            Self::Qualified { module, name } => {
+                let qualifier = module
+                    .iter()
+                    .cloned()
+                    .map(ModuleAliasName::try_new)
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()?;
+                let member = DeclName::try_new(name.clone()).ok()?;
+                Some(ScopedName::qualified_path(qualifier, member))
+            }
             Self::Constructor(_)
             | Self::Variant { .. }
             | Self::Field { .. }

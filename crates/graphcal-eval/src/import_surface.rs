@@ -36,25 +36,25 @@ pub enum ProjectDeclKind {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProjectDeclIdentity<'a> {
-    pub name: &'a str,
+    pub name: &'a NameAtom,
     pub kind: ProjectDeclKind,
 }
 
 pub fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
     let (name, kind) = match &decl.kind {
-        DeclKind::Param(p) => (p.name.value.as_str(), ProjectDeclKind::Param),
-        DeclKind::Node(n) => (n.name.value.as_str(), ProjectDeclKind::Node),
-        DeclKind::ConstNode(c) => (c.name.value.as_str(), ProjectDeclKind::Const),
-        DeclKind::Assert(a) => (a.name.value.as_str(), ProjectDeclKind::Assert),
-        DeclKind::BaseDimension(d) => (d.name.value.as_str(), ProjectDeclKind::Dimension),
-        DeclKind::Dimension(d) => (d.name.value.as_str(), ProjectDeclKind::Dimension),
-        DeclKind::Unit(u) => (u.name.value.as_str(), ProjectDeclKind::Unit),
-        DeclKind::Index(idx) => (idx.name.value.as_str(), ProjectDeclKind::Index),
-        DeclKind::Type(t) => (t.name.value.as_str(), ProjectDeclKind::Type),
-        DeclKind::Plot(p) => (p.name.value.as_str(), ProjectDeclKind::Plot),
-        DeclKind::Figure(f) => (f.name.value.as_str(), ProjectDeclKind::Figure),
-        DeclKind::Layer(l) => (l.name.value.as_str(), ProjectDeclKind::Layer),
-        DeclKind::Dag(d) => (d.name.value.as_str(), ProjectDeclKind::Dag),
+        DeclKind::Param(p) => (p.name.value.atom(), ProjectDeclKind::Param),
+        DeclKind::Node(n) => (n.name.value.atom(), ProjectDeclKind::Node),
+        DeclKind::ConstNode(c) => (c.name.value.atom(), ProjectDeclKind::Const),
+        DeclKind::Assert(a) => (a.name.value.atom(), ProjectDeclKind::Assert),
+        DeclKind::BaseDimension(d) => (d.name.value.atom(), ProjectDeclKind::Dimension),
+        DeclKind::Dimension(d) => (d.name.value.atom(), ProjectDeclKind::Dimension),
+        DeclKind::Unit(u) => (u.name.value.atom(), ProjectDeclKind::Unit),
+        DeclKind::Index(idx) => (idx.name.value.atom(), ProjectDeclKind::Index),
+        DeclKind::Type(t) => (t.name.value.atom(), ProjectDeclKind::Type),
+        DeclKind::Plot(p) => (p.name.value.atom(), ProjectDeclKind::Plot),
+        DeclKind::Figure(f) => (f.name.value.atom(), ProjectDeclKind::Figure),
+        DeclKind::Layer(l) => (l.name.value.atom(), ProjectDeclKind::Layer),
+        DeclKind::Dag(d) => (d.name.value.atom(), ProjectDeclKind::Dag),
         DeclKind::Import(_) | DeclKind::PluginImport(_) | DeclKind::Include(_) => return None,
         DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
     };
@@ -109,8 +109,9 @@ pub fn extract_external_decl_surface(file: &File) -> ExternalDeclSurface {
                 {
                     for item in items {
                         if item.is_pub {
-                            surface
-                                .insert_explicit_export(DeclName::expect_valid(item.local_name()));
+                            surface.insert_explicit_export(DeclName::from_atom(
+                                item.local_name_atom().clone(),
+                            ));
                         }
                     }
                 }
@@ -121,15 +122,16 @@ pub fn extract_external_decl_surface(file: &File) -> ExternalDeclSurface {
                 {
                     for item in items {
                         if item.is_pub {
-                            surface
-                                .insert_explicit_export(DeclName::expect_valid(item.local_name()));
+                            surface.insert_explicit_export(DeclName::from_atom(
+                                item.local_name_atom().clone(),
+                            ));
                         }
                     }
                 }
             }
             _ if decl_is_explicit_export(decl) => {
                 if let Some(identity) = decl_identity(decl) {
-                    surface.insert_explicit_export(DeclName::expect_valid(identity.name));
+                    surface.insert_explicit_export(DeclName::from_atom(identity.name.clone()));
                 }
             }
             _ => {}

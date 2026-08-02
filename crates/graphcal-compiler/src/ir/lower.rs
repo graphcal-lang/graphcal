@@ -36,7 +36,7 @@ use crate::registry::types::{
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
-use crate::syntax::module_name::ScopedName;
+use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, GenericParamName, StructTypeName};
@@ -830,34 +830,6 @@ fn take_type_ann(
         })
 }
 
-fn scoped_name_to_name_path(
-    name: &ScopedName,
-    src: &NamedSource<Arc<String>>,
-) -> Result<NamePath, GraphcalError> {
-    let span = Span::new(0, 0);
-    let qualifier = name
-        .qualifier()
-        .iter()
-        .map(|segment| {
-            NameAtom::parse(segment.as_ref()).map_err(|err| GraphcalError::InternalError {
-                message: format!("invalid scoped-name segment `{segment}`: {err}"),
-                src: src.clone(),
-                span: span.into(),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let leaf = NameAtom::parse(name.member()).map_err(|err| GraphcalError::InternalError {
-        message: format!("invalid scoped-name member `{}`: {err}", name.member()),
-        src: src.clone(),
-        span: span.into(),
-    })?;
-    Ok(if qualifier.is_empty() {
-        NamePath::local(leaf)
-    } else {
-        NamePath::qualified_path(qualifier, leaf)
-    })
-}
-
 fn resolve_existing_synthetic_child_decl(
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     owner: &crate::dag_id::DagId,
@@ -868,7 +840,7 @@ fn resolve_existing_synthetic_child_decl(
     let synthetic_owner = qualifier.fold(owner.child(first.as_ref()), |owner, segment| {
         owner.child(segment.as_ref())
     });
-    let decl_name = DeclName::expect_valid(name.member());
+    let decl_name = name.member().clone();
     resolver
         .modules()
         .get(&synthetic_owner)
@@ -1164,36 +1136,27 @@ impl UnfrozenIR {
             .chain(self.nodes.iter().map(|entry| &entry.name))
         {
             cancellation.checkpoint()?;
-            let canonical =
-                crate::hir::diagnostics::resolved_decl_key(owner, name).ok_or_else(|| {
-                    GraphcalError::InternalError {
-                        message: format!("could not build canonical declaration key for `{name}`"),
-                        src: src.clone(),
-                        span: Span::new(0, 0).into(),
-                    }
-                })?;
+            let canonical = crate::hir::diagnostics::resolved_decl_key(owner, name);
             decl_bindings.insert(name.clone(), canonical);
         }
         for name in self.imported_values.keys() {
             cancellation.checkpoint()?;
-            let path = scoped_name_to_name_path(name, src)?;
+            let path = name.to_name_path();
             let canonical = match resolver.resolve_decl_path(owner, &path) {
                 Ok(target_decl) => target_decl,
-                Err(err) => match self.imported_value_sources.get(name) {
-                    Some(source) => ResolvedDeclName::from_def(
-                        source.dag_id.clone(),
-                        source.source_name.clone(),
-                    ),
-                    None => resolve_existing_synthetic_child_decl(resolver, owner, name)
-                        .or_else(|| crate::hir::diagnostics::resolved_decl_key(owner, name))
-                        .ok_or_else(|| GraphcalError::InternalError {
-                            message: format!(
-                                "imported value `{name}` is not present in module resolver: {err}"
-                            ),
-                            src: src.clone(),
-                            span: Span::new(0, 0).into(),
-                        })?,
-                },
+                Err(_) => self.imported_value_sources.get(name).map_or_else(
+                    || {
+                        resolve_existing_synthetic_child_decl(resolver, owner, name).unwrap_or_else(
+                            || crate::hir::diagnostics::resolved_decl_key(owner, name),
+                        )
+                    },
+                    |source| {
+                        ResolvedDeclName::from_def(
+                            source.dag_id.clone(),
+                            source.source_name.clone(),
+                        )
+                    },
+                ),
             };
             decl_bindings.insert(name.clone(), canonical);
         }
@@ -1579,7 +1542,7 @@ impl UnfrozenIR {
             let mut checker = OverrideReconciliationChecker {
                 index_bindings,
                 type_bindings,
-                orphan_decl: param.name.member(),
+                orphan_decl: param.name.member().as_str(),
                 importer_src,
                 include_span,
             };
@@ -1614,7 +1577,7 @@ impl UnfrozenIR {
     pub fn merge_dependency(
         &mut self,
         dep: Self,
-        prefix: &str,
+        prefix: &ModuleAliasName,
         bindings: &HashMap<DeclName, Expr>,
         dep_names: &HashSet<DeclName>,
         index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
@@ -1634,7 +1597,11 @@ impl UnfrozenIR {
         /// namespace and must keep their qualifier — `with_prefix` would
         /// silently replace it, diverging from the merged expressions whose
         /// qualified refs are left untouched.
-        fn prefix_dep(d: &ScopedName, prefix: &str, dep_names: &HashSet<DeclName>) -> ScopedName {
+        fn prefix_dep(
+            d: &ScopedName,
+            prefix: &ModuleAliasName,
+            dep_names: &HashSet<DeclName>,
+        ) -> ScopedName {
             if !d.is_qualified() && dep_names.contains(d.member()) {
                 d.with_prefix(prefix)
             } else {
@@ -1657,20 +1624,16 @@ impl UnfrozenIR {
         };
 
         let mut all_dep_names = dep_names.clone();
-        all_dep_names.extend(
-            dep.imported_values
-                .keys()
-                .map(|name| DeclName::expect_valid(name.member())),
-        );
+        all_dep_names.extend(dep.imported_values.keys().map(|name| name.member().clone()));
         all_dep_names.extend(
             dep.imported_decl_types
                 .keys()
-                .map(|name| DeclName::expect_valid(name.member())),
+                .map(|name| name.member().clone()),
         );
         all_dep_names.extend(
             dep.imported_value_sources
                 .keys()
-                .map(|name| DeclName::expect_valid(name.member())),
+                .map(|name| name.member().clone()),
         );
         let dep_names = &all_dep_names;
 
@@ -1814,7 +1777,7 @@ impl UnfrozenIR {
                 substitute_type_names_in_expr(&mut prop.value, type_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names);
             }
-            let local = ScopedName::local(requested.alias.as_str());
+            let local = ScopedName::local(requested.alias.clone());
             self.plots.push(UnfrozenPlotEntry {
                 name: local.clone(),
                 decl: entry.decl,
@@ -1886,7 +1849,7 @@ impl UnfrozenIR {
                     .parse::<crate::syntax::attribute::AttributeName>()
                     == Ok(crate::syntax::attribute::AttributeName::ExpectedFail)
                 {
-                    let prefixed_assert = ScopedName::local(orig_name.as_str()).with_prefix(prefix);
+                    let prefixed_assert = ScopedName::local(orig_name.clone()).with_prefix(prefix);
                     let ef = crate::ir::resolve::names::parse_expected_fail_args(
                         &attr.args,
                         importer_src,
@@ -2201,8 +2164,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
 /// declaration name. No flat separator strings are constructed here — the
 /// local/qualified distinction lives in the structured qualifier path.
 struct RefPrefixer<'a> {
-    prefix: &'a str,
-    prefix_atom: NameAtom,
+    prefix: &'a ModuleAliasName,
     dep_names: &'a HashSet<DeclName>,
 }
 
@@ -2244,7 +2206,7 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for RefPrefixer<'_> {
         {
             let leaf = ident.clone();
             let prefix_segment = crate::syntax::ast::Ident {
-                name: self.prefix_atom.clone(),
+                name: self.prefix.atom().clone(),
                 span: leaf.span,
             };
             *path = crate::syntax::ast::IdentPath::new(crate::syntax::non_empty::NonEmpty::new(
@@ -2268,17 +2230,8 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for RefPrefixer<'_> {
 /// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
-fn prefix_expr_refs(expr: &mut Expr, prefix: &str, dep_names: &HashSet<DeclName>) {
-    let Ok(prefix_atom) = NameAtom::parse(prefix) else {
-        // The prefix comes from a validated include alias; a non-identifier
-        // prefix cannot name any reference, so there is nothing to rewrite.
-        return;
-    };
-    let mut prefixer = RefPrefixer {
-        prefix,
-        prefix_atom,
-        dep_names,
-    };
+fn prefix_expr_refs(expr: &mut Expr, prefix: &ModuleAliasName, dep_names: &HashSet<DeclName>) {
+    let mut prefixer = RefPrefixer { prefix, dep_names };
     let _ = prefixer.visit_expr_mut(expr);
 }
 
@@ -5249,7 +5202,10 @@ mod tests {
         .unwrap();
         // Simulate the loader having pre-evaluated `import lib as mission;`
         // inside the dep: the imported value is keyed by a qualified name.
-        let qualified = ScopedName::qualified("mission", "C");
+        let qualified = ScopedName::qualified(
+            ModuleAliasName::expect_valid("mission"),
+            DeclName::expect_valid("C"),
+        );
         dep_unfrozen.imported_values.insert(
             qualified.clone(),
             (
@@ -5278,12 +5234,12 @@ mod tests {
         let dep_names: HashSet<DeclName> = dep_unfrozen
             .source_order
             .iter()
-            .map(|(n, _)| DeclName::expect_valid(n.member()))
+            .map(|(n, _)| n.member().clone())
             .collect();
         unfrozen
             .merge_dependency(
                 dep_unfrozen,
-                "inst",
+                &ModuleAliasName::expect_valid("inst"),
                 &HashMap::new(),
                 &dep_names,
                 &HashMap::new(),
@@ -5304,7 +5260,10 @@ mod tests {
         assert!(
             !unfrozen
                 .imported_values
-                .contains_key(&ScopedName::qualified("inst", "C")),
+                .contains_key(&ScopedName::qualified(
+                    ModuleAliasName::expect_valid("inst"),
+                    DeclName::expect_valid("C"),
+                )),
             "imported value must not be re-keyed with the instance prefix"
         );
     }

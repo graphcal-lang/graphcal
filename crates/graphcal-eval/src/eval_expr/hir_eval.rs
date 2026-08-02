@@ -2228,7 +2228,7 @@ fn eval_hir_match(
 }
 
 fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Option<&'a hir::Expr> {
-    let key = dag_tir.resolved_decl_key_for_local(name)?;
+    let key = dag_tir.resolved_decl_key_for_local(name);
     dag_tir
         .semantic
         .expressions
@@ -2348,13 +2348,14 @@ fn seed_inline_dag_imported_values(
     caller_values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) {
-    let own_names: std::collections::HashSet<&str> = dag_tir
-        .consts
-        .iter()
-        .map(|e| e.name.member())
-        .chain(dag_tir.params.iter().map(|e| e.name.member()))
-        .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
-        .collect();
+    let own_names: std::collections::HashSet<&graphcal_compiler::syntax::decl_name::DeclName> =
+        dag_tir
+            .consts
+            .iter()
+            .map(|e| e.name.member())
+            .chain(dag_tir.params.iter().map(|e| e.name.member()))
+            .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
+            .collect();
     let outer_scope_keys: std::collections::HashSet<&ScopedName> = dag_tir
         .imported_values
         .keys()
@@ -2405,9 +2406,12 @@ fn check_inline_dag_asserts(
         if !matches!(cat, DeclCategory::Assert) {
             continue;
         }
+        let key = dag_tir.resolved_decl_key_for_local(name);
         let body = dag_tir
-            .resolved_decl_key_for_local(name)
-            .and_then(|key| dag_tir.semantic.expressions.asserts.get(&key))
+            .semantic
+            .expressions
+            .asserts
+            .get(&key)
             .ok_or_else(|| {
                 ctx.internal_error(
                     format!("semantic TIR missing HIR body for DAG assertion `{name}`"),

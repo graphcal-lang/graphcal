@@ -42,14 +42,14 @@ use names::parse_expected_fail_args;
 
 fn register_value_namespace_name(
     value_names: &mut HashMap<ScopedName, Span>,
-    name: String,
+    name: &NameAtom,
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let scoped_name = ScopedName::local(name.clone());
+    let scoped_name = ScopedName::from(name.clone());
     if let Some(first_span) = value_names.get(&scoped_name) {
         return Err(GraphcalError::DuplicateName {
-            name,
+            name: name.to_string(),
             src: src.clone(),
             duplicate: span.into(),
             first: (*first_span).into(),
@@ -137,7 +137,7 @@ fn check_exclusive_universe_collisions(
     let mut occupied = names
         .iter()
         .filter(|(name, _)| !name.is_qualified())
-        .map(|(name, span)| (DeclName::expect_valid(name.member()).into_atom(), *span))
+        .map(|(name, span)| (name.member().atom().clone(), *span))
         .collect::<HashMap<_, _>>();
 
     for (atom, span) in file
@@ -184,43 +184,43 @@ fn check_value_namespace_collisions(
         match &decl.kind {
             DeclKind::Param(p) => register_value_namespace_name(
                 &mut value_names,
-                p.name.value.to_string(),
+                p.name.value.atom(),
                 p.name.span,
                 src,
             )?,
             DeclKind::Node(n) => register_value_namespace_name(
                 &mut value_names,
-                n.name.value.to_string(),
+                n.name.value.atom(),
                 n.name.span,
                 src,
             )?,
             DeclKind::ConstNode(c) => register_value_namespace_name(
                 &mut value_names,
-                c.name.value.to_string(),
+                c.name.value.atom(),
                 c.name.span,
                 src,
             )?,
             DeclKind::Assert(a) => register_value_namespace_name(
                 &mut value_names,
-                a.name.value.to_string(),
+                a.name.value.atom(),
                 a.name.span,
                 src,
             )?,
             DeclKind::Plot(p) => register_value_namespace_name(
                 &mut value_names,
-                p.name.value.to_string(),
+                p.name.value.atom(),
                 p.name.span,
                 src,
             )?,
             DeclKind::Figure(f) => register_value_namespace_name(
                 &mut value_names,
-                f.name.value.to_string(),
+                f.name.value.atom(),
                 f.name.span,
                 src,
             )?,
             DeclKind::Layer(l) => register_value_namespace_name(
                 &mut value_names,
-                l.name.value.to_string(),
+                l.name.value.atom(),
                 l.name.span,
                 src,
             )?,
@@ -229,7 +229,7 @@ fn check_value_namespace_collisions(
                     for member in members {
                         register_value_namespace_name(
                             &mut value_names,
-                            member.name.value.to_string(),
+                            member.name.value.atom(),
                             member.name.span,
                             src,
                         )?;
@@ -404,13 +404,13 @@ fn collect_local_declarations(
     for decl in &file.declarations {
         // Dimension and Unit declarations are handled by the registry, not the resolver
         let (name, name_span) = match &decl.kind {
-            DeclKind::Param(p) => (p.name.value.to_string(), p.name.span),
-            DeclKind::Node(n) => (n.name.value.to_string(), n.name.span),
-            DeclKind::ConstNode(c) => (c.name.value.to_string(), c.name.span),
-            DeclKind::Assert(a) => (a.name.value.to_string(), a.name.span),
-            DeclKind::Plot(p) => (p.name.value.to_string(), p.name.span),
-            DeclKind::Figure(f) => (f.name.value.to_string(), f.name.span),
-            DeclKind::Layer(l) => (l.name.value.to_string(), l.name.span),
+            DeclKind::Param(p) => (p.name.value.clone(), p.name.span),
+            DeclKind::Node(n) => (n.name.value.clone(), n.name.span),
+            DeclKind::ConstNode(c) => (c.name.value.clone(), c.name.span),
+            DeclKind::Assert(a) => (a.name.value.clone(), a.name.span),
+            DeclKind::Plot(p) => (p.name.value.clone(), p.name.span),
+            DeclKind::Figure(f) => (f.name.value.clone(), f.name.span),
+            DeclKind::Layer(l) => (l.name.value.clone(), l.name.span),
             DeclKind::BaseDimension(_)
             | DeclKind::Dimension(_)
             | DeclKind::Unit(_)
@@ -425,8 +425,7 @@ fn collect_local_declarations(
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
 
-        let scoped_name = ScopedName::local(name.clone());
-        names.insert(scoped_name, name_span);
+        names.insert(ScopedName::local(name.clone()), name_span);
 
         // Track source order and assert names
         let category = match &decl.kind {
@@ -434,7 +433,7 @@ fn collect_local_declarations(
             DeclKind::ConstNode(_) => DeclCategory::Const,
             DeclKind::Node(_) => DeclCategory::Node,
             DeclKind::Assert(_) => {
-                assert_names.insert(DeclName::expect_valid(name.as_str()));
+                assert_names.insert(name.clone());
                 DeclCategory::Assert
             }
             DeclKind::Plot(_) => DeclCategory::Plot,
@@ -454,7 +453,7 @@ fn collect_local_declarations(
             }
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         };
-        source_order.push((DeclName::expect_valid(name.as_str()), category));
+        source_order.push((name, category));
     }
 
     // Second pass: collect declaration entries. Reference validation and
@@ -1043,16 +1042,16 @@ pub(crate) fn resolve_with_imports(
     // Pre-populate with imported names (they don't get duplicate-checked against
     // each other here because they were validated in their source files).
     for (name, _, _, span) in &imported.consts {
-        names.insert(ScopedName::local(name.as_str()), *span);
+        names.insert(ScopedName::from(name), *span);
     }
     for (name, _, _, span) in &imported.params {
-        names.insert(ScopedName::local(name.as_str()), *span);
+        names.insert(ScopedName::from(name), *span);
     }
     for (name, _, _, span) in &imported.nodes {
-        names.insert(ScopedName::local(name.as_str()), *span);
+        names.insert(ScopedName::from(name), *span);
     }
     for (name, _, span) in &imported.asserts {
-        names.insert(ScopedName::local(name.as_str()), *span);
+        names.insert(ScopedName::from(name), *span);
     }
 
     // Collect local declarations
@@ -1179,7 +1178,7 @@ pub(crate) fn resolve_with_imported_values(
         names.insert(name.clone(), *span);
     }
     for (name, span) in &imported.assert_names {
-        names.insert(ScopedName::local(name.as_str()), *span);
+        names.insert(ScopedName::from(name), *span);
     }
     for (name, span) in &imported.plot_names {
         names.insert(name.clone(), *span);

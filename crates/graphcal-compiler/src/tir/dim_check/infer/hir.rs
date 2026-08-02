@@ -433,7 +433,7 @@ fn infer_resolved_decl_ref_type(
     dag: &crate::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let local_name = ScopedName::local(target.as_str());
+    let local_name = ScopedName::local(target.to_unowned_def_name());
 
     if target.owner() == &dag.dag_id
         && let Some(inferred) = infer_bound_decl_type(&local_name, declared_types, dag, src)?
@@ -4087,16 +4087,7 @@ fn infer_hir_inline_dag_ref(
             .params
             .iter()
             .map(|param| {
-                let key = dag_tir
-                    .resolved_decl_key_for_local(&param.name)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "semantic declaration key missing for inline-DAG param `{}`",
-                            param.name
-                        ),
-                        src: src.clone(),
-                        span: param.span.into(),
-                    })?;
+                let key = dag_tir.resolved_decl_key_for_local(&param.name);
                 if param.default_expr.is_none() {
                     required_param_keys.insert(key.clone());
                 }
@@ -4119,16 +4110,7 @@ fn infer_hir_inline_dag_ref(
             .nodes
             .iter()
             .map(|node| {
-                let key = dag_tir
-                    .resolved_decl_key_for_local(&node.name)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "semantic declaration key missing for inline-DAG node `{}`",
-                            node.name
-                        ),
-                        src: src.clone(),
-                        span: node.span.into(),
-                    })?;
+                let key = dag_tir.resolved_decl_key_for_local(&node.name);
                 let resolved = dag_tir.resolved_decl_types.get(&node.name).ok_or_else(|| {
                     GraphcalError::InternalError {
                         message: format!(

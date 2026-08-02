@@ -41,7 +41,7 @@ use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, Reso
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
-use crate::syntax::names::{NameAtom, NameAtomError, NameNamespace, NamePath};
+use crate::syntax::names::{NameAtom, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
@@ -64,14 +64,6 @@ pub enum ExprLowerError {
     ModuleResolve {
         #[source]
         source: ModuleResolveError,
-        span: Span,
-    },
-    /// A structured diagnostic name contained a segment that cannot be a source name atom.
-    #[error("invalid scoped-name segment `{segment}`: {source}")]
-    InvalidScopedNameSegment {
-        segment: String,
-        #[source]
-        source: NameAtomError,
         span: Span,
     },
     /// A local reference had no lexical binding in scope.
@@ -1575,7 +1567,7 @@ impl<'a> ExprLowerer<'a> {
         {
             return Ok(ExprKind::TypeSystemRef(Spanned::new(type_system_ref, span)));
         }
-        self.lower_const_ref(&ScopedName::local(ident.name.as_str()), span)
+        self.lower_const_ref(&ScopedName::from(ident.name.clone()), span)
             .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
     }
 
@@ -1655,11 +1647,7 @@ impl<'a> ExprLowerer<'a> {
             }
         }
 
-        let (qualifier, member) = path.split_last();
-        let scoped = ScopedName::qualified_path(
-            qualifier.iter().map(|segment| segment.name.to_string()),
-            member.name.to_string(),
-        );
+        let scoped = ScopedName::from(path.to_name_path());
         match self.lower_const_ref(&scoped, span) {
             Ok(const_ref) => Ok(ExprKind::ConstRef(Spanned::new(const_ref, span))),
             // A qualified path that is not a const-like declaration can still
@@ -1692,9 +1680,12 @@ impl<'a> ExprLowerer<'a> {
         if name.value.is_qualified() {
             return None;
         }
-        let scoped = ScopedName::qualified(name.value.member(), field.value.as_str());
+        let scoped = ScopedName::qualified(
+            ModuleAliasName::from_atom(name.value.member().atom().clone()),
+            DeclName::from_atom(field.value.atom().clone()),
+        );
         let span = name.span.merge(field.span);
-        let path = scoped_name_to_path(&scoped, span).ok()?;
+        let path = scoped.to_name_path();
         let resolved = self
             .ctx
             .resolver
@@ -1754,13 +1745,13 @@ impl<'a> ExprLowerer<'a> {
 
     fn lower_const_ref(&self, name: &ScopedName, span: Span) -> Result<ConstRef, ExprLowerError> {
         if !name.is_qualified() {
-            if let Some(builtin) = BuiltinConst::parse(name.member()) {
+            if let Some(builtin) = BuiltinConst::parse(name.member().as_str()) {
                 return Ok(ConstRef::Builtin(builtin));
             }
-            if let Ok(scale) = name.member().parse::<TimeScale>() {
+            if let Ok(scale) = name.member().as_str().parse::<TimeScale>() {
                 return Ok(ConstRef::TimeScale(scale));
             }
-            let generic_name = GenericParamName::expect_valid(name.member());
+            let generic_name = GenericParamName::from_atom(name.member().atom().clone());
             if let Some(binding) = self.ctx.generic_scope.get(&generic_name)
                 && binding.constraint == ast::GenericConstraint::Nat
             {
@@ -1768,7 +1759,7 @@ impl<'a> ExprLowerer<'a> {
             }
         }
 
-        let path = scoped_name_to_path(name, span)?;
+        let path = name.to_name_path();
         let mut first_error = None;
 
         if let Some(resolved) = self
@@ -1826,7 +1817,7 @@ impl<'a> ExprLowerer<'a> {
         name: &ScopedName,
         span: Span,
     ) -> Result<ResolvedDeclName, ExprLowerError> {
-        let path = scoped_name_to_path(name, span)?;
+        let path = name.to_name_path();
         if let Some(resolved) = self
             .ctx
             .decl_bindings
@@ -2474,24 +2465,6 @@ impl<'a> ExprLowerer<'a> {
                 span,
             })
     }
-}
-
-fn scoped_name_to_path(name: &ScopedName, span: Span) -> Result<NamePath, ExprLowerError> {
-    let qualifier = name
-        .qualifier()
-        .iter()
-        .map(|segment| parse_atom(segment, span))
-        .collect::<Result<Vec<_>, _>>()?;
-    let leaf = parse_atom(name.member(), span)?;
-    Ok(NamePath::qualified_path(qualifier, leaf))
-}
-
-fn parse_atom(segment: &str, span: Span) -> Result<NameAtom, ExprLowerError> {
-    NameAtom::parse(segment).map_err(|source| ExprLowerError::InvalidScopedNameSegment {
-        segment: segment.to_string(),
-        source,
-        span,
-    })
 }
 
 #[cfg(test)]

@@ -158,7 +158,7 @@ fn project_dag(tir: &TIR, dag: &DagTIR) -> GraphCluster {
                 | DeclCategory::Figure
                 | DeclCategory::Layer => return None,
             };
-            let id = dag.resolved_decl_key_for_local(name)?;
+            let id = dag.resolved_decl_key_for_local(name);
             let type_label = dag
                 .resolved_decl_types
                 .get(name)

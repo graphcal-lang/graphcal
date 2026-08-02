@@ -8,10 +8,9 @@ use crate::hir::diagnostics::resolved_decl_key;
 use crate::ir::resolve::{ExpectedFail, ParsedExpectedFail};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
-use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
+use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::ResolvedConstructorName;
 
@@ -179,16 +178,7 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in consts {
         let body_src = entry.src.resolve(src);
-        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "could not build canonical declaration key for `{}`",
-                    entry.name
-                ),
-                body_src,
-                entry.span,
-            )
-        })?;
+        let key = resolved_decl_key(ctx.owner, &entry.name);
         let hir_expr = exprs.consts.get(&key).ok_or_else(|| {
             internal_error(
                 format!(
@@ -216,16 +206,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in params {
-        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "could not build canonical declaration key for `{}`",
-                    entry.name
-                ),
-                entry.src.resolve(src),
-                entry.span,
-            )
-        })?;
+        let key = resolved_decl_key(ctx.owner, &entry.name);
         let deps = exprs.param_defaults.get(&key).map_or_else(
             hir::ExprDependencies::default,
             hir::collect_expr_dependencies,
@@ -235,16 +216,7 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in nodes {
         let body_src = entry.src.resolve(src);
-        let key = resolved_decl_key(ctx.owner, &entry.name).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "could not build canonical declaration key for `{}`",
-                    entry.name
-                ),
-                body_src,
-                entry.span,
-            )
-        })?;
+        let key = resolved_decl_key(ctx.owner, &entry.name);
         let hir_expr = exprs.nodes.get(&key).ok_or_else(|| {
             internal_error(
                 format!(
@@ -1004,8 +976,7 @@ pub(super) fn collect_hir_decl_bindings(
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ResolvedDeclName>, GraphcalError> {
+) -> HashMap<ScopedName, ResolvedDeclName> {
     let mut bindings = HashMap::new();
 
     for name in consts
@@ -1014,13 +985,7 @@ pub(super) fn collect_hir_decl_bindings(
         .chain(params.iter().map(|entry| &entry.name))
         .chain(nodes.iter().map(|entry| &entry.name))
     {
-        let resolved = resolved_decl_key(owner, name).ok_or_else(|| {
-            internal_error(
-                format!("could not build canonical declaration key for `{name}`"),
-                src,
-                Span::new(0, 0),
-            )
-        })?;
+        let resolved = resolved_decl_key(owner, name);
         bindings.insert(name.clone(), resolved);
     }
 
@@ -1031,7 +996,7 @@ pub(super) fn collect_hir_decl_bindings(
         );
     }
 
-    Ok(bindings)
+    bindings
 }
 
 #[expect(
@@ -1054,14 +1019,8 @@ pub(super) fn collect_resolved_decl_bindings(
     imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, ResolvedDeclName>, GraphcalError> {
-    let mut bindings = collect_hir_decl_bindings(
-        ctx.owner,
-        consts,
-        params,
-        nodes,
-        imported_value_sources,
-        src,
-    )?;
+    let mut bindings =
+        collect_hir_decl_bindings(ctx.owner, consts, params, nodes, imported_value_sources);
 
     for name in imported_values
         .keys()
@@ -1071,13 +1030,7 @@ pub(super) fn collect_resolved_decl_bindings(
         if bindings.contains_key(name) {
             continue;
         }
-        let path = scoped_name_to_name_path(name).ok_or_else(|| {
-            internal_error(
-                format!("could not convert visible declaration `{name}` to a name path"),
-                src,
-                Span::new(0, 0),
-            )
-        })?;
+        let path = name.to_name_path();
         let resolved = match ctx.resolver.resolve_decl_path(ctx.owner, &path) {
             Ok(resolved) => resolved,
             Err(err) => {
@@ -1093,16 +1046,7 @@ pub(super) fn collect_resolved_decl_bindings(
                     // synthetic declarations owned by the current DAG — only when
                     // that synthetic declaration actually exists in the resolver.
                     resolve_existing_synthetic_child_decl(ctx, name)
-                        .or_else(|| resolved_decl_key(ctx.owner, name))
-                        .ok_or_else(|| {
-                            internal_error(
-                                format!(
-                                    "visible declaration `{name}` is absent from module resolver: {err}"
-                                ),
-                                src,
-                                Span::new(0, 0),
-                            )
-                        })?
+                        .unwrap_or_else(|| resolved_decl_key(ctx.owner, name))
                 } else {
                     return Err(module_resolve_error(&err, src, Span::new(0, 0)));
                 }
@@ -1123,26 +1067,12 @@ fn resolve_existing_synthetic_child_decl(
     let synthetic_owner = qualifier.fold(ctx.owner.child(first.as_ref()), |owner, segment| {
         owner.child(segment.as_ref())
     });
-    let decl_name = DeclName::expect_valid(name.member());
+    let decl_name = name.member().clone();
     ctx.resolver
         .modules()
         .get(&synthetic_owner)
         .and_then(|module| module.decls().contains_key(&decl_name).then_some(()))
         .map(|()| ResolvedDeclName::from_def(synthetic_owner, decl_name))
-}
-
-fn scoped_name_to_name_path(name: &ScopedName) -> Option<NamePath> {
-    let qualifier = name
-        .qualifier()
-        .iter()
-        .map(|segment| NameAtom::parse(segment.as_ref()).ok())
-        .collect::<Option<Vec<_>>>()?;
-    let leaf = NameAtom::parse(name.member()).ok()?;
-    Some(if qualifier.is_empty() {
-        NamePath::local(leaf)
-    } else {
-        NamePath::qualified_path(qualifier, leaf)
-    })
 }
 
 pub(super) fn resolve_expected_fail_keys(

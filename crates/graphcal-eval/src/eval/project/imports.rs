@@ -11,6 +11,7 @@ use crate::import_surface::{
 };
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
+use graphcal_compiler::syntax::names::NameAtom;
 
 /// What kind of "other declaration" a binding name resolves to in the dep file
 /// when it is not a param / type / dim / index.
@@ -177,7 +178,12 @@ fn include_surface_outputs(
                 .iter()
                 .filter(|decl| decl_has_external_role(decl))
                 .filter_map(value_decl_identity)
-                .map(|identity| ScopedName::qualified(prefix.as_str(), identity.name))
+                .map(|identity| {
+                    ScopedName::qualified(
+                        prefix.clone(),
+                        DeclName::from_atom(identity.name.clone()),
+                    )
+                })
                 .collect()
         },
         |aliases| {
@@ -189,7 +195,7 @@ fn include_surface_outputs(
                             .is_some_and(|identity| identity.name == alias.original.as_str())
                     })
                 })
-                .map(|alias| ScopedName::local(alias.local.as_str()))
+                .map(|alias| ScopedName::local(alias.local.clone()))
                 .collect()
         },
     )
@@ -202,10 +208,9 @@ fn qualify_debug_values(
     values
         .iter()
         .map(|(name, result, decl_type)| {
-            let qualifier = std::iter::once(prefix.as_str())
-                .chain(name.qualifier().iter().map(std::convert::AsRef::as_ref));
+            let qualifier = std::iter::once(prefix.clone()).chain(name.qualifier().iter().cloned());
             (
-                ScopedName::qualified_path(qualifier, name.member()),
+                ScopedName::qualified_path(qualifier, name.member().clone()),
                 result.clone(),
                 *decl_type,
             )
@@ -503,7 +508,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
-                let local_name = import_item.local_name().to_string();
+                let original = DeclName::from_atom(orig_name.clone());
+                let local = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 ensure_include_item_selectable(
                     &dep_loaded.ast,
@@ -525,30 +531,26 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     // The requested plot merges into the root namespace under
                     // its local alias, evaluating against this instance (#847).
                     requested_plots.insert(
-                        DeclName::expect_valid(orig_name),
+                        original,
                         graphcal_compiler::ir::lower::RequestedPlot {
-                            alias: DeclName::expect_valid(&local_name),
+                            alias: local.clone(),
                             hidden,
                         },
                     );
-                    ctx.imported_names.plot_names.push((
-                        ScopedName::local(local_name.as_str()),
-                        import_item.local_span(),
-                    ));
+                    ctx.imported_names
+                        .plot_names
+                        .push((ScopedName::local(local), import_item.local_span()));
                     continue;
                 }
 
                 // Collect import-item attributes for deferred processing.
                 if !import_item.attributes.is_empty() {
-                    import_item_attributes.insert(
-                        DeclName::expect_valid(orig_name),
-                        import_item.attributes.clone(),
-                    );
+                    import_item_attributes.insert(original.clone(), import_item.attributes.clone());
                 }
 
                 // Register the local name in scope for the resolver.
                 // Determine the category from the dep's AST.
-                let scoped = ScopedName::local(local_name.as_str());
+                let scoped = ScopedName::local(local.clone());
                 let span = import_item.name.span;
                 match (
                     dep_index.is_const(orig_name),
@@ -559,10 +561,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                     (false, false) => {}
                 }
 
-                selective.push(ImportAlias {
-                    original: DeclName::expect_valid(orig_name),
-                    local: DeclName::expect_valid(local_name),
-                });
+                selective.push(ImportAlias { original, local });
             }
             Some(selective)
         }
@@ -573,7 +572,7 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
                 if let Some((name, is_const)) =
                     include_value_decl(dep_decl, IncludeVisibilityBoundary::CrossModule)
                 {
-                    let scoped = ScopedName::qualified(prefix.as_str(), name.as_str());
+                    let scoped = ScopedName::qualified(prefix.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -731,7 +730,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
-                let local_name = import_item.local_name().to_string();
+                let original = DeclName::from_atom(orig_name.clone());
+                let local = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 ensure_include_item_selectable(
                     &dag_body,
@@ -757,24 +757,20 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
                     requested_plots.insert(
-                        DeclName::expect_valid(orig_name),
+                        original,
                         graphcal_compiler::ir::lower::RequestedPlot {
-                            alias: DeclName::expect_valid(&local_name),
+                            alias: local.clone(),
                             hidden,
                         },
                     );
-                    ctx.imported_names.plot_names.push((
-                        ScopedName::local(local_name.as_str()),
-                        import_item.local_span(),
-                    ));
+                    ctx.imported_names
+                        .plot_names
+                        .push((ScopedName::local(local), import_item.local_span()));
                     continue;
                 }
 
                 if !import_item.attributes.is_empty() {
-                    import_item_attributes.insert(
-                        DeclName::expect_valid(orig_name),
-                        import_item.attributes.clone(),
-                    );
+                    import_item_attributes.insert(original.clone(), import_item.attributes.clone());
                 }
 
                 // Register the local name in scope.
@@ -785,7 +781,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     matches!(&d.kind, DeclKind::Param(p) if p.name.value.as_str() == orig_name.as_str())
                         || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name.as_str())
                 });
-                let scoped = ScopedName::local(local_name.as_str());
+                let scoped = ScopedName::local(local.clone());
                 let span = import_item.name.span;
                 if is_const {
                     ctx.imported_names.const_names.push((scoped, span));
@@ -795,10 +791,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
                     // Type-system declarations — handled via registry merge.
                 }
 
-                selective.push(ImportAlias {
-                    original: DeclName::expect_valid(orig_name),
-                    local: DeclName::expect_valid(local_name),
-                });
+                selective.push(ImportAlias { original, local });
             }
             Some(selective)
         }
@@ -807,7 +800,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
             let import_span = include_decl.path.span();
             for dep_decl in &dag_body.declarations {
                 if let Some((name, is_const)) = include_value_decl(dep_decl, boundary) {
-                    let scoped = ScopedName::qualified(prefix.as_str(), name.as_str());
+                    let scoped = ScopedName::qualified(prefix.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
                     } else {
@@ -948,7 +941,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             for import_item in names {
                 let orig_name = &import_item.name.name;
-                let local_name = import_item.local_name().to_string();
+                let local_name = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 // Boundary check: an ordinary item must be exported; a param is
                 // nameable through its distinct input-port role.
@@ -1009,11 +1002,11 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         ));
                     };
                     let mut spec = spec.clone();
-                    spec.name = ScopedName::local(local_name.as_str());
+                    spec.name = ScopedName::local(local_name.clone());
                     spec.displayed = !hidden;
                     ctx.included_plot_specs.push(spec);
                     ctx.imported_names.plot_names.push((
-                        ScopedName::local(local_name.as_str()),
+                        ScopedName::local(local_name.clone()),
                         import_item.local_span(),
                     ));
                     continue;
@@ -1072,7 +1065,7 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
                         // We just need to make the name visible for #[assumes].
                         ctx.imported_names
                             .assert_names
-                            .push((DeclName::expect_valid(&local_name), import_item.name.span));
+                            .push((local_name.clone(), import_item.name.span));
                     }
                     SelectiveImportResult::NotFound => {
                         if dep_index.is_runtime(orig_name) || dep_index.is_assert(orig_name) {
@@ -1278,8 +1271,8 @@ pub(in crate::eval::project) fn check_dag_recursion(
 )]
 pub(in crate::eval::project) fn import_selective_item(
     dep: &EvaluatedFile,
-    orig_name: &str,
-    local_name: &str,
+    orig_name: &NameAtom,
+    local_name: &DeclName,
     span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
@@ -1288,10 +1281,10 @@ pub(in crate::eval::project) fn import_selective_item(
 ) -> Result<SelectiveImportResult, CompileError> {
     // The dep's `declared_types` is keyed by typed `ScopedName`. Its top-level
     // declarations are always bare locals, so wrap the bare member name.
-    let orig_decl = DeclName::expect_valid(orig_name);
+    let orig_decl = DeclName::from_atom(orig_name.clone());
     if let Some(rv) = dep.const_values.get(&orig_decl) {
         let dt = imported_declared_type(dep, &orig_decl, src, span)?;
-        let scoped = ScopedName::local(local_name);
+        let scoped = ScopedName::local(local_name.clone());
         imported_names.const_names.push((scoped.clone(), span));
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
@@ -1301,7 +1294,7 @@ pub(in crate::eval::project) fn import_selective_item(
     } else if let Some(rv) = dep.values.get(&orig_decl) {
         let dt = imported_declared_type(dep, &orig_decl, src, span)?;
         let category = imported_runtime_category(dep, &orig_decl, src, span)?;
-        let scoped = ScopedName::local(local_name);
+        let scoped = ScopedName::local(local_name.clone());
         match category {
             DeclCategory::Param => imported_names.param_names.push((scoped.clone(), span)),
             DeclCategory::Node => imported_names.node_names.push((scoped.clone(), span)),
@@ -1340,7 +1333,7 @@ fn imported_runtime_category(
     dep.evaluated_values
         .iter()
         .find(|(evaluated_name, _, _)| {
-            !evaluated_name.is_qualified() && evaluated_name.member() == name.as_str()
+            !evaluated_name.is_qualified() && evaluated_name.member() == name
         })
         .and_then(|(_, _, decl_type)| match decl_type {
             DeclType::Param => Some(DeclCategory::Param),
@@ -1363,7 +1356,7 @@ fn imported_declared_type(
     span: Span,
 ) -> Result<DeclaredType, CompileError> {
     dep.declared_types
-        .get(&ScopedName::local(name.as_str()))
+        .get(&ScopedName::from(name))
         .cloned()
         .ok_or_else(|| {
             CompileError::Eval(GraphcalError::EvalError {
@@ -1405,7 +1398,7 @@ pub(in crate::eval::project) fn import_module_values(
             continue;
         }
         let rv = &dep.const_values[name];
-        let scoped = ScopedName::qualified(module_name.as_str(), name.as_str());
+        let scoped = ScopedName::qualified(module_name.clone(), name.clone());
         imported_names
             .const_names
             .push((scoped.clone(), import_span));
@@ -1429,7 +1422,7 @@ pub(in crate::eval::project) fn import_module_values(
             continue;
         }
         let rv = &dep.values[name];
-        let scoped = ScopedName::qualified(module_name.as_str(), name.as_str());
+        let scoped = ScopedName::qualified(module_name.clone(), name.clone());
         let category = imported_runtime_category(dep, name, src, import_span)?;
         match category {
             DeclCategory::Param => imported_names
@@ -1500,8 +1493,8 @@ mod tests {
 
         let err = import_selective_item(
             &dep,
-            "g0",
-            "g0",
+            &NameAtom::parse("g0").unwrap(),
+            &DeclName::expect_valid("g0"),
             Span::new(0, 2),
             &src,
             &mut imported_names,

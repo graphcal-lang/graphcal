@@ -55,7 +55,7 @@ impl DagTIR {
         let mut declared_types = HashMap::new();
         for name in crate::registry::builtins::builtin_constants().keys() {
             declared_types.insert(
-                ScopedName::local(*name),
+                ScopedName::local(DeclName::expect_valid(*name)),
                 crate::registry::declared_type::DeclaredType::Quantity(Dimension::dimensionless()),
             );
         }
@@ -102,9 +102,9 @@ impl DagTIR {
     /// source-facing entries still use resolved identities instead of
     /// source-keyed runtime maps.
     #[must_use]
-    pub fn resolved_decl_key_for_local(&self, name: &ScopedName) -> Option<ResolvedDeclName> {
+    pub fn resolved_decl_key_for_local(&self, name: &ScopedName) -> ResolvedDeclName {
         if let Some(resolved) = self.semantic.decl_bindings.get(name) {
-            return Some(resolved.clone());
+            return resolved.clone();
         }
         if self.resolved_decl_types.contains_key(name)
             || self
@@ -119,11 +119,11 @@ impl DagTIR {
                 .resolved_decl_types
                 .keys()
                 .filter(|candidate| candidate.member() == name.member())
-                .filter_map(|candidate| resolved_decl_key(&self.dag_id, candidate));
+                .map(|candidate| resolved_decl_key(&self.dag_id, candidate));
             if let Some(candidate) = candidates.next()
                 && candidates.next().is_none()
             {
-                return Some(candidate);
+                return candidate;
             }
         }
         resolved_decl_key(&self.dag_id, name)
@@ -725,14 +725,8 @@ fn lower_resolved_expressions(
 ) -> Result<LoweredDagExpressions, GraphcalError> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
-    let decl_bindings = collect_hir_decl_bindings(
-        ctx.owner,
-        consts,
-        params,
-        nodes,
-        imported_value_sources,
-        src,
-    )?;
+    let decl_bindings =
+        collect_hir_decl_bindings(ctx.owner, consts, params, nodes, imported_value_sources);
     let lower_bounds_in = |type_ann: &crate::desugar::desugared_ast::TypeExpr,
                            resolution_owner: &crate::dag_id::DagId,
                            body_src: &NamedSource<Arc<String>>| {
@@ -754,7 +748,7 @@ fn lower_resolved_expressions(
     // against the dependency's own source, not the importer's `src` (#868).
     for entry in consts {
         let body_src = entry.src.resolve(src);
-        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
+        let key = resolved_decl_key(ctx.owner, &entry.name);
         let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
@@ -763,7 +757,7 @@ fn lower_resolved_expressions(
     }
     for entry in params {
         let body_src = entry.src.resolve(src);
-        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
+        let key = resolved_decl_key(ctx.owner, &entry.name);
         let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
@@ -775,7 +769,7 @@ fn lower_resolved_expressions(
     }
     for entry in nodes {
         let body_src = entry.src.resolve(src);
-        let key = decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, body_src)?;
+        let key = resolved_decl_key(ctx.owner, &entry.name);
         let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
@@ -783,8 +777,7 @@ fn lower_resolved_expressions(
         exprs.nodes.insert(key, entry.expr.clone());
     }
     for entry in asserts {
-        let key =
-            decl_key_or_internal_error(ctx.owner, &entry.name, entry.span, entry.src.resolve(src))?;
+        let key = resolved_decl_key(ctx.owner, &entry.name);
         exprs.asserts.insert(key, entry.body.clone());
     }
 
@@ -865,23 +858,6 @@ fn collect_plot_exprs(
 
     semantic.plot_exprs = plot_exprs;
     Ok(())
-}
-
-/// Build the canonical declaration key for `name`, reporting an internal
-/// error when the name cannot form one.
-fn decl_key_or_internal_error(
-    owner: &crate::dag_id::DagId,
-    name: &ScopedName,
-    span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedDeclName, GraphcalError> {
-    resolved_decl_key(owner, name).ok_or_else(|| {
-        internal_error(
-            format!("could not build canonical declaration key for `{name}`"),
-            src,
-            span,
-        )
-    })
 }
 
 /// Lower a declaration type annotation's domain bounds to HIR.
@@ -1003,7 +979,7 @@ fn check_hir_body_policies(
         }
     }
     for (name, body) in &semantic.plot_exprs.plots {
-        let check_literals = !name.is_qualified() && is_explicit_export(name.member());
+        let check_literals = !name.is_qualified() && is_explicit_export(name.member().as_str());
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, false, check_literals)?;
         }
@@ -1017,7 +993,7 @@ fn check_hir_body_policies(
         .iter()
         .chain(&semantic.plot_exprs.layers)
     {
-        let check_literals = !name.is_qualified() && is_explicit_export(name.member());
+        let check_literals = !name.is_qualified() && is_explicit_export(name.member().as_str());
         for field in fields {
             checker.check_expr(&field.value, false, check_literals)?;
         }
@@ -1211,7 +1187,7 @@ impl HirPolicyChecker<'_> {
         }
         if const_body && !kind.is_const() {
             return Err(GraphcalError::GraphRefInConst {
-                name: ScopedName::local(target.value.as_str()),
+                name: ScopedName::local(target.value.to_unowned_def_name()),
                 src: self.src.clone(),
                 span: ref_span.into(),
             });

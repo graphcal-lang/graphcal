@@ -948,7 +948,7 @@ mod tests {
     fn has_errors_counts_plot_errors() {
         let mut result = empty_eval_result();
         result.plot_errors.push(PlotError {
-            name: ScopedName::local("p"),
+            name: ScopedName::parse("p").unwrap(),
             message: "bad plot".to_string(),
         });
 

@@ -1,6 +1,4 @@
-use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::names::ResolvedName;
 use graphcal_compiler::tir::typed::DagTIR;
 
 /// Runtime key for a value declaration during evaluation.
@@ -22,15 +20,7 @@ impl RuntimeDeclKey {
     }
 
     fn local_or_leaf(dag: &DagTIR, name: &ScopedName) -> Self {
-        dag.resolved_decl_key_for_local(name).map_or_else(
-            || {
-                Self::Resolved(ResolvedName::from_def(
-                    dag.dag_id.clone(),
-                    DeclName::expect_valid(name.member()),
-                ))
-            },
-            Self::Resolved,
-        )
+        Self::Resolved(dag.resolved_decl_key_for_local(name))
     }
 
     /// Build the key for a declaration owned by `dag`.

@@ -245,7 +245,7 @@ fn hir_dim_check_uses_lowered_assert_body_not_mutated_syntax_body() {
 fn check_dimensionless_const() {
     let types = check("const node g0: Dimensionless = 9.80665;").unwrap();
     assert_eq!(
-        types[&ScopedName::local("g0")],
+        types[&ScopedName::parse("g0").unwrap()],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
@@ -254,7 +254,7 @@ fn check_dimensionless_const() {
 fn check_dimensionless_arithmetic() {
     let types = check("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 2.0;").unwrap();
     assert_eq!(
-        types[&ScopedName::local("y")],
+        types[&ScopedName::parse("y").unwrap()],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
@@ -264,7 +264,7 @@ fn check_length_unit_literal() {
     let types = check("param alt: Length = 400.0 km;").unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
-        types[&ScopedName::local("alt")],
+        types[&ScopedName::parse("alt").unwrap()],
         DeclaredType::Quantity(length)
     );
 }
@@ -277,7 +277,7 @@ fn check_velocity_from_division() {
         / Dimension::base(BaseDimId::Prelude("Time".to_string())))
     .unwrap();
     assert_eq!(
-        types[&ScopedName::local("speed")],
+        types[&ScopedName::parse("speed").unwrap()],
         DeclaredType::Quantity(velocity)
     );
 }
@@ -389,7 +389,7 @@ fn check_conversion_same_dimension() {
         / Dimension::base(BaseDimId::Prelude("Time".to_string())))
     .unwrap();
     assert_eq!(
-        types[&ScopedName::local("speed_kmh")],
+        types[&ScopedName::parse("speed_kmh").unwrap()],
         DeclaredType::Quantity(velocity)
     );
 }
@@ -474,7 +474,7 @@ Maneuver.Insertion: 1.8 km / s,
         / Dimension::base(BaseDimId::Prelude("Time".to_string())))
     .unwrap();
     assert_eq!(
-        types[&ScopedName::local("dv")],
+        types[&ScopedName::parse("dv").unwrap()],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Quantity(velocity)),
             index: test_index_ref("Maneuver"),
@@ -2172,7 +2172,7 @@ fn inline_dag_call_basic_returns_output_type() {
     let types = check(INLINE_DAG_CALL_SCALE).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
-        types[&ScopedName::local("doubled")],
+        types[&ScopedName::parse("doubled").unwrap()],
         DeclaredType::Quantity(length)
     );
 }
@@ -2189,11 +2189,11 @@ node bound_factor: Dimensionless = @config(factor: 3.0).factor;
 ";
     let types = check(source).unwrap();
     assert_eq!(
-        types[&ScopedName::local("default_factor")],
+        types[&ScopedName::parse("default_factor").unwrap()],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
     assert_eq!(
-        types[&ScopedName::local("bound_factor")],
+        types[&ScopedName::parse("bound_factor").unwrap()],
         DeclaredType::Quantity(Dimension::dimensionless())
     );
 }
@@ -2302,7 +2302,7 @@ node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
-        types[&ScopedName::local("distances")],
+        types[&ScopedName::parse("distances").unwrap()],
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Quantity(length)),
             index: test_index_ref("Region"),
@@ -2349,7 +2349,7 @@ node out: Length = @doubler(v: @dist).result[Region.A];
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
     assert_eq!(
-        types[&ScopedName::local("out")],
+        types[&ScopedName::parse("out").unwrap()],
         DeclaredType::Quantity(length)
     );
 }

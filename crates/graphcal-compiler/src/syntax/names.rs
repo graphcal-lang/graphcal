@@ -279,12 +279,6 @@ impl<Ns: NameNamespace> NameDef<Ns> {
     pub(crate) fn into_atom(self) -> NameAtom {
         self.atom
     }
-
-    /// Consume and return the inner `String`.
-    #[must_use]
-    pub(crate) fn into_inner(self) -> String {
-        self.atom.into_inner()
-    }
 }
 
 impl<Ns: NameNamespace> std::fmt::Display for NameDef<Ns> {
@@ -628,12 +622,6 @@ mod tests {
     fn newtype_as_str() {
         let name = TestDeclName::expect_valid("Length");
         assert_eq!(name.as_str(), "Length");
-    }
-
-    #[test]
-    fn newtype_into_inner() {
-        let name = TestDeclName::expect_valid("km");
-        assert_eq!(name.into_inner(), "km");
     }
 
     #[test]
