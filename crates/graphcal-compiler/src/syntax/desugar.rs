@@ -7,17 +7,9 @@
 //! analysis, so lowering, TIR, resolver, and the runtime all see only
 //! single declarations.
 //!
-//! The desugar pass is invoked at the top of
-//! HIR lowering; everything downstream
-//! can assume `DeclKind::Sugar` does not appear in the AST.
-//!
-//! Note: today this pass mutates a `File<Raw>` in place, eliminating sugar
-//! variants by walking + flattening. A future commit will switch the API
-//! to `File<Raw> -> File<Desugared>` (the [`From`] impl in
-//! [`crate::desugar::convert`] is the engine for that transition) and
-//! pin all consumers to `File<Desugared>`, replacing the runtime
-//! [`unreachable_post_desugar`] panics with `crate::syntax::phase::never`
-//! on the [`Infallible`](core::convert::Infallible) `Sugar` payload.
+//! The desugar pass is invoked at the top of HIR lowering and consumes a
+//! [`File<Raw>`] to produce a [`File<Desugared>`]. Everything downstream can
+//! therefore assume `DeclKind::Sugar` does not appear in the AST.
 //!
 //! ## Span fidelity
 //!
@@ -126,8 +118,8 @@ impl ExpandedSlotDecl {
     reason = "single cohesive routine for multi-decl expansion"
 )]
 pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
-    let row_index_spec = multi.shared_axes.row_axis().clone();
-    let slice_axis_specs: &[TableIndexSpec] = multi.shared_axes.slice_axes();
+    let row_index_spec = multi.shared_axes().row_axis().clone();
+    let slice_axis_specs: &[TableIndexSpec] = multi.shared_axes().slice_axes();
 
     let row_index_name = match &row_index_spec {
         TableIndexSpec::Named(s) => Spanned::new(MapEntryIndex::Named(s.value.clone()), s.span),
@@ -136,26 +128,26 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
         }
     };
 
-    let mut out: Vec<ExpandedSlotDecl> = Vec::with_capacity(multi.slots.len());
-    for (slot_idx, slot) in multi.slots.iter().enumerate() {
+    let mut out: Vec<ExpandedSlotDecl> = Vec::with_capacity(multi.slots().len());
+    for (slot_idx, slot) in multi.slots().iter().enumerate() {
         let mut slot_entries: Vec<MapEntry> = Vec::new();
         let mut slot_indexes: Vec<TableIndexSpec> = slice_axis_specs.to_vec();
         slot_indexes.push(row_index_spec.clone());
         let mut extra_axis_name: Option<Spanned<NamePath>> = None;
 
-        for slice in &multi.slices {
-            let col_span = &slice.column_layout[slot_idx];
+        for slice in multi.slices() {
+            let col_span = &slice.column_layout()[slot_idx];
             match col_span {
                 MultiSlotColumnSpan::Single(col_idx) => {
-                    for row in &slice.rows {
+                    for row in slice.rows() {
                         let row_key = MapEntryKey {
                             index: row_index_name.clone(),
                             additional_index_spans: Vec::new(),
-                            variant: row.label.clone(),
+                            variant: row.label().clone(),
                         };
                         slot_entries.push(MapEntry {
-                            keys: multi_entry_keys(slice.prefix_keys.clone(), row_key, None),
-                            value: row.values[*col_idx].clone(),
+                            keys: multi_entry_keys(slice.prefix_keys().to_vec(), row_key, None),
+                            value: row.values()[*col_idx].clone(),
                         });
                     }
                 }
@@ -168,7 +160,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                         extra_axis_name = Some(extra_axis.clone());
                     }
                     let col_variants: Vec<(Spanned<NamePath>, Spanned<IndexVariantName>)> = slice
-                        .header_cells[*start..*end]
+                        .header_cells()[*start..*end]
                         .iter()
                         .filter_map(|c| match c {
                             MultiHeaderCell::Variant { axis, variant, .. } => {
@@ -177,7 +169,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                             MultiHeaderCell::Underscore { .. } => None,
                         })
                         .collect();
-                    for row in &slice.rows {
+                    for row in slice.rows() {
                         for (local_col, (column_axis, col_variant)) in
                             col_variants.iter().enumerate()
                         {
@@ -185,7 +177,7 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                             let row_key = MapEntryKey {
                                 index: row_index_name.clone(),
                                 additional_index_spans: Vec::new(),
-                                variant: row.label.clone(),
+                                variant: row.label().clone(),
                             };
                             let extra_key = MapEntryKey {
                                 index: Spanned::new(
@@ -200,11 +192,11 @@ pub(crate) fn expand_multi_decl(multi: &MultiDecl) -> Vec<ExpandedSlotDecl> {
                             };
                             slot_entries.push(MapEntry {
                                 keys: multi_entry_keys(
-                                    slice.prefix_keys.clone(),
+                                    slice.prefix_keys().to_vec(),
                                     row_key,
                                     Some(extra_key),
                                 ),
-                                value: row.values[global_col].clone(),
+                                value: row.values()[global_col].clone(),
                             });
                         }
                     }

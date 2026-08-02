@@ -304,9 +304,8 @@ impl Parser<'_> {
 
         let ast_slices: Vec<ast::MultiDeclSlice> = slices
             .iter()
-            .map(|slice| ast::MultiDeclSlice {
-                prefix_keys: slice.prefix_keys.clone(),
-                header_cells: slice
+            .map(|slice| {
+                let header_cells = slice
                     .header_cells
                     .iter()
                     .map(|c| match c {
@@ -323,8 +322,8 @@ impl Parser<'_> {
                             span: *span,
                         },
                     })
-                    .collect(),
-                column_layout: slice
+                    .collect();
+                let column_layout = slice
                     .column_layout
                     .iter()
                     .map(|span| match span {
@@ -339,17 +338,27 @@ impl Parser<'_> {
                             extra_axis: extra_axis.clone(),
                         },
                     })
-                    .collect(),
-                rows: slice
+                    .collect();
+                let rows = slice
                     .row_values
                     .iter()
-                    .map(|(label, values, _row_span)| ast::MultiDataRow {
-                        label: label.clone(),
-                        values: values.clone(),
+                    .map(|(label, values, _row_span)| {
+                        ast::MultiDataRow::new(label.clone(), values.clone())
                     })
-                    .collect(),
+                    .collect();
+                ast::MultiDeclSlice::new(
+                    slice.prefix_keys.clone(),
+                    header_cells,
+                    column_layout,
+                    rows,
+                )
+                .map_err(|error| ParseError::MultiDeclUnsupportedShape {
+                    reason: error.to_string(),
+                    src: self.named_source(),
+                    span: table_total_span.into(),
+                })
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         let shared_axes =
             ast::MultiDeclSharedAxes::try_from_vec(shared_axes.clone()).map_err(|_| {
@@ -360,14 +369,19 @@ impl Parser<'_> {
                 )
             })?;
 
-        let multi = ast::MultiDecl {
-            slots: ast_slots,
+        let multi = ast::MultiDecl::new(
+            ast_slots,
             shared_axes,
-            slot_axes: ast_slot_axes,
-            slices: ast_slices,
-            span: surface_span,
-            table_expr_span: table_total_span,
-        };
+            ast_slot_axes,
+            ast_slices,
+            surface_span,
+            table_total_span,
+        )
+        .map_err(|error| ParseError::MultiDeclUnsupportedShape {
+            reason: error.to_string(),
+            src: self.named_source(),
+            span: table_total_span.into(),
+        })?;
 
         Ok(Declaration {
             attributes: vec![],
@@ -732,12 +746,12 @@ param y: Dimensionless[Fin(2)]
 ";
         let file = Parser::new(source).parse_file().unwrap();
         let multi = sole_multi_decl(&file);
-        assert!(multi.shared_axes.row_axis().is_finite_index());
+        assert!(multi.shared_axes().row_axis().is_finite_index());
         assert_eq!(
-            multi.slices[0]
-                .rows
+            multi.slices()[0]
+                .rows()
                 .iter()
-                .map(|row| row.label.value.clone())
+                .map(|row| row.label().value.clone())
                 .collect::<Vec<_>>(),
             vec![IndexEntryKey::Position(0), IndexEntryKey::Position(1)]
         );
@@ -764,14 +778,20 @@ param n_installed:       Int[Component]
         assert_eq!(file.declarations.len(), 2);
 
         let multi = sole_multi_decl(&file);
-        assert_eq!(multi.slots.len(), 2);
-        assert_eq!(multi.slots[0].name.value.as_str(), "power_consumption");
-        assert_eq!(multi.slots[1].name.value.as_str(), "n_installed");
-        assert_eq!(multi.slot_axes.len(), 2);
-        assert!(matches!(multi.slot_axes[0], ast::MultiSlotAxis::Underscore));
-        assert!(matches!(multi.slot_axes[1], ast::MultiSlotAxis::Underscore));
-        assert_eq!(multi.slices.len(), 1);
-        assert_eq!(multi.slices[0].rows.len(), 2);
+        assert_eq!(multi.slots().len(), 2);
+        assert_eq!(multi.slots()[0].name.value.as_str(), "power_consumption");
+        assert_eq!(multi.slots()[1].name.value.as_str(), "n_installed");
+        assert_eq!(multi.slot_axes().len(), 2);
+        assert!(matches!(
+            multi.slot_axes()[0],
+            ast::MultiSlotAxis::Underscore
+        ));
+        assert!(matches!(
+            multi.slot_axes()[1],
+            ast::MultiSlotAxis::Underscore
+        ));
+        assert_eq!(multi.slices().len(), 1);
+        assert_eq!(multi.slices()[0].rows().len(), 2);
 
         // The desugar pass expands this to two separate Param decls each
         // carrying a 1-D TableLiteral.
@@ -811,10 +831,10 @@ const node mass_per_unit:     Mass[Component]
 ";
         let file = Parser::new(source).parse_file().unwrap();
         let multi = sole_multi_decl(&file);
-        assert_eq!(multi.slots.len(), 3);
-        assert_eq!(multi.slots[0].kind, MultiSlotKind::Param);
-        assert_eq!(multi.slots[1].kind, MultiSlotKind::Node);
-        assert_eq!(multi.slots[2].kind, MultiSlotKind::ConstNode);
+        assert_eq!(multi.slots().len(), 3);
+        assert_eq!(multi.slots()[0].kind, MultiSlotKind::Param);
+        assert_eq!(multi.slots()[1].kind, MultiSlotKind::Node);
+        assert_eq!(multi.slots()[2].kind, MultiSlotKind::ConstNode);
     }
 
     #[test]
@@ -916,8 +936,8 @@ pub node a: Int[Component], node b: Int[Component]
 ";
         let file = Parser::new(source).parse_file().unwrap();
         let multi = sole_multi_decl(&file);
-        assert_eq!(multi.slots[0].visibility, Visibility::Public);
-        assert_eq!(multi.slots[1].visibility, Visibility::Private);
+        assert_eq!(multi.slots()[0].visibility, Visibility::Public);
+        assert_eq!(multi.slots()[1].visibility, Visibility::Private);
 
         let desugared: Vec<_> = expand_multi_decl(multi)
             .into_iter()
@@ -942,8 +962,8 @@ node a: Int[Component], pub node b: Int[Component]
 ";
         let file = Parser::new(source).parse_file().unwrap();
         let multi = sole_multi_decl(&file);
-        assert_eq!(multi.slots[0].visibility, Visibility::Private);
-        assert_eq!(multi.slots[1].visibility, Visibility::Public);
+        assert_eq!(multi.slots()[0].visibility, Visibility::Private);
+        assert_eq!(multi.slots()[1].visibility, Visibility::Public);
 
         let desugared: Vec<_> = expand_multi_decl(multi)
             .into_iter()
@@ -1006,8 +1026,8 @@ param      power_mode:        Bool[Component, OperationMode]
 ";
         let file = Parser::new(source).parse_file().unwrap();
         let multi = sole_multi_decl(&file);
-        assert_eq!(multi.slots.len(), 4);
-        assert!(matches!(multi.slot_axes[3], ast::MultiSlotAxis::Axis(_)));
+        assert_eq!(multi.slots().len(), 4);
+        assert!(matches!(multi.slot_axes()[3], ast::MultiSlotAxis::Axis(_)));
 
         // After desugar, the 4th slot (`power_mode`) becomes a Param with a
         // 2-D TableLiteral over Component × OperationMode.
@@ -1072,11 +1092,11 @@ param q: Int[Phase, Component]
 ";
         let file = Parser::new(source).parse_file().unwrap();
         let multi = sole_multi_decl(&file);
-        assert_eq!(multi.shared_axes.len(), 2);
-        assert_eq!(multi.slices.len(), 2);
-        assert_eq!(multi.slices[0].prefix_keys.len(), 1);
+        assert_eq!(multi.shared_axes().len(), 2);
+        assert_eq!(multi.slices().len(), 2);
+        assert_eq!(multi.slices()[0].prefix_keys().len(), 1);
         assert_eq!(
-            multi.slices[0].prefix_keys[0].index.value.to_string(),
+            multi.slices()[0].prefix_keys()[0].index.value.to_string(),
             "Phase"
         );
 
@@ -1143,7 +1163,7 @@ param m: Bool[Component, OpMode]
         // 2 index decls + 1 multi-decl.
         assert_eq!(file.declarations.len(), 3);
         let multi = sole_multi_decl(&file);
-        assert_eq!(multi.slots.len(), 2);
+        assert_eq!(multi.slots().len(), 2);
     }
 
     #[test]
@@ -1173,26 +1193,27 @@ param m: Bool[mission.Phase, mission.Component, mission.Mode]
         let file = Parser::new(source).parse_file().unwrap();
         let multi = sole_multi_decl(&file);
 
-        let TableIndexSpec::Named(slice_axis) = &multi.shared_axes[0] else {
+        let TableIndexSpec::Named(slice_axis) = &multi.shared_axes()[0] else {
             panic!("expected named slice axis")
         };
         assert_eq!(slice_axis.value.display_path(), "mission.Phase");
-        let TableIndexSpec::Named(row_axis) = &multi.shared_axes[1] else {
+        let TableIndexSpec::Named(row_axis) = &multi.shared_axes()[1] else {
             panic!("expected named row axis")
         };
         assert_eq!(row_axis.value.display_path(), "mission.Component");
-        let ast::MultiSlotAxis::Axis(slot_axis) = &multi.slot_axes[1] else {
+        let ast::MultiSlotAxis::Axis(slot_axis) = &multi.slot_axes()[1] else {
             panic!("expected named slot axis")
         };
         assert_eq!(slot_axis.value.display_path(), "mission.Mode");
-        let ast::MultiHeaderCell::Variant { axis, variant, .. } = &multi.slices[0].header_cells[1]
+        let ast::MultiHeaderCell::Variant { axis, variant, .. } =
+            &multi.slices()[0].header_cells()[1]
         else {
             panic!("expected qualified header variant")
         };
         assert_eq!(axis.value.display_path(), "mission.Mode");
         assert_eq!(variant.value.as_str(), "Safe");
         assert_eq!(
-            multi.slices[0].prefix_keys[0].index.value.to_string(),
+            multi.slices()[0].prefix_keys()[0].index.value.to_string(),
             "mission.Phase"
         );
     }

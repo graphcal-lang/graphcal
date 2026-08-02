@@ -798,7 +798,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     // `pub(bind)`) joins the kind keyword for alignment so per-slot prefixes
     // line up with bare slots.
     let kind_strs: Vec<String> = info
-        .slots
+        .slots()
         .iter()
         .map(|s| {
             let kind = match s.kind {
@@ -815,23 +815,27 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     let max_kind = kind_strs.iter().map(String::len).max().unwrap_or(0);
 
     let name_colon_strs: Vec<String> = info
-        .slots
+        .slots()
         .iter()
         .map(|s| format!("{}:", s.name.value.as_str()))
         .collect();
     let max_name_colon = name_colon_strs.iter().map(String::len).max().unwrap_or(0);
 
     let type_strs: Vec<String> = info
-        .slots
+        .slots()
         .iter()
         .map(|s| render_doc_to_string(&format_type_expr_inline(fmt, &s.type_ann)))
         .collect();
 
-    for idx in 0..info.slots.len() {
+    for idx in 0..info.slots().len() {
         if idx > 0 {
             out.push('\n');
         }
-        let sep = if idx + 1 == info.slots.len() { "" } else { "," };
+        let sep = if idx + 1 == info.slots().len() {
+            ""
+        } else {
+            ","
+        };
         let _ = write!(
             out,
             "{:<kw$} {:<nw$} {}{}",
@@ -846,7 +850,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
 
     // Table expression: `= table[shared, (slots)] { ... };`
     let shared_axes_str = info
-        .shared_axes
+        .shared_axes()
         .iter()
         .map(|spec| match spec {
             TableIndexSpec::Named(s) => s.value.to_string(),
@@ -855,7 +859,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         .collect::<Vec<_>>()
         .join(", ");
     let slot_axes_str = info
-        .slot_axes
+        .slot_axes()
         .iter()
         .map(|a| match a {
             MultiSlotAxis::Underscore => "_".to_string(),
@@ -870,17 +874,17 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
 
     // Body.
     let body_indent = " ".repeat((INDENT * 2) as usize);
-    let finite_row_axis = info.shared_axes.row_axis().is_finite_index();
+    let finite_row_axis = info.shared_axes().row_axis().is_finite_index();
     let (max_row_label, col_widths, rendered_rows) = compute_multi_decl_layout(fmt, info);
 
-    for (si, slice) in info.slices.iter().enumerate() {
+    for (si, slice) in info.slices().iter().enumerate() {
         if si > 0 {
             out.push('\n');
         }
         // Slice prefix `[A.a, B.b]`.
-        if !slice.prefix_keys.is_empty() {
+        if !slice.prefix_keys().is_empty() {
             let labels = slice
-                .prefix_keys
+                .prefix_keys()
                 .iter()
                 .map(format_multi_decl_key)
                 .collect::<Vec<_>>()
@@ -891,7 +895,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         }
         // Header row: `<row-label-padding>: <cells>;`
         let header_cells: Vec<String> = slice
-            .header_cells
+            .header_cells()
             .iter()
             .enumerate()
             .map(|(ci, cell)| {
@@ -909,7 +913,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             " ".repeat(max_row_label),
             header_cells.join(", ")
         );
-        for (ri, row) in slice.rows.iter().enumerate() {
+        for (ri, row) in slice.rows().iter().enumerate() {
             let cells: Vec<String> = rendered_rows[si][ri]
                 .iter()
                 .enumerate()
@@ -923,7 +927,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
                 let _ = write!(
                     out,
                     "{}: {};",
-                    pad_right_to_width(&row.label.value.to_string(), max_row_label),
+                    pad_right_to_width(&row.label().value.to_string(), max_row_label),
                     cells.join(", "),
                 );
             }
@@ -958,12 +962,15 @@ fn compute_multi_decl_layout(
     fmt: &Formatter<'_>,
     info: &MultiDecl,
 ) -> (usize, Vec<usize>, Vec<Vec<Vec<String>>>) {
-    let num_cols = info.slices.first().map_or(0, |s| s.header_cells.len());
+    let num_cols = info
+        .slices()
+        .first()
+        .map_or(0, |slice| slice.header_cells().len());
     let mut col_widths: Vec<usize> = vec![0; num_cols];
 
     // Header cell widths.
-    for slice in &info.slices {
-        for (ci, cell) in slice.header_cells.iter().enumerate() {
+    for slice in info.slices() {
+        for (ci, cell) in slice.header_cells().iter().enumerate() {
             let text = header_cell_text(cell);
             let width = display_width(&text);
             if ci < col_widths.len() && width > col_widths[ci] {
@@ -973,14 +980,14 @@ fn compute_multi_decl_layout(
     }
     // Data cell widths (render once; reuse strings below).
     let rendered_rows: Vec<Vec<Vec<String>>> = info
-        .slices
+        .slices()
         .iter()
         .map(|slice| {
             slice
-                .rows
+                .rows()
                 .iter()
                 .map(|row| {
-                    row.values
+                    row.values()
                         .iter()
                         .map(|v| render_multi_decl_cell_value(fmt, v))
                         .collect()
@@ -999,13 +1006,13 @@ fn compute_multi_decl_layout(
         }
     }
 
-    let max_row_label = if info.shared_axes.row_axis().is_finite_index() {
+    let max_row_label = if info.shared_axes().row_axis().is_finite_index() {
         0
     } else {
-        info.slices
+        info.slices()
             .iter()
-            .flat_map(|s| s.rows.iter())
-            .map(|r| display_width(&r.label.value.to_string()))
+            .flat_map(|slice| slice.rows().iter())
+            .map(|row| display_width(&row.label().value.to_string()))
             .max()
             .unwrap_or(0)
     };
