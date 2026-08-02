@@ -916,7 +916,7 @@ impl std::ops::Index<usize> for MultiDeclSharedAxes {
 /// Plain map literals use named indexes. Tables over `Fin(N)` axes desugar to
 /// map entries with an explicitly typed structural key, so downstream passes
 /// never recover index structure from a fabricated name.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MapEntryIndex {
     /// A declared named index.
     Named(NamePath),
