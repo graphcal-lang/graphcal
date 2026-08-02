@@ -170,7 +170,7 @@ fn resolve_defining_expr<'a>(
             let ExprKind::MapLiteral { entries } = &map_expr.kind else {
                 return Ok(None);
             };
-            find_static_map_entry(entries, args)
+            find_static_map_entry(entries, args.as_slice())
         }
         ExprKind::If {
             condition,

@@ -2607,8 +2607,12 @@ pub fn substitute_type_expr_indexes(
             }
             substitute_type_expr_indexes(base, bindings);
         }
-        TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args }
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            for arg in generic_args {
+                substitute_generic_arg_indexes(arg, bindings);
+            }
+        }
+        TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
                 substitute_generic_arg_indexes(arg, bindings);
@@ -3961,8 +3965,10 @@ fn find_non_earlier_type_reference(
                 })
             })
         }
-        TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args }
+        TypeExprKind::TypeApplication { generic_args, .. } => generic_args
+            .iter()
+            .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
+        TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => generic_args
             .iter()
             .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
@@ -4665,7 +4671,14 @@ fn resolve_extern_value_kind(
                 .map(ValueKind::Quantity)
         }
         TypeExprKind::Indexed { base, indexes } => {
-            resolve_extern_array_kind(base, indexes, dim_vars, index_vars, registry, src)
+            resolve_extern_array_kind(
+                base,
+                indexes.as_slice(),
+                dim_vars,
+                index_vars,
+                registry,
+                src,
+            )
         }
         TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }

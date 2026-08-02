@@ -664,7 +664,7 @@ pub enum ExprKind {
     },
     IndexAccess {
         expr: Box<Expr>,
-        args: Vec<IndexArg>,
+        args: NonEmpty<IndexArg>,
     },
     Scan {
         source: Box<Expr>,
@@ -1323,10 +1323,7 @@ impl<'a> ExprLowerer<'a> {
             }
             ast::ExprKind::IndexAccess { expr, args } => ExprKind::IndexAccess {
                 expr: Box::new(self.lower_expr(expr)),
-                args: args
-                    .iter()
-                    .map(|arg| self.lower_index_arg(arg))
-                    .collect::<Result<Vec<_>, _>>()?,
+                args: args.try_map_ref(|arg| self.lower_index_arg(arg))?,
             },
             ast::ExprKind::Scan {
                 source,

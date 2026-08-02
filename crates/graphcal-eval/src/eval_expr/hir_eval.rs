@@ -143,7 +143,7 @@ fn eval_hir_expr_inner(
             eval_hir_for_comp(bindings, body, values, local_values, ctx)
         }
         hir::ExprKind::IndexAccess { expr: inner, args } => {
-            eval_hir_index_access(expr.span, inner, args, values, local_values, ctx)
+            eval_hir_index_access(expr.span, inner, args.as_slice(), values, local_values, ctx)
         }
         hir::ExprKind::Scan {
             source,

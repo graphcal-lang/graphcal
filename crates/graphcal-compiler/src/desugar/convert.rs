@@ -448,10 +448,10 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
             },
             TypeExprKind::TypeApplication { name, generic_args } => Self::TypeApplication {
                 name,
-                generic_args: generic_args.into_iter().map(Into::into).collect(),
+                generic_args: generic_args.map(Into::into),
             },
             TypeExprKind::DatetimeApplication { type_args } => Self::DatetimeApplication {
-                type_args: type_args.into_iter().map(Into::into).collect(),
+                type_args: type_args.map(Into::into),
             },
             TypeExprKind::ComplexApplication { generic_args } => Self::ComplexApplication {
                 generic_args: generic_args.into_iter().map(Into::into).collect(),
@@ -570,7 +570,7 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
             },
             ExprKind::IndexAccess { expr, args } => Self::IndexAccess {
                 expr: Box::new((*expr).into()),
-                args: args.into_iter().map(Into::into).collect(),
+                args: args.map(Into::into),
             },
             ExprKind::Scan {
                 source,

@@ -1482,22 +1482,12 @@ fn check_type_expr_for_generic_arg_constraints(
         TypeExprKind::Indexed { base, .. } => {
             check_type_expr_for_generic_arg_constraints(base, src)
         }
-        TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args }
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            check_generic_args_for_domain_constraints(generic_args, src)
+        }
+        TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => {
-            for arg in generic_args {
-                if let crate::desugar::desugared_ast::GenericArg::Type(type_expr) = arg {
-                    if let Some(bound) = type_expr.constraints.first() {
-                        return Err(GraphcalError::GenericTypeArgDomainConstraint {
-                            src: src.clone(),
-                            span: bound.span.into(),
-                        });
-                    }
-                    // Recurse so nested generics are checked too.
-                    check_type_expr_for_generic_arg_constraints(type_expr, src)?;
-                }
-            }
-            Ok(())
+            check_generic_args_for_domain_constraints(generic_args, src)
         }
         TypeExprKind::DatetimeApplication { type_args } => {
             for arg in type_args {
@@ -1517,6 +1507,27 @@ fn check_type_expr_for_generic_arg_constraints(
         | TypeExprKind::Datetime
         | TypeExprKind::DimExpr(_) => Ok(()),
     }
+}
+
+fn check_generic_args_for_domain_constraints<'a>(
+    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    generic_args.into_iter().try_for_each(|arg| match arg {
+        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+            if let Some(bound) = type_expr.constraints.first() {
+                return Err(GraphcalError::GenericTypeArgDomainConstraint {
+                    src: src.clone(),
+                    span: bound.span.into(),
+                });
+            }
+            // Recurse so nested generics are checked too.
+            check_type_expr_for_generic_arg_constraints(type_expr, src)
+        }
+        crate::desugar::desugared_ast::GenericArg::Index(_)
+        | crate::desugar::desugared_ast::GenericArg::Nat(_)
+        | crate::desugar::desugared_ast::GenericArg::Ambiguous(_) => Ok(()),
+    })
 }
 
 /// Strip `Indexed` wrappers to get the base resolved type.

@@ -839,6 +839,26 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn empty_required_bracket_and_angle_lists_produce_parse_diagnostics() {
+        for source in [
+            "param value: Dimensionless[];",
+            "param value: Wrapper<>;",
+            "node value: Dimensionless = sqrt<>(4.0);",
+            "type Marker<> { Marker }",
+            "node value: Dimensionless = @values[];",
+        ] {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            assert!(
+                diagnostics.iter().any(|diagnostic| matches!(
+                    diagnostic.code.as_ref(),
+                    Some(NumberOrString::String(code)) if code == "graphcal::P001"
+                )),
+                "expected P001 for `{source}`, got {diagnostics:?}"
+            );
+        }
+    }
+
+    #[test]
     fn inline_dag_param_projection_produces_no_diagnostic() {
         let source = "\
 dag config {

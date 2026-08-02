@@ -559,6 +559,14 @@ param alt: Length = 400.0 km;
 }
 
 #[test]
+fn parse_type_decl_empty_generic_params_rejected() {
+    let error = Parser::new("type Marker<> { Marker }")
+        .parse_file()
+        .unwrap_err();
+    assert!(matches!(error, ParseError::UnexpectedToken { .. }));
+}
+
+#[test]
 fn parse_type_decl_generic_params() {
     let source = "type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }";
     let file = Parser::new(source).parse_file().unwrap();
@@ -754,6 +762,12 @@ fn parse_type_decl_no_attributes() {
 }
 
 #[test]
+fn parse_empty_named_index_rejected() {
+    let error = Parser::new("index Empty = {};").parse_file().unwrap_err();
+    assert!(matches!(error, ParseError::UnexpectedToken { .. }));
+}
+
+#[test]
 fn parse_index_named_decl() {
     let source = "index Maneuver = { Departure, Correction, Insertion };";
     let file = Parser::new(source).parse_file().unwrap();
@@ -829,6 +843,17 @@ fn parse_index_linspace_decl() {
             assert!(matches!(idx.kind, IndexDeclKind::Linspace { .. }));
         }
         _ => panic!("expected index declaration"),
+    }
+}
+
+#[test]
+fn parse_empty_import_and_include_selectors_rejected() {
+    for source in ["import helper.{};", "include helper().{};"] {
+        let error = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(error, ParseError::UnexpectedToken { .. }),
+            "unexpected error for `{source}`: {error:?}"
+        );
     }
 }
 

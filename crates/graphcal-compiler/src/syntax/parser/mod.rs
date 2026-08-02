@@ -724,6 +724,26 @@ impl<'src> Parser<'src> {
         Ok(items)
     }
 
+    /// Parse a comma-separated list that requires at least one item.
+    ///
+    /// Supports trailing commas. Does **not** consume the `end_token`.
+    fn parse_non_empty_comma_separated<T>(
+        &mut self,
+        end_token: Token,
+        mut parse_item: impl FnMut(&mut Self) -> Result<T, ParseError>,
+    ) -> Result<crate::syntax::non_empty::NonEmpty<T>, ParseError> {
+        let first = parse_item(self)?;
+        let mut rest = Vec::new();
+        while self.lexer.peek() == Some(&Token::Comma) {
+            self.lexer.next_token();
+            if self.lexer.peek() == Some(&end_token) {
+                break;
+            }
+            rest.push(parse_item(self)?);
+        }
+        Ok(crate::syntax::non_empty::NonEmpty::new(first, rest))
+    }
+
     /// Parse any identifier regardless of casing.
     fn parse_any_ident(&mut self) -> Result<Ident, ParseError> {
         match self.lexer.next_token() {

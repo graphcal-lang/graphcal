@@ -11,7 +11,7 @@ use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::{GenericConstraint, MulDivOp};
 use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::ResolvedIndexName;
-use crate::syntax::non_empty::AtLeastTwo;
+use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use crate::syntax::type_name::ResolvedStructTypeName;
@@ -120,7 +120,7 @@ pub enum TypeExprKind {
     /// An indexed type expression.
     Indexed {
         base: Box<TypeExpr>,
-        indexes: Vec<IndexRef>,
+        indexes: NonEmpty<IndexRef>,
     },
 }
 

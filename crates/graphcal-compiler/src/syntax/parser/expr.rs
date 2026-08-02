@@ -418,8 +418,8 @@ impl Parser<'_> {
                 }
                 Some(Token::LBracket) => {
                     self.lexer.next_token(); // consume '['
-                    let args =
-                        self.parse_comma_separated(Token::RBracket, Self::parse_index_arg)?;
+                    let args = self
+                        .parse_non_empty_comma_separated(Token::RBracket, Self::parse_index_arg)?;
                     let (_, end_span) = self.expect(Token::RBracket)?;
                     let span = expr.span.merge(end_span);
                     expr = Expr::new(
@@ -757,7 +757,7 @@ impl Parser<'_> {
             // use argument shape to distinguish constructor-call syntax (named
             // args) from function-call syntax (positional args).
             let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
-                self.parse_generic_arg_list()?
+                self.parse_generic_arg_list()?.into_vec()
             } else {
                 vec![]
             };
@@ -1929,6 +1929,23 @@ mod tests {
             }
             other => panic!("expected unresolved path, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn empty_call_generic_arguments_are_rejected() {
+        for source in ["sqrt<>(4.0)", "Wrapper<>(value: 4.0)"] {
+            let error = Parser::new(source).parse_single_expr().unwrap_err();
+            assert!(
+                matches!(error, ParseError::UnexpectedToken { .. }),
+                "unexpected error for `{source}`: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_index_access_is_rejected() {
+        let error = Parser::new("@values[]").parse_single_expr().unwrap_err();
+        assert!(matches!(error, ParseError::UnexpectedToken { .. }));
     }
 
     #[test]
