@@ -650,6 +650,61 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn named_arguments_on_builtin_produce_positional_call_diagnostic() {
+        let source = "node angle: Angle = atan2(y: 1.0 m, x: 2.0 m);";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert!(matches!(
+            &diagnostic.code,
+            Some(NumberOrString::String(code)) if code == "graphcal::N015"
+        ));
+        assert!(
+            diagnostic
+                .message
+                .contains("function `atan2` uses positional arguments")
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("write `atan2(y_value, x_value)`")
+        );
+        assert_eq!(diagnostic.range.start.line, 0);
+        assert_eq!(diagnostic.range.start.character, 20);
+        assert_eq!(diagnostic.range.end.character, 45);
+    }
+
+    #[test]
+    fn named_arguments_on_extern_produce_positional_call_diagnostic() {
+        let source = concat!(
+            "import plugin \"graphcal:demo\" as demo {\n",
+            "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;\n",
+            "}\n",
+            "node x: Dimensionless = demo.lerp(a: 1.0, b: 2.0, t: 0.5);",
+        );
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert!(matches!(
+            &diagnostic.code,
+            Some(NumberOrString::String(code)) if code == "graphcal::N015"
+        ));
+        assert!(
+            diagnostic
+                .message
+                .contains("function `demo.lerp` uses positional arguments")
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("write `demo.lerp(a_value, b_value, t_value)`")
+        );
+        assert_eq!(diagnostic.range.start.line, 3);
+        assert_eq!(diagnostic.range.start.character, 24);
+        assert_eq!(diagnostic.range.end.character, 57);
+    }
+
+    #[test]
     fn unknown_ref_produces_diagnostic() {
         let source = "node x: Dimensionless = @nonexistent;";
         let diags = produce_diagnostics(source, "test.gcl");

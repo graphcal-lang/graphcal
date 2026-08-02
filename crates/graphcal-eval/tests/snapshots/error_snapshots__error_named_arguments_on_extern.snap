@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+function `demo.lerp` uses positional arguments
+    Diagnostic severity: error
+Begin snippet for named_arguments_on_extern.gcl starting at line 4, column 1
+
+snippet line 4: }
+snippet line 5: node value: Dimensionless = demo.lerp(a: 1.0, b: 2.0, t: 0.5);
+    label at line 5, columns 29 to 61: named arguments are not allowed in function calls
+diagnostic help: write `demo.lerp(a_value, b_value, t_value)`
+diagnostic code: graphcal::N015

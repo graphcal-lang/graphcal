@@ -103,6 +103,20 @@ fn error_unknown_function() {
 }
 
 #[test]
+fn error_named_arguments_on_builtin() {
+    let source = include_str!("../../../tests/fixtures/invalid/named_arguments_on_builtin.gcl");
+    let rendered = render_error(source, "named_arguments_on_builtin.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_named_arguments_on_extern() {
+    let source = include_str!("../../../tests/fixtures/invalid/named_arguments_on_extern.gcl");
+    let rendered = render_error(source, "named_arguments_on_extern.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_wrong_arity() {
     let source = include_str!("../../../tests/fixtures/invalid/wrong_arity.gcl");
     let rendered = render_error(source, "wrong_arity.gcl");

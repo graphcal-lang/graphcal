@@ -1,0 +1,2 @@
+// Functions use positional arguments.
+node angle: Angle = atan2(y: 1.0 m, x: 2.0 m);
