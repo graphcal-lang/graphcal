@@ -145,14 +145,17 @@ impl Parser<'_> {
         })
     }
 
-    /// Parse one top-level declaration surface form. A multi-decl is
-    /// represented as `DeclKind::Multi(MultiDecl)` and expanded later
-    /// by the desugar pass.
+    /// Parse one declaration surface form. A multi-decl is represented as
+    /// `DeclKind::Multi(MultiDecl)` and expanded later by the desugar pass.
+    pub(super) fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
+        self.with_nesting_budget(Self::parse_declaration_inner)
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "single entry point dispatches across every declaration kind"
     )]
-    pub(super) fn parse_declaration(&mut self) -> Result<Declaration, ParseError> {
+    fn parse_declaration_inner(&mut self) -> Result<Declaration, ParseError> {
         // Collect any leading attributes: #[name] or #[name(arg1, arg2)]
         let mut attributes = Vec::new();
         while self.lexer.peek() == Some(&Token::Hash) {
@@ -496,6 +499,10 @@ impl Parser<'_> {
     /// Parse a single attribute argument: a path (`ident`, `Idx.Var`) or
     /// a parenthesized group (`(Idx.A, Idx.B)`).
     fn parse_attribute_arg(&mut self) -> Result<AttributeArg, ParseError> {
+        self.with_nesting_budget(Self::parse_attribute_arg_inner)
+    }
+
+    fn parse_attribute_arg_inner(&mut self) -> Result<AttributeArg, ParseError> {
         if self.lexer.peek() == Some(&Token::LParen) {
             // Group: (arg, arg, ...)
             let (_, start_span) = self.expect(Token::LParen)?;

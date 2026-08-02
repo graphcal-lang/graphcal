@@ -4,7 +4,7 @@ use crate::syntax::ast::{
     ImportItemNamespace, ImportKind, IndexDeclKind, MulDivOp, TypeDecl, TypeDeclBody, TypeExprKind,
     UnionMember, UnitConstness, Visibility,
 };
-use crate::syntax::parser::{ParseError, Parser};
+use crate::syntax::parser::{MAX_NESTING_DEPTH, ParseError, Parser};
 
 fn type_members(t: &TypeDecl) -> &[UnionMember] {
     match &t.body {
@@ -1373,6 +1373,21 @@ fn parse_attribute_multiple_groups() {
 }
 
 #[test]
+fn deeply_nested_attribute_groups_exhaust_the_shared_nesting_budget() {
+    let depth = MAX_NESTING_DEPTH + 1;
+    let source = format!(
+        "#[expected_fail({}Mode.Boost{})]\nassert x = true;",
+        "(".repeat(depth),
+        ")".repeat(depth)
+    );
+    let error = Parser::new(&source).parse_file().unwrap_err();
+    assert!(
+        matches!(error, ParseError::TooDeeplyNested { .. }),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn parse_required_named_index() {
     let source = "index Foo;";
     let file = Parser::new(source).parse_file().unwrap();
@@ -1574,6 +1589,17 @@ fn parse_nested_dag() {
         }
         other => panic!("expected outer dag, got {other:?}"),
     }
+}
+
+#[test]
+fn deeply_nested_dag_declarations_exhaust_the_shared_nesting_budget() {
+    let depth = MAX_NESTING_DEPTH + 1;
+    let source = format!("{}{}", "dag nested {\n".repeat(depth), "}\n".repeat(depth));
+    let error = Parser::new(&source).parse_file().unwrap_err();
+    assert!(
+        matches!(error, ParseError::TooDeeplyNested { .. }),
+        "{error:?}"
+    );
 }
 
 // ---- Single-segment include paths (inline DAG references) ----

@@ -119,7 +119,7 @@ impl Parser<'_> {
     //   9. atoms (including NUMBER UNIT_EXPR)
 
     pub(crate) fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        self.with_depth(Self::parse_convert)
+        self.with_nesting_budget(Self::parse_convert)
     }
 
     /// Parse a comma-separated argument list: `(expr1, expr2, ...)`
@@ -302,7 +302,7 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_unary(&mut self) -> Result<Expr, ParseError> {
-        self.with_depth(Self::parse_unary_inner)
+        self.with_nesting_budget(Self::parse_unary_inner)
     }
 
     fn parse_unary_inner(&mut self) -> Result<Expr, ParseError> {
