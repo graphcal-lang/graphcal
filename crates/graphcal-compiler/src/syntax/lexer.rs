@@ -397,6 +397,36 @@ mod tests {
     }
 
     #[test]
+    fn broken_multiline_string_preserves_following_source_metadata() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let input = format!("\"first{line_ending}second\"{line_ending}{line_ending}// after");
+            let mut lexer = Lexer::new(&input);
+            while lexer.next_token().is_some() {}
+
+            assert!(
+                lexer.first_error_span().is_some(),
+                "line ending {line_ending:?} should produce a lexical error"
+            );
+            let blank_line_offset = input
+                .find(&format!("{line_ending}{line_ending}"))
+                .expect("test input should contain a blank line");
+            let comment_offset = input
+                .find("// after")
+                .expect("test input should contain a comment");
+            let metadata = lexer.into_source_metadata();
+            assert_eq!(metadata.blank_lines().len(), 1, "{line_ending:?}");
+            assert_eq!(
+                metadata.blank_lines()[0].span(),
+                Span::new(blank_line_offset, line_ending.len() * 2),
+                "{line_ending:?}"
+            );
+            assert_eq!(metadata.comments().len(), 1, "{line_ending:?}");
+            assert_eq!(metadata.comments()[0].span.offset(), comment_offset);
+            assert_eq!(metadata.comments()[0].value.lexeme(), "// after");
+        }
+    }
+
+    #[test]
     fn only_first_unknown_character_is_recorded() {
         // Multiple stray characters: the lexer reports only the first so that
         // the diagnostic points at the original culprit.
