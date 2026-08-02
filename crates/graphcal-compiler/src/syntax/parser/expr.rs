@@ -758,7 +758,8 @@ impl Parser<'_> {
             // use argument shape to distinguish constructor-call syntax (named
             // args) from function-call syntax (positional args).
             let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
-                self.parse_generic_arg_list()?.into_vec()
+                let (generic_args, _) = self.parse_generic_arg_list()?;
+                generic_args.into_vec()
             } else {
                 vec![]
             };
