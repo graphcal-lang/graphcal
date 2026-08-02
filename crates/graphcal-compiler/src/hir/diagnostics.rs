@@ -89,6 +89,13 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::UnknownUnit { name, span } => {
+            return GraphcalError::UnknownUnit {
+                name: name.clone(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::InvalidTimezone {
             timezone,
             tzdb_version,
@@ -251,6 +258,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::InvalidScopedNameSegment { span, .. }
         | hir::ExprLowerError::UnknownLocalRef { span, .. }
         | hir::ExprLowerError::UnknownGraphRef { span, .. }
+        | hir::ExprLowerError::UnknownUnit { span, .. }
         | hir::ExprLowerError::TooManyLocals { span }
         | hir::ExprLowerError::EmptyMapEntry { span }
         | hir::ExprLowerError::InvalidMapEntryKey { span }

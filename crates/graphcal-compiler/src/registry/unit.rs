@@ -233,19 +233,4 @@ impl UnitRegistry {
     ) -> Result<(Dimension, f64), UnitResolveError> {
         resolve_unit_expr_impl(&self.units, expr)
     }
-
-    /// Resolve a `UnitExpr` to its dimension only (ignoring scales).
-    ///
-    /// Works for both static and dynamic units.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`UnitResolveError`] naming the unknown unit, or the
-    /// exponent overflow.
-    pub(crate) fn resolve_unit_dimension(
-        &self,
-        expr: &UnitExpr,
-    ) -> Result<Dimension, UnitResolveError> {
-        resolve_unit_dimension_impl(&self.units, expr)
-    }
 }

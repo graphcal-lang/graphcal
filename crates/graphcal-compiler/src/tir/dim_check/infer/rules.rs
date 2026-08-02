@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{BinOp, UnaryOp, UnitExpr};
+use crate::desugar::desugared_ast::{BinOp, UnaryOp};
 use crate::dimension::{Dimension, Rational};
 use crate::exact_rational::ExactRational;
 use crate::registry::error::GraphcalError;
@@ -654,46 +654,38 @@ pub(super) fn if_rule(
     Ok(then_branch.ty.clone())
 }
 
-/// Resolve a unit expression's dimension, with a precise diagnostic
-/// pointing at the first unknown unit term (previously copied at four
-/// sites across both engines).
+/// Resolve a canonical HIR unit expression's dimension.
 pub(super) fn resolve_unit_dimension_or_diagnose(
-    unit: &UnitExpr,
-    registry: &Registry,
+    unit: &crate::hir::ResolvedUnitExpr,
+    tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
-    use crate::registry::types::UnitResolveError;
-    registry
-        .units
-        .resolve_unit_dimension(unit)
-        .map_err(|err| match err {
-            UnitResolveError::UnknownUnit(name) => {
-                // Point at the failing term's own span when we can find it.
-                let span = unit
-                    .terms
-                    .iter()
-                    .find(|item| item.name.value == name)
-                    .map_or(unit.span, |item| item.name.span);
+    unit.terms
+        .iter()
+        .try_fold(Dimension::dimensionless(), |dimension, item| {
+            let info = tir.unit_info(item.name.value.resolved()).ok_or_else(|| {
                 GraphcalError::UnknownUnit {
-                    name,
+                    name: item.name.value.spelling().clone(),
                     src: src.clone(),
-                    span: span.into(),
+                    span: item.name.span.into(),
                 }
-            }
-            UnitResolveError::DynamicScale(name) => GraphcalError::EvalError {
-                message: format!("unit `{name}` has a dynamic scale"),
+            })?;
+            let exponent = item.power.unwrap_or(Rational::ONE);
+            let term_dimension =
+                info.dimension
+                    .pow(exponent)
+                    .map_err(|_| GraphcalError::DimensionOverflow {
+                        src: src.clone(),
+                        span: item.name.span.into(),
+                    })?;
+            let resolved = match item.op {
+                crate::syntax::ast::MulDivOp::Mul => dimension.checked_mul(&term_dimension),
+                crate::syntax::ast::MulDivOp::Div => dimension.checked_div(&term_dimension),
+            };
+            resolved.map_err(|_| GraphcalError::DimensionOverflow {
                 src: src.clone(),
-                span: unit.span.into(),
-            },
-            UnitResolveError::InvalidScale { value, reason } => GraphcalError::EvalError {
-                message: format!("compound unit scale {reason}, got {value}"),
-                src: src.clone(),
-                span: unit.span.into(),
-            },
-            UnitResolveError::Overflow(_) => GraphcalError::DimensionOverflow {
-                src: src.clone(),
-                span: unit.span.into(),
-            },
+                span: item.name.span.into(),
+            })
         })
 }
 

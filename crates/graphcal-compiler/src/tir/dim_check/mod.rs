@@ -1250,9 +1250,10 @@ fn check_field_domain_constraint_targets(
                 },
                 |field| field.type_ann.span,
             );
+            let diagnostic_src = bounds.first().map_or(src, |bound| &bound.src);
             return Err(GraphcalError::InvalidDomainTarget {
                 type_kind,
-                src: src.clone(),
+                src: diagnostic_src.clone(),
                 span: span.into(),
             });
         }
@@ -1288,7 +1289,7 @@ fn check_field_domain_constraint_dimensions(
     declared_types: &HashMap<ScopedName, DeclaredType>,
     registry: &Registry,
     builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
-    src: &NamedSource<Arc<String>>,
+    _src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut seen: std::collections::HashSet<&crate::tir::typed::ResolvedStructFieldTypeKey> =
         std::collections::HashSet::new();
@@ -1338,7 +1339,7 @@ fn check_field_domain_constraint_dimensions(
                     tir,
                     registry,
                     builtin_fns,
-                    src,
+                    &bound.src,
                 )?;
                 check_one_bound_with_display_name(
                     &display_name,
@@ -1346,7 +1347,7 @@ fn check_field_domain_constraint_dimensions(
                     &inferred,
                     &expected,
                     registry,
-                    src,
+                    &bound.src,
                 )?;
             }
         }

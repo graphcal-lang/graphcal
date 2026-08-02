@@ -14,10 +14,10 @@ use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{
-    IndexDef, Registry, RegistryBuildError, RegistryBuilder, TypeDef, UnionMemberDef,
+    IndexDef, Registry, RegistryBuildError, RegistryBuilder, TypeDef, UnionMemberDef, UnitInfo,
 };
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
-use crate::syntax::dimension::{DimName, ResolvedDimName};
+use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::module_resolve::ModuleResolver;
@@ -410,9 +410,11 @@ pub struct ModuleConstructorDef {
 #[derive(Debug, Default, Clone)]
 pub struct ModuleTypeRegistry {
     dimensions: HashMap<ResolvedDimName, Dimension>,
+    units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, IndexDef>,
     struct_types: HashMap<ResolvedStructTypeName, TypeDef>,
     constructors: HashMap<ResolvedConstructorName, ModuleConstructorDef>,
+    sources: HashMap<crate::dag_id::DagId, NamedSource<Arc<String>>>,
 }
 
 /// Error from constructing the module type registry's prelude entries.
@@ -446,21 +448,49 @@ impl ModuleTypeRegistry {
                 );
             }
         }
+        for name in crate::registry::prelude::PRELUDE_UNIT_NAMES {
+            let reference = crate::syntax::dimension::UnitRef::local(
+                crate::syntax::dimension::UnitName::expect_valid(*name),
+            );
+            if let Some(info) = registry.units.get_unit(&reference) {
+                self.units.insert(
+                    ResolvedUnitName::from_def(owner.clone(), reference.name().clone()),
+                    info.clone(),
+                );
+            }
+        }
         Ok(())
     }
 
-    /// Insert every type-system definition from `registry` under `owner`.
+    /// Insert every type-system definition from `registry` under `owner` and
+    /// retain the source file indexed by those definitions' spans.
     ///
     /// This is intentionally an owner-qualified view over existing registries,
     /// not a new source of truth. It lets module-aware resolution validate that
     /// `alias.Name` denotes the definition owned by the dependency selected by
-    /// the loader.
-    pub fn insert_registry(&mut self, owner: &crate::dag_id::DagId, registry: &Registry) {
+    /// the loader while keeping diagnostics anchored to that definition file.
+    pub fn insert_registry(
+        &mut self,
+        owner: &crate::dag_id::DagId,
+        registry: &Registry,
+        source: NamedSource<Arc<String>>,
+    ) {
         for (name, dim) in registry.dimensions.all_dimensions() {
             self.dimensions.insert(
                 ResolvedDimName::from_def(owner.clone(), name.clone()),
                 dim.clone(),
             );
+        }
+        for (reference, _, _) in registry.units.all_units() {
+            if reference.is_qualified() {
+                continue;
+            }
+            if let Some(info) = registry.units.get_unit(reference) {
+                self.units.insert(
+                    ResolvedUnitName::from_def(owner.clone(), reference.name().clone()),
+                    info.clone(),
+                );
+            }
         }
         for index in registry.indexes.declared_indexes() {
             self.indexes.insert(
@@ -485,11 +515,44 @@ impl ModuleTypeRegistry {
                 }
             }
         }
+        self.sources.insert(owner.clone(), source);
+    }
+
+    /// Overlay unit entries as visible from `owner`, resolving aliases and
+    /// selective imports to their canonical defining modules.
+    pub fn overlay_visible_units(
+        &mut self,
+        owner: &crate::dag_id::DagId,
+        registry: &Registry,
+        resolver: &ModuleResolver,
+    ) {
+        for (reference, _, _) in registry.units.all_units() {
+            let Ok(resolved_unit) = resolver.resolve_unit_path(owner, &reference.to_name_path())
+            else {
+                continue;
+            };
+            if let Some(info) = registry.units.get_unit(reference) {
+                self.units.insert(resolved_unit, info.clone());
+            }
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn source_for_owner(
+        &self,
+        owner: &crate::dag_id::DagId,
+    ) -> Option<&NamedSource<Arc<String>>> {
+        self.sources.get(owner)
     }
 
     #[must_use]
     pub(crate) fn get_dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
         self.dimensions.get(name)
+    }
+
+    #[must_use]
+    pub(crate) fn get_unit(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
+        self.units.get(name)
     }
 
     #[must_use]
@@ -697,6 +760,8 @@ pub struct ResolvedDomainBound {
     pub value: hir::Expr,
     /// Span of the whole bound.
     pub span: Span,
+    /// Source file whose bytes are indexed by `span` and the expression spans.
+    pub src: NamedSource<Arc<String>>,
 }
 
 /// Authoritative semantic body facts for a checked DAG.
@@ -783,6 +848,8 @@ pub struct TIR {
     /// The type/unit/dimension/index/struct registry, shared by every DAG
     /// in this file.
     pub registry: Registry,
+    /// Canonical module-owned type-system definitions used by HIR references.
+    pub(in crate::tir::typed) module_types: ModuleTypeRegistry,
     /// Canonical id of the file itself; the key under which the file's
     /// own top-level body lives in `dags`.
     pub root_dag_id: crate::dag_id::DagId,
@@ -833,6 +900,26 @@ impl TIR {
         self.dags
             .get_mut(&self.root_dag_id)
             .expect("TIR.dags must contain root_dag_id")
+    }
+
+    /// Look up a unit by its canonical defining-module identity.
+    #[must_use]
+    pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
+        self.module_types.get_unit(name)
+    }
+
+    /// Add an inline module's canonical type-system registry after the file TIR
+    /// has been constructed.
+    pub fn insert_module_registry(
+        &mut self,
+        owner: &crate::dag_id::DagId,
+        registry: &Registry,
+        source: NamedSource<Arc<String>>,
+        resolver: &ModuleResolver,
+    ) {
+        self.module_types.insert_registry(owner, registry, source);
+        self.module_types
+            .overlay_visible_units(owner, registry, resolver);
     }
 
     /// Returns true if this file declares any required param or required index.

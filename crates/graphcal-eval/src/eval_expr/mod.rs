@@ -121,7 +121,27 @@ fn find_struct_field_constraint<'a>(
     })
 }
 
-impl EvalContext<'_> {
+impl<'a> EvalContext<'a> {
+    /// Borrow this evaluation environment with a different diagnostic source.
+    #[must_use]
+    pub fn with_src<'b>(&'b self, src: &'b NamedSource<Arc<String>>) -> EvalContext<'b>
+    where
+        'a: 'b,
+    {
+        EvalContext {
+            cancellation: self.cancellation.clone(),
+            builtin_consts: self.builtin_consts,
+            builtin_fns: self.builtin_fns,
+            registry: self.registry,
+            src,
+            tir: self.tir,
+            current_dag: self.current_dag,
+            root_values: self.root_values,
+            struct_field_constraints: self.struct_field_constraints,
+            host_fns: self.host_fns,
+        }
+    }
+
     /// Build a `GraphcalError::EvalError` using this context's source.
     pub fn eval_error(
         &self,

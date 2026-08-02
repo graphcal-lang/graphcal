@@ -31,8 +31,8 @@ pub mod types;
 
 pub use expr::{
     AssertBody, ConstRef, Expr, ExprDependencies, ExprKind, ExprLowerError, ExprLoweringContext,
-    ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, collect_expr_dependencies,
-    lower_expr_tolerant,
+    ExternFnRef, FunctionRef, LocalDef, LocalEnv, LocalId, ResolvedUnitExpr, ResolvedUnitExprItem,
+    ResolvedUnitRef, collect_expr_dependencies, lower_expr_tolerant,
 };
 pub(crate) use expr::{find_extern_call, lower_assert_body, lower_expr};
 pub use lower::{

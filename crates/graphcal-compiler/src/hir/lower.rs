@@ -5,7 +5,7 @@
 //! `ResolvedName<Ns>` values or lexical `GenericParamId`s instead of carrying
 //! syntax paths forward.
 
-use crate::syntax::dimension::ResolvedDimName;
+use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName, UnitRef};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
@@ -15,7 +15,6 @@ use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
-use crate::syntax::dimension::DimName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
 use crate::syntax::names::{NameAtom, NamePath, ResolvedName};
 use crate::syntax::span::{Span, Spanned};
@@ -95,25 +94,31 @@ pub enum HirLowerError {
     },
 }
 
-/// Implicit prelude type-level symbols visible without an import.
+/// Implicit prelude type-system symbols visible without an import.
 ///
 /// The module resolver intentionally resolves source module aliases only. The
-/// Graphcal prelude is different: it is implicitly in scope in every module but
-/// still needs a canonical owner once we cross into HIR. This small typed scope
-/// models that boundary without falling back to flat strings.
+/// Graphcal prelude is different: its dimensions and units are implicitly in
+/// scope in every module but still need a canonical owner once we cross into
+/// HIR. This small typed scope models that boundary without flat strings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreludeTypeScope {
     owner: DagId,
     dimensions: HashSet<DimName>,
+    units: HashSet<UnitName>,
 }
 
 impl PreludeTypeScope {
-    /// Create a prelude type scope from its canonical owner and dimension names.
+    /// Create a prelude type scope from its canonical owner, dimensions, and units.
     #[must_use]
-    fn new(owner: DagId, dimensions: impl IntoIterator<Item = DimName>) -> Self {
+    fn new(
+        owner: DagId,
+        dimensions: impl IntoIterator<Item = DimName>,
+        units: impl IntoIterator<Item = UnitName>,
+    ) -> Self {
         Self {
             owner,
             dimensions: dimensions.into_iter().collect(),
+            units: units.into_iter().collect(),
         }
     }
 
@@ -126,6 +131,10 @@ impl PreludeTypeScope {
                 .iter()
                 .copied()
                 .map(DimName::expect_valid),
+            crate::registry::prelude::PRELUDE_UNIT_NAMES
+                .iter()
+                .copied()
+                .map(UnitName::expect_valid),
         )
     }
 
@@ -134,6 +143,16 @@ impl PreludeTypeScope {
         self.dimensions
             .contains(atom.as_str())
             .then(|| ResolvedName::new(self.owner.clone(), atom.clone()))
+    }
+
+    pub(crate) fn resolve_unit_ref(&self, reference: &UnitRef) -> Option<ResolvedUnitName> {
+        if reference.is_qualified() || !self.units.contains(reference.name()) {
+            return None;
+        }
+        Some(ResolvedName::from_def(
+            self.owner.clone(),
+            reference.name().clone(),
+        ))
     }
 }
 

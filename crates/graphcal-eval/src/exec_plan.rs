@@ -590,19 +590,21 @@ pub fn resolve_domain_constraints_with_cancellation(
             continue;
         };
 
+        let constraint_src = domain_bounds.first().map_or(src, |bound| &bound.src);
         let target = resolve_constraint_target(
             &name.to_string(),
             tir.root().resolved_decl_types.get(name).map(strip_indexed),
             decl_span,
-            src,
+            constraint_src,
         )?;
+        let bound_ctx = ctx.with_src(constraint_src);
         let resolved_constraint = resolve_constraint_from_bounds(
             domain_bounds,
             &name.to_string(),
             target,
             &visible_const_values,
-            &ctx,
-            src,
+            &bound_ctx,
+            constraint_src,
         )?;
 
         // For const declarations, validate the (already-known) value at compile time.
@@ -865,19 +867,21 @@ pub fn resolve_struct_field_constraints_with_cancellation(
             let bound_span = bounds
                 .first()
                 .map_or_else(|| Span::new(0, 0), |bound| bound.span);
+            let constraint_src = bounds.first().map_or(src, |bound| &bound.src);
             let target = resolve_constraint_target(
                 &display_name,
                 dag.semantic.type_defs.field_type(key).map(strip_indexed),
                 bound_span,
-                src,
+                constraint_src,
             )?;
+            let bound_ctx = ctx.with_src(constraint_src);
             let constraint = resolve_constraint_from_bounds(
                 bounds,
                 &display_name,
                 target,
                 &visible_const_values,
-                &ctx,
-                src,
+                &bound_ctx,
+                constraint_src,
             )?;
             // Store under both the owner-qualified identity and the
             // root-owned display leaf so runtime lookups for
@@ -1167,8 +1171,12 @@ fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: 
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
         ExprKind::UnitLiteral { value, unit } => {
-            let unit_str =
-                graphcal_compiler::registry::format::format_unit_expr_with_config(unit, true);
+            let unit_str = graphcal_compiler::registry::format::format_unit_terms_with_config(
+                unit.terms
+                    .iter()
+                    .map(|item| (item.op, item.name.value.to_string(), item.power)),
+                true,
+            );
             let val_str = graphcal_compiler::registry::format::format_number(*value);
             format!("{val_str} {unit_str}")
         }
@@ -1221,7 +1229,7 @@ mod tests {
             .unwrap();
         let mut module_types = ModuleTypeRegistry::default();
         module_types.insert_graphcal_prelude().unwrap();
-        module_types.insert_registry(&dag_id, &ir.registry);
+        module_types.insert_registry(&dag_id, &ir.registry, src.clone());
         let tir = type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types).unwrap();
         (tir, src)
     }
