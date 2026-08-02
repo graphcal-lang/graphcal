@@ -8,6 +8,6 @@ Begin snippet for range_index_dim_mismatch.gcl starting at line 1, column 1
 
 snippet line 1: // Error: coordinate bounds and step must share one dimension.
 snippet line 2: index TimeStep = range(0.0 s, 100.0 kg, step: 0.1 s);
-    label at line 2, columns 1 to 52: dimension mismatch
+    label at line 2, columns 1 to 53: dimension mismatch
 diagnostic help: coordinate constructor arguments must have exactly the same dimension
 diagnostic code: graphcal::I006

@@ -768,6 +768,22 @@ fn parse_empty_named_index_rejected() {
 }
 
 #[test]
+fn index_declaration_spans_include_the_semicolon() {
+    for source in [
+        "index Foo;",
+        "index Foo: Time;",
+        "index Maneuver = { Departure, Correction, Insertion };",
+        "index TimeStep = range(0.0 s, 100.0 s, step: 0.1 s);",
+        "index Samples = linspace(0.0 s, 100.0 s, points: 11);",
+    ] {
+        let file = Parser::new(source).parse_file().unwrap();
+        let span = file.declarations[0].span;
+        let declaration_source = &source[span.offset()..span.offset() + span.len()];
+        assert_eq!(declaration_source, source);
+    }
+}
+
+#[test]
 fn parse_index_named_decl() {
     let source = "index Maneuver = { Departure, Correction, Insertion };";
     let file = Parser::new(source).parse_file().unwrap();
@@ -1698,9 +1714,7 @@ fn parse_pub_bind_spans_extend_over_annotation() {
     let file = Parser::new(src).parse_file().unwrap();
     let span = file.declarations[0].span;
     assert_eq!(span.offset(), 0);
-    // Span covers from `pub` up through the declaration body; `;` is
-    // consumed but not included in the per-decl span for index.
-    assert!(span.len() >= "pub(bind) index Phase = { Design, Test }".len());
+    assert_eq!(&src[span.offset()..span.offset() + span.len()], src);
 }
 
 #[test]
