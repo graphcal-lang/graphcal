@@ -2852,6 +2852,83 @@ fn format_in_place_then_check() {
 }
 
 #[test]
+fn recursive_parser_nesting_returns_p015_without_aborting() {
+    // Keep these regressions in subprocesses: an omitted parser guard can
+    // overflow the process stack before an in-process assertion can run.
+    const DEPTH: usize = 100_000;
+
+    let cases = [
+        (
+            "dimension-groups",
+            format!(
+                "dim Deep = {}Length{};\n",
+                "(\n".repeat(DEPTH),
+                ")\n".repeat(DEPTH)
+            ),
+        ),
+        (
+            "unit-groups",
+            format!(
+                "unit deep: Length = 1 {}m{};\n",
+                "(\n".repeat(DEPTH),
+                ")\n".repeat(DEPTH)
+            ),
+        ),
+        (
+            "dag-declarations",
+            format!("{}{}", "dag nested {\n".repeat(DEPTH), "}\n".repeat(DEPTH)),
+        ),
+        (
+            "expressions",
+            format!(
+                "node value: Dimensionless = {}1.0{};\n",
+                "(\n".repeat(DEPTH),
+                ")\n".repeat(DEPTH)
+            ),
+        ),
+        (
+            "type-applications",
+            format!(
+                "param value: {}Dimensionless{};\n",
+                "Wrapper<\n".repeat(DEPTH),
+                ">\n".repeat(DEPTH)
+            ),
+        ),
+        (
+            "attribute-groups",
+            format!(
+                "#[expected_fail({}Mode.Boost{})]\nassert value = true;\n",
+                "(\n".repeat(DEPTH),
+                ")\n".repeat(DEPTH)
+            ),
+        ),
+    ];
+
+    let dir = tempfile::tempdir().unwrap();
+    for (case, source) in cases {
+        let path = write_temp_file(dir.path(), &format!("{case}.gcl"), &source);
+        let output = graphcal_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run graphcal check for {case}: {error}"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{case} unexpectedly passed");
+        assert!(
+            output.status.code().is_some(),
+            "{case} terminated by a signal instead of returning P015: {stderr}"
+        );
+        assert!(
+            stderr.contains("graphcal::P015"),
+            "{case} did not return P015: {stderr}"
+        );
+        assert!(
+            !stderr.to_ascii_lowercase().contains("stack overflow"),
+            "{case} overflowed the stack: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn long_nat_chains_survive_formatting_lowering_and_drop() {
     // Run this regression through subprocesses: before Nat operator chains were
     // stored flat, dropping the parsed AST could abort the whole test process.
