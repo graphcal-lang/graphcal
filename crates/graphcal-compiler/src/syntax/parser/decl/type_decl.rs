@@ -17,7 +17,7 @@ impl Parser<'_> {
 
         // Optional generic params: <D: Dim, F: Type>
         let generic_params = if self.lexer.peek() == Some(&Token::Lt) {
-            self.parse_generic_params()?
+            self.parse_generic_params()?.into_vec()
         } else {
             Vec::new()
         };

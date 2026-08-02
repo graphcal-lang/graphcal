@@ -352,9 +352,9 @@ pub(crate) fn lower_type_expr(
         ast::TypeExprKind::Bool => TypeExprKind::Builtin(BuiltinType::Bool),
         ast::TypeExprKind::Int => TypeExprKind::Builtin(BuiltinType::Int),
         ast::TypeExprKind::Datetime => TypeExprKind::Builtin(BuiltinType::datetime_utc()),
-        ast::TypeExprKind::DatetimeApplication { type_args } => {
-            TypeExprKind::Builtin(lower_datetime_application(type_ann.span, type_args)?)
-        }
+        ast::TypeExprKind::DatetimeApplication { type_args } => TypeExprKind::Builtin(
+            lower_datetime_application(type_ann.span, type_args.as_slice())?,
+        ),
         ast::TypeExprKind::ComplexApplication { generic_args } => {
             TypeExprKind::Complex(lower_complex_application(type_ann.span, generic_args, ctx)?)
         }
@@ -364,10 +364,7 @@ pub(crate) fn lower_type_expr(
         ast::TypeExprKind::DimExpr(dim_expr) => lower_dim_expr_as_type(dim_expr, ctx)?,
         ast::TypeExprKind::Indexed { base, indexes } => TypeExprKind::Indexed {
             base: Box::new(lower_type_expr(base, ctx)?),
-            indexes: indexes
-                .iter()
-                .map(|index| lower_index_expr(index, ctx))
-                .collect::<Result<Vec<_>, _>>()?,
+            indexes: indexes.try_map_ref(|index| lower_index_expr(index, ctx))?,
         },
         ast::TypeExprKind::TypeApplication { name, generic_args } => {
             let resolved_name = ctx
@@ -387,7 +384,7 @@ pub(crate) fn lower_type_expr(
             let generic_args = lower_generic_args(
                 resolved_name.as_str(),
                 params,
-                generic_args,
+                generic_args.as_slice(),
                 type_ann.span,
                 ctx,
             )?;

@@ -206,6 +206,17 @@ impl<T> NonEmpty<T> {
             items: self.items.into_iter().map(f).collect(),
         }
     }
+
+    /// Fallibly map borrowed items while preserving non-emptiness.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error produced by `f`.
+    pub fn try_map_ref<U, E>(&self, f: impl FnMut(&T) -> Result<U, E>) -> Result<NonEmpty<U>, E> {
+        Ok(NonEmpty {
+            items: self.items.iter().map(f).collect::<Result<_, _>>()?,
+        })
+    }
 }
 
 impl<T> TryFrom<Vec<T>> for NonEmpty<T> {

@@ -199,7 +199,7 @@ fn infer_hir_type_inner(
         hir::ExprKind::IndexAccess { expr: inner, args } => infer_hir_index_access(
             expr,
             inner,
-            args,
+            args.as_slice(),
             owner_decl_name,
             declared_types,
             local_types,

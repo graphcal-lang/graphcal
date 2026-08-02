@@ -173,8 +173,10 @@ pub(crate) trait ExprVisitor<P: Phase> {
                     self.visit_type_expr(arg)?;
                 }
             }
-            TypeExprKind::TypeApplication { generic_args, .. }
-            | TypeExprKind::ComplexApplication { generic_args }
+            TypeExprKind::TypeApplication { generic_args, .. } => {
+                self.visit_generic_args(generic_args.as_slice())?;
+            }
+            TypeExprKind::ComplexApplication { generic_args }
             | TypeExprKind::KeyApplication { generic_args } => {
                 self.visit_generic_args(generic_args)?;
             }
@@ -421,8 +423,10 @@ pub trait ExprVisitorMut<P: Phase> {
                     self.visit_type_expr_mut(arg)?;
                 }
             }
-            TypeExprKind::TypeApplication { generic_args, .. }
-            | TypeExprKind::ComplexApplication { generic_args }
+            TypeExprKind::TypeApplication { generic_args, .. } => {
+                Self::visit_generic_args_mut(self, generic_args.as_mut_slice())?;
+            }
+            TypeExprKind::ComplexApplication { generic_args }
             | TypeExprKind::KeyApplication { generic_args } => {
                 Self::visit_generic_args_mut(self, generic_args)?;
             }

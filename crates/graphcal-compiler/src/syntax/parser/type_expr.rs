@@ -6,6 +6,7 @@ use crate::syntax::ast::{
 };
 use crate::syntax::dimension::{UnitName, UnitRef};
 use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
 use crate::syntax::token::{ContextualKeyword, Token};
@@ -58,7 +59,7 @@ impl Parser<'_> {
                         // its own variant so TIR resolution doesn't need to
                         // string-match the built-in type name.
                         let type_args = self.parse_type_arg_list()?;
-                        let end_span = type_args.last().map_or(path_span, |a| a.span);
+                        let end_span = type_args.last().span;
                         TypeExpr {
                             kind: TypeExprKind::DatetimeApplication { type_args },
                             constraints: vec![],
@@ -83,7 +84,7 @@ impl Parser<'_> {
                     // type names into dim expressions.
                     let name = path.into_spanned_name_path();
                     let generic_args = self.parse_generic_arg_list()?;
-                    let end_span = generic_args.last().map_or(name.span, GenericArg::span);
+                    let end_span = generic_args.last().span();
                     let span = name.span.merge(end_span);
                     TypeExpr {
                         kind: TypeExprKind::TypeApplication { name, generic_args },
@@ -124,7 +125,8 @@ impl Parser<'_> {
         // Supports named indexes (`Phase`), generic params (`I`, `N`), and nat literals (`3`)
         if self.lexer.peek() == Some(&Token::LBracket) {
             let (_, _bracket_span) = self.advance()?;
-            let indexes = self.parse_comma_separated(Token::RBracket, Self::parse_index_expr)?;
+            let indexes =
+                self.parse_non_empty_comma_separated(Token::RBracket, Self::parse_index_expr)?;
             let (_, end_span) = self.expect(Token::RBracket)?;
             let span = base.span.merge(end_span);
             base = TypeExpr {
@@ -145,7 +147,7 @@ impl Parser<'_> {
         // Bare `Complex` is retained with zero arguments so HIR can report the
         // missing mandatory dimension with a targeted arity diagnostic.
         let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
-            self.parse_generic_arg_list()?
+            self.parse_generic_arg_list()?.into_vec()
         } else {
             Vec::new()
         };
@@ -162,7 +164,7 @@ impl Parser<'_> {
         // Bare `Key` is retained with zero arguments so HIR can report the
         // missing mandatory index axis with a targeted arity diagnostic.
         let generic_args = if self.lexer.peek() == Some(&Token::Lt) {
-            self.parse_generic_arg_list()?
+            self.parse_generic_arg_list()?.into_vec()
         } else {
             Vec::new()
         };
@@ -675,18 +677,18 @@ impl Parser<'_> {
     ///
     /// This is used by closed built-in forms such as `Datetime<Scale>`. User-
     /// defined type and constructor applications use [`Self::parse_generic_arg_list`].
-    fn parse_type_arg_list(&mut self) -> Result<Vec<TypeExpr>, ParseError> {
+    fn parse_type_arg_list(&mut self) -> Result<NonEmpty<TypeExpr>, ParseError> {
         self.expect(Token::Lt)?;
-        let args = self.parse_comma_separated(Token::Gt, Self::parse_type_expr)?;
+        let args = self.parse_non_empty_comma_separated(Token::Gt, Self::parse_type_expr)?;
         self.expect(Token::Gt)?;
         Ok(args)
     }
 
     /// Parse the generic-argument surface shared by user-defined type and
     /// constructor applications.
-    pub(super) fn parse_generic_arg_list(&mut self) -> Result<Vec<GenericArg>, ParseError> {
+    pub(super) fn parse_generic_arg_list(&mut self) -> Result<NonEmpty<GenericArg>, ParseError> {
         self.expect(Token::Lt)?;
-        let args = self.parse_comma_separated(Token::Gt, Self::parse_generic_arg)?;
+        let args = self.parse_non_empty_comma_separated(Token::Gt, Self::parse_generic_arg)?;
         self.expect(Token::Gt)?;
         Ok(args)
     }
@@ -886,23 +888,19 @@ impl Parser<'_> {
     }
 
     /// Parse generic parameters: `<D: Dim, E: Dim>`.
-    pub(super) fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>, ParseError> {
+    pub(super) fn parse_generic_params(&mut self) -> Result<NonEmpty<GenericParam>, ParseError> {
         self.expect(Token::Lt)?;
-        let mut params = Vec::new();
-        loop {
-            if self.lexer.peek() == Some(&Token::Gt) {
-                break;
-            }
-            let name = self.parse_any_ident()?.into_spanned::<GenericParamName>();
-            self.expect(Token::Colon)?;
-            let constraint_ident = self.parse_any_ident()?;
+        let params = self.parse_non_empty_comma_separated(Token::Gt, |parser| {
+            let name = parser.parse_any_ident()?.into_spanned::<GenericParamName>();
+            parser.expect(Token::Colon)?;
+            let constraint_ident = parser.parse_any_ident()?;
             let constraint = match constraint_ident.name.as_str() {
                 "Dim" => GenericConstraint::Dim,
                 "Index" => GenericConstraint::Index,
                 "Nat" => GenericConstraint::Nat,
                 "Type" => GenericConstraint::Type,
                 _ => {
-                    return Err(self.unexpected_token(
+                    return Err(parser.unexpected_token(
                         "`Dim`, `Index`, `Nat`, or `Type`",
                         &constraint_ident.name,
                         constraint_ident.span,
@@ -912,23 +910,18 @@ impl Parser<'_> {
             // Optional sorted default: `= GenericArg`.
             // Classification is deferred until HIR lowering checks it against
             // the declared constraint, so `N: Nat = M` stays ambiguous here.
-            let default = if self.lexer.peek() == Some(&Token::Eq) {
-                self.lexer.next_token(); // consume `=`
-                Some(self.parse_generic_arg()?)
+            let default = if parser.lexer.peek() == Some(&Token::Eq) {
+                parser.lexer.next_token(); // consume `=`
+                Some(parser.parse_generic_arg()?)
             } else {
                 None
             };
-            params.push(GenericParam {
+            Ok(GenericParam {
                 name,
                 constraint,
                 default,
-            });
-            if self.lexer.peek() == Some(&Token::Comma) {
-                self.lexer.next_token();
-            } else {
-                break;
-            }
-        }
+            })
+        })?;
         self.expect(Token::Gt)?;
         Ok(params)
     }
@@ -971,6 +964,23 @@ mod tests {
         let source = "param x: Length = 1.0 m/(s^2000000000)^2000000000;";
         let err = Parser::new(source).parse_file().unwrap_err();
         assert!(matches!(err, ParseError::InvalidNumber { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn empty_type_level_lists_are_rejected() {
+        for source in [
+            "param value: Dimensionless[];",
+            "param value: Wrapper<>;",
+            "param value: Datetime<>;",
+            "param value: Complex<>;",
+            "param value: Key<>;",
+        ] {
+            let error = Parser::new(source).parse_file().unwrap_err();
+            assert!(
+                matches!(error, ParseError::UnexpectedToken { .. }),
+                "unexpected error for `{source}`: {error:?}"
+            );
+        }
     }
 
     #[test]

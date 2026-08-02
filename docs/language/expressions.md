@@ -212,9 +212,11 @@ Access an element of an indexed value:
 node first: Velocity = @delta_v[Maneuver.Departure];
 ```
 
-Each bracket argument is an [index key](indexes.md#index-keys) for its axis:
-a qualified label (a constant key), a loop variable, or any computed
-`Key<I>` value such as an `argmax` result.
+The brackets must contain at least one argument; `expr[]` is invalid rather
+than an identity operation. Each argument is an
+[index key](indexes.md#index-keys) for its axis: a qualified label (a constant
+key), a loop variable, or any computed `Key<I>` value such as an `argmax`
+result.
 
 ## If/Else Expressions
 

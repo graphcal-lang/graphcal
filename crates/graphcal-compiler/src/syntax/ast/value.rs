@@ -419,7 +419,7 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// scale. Kept separate from [`Self::TypeApplication`] so downstream
     /// resolution dispatches on the variant rather than string-matching the
     /// built-in name.
-    DatetimeApplication { type_args: Vec<TypeExpr<P>> },
+    DatetimeApplication { type_args: NonEmpty<TypeExpr<P>> },
     /// `Complex<D>` — built-in complex quantity type parameterized by a dimension.
     ///
     /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
@@ -435,7 +435,7 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// An indexed type such as `Velocity[Maneuver]`, `Dimensionless[Fin(3)]`, or `D[I]`
     Indexed {
         base: Box<TypeExpr<P>>,
-        indexes: Vec<IndexExpr>,
+        indexes: NonEmpty<IndexExpr>,
     },
     /// A user-defined generic type application like `Vec3<Length, ECI>` or
     /// `FixedVec<3>`.
@@ -445,7 +445,7 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// parameter constraints are known.
     TypeApplication {
         name: Spanned<NamePath>,
-        generic_args: Vec<GenericArg<P>>,
+        generic_args: NonEmpty<GenericArg<P>>,
     },
 }
 
@@ -740,7 +740,7 @@ pub enum ExprKind<P: Phase = Raw> {
     /// Index access: `@delta_v[m]`, `@delta_v[Maneuver.Departure]`, `@P[a, b]`
     IndexAccess {
         expr: Box<Expr<P>>,
-        args: Vec<IndexArg<P>>,
+        args: NonEmpty<IndexArg<P>>,
     },
     /// Scan: `scan(source, init, |acc, item| body)`
     Scan {

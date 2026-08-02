@@ -38,18 +38,14 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                 .append(RcDoc::text("]"))
         }
         TypeExprKind::TypeApplication { name, generic_args } => {
-            let mut doc = RcDoc::text(name.value.display_path());
-            if !generic_args.is_empty() {
-                let arg_docs: Vec<RcDoc<'static>> = generic_args
-                    .iter()
-                    .map(|arg| format_generic_arg_inline(fmt, arg))
-                    .collect();
-                doc = doc
-                    .append(RcDoc::text("<"))
-                    .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
-                    .append(RcDoc::text(">"));
-            }
-            doc
+            let arg_docs: Vec<RcDoc<'static>> = generic_args
+                .iter()
+                .map(|arg| format_generic_arg_inline(fmt, arg))
+                .collect();
+            RcDoc::text(name.value.display_path())
+                .append(RcDoc::text("<"))
+                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+                .append(RcDoc::text(">"))
         }
         TypeExprKind::DatetimeApplication { type_args } => {
             let arg_docs: Vec<RcDoc<'static>> = type_args

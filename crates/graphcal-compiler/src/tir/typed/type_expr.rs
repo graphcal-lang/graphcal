@@ -103,6 +103,36 @@ fn type_lower_error_to_graphcal(
     hir_lower_error_to_graphcal(err, src)
 }
 
+fn generic_args_have_index_name_at_span<'a>(
+    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
+    span: Span,
+) -> bool {
+    generic_args.into_iter().any(|arg| {
+        matches!(
+            arg,
+            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
+                if type_expr_has_index_name_at_span(type_expr, span)
+        )
+    })
+}
+
+fn generic_args_have_dim_term_at_span<'a>(
+    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
+    span: Span,
+) -> bool {
+    generic_args.into_iter().any(|arg| {
+        matches!(
+            arg,
+            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
+                if type_expr_has_dim_term_at_span(type_expr, span)
+        ) || matches!(
+            arg,
+            crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous)
+                if ambiguous.span() == span
+        )
+    })
+}
+
 fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
     match &type_ann.kind {
         TypeExprKind::Indexed { base, indexes } => {
@@ -113,15 +143,13 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
                     | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => false,
                 })
         }
-        TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => generic_args.iter().any(|arg| {
-            matches!(
-                arg,
-                crate::desugar::desugared_ast::GenericArg::Type(type_expr)
-                    if type_expr_has_index_name_at_span(type_expr, span)
-            )
-        }),
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            generic_args_have_index_name_at_span(generic_args, span)
+        }
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
+            generic_args_have_index_name_at_span(generic_args, span)
+        }
         TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_index_name_at_span(arg, span)),
@@ -140,19 +168,13 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
             .iter()
             .any(|item| item.term.name.span == span),
         TypeExprKind::Indexed { base, .. } => type_expr_has_dim_term_at_span(base, span),
-        TypeExprKind::TypeApplication { generic_args, .. }
-        | TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => generic_args.iter().any(|arg| {
-            matches!(
-                arg,
-                crate::desugar::desugared_ast::GenericArg::Type(type_expr)
-                    if type_expr_has_dim_term_at_span(type_expr, span)
-            ) || matches!(
-                arg,
-                crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous)
-                    if ambiguous.span() == span
-            )
-        }),
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            generic_args_have_dim_term_at_span(generic_args, span)
+        }
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
+            generic_args_have_dim_term_at_span(generic_args, span)
+        }
         TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_dim_term_at_span(arg, span)),
@@ -1319,7 +1341,7 @@ pub(super) fn resolve_type_expr_inner(
         TypeExprKind::Int => Ok(ResolvedTypeExpr::Int),
         TypeExprKind::Datetime => Ok(ResolvedTypeExpr::Datetime(TimeScale::UTC)),
         TypeExprKind::DatetimeApplication { type_args } => {
-            resolve_datetime_application(type_ann, type_args, src)
+            resolve_datetime_application(type_ann, type_args.as_slice(), src)
         }
         TypeExprKind::ComplexApplication { generic_args } => resolve_complex_application(
             type_ann,
@@ -1403,7 +1425,7 @@ pub(super) fn resolve_type_expr_inner(
         TypeExprKind::TypeApplication { name, generic_args } => resolve_type_application(
             type_ann,
             name,
-            generic_args,
+            generic_args.as_slice(),
             registry,
             owner,
             dim_params,

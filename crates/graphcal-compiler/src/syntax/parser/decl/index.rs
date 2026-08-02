@@ -60,16 +60,17 @@ impl Parser<'_> {
 
     fn parse_named_index_kind(&mut self) -> Result<(IndexDeclKind, Span), ParseError> {
         self.expect(Token::LBrace)?;
-        let variants = self.parse_comma_separated(Token::RBrace, |parser| {
+        let variants = self.parse_non_empty_comma_separated(Token::RBrace, |parser| {
             Ok(parser.parse_any_ident()?.into_spanned::<IndexVariantName>())
         })?;
-        if variants.is_empty() {
-            let (token, span) = self.advance()?;
-            return Err(self.unexpected_token("at least one variant", &token.to_string(), span));
-        }
         let (_, end_span) = self.expect(Token::RBrace)?;
         self.expect(Token::Semicolon)?;
-        Ok((IndexDeclKind::Named { variants }, end_span))
+        Ok((
+            IndexDeclKind::Named {
+                variants: variants.into_vec(),
+            },
+            end_span,
+        ))
     }
 
     fn parse_range_index_kind(&mut self) -> Result<(IndexDeclKind, Span), ParseError> {

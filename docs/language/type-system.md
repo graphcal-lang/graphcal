@@ -1462,11 +1462,14 @@ types while `Frame` is a phantom parameter.
 
 ### Generic Arguments and Defaults
 
-Type annotations and constructors use the same generic-argument surface. Each
-argument is checked positionally against the declared `Dim`, `Index`, `Nat`, or
-`Type` kind; spelling or identifier casing never determines its kind. Ordinary
-functions do not declare or consume these arguments, so a non-empty application
-such as `sqrt<3>(x)` is rejected rather than silently ignored.
+Type annotations and constructors use the same generic-argument surface. Angle
+brackets always contain at least one argument or parameter; omit the brackets
+entirely when using no arguments or declaring a non-generic type. Empty forms
+such as `Vec3<>` and `type Marker<> { Marker }` are invalid. Each argument is
+checked positionally against the declared `Dim`, `Index`, `Nat`, or `Type` kind;
+spelling or identifier casing never determines its kind. Ordinary functions do
+not declare or consume these arguments, so a non-empty application such as
+`sqrt<3>(x)` is rejected rather than silently ignored.
 
 A `Nat` argument may be an integer literal, an in-scope `Nat` parameter, or a
 polynomial expression using `+` and `*`:

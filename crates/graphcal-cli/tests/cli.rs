@@ -4572,6 +4572,61 @@ fn well_formed_fixtures_are_formatted() {
 }
 
 #[test]
+fn check_rejects_empty_required_bracket_and_angle_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    let cases = [
+        ("indexed-type", "param value: Dimensionless[];\n"),
+        ("type-arguments", "param value: Wrapper<>;\n"),
+        (
+            "call-arguments",
+            "node value: Dimensionless = sqrt<>(4.0);\n",
+        ),
+        ("generic-parameters", "type Marker<> { Marker }\n"),
+        ("index-access", "node value: Dimensionless = @values[];\n"),
+    ];
+
+    for (name, source) in cases {
+        let path = write_temp_file(dir.path(), &format!("{name}.gcl"), source);
+        let output = graphcal_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .expect("failed to run graphcal check");
+        assert!(
+            !output.status.success(),
+            "empty {name} list must be rejected"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("graphcal::P001"),
+            "empty {name} list must fail during parsing: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn check_accepts_non_empty_required_bracket_and_angle_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = "\
+pub index I = { Only };
+pub type Wrapper<D: Dim> { Wrapper(value: D) }
+param values: Dimensionless[I] = { I.Only: 1.0 };
+node picked: Dimensionless = @values[I.Only];
+param wrapped: Wrapper<Dimensionless> = Wrapper<Dimensionless>(value: 1.0);
+node time: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");
+";
+    let path = write_temp_file(dir.path(), "non-empty-lists.gcl", source);
+    let output = graphcal_bin()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal check");
+    assert!(
+        output.status.success(),
+        "valid non-empty lists must continue to check: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn format_check_fails_on_unparsable_file() {
     // Regression: `graphcal format --check` exited 0 when a file failed to
     // parse — CI passed silently on syntactically broken files while

@@ -311,7 +311,7 @@ impl Parser<'_> {
     ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
-        let names = self.parse_comma_separated(Token::RBrace, |p| {
+        let names = self.parse_non_empty_comma_separated(Token::RBrace, |p| {
             // Collect any leading attributes on this import item.
             let mut item_attributes = Vec::new();
             while p.lexer.peek() == Some(&Token::Hash) {
@@ -387,7 +387,7 @@ impl Parser<'_> {
         })?;
 
         self.expect(Token::RBrace)?;
-        Ok(names)
+        Ok(names.into_vec())
     }
 
     /// Parse the unique `(name: expr, ...)` bindings of an include or DAG call.
