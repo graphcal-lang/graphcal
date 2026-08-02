@@ -266,6 +266,41 @@ node coordinates: Time[Tenths] = for t: Tenths { coord(t) };
 }
 
 #[test]
+fn coordinate_key_values_retain_the_axis_display_unit() {
+    let source = r#"
+index Hour = range(0.0 h, 2.0 h, step: 1.0 h);
+node signal: Time[Hour] = for t: Hour { coord(t) };
+node peak: Key<Hour> = argmax(@signal);
+node repeated: Key<Hour>[Fin(2)] = for i: Fin(2) { @peak };
+"#;
+    let result = compile_and_eval(source).unwrap();
+
+    let peak = find_entry(&result, "peak");
+    let Value::Quantity {
+        si_value,
+        display_unit: Some(display_unit),
+        ..
+    } = &peak
+    else {
+        panic!("expected a coordinate-shaped key with its axis display unit, got {peak:?}")
+    };
+    assert_eq!(si_value.to_bits(), 7200.0_f64.to_bits());
+    assert_eq!(display_unit.label, "h");
+    assert_eq!(display_unit.scale.to_bits(), 3600.0_f64.to_bits());
+    assert_eq!(peak.format_display(Some(&result.base_dim_symbols)), "2 [h]");
+
+    let Value::Indexed { entries, .. } = find_entry(&result, "repeated") else {
+        panic!("expected indexed coordinate keys")
+    };
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .values()
+            .all(|entry| { entry.format_display(Some(&result.base_dim_symbols)) == "2 [h]" })
+    );
+}
+
+#[test]
 fn coordinate_display_names_remain_unique_when_rounded_labels_collide() {
     let source = r#"
 index Tiny = range(1.0, 1.0000002, step: 0.0000001);

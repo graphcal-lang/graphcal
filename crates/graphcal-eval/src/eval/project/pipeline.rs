@@ -361,7 +361,7 @@ fn assemble_file_output_values(
                 let value = super::super::runtime::runtime_to_value(
                     runtime,
                     Some(declared_type),
-                    &compiled.tir.registry,
+                    &compiled.tir,
                 );
                 Some((name.clone(), Ok(value), decl_type))
             }),
@@ -643,7 +643,7 @@ pub(in crate::eval::project) fn evaluate_project_perfile(
                     let value = super::super::runtime::runtime_to_value(
                         runtime,
                         Some(declared_type),
-                        &compiled.tir.registry,
+                        &compiled.tir,
                     );
                     push_output_value(
                         (name.clone(), Ok(value), decl_type),

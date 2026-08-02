@@ -716,6 +716,64 @@ fn eval_complex_text_and_json_output() {
 }
 
 #[test]
+fn eval_coordinate_keys_use_axis_display_metadata_in_text_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = dir.path().join("coordinate-key-display.gcl");
+    std::fs::write(
+        &source_path,
+        "index TimeStep = range(1.0 h, 3.0 h, step: 1.0 h);\n\
+         node samples: Time[TimeStep] = for t: TimeStep { coord(t) };\n\
+         node peak: Key<TimeStep> = argmax(@samples);\n\
+         node copies: Key<TimeStep>[Fin(2)] = for i: Fin(2) { @peak };\n",
+    )
+    .unwrap();
+
+    let text_output = graphcal_bin()
+        .args(["eval", source_path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        text_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text_output.stderr)
+    );
+    let text = String::from_utf8(text_output.stdout).unwrap();
+    let peak_line = text
+        .lines()
+        .find(|line| line.starts_with("peak "))
+        .expect("missing peak output");
+    assert!(peak_line.ends_with("= 3 h"), "peak output: {peak_line}");
+    let copy_lines = text
+        .lines()
+        .filter(|line| line.starts_with("copies["))
+        .collect::<Vec<_>>();
+    assert_eq!(copy_lines.len(), 2, "indexed key output: {text}");
+    assert!(
+        copy_lines.iter().all(|line| line.ends_with("= 3 h")),
+        "indexed key output: {text}"
+    );
+
+    let json_output = graphcal_bin()
+        .args(["eval", source_path.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        json_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    let peak = &json["node"]["peak"];
+    assert_eq!(peak["si_value"], 10_800.0);
+    assert_eq!(peak["display_value"], 3.0);
+    assert_eq!(peak["unit"], "h");
+    let first_copy = &json["node"]["copies"]["entries"]["#0"];
+    assert_eq!(first_copy["si_value"], 10_800.0);
+    assert_eq!(first_copy["display_value"], 3.0);
+    assert_eq!(first_copy["unit"], "h");
+}
+
+#[test]
 fn eval_nonexistent_file_fails() {
     let output = graphcal_bin()
         .args(["eval", "nonexistent.gcl"])
@@ -788,7 +846,7 @@ fn eval_indexed_json_output() {
 }
 
 #[test]
-fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
+fn eval_same_leaf_imported_indexes_keep_names_and_display_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/collide");
     std::fs::create_dir_all(&root_dir).unwrap();
@@ -799,12 +857,14 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
     .unwrap();
     std::fs::write(
         root_dir.join("a.gcl"),
-        "pub index Phase = { Burn, Coast };\n",
+        "pub index Phase = { Burn, Coast };\n\
+         pub index TimeStep = range(1.0 h, 3.0 h, step: 1.0 h);\n",
     )
     .unwrap();
     std::fs::write(
         root_dir.join("b.gcl"),
-        "pub index Phase = { Burn, Coast };\n",
+        "pub index Phase = { Burn, Coast };\n\
+         pub index TimeStep = range(10.0 min, 30.0 min, step: 10.0 min);\n",
     )
     .unwrap();
     let root = root_dir.join("main.gcl");
@@ -813,7 +873,11 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
         "import collide.a as a;\n\
          import collide.b as b;\n\
          node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
-         node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n",
+         node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n\
+         node samples_a: Time[a.TimeStep] = for t: a.TimeStep { coord(t) };\n\
+         node samples_b: Time[b.TimeStep] = for t: b.TimeStep { coord(t) };\n\
+         node peak_a: Key<a.TimeStep> = argmax(@samples_a);\n\
+         node peak_b: Key<b.TimeStep> = argmax(@samples_b);\n",
     )
     .unwrap();
 
@@ -829,6 +893,20 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("series_a[Burn]"), "stdout: {stdout}");
     assert!(stdout.contains("series_b[Coast]"), "stdout: {stdout}");
+    assert!(stdout.contains("samples_a[1 h]"), "stdout: {stdout}");
+    assert!(stdout.contains("samples_b[10 min]"), "stdout: {stdout}");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("peak_a ") && line.ends_with("= 3 h")),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.starts_with("peak_b ") && line.ends_with("= 30 min")),
+        "stdout: {stdout}"
+    );
 
     let output = graphcal_bin()
         .args(["eval", root.to_str().unwrap(), "--format", "json"])
@@ -843,6 +921,12 @@ fn eval_same_leaf_imported_indexes_display_as_boundary_leaf_names() {
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
     assert_eq!(json["node"]["series_a"]["index"].as_str(), Some("Phase"));
     assert_eq!(json["node"]["series_b"]["index"].as_str(), Some("Phase"));
+    assert!(json["node"]["samples_a"]["entries"].get("1 h").is_some());
+    assert!(json["node"]["samples_b"]["entries"].get("10 min").is_some());
+    assert_eq!(json["node"]["peak_a"]["display_value"], 3.0);
+    assert_eq!(json["node"]["peak_a"]["unit"], "h");
+    assert_eq!(json["node"]["peak_b"]["display_value"], 30.0);
+    assert_eq!(json["node"]["peak_b"]["unit"], "min");
 }
 
 #[test]
