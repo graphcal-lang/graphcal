@@ -34,6 +34,8 @@
 //! accounted for. The equivalence check can never silently go stale and miss a
 //! meaning-changing edit.
 
+use std::collections::HashMap;
+
 use crate::syntax::ast::{
     AmbiguousGenericArg, AssertBody, AssertDecl, Attribute, AttributeArg, BaseDimDecl, DagDecl,
     DeclKind, Declaration, DimDecl, DimExpr, DimExprItem, DimTerm, DomainBound, Encoding, Expr,
@@ -1682,19 +1684,70 @@ impl FormatEquivalent for RawExprSugar {
     }
 }
 
+#[derive(PartialEq, Eq, Hash)]
+struct SpanFreeMapEntryKey<'a> {
+    index: &'a crate::syntax::ast::MapEntryIndex,
+    variant: &'a IndexEntryKey,
+}
+
+fn span_free_table_entry_key(entry: &MapEntry) -> Vec<SpanFreeMapEntryKey<'_>> {
+    entry
+        .keys
+        .iter()
+        .map(|key| SpanFreeMapEntryKey {
+            index: &key.index.value,
+            variant: &key.variant.value,
+        })
+        .collect()
+}
+
 fn table_entries_format_equivalent(lhs: &[MapEntry], rhs: &[MapEntry]) -> bool {
+    table_entries_format_equivalent_by(lhs, rhs, MapEntry::format_equivalent)
+}
+
+fn table_entries_format_equivalent_by(
+    lhs: &[MapEntry],
+    rhs: &[MapEntry],
+    mut entries_equivalent: impl FnMut(&MapEntry, &MapEntry) -> bool,
+) -> bool {
     if lhs.len() != rhs.len() {
         return false;
     }
-    let mut matched_rhs = vec![false; rhs.len()];
+
+    // Formatting normally preserves table order. Keep that common case linear
+    // and allocation-free.
+    if lhs
+        .iter()
+        .zip(rhs)
+        .all(|(entry, candidate)| entries_equivalent(entry, candidate))
+    {
+        return true;
+    }
+
+    // Reordered entries still have multiset semantics. Index by the typed,
+    // span-free key so each entry searches only the values for its exact key,
+    // rather than rescanning the whole right-hand table.
+    let mut rhs_by_key: HashMap<Vec<SpanFreeMapEntryKey<'_>>, Vec<&MapEntry>> = rhs.iter().fold(
+        HashMap::with_capacity(rhs.len()),
+        |mut entries_by_key, entry| {
+            entries_by_key
+                .entry(span_free_table_entry_key(entry))
+                .or_default()
+                .push(entry);
+            entries_by_key
+        },
+    );
+
     lhs.iter().all(|entry| {
-        rhs.iter()
-            .enumerate()
-            .find(|(idx, candidate)| !matched_rhs[*idx] && entry.format_equivalent(candidate))
-            .is_some_and(|(idx, _)| {
-                matched_rhs[idx] = true;
-                true
+        rhs_by_key
+            .get_mut(&span_free_table_entry_key(entry))
+            .and_then(|candidates| {
+                candidates
+                    .iter()
+                    .position(|candidate| entries_equivalent(entry, candidate))
+                    .map(|position| candidates.swap_remove(position))
             })
+            .is_some()
     })
 }
 
@@ -1990,14 +2043,36 @@ impl FormatEquivalent for ExprKind {
 
 #[cfg(test)]
 mod tests {
-    use super::FormatEquivalent;
-    use crate::syntax::ast::File;
+    use super::{FormatEquivalent, table_entries_format_equivalent_by};
+    use crate::syntax::ast::{DeclKind, ExprKind, File, MapEntry, RawExprSugar};
     use crate::syntax::parser::Parser;
 
     fn parse(source: &str) -> File {
         Parser::new(source)
             .parse_file()
             .unwrap_or_else(|err| panic!("test source should parse: {err:?}\n---\n{source}"))
+    }
+
+    fn table_entries(file: &File) -> &[MapEntry] {
+        let DeclKind::Param(param) = &file.declarations[0].kind else {
+            panic!("expected a param declaration");
+        };
+        let value = param.value.as_ref().expect("expected a param value");
+        let ExprKind::Sugar(RawExprSugar::TableLiteral { entries, .. }) = &value.kind else {
+            panic!("expected a table literal");
+        };
+        entries
+    }
+
+    fn large_finite_table(entry_count: usize) -> File {
+        let rows = (0..entry_count)
+            .map(|value| format!("{value}.0;"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        parse(&format!(
+            "param values: Dimensionless[Fin({entry_count})] = \
+             table[Fin({entry_count})] {{\n{rows}\n}};"
+        ))
     }
 
     /// Two parses of the same text are equivalent — reflexivity over real spans.
@@ -2034,6 +2109,82 @@ mod tests {
         let a = "node x: Dimensionless = 1.0;\n";
         let b = "node x: Dimensionless = 2.0;\n";
         assert!(!parse(a).format_equivalent(&parse(b)));
+    }
+
+    #[test]
+    fn reordered_duplicate_table_keys_retain_multiset_semantics() {
+        let ordered = concat!(
+            "param x: Dimensionless[Axis] = table[Axis] {\n",
+            "A: 1.0;\n",
+            "A: 2.0;\n",
+            "};\n",
+        );
+        let reordered = concat!(
+            "param x: Dimensionless[Axis] = table[Axis] {\n",
+            "A: 2.0;\n",
+            "A: 1.0;\n",
+            "};\n",
+        );
+        assert!(parse(ordered).format_equivalent(&parse(reordered)));
+    }
+
+    #[test]
+    fn changed_value_in_duplicate_table_key_bucket_is_not_equivalent() {
+        let original = concat!(
+            "param x: Dimensionless[Axis] = table[Axis] {\n",
+            "A: 1.0;\n",
+            "A: 2.0;\n",
+            "};\n",
+        );
+        let changed = concat!(
+            "param x: Dimensionless[Axis] = table[Axis] {\n",
+            "A: 2.0;\n",
+            "A: 3.0;\n",
+            "};\n",
+        );
+        assert!(!parse(original).format_equivalent(&parse(changed)));
+    }
+
+    #[test]
+    fn ordered_large_table_uses_linear_entry_comparisons() {
+        const ENTRY_COUNT: usize = 1_024;
+        let table = large_finite_table(ENTRY_COUNT);
+        let entries = table_entries(&table);
+        let mut comparison_count = 0;
+
+        assert!(table_entries_format_equivalent_by(
+            entries,
+            entries,
+            |entry, candidate| {
+                comparison_count += 1;
+                entry.format_equivalent(candidate)
+            },
+        ));
+        assert_eq!(comparison_count, ENTRY_COUNT);
+    }
+
+    #[test]
+    fn reordered_large_table_uses_linear_entry_comparisons() {
+        const ENTRY_COUNT: usize = 1_024;
+        let table = large_finite_table(ENTRY_COUNT);
+        let entries = table_entries(&table);
+        let mut reordered = entries.to_vec();
+        reordered.reverse();
+        let mut comparison_count = 0;
+
+        assert!(table_entries_format_equivalent_by(
+            entries,
+            &reordered,
+            |entry, candidate| {
+                comparison_count += 1;
+                entry.format_equivalent(candidate)
+            },
+        ));
+        assert!(
+            comparison_count <= ENTRY_COUNT + 1,
+            "expected linear comparison work, got {comparison_count} comparisons for \
+             {ENTRY_COUNT} entries"
+        );
     }
 
     #[test]
