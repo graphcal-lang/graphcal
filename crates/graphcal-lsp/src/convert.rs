@@ -60,58 +60,17 @@ const fn lsp_position(position: Utf16Position) -> Position {
 /// requested line:
 ///
 /// - If `position.character` falls past the end of the line, the offset of the
-///   line-terminating `\n` (or the source end for the last line) is returned.
+///   line-ending sequence (or the source end for the last line) is returned.
 /// - If `position.character` lands inside a UTF-16 surrogate pair (e.g., the
 ///   second code unit of an astral-plane emoji), the offset of the preceding
 ///   `char` boundary is returned.
 /// - If `position.line` exceeds the number of lines in `source`, the returned
 ///   offset is `source.len()`.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "char::len_utf16() returns 1 or 2, never truncates to u32"
-)]
 pub fn position_to_byte_offset(source: &str, position: Position) -> usize {
-    let line_start = line_start_offset(source, position.line);
-    if line_start >= source.len() {
-        return source.len();
-    }
-
-    let mut col = 0u32;
-    for (offset, ch) in source[line_start..].char_indices() {
-        if ch == '\n' {
-            return line_start + offset;
-        }
-        if col >= position.character {
-            return line_start + offset;
-        }
-        let next_col = col + ch.len_utf16() as u32;
-        if next_col > position.character {
-            // `position.character` lands inside a surrogate pair; snap to the
-            // current (valid) char boundary.
-            return line_start + offset;
-        }
-        col = next_col;
-    }
-    source.len()
-}
-
-/// Return the byte offset where `line` (0-based) starts in `source`.
-///
-/// If `line` exceeds the number of lines, returns `source.len()`.
-fn line_start_offset(source: &str, line: u32) -> usize {
-    if line == 0 {
-        return 0;
-    }
-    let mut seen = 0u32;
-    for (i, byte) in source.bytes().enumerate() {
-        if byte == b'\n' {
-            seen += 1;
-            if seen == line {
-                return i + 1;
-            }
-        }
-    }
-    source.len()
+    Utf16LineIndex::new(source).byte_offset(Utf16Position {
+        line: position.line,
+        character: position.character,
+    })
 }
 
 #[cfg(test)]
@@ -140,6 +99,30 @@ mod tests {
         let pos = LineIndex::new(source).position(6);
         assert_eq!(pos.line, 1);
         assert_eq!(pos.character, 0);
+    }
+
+    #[test]
+    fn forward_and_reverse_positions_support_lf_cr_and_crlf() {
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let source = format!("a🙂{line_ending}bc");
+            let second_line = source.find('b').unwrap();
+            let lines = LineIndex::new(&source);
+            assert_eq!(
+                lines.position(second_line),
+                Position::new(1, 0),
+                "forward conversion for {line_ending:?}"
+            );
+            assert_eq!(
+                position_to_byte_offset(&source, Position::new(1, 1)),
+                source.find('c').unwrap(),
+                "reverse conversion for {line_ending:?}"
+            );
+            assert_eq!(
+                position_to_byte_offset(&source, Position::new(0, u32::MAX)),
+                source.find(line_ending).unwrap(),
+                "line clamp for {line_ending:?}"
+            );
+        }
     }
 
     #[test]

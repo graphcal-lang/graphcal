@@ -2215,7 +2215,7 @@ mod tests {
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
-    use tower_lsp::lsp_types::Range;
+    use tower_lsp::lsp_types::{Position, Range};
 
     use super::*;
 
@@ -2682,6 +2682,27 @@ mod tests {
             "result too long: {result}"
         );
         assert!(result.ends_with("... }"), "expected truncation: {result}");
+    }
+
+    #[test]
+    fn diagnostic_ranges_use_lf_cr_and_crlf_lines_end_to_end() {
+        let uri = untitled_uri();
+        for line_ending in ["\n", "\r", "\r\n"] {
+            let source = format!("node x: Dimensionless = 1.0;{line_ending}?");
+            let analysis = run_analysis(&uri, &source, &[], test_plugin_host());
+            let diagnostics = analysis
+                .diagnostics
+                .get(&uri)
+                .expect("active document diagnostics must be present");
+            let diagnostic = diagnostics
+                .first()
+                .unwrap_or_else(|| panic!("expected diagnostic for {line_ending:?}"));
+            assert_eq!(
+                diagnostic.range.start,
+                Position::new(1, 0),
+                "diagnostic position for {line_ending:?}"
+            );
+        }
     }
 
     /// Use an `untitled:` URI so `build_project` falls through to the in-memory
