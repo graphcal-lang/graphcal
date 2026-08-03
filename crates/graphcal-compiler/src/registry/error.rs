@@ -1946,10 +1946,10 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    /// A `pub include` / `pub import` (or selective `{ pub items }`)
-    /// re-exports a declaration whose effective (post-substitution)
-    /// signature mentions a symbol that is `V = private` at the
-    /// importing site — A9 case 2 / visibility composition.
+    /// A selectively re-exported import/include item (`{ pub item }`)
+    /// has an effective (post-substitution) signature that mentions a symbol
+    /// that is `V = private` at the importing site — A9 case 2 / visibility
+    /// composition.
     ///
     /// Concretely: an include binding renames a bindable symbol `s`
     /// in the dep to a name that is private at the importer, and the
@@ -1962,7 +1962,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::V006),
         help(
-            "make `{leaked_name}` `pub` at the importing file, or drop the `pub` / `pub(..)` re-export marker on this include / import"
+            "make `{leaked_name}` `pub` at the importing file, or drop the per-item `pub` marker on this include / import"
         )
     )]
     GenericsLeakage {

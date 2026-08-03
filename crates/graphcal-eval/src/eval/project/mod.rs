@@ -293,10 +293,8 @@ struct DeferredDagInclude {
     /// included assertions). Key = original name in dep.
     import_item_attributes:
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
-    /// Whether this include carries a leading `pub` (whole-module re-export).
-    pub_reexport_whole: bool,
     /// Original names of selective items marked `pub` in the importer's
-    /// brace list. Empty for whole-module form.
+    /// brace list. Module-form includes never export outputs.
     pub_reexport_items: HashSet<DeclName>,
 }
 

@@ -63,17 +63,18 @@ pub fn decl_identity(decl: &Declaration) -> Option<ProjectDeclIdentity<'_>> {
 
 pub fn decl_is_explicit_export(decl: &Declaration) -> bool {
     match &decl.kind {
-        // Params carry the distinct input-port role. Plugin imports carry no
-        // visibility and their functions are never re-exported.
-        DeclKind::Param(_) | DeclKind::PluginImport(_) => false,
+        // Params carry the distinct input-port role. Import/include visibility
+        // exists only on selected items; plugin functions are never re-exported.
+        DeclKind::Param(_)
+        | DeclKind::Import(_)
+        | DeclKind::Include(_)
+        | DeclKind::PluginImport(_) => false,
         DeclKind::Node(d) | DeclKind::ConstNode(d) => d.visibility.is_public(),
         DeclKind::BaseDimension(d) => d.visibility.is_public(),
         DeclKind::Dimension(d) => d.visibility.is_public(),
         DeclKind::Unit(d) => d.visibility.is_public(),
         DeclKind::Type(d) => d.visibility.is_public(),
         DeclKind::Index(d) => d.visibility.is_public(),
-        DeclKind::Import(d) => d.visibility.is_public(),
-        DeclKind::Include(d) => d.visibility.is_public(),
         DeclKind::Dag(d) => d.visibility.is_public(),
         DeclKind::Assert(d) => d.visibility.is_public(),
         DeclKind::Plot(d) => d.visibility.is_public(),
@@ -94,8 +95,8 @@ pub fn decl_has_external_role(decl: &Declaration) -> bool {
 /// Explicitly `pub`/`pub(bind)` declarations and selective re-exports carry
 /// the explicit-export role. Params carry the distinct annotation-free input-
 /// port role, while their effective values remain externally selectable as
-/// outputs. Whole-module re-exports are expanded transitively during processing,
-/// because this pure AST walk does not have the dependency's external surface.
+/// outputs. Namespaced imports/includes are private use-sites and never widen
+/// this surface.
 pub fn extract_external_decl_surface(file: &File) -> ExternalDeclSurface {
     let mut surface = ExternalDeclSurface::default();
     for decl in &file.declarations {
@@ -103,7 +104,7 @@ pub fn extract_external_decl_surface(file: &File) -> ExternalDeclSurface {
             DeclKind::Param(param) => {
                 surface.insert_input_port(param.name.value.clone());
             }
-            DeclKind::Import(d) if !decl_is_explicit_export(decl) => {
+            DeclKind::Import(d) => {
                 if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
                     &d.kind
                 {
@@ -116,7 +117,7 @@ pub fn extract_external_decl_surface(file: &File) -> ExternalDeclSurface {
                     }
                 }
             }
-            DeclKind::Include(d) if !decl_is_explicit_export(decl) => {
+            DeclKind::Include(d) => {
                 if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
                     &d.kind
                 {
@@ -371,6 +372,30 @@ mod tests {
                 .as_slice(),
             &[ImportItemNamespace::Term, ImportItemNamespace::Type]
         );
+    }
+
+    #[test]
+    fn namespaced_use_sites_never_widen_the_external_surface() {
+        let file = parse(
+            "import pkg.core;\n\
+             include pkg.engine() as engine;\n\
+             import pkg.core.{ pub dim Exposed, helper };\n\
+             include pkg.engine().{ pub thrust, fuel_flow };\n",
+        );
+        let surface = extract_external_decl_surface(&file);
+
+        for exported in ["Exposed", "thrust"] {
+            assert!(
+                surface.is_explicit_export(&DeclName::expect_valid(exported)),
+                "{exported} should be explicitly exported"
+            );
+        }
+        for private in ["core", "engine", "helper", "fuel_flow"] {
+            assert!(
+                !surface.is_externally_nameable(&DeclName::expect_valid(private)),
+                "{private} must remain private"
+            );
+        }
     }
 
     #[test]

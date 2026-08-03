@@ -3989,10 +3989,9 @@ fn merged_dependency_body_error_renders_against_dependency_source() {
 }
 
 #[test]
-fn project_pub_include_leaks_private_type_v006() {
-    // V006: `pub include` re-exports container's `origin` decl whose
-    // signature (post-substitution) names `PrivateInner`, which is a
-    // private-local type at the importer.
+fn project_selective_include_leaks_private_type_v006() {
+    // V006: selective `{ pub origin }` re-exports a declaration whose effective
+    // signature names importer-private `PrivateInner` after substitution.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
         "../../tests/fixtures/invalid/multi/pub_include_leaks_private_type/src/container/main.gcl",
     );
@@ -4013,15 +4012,15 @@ fn project_pub_include_leaks_private_type_v006() {
 }
 
 #[test]
-fn project_pub_include_with_public_type_binding_ok() {
-    // Positive companion to project_pub_include_leaks_private_type_v006:
+fn project_selective_include_with_public_type_binding_ok() {
+    // Positive companion to project_selective_include_leaks_private_type_v006:
     // binding `Element` to a `pub` importer-local type satisfies A9.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/valid/multi/pub_include_with_public_type_binding/src/container/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
     assert!(
         result.is_ok(),
-        "`pub include` re-exporting a `pub` type binding should compile: {result:?}"
+        "selectively re-exporting an output with a `pub` type binding should compile: {result:?}"
     );
 }
 

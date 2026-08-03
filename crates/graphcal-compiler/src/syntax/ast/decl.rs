@@ -284,7 +284,6 @@ pub struct LayerDecl<P: Phase = Raw> {
 /// No param bindings — for DAG instantiation with param bindings, use `include`.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
-    pub visibility: Visibility,
     pub path: ModulePath,
     pub kind: ImportKind,
 }
@@ -381,7 +380,6 @@ pub struct ExternFnParam<P: Phase = Raw> {
 /// outputs as nodes in the including DAG.
 #[derive(Debug, Clone)]
 pub struct IncludeDecl<P: Phase = Raw> {
-    pub visibility: Visibility,
     pub path: ModulePath,
     pub param_bindings: Vec<ParamBinding<P>>,
     pub kind: ImportKind,

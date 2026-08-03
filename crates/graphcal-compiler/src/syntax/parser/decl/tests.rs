@@ -1132,30 +1132,23 @@ fn parse_import_rejects_old_parent_path_error() {
 }
 
 #[test]
-fn parse_pub_import_whole_module() {
-    // `pub import path;` re-exports every pub item from `path`.
-    let file = Parser::new("pub import helper;").parse_file().unwrap();
-    let decl = &file.declarations[0];
-    let DeclKind::Import(import) = &decl.kind else {
-        panic!("expected Import");
-    };
-    assert_eq!(import.visibility, crate::syntax::ast::Visibility::Public);
-}
-
-#[test]
-fn parse_pub_include_whole_module_with_alias() {
-    let file = Parser::new("pub include container(x: 1.0) as c;")
-        .parse_file()
-        .unwrap();
-    let decl = &file.declarations[0];
-    let DeclKind::Include(i) = &decl.kind else {
-        panic!("expected Include");
-    };
-    assert_eq!(i.visibility, crate::syntax::ast::Visibility::Public);
-    let crate::syntax::ast::ImportKind::Module { alias } = &i.kind else {
-        panic!("expected Module");
-    };
-    assert_eq!(alias.as_ref().unwrap().value.as_str(), "c");
+fn leading_pub_on_import_or_include_is_rejected_with_selective_help() {
+    for source in [
+        "pub import helper;",
+        "pub import helper.{x};",
+        "pub include container(x: 1.0) as c;",
+        "pub include container(x: 1.0).{thrust};",
+    ] {
+        let error = Parser::new(source).parse_file().unwrap_err();
+        assert!(
+            matches!(
+                error,
+                ParseError::UnexpectedToken { ref expected, ref found, .. }
+                    if expected.contains("put `pub` on each selected item") && found == "`pub`"
+            ),
+            "unexpected error for `{source}`: {error:?}"
+        );
+    }
 }
 
 #[test]
@@ -1168,7 +1161,6 @@ fn parse_import_brace_list_pub_items() {
     let DeclKind::Import(u) = &decl.kind else {
         panic!("expected Import");
     };
-    assert_eq!(u.visibility, crate::syntax::ast::Visibility::Private);
     let crate::syntax::ast::ImportKind::Selective(items) = &u.kind else {
         panic!("expected Selective");
     };
@@ -1180,22 +1172,18 @@ fn parse_import_brace_list_pub_items() {
 }
 
 #[test]
-fn parse_pub_import_mixed_with_selective_pub_error() {
-    // `pub import path.{ pub item };` mixes the two forms — reject.
+fn parse_leading_pub_with_selective_pub_error() {
     let result = Parser::new("pub import f.{pub a};").parse_file();
-    assert!(
-        result.is_err(),
-        "mixing outer `pub` with selective `pub item` should error"
-    );
+    assert!(result.is_err(), "leading `pub` must always be rejected");
 }
 
 #[test]
 fn parse_pub_bind_on_import_error() {
-    // `pub(bind) import` is illegal — import is a use-site.
+    // Import/include use-sites carry no outer visibility of either kind.
     let result = Parser::new("pub(bind) import f;").parse_file();
     assert!(
         result.is_err(),
-        "`pub(bind)` on import should error — use-sites are not bindable"
+        "`pub(bind)` on import should error — use-sites have no outer visibility"
     );
 }
 
@@ -2044,7 +2032,7 @@ fn parse_plugin_import_rejects_pub() {
             .parse_file()
             .unwrap_err();
     assert!(
-        format!("{err:?}").contains("cannot be re-exported"),
+        format!("{err:?}").contains("without leading visibility"),
         "{err:?}"
     );
 }

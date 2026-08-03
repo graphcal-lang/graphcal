@@ -416,7 +416,15 @@ impl LoadedProject {
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
-        let dag_id = DagId::from_virtual_relative_path(&path).map_err(|e| {
+        // `name` is also a diagnostic label and may be an absolute virtual URI
+        // path. A standalone in-memory file has no filesystem hierarchy, so an
+        // absolute label contributes only its leaf to semantic DAG identity.
+        // Relative labels remain strict, canonical module paths.
+        let semantic_path = match (path.is_absolute(), path.file_name()) {
+            (true, Some(file_name)) => Path::new(file_name),
+            _ => path.as_path(),
+        };
+        let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|e| {
             CompileError::Eval(
                 graphcal_compiler::registry::error::GraphcalError::EvalError {
                     message: format!("invalid source name `{name}`: {e}"),
@@ -2604,6 +2612,20 @@ mod tests {
         let root_file = &project.files[&project.root];
         assert_eq!(root_file.source.as_str(), source);
         assert_eq!(project.root.package(), &DagPackageId::new("test"));
+    }
+
+    #[test]
+    fn from_source_keeps_absolute_diagnostic_label_out_of_semantic_identity() {
+        let project = LoadedProject::from_source(
+            "param x: Dimensionless = 1.0;",
+            "/virtual/project/main.gcl",
+        )
+        .unwrap();
+        let root_file = &project.files[&project.root];
+
+        assert_eq!(root_file.named_source.name(), "/virtual/project/main.gcl");
+        assert_eq!(project.root.package(), &DagPackageId::new("main"));
+        assert_eq!(project.root.to_string(), "main");
     }
 
     #[test]

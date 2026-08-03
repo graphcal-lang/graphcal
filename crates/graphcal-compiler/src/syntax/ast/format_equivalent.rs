@@ -771,38 +771,28 @@ impl FormatEquivalent for GenericParam {
 
 impl FormatEquivalent for ImportDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
+        let Self { path, kind } = self;
         let Self {
-            visibility,
-            path,
-            kind,
-        } = self;
-        let Self {
-            visibility: other_visibility,
             path: other_path,
             kind: other_kind,
         } = other;
-        visibility.format_equivalent(other_visibility)
-            && path.format_equivalent(other_path)
-            && kind.format_equivalent(other_kind)
+        path.format_equivalent(other_path) && kind.format_equivalent(other_kind)
     }
 }
 
 impl FormatEquivalent for IncludeDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
         let Self {
-            visibility,
             path,
             param_bindings,
             kind,
         } = self;
         let Self {
-            visibility: other_visibility,
             path: other_path,
             param_bindings: other_param_bindings,
             kind: other_kind,
         } = other;
-        visibility.format_equivalent(other_visibility)
-            && path.format_equivalent(other_path)
+        path.format_equivalent(other_path)
             && param_bindings.format_equivalent(other_param_bindings)
             && kind.format_equivalent(other_kind)
     }

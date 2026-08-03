@@ -47,9 +47,13 @@ const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
 
 const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
     match &mut decl.kind {
-        // Params and sugar carry no visibility field; plugin imports carry
-        // no visibility at all (extern functions cannot be re-exported).
-        DeclKind::Param(_) | DeclKind::Sugar(_) | DeclKind::PluginImport(_) => {}
+        // Params and use-sites carry no visibility field. Import/include
+        // visibility is expressed only on explicitly selected items.
+        DeclKind::Param(_)
+        | DeclKind::Import(_)
+        | DeclKind::Include(_)
+        | DeclKind::Sugar(_)
+        | DeclKind::PluginImport(_) => {}
         DeclKind::Node(d) | DeclKind::ConstNode(d) => {
             d.visibility = visibility_without_bindability(visibility);
         }
@@ -58,8 +62,6 @@ const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibil
         DeclKind::Unit(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Type(d) => d.visibility = visibility,
         DeclKind::Index(d) => d.visibility = visibility,
-        DeclKind::Import(d) => d.visibility = visibility_without_bindability(visibility),
-        DeclKind::Include(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Dag(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Assert(d) => d.visibility = visibility_without_bindability(visibility),
         DeclKind::Plot(d) => d.visibility = visibility_without_bindability(visibility),
@@ -185,16 +187,16 @@ impl Parser<'_> {
             ));
         }
 
-        // Reject `pub(bind)` on `import` / `include`. Use-sites are not
-        // bindable (A5: B ≡ fixed). `pub` is legal as a re-export marker
-        // per issue #452.
-        if visibility == BindableVisibility::PublicBind
+        // Import/include use-sites have no blanket visibility. Public facade
+        // bindings must be written explicitly in the selective list so a
+        // dependency cannot silently widen this file's API.
+        if let Some(found) = found
             && matches!(self.lexer.peek(), Some(Token::Import | Token::Include))
             && let Some(vis_span) = visibility_span
         {
             return Err(self.unexpected_token(
-                "`pub` (use-sites are not bindable — `pub(bind)` is only for declaration kinds)",
-                "`pub(bind)`",
+                "an import/include without leading visibility; put `pub` on each selected item, for example `include pkg.engine(...).{ pub thrust };`",
+                found,
                 vis_span,
             ));
         }
@@ -332,20 +334,6 @@ impl Parser<'_> {
             None => Err(self.unexpected_eof(expected)),
         }?;
 
-        // Plugin imports cannot carry visibility: extern functions are only
-        // callable qualified through their own alias, so there is nothing to
-        // re-export.
-        if visibility != BindableVisibility::Private
-            && matches!(decl.kind, DeclKind::PluginImport(_))
-            && let Some(vis_span) = visibility_span
-        {
-            return Err(self.unexpected_token(
-                "no visibility annotation (plugin imports cannot be re-exported)",
-                "`pub`",
-                vis_span,
-            ));
-        }
-
         // Set visibility
         if visibility == BindableVisibility::PublicBind
             && !decl_accepts_bindable_visibility(&decl)
@@ -358,35 +346,6 @@ impl Parser<'_> {
             ));
         }
         set_decl_visibility(&mut decl, visibility);
-
-        // Mutual exclusion for re-exports (issue #452 / spec §4.1):
-        // `pub import "X" { pub items };` mixes whole-module and selective
-        // re-export forms. Reject at parse so the semantics of a single
-        // re-export construct stays unambiguous.
-        if visibility == BindableVisibility::Public
-            && let Some(vis_span) = visibility_span
-        {
-            let selective_items = match &decl.kind {
-                DeclKind::Import(d) => match &d.kind {
-                    crate::syntax::ast::ImportKind::Selective(items) => Some(items.as_slice()),
-                    crate::syntax::ast::ImportKind::Module { .. } => None,
-                },
-                DeclKind::Include(d) => match &d.kind {
-                    crate::syntax::ast::ImportKind::Selective(items) => Some(items.as_slice()),
-                    crate::syntax::ast::ImportKind::Module { .. } => None,
-                },
-                _ => None,
-            };
-            if let Some(items) = selective_items
-                && items.iter().any(|it| it.is_pub)
-            {
-                return Err(self.unexpected_token(
-                    "either `pub include/import \"X\" ...` (whole-module re-export) or `include/import \"X\" { pub items }` (selective re-export), not both",
-                    "`pub`",
-                    vis_span,
-                ));
-            }
-        }
 
         // Extend the declaration span to include `pub` / `pub(bind)` prefix
         if let Some(ps) = visibility_span {

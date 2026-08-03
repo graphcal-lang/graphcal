@@ -1279,8 +1279,8 @@ impl ModuleResolver {
     ///
     /// Native declarations and selective re-exports are indistinguishable here:
     /// callers receive the local exported spelling and the marker required to
-    /// import it. Whole-module re-export chains have already been expanded into
-    /// the module scope by import registration.
+    /// import it. Imports expose only items explicitly marked `pub` in their
+    /// selective list; namespaced imports never widen this surface.
     ///
     /// # Errors
     ///
