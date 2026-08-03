@@ -14,8 +14,8 @@ categories.workspace = true
 arrow-array = { workspace = true }
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
-graphcal-compiler = { version = "0.0.1-alpha.18", path = "../graphcal-compiler" }
-graphcal-eval = { version = "0.0.1-alpha.18", path = "../graphcal-eval" }
+graphcal-compiler = { workspace = true }
+graphcal-eval = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 
