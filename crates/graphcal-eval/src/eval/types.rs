@@ -697,7 +697,7 @@ pub struct EvalResult {
     pub layers: Vec<LayerSpec>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub assumes_map: std::collections::HashMap<ScopedName, Vec<ScopedName>>,
-    /// Base dimension symbols for display (e.g., `BaseDimId::Prelude("Length") → "m"`).
+    /// Base dimension symbols for display (e.g., prelude `Length` → `m`).
     pub base_dim_symbols:
         std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
     /// Domain constraints for params/nodes, for programmatic access (sweeping/sampling).
@@ -908,7 +908,10 @@ mod tests {
     use super::*;
 
     fn dim_id(name: &str) -> BaseDimId {
-        BaseDimId::Prelude(name.to_string())
+        BaseDimId::Prelude(
+            graphcal_compiler::dimension::PreludeBaseDimension::parse(name)
+                .expect("test prelude base name"),
+        )
     }
 
     fn quantity(dimension: Dimension, display_unit: Option<DisplayUnit>) -> Value {

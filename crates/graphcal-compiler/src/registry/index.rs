@@ -530,7 +530,9 @@ mod tests {
 
     #[test]
     fn binding_contract_accepts_compatible_required_forwarding() {
-        let time = Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
+        let time = Dimension::base(crate::dimension::BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Time,
+        ));
         let contract = IndexBindingContract::Coordinate {
             dimension: time.clone(),
         };
@@ -571,8 +573,12 @@ mod tests {
 
     #[test]
     fn binding_contract_preserves_kind_and_dimension_errors() {
-        let time = Dimension::base(crate::dimension::BaseDimId::Prelude("Time".to_string()));
-        let length = Dimension::base(crate::dimension::BaseDimId::Prelude("Length".to_string()));
+        let time = Dimension::base(crate::dimension::BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Time,
+        ));
+        let length = Dimension::base(crate::dimension::BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Length,
+        ));
         let contract = IndexBindingContract::Coordinate {
             dimension: time.clone(),
         };

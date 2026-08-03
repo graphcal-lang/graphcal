@@ -1197,7 +1197,7 @@ fn format_dim_display(dim: &Dimension) -> std::result::Result<String, String> {
 fn builtin_base_dim_name(id: &BaseDimId) -> std::result::Result<&str, String> {
     match id {
         BaseDimId::Prelude(name) => Ok(name.as_str()),
-        BaseDimId::UserDefined { .. } => Err(format!(
+        BaseDimId::UserDefined(_) => Err(format!(
             "builtin signature unexpectedly referenced user-defined dimension {id:?}"
         )),
     }

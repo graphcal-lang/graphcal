@@ -6,6 +6,7 @@
 /// Format a numeric value for display: integers without decimal point, floats with
 /// reasonable precision (up to 6 decimal places, trailing zeros stripped).
 use crate::dimension::Rational;
+use thiserror::Error;
 #[must_use]
 pub fn format_number(value: f64) -> String {
     if value == 0.0 {
@@ -52,9 +53,116 @@ pub fn format_exponent(exp: Rational) -> String {
     }
 }
 
-/// Negate an exponent for display, saturating instead of overflowing.
-fn negate_exponent(exp: Rational) -> Rational {
-    Rational::try_new(exp.num().checked_neg().unwrap_or(i32::MAX), exp.den()).unwrap_or(exp)
+/// Failure while exactly accumulating canonical unit-label exponents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum CanonicalUnitFormatError {
+    /// The exact wide rational accumulator exceeded its internal representation.
+    #[error("canonical unit exponent accumulation overflowed")]
+    ExponentOverflow,
+}
+
+/// Exact display-only rational wide enough to render every individual
+/// [`Rational`] magnitude, including `i32::MIN`, without changing its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WideRational {
+    numerator: i128,
+    denominator: i128,
+}
+
+impl WideRational {
+    const ZERO: Self = Self {
+        numerator: 0,
+        denominator: 1,
+    };
+
+    fn from_rational(value: Rational) -> Self {
+        Self {
+            numerator: i128::from(value.num()),
+            denominator: i128::from(value.den()),
+        }
+    }
+
+    fn checked_neg(self) -> Result<Self, CanonicalUnitFormatError> {
+        Ok(Self {
+            numerator: self
+                .numerator
+                .checked_neg()
+                .ok_or(CanonicalUnitFormatError::ExponentOverflow)?,
+            denominator: self.denominator,
+        })
+    }
+
+    fn checked_add(self, other: Self) -> Result<Self, CanonicalUnitFormatError> {
+        let common = gcd128(
+            self.denominator.unsigned_abs(),
+            other.denominator.unsigned_abs(),
+        );
+        let common =
+            i128::try_from(common).map_err(|_| CanonicalUnitFormatError::ExponentOverflow)?;
+        let self_scale = other
+            .denominator
+            .checked_div(common)
+            .ok_or(CanonicalUnitFormatError::ExponentOverflow)?;
+        let other_scale = self
+            .denominator
+            .checked_div(common)
+            .ok_or(CanonicalUnitFormatError::ExponentOverflow)?;
+        let numerator = self
+            .numerator
+            .checked_mul(self_scale)
+            .and_then(|left| {
+                other
+                    .numerator
+                    .checked_mul(other_scale)
+                    .and_then(|right| left.checked_add(right))
+            })
+            .ok_or(CanonicalUnitFormatError::ExponentOverflow)?;
+        let denominator = self
+            .denominator
+            .checked_mul(self_scale)
+            .ok_or(CanonicalUnitFormatError::ExponentOverflow)?;
+        Self::try_new(numerator, denominator)
+    }
+
+    fn try_new(numerator: i128, denominator: i128) -> Result<Self, CanonicalUnitFormatError> {
+        if numerator == 0 {
+            return Ok(Self::ZERO);
+        }
+        let divisor = gcd128(numerator.unsigned_abs(), denominator.unsigned_abs());
+        let divisor =
+            i128::try_from(divisor).map_err(|_| CanonicalUnitFormatError::ExponentOverflow)?;
+        Ok(Self {
+            numerator: numerator
+                .checked_div(divisor)
+                .ok_or(CanonicalUnitFormatError::ExponentOverflow)?,
+            denominator: denominator
+                .checked_div(divisor)
+                .ok_or(CanonicalUnitFormatError::ExponentOverflow)?,
+        })
+    }
+
+    const fn is_zero(self) -> bool {
+        self.numerator == 0
+    }
+
+    fn factor(&self, name: &str, magnitude: bool) -> String {
+        let numerator = if magnitude {
+            self.numerator.unsigned_abs().to_string()
+        } else {
+            self.numerator.to_string()
+        };
+        if self.numerator.unsigned_abs() == 1 && self.denominator == 1 {
+            name.to_string()
+        } else if self.denominator == 1 {
+            format!("{name}^{numerator}")
+        } else {
+            format!("{name}^({numerator}/{})", self.denominator)
+        }
+    }
+}
+
+fn gcd128(a: u128, b: u128) -> u128 {
+    if b == 0 { a } else { gcd128(b, a % b) }
 }
 
 /// Format a `UnitExpr` as a human-readable label.
@@ -135,8 +243,9 @@ pub fn format_unit_expr(expr: &crate::syntax::ast::UnitExpr) -> String {
 /// `m/s * s`, which is mathematically `m`. Display labels for computed values
 /// must not lie about the engineering units, so the eval pipeline routes
 /// through this function instead.
-#[must_use]
-pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String {
+pub fn format_unit_expr_canonical(
+    expr: &crate::syntax::ast::UnitExpr,
+) -> Result<String, CanonicalUnitFormatError> {
     format_unit_terms_canonical(
         expr.terms
             .iter()
@@ -145,46 +254,47 @@ pub fn format_unit_expr_canonical(expr: &crate::syntax::ast::UnitExpr) -> String
 }
 
 /// Normalize and format already-selected unit term spellings.
-#[must_use]
 pub fn format_unit_terms_canonical(
     terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Option<Rational>)>,
-) -> String {
+) -> Result<String, CanonicalUnitFormatError> {
     use crate::syntax::ast::MulDivOp;
     use std::collections::BTreeMap;
 
-    let mut exponents: BTreeMap<String, Rational> = BTreeMap::new();
-    for (op, name, power) in terms {
-        let power = power.unwrap_or(Rational::ONE);
-        let signed = match op {
-            MulDivOp::Mul => power,
-            MulDivOp::Div => negate_exponent(power),
-        };
-        let entry = exponents.entry(name).or_insert(Rational::ZERO);
-        // Saturate on overflow: this is a display label, not a value.
-        *entry = (*entry + signed).unwrap_or(*entry);
-    }
-
-    let render = |name: &str, exponent: Rational| -> String {
-        if exponent == Rational::ONE {
-            name.to_string()
-        } else {
-            format!("{name}{}", format_exponent(exponent))
-        }
-    };
-
-    let mut numerator: Vec<String> = Vec::new();
-    let mut denominator: Vec<String> = Vec::new();
-    for (name, exponent) in &exponents {
-        match exponent.num().cmp(&0) {
-            std::cmp::Ordering::Greater => numerator.push(render(name, *exponent)),
-            std::cmp::Ordering::Less => {
-                denominator.push(render(name, negate_exponent(*exponent)));
+    let exponents = terms.into_iter().try_fold(
+        BTreeMap::<String, WideRational>::new(),
+        |mut exponents, (op, name, power)| {
+            let power = WideRational::from_rational(power.unwrap_or(Rational::ONE));
+            let signed = match op {
+                MulDivOp::Mul => power,
+                MulDivOp::Div => power.checked_neg()?,
+            };
+            let updated = exponents
+                .get(&name)
+                .copied()
+                .unwrap_or(WideRational::ZERO)
+                .checked_add(signed)?;
+            if updated.is_zero() {
+                exponents.remove(&name);
+            } else {
+                exponents.insert(name, updated);
             }
-            std::cmp::Ordering::Equal => {}
-        }
-    }
+            Ok(exponents)
+        },
+    )?;
 
-    match (numerator.is_empty(), denominator.is_empty()) {
+    let (numerator, denominator): (Vec<_>, Vec<_>) = exponents
+        .iter()
+        .partition(|(_, exponent)| exponent.numerator.is_positive());
+    let numerator = numerator
+        .into_iter()
+        .map(|(name, exponent)| exponent.factor(name, false))
+        .collect::<Vec<_>>();
+    let denominator = denominator
+        .into_iter()
+        .map(|(name, exponent)| exponent.factor(name, true))
+        .collect::<Vec<_>>();
+
+    Ok(match (numerator.is_empty(), denominator.is_empty()) {
         (true, true) => String::new(),
         (false, true) => numerator.join(" * "),
         (true, false) => format!("1/{}", denominator.join(" * ")),
@@ -197,7 +307,7 @@ pub fn format_unit_terms_canonical(
                 format!("{num} / ({den})")
             }
         }
-    }
+    })
 }
 
 #[cfg(test)]
@@ -234,7 +344,7 @@ mod tests {
             unit_term(MulDivOp::Div, "s", None),
             unit_term(MulDivOp::Div, "s", None),
         ]);
-        assert_eq!(format_unit_expr_canonical(&expr), "m/s^2");
+        assert_eq!(format_unit_expr_canonical(&expr).unwrap(), "m/s^2");
     }
 
     #[test]
@@ -247,7 +357,10 @@ mod tests {
             unit_term(MulDivOp::Div, "A", None),
             unit_term(MulDivOp::Div, "s", Some(3)),
         ]);
-        assert_eq!(format_unit_expr_canonical(&expr), "kg * m^2 / (A * s^3)");
+        assert_eq!(
+            format_unit_expr_canonical(&expr).unwrap(),
+            "kg * m^2 / (A * s^3)"
+        );
     }
 
     #[test]
@@ -257,6 +370,43 @@ mod tests {
             unit_term(MulDivOp::Mul, "s", None),
             unit_term(MulDivOp::Div, "s", None),
         ]);
-        assert_eq!(format_unit_expr_canonical(&expr), "");
+        assert_eq!(format_unit_expr_canonical(&expr).unwrap(), "");
+    }
+
+    #[test]
+    fn canonical_preserves_min_i32_exponent_magnitude() {
+        let terms = [(
+            MulDivOp::Mul,
+            "m".to_string(),
+            Some(Rational::from(i32::MIN)),
+        )];
+
+        assert_eq!(
+            format_unit_terms_canonical(terms).unwrap(),
+            "1/m^2147483648"
+        );
+    }
+
+    #[test]
+    fn canonical_reports_wide_accumulator_overflow() {
+        let denominators = [
+            i32::MAX,
+            2_147_483_629,
+            2_147_483_587,
+            2_147_483_579,
+            2_147_483_563,
+        ];
+        let terms = denominators.into_iter().map(|denominator| {
+            (
+                MulDivOp::Mul,
+                "m".to_string(),
+                Some(Rational::try_new(1, denominator).unwrap()),
+            )
+        });
+
+        assert_eq!(
+            format_unit_terms_canonical(terms),
+            Err(CanonicalUnitFormatError::ExponentOverflow)
+        );
     }
 }

@@ -3225,10 +3225,9 @@ fn register_base_dimension_decl(
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
-    let dim_id = crate::dimension::BaseDimId::UserDefined {
-        dag: dag_id.clone(),
-        name: d.name.value.to_string(),
-    };
+    let dim_id = crate::dimension::BaseDimId::UserDefined(
+        crate::syntax::dimension::ResolvedDimName::from_def(dag_id.clone(), d.name.value.clone()),
+    );
     registry.register_base_dimension(d.name.value.clone(), dim_id);
 }
 
@@ -3260,10 +3259,9 @@ fn register_required_dimension_decl(
     registry: &mut RegistryBuilder,
     dag_id: &crate::dag_id::DagId,
 ) {
-    let dim_id = crate::dimension::BaseDimId::UserDefined {
-        dag: dag_id.clone(),
-        name: d.name.value.to_string(),
-    };
+    let dim_id = crate::dimension::BaseDimId::UserDefined(
+        crate::syntax::dimension::ResolvedDimName::from_def(dag_id.clone(), d.name.value.clone()),
+    );
     registry.register_base_dimension(d.name.value.clone(), dim_id);
 }
 

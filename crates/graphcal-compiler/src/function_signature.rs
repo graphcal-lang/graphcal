@@ -941,11 +941,15 @@ mod tests {
     }
 
     fn length() -> Dimension {
-        Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        Dimension::base(BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Length,
+        ))
     }
 
     fn time() -> Dimension {
-        Dimension::base(BaseDimId::Prelude("Time".to_string()))
+        Dimension::base(BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Time,
+        ))
     }
 
     #[test]

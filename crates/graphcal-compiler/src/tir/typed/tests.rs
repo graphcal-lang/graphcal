@@ -130,7 +130,9 @@ fn resolve_concrete_dimension() {
     let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
     assert_eq!(
         resolved,
-        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Length
+        )))
     );
 }
 
@@ -139,10 +141,13 @@ fn resolve_compound_dimension() {
     let r = make_registry();
     let te = parse_type("Length / Time^2");
     let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
-    let expected = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string()))
-            .pow(2)
-            .unwrap())
+    let expected = (Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    )) / Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Time,
+    ))
+    .pow(2)
+    .unwrap())
     .unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Quantity(expected));
 }
@@ -216,7 +221,7 @@ fn resolve_concrete_indexed() {
             assert_eq!(
                 *base,
                 ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
-                    "Length".to_string()
+                    crate::dimension::PreludeBaseDimension::Length,
                 )))
             );
             assert_eq!(indexes.len(), 1);
@@ -294,8 +299,11 @@ fn resolve_velocity_derived_dimension() {
     let r = make_registry();
     let te = parse_type("Velocity");
     let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
-    let expected = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+    let expected = (Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    )) / Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Time,
+    )))
     .unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Quantity(expected));
 }
@@ -536,7 +544,7 @@ fn type_resolve_complex() {
         ResolvedTypeExpr::Complex {
             dimension: ResolvedDimArg::Concrete(dimension),
             ..
-        } if *dimension == Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        } if *dimension == Dimension::base(BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length))
     ));
     assert!(matches!(
         &tir.root().resolved_decl_types[&ScopedName::parse("series").unwrap()],
@@ -608,7 +616,7 @@ fn type_resolve_generics() {
             assert_eq!(
                 generic_args[0],
                 ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
-                    BaseDimId::Prelude("Length".to_string())
+                    BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length)
                 )))
             );
             assert!(
@@ -620,7 +628,9 @@ fn type_resolve_generics() {
     // x_pos should be quantity Length
     assert_eq!(
         tir.root().resolved_decl_types[&ScopedName::parse("x_pos").unwrap()],
-        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude("Length".to_string())))
+        ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Length
+        )))
     );
 }
 
@@ -640,7 +650,7 @@ fn type_resolve_default_type_params() {
             assert_eq!(
                 generic_args[0],
                 ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
-                    BaseDimId::Prelude("Length".to_string())
+                    BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length)
                 )))
             );
             assert!(
@@ -661,7 +671,7 @@ fn type_resolve_default_type_params() {
             assert_eq!(
                 generic_args[0],
                 ResolvedGenericArg::Dim(ResolvedDimArg::Concrete(Dimension::base(
-                    BaseDimId::Prelude("Length".to_string())
+                    BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length)
                 )))
             );
             assert!(
@@ -746,7 +756,9 @@ fn convert_int() {
 
 #[test]
 fn convert_quantity() {
-    let dim = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    let dim = Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    ));
     let dt =
         resolved_to_declared_type(&ResolvedTypeExpr::Quantity(dim.clone()), &make_src()).unwrap();
     assert_eq!(dt, DeclaredType::Quantity(dim));
@@ -774,7 +786,7 @@ fn convert_indexed() {
     let dt = resolved_to_declared_type(
         &ResolvedTypeExpr::Indexed {
             base: Box::new(ResolvedTypeExpr::Quantity(Dimension::base(
-                BaseDimId::Prelude("Length".to_string()),
+                BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length),
             ))),
             indexes: vec![ResolvedIndex::Concrete(
                 resolved_index.clone(),
@@ -788,7 +800,7 @@ fn convert_indexed() {
         dt,
         DeclaredType::Indexed {
             element: Box::new(DeclaredType::Quantity(Dimension::base(BaseDimId::Prelude(
-                "Length".to_string()
+                crate::dimension::PreludeBaseDimension::Length,
             )))),
             index: IndexTypeRef::from_resolved(resolved_index),
         }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::dimension::{BaseDimId, Dimension, Rational};
+use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
 use crate::function_signature::FunctionSignature;
 
 const fn dimensionless() -> Dimension {
@@ -9,7 +9,7 @@ const fn dimensionless() -> Dimension {
 }
 
 fn angle() -> Dimension {
-    Dimension::base(BaseDimId::Prelude("Angle".to_string()))
+    Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Angle))
 }
 
 /// A built-in quantity function: an evaluation kernel paired with its

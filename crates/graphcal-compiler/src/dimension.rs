@@ -149,17 +149,6 @@ impl std::ops::Sub for Rational {
     }
 }
 
-impl std::ops::Neg for Rational {
-    type Output = Self;
-
-    fn neg(self) -> Self {
-        self.checked_neg().unwrap_or(Self {
-            num: i32::MAX,
-            den: self.den,
-        })
-    }
-}
-
 impl std::ops::Mul for Rational {
     type Output = Result<Self, RationalError>;
     fn mul(self, rhs: Self) -> Self::Output {
@@ -173,26 +162,120 @@ fn gcd64(a: u64, b: u64) -> u64 {
     if b == 0 { a } else { gcd64(b, a % b) }
 }
 
+macro_rules! define_prelude_base_dimensions {
+    (@unit $_variant:ident) => { () };
+    (@count $($variant:ident),+ $(,)?) => {
+        <[()]>::len(&[$(define_prelude_base_dimensions!(@unit $variant)),+])
+    };
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident => $name:literal
+        ),+ $(,)?
+    ) => {
+        /// Closed vocabulary of independent physical dimensions built into the prelude.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum PreludeBaseDimension {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )+
+        }
+
+        impl PreludeBaseDimension {
+            /// Every prelude base dimension in canonical registration order.
+            pub const ALL: [Self; define_prelude_base_dimensions!(@count $($variant),+)] = [
+                $(Self::$variant),+
+            ];
+
+            /// Canonical source spellings in the same order as [`Self::ALL`].
+            pub const ALL_NAMES: [&'static str; Self::ALL.len()] = [$($name),+];
+
+            /// Parse a source spelling at the text-to-semantic boundary.
+            #[must_use]
+            pub fn parse(name: &str) -> Option<Self> {
+                match name {
+                    $($name => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            /// Canonical source spelling.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name),+
+                }
+            }
+        }
+
+        impl PartialOrd for PreludeBaseDimension {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        impl Ord for PreludeBaseDimension {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.as_str().cmp(other.as_str())
+            }
+        }
+
+        impl fmt::Display for PreludeBaseDimension {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+    };
+}
+
+define_prelude_base_dimensions! {
+    /// Distance.
+    Length => "Length",
+    /// Duration.
+    Time => "Time",
+    /// Inertial mass.
+    Mass => "Mass",
+    /// Thermodynamic temperature.
+    Temperature => "Temperature",
+    /// Electric current.
+    ElectricCurrent => "ElectricCurrent",
+    /// Amount of substance.
+    Amount => "Amount",
+    /// Luminous intensity.
+    LuminousIntensity => "LuminousIntensity",
+    /// Plane angle.
+    Angle => "Angle",
+}
+
 /// A unique identifier for a base dimension.
 ///
 /// Identity is name-based rather than auto-incremented, ensuring consistency
 /// across per-file compilation units (important for diamond imports).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BaseDimId {
-    /// Built-in prelude dimension (e.g., "Length", "Time", "Mass").
-    Prelude(String),
-    /// User-defined dimension, identified by the defining DAG's identity + name.
-    UserDefined {
-        dag: crate::dag_id::DagId,
-        name: String,
-    },
+    /// Built-in prelude dimension.
+    Prelude(PreludeBaseDimension),
+    /// User-defined dimension with its canonical defining DAG and typed leaf.
+    UserDefined(crate::syntax::dimension::ResolvedDimName),
+}
+
+impl BaseDimId {
+    /// Canonical leaf spelling used only at display/serialization boundaries.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Prelude(dimension) => dimension.as_str(),
+            Self::UserDefined(name) => name.as_str(),
+        }
+    }
 }
 
 /// A physical dimension represented as a sparse vector of rational exponents
 /// over base dimensions.
 ///
 /// For example, Velocity = Length^1 * Time^-1 is represented as
-/// `{BaseDimId::Prelude("Length"): 1, BaseDimId::Prelude("Time"): -1}`.
+/// `{BaseDimId::Prelude(Length): 1, BaseDimId::Prelude(Time): -1}`.
 ///
 /// Only non-zero exponents are stored. An empty map represents the dimensionless
 /// dimension.
@@ -214,11 +297,7 @@ impl fmt::Debug for Dimension {
                     write!(f, " * ")?;
                 }
                 first = false;
-                match id {
-                    BaseDimId::Prelude(name) | BaseDimId::UserDefined { name, .. } => {
-                        write!(f, "{name}")?;
-                    }
-                }
+                write!(f, "{}", id.name())?;
                 if *exp != Rational::ONE {
                     write!(f, "^{exp}")?;
                 }
@@ -344,13 +423,12 @@ impl Dimension {
             }
             let name = registered_base_dim_name(names, id)?;
             if first {
-                // Only negative exponents (e.g., Frequency = s^-1)
+                // Only negative exponents (e.g., Frequency = s^-1).
                 push_dim_factor(&mut out, name, exp);
                 first = false;
             } else {
                 out.push_str(div_sep);
-                let pos_exp = -exp;
-                push_dim_factor(&mut out, name, pos_exp);
+                push_dim_factor_magnitude(&mut out, name, exp);
             }
         }
 
@@ -373,6 +451,21 @@ fn push_dim_factor(out: &mut String, name: &str, exp: Rational) {
     if exp != Rational::ONE {
         out.push('^');
         out.push_str(&exp.to_string());
+    }
+}
+
+/// Render the positive magnitude of a known-negative exponent without
+/// constructing a positive [`Rational`] that may be unrepresentable (`i32::MIN`).
+fn push_dim_factor_magnitude(out: &mut String, name: &str, exp: Rational) {
+    out.push_str(name);
+    let magnitude = exp.num().unsigned_abs();
+    if magnitude != 1 || exp.den() != 1 {
+        out.push('^');
+        out.push_str(&magnitude.to_string());
+        if exp.den() != 1 {
+            out.push('/');
+            out.push_str(&exp.den().to_string());
+        }
     }
 }
 
@@ -462,42 +555,42 @@ mod tests {
 
     // Helper: well-known base dimension IDs matching prelude dimensions.
     fn length() -> BaseDimId {
-        BaseDimId::Prelude("Length".to_string())
+        BaseDimId::Prelude(PreludeBaseDimension::Length)
     }
     fn time() -> BaseDimId {
-        BaseDimId::Prelude("Time".to_string())
+        BaseDimId::Prelude(PreludeBaseDimension::Time)
     }
     fn mass() -> BaseDimId {
-        BaseDimId::Prelude("Mass".to_string())
+        BaseDimId::Prelude(PreludeBaseDimension::Mass)
     }
 
     /// Build a names map for display tests.
     fn test_names() -> BTreeMap<BaseDimId, String> {
-        let mut m = BTreeMap::new();
-        m.insert(
-            BaseDimId::Prelude("Length".to_string()),
-            "Length".to_string(),
+        PreludeBaseDimension::ALL
+            .into_iter()
+            .map(|dimension| {
+                (
+                    BaseDimId::Prelude(dimension),
+                    dimension.as_str().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn prelude_base_dimension_vocabulary_is_closed_and_roundtrips() {
+        assert_eq!(
+            PreludeBaseDimension::ALL.map(PreludeBaseDimension::as_str),
+            PreludeBaseDimension::ALL_NAMES
         );
-        m.insert(BaseDimId::Prelude("Time".to_string()), "Time".to_string());
-        m.insert(BaseDimId::Prelude("Mass".to_string()), "Mass".to_string());
-        m.insert(
-            BaseDimId::Prelude("Temperature".to_string()),
-            "Temperature".to_string(),
-        );
-        m.insert(
-            BaseDimId::Prelude("ElectricCurrent".to_string()),
-            "ElectricCurrent".to_string(),
-        );
-        m.insert(
-            BaseDimId::Prelude("Amount".to_string()),
-            "Amount".to_string(),
-        );
-        m.insert(
-            BaseDimId::Prelude("LuminousIntensity".to_string()),
-            "LuminousIntensity".to_string(),
-        );
-        m.insert(BaseDimId::Prelude("Angle".to_string()), "Angle".to_string());
-        m
+        for dimension in PreludeBaseDimension::ALL {
+            assert_eq!(
+                PreludeBaseDimension::parse(dimension.as_str()),
+                Some(dimension)
+            );
+        }
+        assert_eq!(PreludeBaseDimension::parse("Lenght"), None);
+        assert_eq!(PreludeBaseDimension::parse("Velocity"), None);
     }
 
     #[test]
@@ -526,16 +619,16 @@ mod tests {
         assert_eq!(prod, r(1, 6));
 
         // -1/2
-        assert_eq!(-half, r(-1, 2));
+        assert_eq!(half.checked_neg().unwrap(), r(-1, 2));
     }
 
     #[test]
-    fn rational_negation_does_not_panic_on_min_i32() {
+    fn rational_negation_reports_min_i32_overflow() {
         let min = Rational {
             num: i32::MIN,
             den: 1,
         };
-        assert_eq!((-min).num(), i32::MAX);
+        assert_eq!(min.checked_neg(), Err(RationalError::Overflow));
     }
 
     #[test]
@@ -665,6 +758,21 @@ mod tests {
     }
 
     #[test]
+    fn dimension_display_preserves_min_i32_denominator_magnitude() {
+        let dimension = Dimension {
+            exponents: BTreeMap::from([
+                (length(), Rational::from(i32::MIN)),
+                (mass(), Rational::ONE),
+            ]),
+        };
+
+        assert_eq!(
+            dimension.try_format_with(&test_names()).unwrap(),
+            "Mass / Length^2147483648"
+        );
+    }
+
+    #[test]
     fn dimension_display_area() {
         let names = test_names();
         let area = Dimension::base(length()).pow(2).unwrap();
@@ -682,10 +790,10 @@ mod tests {
     #[test]
     fn dimension_user_defined_base() {
         // User-defined base dimension gets a new ID
-        let info_id = BaseDimId::UserDefined {
-            dag: crate::dag_id::DagId::root_in_package("test", "test"),
-            name: "Information".to_string(),
-        };
+        let info_id = BaseDimId::UserDefined(crate::syntax::dimension::ResolvedDimName::from_def(
+            crate::dag_id::DagId::root_in_package("test", "test"),
+            crate::syntax::dimension::DimName::expect_valid("Information"),
+        ));
         let information = Dimension::base(info_id.clone());
         let t = Dimension::base(time());
         let bandwidth = (information / t).unwrap();
@@ -730,18 +838,6 @@ mod tests {
                 .prop_map(|(n, d)| Rational::try_new(n, d).expect("filtered d != 0"))
         }
 
-        /// The 8 prelude dimension names for property testing.
-        const PRELUDE_DIMS: [&str; 8] = [
-            "Length",
-            "Time",
-            "Mass",
-            "Temperature",
-            "ElectricCurrent",
-            "Amount",
-            "LuminousIntensity",
-            "Angle",
-        ];
-
         /// Strategy for generating Dimension values with small exponents.
         /// Uses a fixed set of prelude base dimension IDs.
         fn arb_dimension() -> impl Strategy<Value = Dimension> {
@@ -749,7 +845,7 @@ mod tests {
                 let exponents = map
                     .into_iter()
                     .filter(|(_, r)| !r.is_zero())
-                    .map(|(idx, r)| (BaseDimId::Prelude(PRELUDE_DIMS[idx].to_string()), r))
+                    .map(|(idx, r)| (BaseDimId::Prelude(PreludeBaseDimension::ALL[idx]), r))
                     .collect();
                 Dimension { exponents }
             })
@@ -798,7 +894,7 @@ mod tests {
 
             #[test]
             fn rational_additive_inverse(a in arb_rational()) {
-                prop_assert_eq!((a + (-a)).unwrap(), Rational::ZERO);
+                prop_assert_eq!((a + a.checked_neg().unwrap()).unwrap(), Rational::ZERO);
             }
 
             #[test]
