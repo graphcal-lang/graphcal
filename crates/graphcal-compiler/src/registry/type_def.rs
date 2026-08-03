@@ -126,7 +126,7 @@ impl TypeDef {
         let [only] = members.as_slice() else {
             return None;
         };
-        (only.name.as_str() == self.name.as_str()).then_some(only.fields.as_slice())
+        (only.name.atom() == self.name.atom()).then_some(only.fields.as_slice())
     }
 }
 

@@ -2,7 +2,6 @@ use crate::syntax::ast::DeclKind;
 use crate::syntax::ast::Declaration;
 use crate::syntax::ast::ImportKind;
 use crate::syntax::ast::ModulePath;
-use crate::syntax::ast::Visibility;
 use crate::syntax::module_name::ModuleAliasName;
 use crate::syntax::token::Token;
 
@@ -45,11 +44,7 @@ impl Parser<'_> {
 
         Ok(Declaration {
             attributes: vec![],
-            kind: DeclKind::Import(crate::syntax::ast::ImportDecl {
-                visibility: Visibility::Private,
-                path,
-                kind,
-            }),
+            kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
             span,
         })
     }
@@ -219,7 +214,6 @@ impl Parser<'_> {
         Ok(Declaration {
             attributes: vec![],
             kind: DeclKind::Include(crate::syntax::ast::IncludeDecl {
-                visibility: Visibility::Private,
                 path,
                 param_bindings,
                 kind,

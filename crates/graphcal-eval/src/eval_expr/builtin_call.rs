@@ -136,7 +136,7 @@ mod tests {
         for name in BuiltinFnName::ALL {
             match eval_rule_for_builtin(*name) {
                 EvalBuiltinRule::RegistryFunction => assert!(
-                    ordinary_registry_functions.contains_key(name.as_str()),
+                    ordinary_registry_functions.contains_key(name),
                     "BuiltinFnName::{name:?} (`{}`) is neither in builtin_functions() nor handled by a custom eval rule",
                     name.as_str()
                 ),

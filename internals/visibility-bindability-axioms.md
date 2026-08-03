@@ -361,32 +361,28 @@ ordinary export visibility `V`.
 ### 4.1 Visibility on `include` and `import`
 
 `include` and `import` are use-sites, not declarations — A5 says they
-don't admit bindability (`B ≡ fixed`). The V-axis still applies: a bare
-form is file-local; a `pub`-prefixed form re-exports.
-
-Two forms (per [issue #452](https://github.com/graphcal-lang/graphcal/issues/452)):
+don't admit bindability (`B ≡ fixed`). The use-site itself also has no
+V-axis. Bare/aliased forms create private qualified bindings; visibility
+may be attached only to bindings explicitly named in a selective list.
 
 ```text
-// Whole-module re-export under a namespace
-pub include "./container.gcl"(Element: Inner) as c;
-pub import  "./types.gcl" as types;
+// Private qualified bindings
+include pkg.container(Element: Inner) as c;
+import pkg.types as types;
 
-// Selective re-export
-include "./container.gcl"(Element: Inner) { pub items };
-import  "./types.gcl" { pub Length, pub Mass };
+// Selective re-exports
+include pkg.container(Element: Inner).{ pub origin, helper };
+import pkg.types.{ pub dim Length, pub dim Mass, helper };
 ```
 
-Both forms feed A9 Case 2 (V006). For the whole-module form, the check
-ranges over every `pub` item in the included file; for the selective
-form, only the listed `pub`-marked items.
+Only `origin`, `Length`, and `Mass` become public in this example. `helper`
+and both qualified aliases remain private. `pub import ...`, `pub include
+...`, and their `pub(bind)` variants are parse errors.
 
-**Decision: the two forms are mutually exclusive.** A given `include` /
-`import` statement re-exports either as a whole-module namespace
-(`pub include "X" as c`) or selectively (`include "X" { pub items }`),
-not both. Mixing would create ambiguity about whether selectively
-re-exported items are reachable both directly and via the namespace,
-and the doubled access path provides no expressive power that an
-adjacent second include statement couldn't provide.
+Selective public items feed A9 Case 2 (V006). The check ranges only over
+signatures of explicitly `pub`-marked items after include substitutions.
+This prevents a dependency's newly added public declaration/output from
+silently widening a facade or introducing a new leakage error.
 
 ## 5. Canonical idioms
 
@@ -508,7 +504,7 @@ fire on `pub const node y`) or (b) accept that exposing `y` as a
 | 2   | Importer overrides index, omits `param` binding                                                         | A8: `param` default mentions `Phase::v` and was not re-bound                                                          | **V005**                                                              |
 | 3   | Library declares `pub(bind) index Phase` and `node total = @cost[Phase::a] + @cost[Phase::b]`           | A10: `node` is non-bindable, body has `Phase::v` literals → forbidden at declaration                                  | **V004 at library compile time** (no include needed)                  |
 | 4   | Dependency abstracts over `Phase` via `sum(p in Phase, …)`                                              | body mentions no name nominally tied to `Phase`; A8 vacuous                                                           | **OK**                                                                |
-| 5   | `pub include "container.gcl"(Element: PrivateInner) as c;` (or `{ pub items }`)                         | A9 Case 2: re-exported items' effective signatures name `PrivateInner` (V=private at importer)                        | **V006**                                                              |
+| 5   | `include pkg.container(Element: PrivateInner).{ pub origin };`                                         | A9 Case 2: `origin`'s effective signature names `PrivateInner` (V=private at importer)                               | **V006**                                                              |
 | 6   | Required `index I;` declared without `pub(bind)` (bare → V=private)                                     | A4 (with A3) forbids the state — required forces bindable; an ordinary bindable declaration must be exported          | **V002**                                                              |
 | 7   | `pub` declaration whose annotation names a private symbol                                               | A9 directly                                                                                                           | **V003**                                                              |
 | 8   | Library uses `100 jpy`; importer wants different rate; library follows §5.2 idiom                       | importer binds `jpy_in_usd`; A8 trivially satisfied                                                                   | **OK**                                                                |
@@ -518,9 +514,9 @@ fire on `pub const node y`) or (b) accept that exposing `y` as a
 
 ## 8. What the axioms intentionally don't decide
 
-- **Re-export semantics.** Resolved by issue #452: `pub include` / `pub
-import` for whole-module, `{ pub items }` for selective. See §4.1.
-  V006 becomes implementable once #452 lands.
+- **Re-export semantics.** Resolved by the selective-only policy in §4.1:
+  use-sites are private and only `{ pub items }` bindings are re-exported.
+  V006 checks those explicitly selected signatures.
 - **Scoped visibility.** A1 / A9 generalise by replacing `exported` with a
   lattice of export scopes while retaining input ports as a distinct role.
   `pub(bind)` syntax composes as
@@ -595,8 +591,8 @@ something more primitive.
   runtime-independent case.
 - **Surface syntax is `pub(bind)`** (Option B in #444 §9). Bare for
   private, `pub` for exported-only, `pub(bind)` for exported + bindable.
-  Re-exports use `pub include` / `pub import` and `{ pub item }` per
-  #452.
+  Import/include use-sites carry no leading visibility; re-exports use only
+  per-item `{ pub item }` selectors.
 - **A8 covers both flavours.** Value-override (`param`) and nominal-
   rebind (`index`, `type`, `dimension`) reconcile under the same
   axiom; the resolver dispatches on the bound symbol's kind.

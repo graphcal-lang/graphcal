@@ -10,7 +10,7 @@ use graphcal_compiler::hir::{
     ConstRef, ExprKind as HirExprKind, ExprLoweringContext, FunctionRef, GenericScope,
     PreludeTypeScope,
 };
-use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
+use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -614,7 +614,6 @@ impl PreparedProject {
             return Err(ModelExecutionError::PlanMismatch);
         }
 
-        let builtin_consts = builtin_constants();
         let builtin_fns = builtin_functions();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let EvalLoopResult { values, errors } = run_eval_loop_with_bindings(
@@ -622,7 +621,6 @@ impl PreparedProject {
             &row.bindings,
             &self.tir,
             &self.source,
-            builtin_consts,
             builtin_fns,
             &self.host_fns,
             &cancellation,
@@ -658,7 +656,6 @@ impl PreparedProject {
         let empty_locals = HirLocalValueMap::root();
         let ctx = EvalContext {
             cancellation,
-            builtin_consts,
             builtin_fns,
             registry: &self.tir.registry,
             src: &self.source,
@@ -1398,12 +1395,10 @@ impl PreparedProject {
     ) -> Result<RuntimeValue, CompileError> {
         let values = RuntimeValueMap::new();
         let locals = HirLocalValueMap::root();
-        let builtin_consts = builtin_constants();
         let builtin_fns = builtin_functions();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let context = EvalContext {
             cancellation,
-            builtin_consts,
             builtin_fns,
             registry: &self.tir.registry,
             src: &self.source,
@@ -1844,7 +1839,7 @@ fn validate_closed_hir(expr: &graphcal_compiler::hir::Expr) -> Result<(), &'stat
             .iter()
             .try_for_each(|entry| validate_closed_hir(&entry.value)),
         HirExprKind::KeyForm { arg, .. } => validate_closed_hir(arg),
-        HirExprKind::Error => Err("an unresolved expression is not allowed"),
+        HirExprKind::Error { .. } => Err("an unresolved expression is not allowed"),
         HirExprKind::StringLiteral(_)
         | HirExprKind::TypeSystemRef(_)
         | HirExprKind::GraphRef(_)

@@ -190,6 +190,7 @@ pub fn expr_lower_error_to_graphcal(
         }
         hir::ExprLowerError::InvalidEpochTimeScaleArgument { span } => {
             return GraphcalError::InvalidEpochTimeScaleArgument {
+                expected: crate::registry::time_scale::TimeScale::expected_names(),
                 src: src.clone(),
                 span: (*span).into(),
             };
@@ -197,6 +198,7 @@ pub fn expr_lower_error_to_graphcal(
         hir::ExprLowerError::UnsupportedEpochTimeScale { name, span } => {
             return GraphcalError::UnsupportedEpochTimeScale {
                 name: name.clone(),
+                expected: crate::registry::time_scale::TimeScale::expected_names(),
                 src: src.clone(),
                 span: (*span).into(),
             };

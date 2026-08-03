@@ -1,7 +1,7 @@
-// main.gcl -- pub-re-exports container with Element bound to a
+// main.gcl -- selectively re-exports `origin` with Element bound to a
 // private-local type → V006 (A9 case 2).
 type PrivateInner {
     PrivateInner(size: Length),
 }
 
-pub include container.lib(Element: PrivateInner) as c;
+include container.lib(Element: PrivateInner).{ pub origin };

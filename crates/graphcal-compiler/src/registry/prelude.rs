@@ -1,5 +1,5 @@
 use crate::dag_id::DagId;
-use crate::dimension::{Dimension, RationalError};
+use crate::dimension::{Dimension, PreludeBaseDimension, RationalError};
 use crate::syntax::dimension::{DimName, UnitName};
 
 use crate::registry::types::{PositiveFiniteScale, RegistryBuilder};
@@ -20,16 +20,8 @@ const PRELUDE_DAG_ID_SEGMENT: &str = "__graphcal_prelude__";
 /// derived) reduces to exponents over base dimensions; user-defined *base*
 /// dimensions are scoped to their defining module and never cross such
 /// boundaries.
-pub const PRELUDE_BASE_DIMENSION_NAMES: [&str; 8] = [
-    "Length",
-    "Time",
-    "Mass",
-    "Temperature",
-    "ElectricCurrent",
-    "Amount",
-    "LuminousIntensity",
-    "Angle",
-];
+pub const PRELUDE_BASE_DIMENSION_NAMES: [&str; PreludeBaseDimension::ALL.len()] =
+    PreludeBaseDimension::ALL_NAMES;
 
 /// Look up a prelude *base* dimension by name.
 ///
@@ -41,9 +33,7 @@ pub const PRELUDE_BASE_DIMENSION_NAMES: [&str; 8] = [
 pub fn prelude_base_dimension(name: &str) -> Option<Dimension> {
     use crate::dimension::BaseDimId;
 
-    PRELUDE_BASE_DIMENSION_NAMES
-        .contains(&name)
-        .then(|| Dimension::base(BaseDimId::Prelude(name.to_string())))
+    PreludeBaseDimension::parse(name).map(|base| Dimension::base(BaseDimId::Prelude(base)))
 }
 
 /// Dimension names provided by the Graphcal prelude.
@@ -112,22 +102,22 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
 
     let length_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("Length"),
-        BaseDimId::Prelude("Length".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::Length),
         "m".to_string(),
     );
     let time_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("Time"),
-        BaseDimId::Prelude("Time".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::Time),
         "s".to_string(),
     );
     let mass_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("Mass"),
-        BaseDimId::Prelude("Mass".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::Mass),
         "kg".to_string(),
     );
     let temperature_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("Temperature"),
-        BaseDimId::Prelude("Temperature".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::Temperature),
         "K".to_string(),
     );
     // Real-world temperature units (°C, °F) are affine scales; reject user
@@ -136,22 +126,22 @@ fn load_base_dimensions(r: &mut RegistryBuilder) -> BaseDimIds {
     r.mark_affine_prone(temperature_id.clone());
     let electric_current_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("ElectricCurrent"),
-        BaseDimId::Prelude("ElectricCurrent".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::ElectricCurrent),
         "A".to_string(),
     );
     let amount_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("Amount"),
-        BaseDimId::Prelude("Amount".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::Amount),
         "mol".to_string(),
     );
     let luminous_intensity_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("LuminousIntensity"),
-        BaseDimId::Prelude("LuminousIntensity".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::LuminousIntensity),
         "cd".to_string(),
     );
     let angle_id = r.register_base_dimension_with_symbol(
         DimName::expect_valid("Angle"),
-        BaseDimId::Prelude("Angle".to_string()),
+        BaseDimId::Prelude(PreludeBaseDimension::Angle),
         "rad".to_string(),
     );
 
@@ -346,13 +336,13 @@ mod tests {
 
     // Well-known IDs matching prelude dimension names.
     fn length_id() -> BaseDimId {
-        BaseDimId::Prelude("Length".to_string())
+        BaseDimId::Prelude(PreludeBaseDimension::Length)
     }
     fn time_id() -> BaseDimId {
-        BaseDimId::Prelude("Time".to_string())
+        BaseDimId::Prelude(PreludeBaseDimension::Time)
     }
     fn mass_id() -> BaseDimId {
-        BaseDimId::Prelude("Mass".to_string())
+        BaseDimId::Prelude(PreludeBaseDimension::Mass)
     }
 
     #[test]

@@ -262,7 +262,9 @@ fn check_dimensionless_arithmetic() {
 #[test]
 fn check_length_unit_literal() {
     let types = check("param alt: Length = 400.0 km;").unwrap();
-    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    let length = Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    ));
     assert_eq!(
         types[&ScopedName::parse("alt").unwrap()],
         DeclaredType::Quantity(length)
@@ -273,8 +275,11 @@ fn check_length_unit_literal() {
 fn check_velocity_from_division() {
     let source = "param dist: Length = 100.0 km;\nparam time: Time = 2.0 h;\nnode speed: Velocity = @dist / @time;";
     let types = check(source).unwrap();
-    let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+    let velocity = (Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    )) / Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Time,
+    )))
     .unwrap();
     assert_eq!(
         types[&ScopedName::parse("speed").unwrap()],
@@ -385,8 +390,11 @@ fn check_conversion_same_dimension() {
     let source =
         "param speed: Velocity = 100.0 m / s;\nnode speed_kmh: Velocity = @speed -> km / h;";
     let types = check(source).unwrap();
-    let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+    let velocity = (Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    )) / Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Time,
+    )))
     .unwrap();
     assert_eq!(
         types[&ScopedName::parse("speed_kmh").unwrap()],
@@ -470,8 +478,11 @@ Maneuver.Correction: 0.5 km / s,
 Maneuver.Insertion: 1.8 km / s,
 };";
     let types = check(source).unwrap();
-    let velocity = (Dimension::base(BaseDimId::Prelude("Length".to_string()))
-        / Dimension::base(BaseDimId::Prelude("Time".to_string())))
+    let velocity = (Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    )) / Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Time,
+    )))
     .unwrap();
     assert_eq!(
         types[&ScopedName::parse("dv").unwrap()],
@@ -2170,7 +2181,9 @@ node doubled: Length = @scale(factor: 2.0, v: @src).result;
 #[test]
 fn inline_dag_call_basic_returns_output_type() {
     let types = check(INLINE_DAG_CALL_SCALE).unwrap();
-    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    let length = Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    ));
     assert_eq!(
         types[&ScopedName::parse("doubled").unwrap()],
         DeclaredType::Quantity(length)
@@ -2300,7 +2313,9 @@ param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
 node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
 ";
     let types = check(source).unwrap();
-    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    let length = Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    ));
     assert_eq!(
         types[&ScopedName::parse("distances").unwrap()],
         DeclaredType::Indexed {
@@ -2347,7 +2362,9 @@ param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 3.0 m };
 node out: Length = @doubler(v: @dist).result[Region.A];
 ";
     let types = check(source).unwrap();
-    let length = Dimension::base(BaseDimId::Prelude("Length".to_string()));
+    let length = Dimension::base(BaseDimId::Prelude(
+        crate::dimension::PreludeBaseDimension::Length,
+    ));
     assert_eq!(
         types[&ScopedName::parse("out").unwrap()],
         DeclaredType::Quantity(length)

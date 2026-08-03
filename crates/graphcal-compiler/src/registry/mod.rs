@@ -7,7 +7,6 @@ pub mod dimension_registry;
 pub mod error;
 pub mod format;
 pub mod index;
-pub mod manifest;
 pub mod prelude;
 pub mod resolve_types;
 pub mod runtime_value;

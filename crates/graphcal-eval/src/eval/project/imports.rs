@@ -614,7 +614,6 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         }
     }
 
-    let pub_reexport_whole = include_decl.visibility.is_public();
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
@@ -639,7 +638,6 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         requested_plots,
         import_span: decl.span,
         import_item_attributes,
-        pub_reexport_whole,
         pub_reexport_items,
     });
     Ok(())
@@ -828,7 +826,6 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         }
     }
 
-    let pub_reexport_whole = include_decl.visibility.is_public();
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
@@ -856,7 +853,6 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         requested_plots,
         import_span: decl.span,
         import_item_attributes,
-        pub_reexport_whole,
         pub_reexport_items,
     });
     Ok(())

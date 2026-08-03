@@ -19,7 +19,7 @@ use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::ResolvedName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
-use graphcal_compiler::registry::builtins::BuiltinFunction;
+use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, TypeDef};
@@ -36,13 +36,13 @@ pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
-/// Bundles built-in constants, built-in functions, the type/unit registry,
-/// and source information for diagnostics.
+/// Bundles built-in functions, the type/unit registry, and source information
+/// for diagnostics. Built-in constants carry their values in their typed HIR
+/// identity and need no runtime string-keyed environment.
 pub struct EvalContext<'a> {
     /// Cooperative cancellation for recursive expression evaluation.
     pub cancellation: graphcal_compiler::cancellation::CancellationToken,
-    pub builtin_consts: &'a HashMap<&'a str, f64>,
-    pub builtin_fns: &'a HashMap<&'a str, BuiltinFunction>,
+    pub builtin_fns: &'a BuiltinFunctions,
     pub registry: &'a Registry,
     pub src: &'a NamedSource<Arc<String>>,
     /// The enclosing file's full TIR.
@@ -130,7 +130,6 @@ impl<'a> EvalContext<'a> {
     {
         EvalContext {
             cancellation: self.cancellation.clone(),
-            builtin_consts: self.builtin_consts,
             builtin_fns: self.builtin_fns,
             registry: self.registry,
             src,

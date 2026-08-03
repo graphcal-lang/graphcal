@@ -95,9 +95,9 @@ impl DagTIR {
         // imported decl types from an inline DAG's self-import back onto the
         // importer for names the importer already declares itself.
         let mut declared_types = HashMap::new();
-        for name in crate::registry::builtins::builtin_constants().keys() {
+        for constant in crate::builtin::BuiltinConst::ALL {
             declared_types.insert(
-                ScopedName::local(DeclName::expect_valid(*name)),
+                ScopedName::local(DeclName::expect_valid(constant.as_str())),
                 crate::registry::declared_type::DeclaredType::Quantity(Dimension::dimensionless()),
             );
         }
@@ -1071,8 +1071,8 @@ impl HirPolicyChecker<'_> {
         let recurse =
             |inner: &hir::Expr| self.check_expr(inner, const_body, check_pub_bind_literals);
         match &expr.kind {
-            hir::ExprKind::Error
-            | hir::ExprKind::Number(_)
+            hir::ExprKind::Error { children } => children.iter().try_for_each(recurse),
+            hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
             | hir::ExprKind::StringLiteral(_)

@@ -208,32 +208,37 @@ node span_miles: Length = @span -> a.mile;
 The compiler resolves those paths to the canonical exported item; it does not
 merge same-leaf types, indexes, constructors, or labels from different modules.
 
-### `pub import` — re-export
+### Selective import re-exports
 
-Prefixing an `import` with `pub` re-exports the imported names under
-the importer's namespace:
-
-```graphcal
-pub import nasa.rocket;                              // re-exports `rocket`
-pub import nasa.rocket.{type Orbit, compute_thrust}; // re-exports both items
-```
-
-The brace form also supports per-item `pub`, for fine-grained
-re-export:
+An import is always a private use-site. To re-export a binding, select it
+explicitly and put `pub` on that item:
 
 ```graphcal
 import nasa.rocket.{ pub type Orbit, compute_thrust };
 //                   ^^^ only `Orbit` is re-exported
 ```
 
-Mixing whole-import `pub` with per-item `pub` is rejected:
+Bare and aliased imports remain private qualified bindings. This prevents a
+new export in a dependency from silently widening an intermediate module's
+public API:
 
 ```graphcal
-pub import nasa.rocket.{ pub type Orbit };   // parse error
+import nasa.rocket;       // private binding named `rocket`
+import nasa.rocket as r;  // private binding named `r`
 ```
 
-`pub(bind)` is illegal on `import`. Imports name use-sites, and
-use-sites are not bindable — `pub(bind)` belongs only on declarations.
+All leading visibility forms are rejected. Put `pub` on each selected item
+instead:
+
+```graphcal
+pub import nasa.rocket;                    // parse error
+pub import nasa.rocket.{ type Orbit };     // parse error
+pub(bind) import nasa.rocket;              // parse error
+import nasa.rocket.{ pub type Orbit };     // explicit public binding
+```
+
+Imports are use-sites and are never bindable; `pub(bind)` belongs only on
+bindable declarations.
 
 ## The `include` Form
 
@@ -304,14 +309,19 @@ dag mission {
 }
 ```
 
-### `pub include` — re-export
+### Selective include-output re-exports
 
-A leading `pub` on `include` re-exports the included outputs from the
-including DAG:
+An include is also a private use-site. Re-export only explicitly selected
+outputs by marking each output `pub` inside the brace list:
 
 ```graphcal
-pub include nasa.rocket.compute_thrust(orbit: @o).{ thrust };
+include nasa.rocket.compute_thrust(orbit: @o).{ pub thrust, mass_flow };
+//                                                      ^^^^^^^^^ private here
 ```
+
+Bare and aliased includes create private configured instances. Leading
+`pub include` and `pub(bind) include` forms are parse errors; Graphcal does
+not expose a dependency-controlled output namespace wholesale.
 
 ### Inline-DAG call expression
 
@@ -849,26 +859,28 @@ total (algebraic / by value) and leaves no orphan nominal mentions.
 
 ### Re-exports and generics leakage (`V006`)
 
-A `pub include` / `pub import` re-exports the dependency's `pub` items
-under the importer's namespace. If the include's bindings rename a
-`pub(bind)` symbol to a name that is *private* at the importer, and
-that private name appears in a re-exported signature, downstream
-consumers would see a symbol they cannot name. That's error `V006`:
+A selectively exported include output can mention a bound type, dimension, or
+index in its effective signature. If the include substitutes a `pub(bind)`
+symbol with a name that is *private* at the importer, downstream consumers
+would see a symbol they cannot name. That's error `V006`:
 
 ```graphcal
 // container.gcl
-pub(bind) type Element;
-pub type Widget { Widget(item: Element) }
+pub(bind) type Element { Element }
+pub const node origin: Element = Element;
 
 // main.gcl
-type Inner { Inner }                  // private at the importer
-// ERROR: re-exported type `Widget`'s signature references private type `Inner`
-pub include container(Element: Inner) as c;
+type Inner { Inner } // private at the importer
+// ERROR: re-exported const node `origin` references private type `Inner`
+include container(Element: Inner).{ pub origin };
 
 // Fix: make the substituted name visible too.
 pub type Inner { Inner }
-pub include container(Element: Inner) as c;
+include container(Element: Inner).{ pub origin };
 ```
+
+V006 checks only outputs/items explicitly marked `pub`; adding another public
+output to the dependency does not alter the importer's facade.
 
 ## Parameterized Includes
 

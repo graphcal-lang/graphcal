@@ -53,6 +53,25 @@ fn dep_names_of<'a>(
 }
 
 #[test]
+fn source_level_min_i32_dimension_exponent_formats_exactly() {
+    let tir = compile_to_tir(
+        "pub base dim X;\n\
+         pub base dim Y;\n\
+         pub dim Huge = X^-1073741824;\n\
+         pub dim Mixed = Y * Huge^2;\n",
+    )
+    .unwrap();
+    let mixed = tir.registry.dimensions.get_dimension("Mixed").unwrap();
+
+    assert_eq!(
+        mixed
+            .try_format_with(tir.registry.dimensions.base_dim_names())
+            .unwrap(),
+        "Y / X^2147483648"
+    );
+}
+
+#[test]
 fn resolve_rocket_ksr() {
     let source = include_str!("../../../../../tests/fixtures/valid/rocket.gcl");
     let file = parse_and_desugar(source);

@@ -1110,17 +1110,18 @@ fn build_extern_fn_signatures(
 pub(crate) fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo> {
     static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
         let mut sigs = HashMap::new();
-        for (name, f) in builtin_functions() {
-            let (params, ret) = builtin_signature_parts(&f.signature).unwrap_or_else(|err| {
-                (
-                    vec![format!("<invalid builtin signature: {err}>")],
-                    "<invalid>".to_string(),
-                )
-            });
+        for (name, function) in builtin_functions() {
+            let (params, ret) =
+                builtin_signature_parts(function.signature()).unwrap_or_else(|err| {
+                    (
+                        vec![format!("<invalid builtin signature: {err}>")],
+                        "<invalid>".to_string(),
+                    )
+                });
             let params_str = params.join(", ");
             let label = format!("fn {name}({params_str}) -> {ret}");
             sigs.insert(
-                (*name).to_string(),
+                name.to_string(),
                 FnSignatureInfo {
                     label,
                     parameters: params,
@@ -1197,7 +1198,7 @@ fn format_dim_display(dim: &Dimension) -> std::result::Result<String, String> {
 fn builtin_base_dim_name(id: &BaseDimId) -> std::result::Result<&str, String> {
     match id {
         BaseDimId::Prelude(name) => Ok(name.as_str()),
-        BaseDimId::UserDefined { .. } => Err(format!(
+        BaseDimId::UserDefined(_) => Err(format!(
             "builtin signature unexpectedly referenced user-defined dimension {id:?}"
         )),
     }

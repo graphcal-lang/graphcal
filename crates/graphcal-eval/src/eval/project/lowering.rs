@@ -925,7 +925,6 @@ fn process_deferred_dag_includes(
         )?;
         check_generics_leakage(
             body_for_leakage_check,
-            deferred.pub_reexport_whole,
             &deferred.pub_reexport_items,
             &deferred.index_bindings,
             &deferred.type_bindings,
@@ -1941,10 +1940,9 @@ fn collect_ambiguous_generic_names(
 /// A9 case 2 / V006 — re-exported decls must not name a private-at-importer
 /// symbol in their effective signature.
 ///
-/// For every decl in the dep that the importer re-exports (whole-module
-/// `pub include` / `pub import`, or selectively via `{ pub name }`),
-/// walk its signature, apply the include's substitution map, and check
-/// each referenced type/dim/index name: if the name resolves to a
+/// For every dependency declaration that the importer explicitly re-exports
+/// via `{ pub name }`, walk its signature, apply the include's substitution
+/// map, and check each referenced type/dim/index name. If a name resolves to a
 /// declaration that exists locally in the importer but is not explicitly
 /// exported, the re-export leaks a private symbol.
 #[expect(
@@ -1953,7 +1951,6 @@ fn collect_ambiguous_generic_names(
 )]
 fn check_generics_leakage(
     dep_ast: &graphcal_compiler::desugar::desugared_ast::File,
-    pub_reexport_whole: bool,
     pub_reexport_items: &HashSet<DeclName>,
     index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
@@ -1963,7 +1960,7 @@ fn check_generics_leakage(
     importer_src: &NamedSource<Arc<String>>,
     include_span: Span,
 ) -> Result<(), CompileError> {
-    if !pub_reexport_whole && pub_reexport_items.is_empty() {
+    if pub_reexport_items.is_empty() {
         return Ok(());
     }
 
@@ -1980,12 +1977,7 @@ fn check_generics_leakage(
             DeclKind::Type(t) => (t.name.value.to_string(), "type"),
             _ => continue,
         };
-        let reexported = if pub_reexport_whole {
-            decl_has_external_role(decl)
-        } else {
-            pub_reexport_items.contains(decl_name.as_str())
-        };
-        if !reexported {
+        if !pub_reexport_items.contains(decl_name.as_str()) {
             continue;
         }
 

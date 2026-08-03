@@ -467,13 +467,20 @@ mod tests {
 
     // Well-known IDs matching prelude dimension names.
     fn length_id() -> BaseDimId {
-        BaseDimId::Prelude("Length".to_string())
+        BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length)
     }
     fn time_id() -> BaseDimId {
-        BaseDimId::Prelude("Time".to_string())
+        BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Time)
     }
     fn mass_id() -> BaseDimId {
-        BaseDimId::Prelude("Mass".to_string())
+        BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Mass)
+    }
+
+    fn user_dim_id(name: &str) -> BaseDimId {
+        BaseDimId::UserDefined(crate::syntax::dimension::ResolvedDimName::from_def(
+            crate::dag_id::DagId::root_in_package("test", "test"),
+            DimName::expect_valid(name),
+        ))
     }
 
     fn make_registry() -> Registry {
@@ -758,10 +765,7 @@ mod tests {
     fn register_user_defined_base_dimension() {
         let mut b = RegistryBuilder::new();
         load_prelude(&mut b).unwrap();
-        let info_id = BaseDimId::UserDefined {
-            dag: crate::dag_id::DagId::root_in_package("test", "test"),
-            name: "Information".to_string(),
-        };
+        let info_id = user_dim_id("Information");
         let id = b.register_base_dimension(DimName::expect_valid("Information"), info_id.clone());
         assert_eq!(id, info_id);
         let r = b.try_build().unwrap();
@@ -780,7 +784,7 @@ mod tests {
         let mut b = RegistryBuilder::new();
         let id = b.register_base_dimension_with_symbol(
             DimName::expect_valid("Length"),
-            BaseDimId::Prelude("Length".to_string()),
+            BaseDimId::Prelude(crate::dimension::PreludeBaseDimension::Length),
             "m".to_string(),
         );
         let r = b.try_build().unwrap();
@@ -793,10 +797,7 @@ mod tests {
     #[test]
     fn set_base_dim_symbol_only_first() {
         let mut b = RegistryBuilder::new();
-        let info_id = BaseDimId::UserDefined {
-            dag: crate::dag_id::DagId::root_in_package("test", "test"),
-            name: "Information".to_string(),
-        };
+        let info_id = user_dim_id("Information");
         let id = b.register_base_dimension(DimName::expect_valid("Information"), info_id);
         b.set_base_dim_symbol(id.clone(), "bit".to_string());
         // Second call should not overwrite

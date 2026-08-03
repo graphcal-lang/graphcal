@@ -826,6 +826,10 @@ fn param(name: &str, kind: ValueKind) -> FunctionParam {
     }
 }
 
+const fn typed_param(name: FnParamName, kind: ValueKind) -> FunctionParam {
+    FunctionParam { name, kind }
+}
+
 #[expect(
     clippy::expect_used,
     reason = "built-in signature shapes are validated by construction; a failure is a compiler bug caught by tests"
@@ -855,10 +859,10 @@ impl FunctionSignature {
 
     /// Single fixed-dimension param, fixed-dimension result.
     #[must_use]
-    pub fn fixed_to_fixed(name: &str, input: Dimension, output: Dimension) -> Self {
+    pub fn fixed_to_fixed(name: FnParamName, input: Dimension, output: Dimension) -> Self {
         expect_signature(
             Vec::new(),
-            vec![param(name, ValueKind::quantity(input))],
+            vec![typed_param(name, ValueKind::quantity(input))],
             ValueKind::quantity(output),
         )
     }
@@ -890,11 +894,11 @@ impl FunctionSignature {
 
     /// Single free param `D`, result is `D^power`.
     #[must_use]
-    pub fn free_to_pow(name: &str, power: Rational) -> Self {
+    pub fn free_to_pow(name: FnParamName, power: Rational) -> Self {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
-            vec![param(
+            vec![typed_param(
                 name,
                 ValueKind::Quantity(DimMonomial::var(d.clone())),
             )],
@@ -940,12 +944,20 @@ mod tests {
         DimVarName::expect_valid(name)
     }
 
+    fn fn_param(name: &str) -> FnParamName {
+        FnParamName::expect_valid(name)
+    }
+
     fn length() -> Dimension {
-        Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        Dimension::base(BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Length,
+        ))
     }
 
     fn time() -> Dimension {
-        Dimension::base(BaseDimId::Prelude("Time".to_string()))
+        Dimension::base(BaseDimId::Prelude(
+            crate::dimension::PreludeBaseDimension::Time,
+        ))
     }
 
     #[test]
@@ -1069,7 +1081,7 @@ mod tests {
 
     #[test]
     fn format_with_renders_binders_params_and_result() {
-        let sig = FunctionSignature::free_to_pow("x", Rational::HALF);
+        let sig = FunctionSignature::free_to_pow(fn_param("x"), Rational::HALF);
         let rendered = sig.format_with(|dim| format!("{dim:?}"));
         assert_eq!(rendered, "<D: Dim>(x: D) -> D^(1/2)");
     }
@@ -1163,13 +1175,18 @@ mod tests {
     fn equivalence_distinguishes_kinds_powers_dims_and_arity() {
         let passthrough = FunctionSignature::passthrough("x");
         assert!(
-            !passthrough
-                .structurally_equivalent(&FunctionSignature::free_to_pow("x", Rational::HALF))
+            !passthrough.structurally_equivalent(&FunctionSignature::free_to_pow(
+                fn_param("x"),
+                Rational::HALF
+            ))
         );
         assert!(
-            !FunctionSignature::fixed_to_fixed("x", length(), time()).structurally_equivalent(
-                &FunctionSignature::fixed_to_fixed("x", length(), length())
-            )
+            !FunctionSignature::fixed_to_fixed(fn_param("x"), length(), time())
+                .structurally_equivalent(&FunctionSignature::fixed_to_fixed(
+                    fn_param("x"),
+                    length(),
+                    length(),
+                ))
         );
         assert!(
             !sig(&[], &[ValueKind::Bool], ValueKind::Int).structurally_equivalent(&sig(
@@ -1193,10 +1210,10 @@ mod tests {
     #[test]
     fn builtin_shapes_are_valid() {
         let _ = FunctionSignature::all_dimensionless(&["x", "base"]);
-        let _ = FunctionSignature::fixed_to_fixed("x", length(), time());
+        let _ = FunctionSignature::fixed_to_fixed(fn_param("x"), length(), time());
         let _ = FunctionSignature::passthrough("x");
         let _ = FunctionSignature::free_to_fixed("x", length());
-        let _ = FunctionSignature::free_to_pow("x", Rational::HALF);
+        let _ = FunctionSignature::free_to_pow(fn_param("x"), Rational::HALF);
         let _ = FunctionSignature::same_dim(&["a", "b"]);
         let _ = FunctionSignature::same_dim_to_fixed(&["y", "x"], length());
     }

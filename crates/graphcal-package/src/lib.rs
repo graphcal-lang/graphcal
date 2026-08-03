@@ -298,6 +298,9 @@ pub enum ManifestError {
         field: String,
         expected: &'static str,
     },
+    /// A manifest table contained a field outside the supported schema.
+    #[error("unsupported field `{field}` in {table}")]
+    UnsupportedField { table: &'static str, field: String },
     /// Package name is invalid.
     #[error(transparent)]
     PackageName(#[from] PackageNameError),
@@ -339,20 +342,27 @@ pub fn parse_manifest_str(content: &str) -> Result<PackageManifest, ManifestErro
         .map_err(|e| ManifestError::TomlParseError {
             message: e.to_string(),
         })?;
-    let package = root.get("package").and_then(Value::as_table);
+    reject_unknown_fields(&root, &["package", "dependencies"], "graphcal.toml")?;
 
-    let name = PackageName::new(
-        package
-            .and_then(|table| table.get("name"))
-            .and_then(Value::as_str)
-            .ok_or(ManifestError::MissingField {
+    let package = match root.get("package") {
+        Some(Value::Table(package)) => package,
+        Some(_) => {
+            return Err(ManifestError::InvalidType {
+                field: "[package]".to_string(),
+                expected: "a table",
+            });
+        }
+        None => {
+            return Err(ManifestError::MissingField {
                 field: "[package].name",
-            })?,
-    )?;
-    let source_dir_str = package
-        .and_then(|table| table.get("source_dir"))
-        .and_then(Value::as_str)
-        .unwrap_or("src");
+            });
+        }
+    };
+    reject_unknown_fields(package, &["name", "source_dir"], "[package]")?;
+
+    let name = PackageName::new(manifest_required_string(package, "name", "[package].name")?)?;
+    let source_dir_str =
+        manifest_optional_string(package, "source_dir", "[package].source_dir")?.unwrap_or("src");
     let source_dir = parse_source_dir(source_dir_str)?;
     let dependencies = parse_manifest_dependencies(root.get("dependencies"), &name)?;
 
@@ -361,6 +371,45 @@ pub fn parse_manifest_str(content: &str) -> Result<PackageManifest, ManifestErro
         source_dir,
         dependencies,
     })
+}
+
+fn reject_unknown_fields(
+    table: &Table,
+    allowed: &[&str],
+    table_name: &'static str,
+) -> Result<(), ManifestError> {
+    table
+        .keys()
+        .find(|key| !allowed.contains(&key.as_str()))
+        .map_or(Ok(()), |field| {
+            Err(ManifestError::UnsupportedField {
+                table: table_name,
+                field: field.clone(),
+            })
+        })
+}
+
+fn manifest_required_string<'a>(
+    table: &'a Table,
+    key: &str,
+    field: &'static str,
+) -> Result<&'a str, ManifestError> {
+    manifest_optional_string(table, key, field)?.ok_or(ManifestError::MissingField { field })
+}
+
+fn manifest_optional_string<'a>(
+    table: &'a Table,
+    key: &str,
+    field: &'static str,
+) -> Result<Option<&'a str>, ManifestError> {
+    match table.get(key) {
+        Some(Value::String(value)) => Ok(Some(value)),
+        Some(_) => Err(ManifestError::InvalidType {
+            field: field.to_string(),
+            expected: "a string",
+        }),
+        None => Ok(None),
+    }
 }
 
 fn parse_source_dir(value: &str) -> Result<PathBuf, ManifestError> {
@@ -428,20 +477,34 @@ fn parse_dependency_spec(dependency: &str, item: &Value) -> Result<DependencySpe
         }
     }
 
-    let git = table
-        .get("git")
-        .and_then(Value::as_str)
-        .ok_or(ManifestError::MissingField {
-            field: "[dependencies].<name>.git",
-        })
-        .and_then(|url| GitUrl::new(url).map_err(ManifestError::GitUrl))?;
-    let rev = table
-        .get("rev")
-        .and_then(Value::as_str)
-        .ok_or(ManifestError::MissingField {
-            field: "[dependencies].<name>.rev",
-        })
-        .and_then(|rev| GitCommitHash::new(rev).map_err(ManifestError::GitRev))?;
+    let git = match table.get("git") {
+        Some(Value::String(url)) => GitUrl::new(url).map_err(ManifestError::GitUrl)?,
+        Some(_) => {
+            return Err(ManifestError::InvalidType {
+                field: format!("[dependencies].{dependency}.git"),
+                expected: "a string",
+            });
+        }
+        None => {
+            return Err(ManifestError::MissingField {
+                field: "[dependencies].<name>.git",
+            });
+        }
+    };
+    let rev = match table.get("rev") {
+        Some(Value::String(rev)) => GitCommitHash::new(rev).map_err(ManifestError::GitRev)?,
+        Some(_) => {
+            return Err(ManifestError::InvalidType {
+                field: format!("[dependencies].{dependency}.rev"),
+                expected: "a string",
+            });
+        }
+        None => {
+            return Err(ManifestError::MissingField {
+                field: "[dependencies].<name>.rev",
+            });
+        }
+    };
     let package = table
         .get("package")
         .map(|package| {
@@ -1522,6 +1585,71 @@ units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev =
         let spec = manifest.dependencies.get(&dep("units_v1")).unwrap();
         assert_eq!(spec.expected_package_name(&dep("units_v1")), pkg("units"));
         assert_eq!(spec.git.rev, hash('1'));
+    }
+
+    #[test]
+    fn manifest_rejects_wrong_typed_values_instead_of_treating_them_as_absent() {
+        let cases = [
+            ("package = \"mission\"\n", "[package]", "a table"),
+            ("[package]\nname = 123\n", "[package].name", "a string"),
+            (
+                "[package]\nname = \"mission\"\nsource_dir = 123\n",
+                "[package].source_dir",
+                "a string",
+            ),
+            (
+                "dependencies = []\n[package]\nname = \"mission\"\n",
+                "[dependencies]",
+                "a table",
+            ),
+            (
+                "[package]\nname = \"mission\"\n[dependencies]\nunits = { git = 1, rev = \"1111111111111111111111111111111111111111\" }\n",
+                "[dependencies].units.git",
+                "a string",
+            ),
+            (
+                "[package]\nname = \"mission\"\n[dependencies]\nunits = { git = \"https://github.com/acme/units.git\", rev = 1 }\n",
+                "[dependencies].units.rev",
+                "a string",
+            ),
+        ];
+
+        for (source, expected_field, expected_type) in cases {
+            let err = parse_manifest_str(source).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    ManifestError::InvalidType {
+                        ref field,
+                        expected,
+                    } if field == expected_field && expected == expected_type
+                ),
+                "unexpected error for {expected_field}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_rejects_unknown_root_and_package_fields() {
+        for (source, expected_table, expected_field) in [
+            (
+                "[package]\nname = \"mission\"\nunknown = true\n",
+                "[package]",
+                "unknown",
+            ),
+            (
+                "[package]\nname = \"mission\"\n[tool]\nmode = \"unsafe\"\n",
+                "graphcal.toml",
+                "tool",
+            ),
+        ] {
+            let err = parse_manifest_str(source).unwrap_err();
+            assert!(matches!(
+                err,
+                ManifestError::UnsupportedField { table, field }
+                    if table == expected_table && field == expected_field
+            ));
+        }
     }
 
     #[test]

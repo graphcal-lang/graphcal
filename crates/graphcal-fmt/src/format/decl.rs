@@ -61,16 +61,19 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
 
 fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
     match kind {
-        // Plugin imports carry no visibility annotation.
-        DeclKind::Param(_) | DeclKind::Sugar(_) | DeclKind::PluginImport(_) => RcDoc::nil(),
+        // Use-sites carry no blanket visibility annotation. Selective import/include
+        // items render their own per-item `pub` marker.
+        DeclKind::Param(_)
+        | DeclKind::Import(_)
+        | DeclKind::Include(_)
+        | DeclKind::Sugar(_)
+        | DeclKind::PluginImport(_) => RcDoc::nil(),
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Node(d) | DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
         DeclKind::BaseDimension(d) => visibility_prefix(d.visibility),
         DeclKind::Unit(d) => visibility_prefix(d.visibility),
-        DeclKind::Import(d) => visibility_prefix(d.visibility),
-        DeclKind::Include(d) => visibility_prefix(d.visibility),
         DeclKind::Dag(d) => visibility_prefix(d.visibility),
         DeclKind::Assert(d) => visibility_prefix(d.visibility),
         DeclKind::Plot(d) => visibility_prefix(d.visibility),

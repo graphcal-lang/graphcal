@@ -3,7 +3,7 @@
 use thiserror::Error;
 
 use crate::builtin::ComplexFn;
-use crate::dimension::{BaseDimId, Dimension};
+use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension};
 
 use super::super::InferredType;
 
@@ -48,7 +48,7 @@ pub(super) fn infer(
         ComplexFn::Polar => {
             let magnitude = quantity_dimension(arguments, 0)?;
             let phase = quantity_dimension(arguments, 1)?;
-            let angle = Dimension::base(BaseDimId::Prelude("Angle".to_string()));
+            let angle = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Angle));
             if *phase != angle {
                 return Err(ComplexTypeError::ExpectedAngle { argument: 1 });
             }
@@ -69,7 +69,9 @@ pub(super) fn infer(
             _ => Err(ComplexTypeError::ExpectedQuantityOrComplex { argument: 0 }),
         },
         ComplexFn::Phase => complex_dimension(arguments, 0).map(|_| {
-            InferredType::Quantity(Dimension::base(BaseDimId::Prelude("Angle".to_string())))
+            InferredType::Quantity(Dimension::base(BaseDimId::Prelude(
+                PreludeBaseDimension::Angle,
+            )))
         }),
         ComplexFn::Conjugate => complex_dimension(arguments, 0)
             .cloned()
@@ -116,7 +118,7 @@ mod tests {
     use super::*;
 
     fn length() -> Dimension {
-        Dimension::base(BaseDimId::Prelude("Length".to_string()))
+        Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Length))
     }
 
     #[test]

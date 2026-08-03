@@ -274,14 +274,16 @@ fn resolve_unit_to_display(
     values: &RuntimeValueMap,
 ) -> Result<DisplayUnit, GraphcalError> {
     let scale = crate::eval_expr::resolve_unit_scale(unit, values, ctx)?;
-    Ok(DisplayUnit {
-        label: format_unit_terms_canonical(
-            unit.terms
-                .iter()
-                .map(|item| (item.op, item.name.value.to_string(), item.power)),
-        ),
-        scale,
-    })
+    let label = format_unit_terms_canonical(
+        unit.terms
+            .iter()
+            .map(|item| (item.op, item.name.value.to_string(), item.power)),
+    )
+    .map_err(|_| GraphcalError::DimensionOverflow {
+        src: ctx.src.clone(),
+        span: unit.span.into(),
+    })?;
+    Ok(DisplayUnit { label, scale })
 }
 
 /// Extract a single display unit from a quantity-producing expression.

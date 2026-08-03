@@ -1279,8 +1279,8 @@ impl ModuleResolver {
     ///
     /// Native declarations and selective re-exports are indistinguishable here:
     /// callers receive the local exported spelling and the marker required to
-    /// import it. Whole-module re-export chains have already been expanded into
-    /// the module scope by import registration.
+    /// import it. Imports expose only items explicitly marked `pub` in their
+    /// selective list; namespaced imports never widen this surface.
     ///
     /// # Errors
     ///
@@ -1461,8 +1461,10 @@ impl ModuleResolver {
     /// Indexes named in `bound` (the include's index bindings/overrides) are
     /// skipped: a bound index is rewritten to the importer's replacement before
     /// resolution, so the dependency's original name must not shadow it.
-    /// Any remaining same-name collision is rejected instead of silently
-    /// choosing whichever include was linked first.
+    /// The complete batch is sorted and preflighted against the importer's
+    /// local and selectively imported source-name universe before any symbol
+    /// is committed. A failed include therefore leaves the resolver unchanged
+    /// and reports a deterministic collision.
     ///
     /// # Errors
     ///
@@ -1482,39 +1484,57 @@ impl ModuleResolver {
                 .ok_or_else(|| ModuleResolveError::UnknownModule {
                     owner: source.clone(),
                 })?;
-        let injected: Vec<ModuleIndexSymbol> = source_symbols
+        let mut injected: Vec<(IndexName, ModuleIndexSymbol)> = source_symbols
             .indexes
             .iter()
             .filter(|(name, _)| !bound.contains(*name))
-            .map(|(name, symbol)| ModuleIndexSymbol {
-                symbol: ModuleSymbol::new(
-                    importer,
+            .map(|(name, symbol)| {
+                (
                     name.clone(),
-                    symbol.visibility(),
-                    symbol.span(),
-                ),
-                variants: symbol.variants().clone(),
+                    ModuleIndexSymbol {
+                        symbol: ModuleSymbol::new(
+                            importer,
+                            name.clone(),
+                            symbol.visibility(),
+                            symbol.span(),
+                        ),
+                        variants: symbol.variants().clone(),
+                    },
+                )
             })
             .collect();
+        injected.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+        let target_symbols = self.module_symbols(importer)?;
+        let mut occupied = self.exclusive_name_occupancy(importer)?;
+        for (name, symbol) in &injected {
+            if let Some(first) = occupied
+                .get(name.atom())
+                .filter(|binding| binding.kind == ExclusiveNameKind::Index)
+            {
+                return Err(ModuleResolveError::DuplicateSymbol {
+                    owner: importer.clone(),
+                    namespace: IndexNameNamespace::DISPLAY_NAME,
+                    name: name.to_string(),
+                    first: first.span,
+                    duplicate: symbol.span(),
+                });
+            }
+            target_symbols.insert_exclusive_name(
+                &mut occupied,
+                name.atom(),
+                ExclusiveNameKind::Index,
+                symbol.span(),
+            )?;
+        }
+
         let target =
             self.modules
                 .get_mut(importer)
                 .ok_or_else(|| ModuleResolveError::UnknownModule {
                     owner: importer.clone(),
                 })?;
-        for symbol in injected {
-            let name = IndexName::from_atom(symbol.resolved().atom().clone());
-            if let Some(first) = target.indexes.get(name.as_str()) {
-                return Err(ModuleResolveError::DuplicateSymbol {
-                    owner: importer.clone(),
-                    namespace: IndexNameNamespace::DISPLAY_NAME,
-                    name: name.to_string(),
-                    first: first.span(),
-                    duplicate: symbol.span(),
-                });
-            }
-            target.indexes.insert(name, symbol);
-        }
+        target.indexes.extend(injected);
         Ok(())
     }
 
@@ -1529,6 +1549,9 @@ impl ModuleResolver {
     ) -> Result<(), ModuleResolveError> {
         self.module_symbols(owner)?;
         self.module_symbols(target)?;
+        if matches!(kind, ImportKind::Selective(_)) {
+            self.ensure_module_path_visible(target, access)?;
+        }
 
         let additions = self.import_additions(path, kind, target, access, role)?;
         self.check_import_exclusive_name_collisions(owner, &additions)?;
@@ -1889,7 +1912,7 @@ impl ModuleResolver {
         };
 
         if let Some(access) = imported_access {
-            self.ensure_module_visible(&target, access)?;
+            self.ensure_module_path_visible(&target, access)?;
         }
         for segment in path.segments().iter().skip(1) {
             target = target.child(segment.name.as_str());
@@ -1897,7 +1920,7 @@ impl ModuleResolver {
                 return Err(ModuleResolveError::UnknownModule { owner: target });
             }
             if let Some(access) = imported_access {
-                self.ensure_module_visible(&target, access)?;
+                self.ensure_module_path_visible(&target, access)?;
             }
         }
         Ok(target)
@@ -1939,6 +1962,18 @@ impl ModuleResolver {
         owner: &DagId,
         additions: &[ImportAddition],
     ) -> Result<(), ModuleResolveError> {
+        let local = self.module_symbols(owner)?;
+        let scope = self.module_scope(owner)?;
+        let mut occupied = self.exclusive_name_occupancy(owner)?;
+
+        check_same_namespace_import_collisions(owner, local, scope, additions)?;
+        check_import_addition_exclusive_names(owner, &mut occupied, additions)
+    }
+
+    fn exclusive_name_occupancy(
+        &self,
+        owner: &DagId,
+    ) -> Result<HashMap<NameAtom, ExclusiveNameBinding>, ModuleResolveError> {
         let local = self.module_symbols(owner)?;
         let scope = self.module_scope(owner)?;
         let mut occupied = HashMap::new();
@@ -1986,8 +2021,7 @@ impl ModuleResolver {
             ExclusiveNameKind::Constructor,
         );
 
-        check_same_namespace_import_collisions(owner, local, scope, additions)?;
-        check_import_addition_exclusive_names(owner, &mut occupied, additions)
+        Ok(occupied)
     }
 
     fn import_item_additions(
@@ -2463,18 +2497,19 @@ impl ModuleResolver {
                 alias,
             }
         })?;
-        // Descend segment by segment, enforcing dag visibility at every
-        // step: `lib.helper.symbol` must be rejected when `helper` is a
-        // private dag, exactly like `resolve_module_path` rejects
-        // `lib.helper` — previously only the symbol's own visibility was
-        // checked, never the modules on the path.
+        // Validate the alias's target before descending. This is essential
+        // when the alias points directly at a private inline DAG and `rest` is
+        // empty. The helper also checks every declared DAG ancestor, so a
+        // public child under a private parent cannot be used as an access
+        // tunnel.
         let mut target = alias_target.target.clone();
+        self.ensure_module_path_visible(&target, alias_target.access)?;
         for segment in rest {
             target = target.child(segment.as_str());
             if !self.modules.contains_key(&target) {
                 return Err(ModuleResolveError::UnknownModule { owner: target });
             }
-            self.ensure_module_visible(&target, alias_target.access)?;
+            self.ensure_module_path_visible(&target, alias_target.access)?;
         }
         if self.modules.contains_key(&target) {
             Ok(ResolvedModuleQualifier {
@@ -2511,7 +2546,7 @@ impl ModuleResolver {
             })
     }
 
-    fn ensure_module_visible(
+    fn ensure_module_path_visible(
         &self,
         target: &DagId,
         access: ModuleAccess,
@@ -2519,23 +2554,34 @@ impl ModuleResolver {
         if !access.requires_public() {
             return Ok(());
         }
-        let Some(parent) = target.parent() else {
-            return Ok(());
-        };
-        let Some(parent_symbols) = self.modules.get(&parent) else {
-            return Ok(());
-        };
-        let Some(symbol) = parent_symbols.decls.get(target.name()) else {
-            return Ok(());
-        };
-        if symbol.kind() == DeclSymbolKind::Dag && !symbol.visibility().is_public() {
-            return Err(ModuleResolveError::PrivateName {
-                owner: parent,
-                namespace: "dag",
-                name: target.name().to_string(),
-            });
+
+        let mut child = target.clone();
+        loop {
+            let Some(parent) = child.parent() else {
+                return Ok(());
+            };
+            let Some(parent_symbols) = self.modules.get(&parent) else {
+                // File-root path components are semantic package identity, not
+                // source DAG declarations, and therefore carry no visibility.
+                return Ok(());
+            };
+            let Some(symbol) = parent_symbols.decls.get(child.name()) else {
+                // Synthetic include namespaces have a semantic parent but no
+                // source `dag` declaration on that edge.
+                return Ok(());
+            };
+            if symbol.kind() != DeclSymbolKind::Dag {
+                return Ok(());
+            }
+            if !symbol.visibility().is_public() {
+                return Err(ModuleResolveError::PrivateName {
+                    owner: parent,
+                    namespace: "dag",
+                    name: child.name().to_string(),
+                });
+            }
+            child = parent;
         }
-        Ok(())
     }
 }
 
@@ -3442,9 +3488,11 @@ mod tests {
             .inline_instantiated_include_indexes(&main_id, &first_id, &bound)
             .unwrap();
 
+        let before_failure = resolver.clone();
         let err = resolver
             .inline_instantiated_include_indexes(&main_id, &second_id, &bound)
             .unwrap_err();
+        assert_eq!(resolver, before_failure);
         assert!(matches!(
             err,
             ModuleResolveError::DuplicateSymbol {
@@ -3454,6 +3502,162 @@ mod tests {
                 ..
             } if owner == main_id && name == "Step"
         ));
+    }
+
+    #[test]
+    fn included_indexes_preflight_every_conflicting_source_namespace() {
+        let source_id = DagId::root_in_package("test", "source");
+        let source = desugared_source("pub index Clash = { A };");
+        let bound = HashSet::new();
+
+        for (main_source, expected_namespace) in [
+            ("node Clash: Dimensionless = 1.0;", "name"),
+            ("base dim Clash;", "name"),
+            ("type Clash { MkClash }", "name"),
+            ("index Clash = { Local };", "IndexName"),
+        ] {
+            let main_id = DagId::root_in_package("test", "main");
+            let main = desugared_source(main_source);
+            let mut resolver = ModuleResolver::default();
+            resolver
+                .add_module(source_id.clone(), &source.declarations)
+                .unwrap();
+            resolver
+                .add_module(main_id.clone(), &main.declarations)
+                .unwrap();
+            let before_failure = resolver.clone();
+
+            let err = resolver
+                .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+                .unwrap_err();
+
+            assert_eq!(resolver, before_failure);
+            assert!(matches!(
+                err,
+                ModuleResolveError::DuplicateSymbol {
+                    owner,
+                    namespace,
+                    name,
+                    ..
+                } if owner == main_id && namespace == expected_namespace && name == "Clash"
+            ));
+        }
+    }
+
+    #[test]
+    fn included_indexes_preflight_selective_import_names() {
+        let type_lib_id = DagId::root_in_package("test", "type_lib");
+        let source_id = DagId::root_in_package("test", "source");
+        let main_id = DagId::root_in_package("test", "main");
+        let type_lib = desugared_source("pub type Imported { MkImported }");
+        let source = desugared_source("pub index Clash = { A };");
+        let main = desugared_source("import type_lib.{ type Imported as Clash };");
+        let (import_path, import_kind) = first_import(&main);
+        let bound = HashSet::new();
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(type_lib_id.clone(), &type_lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(source_id.clone(), &source.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &type_lib_id)
+            .unwrap();
+        let before_failure = resolver.clone();
+
+        let err = resolver
+            .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+            .unwrap_err();
+
+        assert_eq!(resolver, before_failure);
+        assert!(matches!(
+            err,
+            ModuleResolveError::DuplicateSymbol {
+                owner,
+                namespace: "name",
+                name,
+                ..
+            } if owner == main_id && name == "Clash"
+        ));
+    }
+
+    #[test]
+    fn included_index_batch_is_atomic_when_a_later_name_collides() {
+        let source_id = DagId::root_in_package("test", "source");
+        let main_id = DagId::root_in_package("test", "main");
+        let source = desugared_source(
+            "pub index Alpha = { A };
+             pub index Zulu = { Z };",
+        );
+        let main = desugared_source("type Zulu { LocalZulu }");
+        let bound = HashSet::new();
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(source_id.clone(), &source.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        let before_failure = resolver.clone();
+
+        let err = resolver
+            .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+            .unwrap_err();
+
+        assert_eq!(resolver, before_failure);
+        assert!(matches!(
+            err,
+            ModuleResolveError::DuplicateSymbol {
+                owner,
+                namespace: "name",
+                name,
+                ..
+            } if owner == main_id && name == "Zulu"
+        ));
+        assert!(matches!(
+            resolver.resolve_index_path(&main_id, &path(&["Alpha"])),
+            Err(ModuleResolveError::UnknownName { name, .. }) if name == "Alpha"
+        ));
+    }
+
+    #[test]
+    fn included_index_can_coexist_with_same_named_constructor() {
+        let source_id = DagId::root_in_package("test", "source");
+        let main_id = DagId::root_in_package("test", "main");
+        let source = desugared_source("pub index Clash = { A };");
+        let main = desugared_source("type Holder { Clash }");
+        let bound = HashSet::new();
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(source_id.clone(), &source.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
+        resolver
+            .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+            .unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve_index_path(&main_id, &path(&["Clash"]))
+                .unwrap()
+                .owner(),
+            &main_id
+        );
+        assert_eq!(
+            resolver
+                .resolve_constructor_path(&main_id, &path(&["Clash"]))
+                .unwrap()
+                .owner(),
+            &main_id
+        );
     }
 
     #[test]
@@ -3882,11 +4086,19 @@ mod tests {
     }
 
     #[test]
-    fn direct_alias_of_private_inline_dag_is_rejected_when_called() {
+    fn direct_alias_of_private_inline_dag_rejects_modules_and_every_symbol_namespace() {
         let lib_id = DagId::root_in_package("test", "lib");
         let helper_id = lib_id.child("helper");
         let main_id = DagId::root_in_package("test", "main");
-        let lib = desugared_source("dag helper { pub node result: Dimensionless = 1.0; }");
+        let lib = desugared_source(
+            "dag helper {
+                pub node result: Dimensionless = 1.0;
+                pub base dim Distance;
+                pub base unit tick: Dimensionless;
+                pub type Shape { Shape }
+                pub index Axis = { A };
+            }",
+        );
         let helper = first_dag(&lib);
         let main = desugared_source("import lib.helper as imported;");
         let (import_path, import_kind) = first_import(&main);
@@ -3905,14 +4117,139 @@ mod tests {
             .register_import(&main_id, import_path, import_kind, &helper_id)
             .unwrap();
 
+        let errors = [
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["imported"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_decl_path(&main_id, &path(&["imported", "result"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_dimension_path(&main_id, &path(&["imported", "Distance"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_unit_path(&main_id, &path(&["imported", "tick"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_struct_type_path(&main_id, &path(&["imported", "Shape"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_constructor_path(&main_id, &path(&["imported", "Shape"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_index_path(&main_id, &path(&["imported", "Axis"]))
+                .map(|_| ())
+                .unwrap_err(),
+        ];
+
+        for error in errors {
+            assert!(matches!(
+                error,
+                ModuleResolveError::PrivateName {
+                    owner,
+                    namespace: "dag",
+                    name,
+                } if owner == lib_id && name == "helper"
+            ));
+        }
+    }
+
+    #[test]
+    fn selective_import_from_private_inline_dag_is_rejected() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let helper_id = lib_id.child("helper");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source(
+            "dag helper {
+                pub node result: Dimensionless = 1.0;
+            }",
+        );
+        let helper = first_dag(&lib);
+        let main = desugared_source("import lib.helper.{ result };");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(helper_id.clone(), &helper.body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
         assert!(matches!(
-            resolver.resolve_module_path(&main_id, &module_path(&["imported"])),
+            resolver.register_import(&main_id, import_path, import_kind, &helper_id),
             Err(ModuleResolveError::PrivateName {
                 owner,
                 namespace: "dag",
                 name,
             }) if owner == lib_id && name == "helper"
         ));
+    }
+
+    #[test]
+    fn public_child_under_private_dag_cannot_be_an_import_tunnel() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let private_id = lib_id.child("private_parent");
+        let child_id = private_id.child("public_child");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source(
+            "dag private_parent {
+                pub dag public_child {
+                    pub node result: Dimensionless = 1.0;
+                }
+            }",
+        );
+        let private_dag = first_dag(&lib);
+        let private_body = ast::File {
+            declarations: private_dag.body.clone(),
+        };
+        let public_child = first_dag(&private_body);
+        let main = desugared_source("import lib.private_parent.public_child as child;");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver.add_module(private_id, &private_dag.body).unwrap();
+        resolver
+            .add_module(child_id.clone(), &public_child.body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &child_id)
+            .unwrap();
+
+        for error in [
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["child"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_decl_path(&main_id, &path(&["child", "result"]))
+                .map(|_| ())
+                .unwrap_err(),
+        ] {
+            assert!(matches!(
+                error,
+                ModuleResolveError::PrivateName {
+                    owner,
+                    namespace: "dag",
+                    name,
+                } if owner == lib_id && name == "private_parent"
+            ));
+        }
     }
 
     #[test]

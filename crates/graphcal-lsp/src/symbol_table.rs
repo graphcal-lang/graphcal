@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::builtin::BuiltinFnName;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{
     AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
@@ -19,7 +18,8 @@ use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::GenericParamName;
 
-use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
+use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
+use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::format::format_unit_expr_with_config;
 use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 use graphcal_compiler::registry::types::{IndexKind, Registry, UnitScale};
@@ -441,8 +441,12 @@ impl<'a> HirRefCollector<'a> {
     )]
     fn walk_inner(&mut self, expr: &hir::Expr, table: &mut SymbolTable) {
         match &expr.kind {
-            hir::ExprKind::Error
-            | hir::ExprKind::Number(_)
+            hir::ExprKind::Error { children } => {
+                for child in children {
+                    self.walk(child, table);
+                }
+            }
+            hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
             | hir::ExprKind::StringLiteral(_)
@@ -1289,11 +1293,12 @@ pub fn build_from_ast(
 }
 
 fn register_builtins(table: &mut SymbolTable) {
-    for name in builtin_constants().keys() {
+    for constant in BuiltinConst::ALL {
+        let name = constant.as_str();
         table.insert_definition(
-            SymbolKey::TopLevel((*name).to_string()),
+            SymbolKey::TopLevel(name.to_string()),
             DefinitionInfo {
-                name: (*name).to_string(),
+                name: name.to_string(),
                 category: SymbolCategory::BuiltinConst,
                 name_span: Span::new(0, 0),
                 decl_span: Span::new(0, 0),
@@ -1307,7 +1312,7 @@ fn register_builtins(table: &mut SymbolTable) {
     let registry_functions = builtin_functions();
     for name in BuiltinFnName::ALL {
         let spelling = name.as_str();
-        let detail = registry_functions.get(spelling).map_or_else(
+        let detail = registry_functions.get(name).map_or_else(
             || match (name.complex(), name.aggregation(), name.linear_algebra()) {
                 (Some(function), None, None) => {
                     format!("builtin, arity {}", function.arity())
@@ -2575,6 +2580,31 @@ node total: Velocity = @dv[Maneuver.Departure];
 
     fn slice(source: &str, span: Span) -> &str {
         &source[span.offset()..span.offset() + span.len()]
+    }
+
+    #[test]
+    fn unresolved_call_retains_resolved_and_unresolved_argument_references() {
+        let source = "param known: Dimensionless = 1.0;\n\
+                      node out: Dimensionless = mystery(@known + also_missing);";
+        let table = table_for(source);
+
+        for (spelling, expected) in [
+            ("mystery", SymbolKey::TopLevel("mystery".to_string())),
+            ("@known", SymbolKey::TopLevel("known".to_string())),
+            (
+                "also_missing",
+                SymbolKey::TopLevel("also_missing".to_string()),
+            ),
+        ] {
+            let offset = source.find(spelling).unwrap() + usize::from(spelling.starts_with('@'));
+            assert_eq!(
+                table
+                    .find_reference_at(offset)
+                    .map(|reference| &reference.target),
+                Some(&expected),
+                "missing retained reference at `{spelling}`"
+            );
+        }
     }
 
     /// Issue #827: row-key reference spans must cover exactly the variant

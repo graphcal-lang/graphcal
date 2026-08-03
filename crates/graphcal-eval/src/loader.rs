@@ -416,7 +416,15 @@ impl LoadedProject {
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
-        let dag_id = DagId::from_virtual_relative_path(&path).map_err(|e| {
+        // `name` is also a diagnostic label and may be an absolute virtual URI
+        // path. A standalone in-memory file has no filesystem hierarchy, so an
+        // absolute label contributes only its leaf to semantic DAG identity.
+        // Relative labels remain strict, canonical module paths.
+        let semantic_path = match (path.is_absolute(), path.file_name()) {
+            (true, Some(file_name)) => Path::new(file_name),
+            _ => path.as_path(),
+        };
+        let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|e| {
             CompileError::Eval(
                 graphcal_compiler::registry::error::GraphcalError::EvalError {
                     message: format!("invalid source name `{name}`: {e}"),
@@ -824,22 +832,21 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
     // outside the namespace is treated as a virtual package — cross-file
     // imports from it will be rejected. This collapses the two modes into a
     // single rule: to import across files, you must live in a real package.
-    let manifest: Option<graphcal_compiler::registry::manifest::Manifest> =
-        load_manifest_for_root(&project_root, &root_canonical, fs)?;
-    let package_id = if manifest.is_some() {
-        let package_manifest = load_package_manifest_for_root(&project_root, fs)?;
-        if !package_manifest.dependencies.is_empty() {
-            return load_locked_package_project(
-                &root_canonical,
-                &project_root,
-                package_manifest,
-                fs,
-                cancellation,
-            );
-        }
-        DagPackageId::new(package_manifest.name.as_str())
-    } else {
-        virtual_package_id_for_path(&root_canonical)?
+    let manifest = load_manifest_for_root(&project_root, &root_canonical, fs)?;
+    if let Some(package_manifest) = manifest.as_ref()
+        && !package_manifest.dependencies.is_empty()
+    {
+        return load_locked_package_project(
+            &root_canonical,
+            &project_root,
+            package_manifest.clone(),
+            fs,
+            cancellation,
+        );
+    }
+    let package_id = match manifest.as_ref() {
+        Some(package_manifest) => DagPackageId::new(package_manifest.name.as_str()),
+        None => virtual_package_id_for_path(&root_canonical)?,
     };
 
     load_file_dfs(
@@ -909,23 +916,6 @@ fn load_plugin_pins<F: FileSystemReader>(
         .iter()
         .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
         .collect())
-}
-
-fn load_package_manifest_for_root<F: FileSystemReader>(
-    project_root: &Path,
-    fs: &F,
-) -> Result<PackageManifest, CompileError> {
-    let path = project_root.join("graphcal.toml");
-    let content = fs.read_to_string(&path).map_err(|e| {
-        CompileError::Eval(GraphcalError::ManifestError {
-            message: e.to_string(),
-        })
-    })?;
-    parse_manifest_str(&content).map_err(|e| {
-        CompileError::Eval(GraphcalError::ManifestError {
-            message: e.to_string(),
-        })
-    })
 }
 
 fn load_locked_package_project<F: FileSystemReader>(
@@ -1025,9 +1015,11 @@ impl PackageLoadContext {
         for package in &lockfile.packages {
             cancellation.checkpoint()?;
             let root = source_root(project_root, &cache_dir, package)?;
-            verify_locked_source(&root, package)?;
-            let manifest = read_package_manifest_from_path(&root)?;
-            manifests.insert(package.id.clone(), manifest);
+            if package.id != lockfile.root {
+                let manifest = read_package_manifest_from_path(&root)?;
+                verify_locked_source(&root, package, &manifest)?;
+                manifests.insert(package.id.clone(), manifest);
+            }
             roots.insert(package.id.clone(), root);
         }
         manifests.insert(lockfile.root.clone(), root_manifest);
@@ -1390,11 +1382,15 @@ fn source_root(
     }
 }
 
-fn verify_locked_source(root: &Path, package: &LockedPackage) -> Result<(), CompileError> {
+fn verify_locked_source(
+    root: &Path,
+    package: &LockedPackage,
+    manifest: &PackageManifest,
+) -> Result<(), CompileError> {
     let PackageSource::Git { tree_hashes, .. } = &package.source else {
         return Ok(());
     };
-    let actual = hash_source_tree(root)?;
+    let actual = hash_source_tree(root, manifest)?;
     if actual == tree_hashes.sha256 {
         Ok(())
     } else {
@@ -1444,8 +1440,7 @@ fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
     hex_string(&hasher.finalize())
 }
 
-fn hash_source_tree(root: &Path) -> Result<String, CompileError> {
-    let manifest = read_package_manifest_from_path(root)?;
+fn hash_source_tree(root: &Path, manifest: &PackageManifest) -> Result<String, CompileError> {
     let mut files = BTreeMap::new();
     collect_hash_files(root, Path::new("graphcal.toml"), &mut files)?;
     collect_hash_files(root, &manifest.source_dir, &mut files)?;
@@ -1645,7 +1640,7 @@ fn load_file_dfs<F: FileSystemReader>(
     load_order: &mut Vec<DagId>,
     loading: &mut HashSet<PathBuf>,
     stack: &mut Vec<String>,
-    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&PackageManifest>,
     fs: &F,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
@@ -1948,7 +1943,7 @@ fn lift_inline_dags<F: FileSystemReader>(
     parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
-    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&PackageManifest>,
     path_to_dag_id: &HashMap<PathBuf, DagId>,
     fs: &F,
 ) -> Vec<LoadedDag> {
@@ -1981,7 +1976,7 @@ struct InlineLiftContext<'a, F: FileSystemReader> {
     parent_dir: &'a Path,
     project_root: &'a Path,
     src: &'a NamedSource<Arc<String>>,
-    manifest: Option<&'a graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&'a PackageManifest>,
     path_to_dag_id: &'a HashMap<PathBuf, DagId>,
     fs: &'a F,
     file_stem: &'a str,
@@ -2263,7 +2258,7 @@ fn load_manifest_for_root<F: FileSystemReader>(
     project_root: &Path,
     root_canonical: &Path,
     fs: &F,
-) -> Result<Option<graphcal_compiler::registry::manifest::Manifest>, CompileError> {
+) -> Result<Option<PackageManifest>, CompileError> {
     let manifest_path = project_root.join("graphcal.toml");
     if !fs.exists(&manifest_path) {
         return Ok(None);
@@ -2273,13 +2268,11 @@ fn load_manifest_for_root<F: FileSystemReader>(
             message: e.to_string(),
         })
     })?;
-    let parsed = manifest_content
-        .parse::<graphcal_compiler::registry::manifest::Manifest>()
-        .map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: e.to_string(),
-            })
-        })?;
+    let parsed = parse_manifest_str(&manifest_content).map_err(|e| {
+        CompileError::Eval(GraphcalError::ManifestError {
+            message: e.to_string(),
+        })
+    })?;
 
     if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
         Ok(Some(parsed))
@@ -2294,15 +2287,15 @@ fn load_manifest_for_root<F: FileSystemReader>(
 fn root_in_package_namespace<F: FileSystemReader>(
     project_root: &Path,
     root_canonical: &Path,
-    manifest: &graphcal_compiler::registry::manifest::Manifest,
+    manifest: &PackageManifest,
     fs: &F,
 ) -> bool {
     let pkg_dir = project_root
-        .join(manifest.source_dir())
-        .join(manifest.package_name());
+        .join(&manifest.source_dir)
+        .join(manifest.name.as_str());
     let pkg_file = project_root
-        .join(manifest.source_dir())
-        .join(format!("{}.gcl", manifest.package_name()));
+        .join(&manifest.source_dir)
+        .join(format!("{}.gcl", manifest.name));
 
     if let Ok(canon_pkg_dir) = fs.canonicalize(&pkg_dir)
         && root_canonical.starts_with(&canon_pkg_dir)
@@ -2329,7 +2322,7 @@ fn resolve_import_path<F: FileSystemReader>(
     _parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
-    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&PackageManifest>,
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
     resolve_module_path(
@@ -2350,7 +2343,7 @@ fn resolve_module_path<F: FileSystemReader>(
     span: graphcal_compiler::syntax::span::Span,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
-    manifest: Option<&graphcal_compiler::registry::manifest::Manifest>,
+    manifest: Option<&PackageManifest>,
     fs: &F,
 ) -> Result<PathBuf, CompileError> {
     let display_path = segments
@@ -2376,17 +2369,17 @@ fn resolve_module_path<F: FileSystemReader>(
     // manifest but outside `<source_dir>/<pkg>/`).
     if let Some(m) = manifest {
         // Real package: first segment must match the package name.
-        if !segments.is_empty() && segments[0].name != m.package_name() {
+        if !segments.is_empty() && segments[0].name != m.name.as_str() {
             return Err(CompileError::Eval(GraphcalError::PackageNameMismatch {
                 path_first: segments[0].name.to_string(),
-                package_name: m.package_name().to_string(),
+                package_name: m.name.to_string(),
                 src: src.clone(),
                 span: span.into(),
             }));
         }
 
         // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
-        let mut file_path = project_root.join(m.source_dir());
+        let mut file_path = project_root.join(&m.source_dir);
         for seg in segments {
             file_path = file_path.join(seg.name.as_str());
         }
@@ -2402,7 +2395,7 @@ fn resolve_module_path<F: FileSystemReader>(
         if segments.len() >= 2
             && let Some((_last, parent_segments)) = segments.split_last()
         {
-            let mut parent_path = project_root.join(m.source_dir());
+            let mut parent_path = project_root.join(&m.source_dir);
             for seg in parent_segments {
                 parent_path = parent_path.join(seg.name.as_str());
             }
@@ -2463,13 +2456,62 @@ fn io_not_found(path: &Path) -> CompileError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::fs;
+    use std::io;
 
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_io::RealFileSystem;
 
     fn fs() -> RealFileSystem {
         RealFileSystem::default()
+    }
+
+    struct MutatingManifestFileSystem {
+        inner: RealFileSystem,
+        manifest_reads: Cell<usize>,
+    }
+
+    impl Default for MutatingManifestFileSystem {
+        fn default() -> Self {
+            Self {
+                inner: RealFileSystem::default(),
+                manifest_reads: Cell::new(0),
+            }
+        }
+    }
+
+    impl FileSystemReader for MutatingManifestFileSystem {
+        fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
+            if path.file_name() == Some(std::ffi::OsStr::new("graphcal.toml")) {
+                let read = self
+                    .manifest_reads
+                    .get()
+                    .checked_add(1)
+                    .ok_or_else(|| io::Error::other("manifest read counter overflow"))?;
+                self.manifest_reads.set(read);
+                if read > 1 {
+                    return Ok("[package]\nname = \"mutated\"\n".to_string());
+                }
+            }
+            self.inner.read_to_string(path)
+        }
+
+        fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
+            self.inner.read_bytes(path)
+        }
+
+        fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
+            self.inner.canonicalize(path)
+        }
+
+        fn is_file(&self, path: &Path) -> bool {
+            self.inner.is_file(path)
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.inner.exists(path)
+        }
     }
 
     /// Create a temporary directory with the given files and return its path.
@@ -2502,6 +2544,20 @@ mod tests {
         assert_eq!(project.files.len(), 1);
         assert_eq!(project.load_order.len(), 1);
         assert_eq!(project.root.package(), &DagPackageId::new("standalone"));
+    }
+
+    #[test]
+    fn root_manifest_is_read_once_and_reused_as_one_snapshot() {
+        let dir = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+            ("src/mission/main.gcl", "param x: Dimensionless = 1.0;"),
+        ]);
+        let fs = MutatingManifestFileSystem::default();
+
+        let project = load_project(&dir.path().join("src/mission/main.gcl"), None, &fs).unwrap();
+
+        assert_eq!(fs.manifest_reads.get(), 1);
+        assert_eq!(project.root.package(), &DagPackageId::new("mission"));
     }
 
     #[test]
@@ -2604,6 +2660,20 @@ mod tests {
         let root_file = &project.files[&project.root];
         assert_eq!(root_file.source.as_str(), source);
         assert_eq!(project.root.package(), &DagPackageId::new("test"));
+    }
+
+    #[test]
+    fn from_source_keeps_absolute_diagnostic_label_out_of_semantic_identity() {
+        let project = LoadedProject::from_source(
+            "param x: Dimensionless = 1.0;",
+            "/virtual/project/main.gcl",
+        )
+        .unwrap();
+        let root_file = &project.files[&project.root];
+
+        assert_eq!(root_file.named_source.name(), "/virtual/project/main.gcl");
+        assert_eq!(project.root.package(), &DagPackageId::new("main"));
+        assert_eq!(project.root.to_string(), "main");
     }
 
     #[test]

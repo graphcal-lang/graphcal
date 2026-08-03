@@ -597,9 +597,13 @@ pub enum ExprKind {
     /// A reference that failed to resolve.
     ///
     /// Produced only by tolerant lowering; the diagnostic for the failure is
-    /// reported alongside the lowered tree. The strict entry points reject
-    /// trees containing this node, so the batch pipeline never observes it.
-    Error,
+    /// reported alongside the lowered tree. Independently lowerable descendant
+    /// expressions are retained for IDE references and additional diagnostics.
+    /// The strict entry points reject trees containing this node, so the batch
+    /// pipeline never observes it.
+    Error {
+        children: Vec<Expr>,
+    },
     Number(f64),
     Integer(i64),
     Bool(bool),
@@ -735,8 +739,12 @@ fn collect_expr_dependencies_into(expr: &Expr, deps: &mut ExprDependencies) {
 
 fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies) {
     match &expr.kind {
-        ExprKind::Error
-        | ExprKind::Number(_)
+        ExprKind::Error { children } => {
+            for child in children {
+                collect_expr_dependencies_into(child, deps);
+            }
+        }
+        ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
@@ -948,8 +956,8 @@ pub(crate) fn find_extern_call(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
 
 fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
     match &expr.kind {
-        ExprKind::Error
-        | ExprKind::Number(_)
+        ExprKind::Error { children } => children.iter().find_map(find_extern_call),
+        ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
@@ -1147,19 +1155,87 @@ impl<'a> ExprLowerer<'a> {
 
     /// Lower one expression level, localizing failures.
     ///
-    /// A subtree whose references cannot be resolved becomes a single
-    /// [`ExprKind::Error`] node with its diagnostic recorded; sibling
-    /// subtrees keep lowering.
+    /// A failed parent becomes an [`ExprKind::Error`] node that retains every
+    /// independently lowerable descendant expression. Any tentative child
+    /// lowering performed before the parent failed is rolled back first, so
+    /// diagnostics and lexical IDs are emitted exactly once.
     fn lower_expr(&mut self, expr: &ast::Expr) -> Expr {
+        let diagnostics_checkpoint = self.diagnostics.len();
+        let next_local_checkpoint = self.next_local;
+        let scope_depth_checkpoint = self.local_scopes.len();
+
         // Recursion choke point: lowering recurses once per tree level
         // (unbounded for left-nested operator chains).
         crate::stack::with_stack_growth(|| match self.lower_expr_inner(expr) {
             Ok(lowered) => lowered,
             Err(err) => {
+                self.diagnostics.truncate(diagnostics_checkpoint);
+                self.next_local = next_local_checkpoint;
+                self.local_scopes.truncate(scope_depth_checkpoint);
                 self.diagnostics.push(err);
-                Expr::new(ExprKind::Error, expr.span)
+                let children = self.lower_error_children(expr);
+                Expr::new(ExprKind::Error { children }, expr.span)
             }
         })
+    }
+
+    /// Lower only expression-valued children of a failed parent.
+    ///
+    /// Binder metadata is intentionally ignored: when a `for`, `scan`,
+    /// `unfold`, or match pattern fails, its lexical bindings were never
+    /// established, so retaining a body must not fabricate those locals.
+    fn lower_error_children(&mut self, expr: &ast::Expr) -> Vec<Expr> {
+        let children: Vec<&ast::Expr> = match &expr.kind {
+            ast::ExprKind::Number(_)
+            | ast::ExprKind::Integer(_)
+            | ast::ExprKind::Bool(_)
+            | ast::ExprKind::StringLiteral(_)
+            | ast::ExprKind::UnresolvedRef(_)
+            | ast::ExprKind::GraphRef(_)
+            | ast::ExprKind::UnitLiteral { .. } => Vec::new(),
+            ast::ExprKind::BinOp { lhs, rhs, .. } => vec![lhs, rhs],
+            ast::ExprKind::UnaryOp { operand, .. } => vec![operand],
+            ast::ExprKind::FnCall { args, .. } => args.iter().collect(),
+            ast::ExprKind::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => vec![condition, then_branch, else_branch],
+            ast::ExprKind::Convert { expr, .. }
+            | ast::ExprKind::DisplayTimezone { expr, .. }
+            | ast::ExprKind::FieldAccess { expr, .. } => vec![expr],
+            ast::ExprKind::ConstructorCall { fields, .. } => {
+                fields.iter().map(|field| &field.value).collect()
+            }
+            ast::ExprKind::MapLiteral { entries } => {
+                entries.iter().map(|entry| &entry.value).collect()
+            }
+            ast::ExprKind::ForComp { body, .. } => vec![body],
+            ast::ExprKind::IndexAccess { expr, args } => std::iter::once(expr.as_ref())
+                .chain(args.iter().filter_map(|arg| match arg {
+                    ast::IndexArg::Expr(expr) => Some(expr.as_ref()),
+                    ast::IndexArg::Variant { .. } | ast::IndexArg::Var(_) => None,
+                }))
+                .collect(),
+            ast::ExprKind::Scan {
+                source, init, body, ..
+            } => vec![source, init, body],
+            ast::ExprKind::Unfold { init, body, .. } => vec![init, body],
+            ast::ExprKind::KeyForm { arg, .. } => vec![arg],
+            ast::ExprKind::Match { scrutinee, arms } => std::iter::once(scrutinee.as_ref())
+                .chain(arms.iter().map(|arm| &arm.body))
+                .collect(),
+            ast::ExprKind::InlineDagRef { args, .. } => args.iter().map(|arg| &arg.value).collect(),
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) proves this arm unreachable"
+            )]
+            ast::ExprKind::Sugar(sugar) => never(*sugar),
+        };
+        children
+            .into_iter()
+            .map(|child| self.lower_expr(child))
+            .collect()
     }
 
     #[expect(clippy::too_many_lines, reason = "exhaustive ExprKind lowering")]
@@ -2087,8 +2163,7 @@ impl<'a> ExprLowerer<'a> {
         if builtin_has_type_checker_arity(builtin) {
             return Ok(());
         }
-        let Some(function) = crate::registry::builtins::builtin_functions().get(builtin.as_str())
-        else {
+        let Some(function) = crate::registry::builtins::builtin_functions().get(&builtin) else {
             return Ok(());
         };
         if got != function.arity() {
@@ -2815,6 +2890,124 @@ mod tests {
         assert_eq!(graph_ref.as_str(), "p");
         assert_eq!(const_ref.owner(), &lib_id);
         assert_eq!(const_ref.as_str(), "C");
+    }
+
+    fn lower_tolerant_node(source: &str, name: &str) -> (Expr, Vec<ExprLowerError>) {
+        let owner = DagId::root_in_package("test", "main");
+        let file = desugared_source(source);
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(owner.clone(), &file.declarations)
+            .unwrap();
+        let scope = GenericScope::new();
+        lower_expr_tolerant(
+            node_value(&file, name),
+            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+        )
+    }
+
+    fn graph_dependency_names(expr: &Expr) -> BTreeSet<String> {
+        collect_expr_dependencies(expr)
+            .graph_refs
+            .into_iter()
+            .map(|name| name.as_str().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn failed_parent_nodes_retain_every_independent_expression_child() {
+        let cases = [
+            (
+                "param a: Dimensionless; param b: Dimensionless; \
+                 node out: Dimensionless = mystery(@a, @b);",
+                2,
+                BTreeSet::from(["a".to_string(), "b".to_string()]),
+            ),
+            (
+                "param a: Dimensionless; param b: Dimensionless; \
+                 node out: Dimensionless = Missing(first: @a, second: @b);",
+                2,
+                BTreeSet::from(["a".to_string(), "b".to_string()]),
+            ),
+            (
+                "index Axis = { Good }; param a: Dimensionless; param b: Dimensionless; \
+                 node out: Dimensionless[Axis] = \
+                     { Axis.Missing: @a, Axis.Good: @b };",
+                2,
+                BTreeSet::from(["a".to_string(), "b".to_string()]),
+            ),
+            (
+                "type State { Good } param state: State; \
+                 param a: Dimensionless; param b: Dimensionless; \
+                 node out: Dimensionless = match @state { \
+                     Missing => @a, Good => @b \
+                 };",
+                3,
+                BTreeSet::from(["state".to_string(), "a".to_string(), "b".to_string()]),
+            ),
+            (
+                "param a: Dimensionless; param b: Dimensionless; \
+                 node out: Dimensionless = @missing(first: @a, second: @b).result;",
+                2,
+                BTreeSet::from(["a".to_string(), "b".to_string()]),
+            ),
+        ];
+
+        for (source, expected_children, expected_dependencies) in cases {
+            let (expr, diagnostics) = lower_tolerant_node(source, "out");
+            let ExprKind::Error { children } = &expr.kind else {
+                panic!("expected failed parent node, got {expr:?}");
+            };
+            assert_eq!(children.len(), expected_children, "source: {source}");
+            assert!(!diagnostics.is_empty(), "source: {source}");
+            assert_eq!(
+                graph_dependency_names(&expr),
+                expected_dependencies,
+                "source: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn failed_parent_accumulates_nested_diagnostics_without_duplicates() {
+        let (expr, diagnostics) =
+            lower_tolerant_node("node out: Dimensionless = mystery(also_missing);", "out");
+
+        assert!(matches!(expr.kind, ExprKind::Error { .. }));
+        assert_eq!(diagnostics.len(), 2, "diagnostics: {diagnostics:?}");
+        assert!(matches!(
+            diagnostics[0],
+            ExprLowerError::UnknownFunction { .. }
+        ));
+        assert!(matches!(
+            diagnostics[1],
+            ExprLowerError::ModuleResolve {
+                source: ModuleResolveError::UnknownName { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn failed_binder_does_not_fabricate_lexical_locals_for_retained_body() {
+        let (expr, diagnostics) = lower_tolerant_node(
+            "param known: Dimensionless; \
+             node out: Dimensionless = for item: Missing { item + @known };",
+            "out",
+        );
+
+        assert!(matches!(expr.kind, ExprKind::Error { .. }));
+        assert!(diagnostics.iter().any(|error| matches!(
+            error,
+            ExprLowerError::ModuleResolve {
+                source: ModuleResolveError::UnknownName { name, .. },
+                ..
+            } if name == "item"
+        )));
+        assert_eq!(
+            graph_dependency_names(&expr),
+            BTreeSet::from(["known".to_string()])
+        );
     }
 
     #[test]

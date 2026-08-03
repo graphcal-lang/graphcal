@@ -63,7 +63,7 @@ fn eval_hir_expr_inner(
     match &expr.kind {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before evaluation.
-        hir::ExprKind::Error => {
+        hir::ExprKind::Error { .. } => {
             Err(ctx.eval_error("unresolved reference reached evaluation", expr.span))
         }
         hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx),
@@ -189,13 +189,7 @@ fn eval_hir_const_ref(
             eval_hir_nullary_constructor(constructor, target.span, ctx)
         }
         ConstRef::Builtin(builtin) => {
-            let value = ctx.builtin_consts.get(builtin.as_str()).ok_or_else(|| {
-                ctx.eval_error(
-                    format!("undefined constant `{}`", builtin.as_str()),
-                    target.span,
-                )
-            })?;
-            checked_finite_quantity(*value, "built-in constant", target.span, ctx)
+            checked_finite_quantity(builtin.value(), "built-in constant", target.span, ctx)
         }
         ConstRef::TimeScale(scale) => Err(ctx.eval_error(
             format!("unexpected time scale `{scale}` outside epoch()"),
@@ -1485,9 +1479,10 @@ fn eval_hir_builtin_fn(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let builtin = ctx.builtin_fns.get(name.as_str()).ok_or_else(|| {
-        ctx.eval_error(format!("unknown function `{}`", name.as_str()), expr.span)
-    })?;
+    let builtin = ctx
+        .builtin_fns
+        .get(&name)
+        .ok_or_else(|| ctx.eval_error(format!("unknown function `{name}`"), expr.span))?;
     let arg_values: Vec<f64> = args
         .iter()
         .map(|arg| {
@@ -1496,18 +1491,9 @@ fn eval_hir_builtin_fn(
                 .map_err(|e| ctx.eval_error(e.to_string(), arg.span))
         })
         .collect::<Result<_, _>>()?;
-    if arg_values.len() != builtin.arity() {
-        return Err(ctx.eval_error(
-            format!(
-                "builtin function `{}` expects {} argument(s) but got {}",
-                name.as_str(),
-                builtin.arity(),
-                arg_values.len()
-            ),
-            expr.span,
-        ));
-    }
-    let result = (builtin.eval)(&arg_values);
+    let result = builtin
+        .eval(&arg_values)
+        .map_err(|error| ctx.eval_error(format!("builtin function `{name}` {error}"), expr.span))?;
     Ok(RuntimeValue::Quantity(super::arithmetic::check_finite(
         result,
         name.as_str(),
@@ -2268,7 +2254,6 @@ fn eval_hir_inline_dag_call(
 
     let dag_ctx = EvalContext {
         cancellation: ctx.cancellation.clone(),
-        builtin_consts: ctx.builtin_consts,
         builtin_fns: ctx.builtin_fns,
         registry: ctx.registry,
         src: ctx.src,

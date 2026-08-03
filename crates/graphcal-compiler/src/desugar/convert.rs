@@ -294,7 +294,6 @@ impl From<IndexDeclKind<Raw>> for IndexDeclKind<Desugared> {
 impl From<IncludeDecl<Raw>> for IncludeDecl<Desugared> {
     fn from(i: IncludeDecl<Raw>) -> Self {
         Self {
-            visibility: i.visibility,
             path: i.path,
             param_bindings: i.param_bindings.into_iter().map(Into::into).collect(),
             kind: i.kind,

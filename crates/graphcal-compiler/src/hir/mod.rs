@@ -36,11 +36,9 @@ pub use expr::{
     ResolvedUnitRef, collect_expr_dependencies, lower_expr_tolerant,
 };
 pub(crate) use expr::{find_extern_call, lower_assert_body, lower_expr};
-pub use lower::{
-    GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope, lower_generic_params,
-};
+pub use lower::{GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope};
 pub(crate) use lower::{TypeLoweringContext, lower_type_expr};
 pub use types::{
     BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
-    GenericParamDef, GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
+    GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
 };

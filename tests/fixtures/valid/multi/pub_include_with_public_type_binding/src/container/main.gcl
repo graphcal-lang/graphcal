@@ -1,7 +1,7 @@
-// main.gcl -- pub-re-exports container with Element bound to a `pub`
+// main.gcl -- selectively re-exports `origin` with Element bound to a `pub`
 // local type → compiles. Positive companion to the V006 fixture.
 pub type Inner {
     Inner(size: Length),
 }
 
-pub include container.lib(Element: Inner) as c;
+include container.lib(Element: Inner).{ pub origin };

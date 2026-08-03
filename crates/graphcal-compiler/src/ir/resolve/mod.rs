@@ -322,12 +322,6 @@ fn collect_local_declarations(
             DeclKind::Index(d) if d.visibility.is_public() => {
                 external_surface.insert_explicit_export(name);
             }
-            DeclKind::Import(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
-            DeclKind::Include(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
-            }
             DeclKind::Dag(d) if d.visibility.is_public() => {
                 external_surface.insert_explicit_export(name);
             }
@@ -814,16 +808,17 @@ fn validate_private_in_public(
             DeclKind::Unit(d) => d.visibility.is_public(),
             DeclKind::Type(d) => d.visibility.is_public(),
             DeclKind::Index(d) => d.visibility.is_public(),
-            DeclKind::Import(d) => d.visibility.is_public(),
-            DeclKind::Include(d) => d.visibility.is_public(),
             DeclKind::Dag(d) => d.visibility.is_public(),
             DeclKind::Assert(d) => d.visibility.is_public(),
             DeclKind::Plot(d) => d.visibility.is_public(),
             DeclKind::Figure(d) => d.visibility.is_public(),
             DeclKind::Layer(d) => d.visibility.is_public(),
-            // Plugin imports carry no visibility (extern functions are only
-            // callable through their own alias); sugar is desugared away.
-            DeclKind::PluginImport(_) | DeclKind::Sugar(_) => false,
+            // Use-sites carry no blanket visibility; plugin functions are only
+            // callable through their own alias; sugar is desugared away.
+            DeclKind::Import(_)
+            | DeclKind::Include(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Sugar(_) => false,
         };
         if !has_external_signature {
             continue;

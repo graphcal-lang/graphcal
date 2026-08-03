@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::dimension::{BaseDimId, Dimension};
+use graphcal_compiler::dimension::Dimension;
 use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_eval::eval::format_number;
@@ -395,9 +395,9 @@ fn render_dimension(dim: &Dimension) -> String {
     let factors: Vec<String> = dim
         .iter()
         .map(|(id, power)| {
-            let (BaseDimId::Prelude(name) | BaseDimId::UserDefined { name, .. }) = id;
+            let name = id.name();
             if *power == graphcal_compiler::dimension::Rational::ONE {
-                name.clone()
+                name.to_string()
             } else {
                 format!("{name}{}", format_exponent(*power))
             }

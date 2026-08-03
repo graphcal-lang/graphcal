@@ -22,7 +22,7 @@ use crate::syntax::type_name::GenericParamName;
 
 use super::types::{
     BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
-    GenericParamDef, GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
+    GenericParamId, IndexRef, NatExpr, TypeExpr, TypeExprKind,
 };
 
 /// Errors produced while lowering syntax type expressions into HIR.
@@ -193,25 +193,6 @@ impl GenericScope {
         Self::default()
     }
 
-    /// Insert one syntax generic parameter into this scope.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`HirLowerError::DuplicateGenericParam`] if a parameter with the
-    /// same leaf name is already in scope.
-    fn insert(
-        &mut self,
-        owner: &GenericParamOwner,
-        param: &ast::GenericParam,
-    ) -> Result<(), HirLowerError> {
-        let id = GenericParamId::new(owner.clone(), param.name.value.clone());
-        self.insert_binding(GenericParamBinding::new(
-            id,
-            param.constraint,
-            param.name.span,
-        ))
-    }
-
     /// Insert an already-built generic parameter binding.
     ///
     /// # Errors
@@ -288,53 +269,6 @@ impl<'a> TypeLoweringContext<'a> {
         self.prelude
             .and_then(|prelude| prelude.resolve_dimension_path(path))
     }
-}
-
-/// Lower syntax generic parameter declarations into HIR definitions and return
-/// the lexical scope they introduce.
-///
-/// Defaults are lowered before their own parameter enters scope, so they may
-/// refer only to parameters declared earlier in the same list.
-///
-/// # Errors
-///
-/// Returns [`HirLowerError`] if a generic parameter is duplicated or a default
-/// type expression cannot be resolved.
-pub fn lower_generic_params(
-    owner: &GenericParamOwner,
-    params: &[ast::GenericParam],
-    module_owner: &DagId,
-    resolver: &ModuleResolver,
-) -> Result<(GenericScope, Vec<GenericParamDef>), HirLowerError> {
-    params.iter().try_fold(
-        (GenericScope::new(), Vec::new()),
-        |(mut scope, mut defs), param| {
-            let id = Spanned::new(
-                GenericParamId::new(owner.clone(), param.name.value.clone()),
-                param.name.span,
-            );
-            let default = param
-                .default
-                .as_ref()
-                .map(|default| {
-                    let ctx = TypeLoweringContext::new(module_owner, resolver, &scope);
-                    lower_generic_arg_for_constraint(
-                        default,
-                        param.constraint,
-                        &param.name.value,
-                        ctx,
-                    )
-                })
-                .transpose()?;
-            scope.insert(owner, param)?;
-            defs.push(GenericParamDef {
-                id,
-                constraint: param.constraint,
-                default,
-            });
-            Ok((scope, defs))
-        },
-    )
 }
 
 /// Lower a syntax type expression into a HIR type expression.
@@ -1065,6 +999,7 @@ fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveErro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hir::GenericParamOwner;
     use crate::syntax::parser::Parser;
     use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
 
@@ -1177,10 +1112,16 @@ mod tests {
             owner_id.clone(),
             StructTypeName::expect_valid("Series"),
         ));
-        let (scope, defs) =
-            lower_generic_params(&type_owner, &type_decl.generic_params, &owner_id, &resolver)
+        let mut scope = GenericScope::new();
+        for param in &type_decl.generic_params {
+            scope
+                .insert_binding(GenericParamBinding::new(
+                    GenericParamId::new(type_owner.clone(), param.name.value.clone()),
+                    param.constraint,
+                    param.name.span,
+                ))
                 .unwrap();
-        assert_eq!(defs.len(), 4);
+        }
 
         let members = match &type_decl.body {
             ast::TypeDeclBody::Constructors(members) => members,

@@ -446,14 +446,13 @@ index_decl
    Alias and brace list are mutually exclusive:
    `import nasa.rocket as nr.{type Orbit};` is a parse error.
 
-   A leading `pub` re-exports the imported item(s). The bare/alias
-   forms re-export every `pub` item from the leaf module; the brace
-   form (with `pub` on individual items) re-exports only the marked
-   items. The two forms are mutually exclusive -- `pub import
-   nasa.rocket.{ pub item };` is rejected. `pub(bind)` on import is
-   illegal (use-sites are not bindable per A5). *)
+   Import use-sites have no leading visibility. A brace item marked
+   `pub` is re-exported individually; bare and aliased module imports
+   remain private qualified bindings. This keeps facade surfaces
+   explicit and prevents a dependency from silently widening them.
+   `pub import ...` and `pub(bind) import ...` are parse errors. *)
 import_decl
-   = [ "pub" ], "import", module_path, [ import_tail ], ";"
+   = "import", module_path, [ import_tail ], ";"
    | plugin_import_decl;
 
 (* --- plugin import (extern functions, issue #943 / #25 Phase A) --- *)
@@ -515,12 +514,11 @@ import_item
 import_category
    = "type" | "dim" | "unit" | "index";
 
-(* `pub` inside the brace list marks the item for re-export at the
-   importer (issue #452). Mixing whole-module `pub` (on the outer
-   import/include) with selective `pub` inside the brace list is
-   rejected. Category markers are valid only on `import` items, not on
-   `include` output selectors. Bare import items select term declarations
-   and constructors. *)
+(* `pub` inside the brace list marks that one item for re-export at the
+   importer (issue #452). Import/include use-sites never carry a leading
+   visibility marker. Category markers are valid only on `import` items,
+   not on `include` output selectors. Bare import items select term
+   declarations and constructors. *)
 
 (* --- include --- *)
 (* Include instantiates a DAG with optional param bindings, embedding
@@ -540,11 +538,12 @@ import_category
    3. Brace list:         include nasa.rocket.compute_thrust(args).{ thrust };
                           (selects outputs; renaming permitted)
 
-   Alias and brace list are mutually exclusive. A leading `pub`
-   re-exports the included outputs at the include site. *)
+   Alias and brace list are mutually exclusive. Include use-sites have
+   no leading visibility; only brace outputs individually marked `pub`
+   are re-exported. A namespaced include remains private and configured.
+   `pub include ...` and `pub(bind) include ...` are parse errors. *)
 include_decl
-   = [ "pub" ], "include", module_path, include_param_bindings,
-     [ include_tail ], ";";
+   = "include", module_path, include_param_bindings, [ include_tail ], ";";
 
 include_tail
    = "as", IDENT

@@ -51,7 +51,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let locals = HirLocalTypes::root();
@@ -80,7 +80,7 @@ fn infer_hir_type(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     // Recursion choke point: inference recurses once per tree level
@@ -112,13 +112,13 @@ fn infer_hir_type_inner(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inferred = match &expr.kind {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before TIR, so inference never sees one.
-        hir::ExprKind::Error => {
+        hir::ExprKind::Error { .. } => {
             return Err(GraphcalError::InternalError {
                 message: "unresolved reference reached type inference".to_string(),
                 src: src.clone(),
@@ -580,7 +580,7 @@ fn infer_arg(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     infer_hir_type(
@@ -606,7 +606,7 @@ fn infer_hir_linear_algebra_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let name = function.builtin_name();
@@ -716,7 +716,7 @@ fn infer_hir_fn_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let (name, epoch_scale) = match &callee.value {
@@ -986,7 +986,7 @@ fn infer_hir_complex_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use super::complex::ComplexTypeError;
@@ -1086,7 +1086,7 @@ fn infer_extern_fn_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use crate::function_signature::ValueKind;
@@ -1313,20 +1313,20 @@ fn infer_hir_builtin_fn(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let Some(func) = builtin_fns.get(name.as_str()) else {
+    let Some(func) = builtin_fns.get(&name) else {
         return Err(GraphcalError::UnknownFunction {
             name: name.as_str().to_string(),
             src: src.clone(),
             span: callee_span.into(),
         });
     };
-    if args.len() != func.signature.arity() {
+    if args.len() != func.arity() {
         return Err(GraphcalError::WrongArity {
             name: crate::syntax::function_name::FnName::expect_valid(name.as_str()),
-            expected: func.signature.arity(),
+            expected: func.arity(),
             got: args.len(),
             src: src.clone(),
             span: callee_span.into(),
@@ -1351,7 +1351,7 @@ fn infer_hir_builtin_fn(
     let arg_spans: Vec<Span> = args.iter().map(|arg| arg.span).collect();
     infer_fn_dim_from_spans(
         name.as_str(),
-        &func.signature,
+        func.signature(),
         &arg_dims,
         &arg_spans,
         registry,
@@ -1370,7 +1370,7 @@ fn infer_hir_type_conversion(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let expected_arity = 1;
@@ -1498,7 +1498,7 @@ fn infer_hir_timescale_conversion(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     if args.len() != 1 {
@@ -1543,7 +1543,7 @@ fn infer_hir_datetime_constructor(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match kind {
@@ -1674,7 +1674,7 @@ fn infer_hir_datetime_unary(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     result: InferredType,
 ) -> Result<InferredType, GraphcalError> {
@@ -1720,7 +1720,7 @@ fn infer_hir_if(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let infer = |expr: &hir::Expr| {
@@ -1767,7 +1767,7 @@ fn infer_hir_unary(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let operand_type = infer_hir_type(
@@ -1831,7 +1831,7 @@ fn infer_hir_binop(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use crate::desugar::desugared_ast::BinOp;
@@ -1941,7 +1941,7 @@ fn infer_hir_key_form(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     use crate::syntax::ast::KeyFormKind;
@@ -2098,7 +2098,7 @@ fn infer_hir_for_comp(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let mut inner_locals = local_types.child(Vec::new());
@@ -2170,7 +2170,7 @@ fn infer_hir_index_access(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let mut current = infer_hir_type(
@@ -2427,7 +2427,7 @@ fn infer_hir_convert(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     reject_nested_conversion(inner, src)?;
@@ -2483,7 +2483,7 @@ fn infer_hir_display_timezone(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     reject_nested_conversion(inner, src)?;
@@ -2754,7 +2754,7 @@ fn infer_hir_field_access(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let inner_type = infer_hir_type(
@@ -3046,7 +3046,7 @@ fn infer_hir_constructor_call(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let target = dag
@@ -3346,7 +3346,7 @@ fn infer_hir_map_literal(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let Some(first_entry) = entries.first() else {
@@ -3602,7 +3602,7 @@ fn infer_hir_scan(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let source_type = infer_hir_type(
@@ -3684,7 +3684,7 @@ fn infer_hir_unfold(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let init_type = infer_hir_type(
@@ -3801,7 +3801,7 @@ fn infer_hir_match(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let scrutinee_type = infer_hir_type(
@@ -4052,7 +4052,7 @@ fn infer_hir_inline_dag_ref(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let display_path = target.value.to_string();
