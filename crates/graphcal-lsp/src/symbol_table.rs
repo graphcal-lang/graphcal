@@ -441,8 +441,12 @@ impl<'a> HirRefCollector<'a> {
     )]
     fn walk_inner(&mut self, expr: &hir::Expr, table: &mut SymbolTable) {
         match &expr.kind {
-            hir::ExprKind::Error
-            | hir::ExprKind::Number(_)
+            hir::ExprKind::Error { children } => {
+                for child in children {
+                    self.walk(child, table);
+                }
+            }
+            hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
             | hir::ExprKind::StringLiteral(_)
@@ -2576,6 +2580,31 @@ node total: Velocity = @dv[Maneuver.Departure];
 
     fn slice(source: &str, span: Span) -> &str {
         &source[span.offset()..span.offset() + span.len()]
+    }
+
+    #[test]
+    fn unresolved_call_retains_resolved_and_unresolved_argument_references() {
+        let source = "param known: Dimensionless = 1.0;\n\
+                      node out: Dimensionless = mystery(@known + also_missing);";
+        let table = table_for(source);
+
+        for (spelling, expected) in [
+            ("mystery", SymbolKey::TopLevel("mystery".to_string())),
+            ("@known", SymbolKey::TopLevel("known".to_string())),
+            (
+                "also_missing",
+                SymbolKey::TopLevel("also_missing".to_string()),
+            ),
+        ] {
+            let offset = source.find(spelling).unwrap() + usize::from(spelling.starts_with('@'));
+            assert_eq!(
+                table
+                    .find_reference_at(offset)
+                    .map(|reference| &reference.target),
+                Some(&expected),
+                "missing retained reference at `{spelling}`"
+            );
+        }
     }
 
     /// Issue #827: row-key reference spans must cover exactly the variant

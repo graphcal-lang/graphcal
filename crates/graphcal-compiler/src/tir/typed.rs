@@ -1071,8 +1071,8 @@ impl HirPolicyChecker<'_> {
         let recurse =
             |inner: &hir::Expr| self.check_expr(inner, const_body, check_pub_bind_literals);
         match &expr.kind {
-            hir::ExprKind::Error
-            | hir::ExprKind::Number(_)
+            hir::ExprKind::Error { children } => children.iter().try_for_each(recurse),
+            hir::ExprKind::Number(_)
             | hir::ExprKind::Integer(_)
             | hir::ExprKind::Bool(_)
             | hir::ExprKind::StringLiteral(_)

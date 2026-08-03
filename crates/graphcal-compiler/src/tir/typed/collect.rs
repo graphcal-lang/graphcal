@@ -82,7 +82,7 @@ fn collect_unit_names_from_hir(
             }
             collect_unit_names_from_hir(inner, names);
         }
-        hir::ExprKind::Error
+        hir::ExprKind::Error { .. }
         | hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)
         | hir::ExprKind::Bool(_)
@@ -426,8 +426,13 @@ fn collect_resolved_collection_refs_from_expr_inner(
     refs: &mut ResolvedCollectionRefs,
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
-        hir::ExprKind::Error
-        | hir::ExprKind::Number(_)
+        hir::ExprKind::Error { children } => {
+            for child in children {
+                collect_resolved_collection_refs_from_expr(child, ctx, src, refs)?;
+            }
+            Ok(())
+        }
+        hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)
         | hir::ExprKind::Bool(_)
         | hir::ExprKind::StringLiteral(_)
@@ -678,8 +683,13 @@ fn collect_resolved_constructor_refs_from_expr_inner(
     refs: &mut ResolvedConstructorRefs,
 ) -> Result<(), GraphcalError> {
     match &expr.kind {
-        hir::ExprKind::Error
-        | hir::ExprKind::Number(_)
+        hir::ExprKind::Error { children } => {
+            for child in children {
+                collect_resolved_constructor_refs_from_expr(child, ctx, src, refs)?;
+            }
+            Ok(())
+        }
+        hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)
         | hir::ExprKind::Bool(_)
         | hir::ExprKind::StringLiteral(_)
@@ -848,8 +858,12 @@ fn collect_resolved_inline_dag_refs_from_expr_inner(
     refs: &mut ResolvedInlineDagRefs,
 ) {
     match &expr.kind {
-        hir::ExprKind::Error
-        | hir::ExprKind::Number(_)
+        hir::ExprKind::Error { children } => {
+            for child in children {
+                collect_resolved_inline_dag_refs_from_expr(child, refs);
+            }
+        }
+        hir::ExprKind::Number(_)
         | hir::ExprKind::Integer(_)
         | hir::ExprKind::Bool(_)
         | hir::ExprKind::StringLiteral(_)

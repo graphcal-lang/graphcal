@@ -1839,7 +1839,7 @@ fn validate_closed_hir(expr: &graphcal_compiler::hir::Expr) -> Result<(), &'stat
             .iter()
             .try_for_each(|entry| validate_closed_hir(&entry.value)),
         HirExprKind::KeyForm { arg, .. } => validate_closed_hir(arg),
-        HirExprKind::Error => Err("an unresolved expression is not allowed"),
+        HirExprKind::Error { .. } => Err("an unresolved expression is not allowed"),
         HirExprKind::StringLiteral(_)
         | HirExprKind::TypeSystemRef(_)
         | HirExprKind::GraphRef(_)

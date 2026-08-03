@@ -63,7 +63,7 @@ fn eval_hir_expr_inner(
     match &expr.kind {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before evaluation.
-        hir::ExprKind::Error => {
+        hir::ExprKind::Error { .. } => {
             Err(ctx.eval_error("unresolved reference reached evaluation", expr.span))
         }
         hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx),

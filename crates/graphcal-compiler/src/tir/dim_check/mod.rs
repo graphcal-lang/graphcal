@@ -593,7 +593,7 @@ fn check_ineffective_conversions_inner(
             }
             Ok(())
         }
-        ExprKind::Error
+        ExprKind::Error { .. }
         | ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
