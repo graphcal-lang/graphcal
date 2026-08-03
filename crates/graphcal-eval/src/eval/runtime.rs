@@ -18,9 +18,7 @@ use crate::eval_expr::{
     EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
 };
 use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
-use graphcal_compiler::registry::builtins::{
-    BuiltinFunction, builtin_constants, builtin_functions,
-};
+use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
 use graphcal_compiler::registry::declared_type::{
     DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
 };
@@ -270,8 +268,7 @@ pub(super) fn run_eval_loop(
     plan: &crate::exec_plan::ExecPlan,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
+    builtin_fns: &BuiltinFunctions,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalLoopResult, GraphcalError> {
@@ -280,7 +277,6 @@ pub(super) fn run_eval_loop(
         &super::bindings::RuntimeParameterBindings::new(),
         tir,
         src,
-        builtin_consts,
         builtin_fns,
         host_fns,
         cancellation,
@@ -288,17 +284,12 @@ pub(super) fn run_eval_loop(
 }
 
 /// Run the core loop with one plan-validated row of runtime parameter bindings.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the evaluator context remains explicit at this functional-core boundary"
-)]
 pub(super) fn run_eval_loop_with_bindings(
     plan: &crate::exec_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-    builtin_consts: &HashMap<&str, f64>,
-    builtin_fns: &HashMap<&str, BuiltinFunction>,
+    builtin_fns: &BuiltinFunctions,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalLoopResult, GraphcalError> {
@@ -358,7 +349,6 @@ pub(super) fn run_eval_loop_with_bindings(
 
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
-            builtin_consts,
             builtin_fns,
             registry: &tir.registry,
             src,
@@ -455,11 +445,9 @@ pub(super) fn export_dynamic_unit_scales(
     graphcal_compiler::cancellation::Cancelled,
 > {
     cancellation.checkpoint()?;
-    let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
-        builtin_consts,
         builtin_fns,
         registry: &tir.registry,
         src,
@@ -576,7 +564,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(EvalResult, RuntimeValueMap), GraphcalError> {
     cancellation.checkpoint()?;
-    let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
 
@@ -585,7 +572,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         bindings,
         tir,
         src,
-        builtin_consts,
         builtin_fns,
         host_fns,
         cancellation,
@@ -594,7 +580,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation.checkpoint()?;
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
-        builtin_consts,
         builtin_fns,
         registry: &tir.registry,
         src,

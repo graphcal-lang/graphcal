@@ -2087,8 +2087,7 @@ impl<'a> ExprLowerer<'a> {
         if builtin_has_type_checker_arity(builtin) {
             return Ok(());
         }
-        let Some(function) = crate::registry::builtins::builtin_functions().get(builtin.as_str())
-        else {
+        let Some(function) = crate::registry::builtins::builtin_functions().get(&builtin) else {
             return Ok(());
         };
         if got != function.arity() {

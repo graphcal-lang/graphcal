@@ -304,8 +304,10 @@ mod tests {
         let (name, signature) = convert_function(&function).unwrap();
         assert_eq!(name.as_str(), "root");
         assert!(
-            signature
-                .structurally_equivalent(&FunctionSignature::free_to_pow("value", Rational::HALF))
+            signature.structurally_equivalent(&FunctionSignature::free_to_pow(
+                FnParamName::expect_valid("value"),
+                Rational::HALF,
+            ))
         );
     }
 
@@ -320,7 +322,7 @@ mod tests {
         };
         let (_, signature) = convert_function(&function).unwrap();
         let expected = FunctionSignature::fixed_to_fixed(
-            "x",
+            FnParamName::expect_valid("x"),
             prelude_base_dimension("Length").unwrap(),
             prelude_base_dimension("Time").unwrap(),
         );

@@ -119,7 +119,7 @@ mod tests {
         for name in BuiltinFnName::ALL {
             match type_rule_for_builtin(*name) {
                 BuiltinTypeRule::RegistrySignature => assert!(
-                    ordinary_registry_functions.contains_key(name.as_str()),
+                    ordinary_registry_functions.contains_key(name),
                     "BuiltinFnName::{name:?} (`{}`) is neither in builtin_functions() nor handled by a custom HIR type rule",
                     name.as_str()
                 ),

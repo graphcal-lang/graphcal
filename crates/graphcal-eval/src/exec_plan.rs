@@ -24,7 +24,7 @@ use crate::domain_check::{
 use crate::eval_expr::{
     EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
 };
-use graphcal_compiler::registry::builtins::{builtin_constants, builtin_functions};
+use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{
     DagTIR, ResolvedDagDependencies, StructFieldConstraintKey, TIR,
@@ -258,7 +258,6 @@ pub fn eval_consts_from_tir_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<RuntimeValueMap, GraphcalError> {
     cancellation.checkpoint()?;
-    let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let dag = tir.root();
 
@@ -277,7 +276,6 @@ pub fn eval_consts_from_tir_with_cancellation(
         let key = RuntimeDeclKey::for_local_decl(dag, &name);
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
-            builtin_consts,
             builtin_fns,
             registry: &tir.registry,
             src,
@@ -511,13 +509,11 @@ pub fn resolve_domain_constraints_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
     cancellation.checkpoint()?;
-    let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
-        builtin_consts,
         builtin_fns,
         registry: &tir.registry,
         src,
@@ -790,13 +786,11 @@ pub fn resolve_struct_field_constraints_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
     cancellation.checkpoint()?;
-    let builtin_consts = builtin_constants();
     let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
-        builtin_consts,
         builtin_fns,
         registry: &tir.registry,
         src,

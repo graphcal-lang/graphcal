@@ -62,10 +62,9 @@ define_builtin_names! {
 }
 
 impl BuiltinConst {
-    /// Numeric value of the constant. Must agree with
-    /// [`crate::registry::builtins::builtin_constants`] (enforced by test).
+    /// Exact numeric value of this built-in constant.
     #[must_use]
-    pub(crate) const fn value(self) -> f64 {
+    pub const fn value(self) -> f64 {
         match self {
             Self::Pi => std::f64::consts::PI,
             Self::E => std::f64::consts::E,

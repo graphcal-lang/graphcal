@@ -319,7 +319,7 @@ struct DimCheckContext<'a> {
     dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a Registry,
-    builtin_fns: &'a HashMap<&'a str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
     src: &'a NamedSource<Arc<String>>,
 }
 
@@ -1019,7 +1019,7 @@ fn check_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &crate::registry::types::Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
@@ -1125,7 +1125,7 @@ fn check_domain_constraint_dimensions_dag(
     declared_types: &HashMap<ScopedName, DeclaredType>,
     tir: &crate::tir::typed::TIR,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     // A merged dependency declaration's domain bounds keep the dependency
@@ -1337,7 +1337,7 @@ fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     registry: &Registry,
-    builtin_fns: &HashMap<&str, crate::registry::builtins::BuiltinFunction>,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     _src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut seen: std::collections::HashSet<&crate::tir::typed::ResolvedStructFieldTypeKey> =
