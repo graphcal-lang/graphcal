@@ -1461,8 +1461,10 @@ impl ModuleResolver {
     /// Indexes named in `bound` (the include's index bindings/overrides) are
     /// skipped: a bound index is rewritten to the importer's replacement before
     /// resolution, so the dependency's original name must not shadow it.
-    /// Any remaining same-name collision is rejected instead of silently
-    /// choosing whichever include was linked first.
+    /// The complete batch is sorted and preflighted against the importer's
+    /// local and selectively imported source-name universe before any symbol
+    /// is committed. A failed include therefore leaves the resolver unchanged
+    /// and reports a deterministic collision.
     ///
     /// # Errors
     ///
@@ -1482,39 +1484,57 @@ impl ModuleResolver {
                 .ok_or_else(|| ModuleResolveError::UnknownModule {
                     owner: source.clone(),
                 })?;
-        let injected: Vec<ModuleIndexSymbol> = source_symbols
+        let mut injected: Vec<(IndexName, ModuleIndexSymbol)> = source_symbols
             .indexes
             .iter()
             .filter(|(name, _)| !bound.contains(*name))
-            .map(|(name, symbol)| ModuleIndexSymbol {
-                symbol: ModuleSymbol::new(
-                    importer,
+            .map(|(name, symbol)| {
+                (
                     name.clone(),
-                    symbol.visibility(),
-                    symbol.span(),
-                ),
-                variants: symbol.variants().clone(),
+                    ModuleIndexSymbol {
+                        symbol: ModuleSymbol::new(
+                            importer,
+                            name.clone(),
+                            symbol.visibility(),
+                            symbol.span(),
+                        ),
+                        variants: symbol.variants().clone(),
+                    },
+                )
             })
             .collect();
+        injected.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+        let target_symbols = self.module_symbols(importer)?;
+        let mut occupied = self.exclusive_name_occupancy(importer)?;
+        for (name, symbol) in &injected {
+            if let Some(first) = occupied
+                .get(name.atom())
+                .filter(|binding| binding.kind == ExclusiveNameKind::Index)
+            {
+                return Err(ModuleResolveError::DuplicateSymbol {
+                    owner: importer.clone(),
+                    namespace: IndexNameNamespace::DISPLAY_NAME,
+                    name: name.to_string(),
+                    first: first.span,
+                    duplicate: symbol.span(),
+                });
+            }
+            target_symbols.insert_exclusive_name(
+                &mut occupied,
+                name.atom(),
+                ExclusiveNameKind::Index,
+                symbol.span(),
+            )?;
+        }
+
         let target =
             self.modules
                 .get_mut(importer)
                 .ok_or_else(|| ModuleResolveError::UnknownModule {
                     owner: importer.clone(),
                 })?;
-        for symbol in injected {
-            let name = IndexName::from_atom(symbol.resolved().atom().clone());
-            if let Some(first) = target.indexes.get(name.as_str()) {
-                return Err(ModuleResolveError::DuplicateSymbol {
-                    owner: importer.clone(),
-                    namespace: IndexNameNamespace::DISPLAY_NAME,
-                    name: name.to_string(),
-                    first: first.span(),
-                    duplicate: symbol.span(),
-                });
-            }
-            target.indexes.insert(name, symbol);
-        }
+        target.indexes.extend(injected);
         Ok(())
     }
 
@@ -1944,6 +1964,18 @@ impl ModuleResolver {
     ) -> Result<(), ModuleResolveError> {
         let local = self.module_symbols(owner)?;
         let scope = self.module_scope(owner)?;
+        let mut occupied = self.exclusive_name_occupancy(owner)?;
+
+        check_same_namespace_import_collisions(owner, local, scope, additions)?;
+        check_import_addition_exclusive_names(owner, &mut occupied, additions)
+    }
+
+    fn exclusive_name_occupancy(
+        &self,
+        owner: &DagId,
+    ) -> Result<HashMap<NameAtom, ExclusiveNameBinding>, ModuleResolveError> {
+        let local = self.module_symbols(owner)?;
+        let scope = self.module_scope(owner)?;
         let mut occupied = HashMap::new();
 
         seed_exclusive_names(&mut occupied, &local.decls, ExclusiveNameKind::Value);
@@ -1989,8 +2021,7 @@ impl ModuleResolver {
             ExclusiveNameKind::Constructor,
         );
 
-        check_same_namespace_import_collisions(owner, local, scope, additions)?;
-        check_import_addition_exclusive_names(owner, &mut occupied, additions)
+        Ok(occupied)
     }
 
     fn import_item_additions(
@@ -3457,9 +3488,11 @@ mod tests {
             .inline_instantiated_include_indexes(&main_id, &first_id, &bound)
             .unwrap();
 
+        let before_failure = resolver.clone();
         let err = resolver
             .inline_instantiated_include_indexes(&main_id, &second_id, &bound)
             .unwrap_err();
+        assert_eq!(resolver, before_failure);
         assert!(matches!(
             err,
             ModuleResolveError::DuplicateSymbol {
@@ -3469,6 +3502,162 @@ mod tests {
                 ..
             } if owner == main_id && name == "Step"
         ));
+    }
+
+    #[test]
+    fn included_indexes_preflight_every_conflicting_source_namespace() {
+        let source_id = DagId::root_in_package("test", "source");
+        let source = desugared_source("pub index Clash = { A };");
+        let bound = HashSet::new();
+
+        for (main_source, expected_namespace) in [
+            ("node Clash: Dimensionless = 1.0;", "name"),
+            ("base dim Clash;", "name"),
+            ("type Clash { MkClash }", "name"),
+            ("index Clash = { Local };", "IndexName"),
+        ] {
+            let main_id = DagId::root_in_package("test", "main");
+            let main = desugared_source(main_source);
+            let mut resolver = ModuleResolver::default();
+            resolver
+                .add_module(source_id.clone(), &source.declarations)
+                .unwrap();
+            resolver
+                .add_module(main_id.clone(), &main.declarations)
+                .unwrap();
+            let before_failure = resolver.clone();
+
+            let err = resolver
+                .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+                .unwrap_err();
+
+            assert_eq!(resolver, before_failure);
+            assert!(matches!(
+                err,
+                ModuleResolveError::DuplicateSymbol {
+                    owner,
+                    namespace,
+                    name,
+                    ..
+                } if owner == main_id && namespace == expected_namespace && name == "Clash"
+            ));
+        }
+    }
+
+    #[test]
+    fn included_indexes_preflight_selective_import_names() {
+        let type_lib_id = DagId::root_in_package("test", "type_lib");
+        let source_id = DagId::root_in_package("test", "source");
+        let main_id = DagId::root_in_package("test", "main");
+        let type_lib = desugared_source("pub type Imported { MkImported }");
+        let source = desugared_source("pub index Clash = { A };");
+        let main = desugared_source("import type_lib.{ type Imported as Clash };");
+        let (import_path, import_kind) = first_import(&main);
+        let bound = HashSet::new();
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(type_lib_id.clone(), &type_lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(source_id.clone(), &source.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &type_lib_id)
+            .unwrap();
+        let before_failure = resolver.clone();
+
+        let err = resolver
+            .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+            .unwrap_err();
+
+        assert_eq!(resolver, before_failure);
+        assert!(matches!(
+            err,
+            ModuleResolveError::DuplicateSymbol {
+                owner,
+                namespace: "name",
+                name,
+                ..
+            } if owner == main_id && name == "Clash"
+        ));
+    }
+
+    #[test]
+    fn included_index_batch_is_atomic_when_a_later_name_collides() {
+        let source_id = DagId::root_in_package("test", "source");
+        let main_id = DagId::root_in_package("test", "main");
+        let source = desugared_source(
+            "pub index Alpha = { A };
+             pub index Zulu = { Z };",
+        );
+        let main = desugared_source("type Zulu { LocalZulu }");
+        let bound = HashSet::new();
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(source_id.clone(), &source.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        let before_failure = resolver.clone();
+
+        let err = resolver
+            .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+            .unwrap_err();
+
+        assert_eq!(resolver, before_failure);
+        assert!(matches!(
+            err,
+            ModuleResolveError::DuplicateSymbol {
+                owner,
+                namespace: "name",
+                name,
+                ..
+            } if owner == main_id && name == "Zulu"
+        ));
+        assert!(matches!(
+            resolver.resolve_index_path(&main_id, &path(&["Alpha"])),
+            Err(ModuleResolveError::UnknownName { name, .. }) if name == "Alpha"
+        ));
+    }
+
+    #[test]
+    fn included_index_can_coexist_with_same_named_constructor() {
+        let source_id = DagId::root_in_package("test", "source");
+        let main_id = DagId::root_in_package("test", "main");
+        let source = desugared_source("pub index Clash = { A };");
+        let main = desugared_source("type Holder { Clash }");
+        let bound = HashSet::new();
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(source_id.clone(), &source.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
+        resolver
+            .inline_instantiated_include_indexes(&main_id, &source_id, &bound)
+            .unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve_index_path(&main_id, &path(&["Clash"]))
+                .unwrap()
+                .owner(),
+            &main_id
+        );
+        assert_eq!(
+            resolver
+                .resolve_constructor_path(&main_id, &path(&["Clash"]))
+                .unwrap()
+                .owner(),
+            &main_id
+        );
     }
 
     #[test]
