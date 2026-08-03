@@ -1657,11 +1657,9 @@ pub enum GraphcalError {
     },
 
     #[error("epoch's static time-scale argument must be a bare name")]
-    #[diagnostic(
-        code(graphcal::D023),
-        help("use one of UTC, TAI, TT, TDB, ET, GPST, GST, BDT, or QZSST")
-    )]
+    #[diagnostic(code(graphcal::D023), help("use one of {expected}"))]
     InvalidEpochTimeScaleArgument {
+        expected: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("expected a supported bare time-scale name")]
@@ -1669,12 +1667,10 @@ pub enum GraphcalError {
     },
 
     #[error("unsupported epoch time scale `{name}`")]
-    #[diagnostic(
-        code(graphcal::D023),
-        help("use one of UTC, TAI, TT, TDB, ET, GPST, GST, BDT, or QZSST")
-    )]
+    #[diagnostic(code(graphcal::D023), help("use one of {expected}"))]
     UnsupportedEpochTimeScale {
         name: NameAtom,
+        expected: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not a supported time scale")]

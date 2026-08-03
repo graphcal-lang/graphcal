@@ -94,12 +94,24 @@ pub enum DagIdPathError {
     /// The path produced no components (e.g., an empty `Path`).
     #[error("path has no components")]
     Empty,
+    /// The path was absolute or contained a platform root/prefix component.
+    #[error("path must be relative")]
+    NotRelative,
+    /// The path contained a parent-directory component.
+    #[error("path must not contain `..`")]
+    ParentTraversal,
+    /// The path contained a current-directory component.
+    #[error("path must be canonical and must not contain `.`")]
+    CurrentDirectory,
     /// A path component was not valid UTF-8.
     #[error("path contains a non-UTF-8 component")]
     NonUtf8Component,
     /// The path did not end with `.gcl`.
     #[error("path must end with `.gcl`")]
     MissingGclExtension,
+    /// The `.gcl` path had an empty file stem.
+    #[error("path must have a non-empty file stem before `.gcl`")]
+    EmptyFileStem,
 }
 
 impl From<NonEmpty<String>> for NonEmpty<Arc<str>> {
@@ -215,8 +227,10 @@ impl DagId {
     /// Returns [`DagIdPathError`] if `path` has no components, contains a
     /// non-UTF-8 component, or does not end with `.gcl`.
     pub fn from_virtual_relative_path(path: &std::path::Path) -> Result<Self, DagIdPathError> {
-        let package = virtual_package_from_path(path)?;
-        Self::from_relative_path(package, path)
+        let segments = NonEmpty::try_from_vec(relative_path_segments(path)?)
+            .map_err(|_| DagIdPathError::Empty)?;
+        let package = DagPackageId::new(Arc::clone(segments.last()));
+        Ok(Self { package, segments })
     }
 
     /// Create a package-qualified `DagId` from a relative file path, stripping
@@ -233,22 +247,7 @@ impl DagId {
         package: impl Into<DagPackageId>,
         path: &std::path::Path,
     ) -> Result<Self, DagIdPathError> {
-        let mut segments: Vec<Arc<str>> = path
-            .components()
-            .map(|c| {
-                c.as_os_str()
-                    .to_str()
-                    .map(Arc::<str>::from)
-                    .ok_or(DagIdPathError::NonUtf8Component)
-            })
-            .collect::<Result<_, _>>()?;
-
-        let last = segments.last_mut().ok_or(DagIdPathError::Empty)?;
-        *last = last
-            .strip_suffix(".gcl")
-            .map(Arc::<str>::from)
-            .ok_or(DagIdPathError::MissingGclExtension)?;
-
+        let segments = relative_path_segments(path)?;
         Ok(Self {
             package: package.into(),
             segments: NonEmpty::try_from_vec(segments).map_err(|_| DagIdPathError::Empty)?,
@@ -256,18 +255,36 @@ impl DagId {
     }
 }
 
-fn virtual_package_from_path(path: &std::path::Path) -> Result<DagPackageId, DagIdPathError> {
-    let file_name = path
+fn relative_path_segments(path: &std::path::Path) -> Result<Vec<Arc<str>>, DagIdPathError> {
+    use std::path::Component;
+
+    if path.as_os_str().is_empty() {
+        return Err(DagIdPathError::Empty);
+    }
+
+    let mut segments = path
         .components()
-        .next_back()
-        .ok_or(DagIdPathError::Empty)?
-        .as_os_str()
-        .to_str()
-        .ok_or(DagIdPathError::NonUtf8Component)?;
-    let stem = file_name
+        .map(|component| match component {
+            Component::Normal(component) => component
+                .to_str()
+                .map(Arc::<str>::from)
+                .ok_or(DagIdPathError::NonUtf8Component),
+            Component::ParentDir => Err(DagIdPathError::ParentTraversal),
+            Component::CurDir => Err(DagIdPathError::CurrentDirectory),
+            Component::RootDir | Component::Prefix(_) => Err(DagIdPathError::NotRelative),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let last = segments.last_mut().ok_or(DagIdPathError::Empty)?;
+    let stem = last
         .strip_suffix(".gcl")
         .ok_or(DagIdPathError::MissingGclExtension)?;
-    Ok(DagPackageId::new(stem))
+    if stem.is_empty() {
+        return Err(DagIdPathError::EmptyFileStem);
+    }
+    *last = Arc::<str>::from(stem);
+
+    Ok(segments)
 }
 
 impl fmt::Display for DagId {
@@ -315,6 +332,37 @@ mod tests {
         let err =
             DagId::from_relative_path("math", std::path::Path::new("helpers/math")).unwrap_err();
         assert_eq!(err, DagIdPathError::MissingGclExtension);
+    }
+
+    #[test]
+    fn from_relative_path_rejects_absolute_paths() {
+        let err = DagId::from_relative_path("math", std::path::Path::new("/helpers/math.gcl"))
+            .unwrap_err();
+        assert_eq!(err, DagIdPathError::NotRelative);
+    }
+
+    #[test]
+    fn from_relative_path_rejects_parent_traversal() {
+        let err = DagId::from_relative_path("math", std::path::Path::new("helpers/../math.gcl"))
+            .unwrap_err();
+        assert_eq!(err, DagIdPathError::ParentTraversal);
+    }
+
+    #[test]
+    fn from_relative_path_rejects_current_directory_components() {
+        let err =
+            DagId::from_relative_path("math", std::path::Path::new("./math.gcl")).unwrap_err();
+        assert_eq!(err, DagIdPathError::CurrentDirectory);
+    }
+
+    #[test]
+    fn from_relative_path_rejects_empty_file_stem() {
+        let err = DagId::from_relative_path("math", std::path::Path::new(".gcl")).unwrap_err();
+        assert_eq!(err, DagIdPathError::EmptyFileStem);
+        assert_eq!(
+            DagId::from_virtual_relative_path(std::path::Path::new(".gcl")).unwrap_err(),
+            DagIdPathError::EmptyFileStem
+        );
     }
 
     #[test]

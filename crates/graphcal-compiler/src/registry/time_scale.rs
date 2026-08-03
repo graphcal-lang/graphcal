@@ -8,73 +8,102 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
-/// Time scales supported by Graphcal.
-///
-/// Each variant maps to a supported [`hifitime::TimeScale`] variant.
-/// `UTC` is the default for civil datetime values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TimeScale {
+macro_rules! define_time_scales {
+    (@unit $_variant:ident) => { () };
+    (@count $($variant:ident),+ $(,)?) => {
+        <[()]>::len(&[$(define_time_scales!(@unit $variant)),+])
+    };
+    (
+        $(
+            $(#[$variant_meta:meta])*
+            $variant:ident => $name:literal
+        ),+ $(,)?
+    ) => {
+        /// Time scales supported by Graphcal.
+        ///
+        /// Each variant maps to a supported [`hifitime::TimeScale`] variant.
+        /// `UTC` is the default for civil datetime values.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum TimeScale {
+            $(
+                $(#[$variant_meta])*
+                $variant,
+            )+
+        }
+
+        impl TimeScale {
+            /// Every time scale supported by Graphcal.
+            pub const ALL: [Self; define_time_scales!(@count $($variant),+)] = [
+                $(Self::$variant),+
+            ];
+
+            /// All supported time scale names, for diagnostics and validation.
+            pub(crate) const ALL_NAMES: &'static [&'static str] = &[$($name),+];
+
+            /// Returns `true` if this is the default civil time scale (UTC).
+            #[must_use]
+            pub(crate) const fn is_utc(self) -> bool {
+                matches!(self, Self::UTC)
+            }
+
+            /// Render the supported spellings for diagnostics.
+            #[must_use]
+            pub(crate) fn expected_names() -> String {
+                Self::ALL_NAMES.join(", ")
+            }
+
+            /// Returns the string name of this time scale.
+            #[must_use]
+            const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name),+
+                }
+            }
+        }
+
+        impl fmt::Display for TimeScale {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.name())
+            }
+        }
+
+        impl FromStr for TimeScale {
+            type Err = ParseTimeScaleError;
+
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $($name => Ok(Self::$variant),)+
+                    _ => Err(ParseTimeScaleError {
+                        input: s.to_string(),
+                    }),
+                }
+            }
+        }
+    };
+}
+
+define_time_scales! {
     /// Coordinated Universal Time — default for civil use.
-    UTC,
+    UTC => "UTC",
     /// International Atomic Time — continuous, the internal reference.
-    TAI,
+    TAI => "TAI",
     /// Terrestrial Time — TAI + 32.184 s, used in orbital mechanics.
-    TT,
+    TT => "TT",
     /// Barycentric Dynamical Time — used for solar system ephemerides.
-    TDB,
+    TDB => "TDB",
     /// Ephemeris Time (NAIF/SPICE variant, ≈ TDB).
-    ET,
+    ET => "ET",
     /// GPS Time — TAI − 19 s.
-    GPST,
+    GPST => "GPST",
     /// Galileo System Time.
-    GST,
+    GST => "GST",
     /// `BeiDou` Time.
-    BDT,
+    BDT => "BDT",
     /// QZSS Time.
-    QZSST,
+    QZSST => "QZSST",
 }
 
 impl TimeScale {
-    /// Every time scale supported by Graphcal.
-    pub const ALL: [Self; 9] = [
-        Self::UTC,
-        Self::TAI,
-        Self::TT,
-        Self::TDB,
-        Self::ET,
-        Self::GPST,
-        Self::GST,
-        Self::BDT,
-        Self::QZSST,
-    ];
-
-    /// All supported time scale names, for error messages and validation.
-    pub(crate) const ALL_NAMES: &[&str] = &[
-        "UTC", "TAI", "TT", "TDB", "ET", "GPST", "GST", "BDT", "QZSST",
-    ];
-
-    /// Returns `true` if this is the default civil time scale (UTC).
-    #[must_use]
-    pub(crate) const fn is_utc(self) -> bool {
-        matches!(self, Self::UTC)
-    }
-
-    /// Returns the string name of this time scale.
-    #[must_use]
-    const fn name(self) -> &'static str {
-        match self {
-            Self::UTC => "UTC",
-            Self::TAI => "TAI",
-            Self::TT => "TT",
-            Self::TDB => "TDB",
-            Self::ET => "ET",
-            Self::GPST => "GPST",
-            Self::GST => "GST",
-            Self::BDT => "BDT",
-            Self::QZSST => "QZSST",
-        }
-    }
-
     /// Convert to the corresponding `hifitime::TimeScale`.
     #[must_use]
     pub const fn to_hifitime(self) -> hifitime::TimeScale {
@@ -139,33 +168,6 @@ impl TryFrom<hifitime::TimeScale> for TimeScale {
 
     fn try_from(ts: hifitime::TimeScale) -> Result<Self, Self::Error> {
         Self::from_hifitime(ts)
-    }
-}
-
-impl fmt::Display for TimeScale {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.name())
-    }
-}
-
-impl FromStr for TimeScale {
-    type Err = ParseTimeScaleError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "UTC" => Ok(Self::UTC),
-            "TAI" => Ok(Self::TAI),
-            "TT" => Ok(Self::TT),
-            "TDB" => Ok(Self::TDB),
-            "ET" => Ok(Self::ET),
-            "GPST" => Ok(Self::GPST),
-            "GST" => Ok(Self::GST),
-            "BDT" => Ok(Self::BDT),
-            "QZSST" => Ok(Self::QZSST),
-            _ => Err(ParseTimeScaleError {
-                input: s.to_string(),
-            }),
-        }
     }
 }
 
