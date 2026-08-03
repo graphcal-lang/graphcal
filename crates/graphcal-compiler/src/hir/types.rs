@@ -8,7 +8,7 @@
 
 use crate::dimension::Rational;
 use crate::registry::time_scale::TimeScale;
-use crate::syntax::ast::{GenericConstraint, MulDivOp};
+use crate::syntax::ast::MulDivOp;
 use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
@@ -40,14 +40,6 @@ impl GenericParamId {
 pub enum GenericParamOwner {
     /// Generic parameter on a user-defined `type` declaration.
     Type(ResolvedStructTypeName),
-}
-
-/// A resolved generic-parameter definition.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GenericParamDef {
-    pub(crate) id: Spanned<GenericParamId>,
-    pub(crate) constraint: GenericConstraint,
-    pub(crate) default: Option<GenericArg>,
 }
 
 /// Built-in type forms with closed semantic meaning.
