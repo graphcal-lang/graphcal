@@ -1529,6 +1529,9 @@ impl ModuleResolver {
     ) -> Result<(), ModuleResolveError> {
         self.module_symbols(owner)?;
         self.module_symbols(target)?;
+        if matches!(kind, ImportKind::Selective(_)) {
+            self.ensure_module_path_visible(target, access)?;
+        }
 
         let additions = self.import_additions(path, kind, target, access, role)?;
         self.check_import_exclusive_name_collisions(owner, &additions)?;
@@ -1889,7 +1892,7 @@ impl ModuleResolver {
         };
 
         if let Some(access) = imported_access {
-            self.ensure_module_visible(&target, access)?;
+            self.ensure_module_path_visible(&target, access)?;
         }
         for segment in path.segments().iter().skip(1) {
             target = target.child(segment.name.as_str());
@@ -1897,7 +1900,7 @@ impl ModuleResolver {
                 return Err(ModuleResolveError::UnknownModule { owner: target });
             }
             if let Some(access) = imported_access {
-                self.ensure_module_visible(&target, access)?;
+                self.ensure_module_path_visible(&target, access)?;
             }
         }
         Ok(target)
@@ -2463,18 +2466,19 @@ impl ModuleResolver {
                 alias,
             }
         })?;
-        // Descend segment by segment, enforcing dag visibility at every
-        // step: `lib.helper.symbol` must be rejected when `helper` is a
-        // private dag, exactly like `resolve_module_path` rejects
-        // `lib.helper` — previously only the symbol's own visibility was
-        // checked, never the modules on the path.
+        // Validate the alias's target before descending. This is essential
+        // when the alias points directly at a private inline DAG and `rest` is
+        // empty. The helper also checks every declared DAG ancestor, so a
+        // public child under a private parent cannot be used as an access
+        // tunnel.
         let mut target = alias_target.target.clone();
+        self.ensure_module_path_visible(&target, alias_target.access)?;
         for segment in rest {
             target = target.child(segment.as_str());
             if !self.modules.contains_key(&target) {
                 return Err(ModuleResolveError::UnknownModule { owner: target });
             }
-            self.ensure_module_visible(&target, alias_target.access)?;
+            self.ensure_module_path_visible(&target, alias_target.access)?;
         }
         if self.modules.contains_key(&target) {
             Ok(ResolvedModuleQualifier {
@@ -2511,7 +2515,7 @@ impl ModuleResolver {
             })
     }
 
-    fn ensure_module_visible(
+    fn ensure_module_path_visible(
         &self,
         target: &DagId,
         access: ModuleAccess,
@@ -2519,23 +2523,34 @@ impl ModuleResolver {
         if !access.requires_public() {
             return Ok(());
         }
-        let Some(parent) = target.parent() else {
-            return Ok(());
-        };
-        let Some(parent_symbols) = self.modules.get(&parent) else {
-            return Ok(());
-        };
-        let Some(symbol) = parent_symbols.decls.get(target.name()) else {
-            return Ok(());
-        };
-        if symbol.kind() == DeclSymbolKind::Dag && !symbol.visibility().is_public() {
-            return Err(ModuleResolveError::PrivateName {
-                owner: parent,
-                namespace: "dag",
-                name: target.name().to_string(),
-            });
+
+        let mut child = target.clone();
+        loop {
+            let Some(parent) = child.parent() else {
+                return Ok(());
+            };
+            let Some(parent_symbols) = self.modules.get(&parent) else {
+                // File-root path components are semantic package identity, not
+                // source DAG declarations, and therefore carry no visibility.
+                return Ok(());
+            };
+            let Some(symbol) = parent_symbols.decls.get(child.name()) else {
+                // Synthetic include namespaces have a semantic parent but no
+                // source `dag` declaration on that edge.
+                return Ok(());
+            };
+            if symbol.kind() != DeclSymbolKind::Dag {
+                return Ok(());
+            }
+            if !symbol.visibility().is_public() {
+                return Err(ModuleResolveError::PrivateName {
+                    owner: parent,
+                    namespace: "dag",
+                    name: child.name().to_string(),
+                });
+            }
+            child = parent;
         }
-        Ok(())
     }
 }
 
@@ -3882,11 +3897,19 @@ mod tests {
     }
 
     #[test]
-    fn direct_alias_of_private_inline_dag_is_rejected_when_called() {
+    fn direct_alias_of_private_inline_dag_rejects_modules_and_every_symbol_namespace() {
         let lib_id = DagId::root_in_package("test", "lib");
         let helper_id = lib_id.child("helper");
         let main_id = DagId::root_in_package("test", "main");
-        let lib = desugared_source("dag helper { pub node result: Dimensionless = 1.0; }");
+        let lib = desugared_source(
+            "dag helper {
+                pub node result: Dimensionless = 1.0;
+                pub base dim Distance;
+                pub base unit tick: Dimensionless;
+                pub type Shape { Shape }
+                pub index Axis = { A };
+            }",
+        );
         let helper = first_dag(&lib);
         let main = desugared_source("import lib.helper as imported;");
         let (import_path, import_kind) = first_import(&main);
@@ -3905,14 +3928,139 @@ mod tests {
             .register_import(&main_id, import_path, import_kind, &helper_id)
             .unwrap();
 
+        let errors = [
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["imported"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_decl_path(&main_id, &path(&["imported", "result"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_dimension_path(&main_id, &path(&["imported", "Distance"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_unit_path(&main_id, &path(&["imported", "tick"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_struct_type_path(&main_id, &path(&["imported", "Shape"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_constructor_path(&main_id, &path(&["imported", "Shape"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_index_path(&main_id, &path(&["imported", "Axis"]))
+                .map(|_| ())
+                .unwrap_err(),
+        ];
+
+        for error in errors {
+            assert!(matches!(
+                error,
+                ModuleResolveError::PrivateName {
+                    owner,
+                    namespace: "dag",
+                    name,
+                } if owner == lib_id && name == "helper"
+            ));
+        }
+    }
+
+    #[test]
+    fn selective_import_from_private_inline_dag_is_rejected() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let helper_id = lib_id.child("helper");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source(
+            "dag helper {
+                pub node result: Dimensionless = 1.0;
+            }",
+        );
+        let helper = first_dag(&lib);
+        let main = desugared_source("import lib.helper.{ result };");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(helper_id.clone(), &helper.body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
         assert!(matches!(
-            resolver.resolve_module_path(&main_id, &module_path(&["imported"])),
+            resolver.register_import(&main_id, import_path, import_kind, &helper_id),
             Err(ModuleResolveError::PrivateName {
                 owner,
                 namespace: "dag",
                 name,
             }) if owner == lib_id && name == "helper"
         ));
+    }
+
+    #[test]
+    fn public_child_under_private_dag_cannot_be_an_import_tunnel() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let private_id = lib_id.child("private_parent");
+        let child_id = private_id.child("public_child");
+        let main_id = DagId::root_in_package("test", "main");
+        let lib = desugared_source(
+            "dag private_parent {
+                pub dag public_child {
+                    pub node result: Dimensionless = 1.0;
+                }
+            }",
+        );
+        let private_dag = first_dag(&lib);
+        let private_body = ast::File {
+            declarations: private_dag.body.clone(),
+        };
+        let public_child = first_dag(&private_body);
+        let main = desugared_source("import lib.private_parent.public_child as child;");
+        let (import_path, import_kind) = first_import(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver.add_module(private_id, &private_dag.body).unwrap();
+        resolver
+            .add_module(child_id.clone(), &public_child.body)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_import(&main_id, import_path, import_kind, &child_id)
+            .unwrap();
+
+        for error in [
+            resolver
+                .resolve_module_path(&main_id, &module_path(&["child"]))
+                .map(|_| ())
+                .unwrap_err(),
+            resolver
+                .resolve_decl_path(&main_id, &path(&["child", "result"]))
+                .map(|_| ())
+                .unwrap_err(),
+        ] {
+            assert!(matches!(
+                error,
+                ModuleResolveError::PrivateName {
+                    owner,
+                    namespace: "dag",
+                    name,
+                } if owner == lib_id && name == "private_parent"
+            ));
+        }
     }
 
     #[test]
