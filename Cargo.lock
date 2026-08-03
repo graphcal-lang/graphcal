@@ -1802,10 +1802,8 @@ dependencies = [
  "miette",
  "petgraph",
  "proptest",
- "serde",
  "stacker",
  "thiserror",
- "toml",
 ]
 
 [[package]]
