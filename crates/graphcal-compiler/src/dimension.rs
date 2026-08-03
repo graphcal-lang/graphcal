@@ -589,7 +589,7 @@ mod tests {
                 Some(dimension)
             );
         }
-        assert_eq!(PreludeBaseDimension::parse("Lenght"), None);
+        assert_eq!(PreludeBaseDimension::parse("length"), None);
         assert_eq!(PreludeBaseDimension::parse("Velocity"), None);
     }
 
