@@ -225,10 +225,7 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
         GraphcalError::UnknownLocalRef { name, .. } => {
             auto_import_data(name, AutoImportCategory::Term)
         }
-        GraphcalError::UnknownGraphRef { name, .. }
-        | GraphcalError::UnknownConstRef { name, .. }
-            if name.qualifier().is_empty() =>
-        {
+        GraphcalError::UnknownGraphRef { name, .. } if name.qualifier().is_empty() => {
             auto_import_data(name.member().as_str(), AutoImportCategory::Term)
         }
         _ => None,
@@ -385,6 +382,72 @@ mod tests {
     }
 
     #[test]
+    fn reassigned_codes_survive_lsp_conversion_by_variant() {
+        use std::sync::Arc;
+
+        use graphcal_compiler::builtin::BuiltinFnName;
+        use graphcal_compiler::datetime_literal::DatetimeLiteralExpectation;
+        use graphcal_compiler::registry::error::GraphcalError;
+        use graphcal_compiler::syntax::names::NameAtom;
+        use miette::NamedSource;
+
+        let src = || NamedSource::new("file:///test.gcl", Arc::new("x".to_string()));
+        let span = || miette::SourceSpan::from((0, 1));
+        let cases = [
+            (
+                GraphcalError::InvalidSourcePath {
+                    path: "bad.txt".to_string(),
+                    reason: "wrong extension".to_string(),
+                },
+                "graphcal::M023",
+            ),
+            (
+                GraphcalError::AggregationCardinalityUnknown {
+                    function: BuiltinFnName::Product,
+                    src: src(),
+                    span: span(),
+                },
+                "graphcal::D027",
+            ),
+            (
+                GraphcalError::InvalidDatetimeLiteral {
+                    expectation: DatetimeLiteralExpectation::OffsetDateTime,
+                    reason: "invalid".to_string(),
+                    src: src(),
+                    span: span(),
+                },
+                "graphcal::D028",
+            ),
+            (
+                GraphcalError::InvalidEpochTimeScaleArgument {
+                    expected: "UTC".to_string(),
+                    src: src(),
+                    span: span(),
+                },
+                "graphcal::D029",
+            ),
+            (
+                GraphcalError::UnsupportedEpochTimeScale {
+                    name: NameAtom::parse("BAD").unwrap(),
+                    expected: "UTC".to_string(),
+                    src: src(),
+                    span: span(),
+                },
+                "graphcal::D030",
+            ),
+        ];
+
+        for (error, expected_code) in cases {
+            let diagnostics = compile_error_to_diagnostics(&CompileError::Eval(error));
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert_eq!(
+                diagnostics[0].code,
+                Some(NumberOrString::String(expected_code.to_string()))
+            );
+        }
+    }
+
+    #[test]
     fn epoch_static_time_scale_argument_produces_no_diagnostics() {
         let source = "node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");";
         let diagnostics = produce_diagnostics(source, "test.gcl");
@@ -433,7 +496,7 @@ param event: Datetime<TT>(
         assert!(diagnostics.iter().any(|diagnostic| {
             matches!(
                 &diagnostic.code,
-                Some(NumberOrString::String(code)) if code == "graphcal::D022"
+                Some(NumberOrString::String(code)) if code == "graphcal::D028"
             ) && diagnostic.message.contains("invalid datetime literal")
         }));
     }

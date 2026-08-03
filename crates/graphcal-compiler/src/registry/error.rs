@@ -205,19 +205,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("unknown constant `{name}`")]
-    #[diagnostic(
-        code(graphcal::N003),
-        help("constant references must point to a `const` or built-in constant (PI, E)")
-    )]
-    UnknownConstRef {
-        name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("not found")]
-        span: SourceSpan,
-    },
-
     #[error("unknown function `{name}`")]
     #[diagnostic(
         code(graphcal::N004),
@@ -467,31 +454,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("graph reference `@{name}` not allowed in function body")]
-    #[diagnostic(code(graphcal::F001))]
-    GraphRefInFn {
-        name: ScopedName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("@ reference not allowed here")]
-        span: SourceSpan,
-        #[help]
-        help: String,
-    },
-
-    #[error("recursive function `{name}` detected")]
-    #[diagnostic(
-        code(graphcal::F002),
-        help("graphcal does not support recursive functions")
-    )]
-    RecursiveFunction {
-        name: FnName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("involved in recursion")]
-        span: SourceSpan,
-    },
-
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     #[diagnostic(code(graphcal::N006))]
     WrongArity {
@@ -501,36 +463,6 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("wrong number of arguments")]
-        span: SourceSpan,
-    },
-
-    #[error("function `{name}` expects {expected} generic argument(s), got {got}")]
-    #[diagnostic(
-        code(graphcal::N007),
-        help("provide all generic parameters or none (to infer)")
-    )]
-    WrongGenericArity {
-        name: FnName,
-        expected: usize,
-        got: usize,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("wrong number of generic arguments")]
-        span: SourceSpan,
-    },
-
-    #[error(
-        "generic argument type mismatch for parameter `{param}` of function `{name}`: expected {expected} constraint, got {found}"
-    )]
-    #[diagnostic(code(graphcal::N008))]
-    GenericArgMismatch {
-        name: FnName,
-        param: String,
-        expected: String,
-        found: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this generic argument")]
         span: SourceSpan,
     },
 
@@ -677,7 +609,7 @@ pub enum GraphcalError {
         "`{function}()` cannot determine the result dimension without a concrete axis cardinality"
     )]
     #[diagnostic(
-        code(graphcal::D022),
+        code(graphcal::D027),
         help(
             "apply product() where the index is concrete, or reduce dimensionless values whose result does not depend on cardinality"
         )
@@ -1008,7 +940,7 @@ pub enum GraphcalError {
 
     #[error("invalid source path `{path}`: {reason}")]
     #[diagnostic(
-        code(graphcal::M020),
+        code(graphcal::M023),
         help("Graphcal source files must be UTF-8 `.gcl` files")
     )]
     InvalidSourcePath { path: String, reason: String },
@@ -1055,21 +987,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("filename `{stem}` is not a valid module name")]
-    #[diagnostic(
-        code(graphcal::M004),
-        help(
-            "module names must be lower_snake_case identifiers; use `as alias` to specify an explicit name"
-        )
-    )]
-    InvalidModuleName {
-        stem: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("imported here")]
-        span: SourceSpan,
-    },
-
     #[error("duplicate module name `{name}`")]
     #[diagnostic(code(graphcal::M005))]
     DuplicateModuleName {
@@ -1094,20 +1011,6 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown module")]
-        span: SourceSpan,
-    },
-
-    #[error("name `{name}` not found in module `{module}`")]
-    #[diagnostic(
-        code(graphcal::M007),
-        help("check that the name is declared in the imported file")
-    )]
-    QualifiedNameNotFound {
-        module: String,
-        name: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("not found in module")]
         span: SourceSpan,
     },
 
@@ -1174,18 +1077,6 @@ pub enum GraphcalError {
         src: NamedSource<Arc<String>>,
         #[label("expected Bool, found {found}")]
         span: SourceSpan,
-    },
-
-    #[error("assumed assertion `{name}` failed")]
-    #[diagnostic(code(graphcal::A002))]
-    AssumedAssertionFailed {
-        name: DeclName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this assertion failed")]
-        span: SourceSpan,
-        #[help]
-        help: String,
     },
 
     #[error("unknown assert `{name}` in #[assumes(...)]")]
@@ -1439,33 +1330,6 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("instantiated import requires an alias or selective names")]
-    #[diagnostic(
-        code(graphcal::M011),
-        help("use `import \"path\"(...) as alias;` or `import \"path\"(...) {{ name1, name2 }};`")
-    )]
-    InstantiatedImportNeedsNamespace {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("instantiated import without alias or selective names")]
-        span: SourceSpan,
-    },
-
-    #[error("bare module import requires a graphcal.toml with [package].name")]
-    #[diagnostic(
-        code(graphcal::M012),
-        help(
-            "create a graphcal.toml file in the project root with:\n\n[package]\nname = \"your_package_name\""
-        )
-    )]
-    BareImportWithoutManifest {
-        path: String,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("bare module path requires a manifest")]
-        span: SourceSpan,
-    },
-
     #[error("module path starts with `{path_first}` but package name is `{package_name}`")]
     #[diagnostic(
         code(graphcal::M013),
@@ -1631,7 +1495,7 @@ pub enum GraphcalError {
     },
 
     #[error("invalid datetime literal: {reason}")]
-    #[diagnostic(code(graphcal::D022), help("{expectation}"))]
+    #[diagnostic(code(graphcal::D028), help("{expectation}"))]
     InvalidDatetimeLiteral {
         expectation: crate::datetime_literal::DatetimeLiteralExpectation,
         reason: String,
@@ -1657,7 +1521,7 @@ pub enum GraphcalError {
     },
 
     #[error("epoch's static time-scale argument must be a bare name")]
-    #[diagnostic(code(graphcal::D023), help("use one of {expected}"))]
+    #[diagnostic(code(graphcal::D029), help("use one of {expected}"))]
     InvalidEpochTimeScaleArgument {
         expected: String,
         #[source_code]
@@ -1667,7 +1531,7 @@ pub enum GraphcalError {
     },
 
     #[error("unsupported epoch time scale `{name}`")]
-    #[diagnostic(code(graphcal::D023), help("use one of {expected}"))]
+    #[diagnostic(code(graphcal::D030), help("use one of {expected}"))]
     UnsupportedEpochTimeScale {
         name: NameAtom,
         expected: String,
@@ -2096,7 +1960,6 @@ impl GraphcalError {
             | Self::ImportPlotItem { src, .. }
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
-            | Self::UnknownConstRef { src, .. }
             | Self::UnknownFunction { src, .. }
             | Self::UnknownExternFunction { src, .. }
             | Self::NamedArgumentsOnFunction { src, .. }
@@ -2113,11 +1976,7 @@ impl GraphcalError {
             | Self::GraphRefInConst { src, .. }
             | Self::GraphRefInConstUnit { src, .. }
             | Self::NonConstUnitInConst { src, .. }
-            | Self::GraphRefInFn { src, .. }
-            | Self::RecursiveFunction { src, .. }
             | Self::WrongArity { src, .. }
-            | Self::WrongGenericArity { src, .. }
-            | Self::GenericArgMismatch { src, .. }
             | Self::CyclicDependency { src, .. }
             | Self::EvalError { src, .. }
             | Self::InternalError { src, .. }
@@ -2155,16 +2014,13 @@ impl GraphcalError {
             | Self::ImportFileNotFound { src, .. }
             | Self::ImportNameNotFound { src, .. }
             | Self::ImportCategoryMismatch { src, .. }
-            | Self::InvalidModuleName { src, .. }
             | Self::DuplicateModuleName { src, .. }
             | Self::UnknownModule { src, .. }
-            | Self::QualifiedNameNotFound { src, .. }
             | Self::CoordinateIndexDimensionMismatch { src, .. }
             | Self::CoordinateIndexInvalid { src, .. }
             | Self::ExpectedIndexFoundNat { src, .. }
             | Self::GraphRefToAssert { src, .. }
             | Self::AssertBodyNotBool { src, .. }
-            | Self::AssumedAssertionFailed { src, .. }
             | Self::UnknownAssertInAssumes { src, .. }
             | Self::InvalidAssumesTarget { src, .. }
             | Self::InvalidHiddenTarget { src, .. }
@@ -2182,8 +2038,6 @@ impl GraphcalError {
             | Self::RequiredParamNotProvided { src, .. }
             | Self::UnknownParamBinding { src, .. }
             | Self::BindingNotAParam { src, .. }
-            | Self::InstantiatedImportNeedsNamespace { src, .. }
-            | Self::BareImportWithoutManifest { src, .. }
             | Self::PackageNameMismatch { src, .. }
             | Self::StdlibNotImplemented { src, .. }
             | Self::CrossFileImportInVirtualPackage { src, .. }
@@ -2220,5 +2074,84 @@ impl GraphcalError {
             | Self::InlineDagArgDimensionMismatch { src, .. } => src,
         };
         Some(src)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    fn diagnostic_code_catalog() -> BTreeMap<String, String> {
+        let source = include_str!("error.rs");
+        let prefix = concat!("code(", "graphcal::");
+        let mut pending_code = None;
+        let mut catalog = BTreeMap::new();
+
+        for line in source.lines() {
+            if let Some((_, suffix)) = line.split_once(prefix) {
+                let code = suffix
+                    .split_once(')')
+                    .map(|(code, _)| code)
+                    .expect("diagnostic code must end with `)`");
+                assert!(pending_code.replace(code.to_string()).is_none());
+                continue;
+            }
+
+            let Some(code) = pending_code.as_ref() else {
+                continue;
+            };
+            let Some(candidate) = line.strip_prefix("    ") else {
+                continue;
+            };
+            if candidate.starts_with(' ') || candidate.starts_with('#') {
+                continue;
+            }
+            let Some(delimiter) = candidate.find(['{', '(']) else {
+                continue;
+            };
+            let variant = candidate[..delimiter].trim();
+            if variant.is_empty()
+                || !variant.starts_with(char::is_uppercase)
+                || !variant.chars().all(char::is_alphanumeric)
+            {
+                continue;
+            }
+
+            let previous = catalog.insert(variant.to_string(), code.clone());
+            assert!(
+                previous.is_none(),
+                "duplicate variant `{variant}` in catalog"
+            );
+            pending_code = None;
+        }
+
+        assert!(pending_code.is_none(), "diagnostic code without a variant");
+        catalog
+    }
+
+    #[test]
+    fn diagnostic_codes_are_unique_and_reassignments_are_pinned() {
+        let catalog = diagnostic_code_catalog();
+        assert!(catalog.len() > 100, "incomplete catalog: {catalog:?}");
+
+        let mut variants_by_code = BTreeMap::new();
+        for (variant, code) in &catalog {
+            if let Some(previous) = variants_by_code.insert(code, variant) {
+                panic!("diagnostic code `{code}` is shared by `{previous}` and `{variant}`");
+            }
+        }
+
+        for (variant, expected) in [
+            ("InvalidSourcePath", "M023"),
+            ("LinearAlgebraShapeMismatch", "D022"),
+            ("AggregationCardinalityUnknown", "D027"),
+            ("InvalidDatetimeLiteral", "D028"),
+            ("EpochTimeScaleArgumentCount", "D023"),
+            ("InvalidEpochTimeScaleArgument", "D029"),
+            ("UnsupportedEpochTimeScale", "D030"),
+            ("ImportRuntimeItem", "M020"),
+        ] {
+            assert_eq!(catalog.get(variant).map(String::as_str), Some(expected));
+        }
     }
 }
