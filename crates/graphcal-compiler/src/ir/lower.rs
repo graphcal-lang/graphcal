@@ -1612,14 +1612,15 @@ impl UnfrozenIR {
             }
         };
 
-        let mut all_dep_scoped_names = dep
+        // Source-order entries are declarations owned by the dependency,
+        // including declarations already nested by an inner include. Imported
+        // metadata is different: a qualified key can name an external module
+        // used by the dependency and must retain that canonical qualifier.
+        let all_dep_scoped_names = dep
             .source_order
             .iter()
             .map(|(name, _)| name.clone())
             .collect::<HashSet<_>>();
-        all_dep_scoped_names.extend(dep.imported_values.keys().cloned());
-        all_dep_scoped_names.extend(dep.imported_decl_types.keys().cloned());
-        all_dep_scoped_names.extend(dep.imported_value_sources.keys().cloned());
         let dep_scoped_names = &all_dep_scoped_names;
 
         let mut all_dep_names = dep_names.clone();
