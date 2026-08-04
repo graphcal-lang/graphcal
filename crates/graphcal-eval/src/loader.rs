@@ -10,8 +10,9 @@ use crate::eval::CompileError;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::ast::{DeclKind, ImportKind, IncludeDecl, ModulePath};
+use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
 use graphcal_compiler::syntax::index_name::IndexName;
+use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
 use graphcal_io::{FileSystemReader, RealFileSystem};
 use graphcal_package::{
@@ -622,9 +623,10 @@ fn add_instantiated_include_modules(
         let DeclKind::Include(include) = &decl.kind else {
             continue;
         };
-        let Some(prefix) = instantiated_include_prefix(include) else {
+        let Some(instance_scope) = instantiated_include_scope(include) else {
             continue;
         };
+        let prefix = instance_scope.merge_scope_name();
         let Some(file_target) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
@@ -658,9 +660,10 @@ fn link_instantiated_include_indexes(
         let DeclKind::Include(include) = &decl.kind else {
             continue;
         };
-        let Some(prefix) = instantiated_include_prefix(include) else {
+        let Some(instance_scope) = instantiated_include_scope(include) else {
             continue;
         };
+        let prefix = instance_scope.merge_scope_name();
         if resolved_imports
             .resolved_target(&ModulePathKey::from_path(&include.path))
             .is_none()
@@ -684,14 +687,8 @@ fn link_instantiated_include_indexes(
     Ok(())
 }
 
-fn instantiated_include_prefix<P: Phase>(include: &IncludeDecl<P>) -> Option<String> {
-    (!include.param_bindings.is_empty()).then(|| match &include.kind {
-        ImportKind::Module { alias } => alias.as_ref().map_or_else(
-            || include.path.leaf().name.to_string(),
-            |alias| alias.value.to_string(),
-        ),
-        ImportKind::Selective(_) => include.path.leaf().name.to_string(),
-    })
+fn instantiated_include_scope<P: Phase>(include: &IncludeDecl<P>) -> Option<IncludeInstanceScope> {
+    (!include.param_bindings.is_empty()).then(|| include.instance_scope())
 }
 
 fn module_declarations<'a>(
@@ -734,8 +731,10 @@ fn register_module_imports(
                 if let Some(target) =
                     resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
                 {
-                    let synthetic_owner = instantiated_include_prefix(include)
-                        .map(|prefix| owner.child(prefix.as_str()));
+                    let synthetic_owner = instantiated_include_scope(include).map(|scope| {
+                        let prefix = scope.merge_scope_name();
+                        owner.child(prefix.as_str())
+                    });
                     let target = synthetic_owner.unwrap_or_else(|| {
                         module_resolver_target_for_path(&include.path, target, files)
                     });

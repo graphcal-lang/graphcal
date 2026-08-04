@@ -441,38 +441,30 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
     let dep_loaded = &project.files[import_dag_id];
     let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
 
-    // Determine the prefix (namespace) for the merged declarations.
-    let prefix = match &include_decl.kind {
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
-            alias.as_ref().map_or_else(
-                || derive_module_name_from_import_path(&include_decl.path),
-                |alias_ident| alias_ident.value.clone(),
-            )
+    // A module-form include introduces a source-visible alias and therefore
+    // participates in duplicate-alias checks. A selective include introduces
+    // only its selected local declarations, so give its merged implementation
+    // an opaque private instance scope instead (#1132).
+    let instance_scope = include_decl.instance_scope();
+    if let IncludeInstanceScope::Named(prefix) = &instance_scope {
+        if let Some(first) = ctx.module_map.get(prefix) {
+            return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
+                name: prefix.to_string(),
+                first: first.span().into(),
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            }));
         }
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(_) => {
-            // For selective instantiated includes, we still need a prefix for
-            // the merged declarations. Derive from the path's leaf segment.
-            derive_module_name_from_import_path(&include_decl.path)
-        }
-    };
-
-    // Check for duplicate module names (instantiated includes occupy the same namespace).
-    if let Some(first) = ctx.module_map.get(&prefix) {
-        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-            name: prefix.to_string(),
-            first: first.span().into(),
-            src: file_src.clone(),
-            span: include_decl.path.span().into(),
-        }));
+        ctx.module_map.insert(
+            prefix.clone(),
+            ProjectModuleBinding {
+                target: import_dag_id.clone(),
+                span: include_decl.path.span(),
+                role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
+            },
+        );
     }
-    ctx.module_map.insert(
-        prefix.clone(),
-        ProjectModuleBinding {
-            target: import_dag_id.clone(),
-            span: include_decl.path.span(),
-            role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
-        },
-    );
+    let prefix = instance_scope.merge_scope_name();
 
     // Classify and validate bindings against the dependency's AST. Each
     // binding lands in one of params/types/dims/indexes, or is rejected as
@@ -627,7 +619,8 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
         source: DeferredDagSource::File {
             dep_dag_id: import_dag_id.clone(),
         },
-        prefix,
+        instance_scope,
+        debug_scope: derive_module_name_from_import_path(&include_decl.path),
         bindings,
         index_bindings,
         index_binding_spans,
@@ -671,34 +664,28 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     let parent_dag_id = target.parent_dag_id;
     let boundary = target.boundary;
 
-    // Determine the prefix (namespace) for the merged declarations.
-    let prefix = match &include_decl.kind {
-        ImportKind::Module { alias } => alias.as_ref().map_or_else(
-            || ModuleAliasName::expect_valid(dag_name),
-            |alias_ident| alias_ident.value.clone(),
-        ),
-        ImportKind::Selective(_) => ModuleAliasName::expect_valid(dag_name),
-    };
-
-    // Check for duplicate module names. The map records the inline DAG's
-    // real canonical id — a fabricated `<dag:name>` sentinel here would
-    // silently mismatch any comparison against genuine DagIds.
-    if let Some(first) = ctx.module_map.get(&prefix) {
-        return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
-            name: prefix.to_string(),
-            first: first.span().into(),
-            src: file_src.clone(),
-            span: include_decl.path.span().into(),
-        }));
+    // As for file-root includes, only the module form introduces an alias.
+    // Selective inline-DAG includes receive an opaque private merge scope.
+    let instance_scope = include_decl.instance_scope();
+    if let IncludeInstanceScope::Named(prefix) = &instance_scope {
+        if let Some(first) = ctx.module_map.get(prefix) {
+            return Err(CompileError::Eval(GraphcalError::DuplicateModuleName {
+                name: prefix.to_string(),
+                first: first.span().into(),
+                src: file_src.clone(),
+                span: include_decl.path.span().into(),
+            }));
+        }
+        ctx.module_map.insert(
+            prefix.clone(),
+            ProjectModuleBinding {
+                target: dag_id.clone(),
+                span: include_decl.path.span(),
+                role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
+            },
+        );
     }
-    ctx.module_map.insert(
-        prefix.clone(),
-        ProjectModuleBinding {
-            target: dag_id.clone(),
-            span: include_decl.path.span(),
-            role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole::IncludedInstance,
-        },
-    );
+    let prefix = instance_scope.merge_scope_name();
 
     let dag_body = graphcal_compiler::desugar::desugared_ast::File {
         declarations: dag_def.body.clone(),
@@ -842,7 +829,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
             dag_id: dag_id.clone(),
             parent_dag_id: parent_dag_id.clone(),
         },
-        prefix,
+        instance_scope,
+        debug_scope: ModuleAliasName::expect_valid(dag_name),
         bindings,
         index_bindings,
         index_binding_spans,

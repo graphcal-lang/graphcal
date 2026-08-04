@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::*;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
@@ -2168,6 +2170,123 @@ fn project_instantiated_import_graph_ref() {
         (result_val - expected_delta_v).abs() < 0.01,
         "result = {result_val}, expected = {expected_delta_v}"
     );
+}
+
+fn write_same_leaf_include_project(main_source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/app");
+    std::fs::create_dir_all(package_dir.join("analysis")).unwrap();
+    std::fs::create_dir_all(package_dir.join("presentation")).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"app\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("analysis/shared.gcl"),
+        "param input: Dimensionless;\npub node output: Dimensionless = @input + 1.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("presentation/shared.gcl"),
+        "param input: Dimensionless;\npub node output: Dimensionless = @input * 2.0;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn project_selective_includes_allow_distinct_modules_with_same_leaf_name() {
+    let (_dir, root) = write_same_leaf_include_project(
+        "include app.analysis.shared(input: 2.0).{ output as analyzed };\n\
+         include app.presentation.shared(input: 5.0).{ output as rendered };\n\
+         node combined: Dimensionless = @analyzed + @rendered;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "combined") - 13.0).abs() < f64::EPSILON);
+
+    let internal_input_owners = result
+        .all
+        .iter()
+        .filter(|(name, _, _)| name.member().as_str() == "input" && name.is_qualified())
+        .map(|(name, _, _)| name.qualifier().to_vec())
+        .collect::<HashSet<_>>();
+    assert_eq!(internal_input_owners.len(), 2);
+}
+
+#[test]
+fn project_selective_includes_still_reject_duplicate_local_names() {
+    let (_dir, root) = write_same_leaf_include_project(
+        "include app.analysis.shared(input: 2.0).{ output as duplicate };\n\
+         include app.presentation.shared(input: 5.0).{ output as duplicate };\n",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+
+    match project.build_module_resolver() {
+        Err(
+            graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
+                namespace,
+                name,
+                ..
+            },
+        ) => {
+            assert_eq!(namespace, "name");
+            assert_eq!(name, "duplicate");
+        }
+        other => panic!("expected a duplicate local declaration diagnostic, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_module_includes_still_reject_duplicate_default_aliases() {
+    let (_dir, root) = write_same_leaf_include_project(
+        "include app.analysis.shared(input: 2.0);\n\
+         include app.presentation.shared(input: 5.0);\n",
+    );
+
+    match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::DuplicateModuleName { name, .. })) => {
+            assert_eq!(name, "shared");
+        }
+        Err(CompileError::Eval(GraphcalError::EvalError { message, .. })) => {
+            assert!(
+                message.contains("duplicate module") && message.contains("shared"),
+                "unexpected duplicate-alias diagnostic: {message}",
+            );
+        }
+        other => panic!("expected a duplicate module alias diagnostic, got {other:?}"),
+    }
+}
+
+#[test]
+fn project_selective_includes_allow_multiple_instances_of_same_module() {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/app");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"app\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("shared.gcl"),
+        "param input: Dimensionless;\npub node output: Dimensionless = @input * 2.0;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include app.shared(input: 2.0).{ output as first };\n\
+         include app.shared(input: 3.0).{ output as second };\n\
+         node combined: Dimensionless = @first + @second;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "combined") - 10.0).abs() < f64::EPSILON);
 }
 
 #[test]

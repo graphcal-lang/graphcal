@@ -11,7 +11,7 @@ use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, Module
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitRef};
 use graphcal_compiler::syntax::index_name::IndexName;
-use graphcal_compiler::syntax::module_name::ModuleAliasName;
+use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
@@ -65,6 +65,12 @@ type IndexBindings = HashMap<IndexName, IndexBindingTarget>;
 /// One evaluated value retained for output assembly across project-file
 /// boundaries.
 type EvaluatedOutputValue = (ScopedName, Result<Value, NodeError>, DeclType);
+
+/// Presentation aliases for private selective-include scopes.
+///
+/// Keys are collision-free synthetic IR qualifiers; values are human-readable
+/// target leaves retained only when that leaf is unambiguous in the importer.
+type IncludeDebugNameMap = HashMap<ModuleAliasName, ModuleAliasName>;
 
 /// A selective import/include alias.
 ///
@@ -241,6 +247,8 @@ struct CompiledFile {
     /// Complete values from pre-evaluated empty-argument file includes. These
     /// are hidden from the surface view but retained for `EvalOutputView::All`.
     included_debug_values: Vec<EvaluatedOutputValue>,
+    /// Human-readable aliases for unambiguous private include scopes.
+    include_debug_names: IncludeDebugNameMap,
     /// Plot specs requested from standalone-evaluated dependencies via
     /// include brace lists, renamed to their local aliases (#847).
     included_plots: Vec<super::types::PlotSpec>,
@@ -264,9 +272,11 @@ struct DeferredDagInclude {
     /// Identifies the source kind and any kind-specific data (file's AST
     /// vs inline dag's body + parent context).
     source: DeferredDagSource,
-    /// The prefix for all merged declarations (from alias or dag name or
-    /// filename).
-    prefix: ModuleAliasName,
+    /// Private merge namespace for this configured instance. Only the named
+    /// variant is source-visible; selective includes use an opaque identity.
+    instance_scope: IncludeInstanceScope,
+    /// Target leaf retained for human-readable debug output when unambiguous.
+    debug_scope: ModuleAliasName,
     /// Param bindings: `param_name` → binding expression.
     bindings: HashMap<DeclName, Expr>,
     /// Index bindings: dependency port → resolved importer-side axis.

@@ -309,6 +309,87 @@ pub(super) const fn output_decl_type(category: DeclCategory) -> Option<DeclType>
     }
 }
 
+pub(super) fn remap_include_debug_name(
+    name: &ScopedName,
+    aliases: &IncludeDebugNameMap,
+) -> ScopedName {
+    let Some((first, rest)) = name.qualifier().split_first() else {
+        return name.clone();
+    };
+    let Some(display) = aliases.get(first) else {
+        return name.clone();
+    };
+    ScopedName::qualified_path(
+        std::iter::once(display.clone()).chain(rest.iter().cloned()),
+        name.member().clone(),
+    )
+}
+
+/// Replace private synthetic include scopes with unambiguous human-readable
+/// target leaves at the presentation boundary.
+pub(super) fn apply_include_debug_names(result: &mut EvalResult, aliases: &IncludeDebugNameMap) {
+    if aliases.is_empty() {
+        return;
+    }
+
+    result
+        .consts
+        .iter_mut()
+        .chain(result.params.iter_mut())
+        .chain(result.nodes.iter_mut())
+        .for_each(|(name, _)| *name = remap_include_debug_name(name, aliases));
+    result
+        .all
+        .iter_mut()
+        .for_each(|(name, _, _)| *name = remap_include_debug_name(name, aliases));
+    result.output_surface = std::mem::take(&mut result.output_surface)
+        .into_iter()
+        .map(|name| remap_include_debug_name(&name, aliases))
+        .collect();
+    result
+        .assertions
+        .iter_mut()
+        .for_each(|(name, _, _)| *name = remap_include_debug_name(name, aliases));
+    result
+        .plots
+        .iter_mut()
+        .for_each(|plot| plot.name = remap_include_debug_name(&plot.name, aliases));
+    result
+        .plot_errors
+        .iter_mut()
+        .for_each(|plot| plot.name = remap_include_debug_name(&plot.name, aliases));
+    result.figures.iter_mut().for_each(|figure| {
+        figure.name = remap_include_debug_name(&figure.name, aliases);
+        figure
+            .plot_names
+            .iter_mut()
+            .for_each(|name| *name = remap_include_debug_name(name, aliases));
+    });
+    result.layers.iter_mut().for_each(|layer| {
+        layer.name = remap_include_debug_name(&layer.name, aliases);
+        layer
+            .plot_names
+            .iter_mut()
+            .for_each(|name| *name = remap_include_debug_name(name, aliases));
+    });
+    result.assumes_map = std::mem::take(&mut result.assumes_map)
+        .into_iter()
+        .map(|(name, assumers)| {
+            (
+                remap_include_debug_name(&name, aliases),
+                assumers
+                    .into_iter()
+                    .map(|assumer| remap_include_debug_name(&assumer, aliases))
+                    .collect(),
+            )
+        })
+        .collect();
+    result.domain_constraints = std::mem::take(&mut result.domain_constraints)
+        .into_iter()
+        .map(|(name, constraint)| (remap_include_debug_name(&name, aliases), constraint))
+        .collect();
+}
+
 pub(super) fn push_output_value(
     (name, result, decl_type): EvaluatedOutputValue,
     consts: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
@@ -423,7 +504,7 @@ fn evaluate_and_store_file(
     // One eval-loop run yields both the public result and the raw values
     // exported to downstream imports (this used to evaluate the whole file
     // twice).
-    let (eval_result, runtime_values) =
+    let (mut eval_result, runtime_values) =
         super::super::runtime::evaluate_plan_with_values_and_cancellation(
             &compiled.tir,
             &plan,
@@ -432,6 +513,7 @@ fn evaluate_and_store_file(
             host_fns,
             cancellation,
         )?;
+    apply_include_debug_names(&mut eval_result, &compiled.include_debug_names);
     let file_runtime_values = filter_local_runtime_values(&compiled.tir, &runtime_values);
     let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
     // Dynamic-unit scales resolve against this file's final values here, so

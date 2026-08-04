@@ -32,8 +32,10 @@ use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeError, Value};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
 
-use super::pipeline::{output_decl_type, push_output_value};
-use super::{CompiledFile, EvaluatedOutputValue};
+use super::pipeline::{
+    apply_include_debug_names, output_decl_type, push_output_value, remap_include_debug_name,
+};
+use super::{CompiledFile, EvaluatedOutputValue, IncludeDebugNameMap};
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -335,6 +337,7 @@ impl PreparedModel {
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
     included_debug_values: Vec<EvaluatedOutputValue>,
+    include_debug_names: IncludeDebugNameMap,
     imported_source_order: Vec<(ScopedName, graphcal_compiler::ir::resolve::DeclCategory)>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     included_plots: Vec<crate::eval::PlotSpec>,
@@ -385,6 +388,7 @@ impl PreparedProject {
             imported_source_order,
             output_surface,
             included_debug_values,
+            include_debug_names,
             included_plots,
         } = compiled;
         tir.prepare_external_value_constructors();
@@ -412,6 +416,7 @@ impl PreparedProject {
             output_assembly: ProjectOutputAssembly {
                 output_surface,
                 included_debug_values,
+                include_debug_names,
                 imported_source_order,
                 imported_values,
                 included_plots,
@@ -676,8 +681,12 @@ impl PreparedProject {
             match result {
                 AssertResult::Pass => {}
                 AssertResult::Fail { message } | AssertResult::Error { message } => {
+                    let name = remap_include_debug_name(
+                        &assertion.name,
+                        &self.output_assembly.include_debug_names,
+                    );
                     return Ok(ModelRowOutcome::Failure(ModelRowFailure {
-                        message: format!("assertion `{}`: {message}", assertion.name),
+                        message: format!("assertion `{name}`: {message}"),
                     }));
                 }
             }
@@ -837,15 +846,21 @@ impl PreparedProject {
     ) -> Option<(ScopedName, &'errors NodeError)> {
         self.tir.root().source_order.iter().find_map(|(name, _)| {
             let key = RuntimeDeclKey::for_local_decl(self.tir.root(), name);
-            errors.get(&key).map(|error| (name.clone(), error))
+            errors.get(&key).map(|error| {
+                (
+                    remap_include_debug_name(name, &self.output_assembly.include_debug_names),
+                    error,
+                )
+            })
         })
     }
 
     fn assemble_normal_result(
         &self,
-        eval_result: EvalResult,
+        mut eval_result: EvalResult,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<EvalResult, CompileError> {
+        apply_include_debug_names(&mut eval_result, &self.output_assembly.include_debug_names);
         let mut assertions = self.output_assembly.dependency_assertions.clone();
         assertions.extend(eval_result.assertions);
 
