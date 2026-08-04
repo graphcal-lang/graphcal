@@ -407,23 +407,36 @@ pub(in crate::eval::project) enum SelectiveImportResult {
     NotFound,
 }
 
-/// Resolve namespace-alias graph references in the AST: rewrite
+/// Resolve namespace-alias graph references in one compilation body's AST and
+/// deferred include bindings: rewrite
 /// `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
 /// `GraphRef(Qualified { module: alias, member: field })` when
-/// `(alias, field)` matches an imported namespace member. The
-/// qualification is preserved structurally throughout the IR / eval
-/// pipeline — there is no flat-string boundary.
+/// `(alias, field)` matches an imported namespace member. The qualification is
+/// preserved structurally throughout the IR / eval pipeline — there is no
+/// flat-string boundary.
 ///
-/// If there are no module imports and no qualified members, returns a
-/// borrowed reference to the original AST.
-fn rewrite_qualified_refs_in_ast<'a>(
+/// Deferred bindings are extracted from the canonical loaded AST before the
+/// body AST is cloned and rewritten. Rewriting both representations together
+/// ensures a nested instantiation can prefix sibling-instance references using
+/// their full qualified identity.
+///
+/// If there are no qualified members, returns a borrowed reference to the
+/// original AST.
+fn rewrite_qualified_refs_in_compilation_body<'a>(
     ast: &'a graphcal_compiler::desugar::desugared_ast::File,
-    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     imported_names: &ImportedValueNames,
+    deferred_dag_includes: &mut [DeferredDagInclude],
 ) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
     let alias_pairs = collect_qualified_pairs(imported_names);
-    if module_map.is_empty() && alias_pairs.is_empty() {
+    if alias_pairs.is_empty() {
         return std::borrow::Cow::Borrowed(ast);
+    }
+
+    for binding in deferred_dag_includes
+        .iter_mut()
+        .flat_map(|include| include.bindings.values_mut())
+    {
+        rewrite_alias_field_access(binding, &alias_pairs);
     }
 
     let mut ast = ast.clone();
