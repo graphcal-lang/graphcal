@@ -51,7 +51,7 @@ pub fn format_decl(fmt: &mut Formatter<'_>, decl: &Declaration) -> RcDoc<'static
     } else {
         let mut parts: Vec<RcDoc<'static>> = Vec::new();
         for attr in &decl.attributes {
-            parts.push(format_attribute(attr));
+            parts.push(format_attribute(fmt, attr));
             parts.push(RcDoc::hardline());
         }
         parts.push(body);
@@ -99,7 +99,7 @@ fn visibility_prefix(visibility: Visibility) -> RcDoc<'static> {
     }
 }
 
-fn format_attribute(attr: &Attribute) -> RcDoc<'static> {
+fn format_attribute(fmt: &Formatter<'_>, attr: &Attribute) -> RcDoc<'static> {
     let mut doc = RcDoc::text("#[").append(RcDoc::text(attr.name.name.clone()));
     if !attr.args.is_empty() {
         let args = attr
@@ -107,12 +107,30 @@ fn format_attribute(attr: &Attribute) -> RcDoc<'static> {
             .iter()
             .map(format_attribute_arg)
             .collect::<Vec<_>>();
-        doc = doc
-            .append(RcDoc::text("("))
-            .append(RcDoc::intersperse(args, RcDoc::text(", ")))
-            .append(RcDoc::text(")"));
+        let args_doc = if attribute_has_magic_trailing_comma(fmt, attr) {
+            multiline_parenthesized_list(args, true)
+        } else {
+            soft_parenthesized_list(args, true)
+        };
+        doc = doc.append(args_doc);
     }
     doc.append(RcDoc::text("]"))
+}
+
+/// Return whether the source argument list ends in a comma immediately before
+/// its closing `)`.
+///
+/// The parser intentionally omits trailing-comma trivia from the AST, while
+/// [`Attribute::span`] covers the complete `#[...]` form. This bounded
+/// source-level check preserves the comma as an explicit request for multiline
+/// formatting without mistaking a trailing comma inside a grouped argument for
+/// one on the attribute's outer argument list.
+fn attribute_has_magic_trailing_comma(fmt: &Formatter<'_>, attr: &Attribute) -> bool {
+    fmt.slice(attr.span)
+        .strip_suffix(']')
+        .map(str::trim_end)
+        .and_then(|before_bracket| before_bracket.strip_suffix(')'))
+        .is_some_and(|before_closing| before_closing.trim_end().ends_with(','))
 }
 
 fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> RcDoc<'static> {
@@ -128,10 +146,8 @@ fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> R
             RcDoc::text(format!("#{position}"))
         }
         graphcal_compiler::syntax::ast::AttributeArg::Group { elements, .. } => {
-            let inner: Vec<RcDoc<'static>> = elements.iter().map(format_attribute_arg).collect();
-            RcDoc::text("(")
-                .append(RcDoc::intersperse(inner, RcDoc::text(", ")))
-                .append(RcDoc::text(")"))
+            let inner = elements.iter().map(format_attribute_arg).collect();
+            soft_parenthesized_list(inner, true)
         }
     }
 }
@@ -459,9 +475,9 @@ fn format_index_decl(fmt: &mut Formatter<'_>, d: &IndexDecl) -> RcDoc<'static> {
 }
 
 /// `import "path" { name1, name2 };` or `import "path";` or `import "path" as alias;`
-fn format_import_decl(_fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
+fn format_import_decl(fmt: &Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
     let path_doc = format_import_or_include_path("import", &d.path);
-    format_import_or_include_kind(path_doc, RcDoc::nil(), &d.kind)
+    format_import_or_include_kind(fmt, path_doc, RcDoc::nil(), &d.kind)
 }
 
 /// `include path(x: 1.0 km).{ name };` or `include path() as alias;`.
@@ -473,7 +489,7 @@ fn format_import_decl(_fmt: &mut Formatter<'_>, d: &ImportDecl) -> RcDoc<'static
 fn format_include_decl(fmt: &mut Formatter<'_>, d: &IncludeDecl) -> RcDoc<'static> {
     let path_doc = format_import_or_include_path("include", &d.path);
     let bindings_doc = format_include_param_bindings(fmt, &d.param_bindings);
-    format_import_or_include_kind(path_doc, bindings_doc, &d.kind)
+    format_import_or_include_kind(fmt, path_doc, bindings_doc, &d.kind)
 }
 
 /// `dag name { declarations... }`
@@ -538,6 +554,7 @@ fn format_selective_import_or_include_suffix(item_docs: Vec<RcDoc<'static>>) -> 
 
 /// Format the kind portion (selective/module) of an import/include declaration.
 fn format_import_or_include_kind(
+    fmt: &Formatter<'_>,
     path_doc: RcDoc<'static>,
     bindings_doc: RcDoc<'static>,
     kind: &graphcal_compiler::syntax::ast::ImportKind,
@@ -549,7 +566,9 @@ fn format_import_or_include_kind(
                 .map(|item| {
                     let mut doc = RcDoc::nil();
                     for attr in &item.attributes {
-                        doc = doc.append(format_attribute(attr)).append(RcDoc::text(" "));
+                        doc = doc
+                            .append(format_attribute(fmt, attr))
+                            .append(RcDoc::text(" "));
                     }
                     if item.is_pub {
                         doc = doc.append(RcDoc::text("pub "));
