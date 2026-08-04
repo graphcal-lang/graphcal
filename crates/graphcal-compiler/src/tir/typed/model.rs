@@ -917,6 +917,17 @@ impl TIR {
         self.module_types.get_unit(name)
     }
 
+    /// Look up a declared index by its canonical defining-module identity.
+    ///
+    /// The per-DAG collection-reference cache contains indexes mentioned by
+    /// value expressions. Prepared recursive schemas also need indexes reached
+    /// only through nominal field types, so those consumers use this complete
+    /// module registry as their fallback.
+    #[must_use]
+    pub fn declared_index_def(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
+        self.module_types.get_index(name)
+    }
+
     /// Add an inline module's canonical type-system registry after the file TIR
     /// has been constructed.
     pub fn insert_module_registry(

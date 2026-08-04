@@ -1,8 +1,9 @@
 pub base dim Money;
 pub base unit credit: Money;
+pub index Mode = { Fast, Safe };
 
 pub type Request {
-    Request(amount: Money(min: 0.0 credit)),
+    Request(amount: Money(min: 0.0 credit), mode: Key<Mode>),
 }
 
 pub type Envelope {

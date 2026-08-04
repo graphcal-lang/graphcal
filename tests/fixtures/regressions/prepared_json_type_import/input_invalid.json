@@ -2,7 +2,8 @@
   "request": {
     "type": "Request",
     "fields": {
-      "amount": "-1.0 credit"
+      "amount": "-1.0 credit",
+      "mode": "Mode.Fast"
     }
   }
 }

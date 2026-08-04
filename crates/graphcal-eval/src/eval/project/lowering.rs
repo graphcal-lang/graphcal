@@ -1360,13 +1360,26 @@ fn seed_imported_type_system(
 ) -> Result<(), GraphcalError> {
     for (dep_dag_id, names) in imported_type_system_names {
         let dep_loaded = &project.files[dep_dag_id];
+        let source_registered_names = if evaluated_files.contains_key(dep_dag_id) {
+            names.without_dimensions()
+        } else {
+            names.clone()
+        };
         graphcal_compiler::ir::lower::register_selected_declarations(
             &dep_loaded.ast,
             builder,
             &dep_loaded.named_source,
-            names,
+            &source_registered_names,
             dep_dag_id,
         )?;
+        if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
+            register_selected_resolved_dimensions(
+                builder,
+                &dep_eval.registry,
+                names,
+                &dep_loaded.named_source,
+            )?;
+        }
         // A selectively imported dynamic unit re-lowered from the dep's AST
         // carries a scale expression that references the dep's own params
         // and cannot be evaluated in this file's context. Substitute the
@@ -1387,6 +1400,48 @@ fn seed_imported_type_system(
                 span: import.import_span.into(),
             }
         })?;
+    }
+    Ok(())
+}
+
+/// Import selected dimensions from the dependency's resolved registry.
+///
+/// Re-registering only the selected declaration's source AST loses sibling
+/// dimensions used by its definition (`Weighted = Base * Mass`). A dimension
+/// is already a closed semantic value after the dependency compiles, so copy
+/// that value and only the base-dimension metadata needed to interpret it.
+fn register_selected_resolved_dimensions(
+    builder: &mut RegistryBuilder,
+    dep_registry: &Registry,
+    selected: &graphcal_compiler::ir::lower::SelectedDeclarations,
+    dep_src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for name in selected.dimensions() {
+        let dimension = dep_registry
+            .dimensions
+            .get_dimension(name.as_str())
+            .cloned()
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "resolved dependency registry is missing selected dimension `{name}`"
+                ),
+                src: dep_src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        for (base_id, _) in dimension.iter() {
+            if let Some(base_name) = dep_registry.dimensions.base_dim_names().get(base_id)
+                && builder.get_dimension(base_name).is_none()
+            {
+                builder.register_base_dimension(
+                    graphcal_compiler::syntax::dimension::DimName::expect_valid(base_name),
+                    base_id.clone(),
+                );
+            }
+            if let Some(symbol) = dep_registry.dimensions.base_dim_symbols().get(base_id) {
+                builder.set_base_dim_symbol(base_id.clone(), symbol.clone());
+            }
+        }
+        builder.register_dimension(name.clone(), dimension);
     }
     Ok(())
 }

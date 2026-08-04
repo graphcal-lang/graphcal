@@ -2909,6 +2909,23 @@ impl SelectedDeclarations {
         }
     }
 
+    /// Dimension names selected with the explicit `dim` marker.
+    pub fn dimensions(&self) -> impl Iterator<Item = &crate::syntax::dimension::DimName> {
+        self.dimensions.iter()
+    }
+
+    /// Clone this selection without dimension declarations.
+    ///
+    /// Project lowering imports selected dimensions from the dependency's
+    /// already-resolved semantic registry, while the remaining declaration
+    /// categories still use source registration.
+    #[must_use]
+    pub fn without_dimensions(&self) -> Self {
+        let mut selected = self.clone();
+        selected.dimensions.clear();
+        selected
+    }
+
     /// Unit names selected with the explicit `unit` marker.
     pub fn units(&self) -> impl Iterator<Item = &crate::syntax::dimension::UnitName> {
         self.units.iter()

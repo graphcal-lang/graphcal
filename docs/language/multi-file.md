@@ -155,6 +155,14 @@ unit positions. Import each side explicitly, for example
 `import finance.{unit JPY, JPY};`. A value and a constructor may **not** share
 a name because both are terms and would be indistinguishable in expressions.
 
+Imported type-system declarations retain semantic dependencies from their
+module of definition. For example, importing `dim WeightedRate` also preserves
+its resolved expansion through private or public sibling dimensions, and
+importing `type Request` preserves nested record and index field types. Those
+dependencies do not introduce extra source names into the consumer: import a
+sibling only when consumer source names it directly. Constructors remain a
+separate term import when consumer source explicitly constructs a value.
+
 ### Aliasing items
 
 Each item in a brace list may be aliased independently:

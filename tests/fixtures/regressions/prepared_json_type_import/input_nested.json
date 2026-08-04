@@ -5,7 +5,8 @@
       "request": {
         "type": "Request",
         "fields": {
-          "amount": "2.0 credit"
+          "amount": "2.0 credit",
+          "mode": "Mode.Safe"
         }
       }
     }

@@ -2605,8 +2605,12 @@ fn write_custom_unit_constrained_record_type_project(
         root_dir.join("schema.gcl"),
         "pub base dim Currency;\n\
          pub base unit credit: Currency;\n\
+         pub dim BaseRate = Length / Time;\n\
+         pub dim WeightedRate = BaseRate * Mass;\n\
+         pub dim ScaledRate = WeightedRate / Time;\n\
          pub type Price { Price(amount: Currency(min: 0.0 credit)) }\n\
-         pub type Basket { Basket(price: Price) }\n",
+         pub type Basket { Basket(price: Price) }\n\
+         pub type Receipt { Receipt(basket: Basket) }\n",
     )
     .unwrap();
     let root = root_dir.join("main.gcl");
@@ -2658,8 +2662,8 @@ fn imported_record_field_constraint_uses_defining_unit_scope_through_selective_t
 #[test]
 fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
-        "import record_scope.schema.{type Basket};\n\
-         param basket: Basket;\n\
+        "import record_scope.schema.{type Receipt};\n\
+         param receipt: Receipt;\n\
          pub node accepted: Bool = true;\n",
     );
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
@@ -2668,8 +2672,8 @@ fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units
     let mut bindings = prepared.binding_builder();
     bindings
         .bind_expression(
-            &graphcal_compiler::syntax::decl_name::DeclName::expect_valid("basket"),
-            &parse_expr("Basket(price: Price(amount: 1.0 credit))"),
+            &graphcal_compiler::syntax::decl_name::DeclName::expect_valid("receipt"),
+            &parse_expr("Receipt(basket: Basket(price: Price(amount: 1.0 credit)))"),
         )
         .unwrap();
     let result = prepared.evaluate(&bindings.finish().unwrap()).unwrap();
@@ -2685,8 +2689,8 @@ fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units
 #[test]
 fn prepared_imported_record_binding_enforces_nested_definition_site_constraint() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
-        "import record_scope.schema.{type Basket};\n\
-         param basket: Basket;\n\
+        "import record_scope.schema.{type Receipt};\n\
+         param receipt: Receipt;\n\
          pub node accepted: Bool = true;\n",
     );
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
@@ -2695,14 +2699,47 @@ fn prepared_imported_record_binding_enforces_nested_definition_site_constraint()
 
     let error = bindings
         .bind_expression(
-            &graphcal_compiler::syntax::decl_name::DeclName::expect_valid("basket"),
-            &parse_expr("Basket(price: Price(amount: -1.0 credit))"),
+            &graphcal_compiler::syntax::decl_name::DeclName::expect_valid("receipt"),
+            &parse_expr("Receipt(basket: Basket(price: Price(amount: -1.0 credit)))"),
         )
         .unwrap_err();
     assert!(
         error.to_string().contains("Price.amount") && error.to_string().contains("below minimum"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn selectively_imported_dimension_retains_transitive_definition_site_dependencies() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema.{dim ScaledRate};\n\
+         param rate: ScaledRate;\n\
+         pub node accepted: Bool = true;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn module_imported_dimension_retains_transitive_definition_site_dependencies() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema as schema;\n\
+         param rate: schema.ScaledRate;\n\
+         pub node accepted: Bool = true;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn selectively_imported_record_retains_transitive_definition_site_field_types() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema.{type Receipt};\n\
+         param receipt: Receipt;\n\
+         pub node accepted: Bool = true;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
 }
 
 #[test]
