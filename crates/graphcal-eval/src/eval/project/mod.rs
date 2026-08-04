@@ -254,12 +254,6 @@ struct CompiledFile {
     included_plots: Vec<super::types::PlotSpec>,
 }
 
-/// Return type for [`build_dep_imported_values`].
-struct DepImportedValues {
-    names: ImportedValueNames,
-    values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-}
-
 /// A deferred include of a DAG (file-level or inline) — compile its body
 /// and merge into the importer's IR after the importer's own decls are
 /// lowered.
@@ -311,9 +305,8 @@ struct DeferredDagInclude {
 /// What is being included — distinguishes file roots from inline DAGs and
 /// carries the kind-specific data the deferred processor needs.
 enum DeferredDagSource {
-    /// File include — body is the dep file's full AST, with its own
-    /// transitive imports' values supplied via
-    /// [`build_dep_imported_values`].
+    /// File include — body is the dependency's full AST. Its own import and
+    /// include declarations are processed recursively for each instance.
     File {
         /// Canonical [`DagId`](graphcal_compiler::dag_id::DagId)
         /// of the dep file (equal to the file's root id).

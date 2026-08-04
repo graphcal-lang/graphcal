@@ -1579,20 +1579,22 @@ impl UnfrozenIR {
         /// Prefix a `ScopedName` if it is an unqualified member owned by
         /// the dependency.
         ///
-        /// Mirrors [`RefPrefixer::rewrite`]: already-qualified names (e.g. a
-        /// transitively-imported `module.x` inside the dep) belong to another
-        /// namespace and must keep their qualifier — `with_prefix` would
-        /// silently replace it, diverging from the merged expressions whose
-        /// qualified refs are left untouched.
+        /// Already-qualified names that identify nested declarations owned by
+        /// this dependency gain an outer instance segment. Other qualified
+        /// names (for example a module import used by the dependency) retain
+        /// their original external namespace.
         fn prefix_dep(
-            d: &ScopedName,
+            name: &ScopedName,
             prefix: &ModuleAliasName,
             dep_names: &HashSet<DeclName>,
+            dep_scoped_names: &HashSet<ScopedName>,
         ) -> ScopedName {
-            if !d.is_qualified() && dep_names.contains(d.member()) {
-                d.with_prefix(prefix)
+            if dep_scoped_names.contains(name) {
+                name.within_scope(prefix)
+            } else if !name.is_qualified() && dep_names.contains(name.member()) {
+                name.with_prefix(prefix)
             } else {
-                d.clone()
+                name.clone()
             }
         }
 
@@ -1610,29 +1612,30 @@ impl UnfrozenIR {
             }
         };
 
+        // Source-order entries are declarations owned by the dependency,
+        // including declarations already nested by an inner include. Imported
+        // metadata is different: a qualified key can name an external module
+        // used by the dependency and must retain that canonical qualifier.
+        let all_dep_scoped_names = dep
+            .source_order
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<HashSet<_>>();
+        let dep_scoped_names = &all_dep_scoped_names;
+
         let mut all_dep_names = dep_names.clone();
-        all_dep_names.extend(dep.imported_values.keys().map(|name| name.member().clone()));
-        all_dep_names.extend(
-            dep.imported_decl_types
-                .keys()
-                .map(|name| name.member().clone()),
-        );
-        all_dep_names.extend(
-            dep.imported_value_sources
-                .keys()
-                .map(|name| name.member().clone()),
-        );
+        all_dep_names.extend(dep_scoped_names.iter().map(|name| name.member().clone()));
         let dep_names = &all_dep_names;
 
         // Merge consts
         for mut entry in dep.consts {
             substitute_indexes(&mut entry.expr, index_bindings);
             substitute_type_names_in_expr(&mut entry.expr, type_bindings);
-            prefix_expr_refs(&mut entry.expr, prefix, dep_names);
+            prefix_expr_refs(&mut entry.expr, prefix, dep_names, dep_scoped_names);
             substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
-            let prefixed = entry.name.with_prefix(prefix);
+            let prefixed = entry.name.within_scope(prefix);
             self.consts.push(UnfrozenConstEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
@@ -1647,7 +1650,7 @@ impl UnfrozenIR {
 
         // Merge params — replace defaults with bindings where provided
         for mut entry in dep.params {
-            let prefixed = entry.name.with_prefix(prefix);
+            let prefixed = entry.name.within_scope(prefix);
             let default_resolution_owner =
                 if let Some(binding_expr) = bindings.get(entry.name.member()) {
                     // Use the binding expression (from the importer's scope, no prefixing needed
@@ -1661,7 +1664,7 @@ impl UnfrozenIR {
                     // Keep default, but substitute indexes and prefix internal refs.
                     substitute_indexes(expr, index_bindings);
                     substitute_type_names_in_expr(expr, type_bindings);
-                    prefix_expr_refs(expr, prefix, dep_names);
+                    prefix_expr_refs(expr, prefix, dep_names, dep_scoped_names);
                     merge_resolution_owner(entry.default_resolution_owner)
                 } else {
                     // Required param without binding — stays None, caught later in exec_plan
@@ -1686,11 +1689,11 @@ impl UnfrozenIR {
         for mut entry in dep.nodes {
             substitute_indexes(&mut entry.expr, index_bindings);
             substitute_type_names_in_expr(&mut entry.expr, type_bindings);
-            prefix_expr_refs(&mut entry.expr, prefix, dep_names);
+            prefix_expr_refs(&mut entry.expr, prefix, dep_names, dep_scoped_names);
             substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
-            let prefixed = entry.name.with_prefix(prefix);
+            let prefixed = entry.name.within_scope(prefix);
             self.nodes.push(UnfrozenNodeEntry {
                 name: prefixed.clone(),
                 type_ann: entry.type_ann,
@@ -1709,7 +1712,7 @@ impl UnfrozenIR {
                 crate::desugar::desugared_ast::AssertBody::Expr(e) => {
                     substitute_indexes(e, index_bindings);
                     substitute_type_names_in_expr(e, type_bindings);
-                    prefix_expr_refs(e, prefix, dep_names);
+                    prefix_expr_refs(e, prefix, dep_names, dep_scoped_names);
                 }
                 crate::desugar::desugared_ast::AssertBody::Tolerance {
                     actual,
@@ -1719,16 +1722,16 @@ impl UnfrozenIR {
                 } => {
                     substitute_indexes(actual, index_bindings);
                     substitute_type_names_in_expr(actual, type_bindings);
-                    prefix_expr_refs(actual, prefix, dep_names);
+                    prefix_expr_refs(actual, prefix, dep_names, dep_scoped_names);
                     substitute_indexes(expected, index_bindings);
                     substitute_type_names_in_expr(expected, type_bindings);
-                    prefix_expr_refs(expected, prefix, dep_names);
+                    prefix_expr_refs(expected, prefix, dep_names, dep_scoped_names);
                     substitute_indexes(tolerance, index_bindings);
                     substitute_type_names_in_expr(tolerance, type_bindings);
-                    prefix_expr_refs(tolerance, prefix, dep_names);
+                    prefix_expr_refs(tolerance, prefix, dep_names, dep_scoped_names);
                 }
             }
-            let prefixed = entry.name.with_prefix(prefix);
+            let prefixed = entry.name.within_scope(prefix);
             self.asserts.push(UnfrozenAssertEntry {
                 name: prefixed.clone(),
                 body: entry.body,
@@ -1752,17 +1755,17 @@ impl UnfrozenIR {
             for encoding in &mut entry.decl.encodings {
                 substitute_indexes(&mut encoding.value, index_bindings);
                 substitute_type_names_in_expr(&mut encoding.value, type_bindings);
-                prefix_expr_refs(&mut encoding.value, prefix, dep_names);
+                prefix_expr_refs(&mut encoding.value, prefix, dep_names, dep_scoped_names);
             }
             for prop in &mut entry.decl.mark.properties {
                 substitute_indexes(&mut prop.value, index_bindings);
                 substitute_type_names_in_expr(&mut prop.value, type_bindings);
-                prefix_expr_refs(&mut prop.value, prefix, dep_names);
+                prefix_expr_refs(&mut prop.value, prefix, dep_names, dep_scoped_names);
             }
             for prop in &mut entry.decl.properties {
                 substitute_indexes(&mut prop.value, index_bindings);
                 substitute_type_names_in_expr(&mut prop.value, type_bindings);
-                prefix_expr_refs(&mut prop.value, prefix, dep_names);
+                prefix_expr_refs(&mut prop.value, prefix, dep_names, dep_scoped_names);
             }
             let local = ScopedName::local(requested.alias.clone());
             self.plots.push(UnfrozenPlotEntry {
@@ -1780,16 +1783,18 @@ impl UnfrozenIR {
 
         // Merge assumes_map and expected_fail
         for (assert_name, assumers) in dep.assumes_map {
-            let prefixed_assert = assert_name.with_prefix(prefix);
-            let prefixed_assumers: Vec<ScopedName> =
-                assumers.iter().map(|a| a.with_prefix(prefix)).collect();
+            let prefixed_assert = assert_name.within_scope(prefix);
+            let prefixed_assumers: Vec<ScopedName> = assumers
+                .iter()
+                .map(|assumer| assumer.within_scope(prefix))
+                .collect();
             self.assumes_map
                 .entry(prefixed_assert)
                 .or_default()
                 .extend(prefixed_assumers);
         }
         for (assert_name, ef) in dep.expected_fail {
-            let prefixed = assert_name.with_prefix(prefix);
+            let prefixed = assert_name.within_scope(prefix);
 
             // If the expected_fail references overridden indexes, filter or drop.
             if index_bindings.is_empty() {
@@ -1852,17 +1857,17 @@ impl UnfrozenIR {
         // unqualified synthetic name.
         for (name, value) in dep.imported_values {
             self.imported_values
-                .entry(prefix_dep(&name, prefix, dep_names))
+                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
                 .or_insert(value);
         }
         for (name, dt) in dep.imported_decl_types {
             self.imported_decl_types
-                .entry(prefix_dep(&name, prefix, dep_names))
+                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
                 .or_insert(dt);
         }
         for (name, source) in dep.imported_value_sources {
             self.imported_value_sources
-                .entry(prefix_dep(&name, prefix, dep_names))
+                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
                 .or_insert(source);
         }
         Ok(())
@@ -2146,22 +2151,21 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
 /// Visitor that prefixes references to dependency declarations.
 ///
 /// When a `@name` (or bare const `NAME`) refers to a name owned by the
-/// dependency being merged, rewrite the typed [`ScopedName`] payload via
-/// [`ScopedName::with_prefix`] so the merged-IR key matches the prefixed
-/// declaration name. No flat separator strings are constructed here — the
-/// local/qualified distinction lives in the structured qualifier path.
+/// dependency being merged, rewrite its typed [`ScopedName`] so the merged-IR
+/// key matches the enclosing instance path. Existing qualifiers are preserved
+/// for exact nested declarations and left untouched for external module
+/// imports. No flat separator strings are constructed here.
 struct RefPrefixer<'a> {
     prefix: &'a ModuleAliasName,
     dep_names: &'a HashSet<DeclName>,
+    dep_scoped_names: &'a HashSet<ScopedName>,
 }
 
 impl RefPrefixer<'_> {
     fn rewrite(&self, scoped: &ScopedName) -> Option<ScopedName> {
-        // Only rewrite refs that are local to the dep (i.e. unqualified
-        // members owned by the dependency). Already-qualified refs (e.g.
-        // a transitively-imported `@module.x` inside the dep) belong to
-        // some other namespace and are left untouched.
-        if !scoped.is_qualified() && self.dep_names.contains(scoped.member()) {
+        if self.dep_scoped_names.contains(scoped) {
+            Some(scoped.within_scope(self.prefix))
+        } else if !scoped.is_qualified() && self.dep_names.contains(scoped.member()) {
             Some(scoped.with_prefix(self.prefix))
         } else {
             None
@@ -2217,8 +2221,17 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for RefPrefixer<'_> {
 /// `"dry_mass"` is in `dep_names` and `prefix` is `"r"`.
 ///
 /// Built-in names and names from the importer's scope are left unchanged.
-fn prefix_expr_refs(expr: &mut Expr, prefix: &ModuleAliasName, dep_names: &HashSet<DeclName>) {
-    let mut prefixer = RefPrefixer { prefix, dep_names };
+fn prefix_expr_refs(
+    expr: &mut Expr,
+    prefix: &ModuleAliasName,
+    dep_names: &HashSet<DeclName>,
+    dep_scoped_names: &HashSet<ScopedName>,
+) {
+    let mut prefixer = RefPrefixer {
+        prefix,
+        dep_names,
+        dep_scoped_names,
+    };
     let _ = prefixer.visit_expr_mut(expr);
 }
 
@@ -2907,6 +2920,23 @@ impl SelectedDeclarations {
                     .insert(crate::syntax::index_name::IndexName::from_atom(name));
             }
         }
+    }
+
+    /// Dimension names selected with the explicit `dim` marker.
+    pub fn dimensions(&self) -> impl Iterator<Item = &crate::syntax::dimension::DimName> {
+        self.dimensions.iter()
+    }
+
+    /// Clone this selection without dimension declarations.
+    ///
+    /// Project lowering imports selected dimensions from the dependency's
+    /// already-resolved semantic registry, while the remaining declaration
+    /// categories still use source registration.
+    #[must_use]
+    pub fn without_dimensions(&self) -> Self {
+        let mut selected = self.clone();
+        selected.dimensions.clear();
+        selected
     }
 
     /// Unit names selected with the explicit `unit` marker.

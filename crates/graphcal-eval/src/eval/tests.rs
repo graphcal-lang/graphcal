@@ -2172,6 +2172,115 @@ fn project_instantiated_import_graph_ref() {
     );
 }
 
+fn write_nested_file_include_project(main_source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/demo");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("leaf.gcl"),
+        "param x: Dimensionless;\n\
+         node private_value: Dimensionless = @x + 1.0;\n\
+         pub node doubled: Dimensionless = @x * 2.0;\n\
+         pub assert positive = @doubled > 0.0;\n\
+         pub plot chart = {\n\
+             mark: line,\n\
+             encode: { x: @x, y: @doubled },\n\
+         };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("middle.gcl"),
+        "param x: Dimensionless;\n\
+         include demo.leaf(x: @x) as leaf;\n\
+         pub node out: Dimensionless = @leaf.doubled;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("upper.gcl"),
+        "param x: Dimensionless;\n\
+         include demo.middle(x: @x) as middle;\n\
+         pub node out: Dimensionless = @middle.out;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn nested_instantiated_file_include_evaluates_immediate_scope_binding() {
+    let (_dir, root) = write_nested_file_include_project(
+        "include demo.middle(x: 3.0) as middle;\n\
+         pub node result: Dimensionless = @middle.out;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - 6.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn nested_instantiated_file_include_keeps_multiple_instances_isolated() {
+    let (_dir, root) = write_nested_file_include_project(
+        "include demo.middle(x: 3.0) as first;\n\
+         include demo.middle(x: 5.0) as second;\n\
+         pub node result: Dimensionless = @first.out + @second.out;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - 16.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn nested_instantiated_file_include_reexports_requested_plot() {
+    let (dir, root) = write_nested_file_include_project(
+        "include demo.middle(x: 3.0).{ out, chart };\n\
+         pub node result: Dimensionless = @out;\n",
+    );
+    std::fs::write(
+        dir.path().join("src/demo/middle.gcl"),
+        "param x: Dimensionless;\n\
+         include demo.leaf(x: @x).{ doubled, pub chart };\n\
+         pub node out: Dimensionless = @doubled;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - 6.0).abs() < f64::EPSILON);
+    assert_eq!(result.plots.len(), 1);
+    assert_eq!(result.plots[0].name.to_string(), "chart");
+}
+
+#[test]
+fn three_level_instantiated_file_include_preserves_assertion_instance_path() {
+    let (_dir, root) = write_nested_file_include_project(
+        "include demo.upper(x: -1.0) as upper;\n\
+         pub node result: Dimensionless = @upper.out;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - (-2.0)).abs() < f64::EPSILON);
+    assert!(result.assertions.iter().any(|(name, outcome, _)| {
+        name.to_string() == "upper.middle.leaf.positive"
+            && matches!(outcome, super::types::AssertResult::Fail { .. })
+    }));
+    assert!(result.output_surface.contains(&scoped_name("upper.out")));
+    assert!(
+        !result
+            .output_surface
+            .contains(&scoped_name("upper.middle.out"))
+    );
+    assert!(
+        !result
+            .output_surface
+            .contains(&scoped_name("upper.middle.leaf.private_value"))
+    );
+}
+
 fn write_same_leaf_include_project(main_source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/app");
@@ -2605,7 +2714,12 @@ fn write_custom_unit_constrained_record_type_project(
         root_dir.join("schema.gcl"),
         "pub base dim Currency;\n\
          pub base unit credit: Currency;\n\
-         pub type Price { Price(amount: Currency(min: 0.0 credit)) }\n",
+         pub dim BaseRate = Length / Time;\n\
+         pub dim WeightedRate = BaseRate * Mass;\n\
+         pub dim ScaledRate = WeightedRate / Time;\n\
+         pub type Price { Price(amount: Currency(min: 0.0 credit)) }\n\
+         pub type Basket { Basket(price: Price) }\n\
+         pub type Receipt { Receipt(basket: Basket) }\n",
     )
     .unwrap();
     let root = root_dir.join("main.gcl");
@@ -2649,6 +2763,89 @@ fn imported_record_field_constraint_uses_defining_unit_scope_through_selective_t
          base unit credit: ConsumerCurrency;\n\
          param price: Price;\n\
          node result: Dimensionless = 1.0;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema.{type Receipt};\n\
+         param receipt: Receipt;\n\
+         pub node accepted: Bool = true;\n",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+
+    let mut bindings = prepared.binding_builder();
+    bindings
+        .bind_expression(
+            &graphcal_compiler::syntax::decl_name::DeclName::expect_valid("receipt"),
+            &parse_expr("Receipt(basket: Basket(price: Price(amount: 1.0 credit)))"),
+        )
+        .unwrap();
+    let result = prepared.evaluate(&bindings.finish().unwrap()).unwrap();
+    assert!(
+        result
+            .nodes
+            .iter()
+            .any(|(name, value)| name.member().as_str() == "accepted"
+                && matches!(value, Ok(Value::Bool(true))))
+    );
+}
+
+#[test]
+fn prepared_imported_record_binding_enforces_nested_definition_site_constraint() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema.{type Receipt};\n\
+         param receipt: Receipt;\n\
+         pub node accepted: Bool = true;\n",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let mut bindings = prepared.binding_builder();
+
+    let error = bindings
+        .bind_expression(
+            &graphcal_compiler::syntax::decl_name::DeclName::expect_valid("receipt"),
+            &parse_expr("Receipt(basket: Basket(price: Price(amount: -1.0 credit)))"),
+        )
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("Price.amount") && error.to_string().contains("below minimum"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn selectively_imported_dimension_retains_transitive_definition_site_dependencies() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema.{dim ScaledRate};\n\
+         param rate: ScaledRate;\n\
+         pub node accepted: Bool = true;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn module_imported_dimension_retains_transitive_definition_site_dependencies() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema as schema;\n\
+         param rate: schema.ScaledRate;\n\
+         pub node accepted: Bool = true;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn selectively_imported_record_retains_transitive_definition_site_field_types() {
+    let (_dir, root) = write_custom_unit_constrained_record_type_project(
+        "import record_scope.schema.{type Receipt};\n\
+         param receipt: Receipt;\n\
+         pub node accepted: Bool = true;\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();

@@ -551,8 +551,19 @@ impl LoadedProject {
             }
         }
 
+        // Load order is dependency-first. Before registering one owner's
+        // include edges, give each synthetic target the already-completed scope
+        // of its canonical dependency; public re-exports are then selectable at
+        // the next composition level.
         for dag_id in &self.load_order {
             let loaded = &self.files[dag_id];
+            inherit_instantiated_include_scopes(
+                &mut resolver,
+                &loaded.dag_id,
+                &loaded.ast.declarations,
+                &loaded.resolved_imports,
+                &self.files,
+            )?;
             register_module_imports(
                 &mut resolver,
                 &loaded.dag_id,
@@ -561,6 +572,13 @@ impl LoadedProject {
                 &self.files,
             )?;
             for inline in &loaded.inline_dags {
+                inherit_instantiated_include_scopes(
+                    &mut resolver,
+                    &inline.dag_id,
+                    &inline.body,
+                    &inline.resolved_imports,
+                    &self.files,
+                )?;
                 register_module_imports(
                     &mut resolver,
                     &inline.dag_id,
@@ -637,6 +655,38 @@ fn add_instantiated_include_modules(
             continue;
         };
         resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
+    }
+    Ok(())
+}
+
+/// Give every synthetic include module the completed import scope of its
+/// canonical source module.
+///
+/// The synthetic module starts with the source declarations, while this pass
+/// adds the source's selective public re-exports and module aliases after all
+/// canonical import edges have been registered.
+fn inherit_instantiated_include_scopes(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &DagId,
+    declarations: &[Declaration],
+    resolved_imports: &impl ResolvedModuleLookup,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for declaration in declarations {
+        let DeclKind::Include(include) = &declaration.kind else {
+            continue;
+        };
+        let Some(instance_scope) = instantiated_include_scope(include) else {
+            continue;
+        };
+        let Some(file_target) =
+            resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
+        else {
+            continue;
+        };
+        let source = module_resolver_target_for_path(&include.path, file_target, files);
+        let instance = owner.child(instance_scope.merge_scope_name().as_str());
+        resolver.inherit_module_scope(&source, &instance)?;
     }
     Ok(())
 }

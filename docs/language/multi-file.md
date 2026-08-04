@@ -155,6 +155,14 @@ unit positions. Import each side explicitly, for example
 `import finance.{unit JPY, JPY};`. A value and a constructor may **not** share
 a name because both are terms and would be indistinguishable in expressions.
 
+Imported type-system declarations retain semantic dependencies from their
+module of definition. For example, importing `dim WeightedRate` also preserves
+its resolved expansion through private or public sibling dimensions, and
+importing `type Request` preserves nested record and index field types. Those
+dependencies do not introduce extra source names into the consumer: import a
+sibling only when consumer source names it directly. Constructors remain a
+separate term import when consumer source explicitly constructs a value.
+
 ### Aliasing items
 
 Each item in a brace list may be aliased independently:
@@ -289,6 +297,34 @@ the consumer's request to display the library's chart of this instance. The
 plot enters the root namespace under its local alias; `#[hidden]` on the
 item includes it for figure/layer composition only. See
 [Cross-File Plots](plots.md#cross-file-plots).
+
+### Configured includes may nest
+
+An included file or inline DAG may own configured includes of its own. Each
+level is a distinct instance scope, and a binding is evaluated in its immediate
+including scope:
+
+```graphcal
+// leaf.gcl
+param x: Dimensionless;
+pub node doubled: Dimensionless = @x * 2.0;
+
+// middle.gcl
+param x: Dimensionless;
+include demo.leaf(x: @x) as leaf;
+pub node out: Dimensionless = @leaf.doubled;
+
+// main.gcl
+include demo.middle(x: 3.0) as middle;
+node result: Dimensionless = @middle.out; // 6.0
+```
+
+Nesting may be arbitrarily deep as long as the project dependency graph is
+acyclic. Multiple outer instances recursively create isolated inner instances.
+Private values stay private, selected/public outputs keep the outer instance
+path, and assertion diagnostics use the complete path such as
+`middle.leaf.positive`. An intermediate DAG that exposes a configurable input
+must declare its own `param` and forward it explicitly, as above.
 
 ### `include` does not require `import` of the DAG
 

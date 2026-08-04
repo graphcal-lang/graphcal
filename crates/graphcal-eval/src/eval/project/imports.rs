@@ -69,6 +69,161 @@ pub(in crate::eval::project) struct InlineDagIncludeTarget<'a> {
     pub(in crate::eval::project) boundary: IncludeVisibilityBoundary,
 }
 
+/// Populate one file body's import context, including deferred configured DAGs.
+///
+/// Both top-level file compilation and recursive file-DAG instantiation use
+/// this path. Keeping import classification here prevents nested instances
+/// from silently dropping their own include graph.
+#[expect(
+    clippy::too_many_lines,
+    reason = "file imports plus file/inline/qualified include routing are one declaration pass"
+)]
+pub(in crate::eval::project) fn process_file_body_declarations<'a>(
+    project: &'a crate::loader::LoadedProject,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    ctx: &mut ImportContext<'a>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<(), CompileError> {
+    let loaded_file = &project.files[file_dag_id];
+    let file_src = &loaded_file.named_source;
+    let dag_definitions: HashMap<DeclName, &graphcal_compiler::desugar::desugared_ast::DagDecl> =
+        loaded_file
+            .ast
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                DeclKind::Dag(dag) => Some((dag.name.value.clone(), dag)),
+                _ => None,
+            })
+            .collect();
+    check_dag_recursion(&dag_definitions, file_src)?;
+
+    for (_declaration, import, target) in loaded_file.imports_with_dag_ids() {
+        cancellation.checkpoint()?;
+        process_non_instantiated_import(
+            project,
+            target,
+            &import.path,
+            &import.kind,
+            file_src,
+            evaluated_files,
+            ctx,
+            true,
+        )?;
+    }
+
+    for (declaration, include, target) in loaded_file.includes_with_dag_ids() {
+        cancellation.checkpoint()?;
+        if is_bare_module_dag_ref(&include.path, target, project) {
+            continue;
+        }
+        if include.param_bindings.is_empty() {
+            process_non_instantiated_import(
+                project,
+                target,
+                &include.path,
+                &include.kind,
+                file_src,
+                evaluated_files,
+                ctx,
+                false,
+            )?;
+        } else {
+            process_instantiated_include(
+                project,
+                target,
+                include,
+                declaration,
+                file_src,
+                evaluated_files,
+                ctx,
+            )?;
+        }
+    }
+
+    for declaration in &loaded_file.ast.declarations {
+        cancellation.checkpoint()?;
+        let DeclKind::Include(include) = &declaration.kind else {
+            continue;
+        };
+        if include.path.segments.len() != 1 {
+            continue;
+        }
+        let dag_name = &include.path.segments[0].name;
+        let Some(dag) = dag_definitions.get(dag_name.as_str()) else {
+            continue;
+        };
+        let dag_id = file_dag_id.child(dag_name.as_str());
+        process_inline_dag_include(
+            &InlineDagIncludeTarget {
+                dag_def: dag,
+                dag_id: &dag_id,
+                dag_name,
+                parent_dag_id: file_dag_id,
+                boundary: IncludeVisibilityBoundary::Local,
+            },
+            include,
+            declaration,
+            file_src,
+            ctx,
+        )?;
+    }
+
+    for (declaration, include, target) in loaded_file.includes_with_dag_ids() {
+        cancellation.checkpoint()?;
+        if !is_bare_module_dag_ref(&include.path, target, project) {
+            continue;
+        }
+        let dag_name = &include.path.segments.last().name;
+        let target_loaded = project.files.get(target).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::EvalError {
+                message: format!("bare module DAG target file not found in project: {target}"),
+                src: file_src.clone(),
+                span: include.path.span().into(),
+            })
+        })?;
+        let target_dag = target_loaded
+            .ast
+            .declarations
+            .iter()
+            .find_map(|candidate| match &candidate.kind {
+                DeclKind::Dag(dag) if dag.name.value.as_str() == dag_name.as_str() => Some(dag),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::EvalError {
+                    message: format!("DAG `{dag_name}` not found in file `{target}`"),
+                    src: file_src.clone(),
+                    span: include.path.span().into(),
+                })
+            })?;
+        if !target_dag.visibility.is_public() {
+            return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
+                name: dag_name.to_string(),
+                file_path: include.path.display_path(),
+                src: file_src.clone(),
+                span: include.path.leaf().span.into(),
+            }));
+        }
+        let target_dag_id = target_loaded.dag_id.child(dag_name.as_str());
+        process_inline_dag_include(
+            &InlineDagIncludeTarget {
+                dag_def: target_dag,
+                dag_id: &target_dag_id,
+                dag_name,
+                parent_dag_id: &target_loaded.dag_id,
+                boundary: IncludeVisibilityBoundary::CrossModule,
+            },
+            include,
+            declaration,
+            file_src,
+            ctx,
+        )?;
+    }
+    Ok(())
+}
+
 impl DepDeclIndex<'_> {
     fn is_const(&self, name: &str) -> bool {
         matches!(self.other.get(name), Some(OtherDeclKind::ConstNode))
@@ -280,6 +435,50 @@ fn validate_include_item_attributes(
         }
     }
     Ok(hidden)
+}
+
+fn file_exports_plot(
+    project: &crate::loader::LoadedProject,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    name: &NameAtom,
+) -> bool {
+    fn visit(
+        project: &crate::loader::LoadedProject,
+        file_dag_id: &graphcal_compiler::dag_id::DagId,
+        name: &NameAtom,
+        seen: &mut HashSet<(graphcal_compiler::dag_id::DagId, DeclName)>,
+    ) -> bool {
+        let Some(file) = project.files.get(file_dag_id) else {
+            return false;
+        };
+        let typed_name = DeclName::from_atom(name.clone());
+        if !seen.insert((file_dag_id.clone(), typed_name)) {
+            return false;
+        }
+        if file.ast.declarations.iter().any(|declaration| {
+            matches!(
+                &declaration.kind,
+                DeclKind::Plot(plot)
+                    if plot.visibility.is_public() && plot.name.value.atom() == name
+            )
+        }) {
+            return true;
+        }
+        file.includes_with_dag_ids().any(|(_, include, target)| {
+            let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
+                &include.kind
+            else {
+                return false;
+            };
+            items.iter().any(|item| {
+                item.is_pub
+                    && item.local_name_atom() == name
+                    && visit(project, target, &item.name.name, seen)
+            })
+        })
+    }
+
+    visit(project, file_dag_id, name, &mut HashSet::new())
 }
 
 fn build_dep_decl_index(
@@ -515,7 +714,9 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
-                let is_plot = is_term_namespace && dep_index.is_plot(orig_name);
+                let is_plot = is_term_namespace
+                    && (dep_index.is_plot(orig_name)
+                        || file_exports_plot(project, import_dag_id, orig_name));
                 let is_assert = is_term_namespace && dep_index.is_assert(orig_name);
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
@@ -1493,56 +1694,6 @@ mod tests {
             "unexpected error: {message}"
         );
         assert!(imported_names.const_names.is_empty());
-        assert!(imported_values.is_empty());
-    }
-
-    #[test]
-    fn transitive_const_only_import_skips_runtime_without_registering_it() {
-        let mut dep = empty_evaluated_file();
-        dep.values.insert(
-            DeclName::expect_valid("runtime"),
-            RuntimeValue::Quantity(1.0),
-        );
-        dep.external_surface
-            .insert_explicit_export(DeclName::expect_valid("runtime"));
-
-        let import_item = graphcal_compiler::desugar::desugared_ast::ImportItem {
-            name: graphcal_compiler::desugar::desugared_ast::Ident {
-                name: graphcal_compiler::syntax::names::NameAtom::parse("runtime").unwrap(),
-                span: Span::new(0, 7),
-            },
-            alias: None,
-            is_pub: false,
-            namespace: graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
-            attributes: Vec::new(),
-        };
-        let import_kind =
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(vec![import_item]);
-        let path = graphcal_compiler::desugar::desugared_ast::ModulePath {
-            segments: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
-                graphcal_compiler::desugar::desugared_ast::Ident {
-                    name: graphcal_compiler::syntax::names::NameAtom::parse("dep").unwrap(),
-                    span: Span::new(0, 3),
-                },
-            ),
-            span: Span::new(0, 3),
-        };
-        let src = NamedSource::new("test.gcl", Arc::new(String::new()));
-        let mut imported_names = ImportedValueNames::default();
-        let mut imported_values = HashMap::new();
-
-        crate::eval::project::lowering::build_dep_import_values_for_kind(
-            &path,
-            &import_kind,
-            &dep,
-            &src,
-            &mut imported_names,
-            &mut imported_values,
-            true,
-        )
-        .expect("runtime values are skipped for const-only transitive imports");
-
-        assert!(imported_names.param_names.is_empty());
         assert!(imported_values.is_empty());
     }
 }
