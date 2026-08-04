@@ -658,6 +658,13 @@ fn record_resolved_struct_type_def(
     };
     let definition_src = ctx.types.source_for_owner(name.owner()).unwrap_or(src);
 
+    // Record the owner before walking defaults and fields so recursive nominal
+    // types terminate naturally. Model-schema expansion needs this closure,
+    // not only the types named directly by entry declarations: a prepared
+    // boundary value can contain nested records whose names never appear in
+    // the consumer module.
+    defs.struct_types.insert(name.clone(), type_def.clone());
+
     for param in &type_def.generic_params {
         if let Some(default) = &param.default {
             let resolved = resolve_generic_default_in_struct_scope(
@@ -669,6 +676,15 @@ fn record_resolved_struct_type_def(
                 registry,
                 definition_src,
             )?;
+            if let ResolvedGenericArg::Type(type_expr) = &resolved {
+                collect_struct_type_defs_from_resolved_type(
+                    type_expr,
+                    ctx,
+                    registry,
+                    definition_src,
+                    defs,
+                )?;
+            }
             defs.generic_defaults
                 .insert((name.clone(), param.name.clone()), resolved);
         }
@@ -701,6 +717,13 @@ fn record_resolved_struct_type_def(
                     definition_src,
                 )?;
                 let bounds = lower_domain_bounds(&field.type_ann, bound_expr_ctx, definition_src)?;
+                collect_struct_type_defs_from_resolved_type(
+                    &resolved,
+                    ctx,
+                    registry,
+                    definition_src,
+                    defs,
+                )?;
                 if !bounds.is_empty() {
                     defs.field_bounds.insert(key.clone(), bounds);
                 }
@@ -709,7 +732,6 @@ fn record_resolved_struct_type_def(
         }
     }
 
-    defs.struct_types.insert(name.clone(), type_def.clone());
     Ok(())
 }
 

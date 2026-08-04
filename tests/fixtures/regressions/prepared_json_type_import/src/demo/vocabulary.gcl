@@ -1,0 +1,10 @@
+pub base dim Money;
+pub base unit credit: Money;
+
+pub type Request {
+    Request(amount: Money(min: 0.0 credit)),
+}
+
+pub type Envelope {
+    Envelope(request: Request),
+}

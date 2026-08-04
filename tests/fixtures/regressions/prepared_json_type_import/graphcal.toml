@@ -1,0 +1,3 @@
+[package]
+name = "demo"
+source_dir = "src"

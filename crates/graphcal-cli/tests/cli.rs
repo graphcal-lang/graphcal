@@ -1998,6 +1998,78 @@ fn eval_input_json_multiple_structured_overrides() {
 }
 
 #[test]
+fn eval_input_json_imported_record_uses_definition_site_constructor_and_unit() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("regressions/prepared_json_type_import/src/demo/main.gcl"),
+            "--input",
+            &fixture("regressions/prepared_json_type_import/input.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("accepted") && line.contains("true")),
+        "expected successful prepared evaluation: {stdout}"
+    );
+}
+
+#[test]
+fn eval_input_json_nested_imported_record_uses_transitive_definition_site_schema() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("regressions/prepared_json_type_import/src/demo/nested.gcl"),
+            "--input",
+            &fixture("regressions/prepared_json_type_import/input_nested.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("accepted") && line.contains("true")),
+        "expected successful nested prepared evaluation: {stdout}"
+    );
+}
+
+#[test]
+fn eval_input_json_imported_record_keeps_definition_site_field_constraint() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("regressions/prepared_json_type_import/src/demo/main.gcl"),
+            "--input",
+            &fixture("regressions/prepared_json_type_import/input_invalid.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("Request.amount") && stderr.contains("below minimum"),
+        "expected the defining-module field constraint to reject the value: {stderr}"
+    );
+}
+
+#[test]
 fn eval_input_json_unknown_param() {
     let dir = std::env::temp_dir().join("graphcal_test_input");
     std::fs::create_dir_all(&dir).unwrap();

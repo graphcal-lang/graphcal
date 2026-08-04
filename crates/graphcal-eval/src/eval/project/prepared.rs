@@ -1368,22 +1368,8 @@ impl PreparedProject {
         port: &ParameterPort,
         expr: &Expr,
     ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
-        let scope = GenericScope::new();
-        let prelude = PreludeTypeScope::graphcal();
-        let context = ExprLoweringContext::new(
-            &self.tir.root_dag_id,
-            &self.module_resolver,
-            &scope,
-            &self.tir.registry.time_zones,
-        )
-        .with_prelude(&prelude)
-        .with_unit_registry(&self.tir.registry.units);
-        let (hir, diagnostics) = graphcal_compiler::hir::lower_expr_tolerant(expr, context);
-        if let Some(error) = diagnostics.first() {
-            return Err(CompileError::Eval(
-                graphcal_compiler::hir::expr_lower_error_to_graphcal(error, &self.source),
-            ));
-        }
+        let hir =
+            self.lower_closed_binding_expr(expr, &port.value_schema, &self.tir.root_dag_id)?;
         validate_closed_hir(&hir).map_err(|message| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
@@ -1402,6 +1388,239 @@ impl PreparedProject {
             &self.source,
         )?;
         Ok(hir)
+    }
+
+    /// Lower a closed boundary value against its canonical recursive schema.
+    ///
+    /// Constructor and field-value syntax is interpreted in the module that
+    /// defines the expected algebraic type. This is deliberately different
+    /// from lowering a source expression in the entry module: decoding a value
+    /// for an imported type must not require the entry to import that type's
+    /// constructors or the units used by its field contracts. Nested values
+    /// switch owners again at each canonical constructor boundary.
+    fn lower_closed_binding_expr(
+        &self,
+        expr: &Expr,
+        expected: &ModelValueSchema,
+        owner: &graphcal_compiler::dag_id::DagId,
+    ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
+        match (&expr.kind, expected) {
+            (AstExprKind::ConstructorCall { callee, .. }, ModelValueSchema::Algebraic { .. })
+                if callee.as_bare().is_some() =>
+            {
+                self.lower_canonical_constructor_binding(expr, expected, owner)
+            }
+            (
+                AstExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(
+                    path,
+                )),
+                ModelValueSchema::Algebraic { constructors, .. },
+            ) if path.as_bare().is_some()
+                && constructors.iter().any(|constructor| {
+                    constructor.name.atom() == &path.leaf().name && constructor.fields.is_empty()
+                }) =>
+            {
+                let constructor_expr = Expr::new(
+                    AstExprKind::ConstructorCall {
+                        callee: path.clone(),
+                        generic_args: Vec::new(),
+                        fields: Vec::new(),
+                    },
+                    expr.span,
+                );
+                self.lower_closed_binding_expr(&constructor_expr, expected, owner)
+            }
+            (AstExprKind::MapLiteral { .. }, ModelValueSchema::Indexed { .. }) => {
+                self.lower_closed_map_binding(expr, expected, owner)
+            }
+            _ => self.lower_binding_expr_in_owner(expr, owner),
+        }
+    }
+
+    fn lower_canonical_constructor_binding(
+        &self,
+        expr: &Expr,
+        expected: &ModelValueSchema,
+        owner: &graphcal_compiler::dag_id::DagId,
+    ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
+        let AstExprKind::ConstructorCall {
+            callee,
+            generic_args,
+            fields,
+        } = &expr.kind
+        else {
+            return Err(self.binding_internal_error(
+                "canonical external constructor has a non-constructor syntax node",
+                expr.span,
+            ));
+        };
+        let ModelValueSchema::Algebraic {
+            identity,
+            constructors,
+            ..
+        } = expected
+        else {
+            return Err(self.binding_internal_error(
+                "canonical external constructor has a non-algebraic schema",
+                expr.span,
+            ));
+        };
+        let Some(constructor) = constructors
+            .iter()
+            .find(|constructor| constructor.name.atom() == &callee.leaf().name)
+        else {
+            return self.lower_binding_expr_in_owner(expr, owner);
+        };
+        let constructor_owner = identity.resolved().owner();
+        let signature_expr = Expr::new(
+            AstExprKind::ConstructorCall {
+                callee: callee.clone(),
+                generic_args: generic_args.clone(),
+                fields: Vec::new(),
+            },
+            expr.span,
+        );
+        let signature = self.lower_binding_expr_in_owner(&signature_expr, constructor_owner)?;
+        let HirExprKind::ConstructorCall {
+            callee,
+            generic_args,
+            ..
+        } = signature.kind
+        else {
+            return Err(self.binding_internal_error(
+                "canonical external constructor did not lower to a constructor call",
+                expr.span,
+            ));
+        };
+        let fields = fields
+            .iter()
+            .map(|field| {
+                let value = constructor
+                    .fields
+                    .iter()
+                    .find(|schema| schema.name == field.name.value)
+                    .map_or_else(
+                        || self.lower_binding_expr_in_owner(&field.value, constructor_owner),
+                        |schema| {
+                            self.lower_closed_binding_expr(
+                                &field.value,
+                                &schema.value,
+                                constructor_owner,
+                            )
+                        },
+                    )?;
+                Ok(graphcal_compiler::hir::expr::FieldInit {
+                    name: field.name.clone(),
+                    value,
+                })
+            })
+            .collect::<Result<Vec<_>, CompileError>>()?;
+        Ok(graphcal_compiler::hir::Expr::new(
+            HirExprKind::ConstructorCall {
+                callee,
+                generic_args,
+                fields,
+            },
+            expr.span,
+        ))
+    }
+
+    fn lower_closed_map_binding(
+        &self,
+        expr: &Expr,
+        expected: &ModelValueSchema,
+        owner: &graphcal_compiler::dag_id::DagId,
+    ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
+        let AstExprKind::MapLiteral { entries } = &expr.kind else {
+            return Err(self.binding_internal_error(
+                "external map binding has a non-map syntax node",
+                expr.span,
+            ));
+        };
+        let entries = entries
+            .iter()
+            .map(|entry| {
+                // Resolve source-shaped keys normally, but lower each value
+                // against its recursive schema so nested constructor owners survive.
+                let mut key_entry = entry.clone();
+                key_entry.value = Expr::new(AstExprKind::Bool(true), entry.value.span);
+                let key_expr = Expr::new(
+                    AstExprKind::MapLiteral {
+                        entries: vec![key_entry],
+                    },
+                    expr.span,
+                );
+                let lowered_key = self.lower_binding_expr_in_owner(&key_expr, owner)?;
+                let HirExprKind::MapLiteral {
+                    entries: lowered_entries,
+                } = lowered_key.kind
+                else {
+                    return Err(self.binding_internal_error(
+                        "external map key did not lower to a map literal",
+                        expr.span,
+                    ));
+                };
+                let Some(lowered_entry) = lowered_entries.into_iter().next() else {
+                    return Err(self.binding_internal_error(
+                        "external map key lowering produced no entry",
+                        expr.span,
+                    ));
+                };
+                let entry_schema =
+                    (0..entry.keys.len()).try_fold(expected, |schema, _| match schema {
+                        ModelValueSchema::Indexed { element, .. } => Some(element.as_ref()),
+                        _ => None,
+                    });
+                let value = entry_schema.map_or_else(
+                    || self.lower_binding_expr_in_owner(&entry.value, owner),
+                    |schema| self.lower_closed_binding_expr(&entry.value, schema, owner),
+                )?;
+                Ok(graphcal_compiler::hir::expr::MapEntry {
+                    keys: lowered_entry.keys,
+                    value,
+                })
+            })
+            .collect::<Result<Vec<_>, CompileError>>()?;
+        Ok(graphcal_compiler::hir::Expr::new(
+            HirExprKind::MapLiteral { entries },
+            expr.span,
+        ))
+    }
+
+    fn lower_binding_expr_in_owner(
+        &self,
+        expr: &Expr,
+        owner: &graphcal_compiler::dag_id::DagId,
+    ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
+        let scope = GenericScope::new();
+        let prelude = PreludeTypeScope::graphcal();
+        let context = ExprLoweringContext::new(
+            owner,
+            &self.module_resolver,
+            &scope,
+            &self.tir.registry.time_zones,
+        )
+        .with_prelude(&prelude);
+        let context = if owner == &self.tir.root_dag_id {
+            context.with_unit_registry(&self.tir.registry.units)
+        } else {
+            context
+        };
+        let (hir, diagnostics) = graphcal_compiler::hir::lower_expr_tolerant(expr, context);
+        if let Some(error) = diagnostics.first() {
+            return Err(CompileError::Eval(
+                graphcal_compiler::hir::expr_lower_error_to_graphcal(error, &self.source),
+            ));
+        }
+        Ok(hir)
+    }
+
+    fn binding_internal_error(&self, message: &str, span: Span) -> CompileError {
+        CompileError::Eval(GraphcalError::InternalError {
+            message: message.to_string(),
+            src: self.source.clone(),
+            span: span.into(),
+        })
     }
 
     fn evaluate_closed_binding(

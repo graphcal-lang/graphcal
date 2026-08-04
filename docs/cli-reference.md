@@ -305,9 +305,17 @@ graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
 ```
 
 The JSON parser preserves module-qualified constructor and index paths inside
-structured value payloads. The top-level JSON keys are still entry parameter
-names, and the same closed-value compiler recursively checks every field and
-indexed entry against that parameter's concrete type:
+structured value payloads. An unqualified constructor in a structured value is
+resolved from the parameter's canonical expected type, recursively for nested
+records. Its field values use the type's defining-module unit scope, so an
+entry that imports `type Request` does not also need to import `Request` or the
+dimensions, units, and nested constructors used by Request's schema. These
+definition-site rules apply only to prepared boundary decoding;
+constructors written in Graphcal source remain term imports.
+
+The top-level JSON keys are still entry parameter names, and the same
+closed-value compiler recursively checks every field and indexed entry against
+that parameter's concrete type:
 
 ```json
 {

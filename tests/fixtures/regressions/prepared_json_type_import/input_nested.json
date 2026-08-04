@@ -1,0 +1,13 @@
+{
+  "envelope": {
+    "type": "Envelope",
+    "fields": {
+      "request": {
+        "type": "Request",
+        "fields": {
+          "amount": "2.0 credit"
+        }
+      }
+    }
+  }
+}
