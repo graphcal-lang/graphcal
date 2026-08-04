@@ -545,6 +545,31 @@ fn format_attribute_with_args() {
 }
 
 #[test]
+fn long_expected_fail_argument_list_expands_and_round_trips() {
+    let source = "#[expected_fail(Mode.Normal, Mode.Economy, Mode.Sport, Mode.Track, Mode.Snow, Mode.Gravel, Mode.Emergency)]\nassert power_ok = true;\n";
+    let formatted = format_source(source).expect("long expected_fail attribute should format");
+    assert_eq!(
+        formatted,
+        "#[expected_fail(\n    Mode.Normal,\n    Mode.Economy,\n    Mode.Sport,\n    Mode.Track,\n    Mode.Snow,\n    Mode.Gravel,\n    Mode.Emergency,\n)]\nassert power_ok = true;\n"
+    );
+    graphcal_compiler::syntax::parser::Parser::new(&formatted)
+        .parse_file()
+        .expect("multiline expected_fail attribute should parse");
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn trailing_comma_forces_multiline_attribute_argument_list() {
+    let source = "#[expected_fail(Mode.Boost, Mode.Eco,)]\nassert known_failures = true;\n";
+    let formatted = format_source(source).expect("magic trailing comma should format");
+    assert_eq!(
+        formatted,
+        "#[expected_fail(\n    Mode.Boost,\n    Mode.Eco,\n)]\nassert known_failures = true;\n"
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
 fn format_multiple_attributes() {
     let source = "#[lazy]\n#[assumes(x)]\nnode y: Dimensionless = 1.0;\n";
     let formatted = format_source(source).unwrap();
