@@ -298,6 +298,34 @@ plot enters the root namespace under its local alias; `#[hidden]` on the
 item includes it for figure/layer composition only. See
 [Cross-File Plots](plots.md#cross-file-plots).
 
+### Configured includes may nest
+
+An included file or inline DAG may own configured includes of its own. Each
+level is a distinct instance scope, and a binding is evaluated in its immediate
+including scope:
+
+```graphcal
+// leaf.gcl
+param x: Dimensionless;
+pub node doubled: Dimensionless = @x * 2.0;
+
+// middle.gcl
+param x: Dimensionless;
+include demo.leaf(x: @x) as leaf;
+pub node out: Dimensionless = @leaf.doubled;
+
+// main.gcl
+include demo.middle(x: 3.0) as middle;
+node result: Dimensionless = @middle.out; // 6.0
+```
+
+Nesting may be arbitrarily deep as long as the project dependency graph is
+acyclic. Multiple outer instances recursively create isolated inner instances.
+Private values stay private, selected/public outputs keep the outer instance
+path, and assertion diagnostics use the complete path such as
+`middle.leaf.positive`. An intermediate DAG that exposes a configurable input
+must declare its own `param` and forward it explicitly, as above.
+
 ### `include` does not require `import` of the DAG
 
 Because the include path is absolute from the package root, no preceding

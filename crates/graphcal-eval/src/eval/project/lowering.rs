@@ -735,17 +735,62 @@ fn process_deferred_dag_includes(
             DeferredDagSource::File { dep_dag_id } => {
                 let dep_loaded = &project.files[dep_dag_id];
                 let dep_src = &dep_loaded.named_source;
-                let dep_imported = build_dep_imported_values(project, dep_dag_id, evaluated_files)?;
-                let (dep_builder, dep_unfrozen) =
-                    graphcal_compiler::ir::lower::lower_to_builder_with_imported_values_and_cancellation(
-                        &dep_loaded.ast,
+                let mut body_ctx = ImportContext {
+                    imported_names: ImportedValueNames::default(),
+                    imported_values: HashMap::new(),
+                    imported_source_order: Vec::new(),
+                    imported_type_system_names: HashMap::new(),
+                    module_map: HashMap::new(),
+                    extra_registry_builders: Vec::new(),
+                    deferred_dag_includes: Vec::new(),
+                    included_debug_values: Vec::new(),
+                    included_plot_specs: Vec::new(),
+                };
+                imports::process_file_body_declarations(
+                    project,
+                    dep_dag_id,
+                    evaluated_files,
+                    &mut body_ctx,
+                    cancellation,
+                )?;
+                let rewritten_body = rewrite_qualified_refs_in_ast(
+                    &dep_loaded.ast,
+                    &body_ctx.module_map,
+                    &body_ctx.imported_names,
+                );
+                let instance_dag_id = importer_dag_id.child(merge_prefix.as_str());
+                let mut registry_seed = |builder: &mut RegistryBuilder| {
+                    seed_imported_type_system(
+                        builder,
+                        project,
+                        &body_ctx.imported_type_system_names,
+                        &body_ctx.extra_registry_builders,
+                        evaluated_files,
                         dep_src,
-                        &dep_imported.names,
-                        dep_imported.values,
-                        dep_dag_id,
-                        None,
+                    )
+                };
+                let (mut dep_builder, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_builder_with_imported_values_and_cancellation(
+                        rewritten_body.as_ref(),
+                        dep_src,
+                        &body_ctx.imported_names,
+                        body_ctx.imported_values,
+                        &instance_dag_id,
+                        Some(&mut registry_seed),
                         cancellation,
                     )?;
+                dep_unfrozen.retarget_existing_resolution_owners(dep_dag_id);
+                process_deferred_dag_includes(
+                    project,
+                    &instance_dag_id,
+                    importer_file_dag_id,
+                    &body_ctx.deferred_dag_includes,
+                    evaluated_files,
+                    dep_src,
+                    rewritten_body.as_ref(),
+                    &mut dep_builder,
+                    &mut dep_unfrozen,
+                    cancellation,
+                )?;
                 let dep_registry = dep_builder
                     .try_build()
                     .map_err(|err| registry_build_compile_error(&err, dep_src))?;
@@ -1365,13 +1410,6 @@ fn seed_imported_type_system(
         } else {
             names.clone()
         };
-        graphcal_compiler::ir::lower::register_selected_declarations(
-            &dep_loaded.ast,
-            builder,
-            &dep_loaded.named_source,
-            &source_registered_names,
-            dep_dag_id,
-        )?;
         if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
             register_selected_resolved_dimensions(
                 builder,
@@ -1380,6 +1418,13 @@ fn seed_imported_type_system(
                 &dep_loaded.named_source,
             )?;
         }
+        graphcal_compiler::ir::lower::register_selected_declarations(
+            &dep_loaded.ast,
+            builder,
+            &dep_loaded.named_source,
+            &source_registered_names,
+            dep_dag_id,
+        )?;
         // A selectively imported dynamic unit re-lowered from the dep's AST
         // carries a scale expression that references the dep's own params
         // and cannot be evaluated in this file's context. Substitute the
@@ -1429,9 +1474,10 @@ fn register_selected_resolved_dimensions(
                 span: Span::new(0, 0).into(),
             })?;
         for (base_id, _) in dimension.iter() {
-            if let Some(base_name) = dep_registry.dimensions.base_dim_names().get(base_id)
-                && builder.get_dimension(base_name).is_none()
-            {
+            if let Some(base_name) = dep_registry.dimensions.base_dim_names().get(base_id) {
+                // Multiple package instances may use the same display leaf for
+                // distinct nominal base IDs. Register every ID's metadata even
+                // though the flat boundary registry keeps only one leaf value.
                 builder.register_base_dimension(
                     graphcal_compiler::syntax::dimension::DimName::expect_valid(base_name),
                     base_id.clone(),
@@ -1775,139 +1821,6 @@ pub(in crate::eval::project) fn extract_type_name_from_binding_expr(
             .ok_or_else(invalid_binding),
         _ => Err(invalid_binding()),
     }
-}
-
-/// Build imported value names and values for a dependency file from its own transitive imports.
-///
-/// This mirrors the import-processing logic in `compile_single_file_in_project` but
-/// only for non-instantiated imports (the dependency's own transitive deps already
-/// have compiled artifacts in `evaluated_files`).
-fn build_dep_imported_values(
-    project: &crate::loader::LoadedProject,
-    dep_dag_id: &graphcal_compiler::dag_id::DagId,
-    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
-) -> Result<DepImportedValues, CompileError> {
-    let dep_loaded = &project.files[dep_dag_id];
-    let dep_src = &dep_loaded.named_source;
-
-    let mut imported_names = ImportedValueNames::default();
-    let mut imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)> = HashMap::new();
-
-    // Process import declarations (non-instantiated).
-    for (_decl, import_decl, trans_canonical) in dep_loaded.imports_with_dag_ids() {
-        let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::EvalError {
-                message: format!(
-                    "transitive dependency `{trans_canonical}` is not available for imports",
-                ),
-                src: dep_src.clone(),
-                span: import_decl.path.span().into(),
-            })
-        })?;
-
-        build_dep_import_values_for_kind(
-            &import_decl.path,
-            &import_decl.kind,
-            trans_dep,
-            dep_src,
-            &mut imported_names,
-            &mut imported_values,
-            true, // is_import: skip runtime items
-        )?;
-    }
-
-    // Process include declarations.
-    for (_decl, include_decl, trans_canonical) in dep_loaded.includes_with_dag_ids() {
-        if !include_decl.param_bindings.is_empty() {
-            // Nested instantiated includes are not supported in this initial implementation.
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "nested instantiated includes are not yet supported".to_string(),
-                src: dep_src.clone(),
-                span: include_decl.path.span().into(),
-            }));
-        }
-
-        let trans_dep = evaluated_files.get(trans_canonical).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::EvalError {
-                message: format!(
-                    "transitive dependency `{trans_canonical}` is not available for imports",
-                ),
-                src: dep_src.clone(),
-                span: include_decl.path.span().into(),
-            })
-        })?;
-
-        build_dep_import_values_for_kind(
-            &include_decl.path,
-            &include_decl.kind,
-            trans_dep,
-            dep_src,
-            &mut imported_names,
-            &mut imported_values,
-            false, // is_import: include allows runtime items
-        )?;
-    }
-
-    Ok(DepImportedValues {
-        names: imported_names,
-        values: imported_values,
-    })
-}
-
-/// Helper: import values from a dependency according to the import kind.
-///
-/// When `is_import` is `true`, runtime values are skipped (import semantics).
-pub(in crate::eval::project) fn build_dep_import_values_for_kind(
-    import_path: &ModulePath,
-    import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
-    trans_dep: &EvaluatedFile,
-    dep_src: &NamedSource<Arc<String>>,
-    imported_names: &mut ImportedValueNames,
-    imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    is_import: bool,
-) -> Result<(), CompileError> {
-    match import_kind {
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
-            for import_item in names {
-                let orig_name = &import_item.name.name;
-                let local_name = DeclName::from_atom(import_item.local_name_atom().clone());
-                if is_import && trans_dep.values.contains_key(orig_name.as_str()) {
-                    // The dep file's own import has already been validated.
-                    // For transitive const-only imports, runtime values do not
-                    // propagate through the compile-time import chain.
-                    continue;
-                }
-                let _ = imports::import_selective_item(
-                    trans_dep,
-                    orig_name,
-                    &local_name,
-                    import_item.name.span,
-                    dep_src,
-                    imported_names,
-                    imported_values,
-                    None,
-                )?;
-            }
-        }
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
-            let module_name = alias.as_ref().map_or_else(
-                || derive_module_name_from_import_path(import_path),
-                |alias_ident| alias_ident.value.clone(),
-            );
-            let import_span = import_path.span();
-            imports::import_module_values(
-                trans_dep,
-                &module_name,
-                import_span,
-                dep_src,
-                imported_names,
-                imported_values,
-                None,
-                is_import,
-            )?;
-        }
-    }
-    Ok(())
 }
 
 /// Collect the set of type-system names declared locally in a file

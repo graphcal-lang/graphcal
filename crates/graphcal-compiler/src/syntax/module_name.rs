@@ -207,6 +207,18 @@ impl ScopedName {
     pub(crate) fn with_prefix(&self, prefix: &ModuleAliasName) -> Self {
         Self::qualified(prefix.clone(), self.member().clone())
     }
+
+    /// Place this name inside one additional outer instance scope.
+    ///
+    /// Unlike [`Self::with_prefix`], this preserves the existing qualifier:
+    /// `x` becomes `outer.x`, while `inner.x` becomes `outer.inner.x`.
+    #[must_use]
+    pub(crate) fn within_scope(&self, outer: &ModuleAliasName) -> Self {
+        Self::qualified_path(
+            std::iter::once(outer.clone()).chain(self.qualifier.iter().cloned()),
+            self.member().clone(),
+        )
+    }
 }
 
 impl std::fmt::Display for ScopedName {
@@ -326,6 +338,21 @@ mod tests {
         let name = ScopedName::qualified_path([module("helpers"), module("math")], member("G0"));
         assert_eq!(name.to_string(), "helpers.math.G0");
         assert_eq!(name.member().as_str(), "G0");
+    }
+
+    #[test]
+    fn scoped_name_outer_scope_preserves_existing_qualifier_path() {
+        let nested = ScopedName::qualified_path([module("middle"), module("leaf")], member("out"));
+        assert_eq!(
+            nested.within_scope(&module("upper")).to_string(),
+            "upper.middle.leaf.out"
+        );
+        assert_eq!(
+            ScopedName::local(member("out"))
+                .within_scope(&module("upper"))
+                .to_string(),
+            "upper.out"
+        );
     }
 
     #[test]

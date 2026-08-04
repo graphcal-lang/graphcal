@@ -2172,6 +2172,91 @@ fn project_instantiated_import_graph_ref() {
     );
 }
 
+fn write_nested_file_include_project(main_source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/demo");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("leaf.gcl"),
+        "param x: Dimensionless;\n\
+         node private_value: Dimensionless = @x + 1.0;\n\
+         pub node doubled: Dimensionless = @x * 2.0;\n\
+         pub assert positive = @doubled > 0.0;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("middle.gcl"),
+        "param x: Dimensionless;\n\
+         include demo.leaf(x: @x) as leaf;\n\
+         pub node out: Dimensionless = @leaf.doubled;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("upper.gcl"),
+        "param x: Dimensionless;\n\
+         include demo.middle(x: @x) as middle;\n\
+         pub node out: Dimensionless = @middle.out;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn nested_instantiated_file_include_evaluates_immediate_scope_binding() {
+    let (_dir, root) = write_nested_file_include_project(
+        "include demo.middle(x: 3.0) as middle;\n\
+         pub node result: Dimensionless = @middle.out;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - 6.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn nested_instantiated_file_include_keeps_multiple_instances_isolated() {
+    let (_dir, root) = write_nested_file_include_project(
+        "include demo.middle(x: 3.0) as first;\n\
+         include demo.middle(x: 5.0) as second;\n\
+         pub node result: Dimensionless = @first.out + @second.out;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - 16.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn three_level_instantiated_file_include_preserves_assertion_instance_path() {
+    let (_dir, root) = write_nested_file_include_project(
+        "include demo.upper(x: -1.0) as upper;\n\
+         pub node result: Dimensionless = @upper.out;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - (-2.0)).abs() < f64::EPSILON);
+    assert!(result.assertions.iter().any(|(name, outcome, _)| {
+        name.to_string() == "upper.middle.leaf.positive"
+            && matches!(outcome, super::types::AssertResult::Fail { .. })
+    }));
+    assert!(result.output_surface.contains(&scoped_name("upper.out")));
+    assert!(
+        !result
+            .output_surface
+            .contains(&scoped_name("upper.middle.out"))
+    );
+    assert!(
+        !result
+            .output_surface
+            .contains(&scoped_name("upper.middle.leaf.private_value"))
+    );
+}
+
 fn write_same_leaf_include_project(main_source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/app");
