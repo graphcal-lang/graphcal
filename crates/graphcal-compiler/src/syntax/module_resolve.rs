@@ -1243,6 +1243,40 @@ impl ModuleResolver {
         Ok(())
     }
 
+    /// Copy a source module's completed import scope onto an instantiated
+    /// synthetic module with the same declaration body.
+    ///
+    /// Synthetic include modules are added before import edges are registered.
+    /// Once the source scope is complete, copying it preserves selective public
+    /// re-exports (including plots) without rebuilding or flattening symbols.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError::UnknownModule`] if either module is absent.
+    pub fn inherit_module_scope(
+        &mut self,
+        source: &DagId,
+        instance: &DagId,
+    ) -> Result<(), ModuleResolveError> {
+        self.module_symbols(source)?;
+        self.module_symbols(instance)?;
+        let scope =
+            self.scopes
+                .get(source)
+                .cloned()
+                .ok_or_else(|| ModuleResolveError::UnknownModule {
+                    owner: source.clone(),
+                })?;
+        let target =
+            self.scopes
+                .get_mut(instance)
+                .ok_or_else(|| ModuleResolveError::UnknownModule {
+                    owner: instance.clone(),
+                })?;
+        *target = scope;
+        Ok(())
+    }
+
     /// Look up an extern-plugin alias visible from `owner`.
     ///
     /// Plugin imports are file-level declarations; inline `dag` children see

@@ -2186,7 +2186,11 @@ fn write_nested_file_include_project(main_source: &str) -> (tempfile::TempDir, s
         "param x: Dimensionless;\n\
          node private_value: Dimensionless = @x + 1.0;\n\
          pub node doubled: Dimensionless = @x * 2.0;\n\
-         pub assert positive = @doubled > 0.0;\n",
+         pub assert positive = @doubled > 0.0;\n\
+         pub plot chart = {\n\
+             mark: line,\n\
+             encode: { x: @x, y: @doubled },\n\
+         };\n",
     )
     .unwrap();
     std::fs::write(
@@ -2229,6 +2233,26 @@ fn nested_instantiated_file_include_keeps_multiple_instances_isolated() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert!((find_value(&result, "result") - 16.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn nested_instantiated_file_include_reexports_requested_plot() {
+    let (dir, root) = write_nested_file_include_project(
+        "include demo.middle(x: 3.0).{ out, chart };\n\
+         pub node result: Dimensionless = @out;\n",
+    );
+    std::fs::write(
+        dir.path().join("src/demo/middle.gcl"),
+        "param x: Dimensionless;\n\
+         include demo.leaf(x: @x).{ doubled, pub chart };\n\
+         pub node out: Dimensionless = @doubled;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - 6.0).abs() < f64::EPSILON);
+    assert_eq!(result.plots.len(), 1);
+    assert_eq!(result.plots[0].name.to_string(), "chart");
 }
 
 #[test]

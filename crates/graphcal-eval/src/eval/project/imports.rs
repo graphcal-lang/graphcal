@@ -437,6 +437,50 @@ fn validate_include_item_attributes(
     Ok(hidden)
 }
 
+fn file_exports_plot(
+    project: &crate::loader::LoadedProject,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    name: &NameAtom,
+) -> bool {
+    fn visit(
+        project: &crate::loader::LoadedProject,
+        file_dag_id: &graphcal_compiler::dag_id::DagId,
+        name: &NameAtom,
+        seen: &mut HashSet<(graphcal_compiler::dag_id::DagId, DeclName)>,
+    ) -> bool {
+        let Some(file) = project.files.get(file_dag_id) else {
+            return false;
+        };
+        let typed_name = DeclName::from_atom(name.clone());
+        if !seen.insert((file_dag_id.clone(), typed_name)) {
+            return false;
+        }
+        if file.ast.declarations.iter().any(|declaration| {
+            matches!(
+                &declaration.kind,
+                DeclKind::Plot(plot)
+                    if plot.visibility.is_public() && plot.name.value.atom() == name
+            )
+        }) {
+            return true;
+        }
+        file.includes_with_dag_ids().any(|(_, include, target)| {
+            let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
+                &include.kind
+            else {
+                return false;
+            };
+            items.iter().any(|item| {
+                item.is_pub
+                    && item.local_name_atom() == name
+                    && visit(project, target, &item.name.name, seen)
+            })
+        })
+    }
+
+    visit(project, file_dag_id, name, &mut HashSet::new())
+}
+
 fn build_dep_decl_index(
     decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
 ) -> DepDeclIndex<'_> {
@@ -670,7 +714,9 @@ pub(in crate::eval::project) fn process_instantiated_include<'a>(
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
-                let is_plot = is_term_namespace && dep_index.is_plot(orig_name);
+                let is_plot = is_term_namespace
+                    && (dep_index.is_plot(orig_name)
+                        || file_exports_plot(project, import_dag_id, orig_name));
                 let is_assert = is_term_namespace && dep_index.is_assert(orig_name);
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
