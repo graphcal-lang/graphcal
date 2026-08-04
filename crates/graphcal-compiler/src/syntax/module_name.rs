@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::{NameAtom, NameAtomError, NameDef, NameNamespace, NamePath};
+use crate::syntax::span::Span;
 
 /// Module alias namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -16,6 +17,59 @@ impl NameNamespace for ModuleAliasNameNamespace {
 /// Name of a module alias introduced by an import/include declaration (e.g.,
 /// `"constants"`, `"std"`).
 pub type ModuleAliasName = NameDef<ModuleAliasNameNamespace>;
+
+/// Opaque owner-local identity of a selective include instance.
+///
+/// A selective include introduces declaration aliases but no source-visible
+/// module alias. Compiler lowering still needs a private namespace for the
+/// included implementation, so its source occurrence is represented directly
+/// instead of overloading the target module's leaf name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct IncludeInstanceId {
+    source_offset: usize,
+}
+
+impl IncludeInstanceId {
+    /// Identify the include occurrence at `path_span` within its owning DAG.
+    #[must_use]
+    pub const fn at(path_span: Span) -> Self {
+        Self {
+            source_offset: path_span.offset(),
+        }
+    }
+
+    /// Render this opaque identity into the flat IR's qualifier namespace.
+    ///
+    /// `NameAtom` intentionally permits generated resolver names beyond the
+    /// source identifier grammar. The angle-bracket spelling cannot collide
+    /// with a source module alias and is never parsed to recover the offset;
+    /// [`IncludeInstanceId`] remains the authoritative representation.
+    #[must_use]
+    pub fn synthetic_scope_name(self) -> ModuleAliasName {
+        ModuleAliasName::expect_valid(format!("<include@{}>", self.source_offset))
+    }
+}
+
+/// Namespace assigned to one included DAG instance.
+///
+/// Module-form includes use a source-visible alias. Selective includes use an
+/// opaque private identity because their brace form introduces no module alias.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IncludeInstanceScope {
+    Named(ModuleAliasName),
+    Anonymous(IncludeInstanceId),
+}
+
+impl IncludeInstanceScope {
+    /// Name used at the boundary to the compiler's flat merged IR.
+    #[must_use]
+    pub fn merge_scope_name(&self) -> ModuleAliasName {
+        match self {
+            Self::Named(alias) => alias.clone(),
+            Self::Anonymous(id) => id.synthetic_scope_name(),
+        }
+    }
+}
 
 /// Error returned when parsing a canonical [`ScopedName`] rendering.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -296,6 +350,16 @@ mod tests {
             DeclName::try_new("math.G0"),
             Err(NameAtomError::ContainsDot)
         );
+    }
+
+    #[test]
+    fn selective_include_instance_ids_have_distinct_synthetic_scope_names() {
+        let first = IncludeInstanceId::at(Span::new(10, 5));
+        let second = IncludeInstanceId::at(Span::new(20, 5));
+
+        assert_ne!(first, second);
+        assert_ne!(first.synthetic_scope_name(), second.synthetic_scope_name());
+        assert_eq!(first.synthetic_scope_name().as_str(), "<include@10>");
     }
 
     #[test]

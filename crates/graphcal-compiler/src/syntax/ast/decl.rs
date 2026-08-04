@@ -8,7 +8,9 @@ use crate::syntax::ast::value::{
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
-use crate::syntax::module_name::ScopedName;
+use crate::syntax::module_name::{
+    IncludeInstanceId, IncludeInstanceScope, ModuleAliasName, ScopedName,
+};
 use crate::syntax::names::NamePath;
 use crate::syntax::phase::{Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
@@ -383,6 +385,27 @@ pub struct IncludeDecl<P: Phase = Raw> {
     pub path: ModulePath,
     pub param_bindings: Vec<ParamBinding<P>>,
     pub kind: ImportKind,
+}
+
+impl<P: Phase> IncludeDecl<P> {
+    /// Return the namespace of this configured DAG instance.
+    ///
+    /// Only module-form includes introduce a source-visible alias. Selective
+    /// includes receive an opaque occurrence identity for internal lowering.
+    #[must_use]
+    pub fn instance_scope(&self) -> IncludeInstanceScope {
+        match &self.kind {
+            ImportKind::Module { alias } => {
+                IncludeInstanceScope::Named(alias.as_ref().map_or_else(
+                    || ModuleAliasName::from_atom(self.path.leaf().name.clone()),
+                    |alias| alias.value.clone(),
+                ))
+            }
+            ImportKind::Selective(_) => {
+                IncludeInstanceScope::Anonymous(IncludeInstanceId::at(self.path.span()))
+            }
+        }
+    }
 }
 
 /// Inline DAG declaration: `dag name { ... }`

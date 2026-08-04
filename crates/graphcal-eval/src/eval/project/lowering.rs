@@ -7,6 +7,37 @@
 )]
 use super::*;
 
+fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
+    let mut leaf_counts: HashMap<ModuleAliasName, usize> = HashMap::new();
+    ctx.deferred_dag_includes
+        .iter()
+        .filter(|include| matches!(include.instance_scope, IncludeInstanceScope::Anonymous(_)))
+        .for_each(|include| {
+            leaf_counts
+                .entry(include.debug_scope.clone())
+                .and_modify(|count| *count = count.saturating_add(1))
+                .or_insert(1);
+        });
+
+    ctx.deferred_dag_includes
+        .iter()
+        .filter(|include| matches!(include.instance_scope, IncludeInstanceScope::Anonymous(_)))
+        .filter(|include| leaf_counts.get(&include.debug_scope) == Some(&1))
+        .filter(|include| !ctx.module_map.contains_key(&include.debug_scope))
+        .filter(|include| {
+            !ctx.included_debug_values
+                .iter()
+                .any(|(name, _, _)| name.qualifier().first() == Some(&include.debug_scope))
+        })
+        .map(|include| {
+            (
+                include.instance_scope.merge_scope_name(),
+                include.debug_scope.clone(),
+            )
+        })
+        .collect()
+}
+
 /// Lower the AST to IR, process deferred instantiated imports, and type-resolve
 /// the final `CompiledFile`.
 #[expect(
@@ -23,6 +54,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
+    let include_debug_names = include_debug_name_map(&ctx);
     // Snapshot before lower_to_builder_with_imported_values consumes
     // `ctx.imported_values`. The deferred-instantiated-include processing
     // below (and lower in this function) needs the original map back —
@@ -205,6 +237,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         imported_source_order: ctx.imported_source_order,
         output_surface,
         included_debug_values: ctx.included_debug_values,
+        include_debug_names,
         included_plots: ctx.included_plot_specs,
     })
 }
@@ -689,6 +722,7 @@ fn process_deferred_dag_includes(
 
     for deferred in deferred_dag_includes {
         cancellation.checkpoint()?;
+        let merge_prefix = deferred.instance_scope.merge_scope_name();
         // ---- 1. Resolve source body + lower to IR ------------------------
         let (
             dep_unfrozen,
@@ -821,7 +855,7 @@ fn process_deferred_dag_includes(
                     &body_ctx.imported_names,
                 );
 
-                let dag_dag_id = importer_dag_id.child(deferred.prefix.as_str());
+                let dag_dag_id = importer_dag_id.child(merge_prefix.as_str());
                 let mut registry_seed = |builder: &mut RegistryBuilder| {
                     seed_imported_type_system(
                         builder,
@@ -938,7 +972,7 @@ fn process_deferred_dag_includes(
         // ---- 5. Merge dep IR into importer's IR ---------------------------
         unfrozen.merge_dependency(
             dep_unfrozen,
-            &deferred.prefix,
+            &merge_prefix,
             &deferred.bindings,
             &dep_names,
             &deferred.index_bindings,
@@ -956,7 +990,7 @@ fn process_deferred_dag_includes(
             add_selective_aliases_inner(
                 body_decls_for_aliases,
                 selective,
-                &deferred.prefix,
+                &merge_prefix,
                 &AliasSubstitutions {
                     index: &deferred.index_bindings,
                     r#type: &deferred.type_bindings,

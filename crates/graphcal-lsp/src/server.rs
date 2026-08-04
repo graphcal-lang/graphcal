@@ -2820,6 +2820,37 @@ node bad: Mass = mass + length;
     }
 
     #[test]
+    fn selective_includes_from_same_leaf_modules_have_no_diagnostics() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"app\"\n"),
+            (
+                "src/app/analysis/shared.gcl",
+                "param input: Dimensionless;\npub node output: Dimensionless = @input + 1.0;\n",
+            ),
+            (
+                "src/app/presentation/shared.gcl",
+                "param input: Dimensionless;\npub node output: Dimensionless = @input * 2.0;\n",
+            ),
+            (
+                "src/app/main.gcl",
+                "include app.analysis.shared(input: 2.0).{ output as analyzed };\n\
+                 include app.presentation.shared(input: 5.0).{ output as rendered };\n\
+                 node combined: Dimensionless = @analyzed + @rendered;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/app/main.gcl");
+        let uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
+
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+    }
+
+    #[test]
     fn parse_error_in_imported_file_routes_to_imported_uri() {
         // lib.gcl has a syntax error; main.gcl is fine. The diagnostic must
         // surface on lib.gcl's URI, not main.gcl's URI.
