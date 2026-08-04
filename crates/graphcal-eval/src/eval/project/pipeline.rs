@@ -42,9 +42,13 @@ fn compile_single_file_in_project(
         cancellation,
     )?;
 
-    // For module imports, resolve qualified references in expressions.
-    let file_ast =
-        rewrite_qualified_refs_in_ast(&loaded_file.ast, &ctx.module_map, &ctx.imported_names);
+    // For module imports/includes, resolve qualified references in body and
+    // deferred binding expressions before lowering either representation.
+    let file_ast = rewrite_qualified_refs_in_compilation_body(
+        &loaded_file.ast,
+        &ctx.imported_names,
+        &mut ctx.deferred_dag_includes,
+    );
 
     // Lower to IR and finalize compilation.
     lowering::lower_and_finalize(

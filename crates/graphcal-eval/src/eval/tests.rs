@@ -2236,6 +2236,74 @@ fn nested_instantiated_file_include_keeps_multiple_instances_isolated() {
 }
 
 #[test]
+fn nested_instantiated_file_include_resolves_aliased_sibling_outputs_in_bindings() {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/example");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"example\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("axes.gcl"),
+        "pub index Item = { One, Two };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("a.gcl"),
+        "import example.axes.{ index Item };\n\
+         param input: Dimensionless[Item];\n\
+         pub node a_values: Dimensionless[Item] = @input;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("b.gcl"),
+        "import example.axes.{ index Item };\n\
+         param input: Dimensionless[Item];\n\
+         pub node b_values: Dimensionless[Item] =\n\
+             for item: Item { @input[item] * 2.0 };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("c.gcl"),
+        "import example.axes.{ index Item };\n\
+         param left: Dimensionless[Item];\n\
+         param right: Dimensionless[Item];\n\
+         pub node combined: Dimensionless[Item] =\n\
+             for item: Item { @left[item] + @right[item] };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("middle.gcl"),
+        "import example.axes.{ index Item };\n\
+         param input: Dimensionless[Item];\n\
+         include example.a(input: @input) as a;\n\
+         include example.b(input: @a.a_values) as b;\n\
+         include example.c(left: @a.a_values, right: @b.b_values) as c;\n\
+         pub node result: Dimensionless[Item] = @c.combined;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "import example.axes.{ index Item };\n\
+         node input: Dimensionless[Item] = {\n\
+             Item.One: 1.0,\n\
+             Item.Two: 2.0,\n\
+         };\n\
+         include example.middle(input: @input).{ pub result };\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert_eq!(
+        indexed_si_values(&find_entry(&result, "result")),
+        vec![("One", 3.0), ("Two", 6.0)]
+    );
+}
+
+#[test]
 fn nested_instantiated_file_include_reexports_requested_plot() {
     let (dir, root) = write_nested_file_include_project(
         "include demo.middle(x: 3.0).{ out, chart };\n\

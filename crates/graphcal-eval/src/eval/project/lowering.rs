@@ -408,7 +408,11 @@ fn compile_loaded_dag_module_ir<'a>(
     let dag_ast = graphcal_compiler::desugar::desugared_ast::File {
         declarations: self_imports.stripped_body,
     };
-    let dag_ast = rewrite_qualified_refs_in_ast(&dag_ast, &ctx.module_map, &ctx.imported_names);
+    let dag_ast = rewrite_qualified_refs_in_compilation_body(
+        &dag_ast,
+        &ctx.imported_names,
+        &mut ctx.deferred_dag_includes,
+    );
     let mut registry_seed = |builder: &mut RegistryBuilder| {
         seed_imported_type_system(
             builder,
@@ -753,10 +757,10 @@ fn process_deferred_dag_includes(
                     &mut body_ctx,
                     cancellation,
                 )?;
-                let rewritten_body = rewrite_qualified_refs_in_ast(
+                let rewritten_body = rewrite_qualified_refs_in_compilation_body(
                     &dep_loaded.ast,
-                    &body_ctx.module_map,
                     &body_ctx.imported_names,
+                    &mut body_ctx.deferred_dag_includes,
                 );
                 let instance_dag_id = importer_dag_id.child(merge_prefix.as_str());
                 let mut registry_seed = |builder: &mut RegistryBuilder| {
@@ -894,10 +898,10 @@ fn process_deferred_dag_includes(
                 let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
                     declarations: self_imports.stripped_body,
                 };
-                let stripped_body = rewrite_qualified_refs_in_ast(
+                let stripped_body = rewrite_qualified_refs_in_compilation_body(
                     &stripped_body,
-                    &body_ctx.module_map,
                     &body_ctx.imported_names,
+                    &mut body_ctx.deferred_dag_includes,
                 );
 
                 let dag_dag_id = importer_dag_id.child(merge_prefix.as_str());
