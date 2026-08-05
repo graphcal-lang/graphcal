@@ -17,7 +17,7 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl,
     PlotDecl, TypeExpr,
 };
-use crate::dimension::Rational;
+use crate::dimension::{Dimension, Rational};
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
     resolve_with_imported_values,
@@ -3394,35 +3394,39 @@ fn register_unit_decl(
                 });
             }
         }
+        let resolved_definition = resolve_unit_definition(registry, &def.unit_expr, src)?;
+        if resolved_definition.dimension != dim {
+            return Err(GraphcalError::UnitDefinitionDimensionMismatch {
+                name: u.name.value.clone(),
+                declared: registry.format_dimension(&dim),
+                definition: registry.format_dimension(&resolved_definition.dimension),
+                src: src.clone(),
+                span: def.unit_expr.span.into(),
+            });
+        }
         if contains_graph_ref(&def.scale_expr) {
             // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
-            // Resolve the base unit's dimension and static scale factor.
-            let base_scale = resolve_base_unit_static_scale(registry, &def.unit_expr, src)?;
             UnitScale::Dynamic {
                 scale_expr: def.scale_expr.clone(),
-                base_unit_scale: base_scale,
+                base_unit_scale: resolved_definition.base_scale,
             }
         } else {
             // Static scale value. A plain `unit` with no `@` still remains a
             // runtime unit for const-context policy; `const unit` is the
             // surface marker that makes it available to `const node`.
-            let (_unit_dim, base_scale) = registry
-                .resolve_unit_expr(&def.unit_expr)
-                .map_err(|err| unit_resolve_to_graphcal(err, src, def.span))?;
             let scale_expr = validate_positive_finite_scale(
                 eval_scale_expr(&def.scale_expr, src)?,
                 "unit scale expression",
                 src,
                 def.scale_expr.span,
             )?;
-            let base_scale = validate_positive_finite_scale(
-                base_scale,
-                "base unit scale",
+            let scale = multiply_positive_scales(
+                scale_expr,
+                resolved_definition.base_scale,
+                "unit scale",
                 src,
-                def.unit_expr.span,
+                def.span,
             )?;
-            let scale =
-                multiply_positive_scales(scale_expr, base_scale, "unit scale", src, def.span)?;
             UnitScale::Static(scale)
         }
     } else {
@@ -3484,19 +3488,34 @@ fn first_non_const_unit_ref<'a>(
     })
 }
 
-/// Resolve the static scale factor of the base unit expression in a unit definition.
+/// Dimension and static scale proved for a unit definition's RHS unit expression.
 ///
-/// For `unit EUR: Money = (@rate) USD;`, the base unit expr is `USD` with scale 1.0.
-/// The base unit itself must be static (not dynamic).
-fn resolve_base_unit_static_scale(
+/// Keeping these facts together prevents registration from pairing a scale from
+/// one physical dimension with an unrelated declared dimension.
+struct ResolvedUnitDefinition {
+    dimension: Dimension,
+    base_scale: PositiveFiniteScale,
+}
+
+/// Resolve the unit-expression half of a unit definition before mutating the registry.
+///
+/// For `unit EUR: Money = (@rate) USD;`, this proves both that `USD` measures
+/// `Money` and that its static base scale is 1.0. The base unit itself must be
+/// static; only the scalar expression may depend on runtime values.
+fn resolve_unit_definition(
     registry: &RegistryBuilder,
     unit_expr: &crate::desugar::desugared_ast::UnitExpr,
     src: &NamedSource<Arc<String>>,
-) -> Result<PositiveFiniteScale, GraphcalError> {
-    let (_dim, base_scale) = registry
+) -> Result<ResolvedUnitDefinition, GraphcalError> {
+    let (dimension, base_scale) = registry
         .resolve_unit_expr(unit_expr)
         .map_err(|err| unit_resolve_to_graphcal(err, src, unit_expr.span))?;
-    validate_positive_finite_scale(base_scale, "base unit scale", src, unit_expr.span)
+    let base_scale =
+        validate_positive_finite_scale(base_scale, "base unit scale", src, unit_expr.span)?;
+    Ok(ResolvedUnitDefinition {
+        dimension,
+        base_scale,
+    })
 }
 
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
@@ -5207,6 +5226,70 @@ mod tests {
             err,
             GraphcalError::UnknownDimension { name, .. } if name.as_str() == "Bar"
         ));
+    }
+
+    #[test]
+    fn static_unit_definition_must_match_declared_dimension() {
+        let err = parse_and_lower("const unit wrong: Length = 1.0 h;").unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnitDefinitionDimensionMismatch {
+                name,
+                declared,
+                definition,
+                ..
+            } if name.as_str() == "wrong"
+                && declared == "Length"
+                && definition == "Time"
+        ));
+    }
+
+    #[test]
+    fn dynamic_unit_definition_must_match_declared_dimension() {
+        let err = parse_and_lower(
+            "param factor: Dimensionless = 2.0;\nunit wrong: Length = (@factor) h;",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnitDefinitionDimensionMismatch { name, .. }
+                if name.as_str() == "wrong"
+        ));
+    }
+
+    #[test]
+    fn compound_unit_definition_with_matching_dimension_is_accepted() {
+        parse_and_lower("const unit cruise: Velocity = 0.5 km/h;").unwrap();
+    }
+
+    #[test]
+    fn failed_unit_definition_does_not_enter_registry() {
+        let source = "const unit wrong: Length = 1.0 h;";
+        let src = make_src(source);
+        let raw_file = Parser::new(source).parse_file().unwrap();
+        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let mut builder = RegistryBuilder::new();
+        load_prelude(&mut builder).unwrap();
+
+        let err = register_file_declarations(
+            &file,
+            &mut builder,
+            &src,
+            &crate::dag_id::DagId::root_in_package("test", "main"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            GraphcalError::UnitDefinitionDimensionMismatch { .. }
+        ));
+        assert!(
+            builder
+                .get_unit(&crate::syntax::dimension::UnitRef::local(
+                    crate::syntax::dimension::UnitName::expect_valid("wrong"),
+                ))
+                .is_none()
+        );
     }
 
     #[test]

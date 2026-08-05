@@ -636,6 +636,23 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("unit `{name}` is declared as {declared}, but its definition uses {definition}")]
+    #[diagnostic(
+        code(graphcal::D031),
+        help(
+            "the unit expression on the right-hand side must have exactly the declared dimension"
+        )
+    )]
+    UnitDefinitionDimensionMismatch {
+        name: UnitName,
+        declared: String,
+        definition: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this unit expression has dimension {definition}")]
+        span: SourceSpan,
+    },
+
     #[error("unknown unit `{name}`")]
     #[diagnostic(
         code(graphcal::D003),
@@ -1989,6 +2006,7 @@ impl GraphcalError {
             | Self::MultiAxisScanSource { src, .. }
             | Self::AggregationCardinalityUnknown { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
+            | Self::UnitDefinitionDimensionMismatch { src, .. }
             | Self::UnknownUnit { src, .. }
             | Self::UnknownDimension { src, .. }
             | Self::CyclicDimension { src, .. }

@@ -109,7 +109,9 @@ A `base unit` declaration (`base unit bit: Information;` with no `= ...`) define
 
 User unit definitions on bare `Temperature` are rejected (`D014`): the common temperature units (°C, °F) are *affine* scales with an offset, which a multiplicative unit definition cannot express — `const unit C: Temperature = 1.0 K;` would print `300 K` as a meaningless `300 C`. Keep absolute temperatures in `K`, or model offsets explicitly in expressions. Compound dimensions involving Temperature (e.g. `Temperature / Time`) still accept unit definitions, since offsets cancel in differences and rates.
 
-Unit scale factors must be **positive and finite**. Static unit definitions such as `const unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales are checked at evaluation time with the same rule.
+The unit expression on the right-hand side must have exactly the declared dimension. For example, `const unit wrong: Length = 1.0 h;` is rejected instead of attaching an hour's scale to `Length`. This rule applies equally to static and runtime-dependent definitions, including compound and reciprocal unit expressions.
+
+Unit scale factors must be **positive and finite**. Static unit definitions such as `const unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales apply the same concrete-value check at evaluation time.
 
 ### Unit Scoping
 

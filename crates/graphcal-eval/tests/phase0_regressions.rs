@@ -83,6 +83,28 @@ fn non_finite_static_unit_scale_is_rejected() {
 }
 
 #[test]
+fn cross_dimension_static_unit_definition_is_rejected() {
+    let result =
+        compile_and_eval("const unit wrong: Length = 1.0 h;\nparam x: Length = 2.0 wrong;");
+    let message = format!("{result:?}");
+    assert!(
+        result.is_err() && message.contains("UnitDefinitionDimensionMismatch"),
+        "BUG: a time scale was registered as a length unit: {message}",
+    );
+}
+
+#[test]
+fn cross_dimension_dynamic_unit_definition_is_rejected() {
+    let result =
+        compile_and_eval("param factor: Dimensionless = 2.0;\nunit wrong: Length = (@factor) h;");
+    let message = format!("{result:?}");
+    assert!(
+        result.is_err() && message.contains("UnitDefinitionDimensionMismatch"),
+        "BUG: a dynamic time scale was registered as a length unit: {message}",
+    );
+}
+
+#[test]
 fn zero_dynamic_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         r"
