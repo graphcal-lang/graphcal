@@ -322,21 +322,3 @@ pub fn expect_quantity(
         span: span.into(),
     })
 }
-
-/// Build the Cartesian product of variant-key slices across multiple axes.
-pub(super) fn cartesian_product<T: Clone + Eq + std::hash::Hash>(
-    axes: &[Vec<T>],
-    current: &mut Vec<T>,
-    result: &mut std::collections::HashSet<Vec<T>>,
-) {
-    if current.len() == axes.len() {
-        result.insert(current.clone());
-        return;
-    }
-    let axis_idx = current.len();
-    for variant in &axes[axis_idx] {
-        current.push(variant.clone());
-        cartesian_product(axes, current, result);
-        current.pop();
-    }
-}

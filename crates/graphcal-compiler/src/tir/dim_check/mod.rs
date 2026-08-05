@@ -386,7 +386,7 @@ impl DimCheckContext<'_> {
             src: self.src.clone(),
             span: expr.span.into(),
         })?;
-        infer::hir::infer_hir_type_with_owner(
+        infer::hir::infer_hir_type_with_owner_and_cancellation(
             expr,
             None,
             self.declared_types,
@@ -395,6 +395,7 @@ impl DimCheckContext<'_> {
             self.registry,
             self.builtin_fns,
             self.src,
+            self.cancellation,
         )
     }
 }
@@ -456,7 +457,7 @@ fn check_decl_expr_type(
                 span: (*type_ann_span).into(),
             })?;
     let owner = dag.resolved_decl_key_for_local(name);
-    let inferred = infer::hir::infer_hir_type_with_owner(
+    let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
         hir_expr,
         Some(&owner),
         body_ctx.declared_types,
@@ -465,6 +466,7 @@ fn check_decl_expr_type(
         body_ctx.registry,
         body_ctx.builtin_fns,
         body_ctx.src,
+        body_ctx.cancellation,
     )?;
     let matches = body_ctx
         .dag
@@ -508,7 +510,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
             });
         }
         let entry_ctx = ctx.for_body(&entry.src);
-        let inferred = infer::hir::infer_hir_type_with_owner(
+        let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
             &entry.expr,
             None,
             entry_ctx.declared_types,
@@ -517,6 +519,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
             entry_ctx.registry,
             entry_ctx.builtin_fns,
             entry_ctx.src,
+            entry_ctx.cancellation,
         )?;
         if !matches!(
             &inferred,
@@ -1005,6 +1008,7 @@ pub fn check_dimensions_tir_with_cancellation(
         &tir.registry,
         builtin_fns,
         src,
+        cancellation,
     )?;
 
     Ok(())
@@ -1330,7 +1334,15 @@ fn check_dimensions_dag(
     ctx.checkpoint()?;
     check_domain_constraint_targets_dag(dag, src)?;
     ctx.checkpoint()?;
-    check_domain_constraint_dimensions_dag(dag, &declared_types, tir, registry, builtin_fns, src)?;
+    check_domain_constraint_dimensions_dag(
+        dag,
+        &declared_types,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+        cancellation,
+    )?;
 
     Ok(())
 }
@@ -1364,6 +1376,7 @@ fn check_domain_constraint_dimensions_dag(
     registry: &Registry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     // A merged dependency declaration's domain bounds keep the dependency
     // file's spans, so they are checked against that body's source (#868).
@@ -1399,7 +1412,7 @@ fn check_domain_constraint_dimensions_dag(
         };
 
         for bound in bounds {
-            let inferred = infer::hir::infer_hir_type_with_owner(
+            let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
                 &bound.value,
                 None,
                 declared_types,
@@ -1408,6 +1421,7 @@ fn check_domain_constraint_dimensions_dag(
                 registry,
                 builtin_fns,
                 body_src,
+                cancellation,
             )?;
             check_one_bound(name, bound, &inferred, &expected, registry, body_src)?;
         }
@@ -1573,6 +1587,7 @@ fn check_field_domain_constraint_dimensions(
     registry: &Registry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     _src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     let mut seen: std::collections::HashSet<&crate::tir::typed::ResolvedStructFieldTypeKey> =
         std::collections::HashSet::new();
@@ -1613,7 +1628,7 @@ fn check_field_domain_constraint_dimensions(
                 format!("{}.{}.{}", type_def.name(), variant.name(), field.name())
             };
             for bound in bounds {
-                let inferred = infer::hir::infer_hir_type_with_owner(
+                let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
                     &bound.value,
                     None,
                     declared_types,
@@ -1622,6 +1637,7 @@ fn check_field_domain_constraint_dimensions(
                     registry,
                     builtin_fns,
                     &bound.src,
+                    cancellation,
                 )?;
                 check_one_bound_with_display_name(
                     &display_name,

@@ -28,7 +28,7 @@ use crate::tir::typed::NatPolyForm;
 
 use super::super::builtins::infer_fn_dim_from_spans;
 use super::super::helpers::{
-    cartesian_product, expect_quantity, format_inferred_type, resolved_type_matches_inferred,
+    expect_quantity, format_inferred_type, resolved_type_matches_inferred,
     struct_type_def_for_inferred,
 };
 use super::super::{
@@ -39,7 +39,43 @@ use super::builtin_call::{
 };
 use super::linear_algebra::{LinearAlgebraTypeError, infer_linear_algebra_type};
 
-type HirLocalTypes<'a> = hir::LocalEnv<'a, InferredType>;
+/// Lexical inference environment plus operation-scoped control state.
+///
+/// Every recursive inference path already carries the local environment. Keeping
+/// the cancellation token in the same typed context makes it impossible for a
+/// nested expression helper to accidentally fall back to an uncancellable pass.
+struct HirLocalTypes<'a> {
+    bindings: hir::LocalEnv<'a, InferredType>,
+    cancellation: crate::cancellation::CancellationToken,
+}
+
+impl HirLocalTypes<'_> {
+    fn root(cancellation: &crate::cancellation::CancellationToken) -> Self {
+        Self {
+            bindings: hir::LocalEnv::root(),
+            cancellation: cancellation.clone(),
+        }
+    }
+
+    fn checkpoint(&self) -> Result<(), GraphcalError> {
+        self.cancellation.checkpoint().map_err(GraphcalError::from)
+    }
+
+    fn get(&self, id: hir::LocalId) -> Option<&InferredType> {
+        self.bindings.get(id)
+    }
+
+    fn bind(&mut self, id: hir::LocalId, value: InferredType) {
+        self.bindings.bind(id, value);
+    }
+
+    fn child<'a>(&'a self, bindings: Vec<(hir::LocalId, InferredType)>) -> HirLocalTypes<'a> {
+        HirLocalTypes {
+            bindings: self.bindings.child(bindings),
+            cancellation: self.cancellation.clone(),
+        }
+    }
+}
 
 type ResolvedDeclKey = ResolvedDeclName;
 
@@ -238,7 +274,31 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let locals = HirLocalTypes::root();
+    infer_hir_type_with_owner_and_cancellation(
+        expr,
+        owner_decl_name,
+        declared_types,
+        dag,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+pub(in crate::tir::dim_check) fn infer_hir_type_with_owner_and_cancellation(
+    expr: &hir::Expr,
+    owner_decl_name: Option<&ResolvedDeclName>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &Registry,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<InferredType, GraphcalError> {
+    let locals = HirLocalTypes::root(cancellation);
     infer_hir_type(
         expr,
         owner_decl_name,
@@ -267,6 +327,7 @@ fn infer_hir_type(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    local_types.checkpoint()?;
     // Recursion choke point: inference recurses once per tree level
     // (unbounded for left-nested operator chains).
     crate::stack::with_stack_growth(|| {
@@ -3516,6 +3577,74 @@ struct MapLiteralAxis {
     entry_keys: Vec<IndexEntryKey>,
 }
 
+/// Checked size of a map literal's Cartesian key space.
+///
+/// Construction performs checked multiplication, so downstream coverage logic
+/// cannot accidentally compare against a wrapped cardinality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MapCoverageCardinality(usize);
+
+impl MapCoverageCardinality {
+    fn checked_from_axes(
+        axes: &[Vec<MapLiteralVariantKey>],
+        src: &NamedSource<Arc<String>>,
+        span: Span,
+    ) -> Result<Self, GraphcalError> {
+        axes.iter()
+            .try_fold(1_usize, |product, axis| {
+                product
+                    .checked_mul(axis.len())
+                    .ok_or_else(|| GraphcalError::EvalError {
+                        message: "map literal key-space cardinality exceeds supported size"
+                            .to_string(),
+                        src: src.clone(),
+                        span: span.into(),
+                    })
+            })
+            .map(Self)
+    }
+
+    const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// Find one absent Cartesian tuple without materializing the product.
+///
+/// Among the first `provided.len() + 1` tuples at least one must be absent, so
+/// this walk is bounded by source-sized input even when the declared product is
+/// enormous.
+fn first_missing_map_tuple(
+    axes: &[Vec<MapLiteralVariantKey>],
+    provided: &std::collections::HashSet<Vec<MapLiteralVariantKey>>,
+) -> Option<Vec<MapLiteralVariantKey>> {
+    let mut offsets = vec![0_usize; axes.len()];
+    for _ in 0..=provided.len() {
+        let candidate = axes
+            .iter()
+            .zip(&offsets)
+            .map(|(axis, offset)| axis[*offset].clone())
+            .collect::<Vec<_>>();
+        if !provided.contains(&candidate) {
+            return Some(candidate);
+        }
+
+        let mut advanced = false;
+        for axis in (0..axes.len()).rev() {
+            offsets[axis] += 1;
+            if offsets[axis] < axes[axis].len() {
+                advanced = true;
+                break;
+            }
+            offsets[axis] = 0;
+        }
+        if !advanced {
+            return None;
+        }
+    }
+    None
+}
+
 impl MapLiteralAxis {
     fn variant_key(&self, key: IndexEntryKey) -> Result<MapLiteralVariantKey, IndexEntryKey> {
         match (self.index.type_ref(), key) {
@@ -3667,39 +3796,34 @@ fn infer_hir_map_literal(
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut expected_tuples = std::collections::HashSet::new();
-    cartesian_product(&axes_variant_keys, &mut Vec::new(), &mut expected_tuples);
+    let expected_cardinality =
+        MapCoverageCardinality::checked_from_axes(&axes_variant_keys, src, expr.span)?;
     let mut provided_tuples = std::collections::HashSet::new();
     for entry in entries {
+        local_types.checkpoint()?;
         let tuple: Vec<MapLiteralVariantKey> = entry
             .keys
             .iter()
             .enumerate()
             .map(|(i, key)| {
-                axes[i]
-                    .variant_key(hir_map_entry_key(key))
-                    .map_err(&incompatible_key_error)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if !provided_tuples.insert(tuple.clone()) {
-            return Err(GraphcalError::EvalError {
-                message: "duplicate map literal entry".to_string(),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
-        if arity > 1 {
-            for (i, key) in entry.keys.iter().enumerate() {
                 let entry_key = hir_map_entry_key(key);
                 if !axes[i].entry_keys.contains(&entry_key) {
-                    return match entry_key {
-                        IndexEntryKey::Named(variant_name) => Err(GraphcalError::UnknownVariant {
-                            index_name: axes[i].index.name(),
-                            variant_name,
+                    return match (arity, entry_key) {
+                        (1, extra) => Err(GraphcalError::ExtraVariants {
+                            index_name: axes[0].index.name(),
+                            extra: vec![extra],
                             src: src.clone(),
                             span: expr.span.into(),
                         }),
-                        IndexEntryKey::Position(position) => Err(GraphcalError::EvalError {
+                        (_, IndexEntryKey::Named(variant_name)) => {
+                            Err(GraphcalError::UnknownVariant {
+                                index_name: axes[i].index.name(),
+                                variant_name,
+                                src: src.clone(),
+                                span: expr.span.into(),
+                            })
+                        }
+                        (_, IndexEntryKey::Position(position)) => Err(GraphcalError::EvalError {
                             message: format!(
                                 "position #{position} is outside index `{}`",
                                 axes[i].index.name()
@@ -3709,69 +3833,49 @@ fn infer_hir_map_literal(
                         }),
                     };
                 }
-            }
+                axes[i]
+                    .variant_key(entry_key)
+                    .map_err(&incompatible_key_error)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if !provided_tuples.insert(tuple) {
+            return Err(GraphcalError::EvalError {
+                message: "duplicate map literal entry".to_string(),
+                src: src.clone(),
+                span: expr.span.into(),
+            });
         }
     }
 
-    let extra: Vec<Vec<MapLiteralVariantKey>> = provided_tuples
-        .difference(&expected_tuples)
-        .cloned()
-        .collect();
-    if !extra.is_empty() {
+    if provided_tuples.len() < expected_cardinality.get() {
         if arity == 1 {
-            return Err(GraphcalError::ExtraVariants {
-                index_name: axes[0].index.name(),
-                extra: extra.iter().map(|tuple| tuple[0].entry_key()).collect(),
-                src: src.clone(),
-                span: expr.span.into(),
-            });
-        }
-        let extra_strs: Vec<String> = extra
-            .iter()
-            .map(|tuple| {
-                tuple
-                    .iter()
-                    .map(MapLiteralVariantKey::display)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .collect();
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "extra entries in map literal: ({})",
-                extra_strs.join("), (")
-            ),
-            src: src.clone(),
-            span: expr.span.into(),
-        });
-    }
-    let missing: Vec<Vec<MapLiteralVariantKey>> = expected_tuples
-        .difference(&provided_tuples)
-        .cloned()
-        .collect();
-    if !missing.is_empty() {
-        if arity == 1 {
+            let missing = axes_variant_keys[0]
+                .iter()
+                .filter(|key| !provided_tuples.contains(&vec![(*key).clone()]))
+                .map(MapLiteralVariantKey::entry_key)
+                .collect();
             return Err(GraphcalError::MissingVariants {
                 index_name: axes[0].index.name(),
-                missing: missing.iter().map(|tuple| tuple[0].entry_key()).collect(),
+                missing,
                 src: src.clone(),
                 span: expr.span.into(),
             });
         }
-        let missing_strs: Vec<String> = missing
+        let first_missing = first_missing_map_tuple(&axes_variant_keys, &provided_tuples)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: "map coverage count and tuple membership disagree".to_string(),
+                src: src.clone(),
+                span: expr.span.into(),
+            })?;
+        let witness = first_missing
             .iter()
-            .map(|tuple| {
-                tuple
-                    .iter()
-                    .map(MapLiteralVariantKey::display)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .collect();
+            .map(MapLiteralVariantKey::display)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let missing_count = expected_cardinality.get() - provided_tuples.len();
         return Err(GraphcalError::EvalError {
             message: format!(
-                "non-exhaustive map literal: missing entries for ({})",
-                missing_strs.join("), (")
+                "non-exhaustive map literal: missing {missing_count} entries; first missing entry is ({witness})"
             ),
             src: src.clone(),
             span: expr.span.into(),

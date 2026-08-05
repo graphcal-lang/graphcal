@@ -575,6 +575,70 @@ Maneuver.Insertion: 1.8 km / s,
 }
 
 #[test]
+fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
+    use std::fmt::Write as _;
+
+    const AXIS_COUNT: usize = 30;
+    let mut source = String::new();
+    for axis in 0..AXIS_COUNT {
+        writeln!(source, "pub index A{axis} = {{ X, Y }};").unwrap();
+    }
+    let axes = (0..AXIS_COUNT)
+        .map(|axis| format!("A{axis}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tuple = (0..AXIS_COUNT)
+        .map(|axis| format!("A{axis}.X"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        source,
+        "param values: Dimensionless[{axes}] = {{ ({tuple}): 1.0 }};"
+    )
+    .unwrap();
+
+    let error = check(&source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("missing 1073741823 entries")
+                && message.contains("first missing entry")
+                && message.contains("A29.Y")),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn map_key_space_cardinality_overflow_is_rejected() {
+    use std::fmt::Write as _;
+
+    let axis_count = usize::BITS as usize;
+    let mut source = String::new();
+    for axis in 0..axis_count {
+        writeln!(source, "pub index A{axis} = {{ X, Y }};").unwrap();
+    }
+    let axes = (0..axis_count)
+        .map(|axis| format!("A{axis}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tuple = (0..axis_count)
+        .map(|axis| format!("A{axis}.X"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        source,
+        "param values: Dimensionless[{axes}] = {{ ({tuple}): 1.0 }};"
+    )
+    .unwrap();
+
+    let error = check(&source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("key-space cardinality exceeds supported size")),
+        "got: {error:?}"
+    );
+}
+
+#[test]
 fn check_index_mismatch_in_for() {
     let source = "\
 pub index Phase = { Coast, Burn };
