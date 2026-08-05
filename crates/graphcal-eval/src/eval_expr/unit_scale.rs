@@ -19,33 +19,38 @@ use super::{EvalContext, HirLocalValueMap, RuntimeValueMap, hir_eval::eval_hir_e
 /// scale expression references this file's params and cannot be re-evaluated
 /// in the importer's context.
 ///
-/// Units whose scale fails to resolve are omitted, preserving the laziness of
-/// dynamic-unit errors: an unused broken dynamic unit never surfaces, and a
-/// used one errors loudly at the importer's use site. Qualified (imported)
-/// units are skipped — their owning module exports its own resolved scales.
+/// Compiler-invalid scale bodies never reach this path: strict lowering,
+/// policy checking, and scalar-Dimensionless type checking happen before
+/// evaluation. A data-dependent non-positive or non-finite runtime scale is
+/// omitted from the export map and remains a loud error if an importer uses
+/// that unit. Qualified imported units are skipped because their owning module
+/// exports its own resolved scales.
 pub fn resolve_exportable_dynamic_unit_scales(
     values: &RuntimeValueMap,
     ctx: &EvalContext<'_>,
 ) -> HashMap<UnitRef, PositiveFiniteScale> {
     let empty_locals = HirLocalValueMap::root();
-    ctx.registry
-        .units
-        .all_units()
-        .filter(|(name, _, _)| !name.is_qualified())
-        .filter_map(|(name, _dim, scale)| {
+    ctx.tir
+        .root()
+        .semantic
+        .dynamic_unit_scales
+        .values()
+        .filter(|entry| !entry.spelling.is_qualified())
+        .filter_map(|entry| {
+            let info = ctx.tir.unit_info(&entry.unit)?;
             let UnitScale::Dynamic {
                 base_unit_scale, ..
-            } = scale
+            } = &info.scale
             else {
                 return None;
             };
-            let scale_hir = ctx.tir.root().semantic.dynamic_unit_scales.get(name)?;
-            let scale_val = eval_hir_expr(scale_hir, values, &empty_locals, ctx).ok()?;
+            let entry_ctx = ctx.with_src(&entry.src);
+            let scale_val = eval_hir_expr(&entry.expr, values, &empty_locals, &entry_ctx).ok()?;
             let RuntimeValue::Quantity(scale_f64) = scale_val else {
                 return None;
             };
             let combined = PositiveFiniteScale::new(scale_f64 * base_unit_scale.get()).ok()?;
-            Some((name.clone(), combined))
+            Some((entry.spelling.clone(), combined))
         })
         .collect()
 }
@@ -87,8 +92,8 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 /// Resolve a `UnitExpr` to its compound scale factor at runtime.
 ///
 /// For static units, this is equivalent to `registry.units.resolve_unit_expr()`.
-/// For dynamic units, the unit's HIR scale expression — lowered at
-/// type-resolution time into the root DAG's semantic body — is evaluated
+/// For dynamic units, the unit's strictly validated HIR scale expression in
+/// the root DAG's semantic body is evaluated
 /// against the current `values`, then multiplied by the base unit's static
 /// scale. Dynamic scale expressions are standalone (graph/const references
 /// only), so no local environment is involved.
@@ -125,7 +130,7 @@ pub fn resolve_unit_scale(
                     .root()
                     .semantic
                     .dynamic_unit_scales
-                    .get(item.name.value.spelling())
+                    .get(item.name.value.resolved())
                     .ok_or_else(|| {
                         ctx.eval_error(
                             format!(
@@ -135,19 +140,29 @@ pub fn resolve_unit_scale(
                             item.name.span,
                         )
                     })?;
-                let empty_locals = HirLocalValueMap::root();
-                let scale_val = eval_hir_expr(scale_hir, values, &empty_locals, ctx)?;
-                let RuntimeValue::Quantity(scale_f64) = scale_val else {
-                    return Err(ctx.eval_error(
-                        "dynamic unit scale expression must evaluate to a quantity",
+                let scale_ctx = ctx.with_src(&scale_hir.src);
+                if scale_hir.declared_dimension != scale_hir.base_unit_dimension {
+                    return Err(scale_ctx.eval_error(
+                        format!(
+                            "internal: dynamic unit `{}` has mismatched declared and base-unit dimensions",
+                            scale_hir.spelling
+                        ),
                         scale_hir.span,
+                    ));
+                }
+                let empty_locals = HirLocalValueMap::root();
+                let scale_val = eval_hir_expr(&scale_hir.expr, values, &empty_locals, &scale_ctx)?;
+                let RuntimeValue::Quantity(scale_f64) = scale_val else {
+                    return Err(scale_ctx.eval_error(
+                        "dynamic unit scale expression must evaluate to a quantity",
+                        scale_hir.expr.span,
                     ));
                 };
                 let dynamic_scale = checked_positive_finite_unit_scale(
                     scale_f64,
                     "dynamic unit scale",
-                    scale_hir.span,
-                    ctx,
+                    scale_hir.expr.span,
+                    &scale_ctx,
                 )?;
                 let base_scale = checked_positive_finite_unit_scale(
                     base_unit_scale.get(),

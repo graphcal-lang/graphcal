@@ -11,7 +11,8 @@ use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, File};
-use graphcal_compiler::ir::lower::{DagBodySelfImports, ImportedValueSource};
+use graphcal_compiler::ir::imported_binding::ImportedBinding;
+use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -53,10 +54,9 @@ impl ParentValueDecls {
 ///
 /// - Marked `type`, `dim`, `unit`, and `index` items are visibility-checked in
 ///   exactly that namespace. A type item does not import a same-named constructor.
-/// - Bare term `const` items are added to `ImportedValueNames::const_names`, to
-///   `imported_decl_types` with the parent's declared type, and to
-///   `imported_value_sources` so evaluation can copy the concrete value
-///   from the caller or the owning dependency.
+/// - Bare term `const` items are added to `ImportedValueNames::const_names` and
+///   receive one canonical imported binding carrying the parent's declaration
+///   identity and declared type. Evaluation may fill its deferred value later.
 /// - Bare term `param` / non-const `node` items are rejected with
 ///   `ImportRuntimeItem` — runtime values must be passed via the dag's own
 ///   params.
@@ -88,8 +88,7 @@ pub fn preprocess_dag_body_self_imports(
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {
     let mut names = ImportedValueNames::default();
-    let mut decl_types: HashMap<ScopedName, DeclaredType> = HashMap::new();
-    let mut value_sources: HashMap<ScopedName, ImportedValueSource> = HashMap::new();
+    let mut bindings: HashMap<ScopedName, ImportedBinding> = HashMap::new();
     let mut stripped_body: Vec<Declaration> = Vec::with_capacity(body.len());
 
     for decl in body {
@@ -156,13 +155,15 @@ pub fn preprocess_dag_body_self_imports(
                                 Some(dt) => {
                                     let scoped = ScopedName::local(local_name);
                                     names.const_names.push((scoped.clone(), span));
-                                    decl_types.insert(scoped.clone(), dt.clone());
-                                    value_sources.insert(
+                                    bindings.insert(
                                         scoped,
-                                        ImportedValueSource {
-                                            dag_id: parent_dag_id.clone(),
-                                            source_name: DeclName::from_atom(orig_name.clone()),
-                                        },
+                                        ImportedBinding::deferred(
+                                            graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                                                parent_dag_id.clone(),
+                                                DeclName::from_atom(orig_name.clone()),
+                                            ),
+                                            dt.clone(),
+                                        ),
                                     );
                                 }
                                 None if parent_values.is_external_runtime(orig_name.as_str()) => {
@@ -186,8 +187,7 @@ pub fn preprocess_dag_body_self_imports(
 
     Ok(DagBodySelfImports {
         names,
-        decl_types,
-        value_sources,
+        bindings,
         stripped_body,
     })
 }

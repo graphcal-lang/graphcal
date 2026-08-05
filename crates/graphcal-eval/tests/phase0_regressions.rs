@@ -8,8 +8,19 @@
 use std::collections::HashMap;
 use std::panic;
 
-use graphcal_eval::eval::{EvalResult, Value, compile_and_eval, compile_and_eval_project};
+use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_eval::eval::{
+    CompileError, EvalResult, Value, compile_and_eval, compile_and_eval_project,
+};
 use graphcal_io::RealFileSystem;
+use miette::Diagnostic;
+
+fn compile_graphcal_error(source: &str) -> GraphcalError {
+    match compile_and_eval(source).unwrap_err() {
+        CompileError::Eval(err) => err,
+        other => panic!("expected semantic error, got {other:?}"),
+    }
+}
 
 fn has_decl_error(result: &EvalResult, name: &str) -> bool {
     result
@@ -83,6 +94,28 @@ fn non_finite_static_unit_scale_is_rejected() {
 }
 
 #[test]
+fn cross_dimension_static_unit_definition_is_rejected() {
+    let result =
+        compile_and_eval("const unit wrong: Length = 1.0 h;\nparam x: Length = 2.0 wrong;");
+    let message = format!("{result:?}");
+    assert!(
+        result.is_err() && message.contains("UnitDefinitionDimensionMismatch"),
+        "BUG: a time scale was registered as a length unit: {message}",
+    );
+}
+
+#[test]
+fn cross_dimension_dynamic_unit_definition_is_rejected() {
+    let result =
+        compile_and_eval("param factor: Dimensionless = 2.0;\nunit wrong: Length = (@factor) h;");
+    let message = format!("{result:?}");
+    assert!(
+        result.is_err() && message.contains("UnitDefinitionDimensionMismatch"),
+        "BUG: a dynamic time scale was registered as a length unit: {message}",
+    );
+}
+
+#[test]
 fn zero_dynamic_unit_scale_is_rejected() {
     assert_rejected_or_decl_error(
         r"
@@ -128,6 +161,43 @@ node price: Money = 1.0 EUR;
 }
 
 #[test]
+fn unused_dynamic_unit_scale_rejects_unknown_reference() {
+    let err = compile_graphcal_error(
+        "base dim Money;\nbase unit USD: Money;\nunit EUR: Money = (@missing) USD;\n",
+    );
+    assert!(matches!(err, GraphcalError::UnknownGraphRef { .. }));
+}
+
+#[test]
+fn unused_dynamic_unit_scale_rejects_assertion_reference() {
+    let err = compile_graphcal_error(
+        "base dim Money;\nbase unit USD: Money;\nassert factor = true;\nunit EUR: Money = (@factor) USD;\n",
+    );
+    assert!(matches!(err, GraphcalError::GraphRefToAssert { .. }));
+}
+
+#[test]
+fn dynamic_unit_scale_must_be_scalar_dimensionless_quantity() {
+    let invalid_factors = [
+        "param factor: Length = 2.0 m;",
+        "param factor: Bool = true;",
+        "param factor: Int = 2;",
+        "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };",
+        "pub type Config { Config(value: Dimensionless) }\nparam factor: Config = Config(value: 2.0);",
+    ];
+    for declarations in invalid_factors {
+        let source = format!(
+            "base dim Money;\nbase unit USD: Money;\n{declarations}\nunit EUR: Money = (@factor) USD;\n"
+        );
+        let err = compile_graphcal_error(&source);
+        assert!(
+            matches!(err, GraphcalError::DynamicUnitScaleTypeMismatch { .. }),
+            "expected D032 for invalid dynamic scale, got {err:?}"
+        );
+    }
+}
+
+#[test]
 fn range_step_must_land_on_endpoint() {
     let source = r"
 pub index T = range(0.0 s, 1.0 s, step: 0.6 s);
@@ -170,6 +240,246 @@ node m: Dimensionless = minimum(for i: Fin(0) { 1.0 });
         result.is_err(),
         "BUG: Fin(0) accepted despite the no-empty-index invariant: {result:?}",
     );
+}
+
+fn write_imported_binding_collision_project(
+    libraries: &[(&str, f64)],
+    qualified_import: bool,
+    nested: bool,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/collision");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collision\"\n",
+    )
+    .unwrap();
+
+    for (name, imported_value) in libraries {
+        std::fs::write(
+            package_dir.join(format!("config_{name}.gcl")),
+            format!("pub const node C: Dimensionless = {imported_value:.1};\n"),
+        )
+        .unwrap();
+        let import = if qualified_import {
+            format!("import collision.config_{name} as config;\n")
+        } else {
+            format!("import collision.config_{name}.{{ C }};\n")
+        };
+        let reference = if qualified_import { "@config.C" } else { "@C" };
+        std::fs::write(
+            package_dir.join(format!("leaf_{name}.gcl")),
+            format!(
+                "{import}param p: Dimensionless;\npub node out: Dimensionless = @p + {reference};\n"
+            ),
+        )
+        .unwrap();
+        if nested {
+            std::fs::write(
+                package_dir.join(format!("lib_{name}.gcl")),
+                format!(
+                    "param p: Dimensionless;\ninclude collision.leaf_{name}(p: @p) as leaf;\npub node out: Dimensionless = @leaf.out;\n"
+                ),
+            )
+            .unwrap();
+        }
+    }
+
+    let include_file = if nested { "lib" } else { "leaf" };
+    let includes = libraries
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| {
+            format!(
+                "include collision.{include_file}_{name}(p: {}.0) as {name};",
+                index + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let total = libraries
+        .iter()
+        .map(|(name, _)| format!("@{name}.out"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        format!("{includes}\npub node total: Dimensionless = {total};\n"),
+    )
+    .unwrap();
+
+    (dir, root)
+}
+
+fn assert_imported_binding_collision_values(
+    libraries: &[(&str, f64)],
+    qualified_import: bool,
+    nested: bool,
+) {
+    let (_dir, root) =
+        write_imported_binding_collision_project(libraries, qualified_import, nested);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|err| panic!("collision project must compile: {err:?}"));
+
+    let mut expected_total = 0.0;
+    for (index, (name, imported_value)) in libraries.iter().enumerate() {
+        #[expect(clippy::cast_precision_loss, reason = "small test fixture index")]
+        let expected = imported_value + (index + 1) as f64;
+        let actual = value_for(&result, &format!("{name}.out"))
+            .si_value()
+            .unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "include `{name}` read another instance's imported value: expected {expected}, got {actual}"
+        );
+        expected_total += expected;
+    }
+    let total = value_for(&result, "total").si_value().unwrap();
+    assert!((total - expected_total).abs() < 1e-9);
+}
+
+#[test]
+fn selective_same_leaf_imports_are_isolated_for_all_include_orders() {
+    let permutations = [
+        [("a", 1.0), ("b", 10.0), ("c", 100.0)],
+        [("a", 1.0), ("c", 100.0), ("b", 10.0)],
+        [("b", 10.0), ("a", 1.0), ("c", 100.0)],
+        [("b", 10.0), ("c", 100.0), ("a", 1.0)],
+        [("c", 100.0), ("a", 1.0), ("b", 10.0)],
+        [("c", 100.0), ("b", 10.0), ("a", 1.0)],
+    ];
+    for permutation in permutations {
+        assert_imported_binding_collision_values(&permutation, false, false);
+    }
+}
+
+#[test]
+fn equal_qualified_aliases_in_included_files_keep_canonical_targets() {
+    assert_imported_binding_collision_values(&[("a", 1.0), ("b", 10.0)], true, false);
+}
+
+#[test]
+fn nested_includes_keep_hidden_imported_bindings_instance_scoped() {
+    assert_imported_binding_collision_values(&[("a", 1.0), ("b", 10.0)], false, true);
+}
+
+#[test]
+fn unused_dynamic_unit_scale_rejects_external_function_call() {
+    let err = compile_graphcal_error(
+        r#"
+import plugin "graphcal:demo" as demo {
+    fn factor(x: Dimensionless) -> Dimensionless;
+}
+param trigger: Dimensionless = 2.0;
+unit Bad: Length = (demo.factor(@trigger)) m;
+"#,
+    );
+    assert!(matches!(err, GraphcalError::ExternCallNotAllowed { .. }));
+}
+
+#[test]
+fn included_dynamic_unit_scale_uses_the_bound_instance_param() {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/dynamic_include");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"dynamic_include\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("lib.gcl"),
+        "pub base dim Money;\npub base unit USD: Money;\nparam factor: Dimensionless;\npub unit EUR: Money = (@factor) USD;\npub node out: Money = 3.0 EUR;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include dynamic_include.lib(factor: 2.0) as priced;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|err| panic!("valid included dynamic unit must compile: {err:?}"));
+    let out = value_for(&result, "priced.out").si_value().unwrap();
+    assert!((out - 6.0).abs() < 1e-9, "expected 6 USD, got {out}");
+}
+
+#[test]
+fn included_dynamic_unit_error_uses_producer_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/dynamic_source");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"dynamic_source\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("lib.gcl"),
+        "pub base dim Money;\npub base unit USD: Money;\npub unit EUR: Money = (@missing) USD;\npub node out: Money = 1.0 EUR;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(&root, "include dynamic_source.lib() as bad;\n").unwrap();
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    let CompileError::Eval(error) = error else {
+        panic!("expected semantic error, got {error:?}");
+    };
+    assert!(matches!(error, GraphcalError::UnknownGraphRef { .. }));
+    let source = error.named_source().expect("error must carry source");
+    assert!(
+        source.name().ends_with("lib.gcl"),
+        "wrong source: {source:?}"
+    );
+    let label = error.labels().unwrap().next().unwrap();
+    let span = label.inner();
+    assert_eq!(
+        &source.inner()[span.offset()..span.offset() + span.len()],
+        "missing"
+    );
+}
+
+#[test]
+fn include_binding_lowering_error_uses_importer_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/provenance");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"provenance\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("lib.gcl"),
+        "param input: Dimensionless;\npub node out: Dimensionless = @input;\n",
+    )
+    .unwrap();
+    let main_source = "// deliberately different importer bytes\ninclude provenance.lib(input: @missing) as inst;\n";
+    let root = package_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
+    match result {
+        Err(CompileError::Eval(GraphcalError::UnknownGraphRef { name, src, span })) => {
+            assert_eq!(name.member().as_str(), "missing");
+            assert!(
+                src.name().ends_with("main.gcl"),
+                "wrong source: {}",
+                src.name()
+            );
+            assert!(span.offset() + span.len() <= src.inner().len());
+            assert_eq!(
+                &src.inner()[span.offset()..span.offset() + span.len()],
+                "missing"
+            );
+        }
+        other => panic!("expected importer-owned N002 diagnostic, got {other:?}"),
+    }
 }
 
 fn write_required_runtime_input_type_project(

@@ -109,7 +109,9 @@ A `base unit` declaration (`base unit bit: Information;` with no `= ...`) define
 
 User unit definitions on bare `Temperature` are rejected (`D014`): the common temperature units (°C, °F) are *affine* scales with an offset, which a multiplicative unit definition cannot express — `const unit C: Temperature = 1.0 K;` would print `300 K` as a meaningless `300 C`. Keep absolute temperatures in `K`, or model offsets explicitly in expressions. Compound dimensions involving Temperature (e.g. `Temperature / Time`) still accept unit definitions, since offsets cancel in differences and rates.
 
-Unit scale factors must be **positive and finite**. Static unit definitions such as `const unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales are checked at evaluation time with the same rule.
+The unit expression on the right-hand side must have exactly the declared dimension. For example, `const unit wrong: Length = 1.0 h;` is rejected instead of attaching an hour's scale to `Length`. This rule applies equally to static and runtime-dependent definitions, including compound and reciprocal unit expressions.
+
+Unit scale factors must be **positive and finite**. Static unit definitions such as `const unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales apply the same concrete-value check at evaluation time.
 
 ### Unit Scoping
 
@@ -142,7 +144,9 @@ unit EUR: Money = (@usd_per_eur) USD;
 
 Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so overriding `usd_per_eur` (e.g., via `--set usd_per_eur=1.20`) changes all EUR-denominated values accordingly.
 
-Dynamic units behave identically to static units for dimension checking (compile-time). The scale is only resolved at evaluation time, after the referenced params have been computed.
+Dynamic unit definitions are fully checked even when the unit is never used. The scale expression must lower successfully and have the concrete scalar type `Dimensionless`: dimensioned quantities, `Bool`, `Int`, structs/unions, and indexed values are rejected (`D032`). Runtime params and nodes may be referenced; assertions and external plugin functions may not. The right-hand unit expression must still have exactly the declared dimension (`D031`).
+
+Only the scale's concrete value is deferred until evaluation, after its referenced params and nodes have been computed. That value must be positive and finite; otherwise any declaration using the unit fails instead of receiving a fallback scale.
 
 A `pub` dynamic unit is also usable across a module-import boundary (`fx.EUR` after `import app.fx as fx;`, or `EUR` after `import app.fx.{ unit EUR };`). The defining module's evaluation resolves the scale — the expression references that module's own params — and the importer carries the resolved value as a fixed scale. If the defining module cannot be evaluated standalone (e.g., it has required params), using its dynamic unit in an importer fails at evaluation time with a scale-resolution error.
 

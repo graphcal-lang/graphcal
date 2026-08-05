@@ -55,11 +55,20 @@ pub(in crate::eval::project) fn lower_and_finalize(
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
     let include_debug_names = include_debug_name_map(&ctx);
-    // Snapshot before lower_to_builder_with_imported_values consumes
-    // `ctx.imported_values`. The deferred-instantiated-include processing
-    // below (and lower in this function) needs the original map back —
-    // builder construction moves it.
-    let saved_imported_values = ctx.imported_values.clone();
+    // Snapshot the source-facing output values before IR lowering consumes the
+    // canonical imported-binding records.
+    let saved_imported_values = ctx
+        .imported_bindings
+        .iter()
+        .filter_map(|(name, binding)| {
+            binding.value().map(|value| {
+                (
+                    name.clone(),
+                    (value.clone(), binding.declared_type().clone()),
+                )
+            })
+        })
+        .collect();
 
     // Imported type-system declarations (selective imports and module-import
     // registries) seed the registry builder before the file's own
@@ -76,11 +85,11 @@ pub(in crate::eval::project) fn lower_and_finalize(
         )
     };
     let (mut builder, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_to_builder_with_imported_values_and_cancellation(
+        graphcal_compiler::ir::lower::lower_to_builder_with_imported_bindings_and_cancellation(
             file_ast,
             file_src,
             &ctx.imported_names,
-            ctx.imported_values,
+            ctx.imported_bindings,
             file_dag_id,
             Some(&mut registry_seed),
             cancellation,
@@ -378,7 +387,7 @@ fn compile_loaded_dag_module_ir<'a>(
 
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
-        imported_values: HashMap::new(),
+        imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
         imported_type_system_names: HashMap::new(),
         module_map: HashMap::new(),
@@ -398,12 +407,12 @@ fn compile_loaded_dag_module_ir<'a>(
     )?;
 
     extend_imported_value_names(&mut ctx.imported_names, self_imports.names);
-    let mut imported_decl_types: HashMap<ScopedName, DeclaredType> = ctx
-        .imported_values
-        .iter()
-        .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
-        .collect();
-    imported_decl_types.extend(self_imports.decl_types);
+    extend_imported_bindings(
+        &mut ctx.imported_bindings,
+        self_imports.bindings,
+        &ctx.imported_names,
+        file_src,
+    )?;
 
     let dag_ast = graphcal_compiler::desugar::desugared_ast::File {
         declarations: self_imports.stripped_body,
@@ -424,13 +433,11 @@ fn compile_loaded_dag_module_ir<'a>(
         )
     };
     let (mut builder, mut unfrozen) =
-        graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+        graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
             dag_ast.as_ref(),
             Some(&tir.registry),
             &ctx.imported_names,
-            ctx.imported_values,
-            imported_decl_types,
-            self_imports.value_sources,
+            ctx.imported_bindings,
             file_src,
             &loaded_dag.dag_id,
             Some(&mut registry_seed),
@@ -479,6 +486,34 @@ fn extend_imported_value_names(target: &mut ImportedValueNames, source: Imported
     target.param_names.extend(source.param_names);
     target.node_names.extend(source.node_names);
     target.assert_names.extend(source.assert_names);
+}
+
+fn extend_imported_bindings(
+    target: &mut HashMap<ScopedName, ImportedBinding>,
+    source: HashMap<ScopedName, ImportedBinding>,
+    imported_names: &ImportedValueNames,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), CompileError> {
+    for (name, binding) in source {
+        if target.contains_key(&name) {
+            let mut spans = imported_names
+                .const_names
+                .iter()
+                .chain(&imported_names.param_names)
+                .chain(&imported_names.node_names)
+                .filter_map(|(candidate, span)| (candidate == &name).then_some(*span));
+            let first = spans.next().unwrap_or(Span::new(0, 0));
+            let duplicate = spans.next_back().unwrap_or(first);
+            return Err(CompileError::Eval(GraphcalError::DuplicateName {
+                name: name.to_string(),
+                src: src.clone(),
+                duplicate: duplicate.into(),
+                first: first.into(),
+            }));
+        }
+        target.insert(name, binding);
+    }
+    Ok(())
 }
 
 fn process_dag_body_import_declarations<'a>(
@@ -659,22 +694,19 @@ fn merge_dep_dag_tirs(
                 continue;
             }
             let mut cloned = dag_tir.clone();
-            // Inject only the values that the dag body imported from its
-            // owning dep DAG. There are no synthetic placeholder values to
-            // overwrite here; the source map carries the import alias.
-            for (local_name, source) in &cloned.imported_value_sources {
-                if &source.dag_id != dep_dag_id {
+            // Supply deferred values imported from this owning dependency.
+            // Canonical target and declared type remain on the same binding
+            // record; no independently keyed source/value maps can diverge.
+            for binding in cloned.imported_bindings.values_mut() {
+                if binding.target().owner() != dep_dag_id {
                     continue;
                 }
-                if let Some(value) = dep_eval.const_values.get(&source.source_name)
-                    && let Some(dt) = dep_eval
-                        .declared_types
-                        .get(&ScopedName::from(&source.source_name))
+                let source_name = binding.target().to_unowned_def_name();
+                if let Some(value) = dep_eval.const_values.get(&source_name)
+                    && let Some(dt) = dep_eval.declared_types.get(&ScopedName::from(&source_name))
                 {
-                    cloned
-                        .imported_values
-                        .entry(local_name.clone())
-                        .or_insert_with(|| (value.clone(), dt.clone()));
+                    binding.supply_value(value.clone());
+                    binding.replace_declared_type(dt.clone());
                 }
             }
             tir.dags.insert(dep_id.clone(), cloned);
@@ -741,7 +773,7 @@ fn process_deferred_dag_includes(
                 let dep_src = &dep_loaded.named_source;
                 let mut body_ctx = ImportContext {
                     imported_names: ImportedValueNames::default(),
-                    imported_values: HashMap::new(),
+                    imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
                     imported_type_system_names: HashMap::new(),
                     module_map: HashMap::new(),
@@ -773,11 +805,11 @@ fn process_deferred_dag_includes(
                         dep_src,
                     )
                 };
-                let (mut dep_builder, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_builder_with_imported_values_and_cancellation(
+                let (mut dep_builder, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_builder_with_imported_bindings_and_cancellation(
                         rewritten_body.as_ref(),
                         dep_src,
                         &body_ctx.imported_names,
-                        body_ctx.imported_values,
+                        body_ctx.imported_bindings,
                         &instance_dag_id,
                         Some(&mut registry_seed),
                         cancellation,
@@ -833,7 +865,7 @@ fn process_deferred_dag_includes(
 
                 let mut body_ctx = ImportContext {
                     imported_names: dag_imported_names.clone(),
-                    imported_values: HashMap::new(),
+                    imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
                     imported_type_system_names: HashMap::new(),
                     module_map: HashMap::new(),
@@ -859,39 +891,35 @@ fn process_deferred_dag_includes(
                     )?;
                 }
                 extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);
-
-                let mut imported_values = body_ctx.imported_values;
-                let mut imported_decl_types: HashMap<ScopedName, DeclaredType> = imported_values
-                    .iter()
-                    .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
-                    .collect();
-                imported_decl_types.extend(self_imports.decl_types);
-                // For cross-file includes (parent != importer), fetch the
-                // parent's artifact values and declared types for each
-                // self-imported name. Same-file includes leave these
-                // empty — the parent isn't in `evaluated_files`
-                // yet, and the merged refs land on names already present
-                // in the importer's own decls.
+                let mut imported_bindings = body_ctx.imported_bindings;
+                extend_imported_bindings(
+                    &mut imported_bindings,
+                    self_imports.bindings,
+                    &body_ctx.imported_names,
+                    importer_src,
+                )?;
+                // For cross-file includes, supply concrete parent values to the
+                // deferred canonical self-import bindings. Same-file includes
+                // resolve them from the importer at runtime.
                 if parent_dag_id != importer_file_dag_id
                     && let Some(parent_eval) = evaluated_files.get(parent_dag_id)
                 {
-                    for (local_name, source) in &self_imports.value_sources {
-                        if &source.dag_id != parent_dag_id {
+                    for binding in imported_bindings.values_mut() {
+                        if binding.target().owner() != parent_dag_id {
                             continue;
                         }
-                        let Some(value) = parent_eval.const_values.get(&source.source_name) else {
+                        let source_name = binding.target().to_unowned_def_name();
+                        let Some(value) = parent_eval.const_values.get(&source_name) else {
                             continue;
                         };
-                        let parent_key = ScopedName::from(&source.source_name);
-                        let Some(dt) = parent_eval.declared_types.get(&parent_key) else {
+                        let Some(dt) = parent_eval
+                            .declared_types
+                            .get(&ScopedName::from(&source_name))
+                        else {
                             continue;
                         };
-                        imported_values.insert(local_name.clone(), (value.clone(), dt.clone()));
-                        // For cross-file the alias has no importer-side
-                        // decl, so install the parent's actual declared
-                        // type (overrides the placeholder from
-                        // classify_value_decls_in_ast).
-                        imported_decl_types.insert(local_name.clone(), dt.clone());
+                        binding.supply_value(value.clone());
+                        binding.replace_declared_type(dt.clone());
                     }
                 }
 
@@ -915,13 +943,11 @@ fn process_deferred_dag_includes(
                         importer_src,
                     )
                 };
-                let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+                let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
                         stripped_body.as_ref(),
                         None,
                         &body_ctx.imported_names,
-                        imported_values,
-                        imported_decl_types,
-                        self_imports.value_sources,
+                        imported_bindings,
                         importer_src,
                         &dag_dag_id,
                         Some(&mut registry_seed),

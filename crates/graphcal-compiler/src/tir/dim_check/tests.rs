@@ -160,7 +160,6 @@ fn compile_inline_dag_bodies_test(
             &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),
-            HashMap::new(),
             src,
             parent_dag_id,
         )?;
@@ -1492,6 +1491,33 @@ const unit EUR: Money = (@rate) USD;";
         matches!(err, GraphcalError::GraphRefInConstUnit { .. }),
         "got: {err:?}"
     );
+}
+
+#[test]
+fn dynamic_unit_scale_requires_scalar_dimensionless_quantity() {
+    for factor in [
+        "param factor: Length = 2.0 m;",
+        "param factor: Bool = true;",
+        "param factor: Int = 2;",
+        "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };",
+    ] {
+        let source = format!(
+            "base dim Money;\nbase unit USD: Money;\n{factor}\nunit EUR: Money = (@factor) USD;"
+        );
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(err, GraphcalError::DynamicUnitScaleTypeMismatch { .. }),
+            "got: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn dynamic_unit_scale_accepts_scalar_dimensionless_quantity() {
+    check(
+        "base dim Money;\nbase unit USD: Money;\nparam factor: Dimensionless = 1.08;\nunit EUR: Money = (@factor) USD;",
+    )
+    .unwrap();
 }
 
 #[test]

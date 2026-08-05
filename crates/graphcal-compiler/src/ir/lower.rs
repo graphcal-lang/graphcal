@@ -17,24 +17,23 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl,
     PlotDecl, TypeExpr,
 };
-use crate::dimension::Rational;
+use crate::dimension::{Dimension, Rational};
+use crate::ir::imported_binding::ImportedBinding;
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
     resolve_with_imported_values,
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
-use crate::registry::declared_type::DeclaredType;
 use crate::registry::dimension_registry::DimensionResolveError;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
-use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
-use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
-use crate::syntax::dimension::DimName;
+use crate::syntax::decl_name::DeclName;
+use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::names::{NameAtom, NamePath};
@@ -132,11 +131,10 @@ pub struct ConstEntry {
     pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub(crate) expr: crate::hir::Expr,
     pub span: Span,
-    /// Provenance of this declaration's `span` (#868). `None` means the span
-    /// indexes into the IR's own file source; `Some` carries the source of a
-    /// dependency body merged in by an instantiated include, so diagnostics
-    /// anchored on the span render against the right file.
-    pub(crate) src: BodySource,
+    /// Source of the type annotation and declaration span.
+    pub(crate) type_src: BodySource,
+    /// Source of the body expression and its spans.
+    pub(crate) body_src: BodySource,
 }
 
 /// A param declaration with type annotation and lowered default.
@@ -149,8 +147,11 @@ pub struct ParamEntry {
     pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub default_expr: Option<crate::hir::Expr>,
     pub span: Span,
-    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub(crate) src: BodySource,
+    /// Source of the type annotation and declaration span.
+    pub(crate) type_src: BodySource,
+    /// Source of the default expression, when present. An include binding is
+    /// importer-owned even though the parameter signature is producer-owned.
+    pub(crate) default_src: Option<BodySource>,
 }
 
 /// A node declaration with type annotation and lowered body.
@@ -163,8 +164,10 @@ pub struct NodeEntry {
     pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub expr: crate::hir::Expr,
     pub span: Span,
-    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub(crate) src: BodySource,
+    /// Source of the type annotation and declaration span.
+    pub(crate) type_src: BodySource,
+    /// Source of the body expression and its spans.
+    pub(crate) body_src: BodySource,
 }
 
 /// An assert declaration with lowered body.
@@ -173,8 +176,8 @@ pub struct AssertEntry {
     pub name: ScopedName,
     pub body: crate::hir::AssertBody,
     pub span: Span,
-    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub(crate) src: BodySource,
+    /// Source of the assertion body and its spans.
+    pub(crate) body_src: BodySource,
 }
 
 /// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -191,8 +194,10 @@ pub struct UnfrozenConstEntry {
     /// Module scope for the declaration body expression.
     body_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the type annotation and declaration span.
+    type_src: BodySource,
+    /// Source of the body expression and its spans.
+    body_src: BodySource,
 }
 
 /// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
@@ -208,8 +213,10 @@ pub struct UnfrozenParamEntry {
     /// from `type_resolution_owner`.
     default_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the type annotation and declaration span.
+    type_src: BodySource,
+    /// Source of the default expression, when present.
+    default_src: Option<BodySource>,
 }
 
 /// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -223,8 +230,10 @@ pub struct UnfrozenNodeEntry {
     /// Module scope for the declaration body expression.
     body_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the type annotation and declaration span.
+    type_src: BodySource,
+    /// Source of the body expression and its spans.
+    body_src: BodySource,
 }
 
 /// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -235,8 +244,8 @@ pub struct UnfrozenAssertEntry {
     /// Module scope for the assertion body expression(s).
     body_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the assertion body and its spans.
+    body_src: BodySource,
 }
 
 /// A plot declaration with lowered body.
@@ -249,6 +258,8 @@ pub struct PlotEntry {
     /// are best-effort at evaluation time: an incomplete body is skipped by
     /// the runtime instead of failing the compile.
     pub body: Option<LoweredPlotBody>,
+    /// Source of every expression in the plot body.
+    pub(crate) body_src: BodySource,
     /// Whether this plot renders standalone when its file is the entry
     /// point. `true` unless the declaration carries `#[hidden]` (#847).
     pub displayed: bool,
@@ -263,6 +274,38 @@ pub struct PlotEntry {
 pub struct IncludedPlotEntry {
     /// The local alias the plot is visible under.
     pub name: ScopedName,
+}
+
+/// A validated dynamic unit scale lowered to HIR.
+#[derive(Debug, Clone)]
+pub struct DynamicUnitScaleEntry {
+    /// Canonical declaration identity of the unit being defined.
+    pub unit: ResolvedUnitName,
+    /// Source spelling under which the unit is registered in this IR.
+    pub spelling: UnitRef,
+    /// Strictly lowered scalar expression.
+    pub expr: crate::hir::Expr,
+    /// Dimension declared on the unit definition.
+    pub declared_dimension: Dimension,
+    /// Dimension proved from the RHS base-unit expression.
+    pub base_unit_dimension: Dimension,
+    /// Span of the scalar expression.
+    pub span: Span,
+    /// Source whose bytes are indexed by `expr` and `span`.
+    pub src: NamedSource<Arc<String>>,
+}
+
+/// A dynamic unit scale awaiting strict HIR lowering at [`UnfrozenIR::freeze`].
+#[derive(Debug, Clone)]
+struct UnfrozenDynamicUnitScaleEntry {
+    spelling: UnitRef,
+    expr: Expr,
+    unit_owner: crate::dag_id::DagId,
+    body_resolution_owner: crate::dag_id::DagId,
+    declared_dimension: Dimension,
+    base_unit_dimension: Dimension,
+    span: Span,
+    src: BodySource,
 }
 
 /// A plot requested by an include brace list item (#847).
@@ -283,6 +326,8 @@ pub struct FigureEntry {
     /// Lowered field expressions; fields that failed to lower are omitted
     /// (best-effort, matching plots).
     pub fields: Vec<LoweredPlotField>,
+    /// Source of every field expression.
+    pub(crate) body_src: BodySource,
 }
 
 /// A layer declaration with lowered fields.
@@ -294,6 +339,8 @@ pub struct LayerEntry {
     /// Lowered field expressions; fields that failed to lower are omitted
     /// (best-effort, matching plots).
     pub fields: Vec<LoweredPlotField>,
+    /// Source of every field expression.
+    pub(crate) body_src: BodySource,
 }
 
 /// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -304,6 +351,8 @@ pub struct UnfrozenPlotEntry {
     /// Module scope for plot field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
+    /// Source of every plot expression.
+    body_src: BodySource,
     /// Whether this plot renders standalone (no `#[hidden]`).
     displayed: bool,
 }
@@ -315,6 +364,8 @@ pub struct UnfrozenFigureEntry {
     decl: FigureDecl,
     /// Module scope for figure field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
+    /// Source of every figure field expression.
+    body_src: BodySource,
 }
 
 /// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
@@ -324,6 +375,8 @@ pub struct UnfrozenLayerEntry {
     decl: LayerDecl,
     /// Module scope for layer field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
+    /// Source of every layer field expression.
+    body_src: BodySource,
 }
 
 /// Intermediate Representation produced by [`lower`].
@@ -359,35 +412,20 @@ pub struct IR {
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
     pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
-    /// Pre-evaluated values imported from dependency files.
-    /// These are injected directly into the execution plan rather than compiled.
-    /// Each entry carries the runtime value and its declared type (for `dim_check`).
-    pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    /// Declared types for imported names that are not backed by a pre-evaluated
-    /// value at this compilation boundary.
+    /// Strictly lowered, source-qualified dynamic unit scale definitions.
+    pub(crate) dynamic_unit_scales: Vec<DynamicUnitScaleEntry>,
+    /// Imported values keyed by their source-visible lexical binding.
     ///
-    /// Inline DAG bodies use this for `import parent.{const}`: the body needs
-    /// the imported name's type during dim-checking, while the concrete value is
-    /// supplied later by the caller or by the dependency that owns the DAG.
-    pub(crate) imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    /// Source bindings for imported values whose runtime value is supplied
-    /// outside this IR.
-    pub(crate) imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    /// Each record atomically retains the canonical declaration target, its
+    /// declared type, and an optional pre-evaluated value. Include merges may
+    /// prefix the lexical key, but never rewrite the canonical target.
+    pub(crate) imported_bindings: HashMap<ScopedName, ImportedBinding>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
     pub(crate) extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
     /// Explicit exports and annotation-free `param` input ports, kept in
     /// distinct roles for downstream boundary checks.
     pub external_surface: ExternalDeclSurface,
-}
-
-/// Runtime source of an imported value visible inside a DAG body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedValueSource {
-    /// DAG that owns the original declaration.
-    pub dag_id: crate::dag_id::DagId,
-    /// Original declaration name in the owning DAG.
-    pub source_name: DeclName,
 }
 
 /// Lower an AST into an [`IR`].
@@ -511,8 +549,6 @@ fn lower_to_builder(
         resolved,
         type_anns,
         HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
         dag_id,
         None,
         None,
@@ -528,13 +564,12 @@ fn lower_to_builder(
 /// entries.
 pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<(), GraphcalError>;
 
-/// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
+/// Lower an AST with imported value bindings, returning a `RegistryBuilder`
 /// that can be further mutated before freezing.
 ///
-/// Unlike `lower_to_builder`, this uses `resolve_with_imported_values` which
-/// only adds imported names to the scope (not their expressions). The actual
-/// imported values are stored in `UnfrozenIR::imported_values` and injected
-/// into the execution plan at runtime.
+/// Unlike `lower_to_builder`, this uses `resolve_with_imported_values`, which
+/// adds only imported lexical names to the scope. Canonical targets, declared
+/// types, and optional pre-evaluated values stay atomic in `imported_bindings`.
 ///
 /// # Errors
 ///
@@ -543,26 +578,26 @@ pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<()
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_to_builder_with_imported_values(
+pub fn lower_to_builder_with_imported_bindings(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    lower_to_builder_with_imported_values_and_cancellation(
+    lower_to_builder_with_imported_bindings_and_cancellation(
         ast,
         src,
         imported_names,
-        imported_values,
+        imported_bindings,
         dag_id,
         registry_seed,
         &crate::cancellation::CancellationToken::unbounded(),
     )
 }
 
-/// Lower an AST with imported values and cooperative cancellation.
+/// Lower an AST with imported bindings and cooperative cancellation.
 ///
 /// # Errors
 ///
@@ -571,74 +606,24 @@ pub fn lower_to_builder_with_imported_values(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_to_builder_with_imported_values_and_cancellation(
+pub fn lower_to_builder_with_imported_bindings_and_cancellation(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     cancellation.checkpoint()?;
-    let imported_decl_types = imported_values
-        .iter()
-        .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
-        .collect();
-    lower_to_builder_with_imported_value_decls(
-        ast,
-        src,
-        imported_names,
-        imported_values,
-        imported_decl_types,
-        HashMap::new(),
-        dag_id,
-        registry_seed,
-        cancellation,
-    )
-}
-
-/// Lower an AST with imported value names plus declared types for imports whose
-/// runtime values will be supplied later.
-///
-/// This is used for inline DAG bodies that import a parent const. The resolver
-/// needs the local imported name in scope, dim-checking needs its declared type,
-/// and evaluation gets the concrete value from `imported_value_sources`.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "lowering threads imported value metadata plus the registry seed hook"
-)]
-fn lower_to_builder_with_imported_value_decls(
-    ast: &File,
-    src: &NamedSource<Arc<String>>,
-    imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
-    dag_id: &crate::dag_id::DagId,
-    registry_seed: Option<RegistrySeed<'_>>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    cancellation.checkpoint()?;
-    // Step 1: Declaration collection with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
-
-    // Step 2: Extract type annotations from local declarations only
     let type_anns = extract_type_annotations(ast);
-
-    // Step 3: Build registry, augment deps, and construct IR
     let (builder, mut unfrozen) = build_ir_from_resolved(
         ast,
         src,
         resolved,
         type_anns,
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         dag_id,
         None,
         registry_seed,
@@ -659,30 +644,9 @@ fn lower_to_builder_with_imported_value_decls(
 /// Lower a `dag { ... }` body as if it were a standalone file.
 ///
 /// The dag body is a virtual [`File`] whose registry is seeded with the
-/// enclosing file's frozen registry (dimensions, units, types, indexes, and
-/// sibling dags) so that reference resolution and type checking behave exactly as
-/// they would for a top-level declaration. Per Concept 9, the dag body cannot
-/// implicitly reference the enclosing file's `const`/`param`/`node` values
-/// — cross-scope values must be either passed in via the dag's own params or
-/// brought into scope explicitly via `import <self>.{...}`.
-///
-/// The caller is responsible for pre-processing dag-body `import` declarations
-/// (resolving self-imports to local names, classifying items against the
-/// parent's value/type-system surface, recording source bindings) and passing
-/// in:
-///
-/// - `stripped_body`: the dag body with self-import declarations removed.
-///   Cross-file imports inside dag bodies (if any) are still left for the
-///   downstream resolver to handle through the regular import machinery.
-/// - `imported_names`: the resolver scope contribution from preprocessed
-///   self-imports.
-/// - `imported_decl_types`: per-name declared types for those self-imports.
-/// - `imported_value_sources`: per-name source bindings for those
-///   self-imports — recording that the value comes from the parent DAG at
-///   runtime.
-///
-/// The returned `IR` has a `dag_id` formed by appending `dag_name` to
-/// `parent_dag_id`, so nested-scope diagnostics have a stable source location.
+/// enclosing file's frozen registry. Cross-scope values must be passed through
+/// params or explicit imports; every imported lexical name carries one atomic
+/// [`ImportedBinding`] with its canonical target and declared type.
 ///
 /// # Errors
 ///
@@ -692,28 +656,20 @@ fn lower_to_builder_with_imported_value_decls(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "dag-module lowering threads pre-processed import metadata + optional parent registry"
-)]
-pub fn lower_dag_module_to_builder_with_imported_value_decls(
+pub fn lower_dag_module_to_builder_with_imported_bindings(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+    lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
         dag_body,
         parent_registry,
         imported_names,
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         src,
         dag_id,
         registry_seed,
@@ -732,15 +688,13 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
 )]
 #[expect(
     clippy::too_many_arguments,
-    reason = "dag-module lowering threads import metadata, registry state, and cancellation"
+    reason = "dag-module lowering threads imported bindings, registry state, and cancellation"
 )]
-pub fn lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -755,9 +709,7 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
         src,
         resolved,
         type_anns,
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         dag_id,
         parent_registry,
         registry_seed,
@@ -767,7 +719,7 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "dag-body lowering threads pre-processed import metadata + parent registry"
+    reason = "dag-body lowering threads imported bindings plus parent registry"
 )]
 #[cfg(test)]
 pub(crate) fn lower_dag_body_to_ir(
@@ -776,8 +728,7 @@ pub(crate) fn lower_dag_body_to_ir(
     parent_registry: &Registry,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     imported_names: &ImportedValueNames,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
@@ -785,13 +736,11 @@ pub(crate) fn lower_dag_body_to_ir(
         declarations: stripped_body.to_vec(),
     };
     let dag_dag_id = parent_dag_id.child(dag_name);
-    let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_value_decls(
+    let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_bindings(
         &virtual_file,
         Some(parent_registry),
         imported_names,
-        HashMap::new(),
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         src,
         &dag_dag_id,
         None,
@@ -802,12 +751,11 @@ pub(crate) fn lower_dag_body_to_ir(
     unfrozen.freeze(registry, &dag_dag_id, resolver, src)
 }
 
-/// Result of `preprocess_dag_body_self_imports`: imported names, declared
-/// types, source bindings, and the body with self-import declarations stripped.
+/// Result of `preprocess_dag_body_self_imports`: imported names, canonical
+/// bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
-    pub decl_types: HashMap<ScopedName, DeclaredType>,
-    pub value_sources: HashMap<ScopedName, ImportedValueSource>,
+    pub bindings: HashMap<ScopedName, ImportedBinding>,
     pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
 }
 
@@ -830,25 +778,7 @@ fn take_type_ann(
         })
 }
 
-fn resolve_existing_synthetic_child_decl(
-    resolver: &crate::syntax::module_resolve::ModuleResolver,
-    owner: &crate::dag_id::DagId,
-    name: &ScopedName,
-) -> Option<ResolvedDeclName> {
-    let mut qualifier = name.qualifier().iter();
-    let first = qualifier.next()?;
-    let synthetic_owner = qualifier.fold(owner.child(first.as_ref()), |owner, segment| {
-        owner.child(segment.as_ref())
-    });
-    let decl_name = name.member().clone();
-    resolver
-        .modules()
-        .get(&synthetic_owner)
-        .and_then(|module| module.decls().contains_key(&decl_name).then_some(()))
-        .map(|()| ResolvedDeclName::from_def(synthetic_owner, decl_name))
-}
-
-/// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
+/// Shared implementation for local and imported-binding lowering.
 ///
 /// Builds the registry, augments runtime deps for dynamic units, pairs resolved
 /// declarations with type annotations, and constructs the `UnfrozenIR`.
@@ -858,16 +788,14 @@ fn resolve_existing_synthetic_child_decl(
 )]
 #[expect(
     clippy::too_many_arguments,
-    reason = "IR construction threads imported value type/source metadata"
+    reason = "IR construction threads imported bindings and registry state"
 )]
 fn build_ir_from_resolved(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     resolved: ResolvedFile,
     mut type_anns: HashMap<DeclName, TypeExpr>,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -894,7 +822,7 @@ fn build_ir_from_resolved(
     if let Some(seed) = registry_seed {
         seed(&mut builder)?;
     }
-    register_file_declarations(ast, &mut builder, src, dag_id)?;
+    let dynamic_unit_scales = register_file_declarations(ast, &mut builder, src, dag_id)?;
     cancellation.checkpoint()?;
 
     // Pair resolved declarations with type annotations.
@@ -912,7 +840,8 @@ fn build_ir_from_resolved(
                 expr: entry.expr,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                type_src: BodySource::own(),
+                body_src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -924,6 +853,7 @@ fn build_ir_from_resolved(
             cancellation.checkpoint()?;
             let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
+            let default_src = entry.default_expr.as_ref().map(|_| BodySource::own());
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
@@ -931,7 +861,8 @@ fn build_ir_from_resolved(
                 default_expr: entry.default_expr,
                 default_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                type_src: BodySource::own(),
+                default_src,
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -950,7 +881,8 @@ fn build_ir_from_resolved(
                 expr: entry.expr,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                type_src: BodySource::own(),
+                body_src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -967,7 +899,7 @@ fn build_ir_from_resolved(
                 body: entry.body,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                body_src: BodySource::own(),
             })
             .collect(),
         plots: resolved
@@ -980,6 +912,7 @@ fn build_ir_from_resolved(
                     decl: entry.decl,
                     body_resolution_owner: dag_id.clone(),
                     span: entry.span,
+                    body_src: BodySource::own(),
                     displayed,
                 }
             })
@@ -991,6 +924,7 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
+                body_src: BodySource::own(),
             })
             .collect(),
         layers: resolved
@@ -1000,6 +934,7 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
+                body_src: BodySource::own(),
             })
             .collect(),
         included_plots: Vec::new(),
@@ -1028,9 +963,8 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(k, v)| (ScopedName::from(k), v))
             .collect(),
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        dynamic_unit_scales,
+        imported_bindings,
         external_surface: resolved.external_surface,
         plugin_imports: ast
             .declarations
@@ -1063,12 +997,10 @@ pub struct UnfrozenIR {
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     // Key-lookup only, order irrelevant.
     expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
-    // Key-lookup only, order irrelevant.
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    // Key-lookup only, order irrelevant.
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    // Key-lookup only, order irrelevant.
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    // Dynamic unit scales declared by this body or merged includes.
+    dynamic_unit_scales: Vec<UnfrozenDynamicUnitScaleEntry>,
+    // Lexical binding lookup only; each value atomically carries canonical metadata.
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     // Explicit exports and named `param` input ports used by downstream
     // import/include boundary checks.
     external_surface: ExternalDeclSurface,
@@ -1139,33 +1071,20 @@ impl UnfrozenIR {
             let canonical = crate::hir::diagnostics::resolved_decl_key(owner, name);
             decl_bindings.insert(name.clone(), canonical);
         }
-        for name in self.imported_values.keys() {
+        for (name, binding) in &self.imported_bindings {
             cancellation.checkpoint()?;
-            let path = name.to_name_path();
-            let canonical = match resolver.resolve_decl_path(owner, &path) {
-                Ok(target_decl) => target_decl,
-                Err(_) => self.imported_value_sources.get(name).map_or_else(
-                    || {
-                        resolve_existing_synthetic_child_decl(resolver, owner, name).unwrap_or_else(
-                            || crate::hir::diagnostics::resolved_decl_key(owner, name),
-                        )
-                    },
-                    |source| {
-                        ResolvedDeclName::from_def(
-                            source.dag_id.clone(),
-                            source.source_name.clone(),
-                        )
-                    },
-                ),
-            };
-            decl_bindings.insert(name.clone(), canonical);
-        }
-        for (name, source) in &self.imported_value_sources {
-            cancellation.checkpoint()?;
-            decl_bindings.insert(
-                name.clone(),
-                ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
-            );
+            if decl_bindings
+                .insert(name.clone(), binding.target().clone())
+                .is_some()
+            {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "imported lexical binding `{name}` collides with a local declaration"
+                    ),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
         }
 
         let generic_scope = crate::hir::GenericScope::new();
@@ -1190,6 +1109,34 @@ impl UnfrozenIR {
             })
         };
 
+        let dynamic_unit_scales = self
+            .dynamic_unit_scales
+            .iter()
+            .map(|entry| {
+                cancellation.checkpoint()?;
+                let entry_src = entry.src.resolve(src);
+                let unit = resolver
+                    .resolve_unit_path(&entry.unit_owner, &entry.spelling.to_name_path())
+                    .map_err(|err| GraphcalError::InternalError {
+                        message: format!(
+                            "registered dynamic unit `{}` did not resolve canonically: {err}",
+                            entry.spelling
+                        ),
+                        src: entry_src.clone(),
+                        span: entry.span.into(),
+                    })?;
+                Ok(DynamicUnitScaleEntry {
+                    unit,
+                    spelling: entry.spelling.clone(),
+                    expr: lower_in(&entry.expr, &entry.body_resolution_owner, entry_src)?,
+                    declared_dimension: entry.declared_dimension.clone(),
+                    base_unit_dimension: entry.base_unit_dimension.clone(),
+                    span: entry.span,
+                    src: entry_src.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+
         let consts = self
             .consts
             .iter()
@@ -1202,10 +1149,11 @@ impl UnfrozenIR {
                     expr: lower_in(
                         &entry.expr,
                         &entry.body_resolution_owner,
-                        entry.src.resolve(src),
+                        entry.body_src.resolve(src),
                     )?,
                     span: entry.span,
-                    src: entry.src.clone(),
+                    type_src: entry.type_src.clone(),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1215,23 +1163,32 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
+                let default_expr = match (&entry.default_expr, &entry.default_src) {
+                    (Some(expr), Some(default_src)) => Some(lower_in(
+                        expr,
+                        &entry.default_resolution_owner,
+                        default_src.resolve(src),
+                    )?),
+                    (None, None) => None,
+                    _ => {
+                        return Err(GraphcalError::InternalError {
+                            message: format!(
+                                "parameter `{}` has inconsistent default-expression provenance",
+                                entry.name
+                            ),
+                            src: src.clone(),
+                            span: entry.span.into(),
+                        });
+                    }
+                };
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
                     type_resolution_owner: entry.type_resolution_owner.clone(),
-                    default_expr: entry
-                        .default_expr
-                        .as_ref()
-                        .map(|expr| {
-                            lower_in(
-                                expr,
-                                &entry.default_resolution_owner,
-                                entry.src.resolve(src),
-                            )
-                        })
-                        .transpose()?,
+                    default_expr,
                     span: entry.span,
-                    src: entry.src.clone(),
+                    type_src: entry.type_src.clone(),
+                    default_src: entry.default_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1248,10 +1205,11 @@ impl UnfrozenIR {
                     expr: lower_in(
                         &entry.expr,
                         &entry.body_resolution_owner,
-                        entry.src.resolve(src),
+                        entry.body_src.resolve(src),
                     )?,
                     span: entry.span,
-                    src: entry.src.clone(),
+                    type_src: entry.type_src.clone(),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1261,7 +1219,7 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let body_src = entry.src.resolve(src);
+                let body_src = entry.body_src.resolve(src);
                 Ok(AssertEntry {
                     name: entry.name.clone(),
                     body: {
@@ -1279,7 +1237,7 @@ impl UnfrozenIR {
                         })?
                     },
                     span: entry.span,
-                    src: entry.src.clone(),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1337,6 +1295,7 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     mark_type: entry.decl.mark.mark_type,
                     body: complete.then_some(body),
+                    body_src: entry.body_src.clone(),
                     displayed: entry.displayed,
                 })
             })
@@ -1364,6 +1323,7 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
                     fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1377,6 +1337,7 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
                     fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1400,9 +1361,8 @@ impl UnfrozenIR {
             source_order: self.source_order,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
-            imported_values: self.imported_values,
-            imported_decl_types: self.imported_decl_types,
-            imported_value_sources: self.imported_value_sources,
+            dynamic_unit_scales,
+            imported_bindings: self.imported_bindings,
             external_surface: self.external_surface,
         })
     }
@@ -1416,6 +1376,10 @@ impl UnfrozenIR {
     /// scope. Call this before merging nested includes so later nested entries
     /// keep their own producer scopes.
     pub fn retarget_existing_resolution_owners(&mut self, owner: &crate::dag_id::DagId) {
+        for entry in &mut self.dynamic_unit_scales {
+            entry.unit_owner = owner.clone();
+            entry.body_resolution_owner = owner.clone();
+        }
         for entry in &mut self.consts {
             entry.type_resolution_owner = owner.clone();
             entry.body_resolution_owner = owner.clone();
@@ -1461,9 +1425,10 @@ impl UnfrozenIR {
             expr,
             body_resolution_owner,
             span,
-            // Alias bodies are synthesized from the importer's include
-            // statement, so their span belongs to the importer's source.
-            src: BodySource::own(),
+            // Alias declarations and bodies are synthesized from the
+            // importer's include statement.
+            type_src: BodySource::own(),
+            body_src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Const));
     }
@@ -1487,9 +1452,10 @@ impl UnfrozenIR {
             expr,
             body_resolution_owner,
             span,
-            // Alias bodies are synthesized from the importer's include
-            // statement, so their span belongs to the importer's source.
-            src: BodySource::own(),
+            // Alias declarations and bodies are synthesized from the
+            // importer's include statement.
+            type_src: BodySource::own(),
+            body_src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Node));
     }
@@ -1620,12 +1586,36 @@ impl UnfrozenIR {
             .source_order
             .iter()
             .map(|(name, _)| name.clone())
+            .chain(dep.imported_bindings.keys().cloned())
             .collect::<HashSet<_>>();
         let dep_scoped_names = &all_dep_scoped_names;
 
         let mut all_dep_names = dep_names.clone();
         all_dep_names.extend(dep_scoped_names.iter().map(|name| name.member().clone()));
         let dep_names = &all_dep_names;
+
+        // Dynamic units share the include's value-instance scope. Their unit
+        // name remains in the file-level unit namespace, while graph references
+        // in the scale expression receive the instance prefix.
+        for mut entry in dep.dynamic_unit_scales {
+            substitute_indexes(&mut entry.expr, index_bindings);
+            substitute_type_names_in_expr(&mut entry.expr, type_bindings);
+            prefix_expr_refs(&mut entry.expr, prefix, dep_names, dep_scoped_names);
+            entry.body_resolution_owner = merge_resolution_owner(entry.body_resolution_owner);
+            entry.src = entry.src.or_dependency(dep_src);
+            if self
+                .dynamic_unit_scales
+                .iter()
+                .any(|existing| existing.spelling == entry.spelling)
+            {
+                return Err(GraphcalError::ConflictingImportedUnit {
+                    name: entry.spelling,
+                    src: importer_src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
+            self.dynamic_unit_scales.push(entry);
+        }
 
         // Merge consts
         for mut entry in dep.consts {
@@ -1643,7 +1633,8 @@ impl UnfrozenIR {
                 expr: entry.expr,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                type_src: entry.type_src.or_dependency(dep_src),
+                body_src: entry.body_src.or_dependency(dep_src),
             });
             self.source_order.push((prefixed, DeclCategory::Const));
         }
@@ -1653,21 +1644,24 @@ impl UnfrozenIR {
             let prefixed = entry.name.within_scope(prefix);
             let default_resolution_owner =
                 if let Some(binding_expr) = bindings.get(entry.name.member()) {
-                    // Use the binding expression (from the importer's scope, no prefixing needed
-                    // for refs that belong to the importer — only dep-internal refs get prefixed).
-                    // The declared type (the diagnostic anchor for an annotation
-                    // mismatch) still belongs to the dependency, so the entry keeps
-                    // dependency provenance below (#868).
+                    // The binding expression and its spans belong to the immediate
+                    // importer, independently of the producer-owned signature.
                     entry.default_expr = Some(binding_expr.clone());
+                    entry.default_src = Some(BodySource::own());
                     importer_owner.clone()
                 } else if let Some(ref mut expr) = entry.default_expr {
-                    // Keep default, but substitute indexes and prefix internal refs.
+                    // Keep the producer default, substitute its type-level names,
+                    // and carry its existing source across this merge boundary.
                     substitute_indexes(expr, index_bindings);
                     substitute_type_names_in_expr(expr, type_bindings);
                     prefix_expr_refs(expr, prefix, dep_names, dep_scoped_names);
+                    entry.default_src = entry
+                        .default_src
+                        .map(|source| source.or_dependency(dep_src));
                     merge_resolution_owner(entry.default_resolution_owner)
                 } else {
-                    // Required param without binding — stays None, caught later in exec_plan
+                    // Required param without binding — stays None, caught later in exec_plan.
+                    entry.default_src = None;
                     merge_resolution_owner(entry.default_resolution_owner)
                 };
             substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
@@ -1680,7 +1674,8 @@ impl UnfrozenIR {
                 default_expr: entry.default_expr,
                 default_resolution_owner,
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                type_src: entry.type_src.or_dependency(dep_src),
+                default_src: entry.default_src,
             });
             self.source_order.push((prefixed, DeclCategory::Param));
         }
@@ -1701,7 +1696,8 @@ impl UnfrozenIR {
                 expr: entry.expr,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                type_src: entry.type_src.or_dependency(dep_src),
+                body_src: entry.body_src.or_dependency(dep_src),
             });
             self.source_order.push((prefixed, DeclCategory::Node));
         }
@@ -1737,7 +1733,7 @@ impl UnfrozenIR {
                 body: entry.body,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                body_src: entry.body_src.or_dependency(dep_src),
             });
             self.assert_names.insert(prefixed.clone());
             self.source_order.push((prefixed, DeclCategory::Assert));
@@ -1773,6 +1769,7 @@ impl UnfrozenIR {
                 decl: entry.decl,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
+                body_src: entry.body_src.or_dependency(dep_src),
                 displayed: !requested.hidden,
             });
             self.source_order.push((local, DeclCategory::Plot));
@@ -1851,24 +1848,24 @@ impl UnfrozenIR {
             }
         }
 
-        // Propagate the dep's imported-value metadata. Hidden imports used by
-        // the dep's expressions are instance-scoped together with the merged
-        // expressions, preventing two DAG include instances from sharing an
-        // unqualified synthetic name.
-        for (name, value) in dep.imported_values {
-            self.imported_values
-                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
-                .or_insert(value);
-        }
-        for (name, dt) in dep.imported_decl_types {
-            self.imported_decl_types
-                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
-                .or_insert(dt);
-        }
-        for (name, source) in dep.imported_value_sources {
-            self.imported_value_sources
-                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
-                .or_insert(source);
+        // Hidden imports used by dependency expressions receive the same
+        // lexical instance prefix as those expressions. Their canonical target,
+        // declared type, and optional value remain one unchanged record.
+        for (name, binding) in dep.imported_bindings {
+            let lexical = prefix_dep(&name, prefix, dep_names, dep_scoped_names);
+            if self
+                .imported_bindings
+                .insert(lexical.clone(), binding)
+                .is_some()
+            {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "duplicate imported lexical binding `{lexical}` while merging include instance `{prefix}`"
+                    ),
+                    src: importer_src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
         }
         Ok(())
     }
@@ -2864,8 +2861,10 @@ fn register_file_declarations(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-) -> Result<(), GraphcalError> {
-    register_declarations_impl(file, registry, src, None, dag_id)
+) -> Result<Vec<UnfrozenDynamicUnitScaleEntry>, GraphcalError> {
+    let mut dynamic_unit_scales = Vec::new();
+    register_declarations_impl(file, registry, src, None, dag_id, &mut dynamic_unit_scales)?;
+    Ok(dynamic_unit_scales)
 }
 
 /// Categorized declarations selected from a dependency's registry.
@@ -2962,7 +2961,7 @@ pub fn register_selected_declarations(
     names: &SelectedDeclarations,
     dag_id: &crate::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
-    register_declarations_impl(file, registry, src, Some(names), dag_id)
+    register_declarations_impl(file, registry, src, Some(names), dag_id, &mut Vec::new())
 }
 
 /// Shared implementation for registering type-system declarations.
@@ -2986,6 +2985,7 @@ fn register_declarations_impl(
     src: &NamedSource<Arc<String>>,
     filter: Option<&SelectedDeclarations>,
     dag_id: &crate::dag_id::DagId,
+    dynamic_unit_scales: &mut Vec<UnfrozenDynamicUnitScaleEntry>,
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::{DimDecl, IndexDecl, UnitDecl};
 
@@ -3064,7 +3064,9 @@ fn register_declarations_impl(
     if !units.is_empty() {
         let sorted = topo_sort_units(&units, src)?;
         for u in sorted {
-            register_unit_decl(u, registry, src)?;
+            if let Some(dynamic_scale) = register_unit_decl(u, registry, src, dag_id)? {
+                dynamic_unit_scales.push(dynamic_scale);
+            }
         }
     }
 
@@ -3366,7 +3368,8 @@ fn register_unit_decl(
     u: &crate::desugar::desugared_ast::UnitDecl,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    dag_id: &crate::dag_id::DagId,
+) -> Result<Option<UnfrozenDynamicUnitScaleEntry>, GraphcalError> {
     let dim = registry
         .resolve_dim_expr_detailed(&u.dim_type)
         .map_err(|err| dimension_resolve_error(err, src, u.dim_type.span))?;
@@ -3377,6 +3380,7 @@ fn register_unit_decl(
             span: u.name.span.into(),
         });
     }
+    let mut dynamic_unit_scale = None;
     let scale = if let Some(def) = &u.definition {
         if u.constness.is_const() {
             if let Some(graph_ref) = first_graph_ref(&def.scale_expr) {
@@ -3394,35 +3398,50 @@ fn register_unit_decl(
                 });
             }
         }
+        let resolved_definition = resolve_unit_definition(registry, &def.unit_expr, src)?;
+        if resolved_definition.dimension != dim {
+            return Err(GraphcalError::UnitDefinitionDimensionMismatch {
+                name: u.name.value.clone(),
+                declared: registry.format_dimension(&dim),
+                definition: registry.format_dimension(&resolved_definition.dimension),
+                src: src.clone(),
+                span: def.unit_expr.span.into(),
+            });
+        }
         if contains_graph_ref(&def.scale_expr) {
-            // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
-            // Resolve the base unit's dimension and static scale factor.
-            let base_scale = resolve_base_unit_static_scale(registry, &def.unit_expr, src)?;
+            // Preserve the validated definition in IR so strict HIR lowering,
+            // policy checking, dependency collection, and type checking all
+            // consume the same source-qualified semantic entry.
+            dynamic_unit_scale = Some(UnfrozenDynamicUnitScaleEntry {
+                spelling: UnitRef::local(u.name.value.clone()),
+                expr: def.scale_expr.clone(),
+                unit_owner: dag_id.clone(),
+                body_resolution_owner: dag_id.clone(),
+                declared_dimension: dim.clone(),
+                base_unit_dimension: resolved_definition.dimension.clone(),
+                span: def.scale_expr.span,
+                src: BodySource::own(),
+            });
             UnitScale::Dynamic {
-                scale_expr: def.scale_expr.clone(),
-                base_unit_scale: base_scale,
+                base_unit_scale: resolved_definition.base_scale,
             }
         } else {
             // Static scale value. A plain `unit` with no `@` still remains a
             // runtime unit for const-context policy; `const unit` is the
             // surface marker that makes it available to `const node`.
-            let (_unit_dim, base_scale) = registry
-                .resolve_unit_expr(&def.unit_expr)
-                .map_err(|err| unit_resolve_to_graphcal(err, src, def.span))?;
             let scale_expr = validate_positive_finite_scale(
                 eval_scale_expr(&def.scale_expr, src)?,
                 "unit scale expression",
                 src,
                 def.scale_expr.span,
             )?;
-            let base_scale = validate_positive_finite_scale(
-                base_scale,
-                "base unit scale",
+            let scale = multiply_positive_scales(
+                scale_expr,
+                resolved_definition.base_scale,
+                "unit scale",
                 src,
-                def.unit_expr.span,
+                def.span,
             )?;
-            let scale =
-                multiply_positive_scales(scale_expr, base_scale, "unit scale", src, def.span)?;
             UnitScale::Static(scale)
         }
     } else {
@@ -3448,7 +3467,7 @@ fn register_unit_decl(
         }
     }
     registry.register_unit_with_scale(u.name.value.clone(), dim, scale, u.constness);
-    Ok(())
+    Ok(dynamic_unit_scale)
 }
 
 fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {
@@ -3484,19 +3503,34 @@ fn first_non_const_unit_ref<'a>(
     })
 }
 
-/// Resolve the static scale factor of the base unit expression in a unit definition.
+/// Dimension and static scale proved for a unit definition's RHS unit expression.
 ///
-/// For `unit EUR: Money = (@rate) USD;`, the base unit expr is `USD` with scale 1.0.
-/// The base unit itself must be static (not dynamic).
-fn resolve_base_unit_static_scale(
+/// Keeping these facts together prevents registration from pairing a scale from
+/// one physical dimension with an unrelated declared dimension.
+struct ResolvedUnitDefinition {
+    dimension: Dimension,
+    base_scale: PositiveFiniteScale,
+}
+
+/// Resolve the unit-expression half of a unit definition before mutating the registry.
+///
+/// For `unit EUR: Money = (@rate) USD;`, this proves both that `USD` measures
+/// `Money` and that its static base scale is 1.0. The base unit itself must be
+/// static; only the scalar expression may depend on runtime values.
+fn resolve_unit_definition(
     registry: &RegistryBuilder,
     unit_expr: &crate::desugar::desugared_ast::UnitExpr,
     src: &NamedSource<Arc<String>>,
-) -> Result<PositiveFiniteScale, GraphcalError> {
-    let (_dim, base_scale) = registry
+) -> Result<ResolvedUnitDefinition, GraphcalError> {
+    let (dimension, base_scale) = registry
         .resolve_unit_expr(unit_expr)
         .map_err(|err| unit_resolve_to_graphcal(err, src, unit_expr.span))?;
-    validate_positive_finite_scale(base_scale, "base unit scale", src, unit_expr.span)
+    let base_scale =
+        validate_positive_finite_scale(base_scale, "base unit scale", src, unit_expr.span)?;
+    Ok(ResolvedUnitDefinition {
+        dimension,
+        base_scale,
+    })
 }
 
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
@@ -5126,6 +5160,8 @@ fn resolve_extern_dim_monomial(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::declared_type::DeclaredType;
+    use crate::syntax::decl_name::ResolvedDeclName;
     use crate::syntax::parser::Parser;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
@@ -5210,6 +5246,70 @@ mod tests {
     }
 
     #[test]
+    fn static_unit_definition_must_match_declared_dimension() {
+        let err = parse_and_lower("const unit wrong: Length = 1.0 h;").unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnitDefinitionDimensionMismatch {
+                name,
+                declared,
+                definition,
+                ..
+            } if name.as_str() == "wrong"
+                && declared == "Length"
+                && definition == "Time"
+        ));
+    }
+
+    #[test]
+    fn dynamic_unit_definition_must_match_declared_dimension() {
+        let err = parse_and_lower(
+            "param factor: Dimensionless = 2.0;\nunit wrong: Length = (@factor) h;",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::UnitDefinitionDimensionMismatch { name, .. }
+                if name.as_str() == "wrong"
+        ));
+    }
+
+    #[test]
+    fn compound_unit_definition_with_matching_dimension_is_accepted() {
+        parse_and_lower("const unit cruise: Velocity = 0.5 km/h;").unwrap();
+    }
+
+    #[test]
+    fn failed_unit_definition_does_not_enter_registry() {
+        let source = "const unit wrong: Length = 1.0 h;";
+        let src = make_src(source);
+        let raw_file = Parser::new(source).parse_file().unwrap();
+        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+        let mut builder = RegistryBuilder::new();
+        load_prelude(&mut builder).unwrap();
+
+        let err = register_file_declarations(
+            &file,
+            &mut builder,
+            &src,
+            &crate::dag_id::DagId::root_in_package("test", "main"),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            err,
+            GraphcalError::UnitDefinitionDimensionMismatch { .. }
+        ));
+        assert!(
+            builder
+                .get_unit(&crate::syntax::dimension::UnitRef::local(
+                    crate::syntax::dimension::UnitName::expect_valid("wrong"),
+                ))
+                .is_none()
+        );
+    }
+
+    #[test]
     fn lower_source_order_preserved() {
         let ir = parse_and_lower(
             "param b: Dimensionless = 2.0;\nparam a: Dimensionless = 1.0;\nnode z: Dimensionless = @a + @b;",
@@ -5220,13 +5320,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_dependency_keeps_qualified_imported_value_keys() {
-        // Regression: `prefix_dep` used to re-key a dep's *qualified*
-        // imported value (e.g. `mission.C` from `import lib as mission;`)
-        // with the include-instance prefix, dropping the qualifier — while
-        // the merged expressions kept referencing `@mission.C` (RefPrefixer
-        // skips qualified refs), so the value map and the expressions
-        // diverged.
+    fn merge_dependency_scopes_qualified_import_binding_without_changing_target() {
         let dep_source = "node out: Dimensionless = 2.0;";
         let dep_src = make_src(dep_source);
         let raw_file = Parser::new(dep_source).parse_file().unwrap();
@@ -5243,17 +5337,20 @@ mod tests {
             &crate::dag_id::DagId::root_in_package("test", "dep"),
         )
         .unwrap();
-        // Simulate the loader having pre-evaluated `import lib as mission;`
-        // inside the dep: the imported value is keyed by a qualified name.
         let qualified = ScopedName::qualified(
             ModuleAliasName::expect_valid("mission"),
             DeclName::expect_valid("C"),
         );
-        dep_unfrozen.imported_values.insert(
+        let canonical = ResolvedDeclName::from_def(
+            crate::dag_id::DagId::root_in_package("producer", "config"),
+            DeclName::expect_valid("C"),
+        );
+        dep_unfrozen.imported_bindings.insert(
             qualified.clone(),
-            (
-                RuntimeValue::Quantity(7.0),
+            ImportedBinding::with_value(
+                canonical.clone(),
                 DeclaredType::Quantity(crate::dimension::Dimension::dimensionless()),
+                crate::registry::runtime_value::RuntimeValue::Quantity(7.0),
             ),
         );
 
@@ -5279,10 +5376,11 @@ mod tests {
             .iter()
             .map(|(n, _)| n.member().clone())
             .collect();
+        let instance = ModuleAliasName::expect_valid("inst");
         unfrozen
             .merge_dependency(
                 dep_unfrozen,
-                &ModuleAliasName::expect_valid("inst"),
+                &instance,
                 &HashMap::new(),
                 &dep_names,
                 &HashMap::new(),
@@ -5296,18 +5394,18 @@ mod tests {
             )
             .unwrap();
 
-        assert!(
-            unfrozen.imported_values.contains_key(&qualified),
-            "qualified imported value must keep its qualifier"
-        );
-        assert!(
-            !unfrozen
-                .imported_values
-                .contains_key(&ScopedName::qualified(
-                    ModuleAliasName::expect_valid("inst"),
-                    DeclName::expect_valid("C"),
-                )),
-            "imported value must not be re-keyed with the instance prefix"
-        );
+        let lexical = qualified.within_scope(&instance);
+        let binding = &unfrozen.imported_bindings[&lexical];
+        assert_eq!(binding.target(), &canonical);
+        assert!(matches!(
+            binding.declared_type(),
+            DeclaredType::Quantity(dimension) if dimension.is_dimensionless()
+        ));
+        assert!(matches!(
+            binding.value(),
+            Some(crate::registry::runtime_value::RuntimeValue::Quantity(value))
+                if (*value - 7.0).abs() < f64::EPSILON
+        ));
+        assert!(!unfrozen.imported_bindings.contains_key(&qualified));
     }
 }

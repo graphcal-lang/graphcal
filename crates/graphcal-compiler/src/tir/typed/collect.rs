@@ -25,17 +25,19 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticB
     if semantic.dynamic_unit_scales.is_empty() {
         return;
     }
-    let scale_deps: HashMap<crate::syntax::dimension::UnitRef, BTreeSet<ResolvedDeclName>> =
-        semantic
-            .dynamic_unit_scales
-            .iter()
-            .map(|(name, expr)| {
-                (
-                    name.clone(),
-                    hir::collect_expr_dependencies(expr).graph_refs,
-                )
-            })
-            .collect();
+    let scale_deps: HashMap<
+        crate::syntax::dimension::ResolvedUnitName,
+        BTreeSet<ResolvedDeclName>,
+    > = semantic
+        .dynamic_unit_scales
+        .iter()
+        .map(|(name, entry)| {
+            (
+                name.clone(),
+                hir::collect_expr_dependencies(&entry.expr).graph_refs,
+            )
+        })
+        .collect();
 
     let DagSemanticBody {
         expressions,
@@ -64,13 +66,13 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticB
 /// Collect every unit name mentioned by `UnitLiteral` / `Convert` nodes.
 fn collect_unit_names_from_hir(
     expr: &hir::Expr,
-    names: &mut std::collections::HashSet<crate::syntax::dimension::UnitRef>,
+    names: &mut std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName>,
 ) {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| match &expr.kind {
         hir::ExprKind::UnitLiteral { unit, .. } => {
             for term in &unit.terms {
-                names.insert(term.name.value.spelling().clone());
+                names.insert(term.name.value.resolved().clone());
             }
         }
         hir::ExprKind::Convert {
@@ -78,7 +80,7 @@ fn collect_unit_names_from_hir(
             target,
         } => {
             for term in &target.terms {
-                names.insert(term.name.value.spelling().clone());
+                names.insert(term.name.value.resolved().clone());
             }
             collect_unit_names_from_hir(inner, names);
         }
@@ -177,7 +179,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in consts {
-        let body_src = entry.src.resolve(src);
+        let body_src = entry.body_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
         let hir_expr = exprs.consts.get(&key).ok_or_else(|| {
             internal_error(
@@ -215,7 +217,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in nodes {
-        let body_src = entry.src.resolve(src);
+        let body_src = entry.body_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
         let hir_expr = exprs.nodes.get(&key).ok_or_else(|| {
             internal_error(
@@ -238,14 +240,7 @@ pub(super) fn collect_resolved_collection_refs(
     exprs: &ResolvedExpressions,
     domain_bounds: &HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
-    imported_values: &HashMap<
-        ScopedName,
-        (
-            crate::registry::runtime_value::RuntimeValue,
-            crate::registry::declared_type::DeclaredType,
-        ),
-    >,
-    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedCollectionRefs, GraphcalError> {
@@ -254,11 +249,13 @@ pub(super) fn collect_resolved_collection_refs(
     for resolved_type in resolved_decl_types.values() {
         collect_resolved_collection_indexes_from_type(resolved_type, ctx, src, &mut refs)?;
     }
-    for declared in imported_decl_types
-        .values()
-        .chain(imported_values.values().map(|(_value, declared)| declared))
-    {
-        collect_resolved_collection_indexes_from_declared_type(declared, ctx, src, &mut refs)?;
+    for binding in imported_bindings.values() {
+        collect_resolved_collection_indexes_from_declared_type(
+            binding.declared_type(),
+            ctx,
+            src,
+            &mut refs,
+        )?;
     }
 
     for hir_expr in exprs
@@ -989,7 +986,7 @@ pub(super) fn collect_hir_decl_bindings(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
-    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
 ) -> HashMap<ScopedName, ResolvedDeclName> {
     let mut bindings = HashMap::new();
 
@@ -999,94 +996,25 @@ pub(super) fn collect_hir_decl_bindings(
         .chain(params.iter().map(|entry| &entry.name))
         .chain(nodes.iter().map(|entry| &entry.name))
     {
-        let resolved = resolved_decl_key(owner, name);
-        bindings.insert(name.clone(), resolved);
+        bindings.insert(name.clone(), resolved_decl_key(owner, name));
     }
 
-    for (name, source) in imported_value_sources {
-        bindings.insert(
-            name.clone(),
-            ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
-        );
-    }
-
+    bindings.extend(
+        imported_bindings
+            .iter()
+            .map(|(name, binding)| (name.clone(), binding.target().clone())),
+    );
     bindings
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "collects local and imported declaration binding sources for a completed DAG"
-)]
 pub(super) fn collect_resolved_decl_bindings(
-    ctx: ModuleTypeContext<'_>,
+    owner: &crate::dag_id::DagId,
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
-    imported_values: &HashMap<
-        ScopedName,
-        (
-            crate::registry::runtime_value::RuntimeValue,
-            crate::registry::declared_type::DeclaredType,
-        ),
-    >,
-    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
-    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ResolvedDeclName>, GraphcalError> {
-    let mut bindings =
-        collect_hir_decl_bindings(ctx.owner, consts, params, nodes, imported_value_sources);
-
-    for name in imported_values
-        .keys()
-        .chain(imported_decl_types.keys())
-        .chain(imported_value_sources.keys())
-    {
-        if bindings.contains_key(name) {
-            continue;
-        }
-        let path = name.to_name_path();
-        let resolved = match ctx.resolver.resolve_decl_path(ctx.owner, &path) {
-            Ok(resolved) => resolved,
-            Err(err) => {
-                if let Some(source) = imported_value_sources.get(name) {
-                    ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone())
-                } else if imported_values.contains_key(name)
-                    || imported_decl_types.contains_key(name)
-                {
-                    // Instantiated inline-DAG includes can carry hidden imported
-                    // values from the included DAG body into the importer. Those
-                    // aliases are not import declarations in the importer's module
-                    // scope, but they are explicit IR inputs, so bind them as
-                    // synthetic declarations owned by the current DAG — only when
-                    // that synthetic declaration actually exists in the resolver.
-                    resolve_existing_synthetic_child_decl(ctx, name)
-                        .unwrap_or_else(|| resolved_decl_key(ctx.owner, name))
-                } else {
-                    return Err(module_resolve_error(&err, src, Span::new(0, 0)));
-                }
-            }
-        };
-        bindings.insert(name.clone(), resolved);
-    }
-
-    Ok(bindings)
-}
-
-fn resolve_existing_synthetic_child_decl(
-    ctx: ModuleTypeContext<'_>,
-    name: &ScopedName,
-) -> Option<ResolvedDeclName> {
-    let mut qualifier = name.qualifier().iter();
-    let first = qualifier.next()?;
-    let synthetic_owner = qualifier.fold(ctx.owner.child(first.as_ref()), |owner, segment| {
-        owner.child(segment.as_ref())
-    });
-    let decl_name = name.member().clone();
-    ctx.resolver
-        .modules()
-        .get(&synthetic_owner)
-        .and_then(|module| module.decls().contains_key(&decl_name).then_some(()))
-        .map(|()| ResolvedDeclName::from_def(synthetic_owner, decl_name))
+    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
+) -> HashMap<ScopedName, ResolvedDeclName> {
+    collect_hir_decl_bindings(owner, consts, params, nodes, imported_bindings)
 }
 
 pub(super) fn resolve_expected_fail_keys(

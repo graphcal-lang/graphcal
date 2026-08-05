@@ -452,18 +452,6 @@ fn infer_resolved_decl_ref_type(
         }
     }
 
-    for name in dag
-        .imported_value_sources
-        .iter()
-        .filter_map(|(name, source)| {
-            imported_source_matches_resolved(source, target).then_some(name)
-        })
-    {
-        if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
-            return Ok(inferred);
-        }
-    }
-
     Err(GraphcalError::UnknownGraphRef {
         name: local_name,
         src: src.clone(),
@@ -493,13 +481,6 @@ fn infer_bound_decl_type(
     }
 
     Ok(declared_types.get(name).map(InferredType::from))
-}
-
-fn imported_source_matches_resolved(
-    source: &crate::ir::lower::ImportedValueSource,
-    target: &ResolvedDeclKey,
-) -> bool {
-    source.dag_id == *target.owner() && source.source_name.as_str() == target.as_str()
 }
 
 fn infer_hir_const_ref(

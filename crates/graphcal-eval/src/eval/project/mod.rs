@@ -23,6 +23,7 @@ pub(in crate::eval::project) use crate::import_surface::{
     ImportItemPresence, decl_has_external_role, extract_external_decl_surface,
     file_exposes_import_item, file_has_import_item, file_import_item_presence,
 };
+use graphcal_compiler::ir::imported_binding::ImportedBinding;
 use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -355,7 +356,7 @@ impl ProjectModuleBinding {
 /// extracted helper functions.
 struct ImportContext<'a> {
     imported_names: ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     imported_source_order: Vec<(ScopedName, DeclCategory)>,
     imported_type_system_names: HashMap<
         graphcal_compiler::dag_id::DagId,

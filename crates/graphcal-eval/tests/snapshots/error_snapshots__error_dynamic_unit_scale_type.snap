@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+dynamic unit `EUR` requires a scalar Dimensionless scale, but found Length
+    Diagnostic severity: error
+Begin snippet for dynamic_unit_scale_type.gcl starting at line 3, column 1
+
+snippet line 3: param factor: Length = 2.0 m;
+snippet line 4: unit EUR: Money = (@factor) USD;
+    label at line 4, columns 20 to 26: this scale expression has type Length
+diagnostic help: use an unindexed Dimensionless quantity; Bool, Int, structures, indexed values, and dimensioned quantities are not valid unit scales
+diagnostic code: graphcal::D032

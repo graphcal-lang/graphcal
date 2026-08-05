@@ -22,36 +22,38 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
     check_plot_references(ctx, dag)?;
     for entry in &dag.plots {
         let Some(body) = &entry.body else { continue };
+        let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
         for field in &body.mark_properties {
             let Some(prop) = MarkProperty::from_name(field.name.as_str()) else {
                 return Err(invalid_property(
-                    ctx,
+                    &entry_ctx,
                     field,
                     "a mark block",
                     &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
         }
         for field in &body.properties {
             let Some(prop) = PlotProperty::from_name(field.name.as_str()) else {
                 return Err(invalid_property(
-                    ctx,
+                    &entry_ctx,
                     field,
                     "a plot declaration",
                     &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
         }
     }
     for entry in &dag.figures {
+        let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
         for field in &entry.fields {
             let prop = CompositionProperty::from_name(field.name.as_str())
                 .filter(|p| p.applies_to_figure());
             let Some(prop) = prop else {
                 return Err(invalid_property(
-                    ctx,
+                    &entry_ctx,
                     field,
                     "a figure declaration",
                     &format!(
@@ -66,20 +68,21 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
                     ),
                 ));
             };
-            check_property_value(ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
         }
     }
     for entry in &dag.layers {
+        let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
         for field in &entry.fields {
             let Some(prop) = CompositionProperty::from_name(field.name.as_str()) else {
                 return Err(invalid_property(
-                    ctx,
+                    &entry_ctx,
                     field,
                     "a layer declaration",
                     &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
         }
     }
     Ok(())
@@ -95,9 +98,14 @@ fn check_plot_references(
     let owners = dag
         .figures
         .iter()
-        .map(|f| ("figure", &f.name, &f.plot_names))
-        .chain(dag.layers.iter().map(|l| ("layer", &l.name, &l.plot_names)));
-    for (owner_kind, owner, plot_names) in owners {
+        .map(|f| ("figure", &f.name, &f.plot_names, &f.body_src))
+        .chain(
+            dag.layers
+                .iter()
+                .map(|l| ("layer", &l.name, &l.plot_names, &l.body_src)),
+        );
+    for (owner_kind, owner, plot_names, body_src) in owners {
+        let owner_ctx = ctx.for_body(body_src.resolve(ctx.src));
         for (i, reference) in plot_names.iter().enumerate() {
             let is_known_plot = dag.plots.iter().any(|p| p.name == reference.value)
                 || dag.included_plots.iter().any(|p| p.name == reference.value);
@@ -114,14 +122,14 @@ fn check_plot_references(
                         owner_kind,
                         owner: owner.clone(),
                         name: reference.value.clone(),
-                        src: ctx.src.clone(),
+                        src: owner_ctx.src.clone(),
                         span: reference.span.into(),
                     },
                     |actual_kind| GraphcalError::CompositionReferencesNonPlot {
                         owner_kind,
                         actual_kind,
                         name: reference.value.clone(),
-                        src: ctx.src.clone(),
+                        src: owner_ctx.src.clone(),
                         span: reference.span.into(),
                     },
                 ));
@@ -131,7 +139,7 @@ fn check_plot_references(
                     owner_kind,
                     owner: owner.clone(),
                     name: reference.value.clone(),
-                    src: ctx.src.clone(),
+                    src: owner_ctx.src.clone(),
                     span: reference.span.into(),
                 });
             }

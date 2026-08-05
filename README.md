@@ -40,7 +40,7 @@ delta_v    = 3778.220768 m/s
 
 ## Why Graphcal?
 
-- **Unit-safe.** Physical dimensions are checked at compile time, and conversions are explicit.
+- **Unit-safe.** Physical dimensions—including unit definitions and runtime unit-scale expressions—are checked at compile time, and conversions are explicit.
 - **Reactive.** Change a parameter and every dependent value is recomputed automatically.
 - **Git-friendly.** Plain-text `.gcl` files diff and merge cleanly, with no hidden spreadsheet state.
 - **Built for engineering.** Typed axes, dimension-aware linear algebra, assertions, display-unit-aware plotting, and reusable computation graphs are built in.
@@ -82,7 +82,7 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 graphcal deps lock --root mission
 ```
 
-See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface and the [Tenax integration guide](https://graphcal.org/docs/tenax-integration/) for persistent model serving. `--set` and `--input` accept recursively closed values, not references or computations. Imported units and prepared structured inputs retain canonical definition-site metadata, so consumers do not need to re-import backing dimensions or schema implementation dependencies they never name. Configured `include` composition may nest to arbitrary acyclic depth while preserving isolated instance paths. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
+See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface and the [Tenax integration guide](https://graphcal.org/docs/tenax-integration/) for persistent model serving. `--set` and `--input` accept recursively closed values, not references or computations. Imported values, units, and prepared structured inputs retain canonical definition-site metadata, so consumers do not need to re-import backing dimensions or schema implementation dependencies they never name. Configured `include` composition may nest to arbitrary acyclic depth while preserving isolated instance paths and internal imports. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
 
 ## Editor Support
 

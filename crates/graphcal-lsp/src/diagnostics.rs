@@ -524,6 +524,25 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn invalid_dynamic_unit_scale_has_type_diagnostic_at_scale_expression() {
+        let source = "param factor: Bool = true;\nunit Bad: Length = (@factor) m;";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                matches!(
+                    &diagnostic.code,
+                    Some(NumberOrString::String(code)) if code == "graphcal::D032"
+                )
+            })
+            .expect("expected D032 dynamic-unit diagnostic");
+        assert!(diagnostic.message.contains("scalar Dimensionless"));
+        assert_eq!(diagnostic.range.start.line, 1);
+        assert_eq!(diagnostic.range.start.character, 20);
+        assert_eq!(diagnostic.range.end.character, 27);
+    }
+
+    #[test]
     fn positional_epoch_scale_suggests_static_argument() {
         let source = "node bad: Datetime<TT> = epoch(\"2024-11-05T12:00:00\", TT);";
         let diagnostics = produce_diagnostics(source, "test.gcl");
