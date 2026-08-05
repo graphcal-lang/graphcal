@@ -33,7 +33,7 @@ use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::DimName;
+use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::names::{NameAtom, NamePath};
@@ -131,11 +131,10 @@ pub struct ConstEntry {
     pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub(crate) expr: crate::hir::Expr,
     pub span: Span,
-    /// Provenance of this declaration's `span` (#868). `None` means the span
-    /// indexes into the IR's own file source; `Some` carries the source of a
-    /// dependency body merged in by an instantiated include, so diagnostics
-    /// anchored on the span render against the right file.
-    pub(crate) src: BodySource,
+    /// Source of the type annotation and declaration span.
+    pub(crate) type_src: BodySource,
+    /// Source of the body expression and its spans.
+    pub(crate) body_src: BodySource,
 }
 
 /// A param declaration with type annotation and lowered default.
@@ -148,8 +147,11 @@ pub struct ParamEntry {
     pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub default_expr: Option<crate::hir::Expr>,
     pub span: Span,
-    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub(crate) src: BodySource,
+    /// Source of the type annotation and declaration span.
+    pub(crate) type_src: BodySource,
+    /// Source of the default expression, when present. An include binding is
+    /// importer-owned even though the parameter signature is producer-owned.
+    pub(crate) default_src: Option<BodySource>,
 }
 
 /// A node declaration with type annotation and lowered body.
@@ -162,8 +164,10 @@ pub struct NodeEntry {
     pub(crate) type_resolution_owner: crate::dag_id::DagId,
     pub expr: crate::hir::Expr,
     pub span: Span,
-    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub(crate) src: BodySource,
+    /// Source of the type annotation and declaration span.
+    pub(crate) type_src: BodySource,
+    /// Source of the body expression and its spans.
+    pub(crate) body_src: BodySource,
 }
 
 /// An assert declaration with lowered body.
@@ -172,8 +176,8 @@ pub struct AssertEntry {
     pub name: ScopedName,
     pub body: crate::hir::AssertBody,
     pub span: Span,
-    /// Source provenance of `span`; see [`ConstEntry::src`] (#868).
-    pub(crate) src: BodySource,
+    /// Source of the assertion body and its spans.
+    pub(crate) body_src: BodySource,
 }
 
 /// A const declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -190,8 +194,10 @@ pub struct UnfrozenConstEntry {
     /// Module scope for the declaration body expression.
     body_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the type annotation and declaration span.
+    type_src: BodySource,
+    /// Source of the body expression and its spans.
+    body_src: BodySource,
 }
 
 /// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
@@ -207,8 +213,10 @@ pub struct UnfrozenParamEntry {
     /// from `type_resolution_owner`.
     default_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the type annotation and declaration span.
+    type_src: BodySource,
+    /// Source of the default expression, when present.
+    default_src: Option<BodySource>,
 }
 
 /// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -222,8 +230,10 @@ pub struct UnfrozenNodeEntry {
     /// Module scope for the declaration body expression.
     body_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the type annotation and declaration span.
+    type_src: BodySource,
+    /// Source of the body expression and its spans.
+    body_src: BodySource,
 }
 
 /// An assert declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -234,8 +244,8 @@ pub struct UnfrozenAssertEntry {
     /// Module scope for the assertion body expression(s).
     body_resolution_owner: crate::dag_id::DagId,
     span: Span,
-    /// Source provenance of `span`; see [`BodySource`] (#868).
-    src: BodySource,
+    /// Source of the assertion body and its spans.
+    body_src: BodySource,
 }
 
 /// A plot declaration with lowered body.
@@ -248,6 +258,8 @@ pub struct PlotEntry {
     /// are best-effort at evaluation time: an incomplete body is skipped by
     /// the runtime instead of failing the compile.
     pub body: Option<LoweredPlotBody>,
+    /// Source of every expression in the plot body.
+    pub(crate) body_src: BodySource,
     /// Whether this plot renders standalone when its file is the entry
     /// point. `true` unless the declaration carries `#[hidden]` (#847).
     pub displayed: bool,
@@ -262,6 +274,38 @@ pub struct PlotEntry {
 pub struct IncludedPlotEntry {
     /// The local alias the plot is visible under.
     pub name: ScopedName,
+}
+
+/// A validated dynamic unit scale lowered to HIR.
+#[derive(Debug, Clone)]
+pub struct DynamicUnitScaleEntry {
+    /// Canonical declaration identity of the unit being defined.
+    pub unit: ResolvedUnitName,
+    /// Source spelling under which the unit is registered in this IR.
+    pub spelling: UnitRef,
+    /// Strictly lowered scalar expression.
+    pub expr: crate::hir::Expr,
+    /// Dimension declared on the unit definition.
+    pub declared_dimension: Dimension,
+    /// Dimension proved from the RHS base-unit expression.
+    pub base_unit_dimension: Dimension,
+    /// Span of the scalar expression.
+    pub span: Span,
+    /// Source whose bytes are indexed by `expr` and `span`.
+    pub src: NamedSource<Arc<String>>,
+}
+
+/// A dynamic unit scale awaiting strict HIR lowering at [`UnfrozenIR::freeze`].
+#[derive(Debug, Clone)]
+struct UnfrozenDynamicUnitScaleEntry {
+    spelling: UnitRef,
+    expr: Expr,
+    unit_owner: crate::dag_id::DagId,
+    body_resolution_owner: crate::dag_id::DagId,
+    declared_dimension: Dimension,
+    base_unit_dimension: Dimension,
+    span: Span,
+    src: BodySource,
 }
 
 /// A plot requested by an include brace list item (#847).
@@ -282,6 +326,8 @@ pub struct FigureEntry {
     /// Lowered field expressions; fields that failed to lower are omitted
     /// (best-effort, matching plots).
     pub fields: Vec<LoweredPlotField>,
+    /// Source of every field expression.
+    pub(crate) body_src: BodySource,
 }
 
 /// A layer declaration with lowered fields.
@@ -293,6 +339,8 @@ pub struct LayerEntry {
     /// Lowered field expressions; fields that failed to lower are omitted
     /// (best-effort, matching plots).
     pub fields: Vec<LoweredPlotField>,
+    /// Source of every field expression.
+    pub(crate) body_src: BodySource,
 }
 
 /// A plot declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -303,6 +351,8 @@ pub struct UnfrozenPlotEntry {
     /// Module scope for plot field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
     pub span: Span,
+    /// Source of every plot expression.
+    body_src: BodySource,
     /// Whether this plot renders standalone (no `#[hidden]`).
     displayed: bool,
 }
@@ -314,6 +364,8 @@ pub struct UnfrozenFigureEntry {
     decl: FigureDecl,
     /// Module scope for figure field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
+    /// Source of every figure field expression.
+    body_src: BodySource,
 }
 
 /// A layer declaration awaiting field lowering at [`UnfrozenIR::freeze`].
@@ -323,6 +375,8 @@ pub struct UnfrozenLayerEntry {
     decl: LayerDecl,
     /// Module scope for layer field expressions.
     pub body_resolution_owner: crate::dag_id::DagId,
+    /// Source of every layer field expression.
+    body_src: BodySource,
 }
 
 /// Intermediate Representation produced by [`lower`].
@@ -358,6 +412,8 @@ pub struct IR {
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
     pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+    /// Strictly lowered, source-qualified dynamic unit scale definitions.
+    pub(crate) dynamic_unit_scales: Vec<DynamicUnitScaleEntry>,
     /// Imported values keyed by their source-visible lexical binding.
     ///
     /// Each record atomically retains the canonical declaration target, its
@@ -766,7 +822,7 @@ fn build_ir_from_resolved(
     if let Some(seed) = registry_seed {
         seed(&mut builder)?;
     }
-    register_file_declarations(ast, &mut builder, src, dag_id)?;
+    let dynamic_unit_scales = register_file_declarations(ast, &mut builder, src, dag_id)?;
     cancellation.checkpoint()?;
 
     // Pair resolved declarations with type annotations.
@@ -784,7 +840,8 @@ fn build_ir_from_resolved(
                 expr: entry.expr,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                type_src: BodySource::own(),
+                body_src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -796,6 +853,7 @@ fn build_ir_from_resolved(
             cancellation.checkpoint()?;
             let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
+            let default_src = entry.default_expr.as_ref().map(|_| BodySource::own());
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
                 type_ann,
@@ -803,7 +861,8 @@ fn build_ir_from_resolved(
                 default_expr: entry.default_expr,
                 default_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                type_src: BodySource::own(),
+                default_src,
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -822,7 +881,8 @@ fn build_ir_from_resolved(
                 expr: entry.expr,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                type_src: BodySource::own(),
+                body_src: BodySource::own(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -839,7 +899,7 @@ fn build_ir_from_resolved(
                 body: entry.body,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
-                src: BodySource::own(),
+                body_src: BodySource::own(),
             })
             .collect(),
         plots: resolved
@@ -852,6 +912,7 @@ fn build_ir_from_resolved(
                     decl: entry.decl,
                     body_resolution_owner: dag_id.clone(),
                     span: entry.span,
+                    body_src: BodySource::own(),
                     displayed,
                 }
             })
@@ -863,6 +924,7 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
+                body_src: BodySource::own(),
             })
             .collect(),
         layers: resolved
@@ -872,6 +934,7 @@ fn build_ir_from_resolved(
                 name: ScopedName::from(entry.name),
                 decl: entry.decl,
                 body_resolution_owner: dag_id.clone(),
+                body_src: BodySource::own(),
             })
             .collect(),
         included_plots: Vec::new(),
@@ -900,6 +963,7 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(k, v)| (ScopedName::from(k), v))
             .collect(),
+        dynamic_unit_scales,
         imported_bindings,
         external_surface: resolved.external_surface,
         plugin_imports: ast
@@ -933,6 +997,8 @@ pub struct UnfrozenIR {
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     // Key-lookup only, order irrelevant.
     expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+    // Dynamic unit scales declared by this body or merged includes.
+    dynamic_unit_scales: Vec<UnfrozenDynamicUnitScaleEntry>,
     // Lexical binding lookup only; each value atomically carries canonical metadata.
     imported_bindings: HashMap<ScopedName, ImportedBinding>,
     // Explicit exports and named `param` input ports used by downstream
@@ -1043,6 +1109,34 @@ impl UnfrozenIR {
             })
         };
 
+        let dynamic_unit_scales = self
+            .dynamic_unit_scales
+            .iter()
+            .map(|entry| {
+                cancellation.checkpoint()?;
+                let entry_src = entry.src.resolve(src);
+                let unit = resolver
+                    .resolve_unit_path(&entry.unit_owner, &entry.spelling.to_name_path())
+                    .map_err(|err| GraphcalError::InternalError {
+                        message: format!(
+                            "registered dynamic unit `{}` did not resolve canonically: {err}",
+                            entry.spelling
+                        ),
+                        src: entry_src.clone(),
+                        span: entry.span.into(),
+                    })?;
+                Ok(DynamicUnitScaleEntry {
+                    unit,
+                    spelling: entry.spelling.clone(),
+                    expr: lower_in(&entry.expr, &entry.body_resolution_owner, entry_src)?,
+                    declared_dimension: entry.declared_dimension.clone(),
+                    base_unit_dimension: entry.base_unit_dimension.clone(),
+                    span: entry.span,
+                    src: entry_src.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+
         let consts = self
             .consts
             .iter()
@@ -1055,10 +1149,11 @@ impl UnfrozenIR {
                     expr: lower_in(
                         &entry.expr,
                         &entry.body_resolution_owner,
-                        entry.src.resolve(src),
+                        entry.body_src.resolve(src),
                     )?,
                     span: entry.span,
-                    src: entry.src.clone(),
+                    type_src: entry.type_src.clone(),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1068,23 +1163,32 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
+                let default_expr = match (&entry.default_expr, &entry.default_src) {
+                    (Some(expr), Some(default_src)) => Some(lower_in(
+                        expr,
+                        &entry.default_resolution_owner,
+                        default_src.resolve(src),
+                    )?),
+                    (None, None) => None,
+                    _ => {
+                        return Err(GraphcalError::InternalError {
+                            message: format!(
+                                "parameter `{}` has inconsistent default-expression provenance",
+                                entry.name
+                            ),
+                            src: src.clone(),
+                            span: entry.span.into(),
+                        });
+                    }
+                };
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     type_ann: entry.type_ann.clone(),
                     type_resolution_owner: entry.type_resolution_owner.clone(),
-                    default_expr: entry
-                        .default_expr
-                        .as_ref()
-                        .map(|expr| {
-                            lower_in(
-                                expr,
-                                &entry.default_resolution_owner,
-                                entry.src.resolve(src),
-                            )
-                        })
-                        .transpose()?,
+                    default_expr,
                     span: entry.span,
-                    src: entry.src.clone(),
+                    type_src: entry.type_src.clone(),
+                    default_src: entry.default_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1101,10 +1205,11 @@ impl UnfrozenIR {
                     expr: lower_in(
                         &entry.expr,
                         &entry.body_resolution_owner,
-                        entry.src.resolve(src),
+                        entry.body_src.resolve(src),
                     )?,
                     span: entry.span,
-                    src: entry.src.clone(),
+                    type_src: entry.type_src.clone(),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1114,7 +1219,7 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let body_src = entry.src.resolve(src);
+                let body_src = entry.body_src.resolve(src);
                 Ok(AssertEntry {
                     name: entry.name.clone(),
                     body: {
@@ -1132,7 +1237,7 @@ impl UnfrozenIR {
                         })?
                     },
                     span: entry.span,
-                    src: entry.src.clone(),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1190,6 +1295,7 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     mark_type: entry.decl.mark.mark_type,
                     body: complete.then_some(body),
+                    body_src: entry.body_src.clone(),
                     displayed: entry.displayed,
                 })
             })
@@ -1217,6 +1323,7 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
                     fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1230,6 +1337,7 @@ impl UnfrozenIR {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
                     fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    body_src: entry.body_src.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1253,6 +1361,7 @@ impl UnfrozenIR {
             source_order: self.source_order,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
+            dynamic_unit_scales,
             imported_bindings: self.imported_bindings,
             external_surface: self.external_surface,
         })
@@ -1267,6 +1376,10 @@ impl UnfrozenIR {
     /// scope. Call this before merging nested includes so later nested entries
     /// keep their own producer scopes.
     pub fn retarget_existing_resolution_owners(&mut self, owner: &crate::dag_id::DagId) {
+        for entry in &mut self.dynamic_unit_scales {
+            entry.unit_owner = owner.clone();
+            entry.body_resolution_owner = owner.clone();
+        }
         for entry in &mut self.consts {
             entry.type_resolution_owner = owner.clone();
             entry.body_resolution_owner = owner.clone();
@@ -1312,9 +1425,10 @@ impl UnfrozenIR {
             expr,
             body_resolution_owner,
             span,
-            // Alias bodies are synthesized from the importer's include
-            // statement, so their span belongs to the importer's source.
-            src: BodySource::own(),
+            // Alias declarations and bodies are synthesized from the
+            // importer's include statement.
+            type_src: BodySource::own(),
+            body_src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Const));
     }
@@ -1338,9 +1452,10 @@ impl UnfrozenIR {
             expr,
             body_resolution_owner,
             span,
-            // Alias bodies are synthesized from the importer's include
-            // statement, so their span belongs to the importer's source.
-            src: BodySource::own(),
+            // Alias declarations and bodies are synthesized from the
+            // importer's include statement.
+            type_src: BodySource::own(),
+            body_src: BodySource::own(),
         });
         self.source_order.push((name, DeclCategory::Node));
     }
@@ -1479,6 +1594,29 @@ impl UnfrozenIR {
         all_dep_names.extend(dep_scoped_names.iter().map(|name| name.member().clone()));
         let dep_names = &all_dep_names;
 
+        // Dynamic units share the include's value-instance scope. Their unit
+        // name remains in the file-level unit namespace, while graph references
+        // in the scale expression receive the instance prefix.
+        for mut entry in dep.dynamic_unit_scales {
+            substitute_indexes(&mut entry.expr, index_bindings);
+            substitute_type_names_in_expr(&mut entry.expr, type_bindings);
+            prefix_expr_refs(&mut entry.expr, prefix, dep_names, dep_scoped_names);
+            entry.body_resolution_owner = merge_resolution_owner(entry.body_resolution_owner);
+            entry.src = entry.src.or_dependency(dep_src);
+            if self
+                .dynamic_unit_scales
+                .iter()
+                .any(|existing| existing.spelling == entry.spelling)
+            {
+                return Err(GraphcalError::ConflictingImportedUnit {
+                    name: entry.spelling,
+                    src: importer_src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
+            self.dynamic_unit_scales.push(entry);
+        }
+
         // Merge consts
         for mut entry in dep.consts {
             substitute_indexes(&mut entry.expr, index_bindings);
@@ -1495,7 +1633,8 @@ impl UnfrozenIR {
                 expr: entry.expr,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                type_src: entry.type_src.or_dependency(dep_src),
+                body_src: entry.body_src.or_dependency(dep_src),
             });
             self.source_order.push((prefixed, DeclCategory::Const));
         }
@@ -1505,21 +1644,24 @@ impl UnfrozenIR {
             let prefixed = entry.name.within_scope(prefix);
             let default_resolution_owner =
                 if let Some(binding_expr) = bindings.get(entry.name.member()) {
-                    // Use the binding expression (from the importer's scope, no prefixing needed
-                    // for refs that belong to the importer — only dep-internal refs get prefixed).
-                    // The declared type (the diagnostic anchor for an annotation
-                    // mismatch) still belongs to the dependency, so the entry keeps
-                    // dependency provenance below (#868).
+                    // The binding expression and its spans belong to the immediate
+                    // importer, independently of the producer-owned signature.
                     entry.default_expr = Some(binding_expr.clone());
+                    entry.default_src = Some(BodySource::own());
                     importer_owner.clone()
                 } else if let Some(ref mut expr) = entry.default_expr {
-                    // Keep default, but substitute indexes and prefix internal refs.
+                    // Keep the producer default, substitute its type-level names,
+                    // and carry its existing source across this merge boundary.
                     substitute_indexes(expr, index_bindings);
                     substitute_type_names_in_expr(expr, type_bindings);
                     prefix_expr_refs(expr, prefix, dep_names, dep_scoped_names);
+                    entry.default_src = entry
+                        .default_src
+                        .map(|source| source.or_dependency(dep_src));
                     merge_resolution_owner(entry.default_resolution_owner)
                 } else {
-                    // Required param without binding — stays None, caught later in exec_plan
+                    // Required param without binding — stays None, caught later in exec_plan.
+                    entry.default_src = None;
                     merge_resolution_owner(entry.default_resolution_owner)
                 };
             substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
@@ -1532,7 +1674,8 @@ impl UnfrozenIR {
                 default_expr: entry.default_expr,
                 default_resolution_owner,
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                type_src: entry.type_src.or_dependency(dep_src),
+                default_src: entry.default_src,
             });
             self.source_order.push((prefixed, DeclCategory::Param));
         }
@@ -1553,7 +1696,8 @@ impl UnfrozenIR {
                 expr: entry.expr,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                type_src: entry.type_src.or_dependency(dep_src),
+                body_src: entry.body_src.or_dependency(dep_src),
             });
             self.source_order.push((prefixed, DeclCategory::Node));
         }
@@ -1589,7 +1733,7 @@ impl UnfrozenIR {
                 body: entry.body,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
-                src: entry.src.or_dependency(dep_src),
+                body_src: entry.body_src.or_dependency(dep_src),
             });
             self.assert_names.insert(prefixed.clone());
             self.source_order.push((prefixed, DeclCategory::Assert));
@@ -1625,6 +1769,7 @@ impl UnfrozenIR {
                 decl: entry.decl,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
+                body_src: entry.body_src.or_dependency(dep_src),
                 displayed: !requested.hidden,
             });
             self.source_order.push((local, DeclCategory::Plot));
@@ -2716,8 +2861,10 @@ fn register_file_declarations(
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
-) -> Result<(), GraphcalError> {
-    register_declarations_impl(file, registry, src, None, dag_id)
+) -> Result<Vec<UnfrozenDynamicUnitScaleEntry>, GraphcalError> {
+    let mut dynamic_unit_scales = Vec::new();
+    register_declarations_impl(file, registry, src, None, dag_id, &mut dynamic_unit_scales)?;
+    Ok(dynamic_unit_scales)
 }
 
 /// Categorized declarations selected from a dependency's registry.
@@ -2814,7 +2961,7 @@ pub fn register_selected_declarations(
     names: &SelectedDeclarations,
     dag_id: &crate::dag_id::DagId,
 ) -> Result<(), GraphcalError> {
-    register_declarations_impl(file, registry, src, Some(names), dag_id)
+    register_declarations_impl(file, registry, src, Some(names), dag_id, &mut Vec::new())
 }
 
 /// Shared implementation for registering type-system declarations.
@@ -2838,6 +2985,7 @@ fn register_declarations_impl(
     src: &NamedSource<Arc<String>>,
     filter: Option<&SelectedDeclarations>,
     dag_id: &crate::dag_id::DagId,
+    dynamic_unit_scales: &mut Vec<UnfrozenDynamicUnitScaleEntry>,
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::{DimDecl, IndexDecl, UnitDecl};
 
@@ -2916,7 +3064,9 @@ fn register_declarations_impl(
     if !units.is_empty() {
         let sorted = topo_sort_units(&units, src)?;
         for u in sorted {
-            register_unit_decl(u, registry, src)?;
+            if let Some(dynamic_scale) = register_unit_decl(u, registry, src, dag_id)? {
+                dynamic_unit_scales.push(dynamic_scale);
+            }
         }
     }
 
@@ -3218,7 +3368,8 @@ fn register_unit_decl(
     u: &crate::desugar::desugared_ast::UnitDecl,
     registry: &mut RegistryBuilder,
     src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
+    dag_id: &crate::dag_id::DagId,
+) -> Result<Option<UnfrozenDynamicUnitScaleEntry>, GraphcalError> {
     let dim = registry
         .resolve_dim_expr_detailed(&u.dim_type)
         .map_err(|err| dimension_resolve_error(err, src, u.dim_type.span))?;
@@ -3229,6 +3380,7 @@ fn register_unit_decl(
             span: u.name.span.into(),
         });
     }
+    let mut dynamic_unit_scale = None;
     let scale = if let Some(def) = &u.definition {
         if u.constness.is_const() {
             if let Some(graph_ref) = first_graph_ref(&def.scale_expr) {
@@ -3257,9 +3409,20 @@ fn register_unit_decl(
             });
         }
         if contains_graph_ref(&def.scale_expr) {
-            // Dynamic unit: scale depends on runtime values (e.g., `(@rate) USD`).
+            // Preserve the validated definition in IR so strict HIR lowering,
+            // policy checking, dependency collection, and type checking all
+            // consume the same source-qualified semantic entry.
+            dynamic_unit_scale = Some(UnfrozenDynamicUnitScaleEntry {
+                spelling: UnitRef::local(u.name.value.clone()),
+                expr: def.scale_expr.clone(),
+                unit_owner: dag_id.clone(),
+                body_resolution_owner: dag_id.clone(),
+                declared_dimension: dim.clone(),
+                base_unit_dimension: resolved_definition.dimension.clone(),
+                span: def.scale_expr.span,
+                src: BodySource::own(),
+            });
             UnitScale::Dynamic {
-                scale_expr: def.scale_expr.clone(),
                 base_unit_scale: resolved_definition.base_scale,
             }
         } else {
@@ -3304,7 +3467,7 @@ fn register_unit_decl(
         }
     }
     registry.register_unit_with_scale(u.name.value.clone(), dim, scale, u.constness);
-    Ok(())
+    Ok(dynamic_unit_scale)
 }
 
 fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {

@@ -25,17 +25,19 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticB
     if semantic.dynamic_unit_scales.is_empty() {
         return;
     }
-    let scale_deps: HashMap<crate::syntax::dimension::UnitRef, BTreeSet<ResolvedDeclName>> =
-        semantic
-            .dynamic_unit_scales
-            .iter()
-            .map(|(name, expr)| {
-                (
-                    name.clone(),
-                    hir::collect_expr_dependencies(expr).graph_refs,
-                )
-            })
-            .collect();
+    let scale_deps: HashMap<
+        crate::syntax::dimension::ResolvedUnitName,
+        BTreeSet<ResolvedDeclName>,
+    > = semantic
+        .dynamic_unit_scales
+        .iter()
+        .map(|(name, entry)| {
+            (
+                name.clone(),
+                hir::collect_expr_dependencies(&entry.expr).graph_refs,
+            )
+        })
+        .collect();
 
     let DagSemanticBody {
         expressions,
@@ -64,13 +66,13 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticB
 /// Collect every unit name mentioned by `UnitLiteral` / `Convert` nodes.
 fn collect_unit_names_from_hir(
     expr: &hir::Expr,
-    names: &mut std::collections::HashSet<crate::syntax::dimension::UnitRef>,
+    names: &mut std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName>,
 ) {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| match &expr.kind {
         hir::ExprKind::UnitLiteral { unit, .. } => {
             for term in &unit.terms {
-                names.insert(term.name.value.spelling().clone());
+                names.insert(term.name.value.resolved().clone());
             }
         }
         hir::ExprKind::Convert {
@@ -78,7 +80,7 @@ fn collect_unit_names_from_hir(
             target,
         } => {
             for term in &target.terms {
-                names.insert(term.name.value.spelling().clone());
+                names.insert(term.name.value.resolved().clone());
             }
             collect_unit_names_from_hir(inner, names);
         }
@@ -177,7 +179,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     let mut resolved = ResolvedDagDependencies::default();
 
     for entry in consts {
-        let body_src = entry.src.resolve(src);
+        let body_src = entry.body_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
         let hir_expr = exprs.consts.get(&key).ok_or_else(|| {
             internal_error(
@@ -215,7 +217,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in nodes {
-        let body_src = entry.src.resolve(src);
+        let body_src = entry.body_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
         let hir_expr = exprs.nodes.get(&key).ok_or_else(|| {
             internal_error(

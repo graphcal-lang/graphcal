@@ -428,41 +428,44 @@ fn validate_decl_finite_index_obligations(
 
 /// Check that a declaration's expression type matches its declared type annotation.
 fn check_decl_expr_type(
-    ctx: &DimCheckContext<'_>,
+    body_ctx: &DimCheckContext<'_>,
     name: &crate::syntax::module_name::ScopedName,
     type_ann_span: &crate::syntax::span::Span,
+    annotation_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let declared = ctx
-        .declared_types
-        .get(name)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("no declared type recorded for `{name}`"),
-            src: ctx.src.clone(),
-            span: (*type_ann_span).into(),
-        })?;
-    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
+    let declared =
+        body_ctx
+            .declared_types
+            .get(name)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("no declared type recorded for `{name}`"),
+                src: annotation_src.clone(),
+                span: (*type_ann_span).into(),
+            })?;
+    let dag = body_ctx.dag.ok_or_else(|| GraphcalError::InternalError {
         message: format!("semantic DAG missing while checking `{name}`"),
-        src: ctx.src.clone(),
+        src: body_ctx.src.clone(),
         span: (*type_ann_span).into(),
     })?;
-    let hir_expr = ctx
-        .hir_expr_for_decl(name)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("semantic HIR expression missing for declaration `{name}`"),
-            src: ctx.src.clone(),
-            span: (*type_ann_span).into(),
-        })?;
+    let hir_expr =
+        body_ctx
+            .hir_expr_for_decl(name)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("semantic HIR expression missing for declaration `{name}`"),
+                src: body_ctx.src.clone(),
+                span: (*type_ann_span).into(),
+            })?;
     let inferred = infer::hir::infer_hir_type_with_owner(
         hir_expr,
         Some(name.member().as_str()),
-        ctx.declared_types,
+        body_ctx.declared_types,
         dag,
-        ctx.tir,
-        ctx.registry,
-        ctx.builtin_fns,
-        ctx.src,
+        body_ctx.tir,
+        body_ctx.registry,
+        body_ctx.builtin_fns,
+        body_ctx.src,
     )?;
-    let matches = ctx
+    let matches = body_ctx
         .dag
         .and_then(|dag| dag.resolved_decl_types.get(name))
         .map_or_else(
@@ -471,13 +474,61 @@ fn check_decl_expr_type(
         );
     if !matches {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
-            declared: format_declared_type(declared, ctx.registry),
-            inferred: format_inferred_type(&inferred, ctx.registry),
-            src: ctx.src.clone(),
+            declared: format_declared_type(declared, body_ctx.registry),
+            inferred: format_inferred_type(&inferred, body_ctx.registry),
+            src: annotation_src.clone(),
             span: (*type_ann_span).into(),
         });
     }
-    check_ineffective_conversions(hir_expr, true, ctx.src)?;
+    check_ineffective_conversions(hir_expr, true, body_ctx.src)?;
+    Ok(())
+}
+
+/// Require every runtime unit factor to be one scalar Dimensionless quantity.
+fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+    let Some(dag) = ctx.dag else {
+        return Ok(());
+    };
+    for entry in dag.semantic.dynamic_unit_scales.values() {
+        ctx.checkpoint()?;
+        if entry.declared_dimension != entry.base_unit_dimension {
+            return Err(GraphcalError::UnitDefinitionDimensionMismatch {
+                name: entry.spelling.name().clone(),
+                declared: ctx
+                    .registry
+                    .dimensions
+                    .format_dimension(&entry.declared_dimension),
+                definition: ctx
+                    .registry
+                    .dimensions
+                    .format_dimension(&entry.base_unit_dimension),
+                src: entry.src.clone(),
+                span: entry.span.into(),
+            });
+        }
+        let entry_ctx = ctx.for_body(&entry.src);
+        let inferred = infer::hir::infer_hir_type_with_owner(
+            &entry.expr,
+            None,
+            entry_ctx.declared_types,
+            dag,
+            entry_ctx.tir,
+            entry_ctx.registry,
+            entry_ctx.builtin_fns,
+            entry_ctx.src,
+        )?;
+        if !matches!(
+            &inferred,
+            InferredType::Quantity(dimension) if dimension.is_dimensionless()
+        ) {
+            return Err(GraphcalError::DynamicUnitScaleTypeMismatch {
+                name: entry.spelling.clone(),
+                found: format_inferred_type(&inferred, entry_ctx.registry),
+                src: entry.src.clone(),
+                span: entry.expr.span.into(),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -1039,29 +1090,45 @@ fn check_dimensions_dag(
     // dependency file's spans, so each is checked against its own source (#868).
     for entry in &dag.consts {
         ctx.checkpoint()?;
-        let entry_ctx = ctx.for_body(entry.src.resolve(src));
-        validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
-        check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
+        let annotation_src = entry.type_src.resolve(src);
+        let annotation_ctx = ctx.for_body(annotation_src);
+        validate_decl_finite_index_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        let body_ctx = ctx.for_body(entry.body_src.resolve(src));
+        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
     for entry in &dag.nodes {
         ctx.checkpoint()?;
-        let entry_ctx = ctx.for_body(entry.src.resolve(src));
-        validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
-        check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
+        let annotation_src = entry.type_src.resolve(src);
+        let annotation_ctx = ctx.for_body(annotation_src);
+        validate_decl_finite_index_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        let body_ctx = ctx.for_body(entry.body_src.resolve(src));
+        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
     for entry in &dag.params {
         ctx.checkpoint()?;
-        let entry_ctx = ctx.for_body(entry.src.resolve(src));
-        validate_decl_finite_index_obligations(&entry_ctx, &entry.name, entry.type_ann.span)?;
+        let annotation_src = entry.type_src.resolve(src);
+        let annotation_ctx = ctx.for_body(annotation_src);
+        validate_decl_finite_index_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
         let Some(_value_expr) = entry.default_expr.as_ref() else {
             continue;
         };
-        check_decl_expr_type(&entry_ctx, &entry.name, &entry.type_ann.span)?;
+        let Some(default_src) = entry.default_src.as_ref() else {
+            return Err(GraphcalError::InternalError {
+                message: format!("parameter `{}` is missing default provenance", entry.name),
+                src: annotation_src.clone(),
+                span: entry.span.into(),
+            });
+        };
+        let body_ctx = ctx.for_body(default_src.resolve(src));
+        check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
+
+    ctx.checkpoint()?;
+    check_dynamic_unit_scale_types(&ctx)?;
 
     for entry in &dag.asserts {
         ctx.checkpoint()?;
-        let body_src = entry.src.resolve(src);
+        let body_src = entry.body_src.resolve(src);
         let entry_ctx = ctx.for_body(body_src);
         let body = entry_ctx.hir_assert_body(&entry.name, entry.span)?;
         let shape = check_hir_assert_body(&entry_ctx, body, entry.span)?;
@@ -1133,17 +1200,17 @@ fn check_domain_constraint_dimensions_dag(
     let decl_iter = dag
         .consts
         .iter()
-        .map(|e| (&e.name, &e.src))
-        .chain(dag.params.iter().map(|e| (&e.name, &e.src)))
-        .chain(dag.nodes.iter().map(|e| (&e.name, &e.src)));
+        .map(|e| (&e.name, &e.type_src))
+        .chain(dag.params.iter().map(|e| (&e.name, &e.type_src)))
+        .chain(dag.nodes.iter().map(|e| (&e.name, &e.type_src)));
 
-    for (name, body_provenance) in decl_iter {
+    for (name, signature_provenance) in decl_iter {
         let key = dag.resolved_decl_key_for_local(name);
         let bounds = dag.semantic.domain_bounds.get(&key);
         let Some(bounds) = bounds else {
             continue;
         };
-        let body_src = body_provenance.resolve(src);
+        let body_src = signature_provenance.resolve(src);
 
         let resolved = dag.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);

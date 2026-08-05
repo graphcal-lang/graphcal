@@ -653,6 +653,22 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("dynamic unit `{name}` requires a scalar Dimensionless scale, but found {found}")]
+    #[diagnostic(
+        code(graphcal::D032),
+        help(
+            "use an unindexed Dimensionless quantity; Bool, Int, structures, indexed values, and dimensioned quantities are not valid unit scales"
+        )
+    )]
+    DynamicUnitScaleTypeMismatch {
+        name: UnitRef,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this scale expression has type {found}")]
+        span: SourceSpan,
+    },
+
     #[error("unknown unit `{name}`")]
     #[diagnostic(
         code(graphcal::D003),
@@ -2007,6 +2023,7 @@ impl GraphcalError {
             | Self::AggregationCardinalityUnknown { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnitDefinitionDimensionMismatch { src, .. }
+            | Self::DynamicUnitScaleTypeMismatch { src, .. }
             | Self::UnknownUnit { src, .. }
             | Self::UnknownDimension { src, .. }
             | Self::CyclicDimension { src, .. }

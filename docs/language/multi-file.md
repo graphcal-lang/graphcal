@@ -331,7 +331,12 @@ must declare its own `param` and forward it explicitly, as above.
 Imports used internally by an included file are isolated with that configured
 instance. Two libraries may each import a local `C` (or use the same module
 alias) from different modules, and each included body continues to read its own
-canonical declaration regardless of include order or nesting.
+canonical declaration regardless of include order or nesting. Include-binding
+expressions belong to the importer, while declaration signatures and producer
+bodies belong to the included file; diagnostics report the file that owns the
+failing expression instead of applying one file's spans to another's text.
+Dynamic unit scale bodies follow the same rule and are checked before the
+included graph runs.
 
 ### `include` does not require `import` of the DAG
 

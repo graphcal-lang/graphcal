@@ -786,13 +786,11 @@ pub struct DagSemanticBody {
     pub domain_bounds: HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     /// Plot/figure/layer expressions lowered to HIR, keyed by declaration name.
     pub plot_exprs: ResolvedPlotExprs,
-    /// Dynamic unit scale expressions lowered to HIR, keyed by unit reference.
+    /// Source-qualified dynamic unit definitions keyed by canonical unit identity.
     ///
-    /// Units are file-level declarations, so only the root DAG's semantic
-    /// body carries entries; evaluation looks them up through the TIR root.
-    /// Module-alias-qualified references (`u.mile`) key the entry the import
-    /// merged under that alias.
-    pub dynamic_unit_scales: HashMap<crate::syntax::dimension::UnitRef, hir::Expr>,
+    /// Each entry carries the validated declared/base dimensions and strictly
+    /// lowered HIR scalar expression as one semantic record.
+    pub dynamic_unit_scales: HashMap<ResolvedUnitName, crate::ir::lower::DynamicUnitScaleEntry>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Canonical HIR-derived collection/index references.

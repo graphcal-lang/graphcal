@@ -144,7 +144,9 @@ unit EUR: Money = (@usd_per_eur) USD;
 
 Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so overriding `usd_per_eur` (e.g., via `--set usd_per_eur=1.20`) changes all EUR-denominated values accordingly.
 
-Dynamic units behave identically to static units for dimension checking (compile-time). The scale is only resolved at evaluation time, after the referenced params have been computed.
+Dynamic unit definitions are fully checked even when the unit is never used. The scale expression must lower successfully and have the concrete scalar type `Dimensionless`: dimensioned quantities, `Bool`, `Int`, structs/unions, and indexed values are rejected (`D032`). Runtime params and nodes may be referenced; assertions and external plugin functions may not. The right-hand unit expression must still have exactly the declared dimension (`D031`).
+
+Only the scale's concrete value is deferred until evaluation, after its referenced params and nodes have been computed. That value must be positive and finite; otherwise any declaration using the unit fails instead of receiving a fallback scale.
 
 A `pub` dynamic unit is also usable across a module-import boundary (`fx.EUR` after `import app.fx as fx;`, or `EUR` after `import app.fx.{ unit EUR };`). The defining module's evaluation resolves the scale — the expression references that module's own params — and the importer carries the resolved value as a fixed scale. If the defining module cannot be evaluated standalone (e.g., it has required params), using its dynamic unit in an importer fails at evaluation time with a scale-resolution error.
 

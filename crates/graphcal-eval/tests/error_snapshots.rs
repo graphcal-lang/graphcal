@@ -75,6 +75,13 @@ fn error_const_unit_graph_ref() {
 }
 
 #[test]
+fn error_dynamic_unit_scale_type() {
+    let source = include_str!("../../../tests/fixtures/invalid/dynamic_unit_scale_type.gcl");
+    let rendered = render_error(source, "dynamic_unit_scale_type.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_const_node_runtime_unit() {
     let source = include_str!("../../../tests/fixtures/invalid/const_node_runtime_unit.gcl");
     let rendered = render_error(source, "const_node_runtime_unit.gcl");

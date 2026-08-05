@@ -242,15 +242,15 @@ fn type_resolve_impl(
         ir.source_order,
         ir.assumes_map,
         ir.expected_fail,
+        ir.dynamic_unit_scales,
         ir.imported_bindings,
         module_ctx,
         src,
     )?;
     cancellation.checkpoint()?;
-    lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut root_dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut root_dag.semantic);
     cancellation.checkpoint()?;
-    check_hir_body_policies(&root_dag.semantic, &ir.external_surface, module_ctx, src)?;
+    check_hir_body_policies(&root_dag, &ir.external_surface, module_ctx, src)?;
     let mut dags = DagRegistry::new();
     dags.insert(root_dag_id.clone(), root_dag);
     Ok(TIR {
@@ -331,48 +331,16 @@ fn type_resolve_single_impl(
         ir.source_order,
         ir.assumes_map,
         ir.expected_fail,
+        ir.dynamic_unit_scales,
         ir.imported_bindings,
         module_ctx,
         src,
     )?;
     cancellation.checkpoint()?;
-    lower_dynamic_unit_scales(&ir.registry, module_ctx, &mut dag.semantic);
     augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
     cancellation.checkpoint()?;
-    check_hir_body_policies(&dag.semantic, &ir.external_surface, module_ctx, src)?;
+    check_hir_body_policies(&dag, &ir.external_surface, module_ctx, src)?;
     Ok(dag)
-}
-
-/// Lower the registry's dynamic unit scale expressions to HIR into the DAG's
-/// semantic body.
-///
-/// A scale expression that fails to lower is omitted; evaluation reports a
-/// dynamic-scale resolution error if such a unit is actually used. This keeps
-/// the laziness of the previous evaluation-time path, where an unused broken
-/// dynamic unit never surfaced an error.
-fn lower_dynamic_unit_scales(
-    registry: &Registry,
-    ctx: ModuleTypeContext<'_>,
-    semantic: &mut DagSemanticBody,
-) {
-    let generic_scope = hir::GenericScope::new();
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let expr_ctx = hir::ExprLoweringContext::new(
-        ctx.owner,
-        ctx.resolver,
-        &generic_scope,
-        &registry.time_zones,
-    )
-    .with_prelude(&prelude)
-    .with_unit_registry(&registry.units)
-    .with_decl_bindings(&semantic.decl_bindings);
-    for (name, _dim, scale) in registry.units.all_units() {
-        if let crate::registry::types::UnitScale::Dynamic { scale_expr, .. } = scale
-            && let Ok(lowered) = hir::lower_expr(scale_expr, expr_ctx)
-        {
-            semantic.dynamic_unit_scales.insert(name.clone(), lowered);
-        }
-    }
 }
 
 /// Internal helper: resolve type annotations for the const/param/node
@@ -411,7 +379,7 @@ fn type_resolve_dag(
             no_generic_params,
             no_generic_params,
             no_generic_params,
-            entry.src.resolve(src),
+            entry.type_src.resolve(src),
             Some(entry_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -426,7 +394,7 @@ fn type_resolve_dag(
             no_generic_params,
             no_generic_params,
             no_generic_params,
-            entry.src.resolve(src),
+            entry.type_src.resolve(src),
             Some(entry_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -441,7 +409,7 @@ fn type_resolve_dag(
             no_generic_params,
             no_generic_params,
             no_generic_params,
-            entry.src.resolve(src),
+            entry.type_src.resolve(src),
             Some(entry_ctx),
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
@@ -783,18 +751,18 @@ fn lower_resolved_expressions(
     // Domain-bound and key errors for a merged dependency body must render
     // against the dependency's own source, not the importer's `src` (#868).
     for entry in consts {
-        let body_src = entry.src.resolve(src);
+        let signature_src = entry.type_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
-        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
+        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, signature_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
         exprs.consts.insert(key, entry.expr.clone());
     }
     for entry in params {
-        let body_src = entry.src.resolve(src);
+        let signature_src = entry.type_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
-        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
+        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, signature_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
@@ -804,9 +772,9 @@ fn lower_resolved_expressions(
         exprs.param_defaults.insert(key, expr.clone());
     }
     for entry in nodes {
-        let body_src = entry.src.resolve(src);
+        let signature_src = entry.type_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
-        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, body_src)?;
+        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, signature_src)?;
         if !bounds.is_empty() {
             domain_bounds.insert(key.clone(), bounds);
         }
@@ -821,6 +789,30 @@ fn lower_resolved_expressions(
         exprs,
         domain_bounds,
     })
+}
+
+/// Collect semantic index/constructor definitions reached only from dynamic
+/// unit scale expressions.
+fn collect_dynamic_unit_refs(
+    ctx: ModuleTypeContext<'_>,
+    semantic: &mut DagSemanticBody,
+) -> Result<(), GraphcalError> {
+    let DagSemanticBody {
+        dynamic_unit_scales,
+        collection_refs,
+        constructor_refs,
+        ..
+    } = semantic;
+    for entry in dynamic_unit_scales.values() {
+        collect_resolved_collection_refs_from_expr(&entry.expr, ctx, &entry.src, collection_refs)?;
+        collect_resolved_constructor_refs_from_expr(
+            &entry.expr,
+            ctx,
+            &entry.src,
+            constructor_refs,
+        )?;
+    }
+    Ok(())
 }
 
 /// Populate the semantic body's plot expression maps from the IR's lowered
@@ -841,20 +833,23 @@ fn collect_plot_exprs(
     let mut plot_exprs = ResolvedPlotExprs::default();
 
     let collect = |expr: &hir::Expr,
+                   expr_src: &NamedSource<Arc<String>>,
                    collection_refs: &mut ResolvedCollectionRefs,
                    constructor_refs: &mut ResolvedConstructorRefs|
      -> Result<(), GraphcalError> {
-        collect_resolved_collection_refs_from_expr(expr, ctx, src, collection_refs)?;
-        collect_resolved_constructor_refs_from_expr(expr, ctx, src, constructor_refs)
+        collect_resolved_collection_refs_from_expr(expr, ctx, expr_src, collection_refs)?;
+        collect_resolved_constructor_refs_from_expr(expr, ctx, expr_src, constructor_refs)
     };
 
     for entry in plots {
         let Some(body) = &entry.body else {
             continue;
         };
+        let body_src = entry.body_src.resolve(src);
         for (_, expr) in &body.encodings {
             collect(
                 expr,
+                body_src,
                 &mut semantic.collection_refs,
                 &mut semantic.constructor_refs,
             )?;
@@ -862,6 +857,7 @@ fn collect_plot_exprs(
         for field in body.mark_properties.iter().chain(&body.properties) {
             collect(
                 &field.value,
+                body_src,
                 &mut semantic.collection_refs,
                 &mut semantic.constructor_refs,
             )?;
@@ -869,18 +865,20 @@ fn collect_plot_exprs(
         plot_exprs.plots.insert(entry.name.clone(), body.clone());
     }
 
-    for (name, fields, is_figure) in figures
+    for (name, fields, body_src, is_figure) in figures
         .iter()
-        .map(|entry| (&entry.name, &entry.fields, true))
+        .map(|entry| (&entry.name, &entry.fields, &entry.body_src, true))
         .chain(
             layers
                 .iter()
-                .map(|entry| (&entry.name, &entry.fields, false)),
+                .map(|entry| (&entry.name, &entry.fields, &entry.body_src, false)),
         )
     {
+        let body_src = body_src.resolve(src);
         for field in fields {
             collect(
                 &field.value,
+                body_src,
                 &mut semantic.collection_refs,
                 &mut semantic.constructor_refs,
             )?;
@@ -938,28 +936,76 @@ struct LoweredDagExpressions {
 ///   ([`GraphcalError::PubIndexVariantLiteral`]). Params are exempt (A10(a));
 ///   sink kinds (assert/plot/figure/layer) are checked only when `pub`.
 fn check_hir_body_policies(
-    semantic: &DagSemanticBody,
+    dag: &DagTIR,
     external_surface: &ExternalDeclSurface,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let checker = HirPolicyChecker { ctx, src };
+    let semantic = &dag.semantic;
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
-    let is_explicit_export =
-        |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
 
-    for (key, expr) in &semantic.expressions.consts {
-        checker.check_expr(expr, true, local(key))?;
+    for entry in &dag.consts {
+        let key = dag.resolved_decl_key_for_local(&entry.name);
+        let body_src = entry.body_src.resolve(src);
+        let expr = semantic.expressions.consts.get(&key).ok_or_else(|| {
+            internal_error(
+                format!("semantic HIR expression missing for const `{}`", entry.name),
+                body_src,
+                entry.span,
+            )
+        })?;
+        HirPolicyChecker { ctx, src: body_src }.check_expr(expr, true, local(&key))?;
     }
-    let check_domain_bounds = |bounds: &[ResolvedDomainBound],
-                               check_pub_bind_literals: bool|
+    check_domain_bound_policies(semantic, ctx)?;
+    check_dynamic_unit_policies(semantic, ctx)?;
+    for entry in &dag.nodes {
+        let key = dag.resolved_decl_key_for_local(&entry.name);
+        let body_src = entry.body_src.resolve(src);
+        let expr = semantic.expressions.nodes.get(&key).ok_or_else(|| {
+            internal_error(
+                format!("semantic HIR expression missing for node `{}`", entry.name),
+                body_src,
+                entry.span,
+            )
+        })?;
+        HirPolicyChecker { ctx, src: body_src }.check_expr(expr, false, local(&key))?;
+    }
+    for entry in &dag.params {
+        let key = dag.resolved_decl_key_for_local(&entry.name);
+        let Some(expr) = semantic.expressions.param_defaults.get(&key) else {
+            continue;
+        };
+        let default_src = entry.default_src.as_ref().ok_or_else(|| {
+            internal_error(
+                format!("parameter `{}` is missing default provenance", entry.name),
+                src,
+                entry.span,
+            )
+        })?;
+        // Params are exempt from A10 (a rebinding importer is forced to
+        // rebind the param too — V005 at the include site).
+        HirPolicyChecker {
+            ctx,
+            src: default_src.resolve(src),
+        }
+        .check_expr(expr, false, false)?;
+    }
+    check_sink_body_policies(dag, external_surface, ctx, src)
+}
+
+fn check_domain_bound_policies(
+    semantic: &DagSemanticBody,
+    ctx: ModuleTypeContext<'_>,
+) -> Result<(), GraphcalError> {
+    let check_bounds = |bounds: &[ResolvedDomainBound],
+                        check_pub_bind_literals: bool|
      -> Result<(), GraphcalError> {
         for bound in bounds {
-            let bound_checker = HirPolicyChecker {
+            HirPolicyChecker {
                 ctx,
                 src: &bound.src,
-            };
-            bound_checker.check_expr(&bound.value, true, check_pub_bind_literals)?;
+            }
+            .check_expr(&bound.value, true, check_pub_bind_literals)?;
             // Domain bounds are evaluated without a host function registry.
             if let Some((external, span)) = hir::find_extern_call(&bound.value) {
                 return Err(GraphcalError::ExternCallNotAllowed {
@@ -973,33 +1019,59 @@ fn check_hir_body_policies(
         Ok(())
     };
     for (key, bounds) in &semantic.domain_bounds {
-        check_domain_bounds(bounds, local(key))?;
+        check_bounds(bounds, key.owner() == ctx.owner)?;
     }
     for bounds in semantic.type_defs.field_bounds.values() {
-        check_domain_bounds(bounds, false)?;
+        check_bounds(bounds, false)?;
     }
-    // Dynamic unit scales resolve in contexts that carry no host function
-    // registry (including dependency export); reject extern calls there.
-    for expr in semantic.dynamic_unit_scales.values() {
-        if let Some((ext, span)) = hir::find_extern_call(expr) {
+    Ok(())
+}
+
+fn check_dynamic_unit_policies(
+    semantic: &DagSemanticBody,
+    ctx: ModuleTypeContext<'_>,
+) -> Result<(), GraphcalError> {
+    // Dynamic unit scales may read runtime params/nodes, but otherwise obey
+    // ordinary runtime-body policy (notably, assertions cannot be read).
+    // They also resolve in contexts with no host-function registry.
+    for entry in semantic.dynamic_unit_scales.values() {
+        HirPolicyChecker {
+            ctx,
+            src: &entry.src,
+        }
+        .check_expr(&entry.expr, false, false)?;
+        if let Some((external, span)) = hir::find_extern_call(&entry.expr) {
             return Err(GraphcalError::ExternCallNotAllowed {
-                name: ext.to_string(),
+                name: external.to_string(),
                 context: "unit scale expression".to_string(),
-                src: src.clone(),
+                src: entry.src.clone(),
                 span: span.into(),
             });
         }
     }
-    for (key, expr) in &semantic.expressions.nodes {
-        checker.check_expr(expr, false, local(key))?;
-    }
-    for expr in semantic.expressions.param_defaults.values() {
-        // Params are exempt from A10 (a rebinding importer is forced to
-        // rebind the param too — V005 at the include site).
-        checker.check_expr(expr, false, false)?;
-    }
-    for (key, body) in &semantic.expressions.asserts {
-        let check_literals = local(key) && is_explicit_export(key.as_str());
+    Ok(())
+}
+
+fn check_sink_body_policies(
+    dag: &DagTIR,
+    external_surface: &ExternalDeclSurface,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let is_explicit_export =
+        |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
+    for entry in &dag.asserts {
+        let key = dag.resolved_decl_key_for_local(&entry.name);
+        let body_src = entry.body_src.resolve(src);
+        let body = dag.semantic.expressions.asserts.get(&key).ok_or_else(|| {
+            internal_error(
+                format!("semantic HIR body missing for assert `{}`", entry.name),
+                body_src,
+                entry.span,
+            )
+        })?;
+        let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
+        let checker = HirPolicyChecker { ctx, src: body_src };
         match body {
             hir::AssertBody::Expr(expr) => checker.check_expr(expr, false, check_literals)?,
             hir::AssertBody::Tolerance {
@@ -1014,8 +1086,16 @@ fn check_hir_body_policies(
             }
         }
     }
-    for (name, body) in &semantic.plot_exprs.plots {
-        let check_literals = !name.is_qualified() && is_explicit_export(name.member().as_str());
+    for entry in &dag.plots {
+        let Some(body) = &entry.body else {
+            continue;
+        };
+        let check_literals =
+            !entry.name.is_qualified() && is_explicit_export(entry.name.member().as_str());
+        let checker = HirPolicyChecker {
+            ctx,
+            src: entry.body_src.resolve(src),
+        };
         for (_, expr) in &body.encodings {
             checker.check_expr(expr, false, check_literals)?;
         }
@@ -1023,13 +1103,21 @@ fn check_hir_body_policies(
             checker.check_expr(&field.value, false, check_literals)?;
         }
     }
-    for (name, fields) in semantic
-        .plot_exprs
+    for (name, fields, body_src) in dag
         .figures
         .iter()
-        .chain(&semantic.plot_exprs.layers)
+        .map(|entry| (&entry.name, &entry.fields, &entry.body_src))
+        .chain(
+            dag.layers
+                .iter()
+                .map(|entry| (&entry.name, &entry.fields, &entry.body_src)),
+        )
     {
         let check_literals = !name.is_qualified() && is_explicit_export(name.member().as_str());
+        let checker = HirPolicyChecker {
+            ctx,
+            src: body_src.resolve(src),
+        };
         for field in fields {
             checker.check_expr(&field.value, false, check_literals)?;
         }
@@ -1308,6 +1396,7 @@ impl DagTIRSeed {
         source_order: Vec<(ScopedName, DeclCategory)>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
         expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+        dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
         module_ctx: ModuleTypeContext<'_>,
         src: &NamedSource<Arc<String>>,
@@ -1323,6 +1412,21 @@ impl DagTIRSeed {
 
         let mut semantic = self.semantic;
         semantic.decl_bindings = decl_bindings;
+        for entry in dynamic_unit_scales {
+            let unit = entry.unit.clone();
+            if semantic
+                .dynamic_unit_scales
+                .insert(unit.clone(), entry)
+                .is_some()
+            {
+                return Err(GraphcalError::InternalError {
+                    message: format!("duplicate dynamic unit semantic entry `{unit}`"),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
+        }
+        collect_dynamic_unit_refs(module_ctx, &mut semantic)?;
         collect_plot_exprs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
 
         Ok(DagTIR {

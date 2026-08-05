@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use thiserror::Error;
 
-use crate::desugar::desugared_ast::{Expr, MulDivOp, UnitExpr};
+use crate::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use crate::dimension::{Dimension, Rational, RationalError};
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::dimension::UnitRef;
@@ -62,12 +62,9 @@ impl std::fmt::Display for PositiveFiniteScale {
 pub enum UnitScale {
     /// Scale factor known at compile time (e.g., `const unit km: Length = 1000 m;`).
     Static(PositiveFiniteScale),
-    /// Scale factor depends on runtime values (e.g., `unit EUR: Money = (@rate) USD;`).
-    ///
-    /// The final SI scale = `eval(scale_expr) * base_unit_scale`.
+    /// Scale factor depends on a strictly typed HIR expression retained by IR/TIR
+    /// (e.g., `unit EUR: Money = (@rate) USD;`).
     Dynamic {
-        /// The unevaluated scale expression containing `@`-references.
-        scale_expr: Expr,
         /// The scale factor of the base unit in the definition (resolved at compile time).
         /// For `(@rate) USD` where USD has scale 1.0, this is 1.0.
         base_unit_scale: PositiveFiniteScale,

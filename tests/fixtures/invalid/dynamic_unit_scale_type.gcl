@@ -1,0 +1,4 @@
+base dim Money;
+base unit USD: Money;
+param factor: Length = 2.0 m;
+unit EUR: Money = (@factor) USD;

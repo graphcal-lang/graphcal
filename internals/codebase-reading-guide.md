@@ -432,11 +432,11 @@ The compiler crate owns the functional core through TIR.
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
 | `desugar/`                    | Phase walker and the `Desugared` AST alias module             |
 | `hir/`                        | The single resolution stage; resolved type/value expressions  |
-| `ir/lower.rs`                 | IR assembly, `UnfrozenIR::freeze` lowering boundary           |
+| `ir/lower.rs`                 | IR assembly, body-source provenance, strict HIR freeze boundary |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
-| `tir/typed.rs`                | `TIR`, `DagTIR`, `DagSemanticBody`, resolved type expressions |
-| `tir/dim_check/`              | Dimension/type inference and checking                         |
+| `tir/typed.rs`                | Typed semantic bodies, including atomic dynamic-unit entries   |
+| `tir/dim_check/`              | Dimension/type inference, including scalar unit-scale checks   |
 | `tir/dim_check/plot.rs`       | Plot/figure/layer dimension validation                        |
 
 ### 2.2 `graphcal-eval`
