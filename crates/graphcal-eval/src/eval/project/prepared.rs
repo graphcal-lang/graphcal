@@ -22,7 +22,7 @@ use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 use graphcal_compiler::syntax::span::Span;
-use miette::NamedSource;
+use miette::{NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
@@ -958,6 +958,27 @@ impl ParameterBindingBuilder<'_> {
     /// Bind a parsed, desugared closed Graphcal value expression by entry name.
     pub fn bind_expression(&mut self, name: &DeclName, expr: &Expr) -> Result<(), CompileError> {
         let value = self.project.compile_named_parameter_value(name, expr)?;
+        self.bind_value(value)
+    }
+
+    /// Bind an expression supplied by an external format and report semantic
+    /// failures against that format's source location.
+    pub fn bind_external_expression(
+        &mut self,
+        name: &DeclName,
+        expr: &Expr,
+        src: &NamedSource<Arc<String>>,
+        span: SourceSpan,
+    ) -> Result<(), CompileError> {
+        let value = self
+            .project
+            .compile_named_parameter_value(name, expr)
+            .map_err(|error| CompileError::ExternalBinding {
+                name: name.clone(),
+                reason: error.to_string(),
+                src: src.clone(),
+                span,
+            })?;
         self.bind_value(value)
     }
 

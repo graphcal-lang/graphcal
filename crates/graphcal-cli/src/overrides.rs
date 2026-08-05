@@ -16,12 +16,13 @@
 use std::collections::HashMap;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::names::NameAtomError;
 use graphcal_compiler::syntax::parser::ParseError;
-use miette::Diagnostic;
+use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use crate::json_input::{self, JsonInputError};
@@ -32,6 +33,27 @@ use crate::json_input::{self, JsonInputError};
 /// accidental `--input some-huge-dataset.json` with a clear error instead of
 /// silently OOM-ing inside `serde_json`.
 pub const DEFAULT_INPUT_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Parsed CLI overrides plus the source to use for diagnostics from structured
+/// input files.
+#[derive(Debug)]
+pub struct ParsedOverrides {
+    /// Values keyed by their typed entry parameter names.
+    pub values: HashMap<DeclName, Expr>,
+    /// Diagnostic sources for values that came from `--input` rather than
+    /// `--set`. The source is keyed by the same typed parameter name as the
+    /// value map, not by a formatted composite string.
+    pub input_sources: HashMap<DeclName, InputOverrideSource>,
+}
+
+/// Source information for one value synthesized from a JSON input file.
+#[derive(Debug, Clone)]
+pub struct InputOverrideSource {
+    /// The JSON file displayed by miette.
+    pub source: NamedSource<Arc<String>>,
+    /// Span of the top-level parameter key in the JSON input.
+    pub span: SourceSpan,
+}
 
 /// Errors that can occur when parsing CLI overrides.
 #[derive(Debug, Error, Diagnostic)]
@@ -142,13 +164,15 @@ pub enum OverrideParseError {
 ///
 /// Returns [`OverrideParseError`] if any `--set` entry is malformed, if
 /// `--input` cannot be read, is too large, or fails to match the JSON-input
-/// schema.
-pub fn parse_overrides(
+/// schema. The returned value retains the source of structured input values so
+/// their later semantic diagnostics can point to the JSON file.
+pub fn parse_overrides_with_sources(
     set: &[String],
     input: Option<&Path>,
     input_max_bytes: Option<u64>,
-) -> Result<HashMap<DeclName, Expr>, OverrideParseError> {
+) -> Result<ParsedOverrides, OverrideParseError> {
     let mut overrides = HashMap::new();
+    let mut input_sources = HashMap::new();
 
     for s in set {
         let Some((name, value_str)) = s.split_once('=') else {
@@ -193,14 +217,80 @@ pub fn parse_overrides(
                 source: e,
             }
         })?;
+        let parameter_spans = top_level_parameter_spans(&json_str);
+        let input_source = NamedSource::new(input_path.display().to_string(), Arc::new(json_str));
         for (name, expr) in json_overrides {
-            overrides
-                .entry(name)
-                .or_insert_with(|| resolve_override_expr(expr));
+            if let std::collections::hash_map::Entry::Vacant(entry) = overrides.entry(name.clone())
+            {
+                entry.insert(resolve_override_expr(expr));
+                let span = parameter_spans
+                    .get(&name)
+                    .copied()
+                    .unwrap_or_else(|| (0usize, 0usize).into());
+                input_sources.insert(
+                    name,
+                    InputOverrideSource {
+                        source: input_source.clone(),
+                        span,
+                    },
+                );
+            }
         }
     }
 
-    Ok(overrides)
+    Ok(ParsedOverrides {
+        values: overrides,
+        input_sources,
+    })
+}
+
+/// Locate top-level object keys after serde has validated the JSON. This small
+/// lexical pass retains only boundary-source metadata; semantic values still
+/// come exclusively from `serde_json` and [`json_input::json_to_overrides`].
+fn top_level_parameter_spans(json: &str) -> HashMap<DeclName, SourceSpan> {
+    let bytes = json.as_bytes();
+    let mut containers = Vec::new();
+    let mut spans = HashMap::new();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' => {
+                let start = cursor;
+                cursor += 1;
+                while cursor < bytes.len() && bytes[cursor] != b'"' {
+                    cursor += usize::from(bytes[cursor] == b'\\') + 1;
+                }
+                cursor = cursor.saturating_add(1).min(bytes.len());
+
+                let mut after = cursor;
+                while after < bytes.len() && bytes[after].is_ascii_whitespace() {
+                    after += 1;
+                }
+                if containers.as_slice() == b"{" && bytes.get(after) == Some(&b':') {
+                    let key_literal = &json[start..cursor];
+                    if let Some(name) = serde_json::from_str::<String>(key_literal)
+                        .ok()
+                        .and_then(|key| DeclName::try_new(key).ok())
+                    {
+                        spans.insert(name, (start, cursor - start).into());
+                    }
+                }
+                continue;
+            }
+            b'{' | b'[' => containers.push(bytes[cursor]),
+            b'}' if containers.last() == Some(&b'{') => {
+                containers.pop();
+            }
+            b']' if containers.last() == Some(&b'[') => {
+                containers.pop();
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+
+    spans
 }
 
 fn read_input_file_limited(path: &Path, limit: u64) -> Result<String, OverrideParseError> {
@@ -262,6 +352,14 @@ fn resolve_override_expr(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_overrides(
+        set: &[String],
+        input: Option<&Path>,
+        input_max_bytes: Option<u64>,
+    ) -> Result<HashMap<DeclName, Expr>, OverrideParseError> {
+        super::parse_overrides_with_sources(set, input, input_max_bytes).map(|parsed| parsed.values)
+    }
 
     #[test]
     fn parse_overrides_happy_path() {
@@ -375,6 +473,22 @@ mod tests {
 
         let overrides = parse_overrides(&[], Some(&path), Some(DEFAULT_INPUT_MAX_BYTES)).unwrap();
         assert!(overrides.contains_key(&DeclName::expect_valid("x")));
+    }
+
+    #[test]
+    fn parse_overrides_retains_top_level_json_key_span() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.json");
+        std::fs::write(
+            &path,
+            "{\n  \"matrix\": {\"index\": \"Row\", \"entries\": {}}\n}",
+        )
+        .unwrap();
+
+        let parsed = parse_overrides_with_sources(&[], Some(&path), None).unwrap();
+        let source = &parsed.input_sources[&DeclName::expect_valid("matrix")];
+        assert_eq!(source.span.offset(), 4);
+        assert_eq!(source.span.len(), 8);
     }
 
     #[test]

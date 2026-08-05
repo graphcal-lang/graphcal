@@ -1818,6 +1818,42 @@ fn prepared_bindings_reject_computations_and_cross_plan_positions() {
 }
 
 #[test]
+fn external_binding_errors_retain_boundary_source_and_parameter() {
+    let project =
+        crate::loader::LoadedProject::from_source("param count: Int;", "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let input = miette::NamedSource::new(
+        "input.json",
+        std::sync::Arc::new("{\n  \"count\": true\n}".to_string()),
+    );
+    let mut bindings = prepared.binding_builder();
+
+    let error = bindings
+        .bind_external_expression(
+            &DeclName::expect_valid("count"),
+            &parse_expr("true"),
+            &input,
+            (4usize, 7usize).into(),
+        )
+        .unwrap_err();
+
+    match error {
+        CompileError::ExternalBinding {
+            name, reason, span, ..
+        } => {
+            assert_eq!(name.as_str(), "count");
+            assert!(
+                reason.contains("declared Int, inferred Bool"),
+                "unexpected reason: {reason}"
+            );
+            assert_eq!(span.offset(), 4);
+            assert_eq!(span.len(), 7);
+        }
+        other => panic!("expected external binding diagnostic, got {other:?}"),
+    }
+}
+
+#[test]
 fn tenax_v2_projection_is_strict_and_preserves_typed_domains() {
     let source = r"
         pub index Mode = { Zulu, Alpha };

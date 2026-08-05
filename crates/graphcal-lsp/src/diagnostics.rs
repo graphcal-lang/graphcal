@@ -157,10 +157,7 @@ pub fn compile_error_to_diagnostics_grouped(
     error: &CompileError,
     fallback_uri: &Url,
 ) -> HashMap<Url, Vec<Diagnostic>> {
-    let diag: &dyn miette::Diagnostic = match error {
-        CompileError::Parse(e) => e,
-        CompileError::Eval(e) => e,
-    };
+    let diag: &dyn miette::Diagnostic = error;
     let data = structured_data(error);
 
     // Source-less errors carry no labels either, so an empty source is safe

@@ -58,10 +58,7 @@ impl From<Utf16Range> for TextRange {
 }
 
 pub fn compile_error_view(error: &CompileError, project: &VirtualProject) -> DiagnosticView {
-    let diagnostic: &dyn miette::Diagnostic = match error {
-        CompileError::Parse(inner) => inner,
-        CompileError::Eval(inner) => inner,
-    };
+    let diagnostic: &dyn miette::Diagnostic = error;
 
     let source = error.named_source();
     let file = source

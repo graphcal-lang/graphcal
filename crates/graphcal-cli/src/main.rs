@@ -26,8 +26,8 @@ use std::process;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
-    CompileError, EvalOutputView, EvalResult, compile_and_eval_from_project_with_host_fns,
-    compile_to_tir_from_project_with_host_fns, format_number,
+    CompileError, EvalOutputView, EvalResult, compile_to_tir_from_project_with_host_fns,
+    format_number, prepare_from_project_with_host_fns,
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
@@ -35,7 +35,9 @@ use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project
 use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
 
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
-use crate::overrides::{OverrideParseError, parse_overrides};
+use crate::overrides::{
+    InputOverrideSource, OverrideParseError, ParsedOverrides, parse_overrides_with_sources,
+};
 
 const VERSION: &str = if env!("GIT_HASH").is_empty() {
     env!("CARGO_PKG_VERSION")
@@ -334,10 +336,11 @@ fn run_command(cli: Cli) {
             root,
             plot: plot_output,
         } => {
-            let overrides = match parse_overrides(&set, input.as_deref(), input_max_bytes) {
-                Ok(o) => o,
-                Err(e) => report_override_error(&e),
-            };
+            let overrides =
+                match parse_overrides_with_sources(&set, input.as_deref(), input_max_bytes) {
+                    Ok(o) => o,
+                    Err(e) => report_override_error(&e),
+                };
             handle_eval(
                 &file,
                 &format,
@@ -506,10 +509,7 @@ fn handle_eval(
     file: &Path,
     format: &OutputFormat,
     output_view: EvalOutputView,
-    overrides: &std::collections::HashMap<
-        DeclName,
-        graphcal_compiler::desugar::desugared_ast::Expr,
-    >,
+    overrides: &ParsedOverrides,
     root: Option<&Path>,
     plot_output: Option<&PlotOutput>,
 ) {
@@ -519,7 +519,17 @@ fn handle_eval(
     // `graphcal.toml`, falling back to an unrooted FS for loose files.
     let fs = build_rooted_filesystem(file, root);
     let outcome = load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
-        compile_and_eval_from_project_with_host_fns(&project, overrides, &host_fns)
+        let prepared = prepare_from_project_with_host_fns(&project, &host_fns)?;
+        let mut bindings = prepared.binding_builder();
+        for (name, expression) in &overrides.values {
+            match overrides.input_sources.get(name) {
+                Some(InputOverrideSource { source, span }) => {
+                    bindings.bind_external_expression(name, expression, source, *span)?;
+                }
+                None => bindings.bind_expression(name, expression)?,
+            }
+        }
+        prepared.evaluate(&bindings.finish()?)
     });
     match outcome {
         Ok(result) => {

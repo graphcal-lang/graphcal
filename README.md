@@ -67,7 +67,7 @@ graphcal eval rocket.gcl --set 'isp=450.0 s'
 # Serve bounded scalar inputs and public Bool outputs to Tenax over Arrow IPC
 graphcal model serve reliability.gcl --output failure
 
-# Bind from JSON, emit JSON, or inspect included-DAG internals
+# Bind from JSON (input errors point back to params.json) or emit JSON
 graphcal eval analysis.gcl --input params.json --format json
 graphcal eval analysis.gcl --output-view all
 graphcal eval analysis.gcl --plot browser
