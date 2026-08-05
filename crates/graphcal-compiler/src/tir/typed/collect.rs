@@ -17,8 +17,7 @@ use crate::syntax::type_name::ResolvedConstructorName;
 use super::{
     DagSemanticBody, ModuleTypeContext, ResolvedCollectionRefs, ResolvedConstructorRefs,
     ResolvedConstructorTarget, ResolvedDagDependencies, ResolvedDomainBound, ResolvedExpressions,
-    ResolvedIndex, ResolvedInlineDagCall, ResolvedInlineDagRefs, ResolvedTypeExpr, internal_error,
-    module_resolve_error,
+    ResolvedIndex, ResolvedTypeExpr, internal_error, module_resolve_error,
 };
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
@@ -160,7 +159,7 @@ fn collect_unit_names_from_hir(
                 collect_unit_names_from_hir(&arm.body, names);
             }
         }
-        hir::ExprKind::InlineDagRef { args, .. } => {
+        hir::ExprKind::DagCall { args, .. } => {
             for arg in args {
                 collect_unit_names_from_hir(&arg.value, names);
             }
@@ -573,7 +572,7 @@ fn collect_resolved_collection_refs_from_expr_inner(
             }
             Ok(())
         }
-        hir::ExprKind::InlineDagRef { args, .. } => {
+        hir::ExprKind::DagCall { args, .. } => {
             for arg in args {
                 collect_resolved_collection_refs_from_expr(&arg.value, ctx, src, refs)?;
             }
@@ -787,7 +786,7 @@ fn collect_resolved_constructor_refs_from_expr_inner(
             }
             Ok(())
         }
-        hir::ExprKind::InlineDagRef { args, .. } => {
+        hir::ExprKind::DagCall { args, .. } => {
             for arg in args {
                 collect_resolved_constructor_refs_from_expr(&arg.value, ctx, src, refs)?;
             }
@@ -814,169 +813,6 @@ fn collect_resolved_constructor_refs_from_assert_body(
             collect_resolved_constructor_refs_from_expr(actual, ctx, src, refs)?;
             collect_resolved_constructor_refs_from_expr(expected, ctx, src, refs)?;
             collect_resolved_constructor_refs_from_expr(tolerance, ctx, src, refs)
-        }
-    }
-}
-
-pub(super) fn collect_resolved_inline_dag_refs(
-    exprs: &ResolvedExpressions,
-) -> ResolvedInlineDagRefs {
-    let mut refs = ResolvedInlineDagRefs::default();
-
-    for hir_expr in exprs
-        .consts
-        .values()
-        .chain(exprs.param_defaults.values())
-        .chain(exprs.nodes.values())
-    {
-        collect_resolved_inline_dag_refs_from_expr(hir_expr, &mut refs);
-    }
-    for body in exprs.asserts.values() {
-        collect_resolved_inline_dag_refs_from_assert_body(body, &mut refs);
-    }
-
-    refs
-}
-
-fn collect_resolved_inline_dag_refs_from_expr(expr: &hir::Expr, refs: &mut ResolvedInlineDagRefs) {
-    // Recursion choke point: recurses once per tree level (unbounded for
-    // left-nested operator chains).
-    crate::stack::with_stack_growth(|| {
-        collect_resolved_inline_dag_refs_from_expr_inner(expr, refs);
-    });
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "single recursion covering every ExprKind variant"
-)]
-fn collect_resolved_inline_dag_refs_from_expr_inner(
-    expr: &hir::Expr,
-    refs: &mut ResolvedInlineDagRefs,
-) {
-    match &expr.kind {
-        hir::ExprKind::Error { children } => {
-            for child in children {
-                collect_resolved_inline_dag_refs_from_expr(child, refs);
-            }
-        }
-        hir::ExprKind::Number(_)
-        | hir::ExprKind::Integer(_)
-        | hir::ExprKind::Bool(_)
-        | hir::ExprKind::StringLiteral(_)
-        | hir::ExprKind::OffsetDateTimeLiteral(_)
-        | hir::ExprKind::CivilDateTimeLiteral(_)
-        | hir::ExprKind::ZonedDateTimeLiteral(_)
-        | hir::ExprKind::IanaTimeZoneLiteral(_)
-        | hir::ExprKind::TypeSystemRef(_)
-        | hir::ExprKind::GraphRef(_)
-        | hir::ExprKind::ConstRef(_)
-        | hir::ExprKind::LocalRef(_)
-        | hir::ExprKind::UnitLiteral { .. }
-        | hir::ExprKind::VariantLiteral(_) => {}
-        hir::ExprKind::BinOp { lhs, rhs, .. } => {
-            collect_resolved_inline_dag_refs_from_expr(lhs, refs);
-            collect_resolved_inline_dag_refs_from_expr(rhs, refs);
-        }
-        hir::ExprKind::UnaryOp { operand, .. }
-        | hir::ExprKind::Convert { expr: operand, .. }
-        | hir::ExprKind::DisplayTimezone { expr: operand, .. }
-        | hir::ExprKind::FieldAccess { expr: operand, .. } => {
-            collect_resolved_inline_dag_refs_from_expr(operand, refs);
-        }
-        hir::ExprKind::FnCall { args, .. } => {
-            for arg in args {
-                collect_resolved_inline_dag_refs_from_expr(arg, refs);
-            }
-        }
-        hir::ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_resolved_inline_dag_refs_from_expr(condition, refs);
-            collect_resolved_inline_dag_refs_from_expr(then_branch, refs);
-            collect_resolved_inline_dag_refs_from_expr(else_branch, refs);
-        }
-        hir::ExprKind::ConstructorCall { fields, .. } => {
-            for field in fields {
-                collect_resolved_inline_dag_refs_from_expr(&field.value, refs);
-            }
-        }
-        hir::ExprKind::MapLiteral { entries } => {
-            for entry in entries {
-                collect_resolved_inline_dag_refs_from_expr(&entry.value, refs);
-            }
-        }
-        hir::ExprKind::ForComp { body, .. } => {
-            collect_resolved_inline_dag_refs_from_expr(body, refs);
-        }
-        hir::ExprKind::IndexAccess { expr, args } => {
-            collect_resolved_inline_dag_refs_from_expr(expr, refs);
-            for arg in args {
-                if let hir::expr::IndexArg::Expr(expr) = arg {
-                    collect_resolved_inline_dag_refs_from_expr(expr, refs);
-                }
-            }
-        }
-        hir::ExprKind::Scan {
-            source, init, body, ..
-        } => {
-            collect_resolved_inline_dag_refs_from_expr(source, refs);
-            collect_resolved_inline_dag_refs_from_expr(init, refs);
-            collect_resolved_inline_dag_refs_from_expr(body, refs);
-        }
-        hir::ExprKind::Unfold { init, body, .. } => {
-            collect_resolved_inline_dag_refs_from_expr(init, refs);
-            collect_resolved_inline_dag_refs_from_expr(body, refs);
-        }
-        hir::ExprKind::KeyForm { arg, .. } => {
-            collect_resolved_inline_dag_refs_from_expr(arg, refs);
-        }
-        hir::ExprKind::Match { scrutinee, arms } => {
-            collect_resolved_inline_dag_refs_from_expr(scrutinee, refs);
-            for arm in arms {
-                collect_resolved_inline_dag_refs_from_expr(&arm.body, refs);
-            }
-        }
-        hir::ExprKind::InlineDagRef {
-            target,
-            args,
-            output,
-        } => {
-            let arg_targets = args
-                .iter()
-                .map(|arg| (arg.target.span, arg.target.value.clone()))
-                .collect();
-            refs.calls.insert(
-                expr.span,
-                ResolvedInlineDagCall {
-                    target: target.value.clone(),
-                    arg_targets,
-                    output: output.clone(),
-                },
-            );
-            for arg in args {
-                collect_resolved_inline_dag_refs_from_expr(&arg.value, refs);
-            }
-        }
-    }
-}
-
-fn collect_resolved_inline_dag_refs_from_assert_body(
-    body: &hir::AssertBody,
-    refs: &mut ResolvedInlineDagRefs,
-) {
-    match body {
-        hir::AssertBody::Expr(expr) => collect_resolved_inline_dag_refs_from_expr(expr, refs),
-        hir::AssertBody::Tolerance {
-            actual,
-            expected,
-            tolerance,
-        } => {
-            collect_resolved_inline_dag_refs_from_expr(actual, refs);
-            collect_resolved_inline_dag_refs_from_expr(expected, refs);
-            collect_resolved_inline_dag_refs_from_expr(tolerance, refs);
         }
     }
 }

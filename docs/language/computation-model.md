@@ -67,7 +67,7 @@ Nodes are computed values. Their expressions can reference parameters, other nod
 const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
-Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes (the `@` sigil is prohibited in `const node` expressions).
+Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes. DAG calls are anonymous runtime includes, so they are also prohibited in `const node` expressions and compile-time domain bounds.
 
 ### Assertions
 
@@ -84,7 +84,7 @@ The `@` prefix is the central scoping mechanism:
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
 | `@name` | Parameter, node, or const node in the graph | `node` expressions, `dag` block bodies |
-| `@dag(args).out` | Inline DAG invocation projecting one output | Same as above |
+| `@dag(args).out` | Runtime DAG instantiation projecting one output | Runtime expressions only |
 | `NAME` | Built-in constant (`PI`, `E`, `TAU`, etc.) | Everywhere |
 | `name` | Local variable (loop variable, match binding) | Expression bodies |
 

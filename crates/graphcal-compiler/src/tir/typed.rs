@@ -444,7 +444,6 @@ fn type_resolve_dag(
     cancellation.checkpoint()?;
     let constructor_refs =
         collect_resolved_constructor_refs(&expressions, &domain_bounds, module_ctx, src)?;
-    let inline_dag_refs = collect_resolved_inline_dag_refs(&expressions);
     cancellation.checkpoint()?;
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
@@ -463,7 +462,6 @@ fn type_resolve_dag(
         dependencies,
         collection_refs,
         constructor_refs,
-        inline_dag_refs,
         type_defs,
         decl_bindings: HashMap::new(),
     };
@@ -948,7 +946,11 @@ fn check_hir_body_policies(
                 entry.span,
             )
         })?;
-        HirPolicyChecker { ctx, src: body_src }.check_expr(expr, true, local(&key))?;
+        HirPolicyChecker { ctx, src: body_src }.check_expr(
+            expr,
+            BodyPhase::CompileTime,
+            local(&key),
+        )?;
     }
     check_domain_bound_policies(semantic, ctx)?;
     check_dynamic_unit_policies(semantic, ctx)?;
@@ -962,7 +964,11 @@ fn check_hir_body_policies(
                 entry.span,
             )
         })?;
-        HirPolicyChecker { ctx, src: body_src }.check_expr(expr, false, local(&key))?;
+        HirPolicyChecker { ctx, src: body_src }.check_expr(
+            expr,
+            BodyPhase::Runtime,
+            local(&key),
+        )?;
     }
     for entry in &dag.params {
         let key = dag.resolved_decl_key_for_local(&entry.name);
@@ -982,7 +988,7 @@ fn check_hir_body_policies(
             ctx,
             src: default_src.resolve(src),
         }
-        .check_expr(expr, false, false)?;
+        .check_expr(expr, BodyPhase::Runtime, false)?;
     }
     check_sink_body_policies(dag, external_surface, ctx, src)
 }
@@ -999,7 +1005,11 @@ fn check_domain_bound_policies(
                 ctx,
                 src: &bound.src,
             }
-            .check_expr(&bound.value, true, check_pub_bind_literals)?;
+            .check_expr(
+                &bound.value,
+                BodyPhase::CompileTime,
+                check_pub_bind_literals,
+            )?;
             // Domain bounds are evaluated without a host function registry.
             if let Some((external, span)) = hir::find_extern_call(&bound.value) {
                 return Err(GraphcalError::ExternCallNotAllowed {
@@ -1033,7 +1043,7 @@ fn check_dynamic_unit_policies(
             ctx,
             src: &entry.src,
         }
-        .check_expr(&entry.expr, false, false)?;
+        .check_expr(&entry.expr, BodyPhase::Runtime, false)?;
         if let Some((external, span)) = hir::find_extern_call(&entry.expr) {
             return Err(GraphcalError::ExternCallNotAllowed {
                 name: external.to_string(),
@@ -1067,16 +1077,18 @@ fn check_sink_body_policies(
         let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
         let checker = HirPolicyChecker { ctx, src: body_src };
         match body {
-            hir::AssertBody::Expr(expr) => checker.check_expr(expr, false, check_literals)?,
+            hir::AssertBody::Expr(expr) => {
+                checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
+            }
             hir::AssertBody::Tolerance {
                 actual,
                 expected,
                 tolerance,
                 ..
             } => {
-                checker.check_expr(actual, false, check_literals)?;
-                checker.check_expr(expected, false, check_literals)?;
-                checker.check_expr(tolerance, false, check_literals)?;
+                checker.check_expr(actual, BodyPhase::Runtime, check_literals)?;
+                checker.check_expr(expected, BodyPhase::Runtime, check_literals)?;
+                checker.check_expr(tolerance, BodyPhase::Runtime, check_literals)?;
             }
         }
     }
@@ -1089,10 +1101,10 @@ fn check_sink_body_policies(
             src: entry.body_src.resolve(src),
         };
         for (_, expr) in &body.encodings {
-            checker.check_expr(expr, false, check_literals)?;
+            checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
         }
         for field in body.mark_properties.iter().chain(&body.properties) {
-            checker.check_expr(&field.value, false, check_literals)?;
+            checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
         }
     }
     for (name, fields, body_src) in dag
@@ -1111,10 +1123,22 @@ fn check_sink_body_policies(
             src: body_src.resolve(src),
         };
         for field in fields {
-            checker.check_expr(&field.value, false, check_literals)?;
+            checker.check_expr(&field.value, BodyPhase::Runtime, check_literals)?;
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BodyPhase {
+    CompileTime,
+    Runtime,
+}
+
+impl BodyPhase {
+    const fn is_compile_time(self) -> bool {
+        matches!(self, Self::CompileTime)
+    }
 }
 
 struct HirPolicyChecker<'a> {
@@ -1126,12 +1150,12 @@ impl HirPolicyChecker<'_> {
     fn check_expr(
         &self,
         expr: &hir::Expr,
-        const_body: bool,
+        phase: BodyPhase,
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
         // Recursion choke point: recurses once per tree level.
         crate::stack::with_stack_growth(|| {
-            self.check_expr_inner(expr, const_body, check_pub_bind_literals)
+            self.check_expr_inner(expr, phase, check_pub_bind_literals)
         })
     }
 
@@ -1139,11 +1163,10 @@ impl HirPolicyChecker<'_> {
     fn check_expr_inner(
         &self,
         expr: &hir::Expr,
-        const_body: bool,
+        phase: BodyPhase,
         check_pub_bind_literals: bool,
     ) -> Result<(), GraphcalError> {
-        let recurse =
-            |inner: &hir::Expr| self.check_expr(inner, const_body, check_pub_bind_literals);
+        let recurse = |inner: &hir::Expr| self.check_expr(inner, phase, check_pub_bind_literals);
         match &expr.kind {
             hir::ExprKind::Error { children } => children.iter().try_for_each(recurse),
             hir::ExprKind::Number(_)
@@ -1157,11 +1180,11 @@ impl HirPolicyChecker<'_> {
             | hir::ExprKind::TypeSystemRef(_)
             | hir::ExprKind::ConstRef(_)
             | hir::ExprKind::LocalRef(_) => Ok(()),
-            hir::ExprKind::UnitLiteral { unit, .. } => self.check_const_unit_expr(unit, const_body),
+            hir::ExprKind::UnitLiteral { unit, .. } => self.check_unit_expr(unit, phase),
             hir::ExprKind::GraphRef(target) => {
                 // Use the whole `@name` span (the reference Spanned covers
                 // only the name) so the label includes the sigil.
-                self.check_graph_ref(target, expr.span, const_body)
+                self.check_graph_ref(target, expr.span, phase)
             }
             hir::ExprKind::VariantLiteral(variant) => {
                 self.check_variant_literal(variant, check_pub_bind_literals)
@@ -1177,13 +1200,15 @@ impl HirPolicyChecker<'_> {
                 expr: operand,
                 target,
             } => {
-                self.check_const_unit_expr(target, const_body)?;
+                self.check_unit_expr(target, phase)?;
                 recurse(operand)
             }
             hir::ExprKind::FnCall { callee, args, .. } => {
                 // Extern functions are runtime-provided; const expressions
                 // evaluate at compile time without a host function registry.
-                if const_body && let hir::FunctionRef::External(ext) = &callee.value {
+                if phase.is_compile_time()
+                    && let hir::FunctionRef::External(ext) = &callee.value
+                {
                     return Err(GraphcalError::ExternCallNotAllowed {
                         name: ext.to_string(),
                         context: "const expression".to_string(),
@@ -1252,18 +1277,25 @@ impl HirPolicyChecker<'_> {
                 }
                 Ok(())
             }
-            hir::ExprKind::InlineDagRef { args, .. } => {
+            hir::ExprKind::DagCall { target, args, .. } => {
+                if phase.is_compile_time() {
+                    return Err(GraphcalError::DagCallInCompileTime {
+                        name: target.value.to_string(),
+                        src: self.src.clone(),
+                        span: expr.span.into(),
+                    });
+                }
                 args.iter().try_for_each(|arg| recurse(&arg.value))
             }
         }
     }
 
-    fn check_const_unit_expr(
+    fn check_unit_expr(
         &self,
         unit: &hir::ResolvedUnitExpr,
-        const_body: bool,
+        phase: BodyPhase,
     ) -> Result<(), GraphcalError> {
-        if !const_body {
+        if !phase.is_compile_time() {
             return Ok(());
         }
         for term in &unit.terms {
@@ -1287,7 +1319,7 @@ impl HirPolicyChecker<'_> {
         &self,
         target: &Spanned<ResolvedDeclName>,
         ref_span: Span,
-        const_body: bool,
+        phase: BodyPhase,
     ) -> Result<(), GraphcalError> {
         let Ok(kind) = self.ctx.resolver.decl_symbol_kind(&target.value) else {
             // Unknown targets get their own diagnostic from dependency
@@ -1301,7 +1333,7 @@ impl HirPolicyChecker<'_> {
                 span: ref_span.into(),
             });
         }
-        if const_body && !kind.is_const() {
+        if phase.is_compile_time() && !kind.is_const() {
             return Err(GraphcalError::GraphRefInConst {
                 name: ScopedName::local(target.value.to_unowned_def_name()),
                 src: self.src.clone(),
@@ -1357,8 +1389,7 @@ use collect::{
     augment_runtime_deps_for_dynamic_units, collect_hir_decl_bindings,
     collect_resolved_collection_refs, collect_resolved_collection_refs_from_expr,
     collect_resolved_constructor_refs, collect_resolved_constructor_refs_from_expr,
-    collect_resolved_dag_dependencies, collect_resolved_decl_bindings,
-    collect_resolved_inline_dag_refs, resolve_expected_fail_keys,
+    collect_resolved_dag_dependencies, collect_resolved_decl_bindings, resolve_expected_fail_keys,
 };
 
 /// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized

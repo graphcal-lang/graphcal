@@ -638,7 +638,7 @@ fn check_ineffective_conversions_inner(
         }
         // Inline-dag param bindings flow into the callee's params, whose
         // reads propagate display metadata; treat them as display positions.
-        ExprKind::InlineDagRef { args, .. } => {
+        ExprKind::DagCall { args, .. } => {
             for binding in args {
                 check_ineffective_conversions(&binding.value, display_position, src)?;
             }
@@ -1679,18 +1679,16 @@ enum DagCycleFrame {
     Leave(crate::dag_id::DagId),
 }
 
-/// Collect inline dag call targets from a compiled DAG's semantic body.
+/// Collect DAG-call targets directly from every semantic HIR root.
 fn collect_dag_call_targets_from_dag(
     dag: &crate::tir::typed::DagTIR,
     out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
 ) {
-    out.extend(
-        dag.semantic
-            .inline_dag_refs
-            .calls
-            .values()
-            .map(|call| call.target.clone()),
-    );
+    dag.semantic.visit_expressions(&mut |expr| {
+        if let crate::hir::ExprKind::DagCall { target, .. } = &expr.kind {
+            out.insert(target.value.clone());
+        }
+    });
 }
 
 /// Detect cycles in same-file declaration dependencies.

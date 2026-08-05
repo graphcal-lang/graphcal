@@ -166,11 +166,11 @@ fn eval_hir_expr_inner(
         hir::ExprKind::VariantLiteral(variant) => {
             Ok(RuntimeValue::resolved_label(&variant.variant))
         }
-        hir::ExprKind::InlineDagRef {
+        hir::ExprKind::DagCall {
             target,
             args,
             output,
-        } => eval_hir_inline_dag_call(target, args, output, values, local_values, ctx),
+        } => eval_hir_dag_call(target, args, output, values, local_values, ctx),
     }
 }
 
@@ -2226,7 +2226,7 @@ fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Opt
         .or_else(|| dag_tir.semantic.expressions.runtime_expr(&key))
 }
 
-fn eval_hir_inline_dag_call(
+fn eval_hir_dag_call(
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclKey>,

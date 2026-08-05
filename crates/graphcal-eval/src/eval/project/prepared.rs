@@ -2113,7 +2113,7 @@ fn validate_closed_hir(expr: &graphcal_compiler::hir::Expr) -> Result<(), &'stat
         | HirExprKind::Scan { .. }
         | HirExprKind::Unfold { .. }
         | HirExprKind::Match { .. }
-        | HirExprKind::InlineDagRef { .. } => {
+        | HirExprKind::DagCall { .. } => {
             Err("references, computations, and control-flow expressions are not allowed")
         }
     }

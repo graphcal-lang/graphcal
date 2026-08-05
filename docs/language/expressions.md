@@ -228,10 +228,10 @@ node clamped: Int = if @a > @seven { @seven } else { @a };
 
 Both branches must have the same type and dimension. The `else` branch is required.
 
-## Inline DAG Invocation (`@dag(args).out`)
+## DAG Call Expression (`@dag(args).out`)
 
-A `dag` can be invoked as an expression, producing a fresh sub-graph at every
-syntactic call site:
+Any DAG module—a file root or a `dag` block—can be invoked as an expression,
+producing a fresh runtime sub-graph at every syntactic call site:
 
 ```
 node doubled: Length = @scale(factor: 2.0, v: @src).result;
@@ -248,7 +248,11 @@ mandatory projection makes the expression a graph reference. It may name either
 an explicitly exported node or a param input port; projecting a param yields its
 effective bound/default value.
 
-See [Multi-File: Inline-DAG Call Expression](./multi-file.md#inline-dag-call-expression)
+A DAG call is syntax sugar for an anonymous `include`, not a compile-time
+function call. It is therefore rejected in `const node` bodies and all domain
+bounds, even when the selected output happens to depend only on constants.
+
+See [Multi-File: DAG Call Expression](./multi-file.md#dag-call-expression)
 for the full semantics.
 
 ## Numeric Literals

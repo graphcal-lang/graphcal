@@ -21,7 +21,7 @@ use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::module_resolve::ModuleResolver;
-use crate::syntax::span::{Span, Spanned};
+use crate::syntax::span::Span;
 use crate::syntax::type_name::{
     ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
 };
@@ -715,13 +715,6 @@ pub struct ResolvedConstructorRefs {
     pub constructor_defs: HashMap<ResolvedConstructorName, ResolvedConstructorTarget>,
 }
 
-/// Canonical HIR-derived inline-DAG calls used by dim-check/eval routing.
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedInlineDagRefs {
-    /// Full inline-DAG call expression span -> resolved call routing metadata.
-    pub(crate) calls: HashMap<Span, ResolvedInlineDagCall>,
-}
-
 /// Canonical field type identity inside a resolved struct/tagged-union type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResolvedStructFieldTypeKey {
@@ -797,12 +790,71 @@ pub struct DagSemanticBody {
     pub collection_refs: ResolvedCollectionRefs,
     /// Canonical HIR-derived constructor calls and match patterns.
     pub constructor_refs: ResolvedConstructorRefs,
-    /// Canonical HIR-derived inline-DAG routing identities for calls from this DAG.
-    pub(crate) inline_dag_refs: ResolvedInlineDagRefs,
     /// Canonical type definitions referenced by this DAG.
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.
     pub decl_bindings: HashMap<ScopedName, ResolvedDeclName>,
+}
+
+impl DagSemanticBody {
+    /// Visit every semantic HIR expression node in this DAG.
+    ///
+    /// This root list is exhaustive: declaration and assertion bodies, value
+    /// and constructor-field bounds, visualization bodies, and dynamic unit
+    /// scales all participate. Analyses that need whole-DAG facts use this
+    /// method rather than maintaining incomplete side tables per body kind.
+    pub(crate) fn visit_expressions(&self, visitor: &mut impl FnMut(&hir::Expr)) {
+        let visit_root = |expr: &hir::Expr, visitor: &mut _| hir::visit_expr(expr, visitor);
+
+        self.expressions
+            .consts
+            .values()
+            .chain(self.expressions.param_defaults.values())
+            .chain(self.expressions.nodes.values())
+            .chain(self.domain_bounds.values().flatten().map(|bound| &bound.value))
+            .chain(
+                self.type_defs
+                    .field_bounds
+                    .values()
+                    .flatten()
+                    .map(|bound| &bound.value),
+            )
+            .chain(
+                self.plot_exprs
+                    .plots
+                    .values()
+                    .flat_map(|body| {
+                        body.encodings
+                            .iter()
+                            .map(|(_, expr)| expr)
+                            .chain(body.mark_properties.iter().map(|field| &field.value))
+                            .chain(body.properties.iter().map(|field| &field.value))
+                    }),
+            )
+            .chain(
+                self.plot_exprs
+                    .figures
+                    .values()
+                    .chain(self.plot_exprs.layers.values())
+                    .flatten()
+                    .map(|field| &field.value),
+            )
+            .chain(self.dynamic_unit_scales.values().map(|entry| &entry.expr))
+            .for_each(|expr| visit_root(expr, visitor));
+
+        self.expressions.asserts.values().for_each(|body| match body {
+            hir::AssertBody::Expr(expr) => visit_root(expr, visitor),
+            hir::AssertBody::Tolerance {
+                actual,
+                expected,
+                tolerance,
+            } => {
+                visit_root(actual, visitor);
+                visit_root(expected, visitor);
+                visit_root(tolerance, visitor);
+            }
+        });
+    }
 }
 
 /// Plot/figure/layer expressions lowered to HIR.
@@ -818,16 +870,6 @@ pub struct ResolvedPlotExprs {
     pub figures: HashMap<ScopedName, Vec<LoweredPlotField>>,
     /// Lowered layer field expressions keyed by the layer's declaration name.
     pub layers: HashMap<ScopedName, Vec<LoweredPlotField>>,
-}
-
-/// A resolved inline-DAG invocation target, bindings, and projected output.
-#[derive(Debug, Clone)]
-pub struct ResolvedInlineDagCall {
-    pub(crate) target: crate::dag_id::DagId,
-    /// Param binding name span -> canonical declaration in the target DAG.
-    pub(crate) arg_targets: HashMap<Span, ResolvedDeclName>,
-    /// Canonical projected declaration in the target DAG.
-    pub(crate) output: Spanned<ResolvedDeclName>,
 }
 
 /// A resolved constructor and the tagged-union member it constructs.

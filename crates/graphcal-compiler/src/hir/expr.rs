@@ -695,7 +695,7 @@ pub enum ExprKind {
         arms: Vec<MatchArm>,
     },
     VariantLiteral(IndexVariantRef),
-    InlineDagRef {
+    DagCall {
         target: Spanned<DagId>,
         args: Vec<ParamBinding>,
         output: Spanned<ResolvedDeclName>,
@@ -827,12 +827,118 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
                 collect_expr_dependencies_into(&arm.body, deps);
             }
         }
-        ExprKind::InlineDagRef { args, .. } => {
+        ExprKind::DagCall { args, .. } => {
             for arg in args {
                 collect_expr_dependencies_into(&arg.value, deps);
             }
         }
     }
+}
+
+/// Visit every node in an HIR expression exactly once, in pre-order.
+///
+/// Semantic analyses should consume canonical facts directly from HIR through
+/// this traversal instead of copying call-site data into span-keyed side tables.
+pub(crate) fn visit_expr(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
+    // Recursion choke point: recurses once per tree level (unbounded for
+    // left-nested operator chains).
+    crate::stack::with_stack_growth(|| visit_expr_inner(expr, visitor));
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive traversal over every HIR expression variant"
+)]
+fn visit_expr_inner(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
+    visitor(expr);
+    match &expr.kind {
+        ExprKind::Error { children } => children
+            .iter()
+            .for_each(|child| visit_expr(child, visitor)),
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::OffsetDateTimeLiteral(_)
+        | ExprKind::CivilDateTimeLiteral(_)
+        | ExprKind::ZonedDateTimeLiteral(_)
+        | ExprKind::IanaTimeZoneLiteral(_)
+        | ExprKind::TypeSystemRef(_)
+        | ExprKind::GraphRef(_)
+        | ExprKind::ConstRef(_)
+        | ExprKind::LocalRef(_)
+        | ExprKind::UnitLiteral { .. }
+        | ExprKind::VariantLiteral(_) => {}
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            visit_expr(lhs, visitor);
+            visit_expr(rhs, visitor);
+        }
+        ExprKind::UnaryOp { operand, .. }
+        | ExprKind::Convert { expr: operand, .. }
+        | ExprKind::DisplayTimezone { expr: operand, .. }
+        | ExprKind::FieldAccess { expr: operand, .. } => visit_expr(operand, visitor),
+        ExprKind::FnCall { args, .. } => {
+            args.iter().for_each(|arg| visit_expr(arg, visitor));
+        }
+        ExprKind::If {
+            condition,
+            then_branch,
+            else_branch,
+        } => {
+            visit_expr(condition, visitor);
+            visit_expr(then_branch, visitor);
+            visit_expr(else_branch, visitor);
+        }
+        ExprKind::ConstructorCall { fields, .. } => fields
+            .iter()
+            .for_each(|field| visit_expr(&field.value, visitor)),
+        ExprKind::MapLiteral { entries } => entries
+            .iter()
+            .for_each(|entry| visit_expr(&entry.value, visitor)),
+        ExprKind::ForComp { body, .. } => visit_expr(body, visitor),
+        ExprKind::IndexAccess { expr: inner, args } => {
+            visit_expr(inner, visitor);
+            args.iter().for_each(|arg| {
+                if let IndexArg::Expr(arg) = arg {
+                    visit_expr(arg, visitor);
+                }
+            });
+        }
+        ExprKind::Scan {
+            source, init, body, ..
+        } => {
+            visit_expr(source, visitor);
+            visit_expr(init, visitor);
+            visit_expr(body, visitor);
+        }
+        ExprKind::Unfold { init, body, .. } => {
+            visit_expr(init, visitor);
+            visit_expr(body, visitor);
+        }
+        ExprKind::KeyForm { arg, .. } => visit_expr(arg, visitor),
+        ExprKind::Match { scrutinee, arms } => {
+            visit_expr(scrutinee, visitor);
+            arms.iter()
+                .for_each(|arm| visit_expr(&arm.body, visitor));
+        }
+        ExprKind::DagCall { args, .. } => args
+            .iter()
+            .for_each(|binding| visit_expr(&binding.value, visitor)),
+    }
+}
+
+/// Return the first DAG call in an HIR expression, if any.
+#[must_use]
+pub fn find_dag_call(expr: &Expr) -> Option<(DagId, Span)> {
+    let mut found = None;
+    visit_expr(expr, &mut |candidate| {
+        if found.is_none()
+            && let ExprKind::DagCall { target, .. } = &candidate.kind
+        {
+            found = Some((target.value.clone(), candidate.span));
+        }
+    });
+    found
 }
 
 /// Type-system identifier used as a value expression, usually in include bindings.
@@ -1013,7 +1119,7 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
         ExprKind::KeyForm { arg, .. } => find_extern_call(arg),
         ExprKind::Match { scrutinee, arms } => find_extern_call(scrutinee)
             .or_else(|| arms.iter().find_map(|arm| find_extern_call(&arm.body))),
-        ExprKind::InlineDagRef { args, .. } => args
+        ExprKind::DagCall { args, .. } => args
             .iter()
             .find_map(|binding| find_extern_call(&binding.value)),
     }
@@ -1037,7 +1143,7 @@ pub struct FieldInit {
     pub value: Expr,
 }
 
-/// A param binding in an inline DAG invocation.
+/// A named param binding in a DAG call expression.
 #[derive(Debug, Clone)]
 pub struct ParamBinding {
     pub target: Spanned<ResolvedDeclName>,
@@ -1522,7 +1628,7 @@ impl<'a> ExprLowerer<'a> {
                         source,
                         span: output.span,
                     })?;
-                ExprKind::InlineDagRef {
+                ExprKind::DagCall {
                     target: Spanned::new(target, path.span()),
                     args: lowered_args,
                     output: Spanned::new(lowered_output, output.span),

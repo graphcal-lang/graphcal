@@ -2,7 +2,7 @@
 //!
 //! This is the semantic expression type checker for module-aware declaration and
 //! assertion bodies. It consumes HIR references directly: canonical declaration,
-//! index, constructor, inline-DAG refs, lexical `LocalId`s, and typed built-in
+//! index, constructor, DAG-call refs, lexical `LocalId`s, and typed built-in
 //! function variants. It must not fall back to source/syntax-AST inference.
 
 use crate::syntax::decl_name::ResolvedDeclName;
@@ -395,11 +395,11 @@ fn infer_hir_type_inner(
             builtin_fns,
             src,
         )?,
-        hir::ExprKind::InlineDagRef {
+        hir::ExprKind::DagCall {
             target,
             args,
             output,
-        } => infer_hir_inline_dag_ref(
+        } => infer_hir_dag_call(
             expr,
             target,
             args,
@@ -4021,8 +4021,8 @@ fn hir_arm_types_match(
     rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }
 
-#[expect(clippy::too_many_arguments, reason = "inline-DAG expression context")]
-fn infer_hir_inline_dag_ref(
+#[expect(clippy::too_many_arguments, reason = "DAG-call expression context")]
+fn infer_hir_dag_call(
     expr: &hir::Expr,
     target: &crate::syntax::span::Spanned<crate::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
@@ -4037,26 +4037,6 @@ fn infer_hir_inline_dag_ref(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let display_path = target.value.to_string();
-    let resolved_call = dag
-        .semantic
-        .inline_dag_refs
-        .calls
-        .get(&expr.span)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("semantic TIR missing inline-DAG call metadata for `{display_path}`"),
-            src: src.clone(),
-            span: expr.span.into(),
-        })?;
-    if resolved_call.target != target.value {
-        return Err(GraphcalError::InternalError {
-            message: format!(
-                "semantic inline-DAG metadata target `{}` disagrees with HIR target `{}`",
-                resolved_call.target, target.value
-            ),
-            src: src.clone(),
-            span: target.span.into(),
-        });
-    }
     let dag_tir = tir
         .dags
         .get(&target.value)
@@ -4081,7 +4061,7 @@ fn infer_hir_inline_dag_ref(
                     .get(&param.name)
                     .ok_or_else(|| GraphcalError::InternalError {
                         message: format!(
-                            "semantic type missing for inline-DAG param `{}`",
+                            "semantic type missing for DAG-call param `{}`",
                             param.name
                         ),
                         src: src.clone(),
@@ -4099,7 +4079,7 @@ fn infer_hir_inline_dag_ref(
                 let resolved = dag_tir.resolved_decl_types.get(&node.name).ok_or_else(|| {
                     GraphcalError::InternalError {
                         message: format!(
-                            "semantic type missing for inline-DAG node `{}`",
+                            "semantic type missing for DAG-call node `{}`",
                             node.name
                         ),
                         src: src.clone(),
@@ -4113,20 +4093,10 @@ fn infer_hir_inline_dag_ref(
     let mut bound_resolved_names: std::collections::HashSet<ResolvedDeclKey> =
         std::collections::HashSet::with_capacity(args.len());
     for binding in args {
-        let target_key = resolved_call
-            .arg_targets
-            .get(&binding.target.span)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "semantic TIR missing inline-DAG arg target for binding `{}`",
-                    binding.target.value
-                ),
-                src: src.clone(),
-                span: binding.target.span.into(),
-            })?;
+        let target_key = &binding.target.value;
         bound_resolved_names.insert(target_key.clone());
         let expected = param_decl_types_by_key.get(target_key).ok_or_else(|| {
-            GraphcalError::UnknownInlineDagParam {
+            GraphcalError::UnknownDagParam {
                 name: target_key.as_str().to_string(),
                 dag_name: display_path.clone(),
                 src: src.clone(),
@@ -4145,7 +4115,7 @@ fn infer_hir_inline_dag_ref(
             src,
         )?;
         if !resolved_type_matches_inferred(expected, &found) {
-            return Err(GraphcalError::InlineDagArgDimensionMismatch {
+            return Err(GraphcalError::DagArgTypeMismatch {
                 param_name: target_key.as_str().to_string(),
                 expected: expected.format(registry),
                 found: format_inferred_type(&found, registry),
@@ -4162,7 +4132,7 @@ fn infer_hir_inline_dag_ref(
         .collect();
     if !missing.is_empty() {
         missing.sort();
-        return Err(GraphcalError::MissingInlineDagBindings {
+        return Err(GraphcalError::MissingDagBindings {
             missing,
             dag_name: display_path.clone(),
             src: src.clone(),
@@ -4170,21 +4140,11 @@ fn infer_hir_inline_dag_ref(
         });
     }
 
-    let output_key = &resolved_call.output.value;
-    if output_key != &output.value {
-        return Err(GraphcalError::InternalError {
-            message: format!(
-                "semantic inline-DAG metadata output `{}` disagrees with HIR output `{}`",
-                output_key, output.value
-            ),
-            src: src.clone(),
-            span: output.span.into(),
-        });
-    }
+    let output_key = &output.value;
     let output_decl = node_decl_types_by_key
         .get(output_key)
         .or_else(|| param_decl_types_by_key.get(output_key))
-        .ok_or_else(|| GraphcalError::UnknownInlineDagOutput {
+        .ok_or_else(|| GraphcalError::UnknownDagOutput {
             name: output_key.as_str().to_string(),
             dag_name: display_path.clone(),
             src: src.clone(),

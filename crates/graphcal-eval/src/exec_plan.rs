@@ -306,6 +306,16 @@ pub fn eval_consts_from_tir_with_cancellation(
                 src: src.clone(),
                 span: Span::new(0, 0).into(),
             })?;
+        // Defense in depth for TIR values constructed or mutated outside the
+        // compiler pipeline. Valid TIR rejects runtime DAG instantiation in a
+        // const body during policy checking.
+        if let Some((target, call_span)) = graphcal_compiler::hir::find_dag_call(hir_expr) {
+            return Err(GraphcalError::DagCallInCompileTime {
+                name: target.to_string(),
+                src: src.clone(),
+                span: call_span.into(),
+            });
+        }
         let value = eval_hir_expr(hir_expr, &visible_values, &empty_hir_locals, &ctx)?;
         visible_values.insert(key.clone(), value.clone());
         local_const_values.insert(key, value);

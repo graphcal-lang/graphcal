@@ -147,7 +147,7 @@ fn resolve_defining_expr<'a>(
             ConstRef::Decl(name) => exprs.consts.get(name),
             _ => None,
         },
-        ExprKind::InlineDagRef { output, .. } => decl_expr(&output.value),
+        ExprKind::DagCall { output, .. } => decl_expr(&output.value),
         ExprKind::FieldAccess { expr: inner, field } => {
             let Some(ctor) = resolve_defining_expr(inner, ctx, values, depth.saturating_sub(1))?
             else {
