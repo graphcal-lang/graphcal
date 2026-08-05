@@ -44,7 +44,8 @@ pub fn resolve_exportable_dynamic_unit_scales(
             else {
                 return None;
             };
-            let scale_val = eval_hir_expr(&entry.expr, values, &empty_locals, ctx).ok()?;
+            let entry_ctx = ctx.with_src(&entry.src);
+            let scale_val = eval_hir_expr(&entry.expr, values, &empty_locals, &entry_ctx).ok()?;
             let RuntimeValue::Quantity(scale_f64) = scale_val else {
                 return None;
             };
@@ -139,8 +140,9 @@ pub fn resolve_unit_scale(
                             item.name.span,
                         )
                     })?;
+                let scale_ctx = ctx.with_src(&scale_hir.src);
                 if scale_hir.declared_dimension != scale_hir.base_unit_dimension {
-                    return Err(ctx.eval_error(
+                    return Err(scale_ctx.eval_error(
                         format!(
                             "internal: dynamic unit `{}` has mismatched declared and base-unit dimensions",
                             scale_hir.spelling
@@ -149,9 +151,9 @@ pub fn resolve_unit_scale(
                     ));
                 }
                 let empty_locals = HirLocalValueMap::root();
-                let scale_val = eval_hir_expr(&scale_hir.expr, values, &empty_locals, ctx)?;
+                let scale_val = eval_hir_expr(&scale_hir.expr, values, &empty_locals, &scale_ctx)?;
                 let RuntimeValue::Quantity(scale_f64) = scale_val else {
-                    return Err(ctx.eval_error(
+                    return Err(scale_ctx.eval_error(
                         "dynamic unit scale expression must evaluate to a quantity",
                         scale_hir.expr.span,
                     ));
@@ -160,7 +162,7 @@ pub fn resolve_unit_scale(
                     scale_f64,
                     "dynamic unit scale",
                     scale_hir.expr.span,
-                    ctx,
+                    &scale_ctx,
                 )?;
                 let base_scale = checked_positive_finite_unit_scale(
                     base_unit_scale.get(),
