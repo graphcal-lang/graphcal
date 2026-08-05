@@ -590,6 +590,33 @@ fn format_assert_bool() {
 }
 
 #[test]
+fn long_logical_chain_breaks_at_aligned_operators() {
+    let source = "pub index Mode = { First, Second, Third, Fourth };\n\
+param priority: Int[Mode];\n\
+assert priorities = @priority[Mode.First] == 1 && @priority[Mode.Second] == 2 && @priority[Mode.Third] == 3 && @priority[Mode.Fourth] == 4;\n";
+    let formatted = format_source(source).expect("logical chain should format");
+    assert_eq!(
+        formatted,
+        concat!(
+            "pub index Mode = { First, Second, Third, Fourth };\n",
+            "param priority: Int[Mode];\n",
+            "assert priorities = @priority[Mode.First] == 1\n",
+            "    && @priority[Mode.Second] == 2\n",
+            "    && @priority[Mode.Third] == 3\n",
+            "    && @priority[Mode.Fourth] == 4;\n",
+        )
+    );
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[test]
+fn short_logical_chain_stays_inline() {
+    let source = "param first: Bool = true;\nparam second: Bool = false;\nassert check = @first && @second;\n";
+    let formatted = format_source(source).expect("short logical chain should format");
+    assert!(formatted.contains("assert check = @first && @second;"));
+}
+
+#[test]
 fn format_assert_tolerance() {
     let source = "param x: Dimensionless = 1.0;\nassert check = @x ~= 1.0 +/- 0.1;\n";
     let formatted = format_source(source).unwrap();
