@@ -668,6 +668,7 @@ impl PreparedProject {
             current_dag: Some(self.tir.root()),
             root_values: Some(&values),
             struct_field_constraints: Some(&self.plan.struct_field_constraints),
+            generic_nat_bindings: None,
             host_fns: Some(&self.host_fns),
         };
         for assertion in &self.plan.assert_bodies {
@@ -1661,6 +1662,7 @@ impl PreparedProject {
             current_dag: Some(self.tir.root()),
             root_values: Some(&values),
             struct_field_constraints: Some(&self.plan.struct_field_constraints),
+            generic_nat_bindings: None,
             host_fns: Some(&self.host_fns),
         };
         eval_hir_expr(expr, &values, &locals, &context).map_err(CompileError::from)

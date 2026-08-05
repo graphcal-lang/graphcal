@@ -83,6 +83,22 @@ pub fn concrete_model_constructors(
         .iter()
         .map(InferredGenericArg::from)
         .collect::<Vec<_>>();
+    let inferred_application = super::InferredType::Struct(
+        super::InferredStructType::from_ref(identity.clone()),
+        inferred_args.clone(),
+    );
+    let declared_types = tir.build_declared_types(src)?;
+    super::infer::hir::validate_concrete_type_obligations(
+        &inferred_application,
+        &declared_types,
+        dag,
+        tir,
+        &tir.registry,
+        crate::registry::builtins::builtin_functions(),
+        src,
+        Span::new(0, 0),
+        &crate::cancellation::CancellationToken::unbounded(),
+    )?;
     members
         .iter()
         .map(|constructor| {

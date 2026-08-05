@@ -39,14 +39,17 @@ fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
         (
             RuntimeValue::Struct {
                 type_name: lt,
+                generic_args: la,
                 fields: lf,
             },
             RuntimeValue::Struct {
                 type_name: rt,
+                generic_args: ra,
                 fields: rf,
             },
         ) => {
             struct_value_type_refs_equal(lt, rt)
+                && la == ra
                 && lf.len() == rf.len()
                 && lf
                     .iter()

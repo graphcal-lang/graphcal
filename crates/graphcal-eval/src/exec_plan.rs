@@ -3,16 +3,16 @@
 //! Contains evaluated const values, topologically sorted runtime declarations,
 //! and their expressions, ready for evaluation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use graphcal_compiler::hir::AssertBody;
-use graphcal_compiler::registry::declared_type::StructTypeRef;
+use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, DeclaredType, StructTypeRef};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::{Span, Spanned};
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
@@ -294,6 +294,7 @@ pub fn eval_consts_from_tir_with_cancellation(
             current_dag: Some(tir.root()),
             root_values: Some(&visible_values),
             struct_field_constraints: None,
+            generic_nat_bindings: None,
             host_fns: None,
         };
         let hir_expr = dag
@@ -542,6 +543,7 @@ pub fn resolve_domain_constraints_with_cancellation(
         current_dag: Some(tir.root()),
         root_values: Some(&visible_const_values),
         struct_field_constraints: None,
+        generic_nat_bindings: None,
         // Compile-time contexts carry no host registry; dimension checking
         // rejects extern calls in const and unit-scale positions.
         host_fns: None,
@@ -777,10 +779,110 @@ fn domain_bound_value_error(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ConcreteNominalApplication {
+    identity: StructTypeRef,
+    generic_args: Vec<DeclaredGenericArg>,
+}
+
+fn collect_concrete_nominal_applications(
+    declared: &DeclaredType,
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+    applications: &mut HashSet<ConcreteNominalApplication>,
+) -> Result<(), GraphcalError> {
+    match declared {
+        DeclaredType::Struct(identity, generic_args) => {
+            for arg in generic_args {
+                if let DeclaredGenericArg::Type(type_arg) = arg {
+                    collect_concrete_nominal_applications(type_arg, tir, src, applications)?;
+                }
+            }
+            let application = ConcreteNominalApplication {
+                identity: identity.clone(),
+                generic_args: generic_args.clone(),
+            };
+            if !applications.insert(application) {
+                return Ok(());
+            }
+            for constructor in graphcal_compiler::tir::dim_check::concrete_model_constructors(
+                tir,
+                identity,
+                generic_args,
+                src,
+            )? {
+                for field in constructor.fields() {
+                    collect_concrete_nominal_applications(
+                        field.declared_type(),
+                        tir,
+                        src,
+                        applications,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+        DeclaredType::Indexed { element, .. } => {
+            collect_concrete_nominal_applications(element, tir, src, applications)
+        }
+        DeclaredType::Quantity(_)
+        | DeclaredType::Complex(_)
+        | DeclaredType::Bool
+        | DeclaredType::Int
+        | DeclaredType::Datetime(_)
+        | DeclaredType::IndexArg(_)
+        | DeclaredType::Key(_) => Ok(()),
+    }
+}
+
+fn generic_nat_bindings(
+    type_def: &graphcal_compiler::registry::types::TypeDef,
+    generic_args: &[DeclaredGenericArg],
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<HashMap<GenericParamName, u64>, GraphcalError> {
+    if type_def.generic_params().len() != generic_args.len() {
+        return Err(GraphcalError::InternalError {
+            message: format!(
+                "concrete application of `{}` has {} generic arguments, expected {}",
+                type_def.name(),
+                generic_args.len(),
+                type_def.generic_params().len()
+            ),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+    type_def
+        .generic_params()
+        .iter()
+        .zip(generic_args)
+        .filter_map(|(param, arg)| match arg {
+            DeclaredGenericArg::Nat(form) => Some((param, form)),
+            DeclaredGenericArg::Dim(_)
+            | DeclaredGenericArg::Index(_)
+            | DeclaredGenericArg::Type(_) => None,
+        })
+        .map(|(param, form)| {
+            form.constant_value()
+                .map(|value| (param.name.clone(), value))
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "concrete Nat argument `{}` for `{}` remained symbolic",
+                        form.format(),
+                        param.name
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                })
+        })
+        .collect()
+}
+
 /// Resolve domain constraints declared on struct/union member fields.
 ///
-/// Field bounds are stored as HIR in each DAG's semantic type defs
-/// (`ResolvedTypeDefs.field_bounds`); this evaluates each constrained field's
+/// Field bounds are stored atomically with their resolved target types in each
+/// DAG's semantic type defs; this evaluates each constrained field's
 /// typed `min`/`max` bounds, validates `min ≤ max`, and stores the result keyed
 /// by the owning struct type, constructor, and field name —
 /// under both the owner-qualified identity and the root-owned display leaf so
@@ -803,6 +905,111 @@ pub fn resolve_struct_field_constraints(
     )
 }
 
+struct FieldConstraintResolutionContext<'a> {
+    tir: &'a TIR,
+    visible_const_values: &'a RuntimeValueMap,
+    builtin_fns: &'a graphcal_compiler::registry::builtins::BuiltinFunctions,
+    src: &'a NamedSource<Arc<String>>,
+    cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
+}
+
+fn resolve_application_field_constraints(
+    application: &ConcreteNominalApplication,
+    ctx: &FieldConstraintResolutionContext<'_>,
+) -> Result<Vec<(StructFieldConstraintKey, ResolvedDomainConstraint)>, GraphcalError> {
+    ctx.cancellation.checkpoint()?;
+    let (dag, type_def) = ctx
+        .tir
+        .dag_registry()
+        .values()
+        .find_map(|dag| {
+            dag.semantic()
+                .type_defs
+                .struct_types
+                .get(application.identity.resolved())
+                .map(|type_def| (dag, type_def))
+        })
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!(
+                "semantic type metadata missing concrete application `{}`",
+                application.identity
+            ),
+            src: ctx.src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    let nat_bindings = generic_nat_bindings(
+        type_def,
+        &application.generic_args,
+        ctx.src,
+        Span::new(0, 0),
+    )?;
+    let application_ctx = EvalContext {
+        cancellation: ctx.cancellation.clone(),
+        builtin_fns: ctx.builtin_fns,
+        registry: ctx.tir.registry(),
+        src: ctx.src,
+        tir: ctx.tir,
+        current_dag: Some(dag),
+        root_values: Some(ctx.visible_const_values),
+        struct_field_constraints: None,
+        generic_nat_bindings: Some(&nat_bindings),
+        // Compile-time contexts carry no host registry; dimension checking
+        // rejects extern calls in const and unit-scale positions.
+        host_fns: None,
+    };
+    let mut constraints = Vec::new();
+    for (key, field_semantics) in dag
+        .semantic()
+        .type_defs
+        .constrained_fields()
+        .filter(|(key, _)| key.owning_type == *application.identity.resolved())
+    {
+        let display_name = format!("{}.{}", key.constructor, key.field);
+        let bounds = field_semantics.domain_bounds();
+        let bound_span = bounds
+            .first()
+            .map_or_else(|| Span::new(0, 0), |bound| bound.span);
+        let constraint_src = bounds.first().map_or(ctx.src, |bound| &bound.src);
+        let target = resolve_constraint_target(
+            &display_name,
+            Some(strip_indexed(field_semantics.resolved_type())),
+            bound_span,
+            constraint_src,
+        )?;
+        let constraint = resolve_constraint_from_bounds(
+            bounds,
+            &display_name,
+            target,
+            ctx.visible_const_values,
+            &application_ctx.with_src(constraint_src),
+            constraint_src,
+        )?;
+        let args = application.generic_args.clone();
+        constraints.push((
+            StructFieldConstraintKey::for_application(
+                StructTypeRef::from_resolved(key.owning_type.clone()),
+                args.clone(),
+                key.constructor.clone(),
+                key.field.clone(),
+            ),
+            constraint.clone(),
+        ));
+        constraints.push((
+            StructFieldConstraintKey::for_application(
+                StructTypeRef::with_owner(
+                    ctx.tir.root_dag_id().clone(),
+                    key.owning_type.to_unowned_def_name(),
+                ),
+                args,
+                key.constructor.clone(),
+                key.field.clone(),
+            ),
+            constraint,
+        ));
+    }
+    Ok(constraints)
+}
+
 pub fn resolve_struct_field_constraints_with_cancellation(
     tir: &TIR,
     const_values: &RuntimeValueMap,
@@ -813,79 +1020,46 @@ pub fn resolve_struct_field_constraints_with_cancellation(
     let builtin_fns = builtin_functions();
     let visible_const_values = visible_values_with_imports(tir.root(), const_values);
 
-    let ctx = EvalContext {
-        cancellation: cancellation.clone(),
-        builtin_fns,
-        registry: tir.registry(),
-        src,
-        tir,
-        current_dag: Some(tir.root()),
-        root_values: Some(&visible_const_values),
-        struct_field_constraints: None,
-        // Compile-time contexts carry no host registry; dimension checking
-        // rejects extern calls in const and unit-scale positions.
-        host_fns: None,
-    };
-
-    let mut constraints = HashMap::new();
-    let mut seen: std::collections::HashSet<
-        &graphcal_compiler::tir::typed::ResolvedStructFieldTypeKey,
-    > = std::collections::HashSet::new();
-
-    for (_, dag) in tir.local_dags() {
-        cancellation.checkpoint()?;
-        for (key, bounds) in &dag.semantic().type_defs.field_bounds {
-            if !seen.insert(key) {
-                continue;
+    let mut applications = HashSet::new();
+    for declared in tir.build_declared_types(src)?.values() {
+        collect_concrete_nominal_applications(declared, tir, src, &mut applications)?;
+    }
+    for dag in tir.dag_registry().values() {
+        for application in
+            graphcal_compiler::tir::dim_check::concrete_constructor_applications(tir, dag, src)?
+        {
+            applications.insert(ConcreteNominalApplication {
+                identity: application.identity().clone(),
+                generic_args: application.generic_args().to_vec(),
+            });
+        }
+    }
+    // Non-generic definitions have one concrete application even when no value
+    // declaration mentions them. Preserve compile-time validation of their
+    // min/max ordering instead of making it usage-dependent.
+    for dag in tir.dag_registry().values() {
+        for (identity, type_def) in &dag.semantic().type_defs.struct_types {
+            if type_def.generic_params().is_empty() {
+                applications.insert(ConcreteNominalApplication {
+                    identity: StructTypeRef::from_resolved(identity.clone()),
+                    generic_args: Vec::new(),
+                });
             }
-            // Display name uses the constructor's leaf while semantic identity
-            // remains the owning union type.
-            let display_name = format!("{}.{}", key.constructor, key.field);
-            let bound_span = bounds
-                .first()
-                .map_or_else(|| Span::new(0, 0), |bound| bound.span);
-            let constraint_src = bounds.first().map_or(src, |bound| &bound.src);
-            let target = resolve_constraint_target(
-                &display_name,
-                dag.semantic().type_defs.field_type(key).map(strip_indexed),
-                bound_span,
-                constraint_src,
-            )?;
-            let bound_ctx = ctx.with_src(constraint_src);
-            let constraint = resolve_constraint_from_bounds(
-                bounds,
-                &display_name,
-                target,
-                &visible_const_values,
-                &bound_ctx,
-                constraint_src,
-            )?;
-            // Store under both the owner-qualified identity and the
-            // root-owned display leaf so runtime lookups for
-            // boundary-created synthetic owners still hit.
-            constraints.insert(
-                StructFieldConstraintKey::new(
-                    StructTypeRef::from_resolved(key.owning_type.clone()),
-                    key.constructor.clone(),
-                    key.field.clone(),
-                ),
-                constraint.clone(),
-            );
-            constraints.insert(
-                StructFieldConstraintKey::new(
-                    StructTypeRef::with_owner(
-                        tir.root_dag_id().clone(),
-                        key.owning_type.to_unowned_def_name(),
-                    ),
-                    key.constructor.clone(),
-                    key.field.clone(),
-                ),
-                constraint,
-            );
         }
     }
 
-    Ok(constraints)
+    let resolution_ctx = FieldConstraintResolutionContext {
+        tir,
+        visible_const_values: &visible_const_values,
+        builtin_fns,
+        src,
+        cancellation,
+    };
+    applications
+        .iter()
+        .map(|application| resolve_application_field_constraints(application, &resolution_ctx))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|entries| entries.into_iter().flatten().collect())
 }
 
 /// Walk every top-level const value and validate it against resolved
@@ -939,12 +1113,14 @@ fn struct_type_ref_from_resolved_type(
 fn find_struct_field_constraint<'a>(
     field_constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     owning_type: Option<&StructTypeRef>,
+    generic_args: &[graphcal_compiler::registry::declared_type::DeclaredGenericArg],
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
     owning_type.and_then(|owning_type| {
-        field_constraints.get(&StructFieldConstraintKey::new(
+        field_constraints.get(&StructFieldConstraintKey::for_application(
             owning_type.clone(),
+            generic_args.to_vec(),
             constructor.clone(),
             field.clone(),
         ))
@@ -966,7 +1142,11 @@ fn check_const_struct_field_constraints(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match value {
-        RuntimeValue::Struct { type_name, fields } => {
+        RuntimeValue::Struct {
+            type_name,
+            generic_args,
+            fields,
+        } => {
             let runtime_owning_type = StructTypeRef::from_resolved(type_name.resolved().clone());
             let effective_owning_type = owning_type.or(Some(&runtime_owning_type));
             let constructor = ConstructorName::from_atom(type_name.name().atom().clone());
@@ -974,6 +1154,7 @@ fn check_const_struct_field_constraints(
                 if let Some(constraint) = find_struct_field_constraint(
                     field_constraints,
                     effective_owning_type,
+                    generic_args,
                     &constructor,
                     field_name,
                 ) && let Err(violation) =

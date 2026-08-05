@@ -770,6 +770,22 @@ an exported type is therefore sufficient even when its bounds use custom
 units and dimensions from that defining module; consumers do not need
 redundant imports for those implementation dependencies.
 
+A field whose type contains generic `Dim` or `Nat` parameters creates a
+compile-time obligation for every concrete application of the owning type. The
+compiler substitutes explicit, nested, and defaulted arguments before checking
+the bound type and any static `Fin` keys or indexes in the bound expression:
+
+```graphcal
+type Box<D: Dim> { Box(value: D(min: 0.0 m)) }
+
+node length: Box<Length> = Box<Length>(value: 1.0 m); // valid
+node time: Box<Time> = Box<Time>(value: 1.0 s);       // compile error
+```
+
+The same checks apply through imported types and model-port schemas. A
+symbolic `key(Fin(N), position)` is accepted in a generic definition only when
+every concrete use proves `0 <= position < N`; `Fin(0)` is always rejected.
+
 Field constraints fire at **construction time** for each
 `Ctor(field: ...)` call:
 
@@ -778,7 +794,7 @@ Field constraints fire at **construction time** for each
 
 ### Generic Type Arguments
 
-Domain constraints are **not** allowed on generic type arguments — they have no enforcement site after type erasure and ambiguous semantics. Put the constraint on the payload field of the constructor instead:
+Domain constraints are **not** allowed on generic type arguments — they have no enforcement site after type erasure and ambiguous semantics. This rule also applies to nested type arguments and generic parameter defaults, including types declared inside inline DAGs. Put the constraint on the payload field of the constructor instead:
 
 ```
 // REJECTED at compile time:

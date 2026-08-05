@@ -44,21 +44,39 @@ use super::linear_algebra::{LinearAlgebraTypeError, infer_linear_algebra_type};
 /// Every recursive inference path already carries the local environment. Keeping
 /// the cancellation token in the same typed context makes it impossible for a
 /// nested expression helper to accidentally fall back to an uncancellable pass.
+struct HirInferenceControl {
+    cancellation: crate::cancellation::CancellationToken,
+    generic_substitutions: Option<ConcreteGenericSubstitutions>,
+}
+
 struct HirLocalTypes<'a> {
     bindings: hir::LocalEnv<'a, InferredType>,
-    cancellation: crate::cancellation::CancellationToken,
+    control: Arc<HirInferenceControl>,
 }
 
 impl HirLocalTypes<'_> {
-    fn root(cancellation: &crate::cancellation::CancellationToken) -> Self {
+    fn root(
+        cancellation: &crate::cancellation::CancellationToken,
+        generic_substitutions: Option<ConcreteGenericSubstitutions>,
+    ) -> Self {
         Self {
             bindings: hir::LocalEnv::root(),
-            cancellation: cancellation.clone(),
+            control: Arc::new(HirInferenceControl {
+                cancellation: cancellation.clone(),
+                generic_substitutions,
+            }),
         }
     }
 
     fn checkpoint(&self) -> Result<(), GraphcalError> {
-        self.cancellation.checkpoint().map_err(GraphcalError::from)
+        self.control
+            .cancellation
+            .checkpoint()
+            .map_err(GraphcalError::from)
+    }
+
+    fn generic_substitutions(&self) -> Option<&ConcreteGenericSubstitutions> {
+        self.control.generic_substitutions.as_ref()
     }
 
     fn get(&self, id: hir::LocalId) -> Option<&InferredType> {
@@ -69,10 +87,10 @@ impl HirLocalTypes<'_> {
         self.bindings.bind(id, value);
     }
 
-    fn child<'a>(&'a self, bindings: Vec<(hir::LocalId, InferredType)>) -> HirLocalTypes<'a> {
+    fn child(&self, bindings: Vec<(hir::LocalId, InferredType)>) -> HirLocalTypes<'_> {
         HirLocalTypes {
             bindings: self.bindings.child(bindings),
-            cancellation: self.cancellation.clone(),
+            control: Arc::clone(&self.control),
         }
     }
 }
@@ -298,7 +316,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner_and_cancellation(
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<InferredType, GraphcalError> {
-    let locals = HirLocalTypes::root(cancellation);
+    let locals = HirLocalTypes::root(cancellation, None);
     infer_hir_type(
         expr,
         owner_decl_name,
@@ -816,6 +834,7 @@ fn infer_hir_const_ref(
                 registry,
                 src,
                 target.span,
+                None,
             )?;
             Ok(InferredType::Struct(
                 InferredStructType::from_resolved(target_def.owning_type.clone()),
@@ -2163,6 +2182,28 @@ fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatPolyForm, NatOverflo
     }
 }
 
+fn resolve_hir_nat_form(
+    expr: &hir::NatExpr,
+    substitutions: Option<&ConcreteGenericSubstitutions>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<NatPolyForm, GraphcalError> {
+    let form = hir_nat_to_linear_form(expr)
+        .map_err(|error| nat_overflow_error(error, src, expr.span()))?;
+    let Some(substitutions) = substitutions else {
+        return Ok(form);
+    };
+    form.evaluate(&substitutions.bindings().nats)
+        .map(NatPolyForm::from_constant)
+        .ok_or_else(|| GraphcalError::EvalError {
+            message: format!(
+                "Nat expression `{}` could not be concretely instantiated",
+                form.format()
+            ),
+            src: src.clone(),
+            span: expr.span().into(),
+        })
+}
+
 fn nat_overflow_error(
     err: NatOverflowError,
     src: &NamedSource<Arc<String>>,
@@ -2235,8 +2276,7 @@ fn infer_hir_key_form(
             (identity, finite_form)
         }
         hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-            let form = hir_nat_to_linear_form(cardinality)
-                .map_err(|err| nat_overflow_error(err, src, *span))?;
+            let form = resolve_hir_nat_form(cardinality, local_types.generic_substitutions(), src)?;
             let identity = InferredIndex::from_finite_index_form(form.clone())
                 .map_err(|err| finite_index_error(err, src, *span))?;
             (identity, Some(form))
@@ -2382,8 +2422,8 @@ fn infer_hir_for_comp(
                 InferredType::Key(index_identity)
             }
             hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-                let form = hir_nat_to_linear_form(cardinality)
-                    .map_err(|err| nat_overflow_error(err, src, *span))?;
+                let form =
+                    resolve_hir_nat_form(cardinality, local_types.generic_substitutions(), src)?;
                 InferredType::Key(
                     InferredIndex::from_finite_index_form(form)
                         .map_err(|err| finite_index_error(err, src, *span))?,
@@ -2409,8 +2449,8 @@ fn infer_hir_for_comp(
                 InferredIndex::from_resolved(index.value.clone())
             }
             hir::expr::ForBindingIndex::Finite { cardinality, span } => {
-                let form = hir_nat_to_linear_form(cardinality)
-                    .map_err(|err| nat_overflow_error(err, src, *span))?;
+                let form =
+                    resolve_hir_nat_form(cardinality, local_types.generic_substitutions(), src)?;
                 InferredIndex::from_finite_index_form(form)
                     .map_err(|err| finite_index_error(err, src, *span))?
             }
@@ -2640,10 +2680,6 @@ fn check_constant_finite_index_index(
     let Some(index) = try_const_int(index_expr) else {
         return Ok(());
     };
-    if !index_form.is_constant() {
-        return Ok(());
-    }
-    let size = index_form.constant();
     let Ok(index_u64) = u64::try_from(index) else {
         return Err(GraphcalError::EvalError {
             message: format!("index expression evaluated to negative value: {index}"),
@@ -2651,6 +2687,10 @@ fn check_constant_finite_index_index(
             span: index_expr.span.into(),
         });
     };
+    if !index_form.is_constant() {
+        return Ok(());
+    }
+    let size = index_form.constant();
     if index_u64 >= size {
         return Err(GraphcalError::EvalError {
             message: format!(
@@ -2792,15 +2832,27 @@ fn resolved_type_field_key(
     }
 }
 
-fn generic_substitutions(
+fn generic_substitution_prefix(
     type_def: &TypeDef,
     type_args: &[InferredGenericArg],
-    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<GenericSubstitutions, GraphcalError> {
+    if type_args.len() > type_def.generic_params().len() {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "type `{}` expects at most {} generic arguments, got {}",
+                type_def.name(),
+                type_def.generic_params().len(),
+                type_args.len()
+            ),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+
     let mut subs = GenericSubstitutions::default();
-    for (param, arg) in type_def.generic_params().iter().zip(type_args.iter()) {
+    for (param, arg) in type_def.generic_params().iter().zip(type_args) {
         match param.constraint {
             TypeGenericConstraint::Dim => match arg {
                 InferredGenericArg::Dim(dim) => {
@@ -2809,9 +2861,17 @@ fn generic_substitutions(
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             TypeGenericConstraint::Index => match arg {
-                InferredGenericArg::Index(index) => {
+                InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
                     subs.indexes
                         .insert(param.name.clone(), index.type_ref().clone());
+                }
+                InferredGenericArg::Index(index) => {
+                    return Err(non_concrete_generic_argument(
+                        &param.name,
+                        &index.to_string(),
+                        src,
+                        span,
+                    ));
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
@@ -2820,27 +2880,96 @@ fn generic_substitutions(
                     subs.nats.insert(param.name.clone(), form.constant());
                 }
                 InferredGenericArg::Nat(form) => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic Nat argument `{}` for `{}` is not concrete",
-                            form.format(),
-                            param.name
-                        ),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
+                    return Err(non_concrete_generic_argument(
+                        &param.name,
+                        &form.format(),
+                        src,
+                        span,
+                    ));
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             TypeGenericConstraint::Type => match arg {
-                InferredGenericArg::Type(type_expr) => {
+                InferredGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
                     subs.types.insert(param.name.clone(), type_expr.clone());
+                }
+                InferredGenericArg::Type(type_expr) => {
+                    return Err(non_concrete_generic_argument(
+                        &param.name,
+                        &format!("{type_expr:?}"),
+                        src,
+                        span,
+                    ));
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
         }
     }
     Ok(subs)
+}
+
+fn concrete_generic_substitutions(
+    type_def: &TypeDef,
+    type_args: &[InferredGenericArg],
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<ConcreteGenericSubstitutions, GraphcalError> {
+    if type_args.len() != type_def.generic_params().len() {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "concrete type `{}` requires exactly {} generic arguments, got {}",
+                type_def.name(),
+                type_def.generic_params().len(),
+                type_args.len()
+            ),
+            src: src.clone(),
+            span: span.into(),
+        });
+    }
+    generic_substitution_prefix(type_def, type_args, src, span).map(ConcreteGenericSubstitutions)
+}
+
+fn inferred_index_is_concrete(index: &InferredIndex) -> bool {
+    index
+        .finite_index_form()
+        .is_none_or(|form| form.is_constant())
+}
+
+fn inferred_type_is_concrete(inferred: &InferredType) -> bool {
+    match inferred {
+        InferredType::CoordinateIndexLabel { index, .. }
+        | InferredType::NamedIndexCase(index)
+        | InferredType::Key(index)
+        | InferredType::IndexArg(index) => inferred_index_is_concrete(index),
+        InferredType::Fin(form) => form.is_constant(),
+        InferredType::Struct(_, args) => args.iter().all(|arg| match arg {
+            InferredGenericArg::Dim(_) => true,
+            InferredGenericArg::Index(index) => inferred_index_is_concrete(index),
+            InferredGenericArg::Nat(form) => form.is_constant(),
+            InferredGenericArg::Type(type_expr) => inferred_type_is_concrete(type_expr),
+        }),
+        InferredType::Indexed { element, index } => {
+            inferred_index_is_concrete(index) && inferred_type_is_concrete(element)
+        }
+        InferredType::Quantity(_)
+        | InferredType::Complex(_)
+        | InferredType::Bool
+        | InferredType::Int
+        | InferredType::Datetime(_) => true,
+    }
+}
+
+fn non_concrete_generic_argument(
+    parameter: &GenericParamName,
+    argument: &str,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::EvalError {
+        message: format!("generic argument `{argument}` for `{parameter}` is not concrete"),
+        src: src.clone(),
+        span: span.into(),
+    }
 }
 
 fn generic_arg_internal_sort_error(
@@ -2858,12 +2987,26 @@ fn generic_arg_internal_sort_error(
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct GenericSubstitutions {
     dims: HashMap<GenericParamName, Dimension>,
     indexes: HashMap<GenericParamName, IndexTypeRef>,
     nats: HashMap<GenericParamName, u64>,
     types: HashMap<GenericParamName, InferredType>,
+}
+
+/// Complete, sort-checked, concrete bindings for one nominal application.
+///
+/// This wrapper can only be constructed after exact arity, sort, and
+/// concreteness validation, so instantiated field-bound inference cannot be
+/// called with a partial generic environment.
+#[derive(Clone)]
+struct ConcreteGenericSubstitutions(GenericSubstitutions);
+
+impl ConcreteGenericSubstitutions {
+    const fn bindings(&self) -> &GenericSubstitutions {
+        &self.0
+    }
 }
 
 fn substitute_resolved_type_with_type_params(
@@ -2903,108 +3046,295 @@ pub(in crate::tir::dim_check) fn resolved_field_type(
     type_def: &TypeDef,
     type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
-    registry: &Registry,
+    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<InferredType, GraphcalError> {
     let key = resolved_type_field_key(owning_type, constructor, field);
-    let resolved = dag
-        .semantic
-        .type_defs
-        .field_types
-        .get(&key)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!(
-                "semantic type metadata missing field type for `{}.{}`",
-                constructor.name(),
-                field
-            ),
-            src: src.clone(),
-            span: span.into(),
-        })?;
-    let subs = generic_substitutions(type_def, type_args, registry, src, span)?;
-    substitute_resolved_type_with_type_params(resolved, &subs, src)
+    let resolved =
+        dag.semantic
+            .type_defs
+            .field_type(&key)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "semantic type metadata missing field type for `{}.{}`",
+                    constructor.name(),
+                    field
+                ),
+                src: src.clone(),
+                span: span.into(),
+            })?;
+    let subs = concrete_generic_substitutions(type_def, type_args, src, span)?;
+    substitute_resolved_type_with_type_params(resolved, subs.bindings(), src)
 }
 
-pub(in crate::tir::dim_check) fn validate_finite_index_obligations(
-    inferred: &InferredType,
-    dag: &crate::tir::typed::DagTIR,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<(), GraphcalError> {
-    validate_finite_index_obligations_inner(inferred, dag, registry, src, span, &mut Vec::new())
+#[derive(Clone, PartialEq, Eq)]
+struct ConcreteStructApplicationKey {
+    type_name: InferredStructType,
+    type_args: Vec<InferredGenericArg>,
 }
 
-fn validate_finite_index_obligations_inner(
+struct ConcreteStructApplication<'a> {
+    key: ConcreteStructApplicationKey,
+    type_def: &'a TypeDef,
+    substitutions: ConcreteGenericSubstitutions,
+}
+
+impl<'a> ConcreteStructApplication<'a> {
+    fn new(
+        type_name: &InferredStructType,
+        type_args: &[InferredGenericArg],
+        type_def: &'a TypeDef,
+        src: &NamedSource<Arc<String>>,
+        span: Span,
+    ) -> Result<Self, GraphcalError> {
+        Ok(Self {
+            key: ConcreteStructApplicationKey {
+                type_name: type_name.clone(),
+                type_args: type_args.to_vec(),
+            },
+            type_def,
+            substitutions: concrete_generic_substitutions(type_def, type_args, src, span)?,
+        })
+    }
+}
+
+struct ConcreteObligationContext<'a> {
+    declared_types: &'a HashMap<ScopedName, DeclaredType>,
+    dag: &'a crate::tir::typed::DagTIR,
+    tir: &'a crate::tir::typed::TIR,
+    registry: &'a Registry,
+    builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
+    src: &'a NamedSource<Arc<String>>,
+    span: Span,
+    cancellation: &'a crate::cancellation::CancellationToken,
+}
+
+pub(in crate::tir::dim_check) fn validate_concrete_type_obligations(
     inferred: &InferredType,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     span: Span,
-    visited: &mut Vec<InferredStructType>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
+    let ctx = ConcreteObligationContext {
+        declared_types,
+        dag,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+        span,
+        cancellation,
+    };
+    validate_concrete_type_obligations_inner(inferred, &ctx, &mut Vec::new())
+}
+
+fn validate_concrete_type_obligations_inner(
+    inferred: &InferredType,
+    ctx: &ConcreteObligationContext<'_>,
+    stack: &mut Vec<ConcreteStructApplicationKey>,
+) -> Result<(), GraphcalError> {
+    ctx.cancellation.checkpoint()?;
     match inferred {
         InferredType::Struct(type_name, type_args) => {
             for arg in type_args {
                 if let InferredGenericArg::Type(type_arg) = arg {
-                    validate_finite_index_obligations_inner(
-                        type_arg, dag, registry, src, span, visited,
-                    )?;
+                    validate_concrete_type_obligations_inner(type_arg, ctx, stack)?;
                 }
             }
-            if visited.contains(type_name) {
-                return Ok(());
-            }
-            let type_def = struct_type_def_for_inferred(type_name, Some(dag), registry)
+            let type_def = struct_type_def_for_inferred(type_name, Some(ctx.dag), ctx.registry)
                 .ok_or_else(|| GraphcalError::UnknownStructType {
                     name: type_name.to_string(),
-                    src: src.clone(),
-                    span: span.into(),
+                    src: ctx.src.clone(),
+                    span: ctx.span.into(),
                 })?;
-            visited.push(type_name.clone());
-            if let Some(members) = type_def.union_members() {
-                for member in members {
-                    for field in member.fields() {
-                        let field_type = resolved_field_type(
-                            type_name.resolved(),
-                            member,
-                            field.name(),
-                            type_def,
-                            type_args,
-                            dag,
-                            registry,
-                            src,
-                            span,
-                        )?;
-                        validate_finite_index_obligations_inner(
-                            &field_type,
-                            dag,
-                            registry,
-                            src,
-                            span,
-                            visited,
-                        )?;
-                    }
+            let application =
+                ConcreteStructApplication::new(type_name, type_args, type_def, ctx.src, ctx.span)?;
+            let field_types = validate_concrete_field_obligations(&application, ctx)?;
+
+            if let Some(ancestor) = stack
+                .iter()
+                .find(|ancestor| ancestor.type_name == application.key.type_name)
+            {
+                if ancestor == &application.key {
+                    return Ok(());
                 }
+                return Err(GraphcalError::EvalError {
+                    message: format!(
+                        "recursive generic type `{}` changes its arguments; concrete field obligations cannot be discharged finitely",
+                        application.key.type_name
+                    ),
+                    src: ctx.src.clone(),
+                    span: ctx.span.into(),
+                });
             }
-            visited.pop();
+
+            stack.push(application.key);
+            for field_type in field_types {
+                validate_concrete_type_obligations_inner(&field_type, ctx, stack)?;
+            }
+            stack.pop();
             Ok(())
         }
-        InferredType::Indexed { element, .. } => {
-            validate_finite_index_obligations_inner(element, dag, registry, src, span, visited)
+        InferredType::Indexed { element, index } => {
+            validate_concrete_index(index, ctx)?;
+            validate_concrete_type_obligations_inner(element, ctx, stack)
         }
+        InferredType::CoordinateIndexLabel { index, .. }
+        | InferredType::NamedIndexCase(index)
+        | InferredType::Key(index)
+        | InferredType::IndexArg(index) => validate_concrete_index(index, ctx),
+        InferredType::Fin(form) if !form.is_constant() => Err(GraphcalError::EvalError {
+            message: format!(
+                "unresolved finite-index obligation `Fin({})`",
+                form.format()
+            ),
+            src: ctx.src.clone(),
+            span: ctx.span.into(),
+        }),
+        InferredType::Fin(form) if form.constant() == 0 => Err(GraphcalError::EvalError {
+            message: "Fin(0) is invalid: finite indexes must contain at least one key".to_string(),
+            src: ctx.src.clone(),
+            span: ctx.span.into(),
+        }),
         InferredType::Quantity(_)
         | InferredType::Complex(_)
-        | InferredType::CoordinateIndexLabel { .. }
         | InferredType::Bool
         | InferredType::Int
         | InferredType::Fin(_)
-        | InferredType::Datetime(_)
-        | InferredType::NamedIndexCase(_)
-        | InferredType::Key(_)
-        | InferredType::IndexArg(_) => Ok(()),
+        | InferredType::Datetime(_) => Ok(()),
     }
+}
+
+fn validate_concrete_index(
+    index: &InferredIndex,
+    ctx: &ConcreteObligationContext<'_>,
+) -> Result<(), GraphcalError> {
+    let Some(form) = index.finite_index_form() else {
+        return Ok(());
+    };
+    if !form.is_constant() {
+        return Err(GraphcalError::EvalError {
+            message: format!(
+                "unresolved finite-index obligation `Fin({})`",
+                form.format()
+            ),
+            src: ctx.src.clone(),
+            span: ctx.span.into(),
+        });
+    }
+    if form.constant() == 0 {
+        return Err(GraphcalError::EvalError {
+            message: "Fin(0) is invalid: finite indexes must contain at least one key".to_string(),
+            src: ctx.src.clone(),
+            span: ctx.span.into(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_concrete_field_obligations(
+    application: &ConcreteStructApplication<'_>,
+    ctx: &ConcreteObligationContext<'_>,
+) -> Result<Vec<InferredType>, GraphcalError> {
+    let Some(members) = application.type_def.union_members() else {
+        return Ok(Vec::new());
+    };
+    members
+        .iter()
+        .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
+        .map(|(member, field)| {
+            ctx.cancellation.checkpoint()?;
+            let key =
+                resolved_type_field_key(application.key.type_name.resolved(), member, field.name());
+            let field_semantics = ctx.dag.semantic.type_defs.field(&key).ok_or_else(|| {
+                GraphcalError::InternalError {
+                    message: format!(
+                        "semantic type metadata missing field `{}.{}`",
+                        member.name(),
+                        field.name()
+                    ),
+                    src: ctx.src.clone(),
+                    span: ctx.span.into(),
+                }
+            })?;
+            let field_type = substitute_resolved_type_with_type_params(
+                field_semantics.resolved_type(),
+                application.substitutions.bindings(),
+                ctx.src,
+            )?;
+            if !field_semantics.domain_bounds().is_empty() {
+                validate_instantiated_field_bounds(
+                    application,
+                    member,
+                    field,
+                    field_semantics.domain_bounds(),
+                    &field_type,
+                    ctx,
+                )?;
+            }
+            Ok(field_type)
+        })
+        .collect()
+}
+
+fn validate_instantiated_field_bounds(
+    application: &ConcreteStructApplication<'_>,
+    member: &UnionMemberDef,
+    field: &crate::registry::types::StructField,
+    bounds: &[crate::tir::typed::ResolvedDomainBound],
+    field_type: &InferredType,
+    ctx: &ConcreteObligationContext<'_>,
+) -> Result<(), GraphcalError> {
+    let expected = super::super::expected_bound_from_inferred(field_type).ok_or_else(|| {
+        GraphcalError::InvalidDomainTarget {
+            type_kind: format_inferred_type(field_type, ctx.registry),
+            src: bounds
+                .first()
+                .map_or_else(|| ctx.src.clone(), |bound| bound.src.clone()),
+            span: bounds.first().map_or(ctx.span, |bound| bound.span).into(),
+        }
+    })?;
+    let display_name = if member.name().as_str() == application.type_def.name().as_str() {
+        format!("{}.{}", application.type_def.name(), field.name())
+    } else {
+        format!(
+            "{}.{}.{}",
+            application.type_def.name(),
+            member.name(),
+            field.name()
+        )
+    };
+
+    for bound in bounds {
+        ctx.cancellation.checkpoint()?;
+        let locals = HirLocalTypes::root(ctx.cancellation, Some(application.substitutions.clone()));
+        let inferred = infer_hir_type(
+            &bound.value,
+            None,
+            ctx.declared_types,
+            &locals,
+            ctx.dag,
+            ctx.tir,
+            ctx.registry,
+            ctx.builtin_fns,
+            &bound.src,
+        )?;
+        super::super::check_one_bound_with_display_name(
+            &display_name,
+            bound,
+            &inferred,
+            &expected,
+            ctx.registry,
+            &bound.src,
+        )?;
+    }
+    Ok(())
 }
 
 fn record_member(type_def: &TypeDef) -> Option<&UnionMemberDef> {
@@ -3105,6 +3435,7 @@ fn infer_hir_generic_type_arg(
     dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
+    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredType, GraphcalError> {
     match &type_expr.kind {
         hir::TypeExprKind::Builtin(hir::BuiltinType::Dimensionless) => {
@@ -3116,32 +3447,39 @@ fn infer_hir_generic_type_arg(
             Ok(InferredType::Datetime(*scale))
         }
         hir::TypeExprKind::DimExpr(dim_expr) => {
-            infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Quantity)
+            infer_hir_dim_expr_arg(dim_expr, registry, src, substitutions)
+                .map(InferredType::Quantity)
         }
         hir::TypeExprKind::Complex(dimension) => match dimension {
             hir::DimArg::Dimensionless(_) => Ok(InferredType::Complex(Dimension::dimensionless())),
             hir::DimArg::Expr(dim_expr) => {
-                infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredType::Complex)
+                infer_hir_dim_expr_arg(dim_expr, registry, src, substitutions)
+                    .map(InferredType::Complex)
             }
         },
         hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
-            inferred_index_from_type_arg(index, src)?,
+            inferred_index_from_type_arg(index, src, substitutions)?,
         )),
-        hir::TypeExprKind::Key(index) => {
-            Ok(InferredType::Key(inferred_index_from_type_arg(index, src)?))
-        }
+        hir::TypeExprKind::Key(index) => Ok(InferredType::Key(inferred_index_from_type_arg(
+            index,
+            src,
+            substitutions,
+        )?)),
         hir::TypeExprKind::Struct(name) => Ok(InferredType::Struct(
             InferredStructType::from_resolved(name.value.clone()),
             vec![],
         )),
-        hir::TypeExprKind::GenericTypeParam(param) => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic type parameter `{}` is not bound at this constructor call site",
-                param.value.name
-            ),
-            src: src.clone(),
-            span: param.span.into(),
-        }),
+        hir::TypeExprKind::GenericTypeParam(param) => substitutions
+            .and_then(|substitutions| substitutions.bindings().types.get(&param.value.name))
+            .cloned()
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!(
+                    "generic type parameter `{}` is not concretely bound",
+                    param.value.name
+                ),
+                src: src.clone(),
+                span: param.span.into(),
+            }),
         hir::TypeExprKind::TypeApplication { name, generic_args } => {
             let type_def = dag
                 .semantic
@@ -3166,33 +3504,14 @@ fn infer_hir_generic_type_arg(
                     registry,
                     src,
                     name.span,
+                    substitutions,
                 )?,
             ))
         }
         hir::TypeExprKind::Indexed { base, indexes } => {
-            let mut result = infer_hir_generic_type_arg(base, dag, registry, src)?;
+            let mut result = infer_hir_generic_type_arg(base, dag, registry, src, substitutions)?;
             for index in indexes.iter().rev() {
-                let inferred_index = match index {
-                    hir::IndexRef::Concrete(index) => {
-                        InferredIndex::from_resolved(index.value.clone())
-                    }
-                    hir::IndexRef::GenericParam(param) => {
-                        return Err(GraphcalError::EvalError {
-                            message: format!(
-                                "generic index parameter `{}` is not bound at this constructor call site",
-                                param.value.name
-                            ),
-                            src: src.clone(),
-                            span: param.span.into(),
-                        });
-                    }
-                    hir::IndexRef::Finite(nat) => {
-                        let form = hir_nat_to_linear_form(nat)
-                            .map_err(|err| nat_overflow_error(err, src, nat.span()))?;
-                        InferredIndex::from_finite_index_form(form)
-                            .map_err(|err| finite_index_error(err, src, nat.span()))?
-                    }
-                };
+                let inferred_index = inferred_index_from_type_arg(index, src, substitutions)?;
                 result = InferredType::Indexed {
                     element: Box::new(result),
                     index: inferred_index,
@@ -3208,22 +3527,25 @@ fn infer_hir_sorted_generic_arg(
     dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
+    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredGenericArg, GraphcalError> {
     match arg {
         hir::GenericArg::Dim(hir::DimArg::Dimensionless(_)) => {
             Ok(InferredGenericArg::Dim(Dimension::dimensionless()))
         }
         hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
-            infer_hir_dim_expr_arg(dim_expr, registry, src).map(InferredGenericArg::Dim)
+            infer_hir_dim_expr_arg(dim_expr, registry, src, substitutions)
+                .map(InferredGenericArg::Dim)
         }
         hir::GenericArg::Index(index) => {
-            inferred_index_from_type_arg(index, src).map(InferredGenericArg::Index)
+            inferred_index_from_type_arg(index, src, substitutions).map(InferredGenericArg::Index)
         }
-        hir::GenericArg::Nat(nat) => hir_nat_to_linear_form(nat)
-            .map(InferredGenericArg::Nat)
-            .map_err(|err| nat_overflow_error(err, src, nat.span())),
+        hir::GenericArg::Nat(nat) => {
+            resolve_hir_nat_form(nat, substitutions, src).map(InferredGenericArg::Nat)
+        }
         hir::GenericArg::Type(type_expr) => {
-            infer_hir_generic_type_arg(type_expr, dag, registry, src).map(InferredGenericArg::Type)
+            infer_hir_generic_type_arg(type_expr, dag, registry, src, substitutions)
+                .map(InferredGenericArg::Type)
         }
     }
 }
@@ -3231,20 +3553,24 @@ fn infer_hir_sorted_generic_arg(
 fn inferred_index_from_type_arg(
     index: &hir::IndexRef,
     src: &NamedSource<Arc<String>>,
+    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<InferredIndex, GraphcalError> {
     match index {
         hir::IndexRef::Concrete(name) => Ok(InferredIndex::from_resolved(name.value.clone())),
-        hir::IndexRef::GenericParam(param) => Err(GraphcalError::EvalError {
-            message: format!(
-                "generic index parameter `{}` is not bound at this constructor call site",
-                param.value.name
-            ),
-            src: src.clone(),
-            span: param.span.into(),
-        }),
+        hir::IndexRef::GenericParam(param) => substitutions
+            .and_then(|substitutions| substitutions.bindings().indexes.get(&param.value.name))
+            .cloned()
+            .map(InferredIndex::from_ref)
+            .ok_or_else(|| GraphcalError::EvalError {
+                message: format!(
+                    "generic index parameter `{}` is not concretely bound",
+                    param.value.name
+                ),
+                src: src.clone(),
+                span: param.span.into(),
+            }),
         hir::IndexRef::Finite(nat_expr) => {
-            let form = hir_nat_to_linear_form(nat_expr)
-                .map_err(|err| nat_overflow_error(err, src, nat_expr.span()))?;
+            let form = resolve_hir_nat_form(nat_expr, substitutions, src)?;
             InferredIndex::from_finite_index_form(form)
                 .map_err(|err| finite_index_error(err, src, nat_expr.span()))
         }
@@ -3255,6 +3581,7 @@ fn infer_hir_dim_expr_arg(
     dim_expr: &hir::DimExpr,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
+    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<Dimension, GraphcalError> {
     dim_expr
         .terms
@@ -3271,25 +3598,39 @@ fn infer_hir_dim_expr_arg(
                             src: src.clone(),
                             span: target.span.into(),
                         })?;
-                    (dim, item.term.power.unwrap_or(Rational::ONE), item.term.span)
+                    (
+                        dim,
+                        item.term.power.unwrap_or(Rational::ONE),
+                        item.term.span,
+                    )
                 }
                 hir::DimTermTarget::GenericParam(param) => {
-                    return Err(GraphcalError::EvalError {
-                        message: format!(
-                            "generic dimension parameter `{}` is not bound at this constructor call site",
-                            param.value.name
-                        ),
-                        src: src.clone(),
-                        span: param.span.into(),
-                    });
+                    let dim = substitutions
+                        .and_then(|substitutions| {
+                            substitutions.bindings().dims.get(&param.value.name)
+                        })
+                        .cloned()
+                        .ok_or_else(|| GraphcalError::EvalError {
+                            message: format!(
+                                "generic dimension parameter `{}` is not concretely bound",
+                                param.value.name
+                            ),
+                            src: src.clone(),
+                            span: param.span.into(),
+                        })?;
+                    (
+                        dim,
+                        item.term.power.unwrap_or(Rational::ONE),
+                        item.term.span,
+                    )
                 }
             };
-            let powered = dim.pow(power).map_err(|_| {
-                GraphcalError::DimensionOverflow {
+            let powered = dim
+                .pow(power)
+                .map_err(|_| GraphcalError::DimensionOverflow {
                     src: src.clone(),
                     span: span.into(),
-                }
-            })?;
+                })?;
             match item.op {
                 crate::desugar::desugared_ast::MulDivOp::Mul => {
                     acc.checked_mul(&powered)
@@ -3362,6 +3703,7 @@ fn infer_hir_constructor_call(
         registry,
         src,
         callee.span,
+        local_types.generic_substitutions(),
     )?;
 
     let def_field_names: std::collections::HashSet<&str> = variant
@@ -3471,6 +3813,32 @@ fn infer_hir_constructor_call(
     ))
 }
 
+pub(in crate::tir::dim_check) fn resolve_concrete_generic_args(
+    owning_type: &ResolvedStructTypeName,
+    type_def: &TypeDef,
+    applied_generic_args: &[hir::GenericArg],
+    dag: &crate::tir::typed::DagTIR,
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Vec<crate::registry::declared_type::DeclaredGenericArg>, GraphcalError> {
+    resolve_applied_generic_args(
+        owning_type,
+        type_def,
+        applied_generic_args,
+        dag,
+        registry,
+        src,
+        span,
+        None,
+    )
+    .map(|args| {
+        args.iter()
+            .map(crate::registry::declared_type::DeclaredGenericArg::from)
+            .collect()
+    })
+}
+
 fn resolve_applied_generic_args(
     owning_type: &ResolvedStructTypeName,
     type_def: &TypeDef,
@@ -3479,6 +3847,7 @@ fn resolve_applied_generic_args(
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
+    substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<Vec<InferredGenericArg>, GraphcalError> {
     if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
         return Ok(Vec::new());
@@ -3507,7 +3876,7 @@ fn resolve_applied_generic_args(
     }
     let mut args = Vec::with_capacity(total_params);
     for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
-        let inferred = infer_hir_sorted_generic_arg(arg, dag, registry, src)?;
+        let inferred = infer_hir_sorted_generic_arg(arg, dag, registry, src, substitutions)?;
         let matches_sort = matches!(
             (param.constraint, &inferred),
             (TypeGenericConstraint::Dim, InferredGenericArg::Dim(_))
@@ -3539,7 +3908,7 @@ fn resolve_applied_generic_args(
                 span: span.into(),
             })?
             .resolved;
-        let subs = generic_substitutions(type_def, &args, registry, src, span)?;
+        let subs = generic_substitution_prefix(type_def, &args, src, span)?;
         args.push(substitute_resolved_generic_arg_with_type_params(
             resolved_default,
             &subs,
@@ -3631,7 +4000,7 @@ fn first_missing_map_tuple(
 
         let mut advanced = false;
         for axis in (0..axes.len()).rev() {
-            offsets[axis] += 1;
+            offsets[axis] = offsets[axis].checked_add(1)?;
             if offsets[axis] < axes[axis].len() {
                 advanced = true;
                 break;
@@ -3872,7 +4241,14 @@ fn infer_hir_map_literal(
             .map(MapLiteralVariantKey::display)
             .collect::<Vec<_>>()
             .join(", ");
-        let missing_count = expected_cardinality.get() - provided_tuples.len();
+        let missing_count = expected_cardinality
+            .get()
+            .checked_sub(provided_tuples.len())
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: "map coverage cardinality underflow".to_string(),
+                src: src.clone(),
+                span: expr.span.into(),
+            })?;
         return Err(GraphcalError::EvalError {
             message: format!(
                 "non-exhaustive map literal: missing {missing_count} entries; first missing entry is ({witness})"

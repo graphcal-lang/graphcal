@@ -16,10 +16,10 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
+use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
 use graphcal_compiler::registry::builtins::BuiltinFunctions;
-use graphcal_compiler::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{Registry, TypeDef};
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, StructFieldConstraintKey};
@@ -64,6 +64,8 @@ pub struct EvalContext<'a> {
     /// constraints yet, e.g. const-bound evaluation inside `exec_plan`).
     pub struct_field_constraints:
         Option<&'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
+    /// Concrete Nat bindings while evaluating one instantiated generic field bound.
+    pub generic_nat_bindings: Option<&'a HashMap<GenericParamName, u64>>,
     /// Embedder-injected host functions backing extern (plugin) calls.
     ///
     /// `None` in contexts that must not reach extern calls (const
@@ -108,12 +110,14 @@ fn constructor_fields_for_runtime_struct<'a>(
 fn find_struct_field_constraint<'a>(
     constraints: &'a HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     owning_type: Option<&StructTypeRef>,
+    generic_args: &[DeclaredGenericArg],
     constructor: &ConstructorName,
     field: &FieldName,
 ) -> Option<&'a ResolvedDomainConstraint> {
     owning_type.and_then(|owning_type| {
-        constraints.get(&StructFieldConstraintKey::new(
+        constraints.get(&StructFieldConstraintKey::for_application(
             owning_type.clone(),
+            generic_args.to_vec(),
             constructor.clone(),
             field.clone(),
         ))
@@ -136,6 +140,7 @@ impl<'a> EvalContext<'a> {
             current_dag: self.current_dag,
             root_values: self.root_values,
             struct_field_constraints: self.struct_field_constraints,
+            generic_nat_bindings: self.generic_nat_bindings,
             host_fns: self.host_fns,
         }
     }
