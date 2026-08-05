@@ -156,9 +156,11 @@ unit positions. Import each side explicitly, for example
 a name because both are terms and would be indistinguishable in expressions.
 
 Imported type-system declarations retain semantic dependencies from their
-module of definition. For example, importing `dim WeightedRate` also preserves
-its resolved expansion through private or public sibling dimensions, and
-importing `type Request` preserves nested record and index field types. Those
+module of definition. For example, importing `dim WeightedRate` preserves its
+resolved expansion through private or public sibling dimensions, importing
+`unit point` preserves its canonical backing dimension and scale, and importing
+`type Request` preserves nested record and index field types. This also applies
+when a dimension or unit definition uses module-qualified dependencies. Those
 dependencies do not introduce extra source names into the consumer: import a
 sibling only when consumer source names it directly. Constructors remain a
 separate term import when consumer source explicitly constructs a value.

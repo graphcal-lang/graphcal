@@ -2927,15 +2927,16 @@ impl SelectedDeclarations {
         self.dimensions.iter()
     }
 
-    /// Clone this selection without dimension declarations.
+    /// Clone this selection without declarations that are closed semantic values.
     ///
-    /// Project lowering imports selected dimensions from the dependency's
-    /// already-resolved semantic registry, while the remaining declaration
-    /// categories still use source registration.
+    /// Project lowering imports selected dimensions and units from the
+    /// dependency's already-resolved semantic registry, while the remaining
+    /// declaration categories still use source registration.
     #[must_use]
-    pub fn without_dimensions(&self) -> Self {
+    pub fn without_resolved_dimensions_and_units(&self) -> Self {
         let mut selected = self.clone();
         selected.dimensions.clear();
+        selected.units.clear();
         selected
     }
 
