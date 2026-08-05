@@ -1745,13 +1745,30 @@ fn check_no_constraints_on_generic_type_args(
             walk(&entry.type_ann)?;
         }
     }
-    for type_def in tir.registry.types.all_types() {
-        if let Some(members) = type_def.union_members() {
-            for field in members
+    // Type definitions are module-owned semantic facts. Walking the root
+    // registry here misses definitions declared by inline DAGs, while walking
+    // every reachable definition would diagnose imported source against the
+    // wrong file. Each local DAG records all of its own type symbols, so visit
+    // exactly those definitions at their owning semantic boundary.
+    for (dag_id, dag) in tir.local_dags() {
+        for (identity, type_def) in &dag.semantic.type_defs.struct_types {
+            if identity.owner() != dag_id {
+                continue;
+            }
+            for default in type_def
+                .generic_params()
                 .iter()
-                .flat_map(crate::registry::types::UnionMemberDef::fields)
+                .filter_map(|param| param.default.as_ref())
             {
-                walk(field.type_ann())?;
+                check_generic_args_for_domain_constraints(std::iter::once(default), src)?;
+            }
+            if let Some(members) = type_def.union_members() {
+                for field in members
+                    .iter()
+                    .flat_map(crate::registry::types::UnionMemberDef::fields)
+                {
+                    walk(field.type_ann())?;
+                }
             }
         }
     }

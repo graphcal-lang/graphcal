@@ -166,6 +166,7 @@ fn compile_inline_dag_bodies_test(
             parent_dag_id,
         )?;
         let dag_id = parent_dag_id.child(name.as_str());
+        module_types.insert_registry(&dag_id, &dag_body_ir.registry, src.clone());
         let mut compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
             dag_body_ir,
             &dag_id,
@@ -2195,6 +2196,50 @@ fn const_domain_bound_well_formed_passes_dim_check() {
     // Well-formed const constraint passes dim_check (value-vs-bound check is
     // in exec_plan, not dim_check).
     let source = "const node MAX_M: Mass(min: 1.0 kg, max: 100.0 kg) = 50.0 kg;";
+    check(source).unwrap();
+}
+
+// -----------------------------------------------------------------------
+// Generic-argument domain constraints are rejected in every type definition
+// -----------------------------------------------------------------------
+
+#[test]
+fn generic_argument_constraint_in_type_default_is_rejected() {
+    let source = r#"
+type Wrapper<T: Type> { Wrapper(value: T) }
+type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> { Bad(value: T) }
+node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
+"#;
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::GenericTypeArgDomainConstraint { .. }
+    ));
+}
+
+#[test]
+fn generic_argument_constraint_in_inline_dag_type_is_rejected() {
+    let source = r#"
+dag nested {
+    type Wrapper<T: Type> { Wrapper(value: T) }
+    type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> { Bad(value: T) }
+    node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
+}
+"#;
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::GenericTypeArgDomainConstraint { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn ordinary_field_constraint_remains_legal() {
+    let source = r#"
+type Wrapper<T: Type> { Wrapper(value: T) }
+type Good { Good(value: Length(min: 0.0 m)) }
+node good: Good = Good(value: 1.0 m);
+"#;
     check(source).unwrap();
 }
 
