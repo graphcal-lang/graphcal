@@ -25,8 +25,8 @@ pub use super::index::{
     MAX_INDEX_CARDINALITY,
 };
 pub use super::type_def::{
-    StructField, TypeDef, TypeDefKind, TypeGenericConstraint, TypeGenericParam, TypeRegistry,
-    UnionMemberDef,
+    StructField, TypeDef, TypeDefError, TypeDefKind, TypeGenericConstraint, TypeGenericParam,
+    TypeRegistry, UnionMemberDef,
 };
 pub(crate) use super::unit::UnitResolveError;
 pub use super::unit::{
@@ -304,14 +304,14 @@ impl RegistryBuilder {
     /// during declaration collection, so this low-level registry overwrites
     /// by key like the other `register_*` helpers.
     pub fn register_type(&mut self, def: TypeDef) {
-        if let TypeDefKind::Union { ref members } = def.kind {
+        if let Some(members) = def.union_members() {
             for member in members {
-                // Last-wins, like every other register_* entry point —
-                // duplicates are rejected upstream during declaration collection.
-                self.ctors.insert(member.name.clone(), def.name.clone());
+                // Constructor and payload-field uniqueness were checked when
+                // the TypeDef was built; registration only installs indexes.
+                self.ctors.insert(member.name().clone(), def.name().clone());
             }
         }
-        self.types.insert(def.name.clone(), def);
+        self.types.insert(def.name().clone(), def);
     }
 
     /// Register an index definition.
@@ -679,35 +679,38 @@ mod tests {
         load_prelude(&mut b).unwrap();
         // Record-shaped types are single-variant unions whose sole
         // constructor's name matches the type's name.
-        b.register_type(TypeDef {
-            name: StructTypeName::expect_valid("TransferResult"),
-            generic_params: vec![],
-            kind: TypeDefKind::Union {
-                members: vec![UnionMemberDef {
-                    name: ConstructorName::expect_valid("TransferResult"),
-                    fields: vec![
-                        StructField {
-                            name: FieldName::expect_valid("dv1"),
-                            type_ann: make_dim_type_expr("Velocity"),
-                        },
-                        StructField {
-                            name: FieldName::expect_valid("dv2"),
-                            type_ann: make_dim_type_expr("Velocity"),
-                        },
-                    ],
-                }],
-            },
-        });
+        let member = UnionMemberDef::try_new(
+            ConstructorName::expect_valid("TransferResult"),
+            vec![
+                StructField::new(
+                    FieldName::expect_valid("dv1"),
+                    make_dim_type_expr("Velocity"),
+                ),
+                StructField::new(
+                    FieldName::expect_valid("dv2"),
+                    make_dim_type_expr("Velocity"),
+                ),
+            ],
+        )
+        .unwrap();
+        b.register_type(
+            TypeDef::try_union(
+                StructTypeName::expect_valid("TransferResult"),
+                vec![],
+                vec![member],
+            )
+            .unwrap(),
+        );
         let r = b.try_build().unwrap();
         let velocity_dim = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
         let def = r.types.get_type("TransferResult").unwrap();
-        assert_eq!(def.name.as_str(), "TransferResult");
+        assert_eq!(def.name().as_str(), "TransferResult");
         assert!(def.is_union());
         let fields = def.record_fields().expect("single-variant collision");
         assert_eq!(fields.len(), 2);
-        assert_eq!(fields[0].name.as_str(), "dv1");
+        assert_eq!(fields[0].name().as_str(), "dv1");
         assert_eq!(
-            r.dimensions.resolve_type_expr(&fields[0].type_ann),
+            r.dimensions.resolve_type_expr(fields[0].type_ann()),
             Ok(Some(velocity_dim))
         );
         assert!(r.types.get_type("NonExistent").is_none());

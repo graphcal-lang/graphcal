@@ -110,7 +110,7 @@ pub(super) fn runtime_to_value(
                 if let (Some(td), Some(DeclaredType::Struct(_, generic_args))) =
                     (type_def, declared_type)
                 {
-                    td.generic_params
+                    td.generic_params()
                         .iter()
                         .zip(generic_args)
                         .filter_map(|(param, arg)| {
@@ -136,10 +136,10 @@ pub(super) fn runtime_to_value(
                     let field_declared = type_def.and_then(|td| {
                         td.union_members()?
                             .iter()
-                            .find(|member| member.name.as_str() == public_type_name.as_str())?
-                            .fields
+                            .find(|member| member.name().as_str() == public_type_name.as_str())?
+                            .fields()
                             .iter()
-                            .find(|f| f.name == *field_name)
+                            .find(|field| field.name() == field_name)
                             .and_then(|f| resolve_field_declared_type(f, &generic_sub, registry))
                     });
                     let val = runtime_to_value(field_rv, field_declared.as_ref(), tir);

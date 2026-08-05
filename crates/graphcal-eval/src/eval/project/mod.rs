@@ -524,7 +524,7 @@ pub(super) fn resolve_field_declared_type(
 ) -> Option<DeclaredType> {
     // Check if the field type is a bare generic param reference (e.g., `D`)
     if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::DimExpr(dim_expr) =
-        &field.type_ann.kind
+        &field.type_ann().kind
         && dim_expr.terms.len() == 1
         && dim_expr.terms[0].term.power.is_none()
         && let Some(name) = dim_expr.terms[0]
@@ -539,7 +539,7 @@ pub(super) fn resolve_field_declared_type(
     }
     if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::ComplexApplication {
         generic_args,
-    } = &field.type_ann.kind
+    } = &field.type_ann().kind
         && let [dimension_arg] = generic_args.as_slice()
     {
         let dimension = resolve_field_dimension_arg(dimension_arg, generic_sub, registry);
@@ -553,7 +553,7 @@ pub(super) fn resolve_field_declared_type(
     // overflow as a real error during compilation.
     registry
         .dimensions
-        .resolve_type_expr(&field.type_ann)
+        .resolve_type_expr(field.type_ann())
         .ok()
         .flatten()
         .map(DeclaredType::Quantity)

@@ -594,6 +594,25 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn duplicate_constructor_field_has_original_as_related_information() {
+        let source = "pub type Pair {\n    Pair(\n        value: Length,\n        other: Bool,\n        value: Time,\n    )\n}";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert!(matches!(
+            &diagnostic.code,
+            Some(NumberOrString::String(code)) if code == "graphcal::N016"
+        ));
+        assert_eq!(diagnostic.range.start.line, 4);
+        let related = diagnostic
+            .related_information
+            .as_ref()
+            .expect("first field declaration should be related information");
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].location.range.start.line, 2);
+    }
+
+    #[test]
     fn duplicate_extern_param_has_original_as_related_information() {
         let source = concat!(
             "import plugin \"graphcal:demo\" as demo {\n",
@@ -1019,6 +1038,20 @@ include pass_through(
         assert!(diags[0].message.contains("Speed"));
         // V003 has related information pointing to the pub declaration
         assert!(diags[0].related_information.is_some());
+    }
+
+    #[test]
+    fn private_generic_default_produces_v003_diagnostic() {
+        let source =
+            "type Secret { Secret }\npub type Wrapper<T: Type = Secret> { Wrapper(value: T) }";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(matches!(
+            &diagnostics[0].code,
+            Some(NumberOrString::String(code)) if code == "graphcal::V003"
+        ));
+        assert!(diagnostics[0].message.contains("Secret"));
+        assert_eq!(diagnostics[0].range.start.line, 1);
     }
 
     #[test]

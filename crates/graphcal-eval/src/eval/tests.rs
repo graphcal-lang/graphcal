@@ -4502,6 +4502,27 @@ fn project_selective_include_leaks_private_type_v006() {
 }
 
 #[test]
+fn project_selective_include_rejects_private_generic_default_binding() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../tests/fixtures/invalid/multi/pub_include_leaks_private_generic_default/src/generic_default/main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs());
+    match result {
+        Err(CompileError::Eval(GraphcalError::GenericsLeakage {
+            reexport_name,
+            leaked_name,
+            leaked_kind,
+            ..
+        })) => {
+            assert_eq!(reexport_name, "Wrapper");
+            assert_eq!(leaked_name, "PrivateElement");
+            assert_eq!(leaked_kind, "type");
+        }
+        other => panic!("expected generic-default GenericsLeakage, got {other:?}"),
+    }
+}
+
+#[test]
 fn project_selective_include_with_public_type_binding_ok() {
     // Positive companion to project_selective_include_leaks_private_type_v006:
     // binding `Element` to a `pub` importer-local type satisfies A9.

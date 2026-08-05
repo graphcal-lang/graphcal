@@ -887,6 +887,83 @@ fn resolve_pub_union_type_with_private_payload_type_fires_v003() {
 }
 
 #[test]
+fn resolve_pub_type_with_private_type_default_fires_v003() {
+    let source = r"
+        type Secret { Secret }
+        pub type Wrapper<T: Type = Secret> { Wrapper(value: T) }
+    ";
+    let err = compile_to_tir(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { pub_kind, ref_kind, ref_name, .. }
+            if pub_kind == "type" && ref_kind == "type" && ref_name == "Secret")
+    );
+}
+
+#[test]
+fn resolve_pub_type_with_private_dimension_default_fires_v003() {
+    let source = r"
+        dim SecretDim = Length;
+        pub type Wrapper<D: Dim = SecretDim> { Wrapper(value: D) }
+    ";
+    let err = compile_to_tir(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_kind, ref_name, .. }
+            if ref_kind == "dim" && ref_name == "SecretDim")
+    );
+}
+
+#[test]
+fn resolve_pub_type_with_private_index_default_fires_v003() {
+    let source = r"
+        index SecretIndex = { One };
+        pub type Wrapper<I: Index = SecretIndex> { Wrapper(value: Key<I>) }
+    ";
+    let err = compile_to_tir(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_kind, ref_name, .. }
+            if ref_kind == "index" && ref_name == "SecretIndex")
+    );
+}
+
+#[test]
+fn resolve_pub_type_checks_nested_generic_default_dependencies() {
+    let source = r"
+        type Secret { Secret }
+        pub type PublicBox<T: Type> { PublicBox(value: T) }
+        pub type Wrapper<T: Type = PublicBox<Secret>> { Wrapper(value: T) }
+    ";
+    let err = compile_to_tir(source).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::PrivateInPublic { ref_name, .. }
+            if ref_name == "Secret")
+    );
+}
+
+#[test]
+fn generic_default_parameter_shadowing_private_type_is_not_a_visibility_leak() {
+    let source = r"
+        type Shadow { Shadow }
+        pub type Wrapper<Shadow: Type, T: Type = Shadow> { Wrapper(value: T) }
+    ";
+    compile_to_tir(source).unwrap();
+}
+
+#[test]
+fn public_generic_defaults_are_accepted() {
+    let source = r"
+        pub dim PublicDim = Length;
+        pub index PublicIndex = { One };
+        pub type PublicType { PublicType }
+        pub type Wrapper<
+            D: Dim = PublicDim,
+            I: Index = PublicIndex,
+            T: Type = PublicType,
+        > { Wrapper(value: T, key: Key<I>, quantity: D) }
+    ";
+    compile_to_tir(source).unwrap();
+}
+
+#[test]
 fn resolve_pub_bind_index_with_private_dim_fires_v003() {
     // A required coordinate index carries a dimension constraint that participates
     // in A9 case 1.

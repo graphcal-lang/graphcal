@@ -13,7 +13,7 @@ use crate::syntax::import_category::ImportItemCategoryMismatch;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NameAtom;
-use crate::syntax::type_name::{FieldName, StructTypeName};
+use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
 fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
     keys.iter()
@@ -42,6 +42,24 @@ pub enum GraphcalError {
         #[label("duplicate definition here")]
         duplicate: SourceSpan,
         #[label("first defined here")]
+        first: SourceSpan,
+    },
+
+    /// A constructor payload repeats a field declaration.
+    #[error("constructor `{constructor}` declares field `{field}` more than once")]
+    #[diagnostic(
+        code(graphcal::N016),
+        help("constructor field names must be unique; remove or rename one declaration")
+    )]
+    DuplicateConstructorField {
+        type_name: StructTypeName,
+        constructor: ConstructorName,
+        field: FieldName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate `{field}` field in `{type_name}.{constructor}`")]
+        duplicate: SourceSpan,
+        #[label("first `{field}` field declared here")]
         first: SourceSpan,
     },
 
@@ -1997,6 +2015,7 @@ impl GraphcalError {
             | Self::OverrideNotAParam { .. }
             | Self::OverrideUnknownParam { .. } => return None,
             Self::DuplicateName { src, .. }
+            | Self::DuplicateConstructorField { src, .. }
             | Self::BuiltinNameShadowed { src, .. }
             | Self::ConflictingImportedUnit { src, .. }
             | Self::InvalidPlotProperty { src, .. }

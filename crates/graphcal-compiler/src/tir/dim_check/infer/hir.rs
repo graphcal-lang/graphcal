@@ -737,11 +737,11 @@ fn infer_hir_const_ref(
                 &target_def.owning_type,
                 TypeNominalUse::Constructor(constructor),
             )?;
-            if !target_def.variant.fields.is_empty() {
+            if !target_def.variant.fields().is_empty() {
                 return Err(GraphcalError::EvalError {
                     message: format!(
                         "constructor `{}` requires field arguments",
-                        target_def.variant.name
+                        target_def.variant.name()
                     ),
                     src: src.clone(),
                     span: target.span.into(),
@@ -2726,7 +2726,7 @@ fn resolved_type_field_key(
 ) -> crate::tir::typed::ResolvedStructFieldTypeKey {
     crate::tir::typed::ResolvedStructFieldTypeKey {
         owning_type: owning_type.clone(),
-        constructor: constructor.name.clone(),
+        constructor: constructor.name().clone(),
         field: field.clone(),
     }
 }
@@ -2739,7 +2739,7 @@ fn generic_substitutions(
     span: Span,
 ) -> Result<GenericSubstitutions, GraphcalError> {
     let mut subs = GenericSubstitutions::default();
-    for (param, arg) in type_def.generic_params.iter().zip(type_args.iter()) {
+    for (param, arg) in type_def.generic_params().iter().zip(type_args.iter()) {
         match param.constraint {
             TypeGenericConstraint::Dim => match arg {
                 InferredGenericArg::Dim(dim) => {
@@ -2855,7 +2855,8 @@ pub(in crate::tir::dim_check) fn resolved_field_type(
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!(
                 "semantic type metadata missing field type for `{}.{}`",
-                constructor.name, field
+                constructor.name(),
+                field
             ),
             src: src.clone(),
             span: span.into(),
@@ -2903,11 +2904,11 @@ fn validate_finite_index_obligations_inner(
             visited.push(type_name.clone());
             if let Some(members) = type_def.union_members() {
                 for member in members {
-                    for field in &member.fields {
+                    for field in member.fields() {
                         let field_type = resolved_field_type(
                             type_name.resolved(),
                             member,
-                            &field.name,
+                            field.name(),
                             type_def,
                             type_args,
                             dag,
@@ -2950,7 +2951,7 @@ fn record_member(type_def: &TypeDef) -> Option<&UnionMemberDef> {
     let [only] = members else {
         return None;
     };
-    (only.name.as_str() == type_def.name.as_str()).then_some(only)
+    (only.name().as_str() == type_def.name().as_str()).then_some(only)
 }
 
 #[expect(clippy::too_many_arguments, reason = "field-access expression context")]
@@ -3014,9 +3015,9 @@ fn infer_hir_field_access(
         }
     })?;
     if !member
-        .fields
+        .fields()
         .iter()
-        .any(|field_def| field_def.name == field.value)
+        .any(|field_def| field_def.name() == &field.value)
     {
         return Err(GraphcalError::UnknownField {
             type_name: type_name.name().clone(),
@@ -3290,7 +3291,7 @@ fn infer_hir_constructor_call(
     let type_def = &target.type_def;
     let variant = &target.variant;
     let owning_type_identity = InferredStructType::from_resolved(target.owning_type.clone());
-    let owning_type_name = type_def.name.clone();
+    let owning_type_name = type_def.name().clone();
 
     let resolved_type_args = resolve_applied_generic_args(
         &target.owning_type,
@@ -3303,9 +3304,9 @@ fn infer_hir_constructor_call(
     )?;
 
     let def_field_names: std::collections::HashSet<&str> = variant
-        .fields
+        .fields()
         .iter()
-        .map(|field| field.name.as_str())
+        .map(|field| field.name().as_str())
         .collect();
     let provided_names: Vec<&str> = fields
         .iter()
@@ -3317,7 +3318,8 @@ fn infer_hir_constructor_call(
             return Err(GraphcalError::EvalError {
                 message: format!(
                     "duplicate field `{}` in constructor `{}`",
-                    field.name.value, variant.name
+                    field.name.value,
+                    variant.name()
                 ),
                 src: src.clone(),
                 span: field.name.span.into(),
@@ -3340,10 +3342,10 @@ fn infer_hir_constructor_call(
 
     let provided_set: std::collections::HashSet<&str> = provided_names.iter().copied().collect();
     let missing: Vec<FieldName> = variant
-        .fields
+        .fields()
         .iter()
-        .filter(|field| !provided_set.contains(field.name.as_str()))
-        .map(|field| field.name.clone())
+        .filter(|field| !provided_set.contains(field.name().as_str()))
+        .map(|field| field.name().clone())
         .collect();
     if !missing.is_empty() {
         return Err(GraphcalError::MissingFields {
@@ -3356,13 +3358,14 @@ fn infer_hir_constructor_call(
 
     for field_init in fields {
         let field_def = variant
-            .fields
+            .fields()
             .iter()
-            .find(|field| field.name == field_init.name.value)
+            .find(|field| field.name() == &field_init.name.value)
             .ok_or_else(|| GraphcalError::EvalError {
                 message: format!(
                     "internal: unknown field `{}` in constructor `{}`",
-                    field_init.name.value, variant.name
+                    field_init.name.value,
+                    variant.name()
                 ),
                 src: src.clone(),
                 span: field_init.name.span.into(),
@@ -3381,7 +3384,7 @@ fn infer_hir_constructor_call(
         let expected = resolved_field_type(
             &target.owning_type,
             variant,
-            &field_def.name,
+            field_def.name(),
             type_def,
             &resolved_type_args,
             dag,
@@ -3416,12 +3419,12 @@ fn resolve_applied_generic_args(
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<Vec<InferredGenericArg>, GraphcalError> {
-    if applied_generic_args.is_empty() && type_def.generic_params.is_empty() {
+    if applied_generic_args.is_empty() && type_def.generic_params().is_empty() {
         return Ok(Vec::new());
     }
-    let total_params = type_def.generic_params.len();
+    let total_params = type_def.generic_params().len();
     let required_count = type_def
-        .generic_params
+        .generic_params()
         .iter()
         .rposition(|param| param.default.is_none())
         .map_or(0, |index| index.saturating_add(1));
@@ -3434,7 +3437,7 @@ fn resolve_applied_generic_args(
         return Err(GraphcalError::EvalError {
             message: format!(
                 "type `{}` expects {hint} generic argument(s), got {}",
-                type_def.name,
+                type_def.name(),
                 applied_generic_args.len()
             ),
             src: src.clone(),
@@ -3442,7 +3445,7 @@ fn resolve_applied_generic_args(
         });
     }
     let mut args = Vec::with_capacity(total_params);
-    for (param, arg) in type_def.generic_params.iter().zip(applied_generic_args) {
+    for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
         let inferred = infer_hir_sorted_generic_arg(arg, dag, registry, src)?;
         let matches_sort = matches!(
             (param.constraint, &inferred),
@@ -3457,11 +3460,11 @@ fn resolve_applied_generic_args(
         args.push(inferred);
     }
     for param in type_def
-        .generic_params
+        .generic_params()
         .iter()
         .skip(applied_generic_args.len())
     {
-        let resolved_default = dag
+        let resolved_default = &dag
             .semantic
             .type_defs
             .generic_defaults
@@ -3473,7 +3476,8 @@ fn resolve_applied_generic_args(
                 ),
                 src: src.clone(),
                 span: span.into(),
-            })?;
+            })?
+            .resolved;
         let subs = generic_substitutions(type_def, &args, registry, src, span)?;
         args.push(substitute_resolved_generic_arg_with_type_params(
             resolved_default,
@@ -4003,12 +4007,12 @@ fn constructor_field_type(
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     if !variant
-        .fields
+        .fields()
         .iter()
-        .any(|field_def| field_def.name == field.value)
+        .any(|field_def| field_def.name() == &field.value)
     {
         return Err(GraphcalError::UnknownField {
-            type_name: type_def.name.clone(),
+            type_name: type_def.name().clone(),
             field_name: field.value.clone(),
             src: src.clone(),
             span: field.span.into(),
@@ -4195,14 +4199,14 @@ fn infer_hir_match(
                 if !type_name.matches_resolved(&target.owning_type) {
                     return Err(GraphcalError::UnknownField {
                         type_name: type_name.name().clone(),
-                        field_name: FieldName::expect_valid(target.variant.name.as_str()),
+                        field_name: FieldName::expect_valid(target.variant.name().as_str()),
                         src: src.clone(),
                         span: constructor.span.into(),
                     });
                 }
-                if !covered.insert(target.variant.name.clone()) {
+                if !covered.insert(target.variant.name().clone()) {
                     return Err(GraphcalError::EvalError {
-                        message: format!("duplicate match arm for `{}`", target.variant.name),
+                        message: format!("duplicate match arm for `{}`", target.variant.name()),
                         src: src.clone(),
                         span: (*span).into(),
                     });
@@ -4218,7 +4222,8 @@ fn infer_hir_match(
                         return Err(GraphcalError::EvalError {
                             message: format!(
                                 "duplicate pattern binding for field `{}` in `{}`",
-                                field.value, target.variant.name
+                                field.value,
+                                target.variant.name()
                             ),
                             src: src.clone(),
                             span: field.span.into(),
@@ -4255,11 +4260,11 @@ fn infer_hir_match(
             }
             if let Some(members) = type_def.union_members() {
                 for member in members {
-                    if !covered.contains(&member.name) {
+                    if !covered.contains(member.name()) {
                         return Err(GraphcalError::EvalError {
                             message: format!(
                                 "non-exhaustive match: member `{}` not covered",
-                                member.name
+                                member.name()
                             ),
                             src: src.clone(),
                             span: expr.span.into(),

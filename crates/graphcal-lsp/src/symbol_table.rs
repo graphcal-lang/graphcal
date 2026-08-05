@@ -2315,18 +2315,22 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     let desc = type_def.union_members().map_or_else(
-                        || format!("{} (required)", type_def.name),
+                        || format!("{} (required)", type_def.name()),
                         |members| match type_def.record_fields() {
-                            Some([]) => type_def.name.to_string(),
+                            Some([]) => type_def.name().to_string(),
                             Some(fields) => {
-                                let field_descs: Vec<String> =
-                                    fields.iter().map(|f| f.name.to_string()).collect();
-                                format!("{} {{ {} }}", type_def.name, field_descs.join(", "))
+                                let field_descs: Vec<String> = fields
+                                    .iter()
+                                    .map(|field| field.name().to_string())
+                                    .collect();
+                                format!("{} {{ {} }}", type_def.name(), field_descs.join(", "))
                             }
                             None => {
                                 // Union type: show members separated by |
-                                let member_descs: Vec<String> =
-                                    members.iter().map(|m| m.name.to_string()).collect();
+                                let member_descs: Vec<String> = members
+                                    .iter()
+                                    .map(|member| member.name().to_string())
+                                    .collect();
                                 member_descs.join(" | ")
                             }
                         },
@@ -2347,21 +2351,21 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
             continue;
         };
         for member in members {
-            for field in &member.fields {
+            for field in member.fields() {
                 let field_key = SymbolKey::Field {
-                    owner: SymbolPath::local(member.name.to_string()),
-                    field_name: field.name.to_string(),
+                    owner: SymbolPath::local(member.name().to_string()),
+                    field_name: field.name().to_string(),
                 };
                 if !table.definitions.contains_key(&field_key) {
                     table.insert_definition(
                         field_key,
                         DefinitionInfo {
-                            name: field.name.to_string(),
+                            name: field.name().to_string(),
                             category: SymbolCategory::Field,
                             name_span: Span::new(0, 0),
                             decl_span: Span::new(0, 0),
                             type_description: None,
-                            detail: Some(format!("field of {}.{}", type_def.name, member.name)),
+                            detail: Some(format!("field of {}.{}", type_def.name(), member.name())),
                             visibility: None,
                         },
                     );

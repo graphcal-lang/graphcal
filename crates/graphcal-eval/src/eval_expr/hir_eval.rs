@@ -211,7 +211,7 @@ fn eval_hir_nullary_constructor(
         .ok_or_else(|| ctx.eval_error(format!("unknown constructor `{constructor}`"), span))?;
     Ok(RuntimeValue::Struct {
         type_name: StructTypeRef::with_display_leaf(
-            StructTypeName::from_atom(target.variant.name.atom().clone()),
+            StructTypeName::from_atom(target.variant.name().atom().clone()),
             target.owning_type.clone(),
         ),
         fields: IndexMap::new(),
@@ -1521,14 +1521,14 @@ fn eval_hir_field_access(
                         format!(
                             "constructor `{}` is not a member of struct `{}`",
                             type_name.name(),
-                            type_def.name
+                            type_def.name()
                         ),
                         inner_span,
                     )
                 })?;
                 if !constructor_fields
                     .iter()
-                    .any(|field_def| field_def.name == field.value)
+                    .any(|field_def| field_def.name() == &field.value)
                 {
                     return Err(ctx.eval_error(
                         format!("no field `{}` on struct `{type_name}`", field.value),
@@ -1568,7 +1568,7 @@ fn eval_hir_constructor_call(
             callee.span,
         )
     })?;
-    let constructor_name = target.variant.name.clone();
+    let constructor_name = target.variant.name().clone();
     let owning_type = StructTypeRef::from_resolved(target.owning_type.clone());
     let mut field_map = IndexMap::new();
     for field_init in fields {
@@ -1594,7 +1594,7 @@ fn eval_hir_constructor_call(
     }
     Ok(RuntimeValue::Struct {
         type_name: StructTypeRef::with_display_leaf(
-            StructTypeName::from_atom(target.variant.name.atom().clone()),
+            StructTypeName::from_atom(target.variant.name().atom().clone()),
             target.owning_type.clone(),
         ),
         fields: field_map,
@@ -2137,7 +2137,7 @@ fn runtime_struct_matches_resolved_constructor(
     scrutinee_type: &StructTypeRef,
     target: &ResolvedConstructorTarget,
 ) -> bool {
-    scrutinee_type.name().as_str() == target.variant.name.as_str()
+    scrutinee_type.name().as_str() == target.variant.name().as_str()
         && scrutinee_type.resolved() == &target.owning_type
 }
 

@@ -512,7 +512,7 @@ struct ResolvedGenericSubstitutions {
 
 impl ResolvedGenericSubstitutions {
     fn from_resolved_prefix(type_def: &TypeDef, resolved_args: &[ResolvedGenericArg]) -> Self {
-        type_def.generic_params.iter().zip(resolved_args).fold(
+        type_def.generic_params().iter().zip(resolved_args).fold(
             Self::default(),
             |mut substitutions, (param, arg)| {
                 match arg {
@@ -818,9 +818,9 @@ fn check_type_application_arity(
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let total_params = type_def.generic_params.len();
+    let total_params = type_def.generic_params().len();
     let required_count = type_def
-        .generic_params
+        .generic_params()
         .iter()
         .rposition(|param| param.default.is_none())
         .map_or(0, |index| index.saturating_add(1));
@@ -856,12 +856,12 @@ fn resolve_hir_type_application(
         ctx.src,
     )?;
 
-    let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
-    for (param, arg) in type_def.generic_params.iter().zip(generic_args) {
+    let mut resolved_args = Vec::with_capacity(type_def.generic_params().len());
+    for (param, arg) in type_def.generic_params().iter().zip(generic_args) {
         resolved_args.push(resolve_hir_generic_arg_for_param(param, arg, ctx)?);
     }
 
-    for param in type_def.generic_params.iter().skip(generic_args.len()) {
+    for param in type_def.generic_params().iter().skip(generic_args.len()) {
         let default = param
             .default
             .as_ref()
@@ -954,7 +954,7 @@ fn generic_scope_for_type(
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<hir::GenericScope, GraphcalError> {
     let mut scope = hir::GenericScope::new();
-    for param in &type_def.generic_params {
+    for param in type_def.generic_params() {
         let constraint = generic_constraint(param.constraint);
         let id = hir::GenericParamId::new(
             hir::GenericParamOwner::Type(type_owner.clone()),
@@ -1000,7 +1000,7 @@ fn lower_generic_default(
 ) -> Result<hir::GenericArg, GraphcalError> {
     let mut scope = hir::GenericScope::new();
     for earlier in type_def
-        .generic_params
+        .generic_params()
         .iter()
         .take_while(|earlier| earlier.name != param.name)
     {
@@ -1217,7 +1217,7 @@ pub(super) fn resolve_generic_default_in_struct_scope(
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedGenericArg, GraphcalError> {
+) -> Result<(hir::GenericArg, ResolvedGenericArg), GraphcalError> {
     let prelude = hir::PreludeTypeScope::graphcal();
     let resolve_ctx = HirTypeResolutionContext {
         src,
@@ -1227,7 +1227,8 @@ pub(super) fn resolve_generic_default_in_struct_scope(
         prelude: &prelude,
     };
     let hir_arg = lower_generic_default(default, param, type_owner, type_def, resolve_ctx)?;
-    resolve_hir_generic_arg_for_param(param, &hir_arg, resolve_ctx)
+    let resolved = resolve_hir_generic_arg_for_param(param, &hir_arg, resolve_ctx)?;
+    Ok((hir_arg, resolved))
 }
 
 pub(super) fn resolve_type_expr_in_struct_scope(
@@ -1490,7 +1491,7 @@ fn resolve_dim_expr(
             src,
             module_ctx,
         )? {
-            return if type_def.generic_params.is_empty() {
+            return if type_def.generic_params().is_empty() {
                 Ok(ResolvedTypeExpr::Struct(type_name, term.span))
             } else {
                 resolve_known_type_application(
@@ -1830,8 +1831,8 @@ fn resolve_known_type_application(
     module_ctx: Option<ModuleTypeContext<'_>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     check_type_application_arity(type_name.as_str(), type_def, generic_args.len(), span, src)?;
-    let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
-    for (param, arg) in type_def.generic_params.iter().zip(generic_args) {
+    let mut resolved_args = Vec::with_capacity(type_def.generic_params().len());
+    for (param, arg) in type_def.generic_params().iter().zip(generic_args) {
         let resolved = resolve_type_arg_for_param(
             param,
             arg,
@@ -1845,7 +1846,7 @@ fn resolve_known_type_application(
         )?;
         resolved_args.push(resolved);
     }
-    for param in type_def.generic_params.iter().skip(generic_args.len()) {
+    for param in type_def.generic_params().iter().skip(generic_args.len()) {
         let default_expr = param
             .default
             .as_ref()

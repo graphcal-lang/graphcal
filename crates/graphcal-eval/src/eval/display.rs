@@ -232,7 +232,7 @@ fn runtime_struct_matches_resolved_constructor(
     scrutinee_type: &StructTypeRef,
     target: &ResolvedConstructorTarget,
 ) -> bool {
-    scrutinee_type.name().as_str() == target.variant.name.as_str()
+    scrutinee_type.name().as_str() == target.variant.name().as_str()
         && scrutinee_type.resolved() == &target.owning_type
 }
 

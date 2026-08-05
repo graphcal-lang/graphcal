@@ -1798,11 +1798,11 @@ fn merge_registry_into_builder_filtered(
 
     // Import struct types — skip bound types (they are replaced by the importer's type).
     for type_def in dep_registry.types.all_types() {
-        if type_bindings.contains_key(type_def.name.as_str()) {
+        if type_bindings.contains_key(type_def.name().as_str()) {
             continue;
         }
         if external_surface.is_some_and(|surface| {
-            !surface.is_explicit_export(&DeclName::from_atom(type_def.name.atom().clone()))
+            !surface.is_explicit_export(&DeclName::from_atom(type_def.name().atom().clone()))
         }) {
             continue;
         }
@@ -2026,6 +2026,21 @@ fn collect_type_expr_names(
     }
 }
 
+fn collect_generic_arg_names(
+    arg: &graphcal_compiler::syntax::ast::GenericArg<graphcal_compiler::syntax::phase::Desugared>,
+    refs: &mut Vec<String>,
+) {
+    use graphcal_compiler::desugar::desugared_ast::IndexExpr;
+    use graphcal_compiler::syntax::ast::GenericArg;
+    match arg {
+        GenericArg::Type(type_expr) => collect_type_expr_names(type_expr, refs),
+        GenericArg::Index(IndexExpr::Name(path)) => refs.push(path.value.display_path()),
+        GenericArg::Index(IndexExpr::Finite { .. } | IndexExpr::BareNat(_))
+        | GenericArg::Nat(_) => {}
+        GenericArg::Ambiguous(ambiguous) => collect_ambiguous_generic_names(ambiguous, refs),
+    }
+}
+
 fn collect_ambiguous_generic_names(
     arg: &graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg,
     refs: &mut Vec<String>,
@@ -2117,6 +2132,22 @@ fn check_generics_leakage(
                         }
                     }
                 }
+                for default in t
+                    .generic_params
+                    .iter()
+                    .filter_map(|param| param.default.as_ref())
+                {
+                    collect_generic_arg_names(default, &mut refs);
+                }
+                // Bare references to lexical generic parameters are not
+                // module API dependencies, even when a local type-system
+                // declaration has the same leaf spelling.
+                let generic_params = t
+                    .generic_params
+                    .iter()
+                    .map(|param| param.name.value.as_str())
+                    .collect::<HashSet<_>>();
+                refs.retain(|name| !generic_params.contains(name.as_str()));
             }
             _ => {}
         }

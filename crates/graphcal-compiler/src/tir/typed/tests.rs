@@ -45,25 +45,28 @@ fn make_dim_type_expr(name: &str) -> crate::desugar::desugared_ast::TypeExpr {
 fn make_registry_with_struct() -> Registry {
     let mut b = RegistryBuilder::new();
     load_prelude(&mut b).unwrap();
-    b.register_type(crate::registry::types::TypeDef {
-        name: StructTypeName::expect_valid("TransferResult"),
-        generic_params: vec![],
-        kind: crate::registry::types::TypeDefKind::Union {
-            members: vec![crate::registry::types::UnionMemberDef {
-                name: crate::syntax::type_name::ConstructorName::expect_valid("TransferResult"),
-                fields: vec![
-                    crate::registry::types::StructField {
-                        name: crate::syntax::type_name::FieldName::expect_valid("dv1"),
-                        type_ann: make_dim_type_expr("Velocity"),
-                    },
-                    crate::registry::types::StructField {
-                        name: crate::syntax::type_name::FieldName::expect_valid("dv2"),
-                        type_ann: make_dim_type_expr("Velocity"),
-                    },
-                ],
-            }],
-        },
-    });
+    let member = crate::registry::types::UnionMemberDef::try_new(
+        crate::syntax::type_name::ConstructorName::expect_valid("TransferResult"),
+        vec![
+            crate::registry::types::StructField::new(
+                crate::syntax::type_name::FieldName::expect_valid("dv1"),
+                make_dim_type_expr("Velocity"),
+            ),
+            crate::registry::types::StructField::new(
+                crate::syntax::type_name::FieldName::expect_valid("dv2"),
+                make_dim_type_expr("Velocity"),
+            ),
+        ],
+    )
+    .unwrap();
+    b.register_type(
+        crate::registry::types::TypeDef::try_union(
+            StructTypeName::expect_valid("TransferResult"),
+            vec![],
+            vec![member],
+        )
+        .unwrap(),
+    );
     b.try_build().unwrap()
 }
 

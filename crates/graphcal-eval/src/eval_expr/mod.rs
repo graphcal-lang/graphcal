@@ -101,7 +101,7 @@ fn constructor_fields_for_runtime_struct<'a>(
     type_name: &StructTypeRef,
 ) -> Option<&'a [graphcal_compiler::registry::types::StructField]> {
     type_def.union_members()?.iter().find_map(|member| {
-        (member.name.as_str() == type_name.as_str()).then_some(member.fields.as_slice())
+        (member.name().as_str() == type_name.as_str()).then_some(member.fields())
     })
 }
 

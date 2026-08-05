@@ -72,7 +72,7 @@ pub fn concrete_model_constructors(
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    let TypeDefKind::Union { members } = &type_def.kind else {
+    let TypeDefKind::Union { members } = type_def.kind() else {
         return Err(GraphcalError::InternalError {
             message: format!("model schema cannot expose unresolved required type `{identity}`"),
             src: src.clone(),
@@ -87,13 +87,13 @@ pub fn concrete_model_constructors(
         .iter()
         .map(|constructor| {
             let fields = constructor
-                .fields
+                .fields()
                 .iter()
                 .map(|field| {
                     super::infer::hir::resolved_field_type(
                         identity.resolved(),
                         constructor,
-                        &field.name,
+                        field.name(),
                         type_def,
                         &inferred_args,
                         dag,
@@ -102,13 +102,13 @@ pub fn concrete_model_constructors(
                         Span::new(0, 0),
                     )
                     .map(|inferred| ConcreteModelField {
-                        name: field.name.clone(),
+                        name: field.name().clone(),
                         declared_type: DeclaredType::from(&inferred),
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(ConcreteModelConstructor {
-                name: constructor.name.clone(),
+                name: constructor.name().clone(),
                 fields,
             })
         })

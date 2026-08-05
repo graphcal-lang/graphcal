@@ -508,13 +508,14 @@ impl ModuleTypeRegistry {
             );
         }
         for type_def in registry.types.all_types() {
-            let type_name = ResolvedStructTypeName::from_def(owner.clone(), type_def.name.clone());
+            let type_name =
+                ResolvedStructTypeName::from_def(owner.clone(), type_def.name().clone());
             self.struct_types
                 .insert(type_name.clone(), type_def.clone());
             if let Some(members) = type_def.union_members() {
                 for member in members {
                     self.constructors.insert(
-                        ResolvedConstructorName::from_def(owner.clone(), member.name.clone()),
+                        ResolvedConstructorName::from_def(owner.clone(), member.name().clone()),
                         ModuleConstructorDef {
                             owning_type: type_name.clone(),
                             type_def: type_def.clone(),
@@ -726,6 +727,19 @@ pub struct ResolvedStructFieldTypeKey {
     pub field: FieldName,
 }
 
+/// One generic-parameter default after canonical HIR lowering and semantic
+/// resolution.
+///
+/// The HIR form preserves the canonical declarations named by dimension,
+/// index, and nominal-type defaults. The resolved form is used for generic
+/// substitution. Keeping both in one record prevents visibility checks from
+/// trying to recover erased alias identity from a concrete dimension value.
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedGenericDefault {
+    pub(crate) hir: hir::GenericArg,
+    pub(crate) resolved: ResolvedGenericArg,
+}
+
 /// Canonical type definitions referenced by module-aware TIR.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
@@ -737,7 +751,7 @@ pub struct ResolvedTypeDefs {
     pub field_bounds: HashMap<ResolvedStructFieldTypeKey, Vec<ResolvedDomainBound>>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
     pub(crate) generic_defaults:
-        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericArg>,
+        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericDefault>,
 }
 
 impl ResolvedTypeDefs {
