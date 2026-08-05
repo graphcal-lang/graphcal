@@ -43,10 +43,194 @@ type HirLocalTypes<'a> = hir::LocalEnv<'a, InferredType>;
 
 type ResolvedDeclKey = ResolvedDeclName;
 
+#[derive(Debug, Clone, Copy)]
+enum TypeNominalUse<'a> {
+    Field(&'a FieldName),
+    Constructor(&'a ResolvedConstructorName),
+    TypeArgument,
+}
+
+fn check_type_override_dependency(
+    dag: &crate::tir::typed::DagTIR,
+    owner_decl: Option<&ResolvedDeclName>,
+    actual: &ResolvedStructTypeName,
+    nominal_use: TypeNominalUse<'_>,
+) -> Result<(), GraphcalError> {
+    let Some(owner_decl) = owner_decl else {
+        return Ok(());
+    };
+    let Some(reconciliations) = dag.semantic.override_reconciliations.get(owner_decl) else {
+        return Ok(());
+    };
+
+    for reconciliation in reconciliations {
+        for target in &reconciliation.targets {
+            let crate::tir::typed::ResolvedOverrideTarget::Type {
+                overridden,
+                source,
+                replacement,
+            } = target
+            else {
+                continue;
+            };
+            if actual != source && actual != replacement {
+                continue;
+            }
+            let detail = match nominal_use {
+                TypeNominalUse::Field(field) => {
+                    format!("field `{field}` of type `{overridden}`")
+                }
+                TypeNominalUse::Constructor(constructor) => format!(
+                    "constructor `{}` of type `{overridden}`",
+                    constructor.as_str()
+                ),
+                TypeNominalUse::TypeArgument => format!("type `{overridden}`"),
+            };
+            return Err(GraphcalError::IncludeMustReconcileOverride {
+                overridden: overridden.to_string(),
+                overridden_kind: "type".to_string(),
+                orphan_decl: reconciliation.orphan_decl.to_string(),
+                detail,
+                src: reconciliation.src.clone(),
+                span: reconciliation.include_span.into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum IndexNominalUse<'a> {
+    Label(&'a crate::syntax::index_name::IndexVariantName),
+    TypeArgument,
+}
+
+fn check_index_override_dependency(
+    dag: &crate::tir::typed::DagTIR,
+    owner_decl: Option<&ResolvedDeclName>,
+    actual: &IndexTypeRef,
+    nominal_use: IndexNominalUse<'_>,
+) -> Result<(), GraphcalError> {
+    let Some(owner_decl) = owner_decl else {
+        return Ok(());
+    };
+    let Some(reconciliations) = dag.semantic.override_reconciliations.get(owner_decl) else {
+        return Ok(());
+    };
+
+    for reconciliation in reconciliations {
+        for target in &reconciliation.targets {
+            let crate::tir::typed::ResolvedOverrideTarget::Index {
+                overridden,
+                source,
+                replacement,
+            } = target
+            else {
+                continue;
+            };
+            let source_matches = actual.declared_resolved() == Some(source);
+            if !source_matches && !replacement.matches_ref(actual) {
+                continue;
+            }
+            let detail = match nominal_use {
+                IndexNominalUse::Label(variant) => {
+                    format!("index label `{overridden}.{variant}`")
+                }
+                IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
+            };
+            return Err(GraphcalError::IncludeMustReconcileOverride {
+                overridden: overridden.to_string(),
+                overridden_kind: "index".to_string(),
+                orphan_decl: reconciliation.orphan_decl.to_string(),
+                detail,
+                src: reconciliation.src.clone(),
+                span: reconciliation.include_span.into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn check_hir_index_ref_override_dependency(
+    index: &hir::IndexRef,
+    dag: &crate::tir::typed::DagTIR,
+    owner_decl: Option<&ResolvedDeclName>,
+) -> Result<(), GraphcalError> {
+    let actual = match index {
+        hir::IndexRef::Concrete(index) => IndexTypeRef::from_resolved(index.value.clone()),
+        hir::IndexRef::Finite(cardinality) => {
+            let Ok(form) = hir_nat_to_linear_form(cardinality) else {
+                return Ok(());
+            };
+            let Ok(index) = IndexTypeRef::from_finite_index_form(form) else {
+                return Ok(());
+            };
+            index
+        }
+        hir::IndexRef::GenericParam(_) => return Ok(()),
+    };
+    check_index_override_dependency(dag, owner_decl, &actual, IndexNominalUse::TypeArgument)
+}
+
+fn check_hir_generic_arg_override_dependencies(
+    arg: &hir::GenericArg,
+    dag: &crate::tir::typed::DagTIR,
+    owner_decl: Option<&ResolvedDeclName>,
+) -> Result<(), GraphcalError> {
+    match arg {
+        hir::GenericArg::Index(index) => {
+            check_hir_index_ref_override_dependency(index, dag, owner_decl)
+        }
+        hir::GenericArg::Type(type_expr) => {
+            check_hir_type_override_dependencies(type_expr, dag, owner_decl)
+        }
+        hir::GenericArg::Dim(_) | hir::GenericArg::Nat(_) => Ok(()),
+    }
+}
+
+fn check_hir_type_override_dependencies(
+    type_expr: &hir::TypeExpr,
+    dag: &crate::tir::typed::DagTIR,
+    owner_decl: Option<&ResolvedDeclName>,
+) -> Result<(), GraphcalError> {
+    match &type_expr.kind {
+        hir::TypeExprKind::Struct(name) => check_type_override_dependency(
+            dag,
+            owner_decl,
+            &name.value,
+            TypeNominalUse::TypeArgument,
+        ),
+        hir::TypeExprKind::TypeApplication { name, generic_args } => {
+            check_type_override_dependency(
+                dag,
+                owner_decl,
+                &name.value,
+                TypeNominalUse::TypeArgument,
+            )?;
+            generic_args.iter().try_for_each(|arg| {
+                check_hir_generic_arg_override_dependencies(arg, dag, owner_decl)
+            })
+        }
+        hir::TypeExprKind::Indexed { base, indexes } => {
+            check_hir_type_override_dependencies(base, dag, owner_decl)?;
+            indexes.iter().try_for_each(|index| {
+                check_hir_index_ref_override_dependency(index, dag, owner_decl)
+            })
+        }
+        hir::TypeExprKind::Index(index) | hir::TypeExprKind::Key(index) => {
+            check_hir_index_ref_override_dependency(index, dag, owner_decl)
+        }
+        hir::TypeExprKind::Builtin(_)
+        | hir::TypeExprKind::DimExpr(_)
+        | hir::TypeExprKind::GenericTypeParam(_)
+        | hir::TypeExprKind::Complex(_) => Ok(()),
+    }
+}
+
 /// Infer a HIR expression.
 pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
     expr: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
@@ -74,7 +258,7 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner(
 )]
 fn infer_hir_type(
     expr: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -106,7 +290,7 @@ fn infer_hir_type(
 )]
 fn infer_hir_type_inner(
     expr: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -151,6 +335,12 @@ fn infer_hir_type_inner(
         }
         hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, tir, src)?,
         hir::ExprKind::VariantLiteral(variant) => {
+            check_index_override_dependency(
+                dag,
+                owner_decl_name,
+                &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                IndexNominalUse::Label(variant.variant.variant()),
+            )?;
             // A qualified label is self-typed: `Maneuver.Departure` is a
             // constant of type `Key<Maneuver>` — the axis is in the spelling.
             InferredType::Key(InferredIndex::from_resolved(
@@ -161,7 +351,7 @@ fn infer_hir_type_inner(
             infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
         }
         hir::ExprKind::ConstRef(target) => {
-            infer_hir_const_ref(target, declared_types, dag, registry, src)?
+            infer_hir_const_ref(target, owner_decl_name, declared_types, dag, registry, src)?
         }
         hir::ExprKind::LocalRef(local) => {
             local_types
@@ -173,17 +363,40 @@ fn infer_hir_type_inner(
                     span: local.span.into(),
                 })?
         }
-        hir::ExprKind::FnCall { callee, args, .. } => infer_hir_fn_call(
-            callee,
-            args,
-            declared_types,
-            local_types,
-            dag,
-            tir,
-            registry,
-            builtin_fns,
-            src,
-        )?,
+        hir::ExprKind::FnCall { callee, args, .. } => {
+            if owner_decl_name
+                .is_some_and(|owner| dag.semantic.override_reconciliations.contains_key(owner))
+            {
+                // Function inference has several specialized signature paths.
+                // Check each argument once with the declaration identity intact
+                // before those paths infer it for their own type rule.
+                args.iter().try_for_each(|arg| {
+                    infer_hir_type(
+                        arg,
+                        owner_decl_name,
+                        declared_types,
+                        local_types,
+                        dag,
+                        tir,
+                        registry,
+                        builtin_fns,
+                        src,
+                    )
+                    .map(|_| ())
+                })?;
+            }
+            infer_hir_fn_call(
+                callee,
+                args,
+                declared_types,
+                local_types,
+                dag,
+                tir,
+                registry,
+                builtin_fns,
+                src,
+            )?
+        }
         hir::ExprKind::ForComp { bindings, body } => infer_hir_for_comp(
             bindings,
             body,
@@ -303,6 +516,7 @@ fn infer_hir_type_inner(
             callee,
             generic_args,
             fields,
+            owner_decl_name,
             declared_types,
             local_types,
             dag,
@@ -314,6 +528,7 @@ fn infer_hir_type_inner(
         hir::ExprKind::MapLiteral { entries } => infer_hir_map_literal(
             expr,
             entries,
+            owner_decl_name,
             declared_types,
             local_types,
             dag,
@@ -485,6 +700,7 @@ fn infer_bound_decl_type(
 
 fn infer_hir_const_ref(
     target: &crate::syntax::span::Spanned<ConstRef>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
@@ -515,6 +731,12 @@ fn infer_hir_const_ref(
                     src: src.clone(),
                     span: target.span.into(),
                 })?;
+            check_type_override_dependency(
+                dag,
+                owner_decl_name,
+                &target_def.owning_type,
+                TypeNominalUse::Constructor(constructor),
+            )?;
             if !target_def.variant.fields.is_empty() {
                 return Err(GraphcalError::EvalError {
                     message: format!(
@@ -1695,7 +1917,7 @@ fn infer_hir_if(
     condition: &hir::Expr,
     then_branch: &hir::Expr,
     else_branch: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -1742,7 +1964,7 @@ fn infer_hir_if(
 fn infer_hir_unary(
     op: crate::desugar::desugared_ast::UnaryOp,
     operand: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -1806,7 +2028,7 @@ fn infer_hir_binop(
     op: crate::desugar::desugared_ast::BinOp,
     lhs: &hir::Expr,
     rhs: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -1916,7 +2138,7 @@ fn infer_hir_key_form(
     axis: &hir::expr::ForBindingIndex,
     axis_span: Span,
     arg: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -2073,7 +2295,7 @@ fn infer_hir_key_form(
 fn infer_hir_for_comp(
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -2145,7 +2367,7 @@ fn infer_hir_index_access(
     expr: &hir::Expr,
     inner: &hir::Expr,
     args: &[hir::expr::IndexArg],
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -2175,6 +2397,12 @@ fn infer_hir_index_access(
         };
         match arg {
             hir::expr::IndexArg::Variant(variant) => {
+                check_index_override_dependency(
+                    dag,
+                    owner_decl_name,
+                    &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                    IndexNominalUse::Label(variant.variant.variant()),
+                )?;
                 let arg_index = InferredIndex::from_resolved(variant.variant.index().clone());
                 if arg_index != index {
                     return Err(GraphcalError::IndexMismatch {
@@ -2402,7 +2630,7 @@ fn reject_nested_conversion(
 fn infer_hir_convert(
     inner: &hir::Expr,
     target: &hir::ResolvedUnitExpr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -2458,7 +2686,7 @@ fn infer_hir_convert(
 fn infer_hir_display_timezone(
     inner: &hir::Expr,
     timezone: &crate::registry::time_zone::IanaTimeZoneId,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -2729,7 +2957,7 @@ fn record_member(type_def: &TypeDef) -> Option<&UnionMemberDef> {
 fn infer_hir_field_access(
     inner: &hir::Expr,
     field: &crate::syntax::span::Spanned<FieldName>,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -2756,6 +2984,12 @@ fn infer_hir_field_access(
             span: inner.span.into(),
         });
     };
+    check_type_override_dependency(
+        dag,
+        owner_decl_name,
+        type_name.resolved(),
+        TypeNominalUse::Field(&field.value),
+    )?;
     let type_def =
         struct_type_def_for_inferred(type_name, Some(dag), registry).ok_or_else(|| {
             GraphcalError::UnknownStructType {
@@ -3022,6 +3256,7 @@ fn infer_hir_constructor_call(
     callee: &crate::syntax::span::Spanned<ResolvedConstructorName>,
     constructor_generic_args: &[hir::GenericArg],
     fields: &[hir::expr::FieldInit],
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -3043,6 +3278,15 @@ fn infer_hir_constructor_call(
             src: src.clone(),
             span: callee.span.into(),
         })?;
+    check_type_override_dependency(
+        dag,
+        owner_decl_name,
+        &target.owning_type,
+        TypeNominalUse::Constructor(&callee.value),
+    )?;
+    constructor_generic_args.iter().try_for_each(|arg| {
+        check_hir_generic_arg_override_dependencies(arg, dag, owner_decl_name)
+    })?;
     let type_def = &target.type_def;
     let variant = &target.variant;
     let owning_type_identity = InferredStructType::from_resolved(target.owning_type.clone());
@@ -3125,7 +3369,7 @@ fn infer_hir_constructor_call(
             })?;
         let value_type = infer_hir_type(
             &field_init.value,
-            None,
+            owner_decl_name,
             declared_types,
             local_types,
             dag,
@@ -3322,6 +3566,7 @@ fn hir_map_entry_key(key: &hir::expr::MapEntryKey) -> IndexEntryKey {
 fn infer_hir_map_literal(
     expr: &hir::Expr,
     entries: &[hir::expr::MapEntry],
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -3330,6 +3575,18 @@ fn infer_hir_map_literal(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
+    for entry in entries {
+        for key in &entry.keys {
+            if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
+                check_index_override_dependency(
+                    dag,
+                    owner_decl_name,
+                    &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                    IndexNominalUse::Label(variant.variant.variant()),
+                )?;
+            }
+        }
+    }
     let Some(first_entry) = entries.first() else {
         return Err(GraphcalError::EvalError {
             message: "empty map literal".to_string(),
@@ -3519,7 +3776,7 @@ fn infer_hir_map_literal(
 
     let first_type = infer_hir_type(
         &first_entry.value,
-        None,
+        owner_decl_name,
         declared_types,
         local_types,
         dag,
@@ -3542,7 +3799,7 @@ fn infer_hir_map_literal(
     for entry in entries.iter().skip(1) {
         let entry_type = infer_hir_type(
             &entry.value,
-            None,
+            owner_decl_name,
             declared_types,
             local_types,
             dag,
@@ -3577,7 +3834,7 @@ fn infer_hir_scan(
     acc: &hir::LocalDef,
     val: &hir::LocalDef,
     body: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -3659,7 +3916,7 @@ fn infer_hir_unfold(
     prev_index: &hir::LocalDef,
     current_index: &hir::LocalDef,
     body: &hir::Expr,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -3776,7 +4033,7 @@ fn infer_hir_match(
     expr: &hir::Expr,
     scrutinee: &hir::Expr,
     arms: &[hir::expr::MatchArm],
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -3838,6 +4095,12 @@ fn infer_hir_match(
                         span: arm.span.into(),
                     });
                 };
+                check_index_override_dependency(
+                    dag,
+                    owner_decl_name,
+                    &IndexTypeRef::from_resolved(variant.variant.index().clone()),
+                    IndexNominalUse::Label(variant.variant.variant()),
+                )?;
                 if !index_identity.matches_resolved(variant.variant.index()) {
                     return Err(GraphcalError::IndexMismatch {
                         expected: index_identity.name(),
@@ -3923,6 +4186,12 @@ fn infer_hir_match(
                         src: src.clone(),
                         span: constructor.span.into(),
                     })?;
+                check_type_override_dependency(
+                    dag,
+                    owner_decl_name,
+                    &target.owning_type,
+                    TypeNominalUse::Constructor(&constructor.value),
+                )?;
                 if !type_name.matches_resolved(&target.owning_type) {
                     return Err(GraphcalError::UnknownField {
                         type_name: type_name.name().clone(),
@@ -4027,7 +4296,7 @@ fn infer_hir_dag_call(
     target: &crate::syntax::span::Spanned<crate::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
     output: &crate::syntax::span::Spanned<ResolvedDeclName>,
-    owner_decl_name: Option<&str>,
+    owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     local_types: &HirLocalTypes<'_>,
     dag: &crate::tir::typed::DagTIR,
@@ -4078,10 +4347,7 @@ fn infer_hir_dag_call(
                 let key = dag_tir.resolved_decl_key_for_local(&node.name);
                 let resolved = dag_tir.resolved_decl_types.get(&node.name).ok_or_else(|| {
                     GraphcalError::InternalError {
-                        message: format!(
-                            "semantic type missing for DAG-call node `{}`",
-                            node.name
-                        ),
+                        message: format!("semantic type missing for DAG-call node `{}`", node.name),
                         src: src.clone(),
                         span: node.type_ann.span.into(),
                     }

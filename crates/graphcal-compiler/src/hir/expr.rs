@@ -845,16 +845,14 @@ pub(crate) fn visit_expr(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
     crate::stack::with_stack_growth(|| visit_expr_inner(expr, visitor));
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "exhaustive traversal over every HIR expression variant"
-)]
 fn visit_expr_inner(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
     visitor(expr);
     match &expr.kind {
-        ExprKind::Error { children } => children
-            .iter()
-            .for_each(|child| visit_expr(child, visitor)),
+        ExprKind::Error { children } => {
+            for child in children {
+                visit_expr(child, visitor);
+            }
+        }
         ExprKind::Number(_)
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
@@ -878,7 +876,9 @@ fn visit_expr_inner(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
         | ExprKind::DisplayTimezone { expr: operand, .. }
         | ExprKind::FieldAccess { expr: operand, .. } => visit_expr(operand, visitor),
         ExprKind::FnCall { args, .. } => {
-            args.iter().for_each(|arg| visit_expr(arg, visitor));
+            for arg in args {
+                visit_expr(arg, visitor);
+            }
         }
         ExprKind::If {
             condition,
@@ -918,8 +918,9 @@ fn visit_expr_inner(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
         ExprKind::KeyForm { arg, .. } => visit_expr(arg, visitor),
         ExprKind::Match { scrutinee, arms } => {
             visit_expr(scrutinee, visitor);
-            arms.iter()
-                .for_each(|arm| visit_expr(&arm.body, visitor));
+            for arm in arms {
+                visit_expr(&arm.body, visitor);
+            }
         }
         ExprKind::DagCall { args, .. } => args
             .iter()

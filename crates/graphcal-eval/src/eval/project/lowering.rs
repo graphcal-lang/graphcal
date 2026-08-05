@@ -714,6 +714,70 @@ fn merge_dep_dag_tirs(
     }
 }
 
+fn check_semantic_override_reconciliation(
+    dependencies: &graphcal_compiler::tir::dim_check::OverrideDependencySummary,
+    source_dag_id: &graphcal_compiler::dag_id::DagId,
+    deferred: &DeferredDagInclude,
+    importer_src: &NamedSource<Arc<String>>,
+) -> Result<(), CompileError> {
+    use graphcal_compiler::syntax::index_name::ResolvedIndexName;
+    use graphcal_compiler::syntax::type_name::ResolvedStructTypeName;
+    use graphcal_compiler::tir::dim_check::NominalOverrideIdentity;
+
+    let mut overridden_indexes = deferred.index_bindings.keys().cloned().collect::<Vec<_>>();
+    overridden_indexes.sort();
+    let mut overridden_types = deferred.type_bindings.keys().cloned().collect::<Vec<_>>();
+    overridden_types.sort();
+    let mut defaults = dependencies
+        .iter()
+        .filter(|(param, _)| param.owner() == source_dag_id)
+        .collect::<Vec<_>>();
+    defaults.sort_by_key(|(param, _)| (*param).clone());
+
+    for (param, dependencies) in defaults {
+        if deferred.bindings.contains_key(&param.to_unowned_def_name()) {
+            continue;
+        }
+        for overridden in &overridden_indexes {
+            let identity = NominalOverrideIdentity::Index(ResolvedIndexName::from_def(
+                source_dag_id.clone(),
+                overridden.clone(),
+            ));
+            if dependencies.contains(&identity) {
+                return Err(CompileError::Eval(
+                    GraphcalError::IncludeMustReconcileOverride {
+                        overridden: overridden.to_string(),
+                        overridden_kind: "index".to_string(),
+                        orphan_decl: param.as_str().to_string(),
+                        detail: format!("canonical dependency on index `{overridden}`"),
+                        src: importer_src.clone(),
+                        span: deferred.import_span.into(),
+                    },
+                ));
+            }
+        }
+        for overridden in &overridden_types {
+            let identity = NominalOverrideIdentity::Type(ResolvedStructTypeName::from_def(
+                source_dag_id.clone(),
+                overridden.clone(),
+            ));
+            if dependencies.contains(&identity) {
+                return Err(CompileError::Eval(
+                    GraphcalError::IncludeMustReconcileOverride {
+                        overridden: overridden.to_string(),
+                        overridden_kind: "type".to_string(),
+                        orphan_decl: param.as_str().to_string(),
+                        detail: format!("canonical dependency on type `{overridden}`"),
+                        src: importer_src.clone(),
+                        span: deferred.import_span.into(),
+                    },
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Process every deferred DAG include (file-level instantiated, same-file
 /// inline DAG, cross-file qualified inline DAG) through one path:
 ///
@@ -725,7 +789,7 @@ fn merge_dep_dag_tirs(
 /// 2. Compile the body to IR with imported names/values set up.
 /// 3. Capture importer-owned index binding candidates, merge the body's registry,
 ///    then validate every candidate against the body's effective typed contract.
-/// 4. Run `check_include_reconciles_overrides` (A8/V005) and
+/// 4. Preserve canonical A8/V005 reconciliation facts and run
 ///    `check_generics_leakage` (A9/V006).
 /// 5. Merge the body's IR into the importer's IR with prefix/bindings.
 /// 6. For selective includes, add `local_name = @prefix::orig_name` aliases.
@@ -761,12 +825,13 @@ fn process_deferred_dag_includes(
         let merge_prefix = deferred.instance_scope.merge_scope_name();
         // ---- 1. Resolve source body + lower to IR ------------------------
         let (
-            dep_unfrozen,
+            mut dep_unfrozen,
             dep_registry,
             dep_src,
             dep_resolution_owner,
             body_for_leakage_check,
             body_decls_for_aliases,
+            source_override_dependencies,
         ) = match &deferred.source {
             DeferredDagSource::File { dep_dag_id } => {
                 let dep_loaded = &project.files[dep_dag_id];
@@ -837,6 +902,9 @@ fn process_deferred_dag_includes(
                     dep_dag_id.clone(),
                     &dep_loaded.ast,
                     dep_loaded.ast.declarations.as_slice(),
+                    evaluated_files
+                        .get(dep_dag_id)
+                        .map(|artifact| &artifact.override_dependencies),
                 )
             }
             DeferredDagSource::InlineDag {
@@ -976,6 +1044,9 @@ fn process_deferred_dag_includes(
                     dag_id.clone(),
                     dag_body,
                     dag_body.declarations.as_slice(),
+                    evaluated_files
+                        .get(parent_dag_id)
+                        .map(|artifact| &artifact.override_dependencies),
                 )
             }
         };
@@ -1025,13 +1096,24 @@ fn process_deferred_dag_includes(
         for (name, _) in &dep_unfrozen.source_order {
             dep_names.insert(name.member().clone());
         }
-        dep_unfrozen.check_include_reconciles_overrides(
-            &deferred.bindings,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            importer_src,
-            deferred.import_span,
-        )?;
+        match source_override_dependencies {
+            Some(dependencies) => check_semantic_override_reconciliation(
+                dependencies,
+                &dep_resolution_owner,
+                deferred,
+                importer_src,
+            )?,
+            None => dep_unfrozen.record_include_override_reconciliations(
+                &deferred.bindings,
+                &deferred.index_bindings,
+                &deferred.type_bindings,
+                &dep_registry,
+                &dep_resolution_owner,
+                importer_dag_id,
+                importer_src,
+                deferred.import_span,
+            )?,
+        }
         check_generics_leakage(
             body_for_leakage_check,
             &deferred.pub_reexport_items,

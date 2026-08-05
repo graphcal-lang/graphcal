@@ -766,6 +766,38 @@ pub struct ResolvedDomainBound {
     pub src: NamedSource<Arc<String>>,
 }
 
+/// A canonical nominal override that an unrebound param default must not use.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "crate-only prevents the public model glob re-export from exposing reconciliation internals"
+)]
+#[derive(Debug, Clone)]
+pub(crate) enum ResolvedOverrideTarget {
+    Index {
+        overridden: IndexName,
+        source: ResolvedIndexName,
+        replacement: IndexTypeRef,
+    },
+    Type {
+        overridden: crate::syntax::type_name::StructTypeName,
+        source: ResolvedStructTypeName,
+        replacement: ResolvedStructTypeName,
+    },
+}
+
+/// One include-site reconciliation obligation for an unrebound param default.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "crate-only prevents the public model glob re-export from exposing reconciliation internals"
+)]
+#[derive(Debug, Clone)]
+pub(crate) struct OverrideReconciliation {
+    pub(crate) orphan_decl: DeclName,
+    pub(crate) targets: Vec<ResolvedOverrideTarget>,
+    pub(crate) src: NamedSource<Arc<String>>,
+    pub(crate) include_span: Span,
+}
+
 /// Authoritative semantic body facts for a checked DAG.
 ///
 /// The source-shaped declaration entries on [`DagTIR`] retain spans,
@@ -790,6 +822,9 @@ pub struct DagSemanticBody {
     pub collection_refs: ResolvedCollectionRefs,
     /// Canonical HIR-derived constructor calls and match patterns.
     pub constructor_refs: ResolvedConstructorRefs,
+    /// Include override obligations keyed by the canonical param whose default
+    /// must remain independent of the replaced nominal declarations.
+    pub(crate) override_reconciliations: HashMap<ResolvedDeclName, Vec<OverrideReconciliation>>,
     /// Canonical type definitions referenced by this DAG.
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.
@@ -811,7 +846,12 @@ impl DagSemanticBody {
             .values()
             .chain(self.expressions.param_defaults.values())
             .chain(self.expressions.nodes.values())
-            .chain(self.domain_bounds.values().flatten().map(|bound| &bound.value))
+            .chain(
+                self.domain_bounds
+                    .values()
+                    .flatten()
+                    .map(|bound| &bound.value),
+            )
             .chain(
                 self.type_defs
                     .field_bounds
@@ -819,18 +859,13 @@ impl DagSemanticBody {
                     .flatten()
                     .map(|bound| &bound.value),
             )
-            .chain(
-                self.plot_exprs
-                    .plots
-                    .values()
-                    .flat_map(|body| {
-                        body.encodings
-                            .iter()
-                            .map(|(_, expr)| expr)
-                            .chain(body.mark_properties.iter().map(|field| &field.value))
-                            .chain(body.properties.iter().map(|field| &field.value))
-                    }),
-            )
+            .chain(self.plot_exprs.plots.values().flat_map(|body| {
+                body.encodings
+                    .iter()
+                    .map(|(_, expr)| expr)
+                    .chain(body.mark_properties.iter().map(|field| &field.value))
+                    .chain(body.properties.iter().map(|field| &field.value))
+            }))
             .chain(
                 self.plot_exprs
                     .figures
@@ -842,18 +877,21 @@ impl DagSemanticBody {
             .chain(self.dynamic_unit_scales.values().map(|entry| &entry.expr))
             .for_each(|expr| visit_root(expr, visitor));
 
-        self.expressions.asserts.values().for_each(|body| match body {
-            hir::AssertBody::Expr(expr) => visit_root(expr, visitor),
-            hir::AssertBody::Tolerance {
-                actual,
-                expected,
-                tolerance,
-            } => {
-                visit_root(actual, visitor);
-                visit_root(expected, visitor);
-                visit_root(tolerance, visitor);
-            }
-        });
+        self.expressions
+            .asserts
+            .values()
+            .for_each(|body| match body {
+                hir::AssertBody::Expr(expr) => visit_root(expr, visitor),
+                hir::AssertBody::Tolerance {
+                    actual,
+                    expected,
+                    tolerance,
+                } => {
+                    visit_root(actual, visitor);
+                    visit_root(expected, visitor);
+                    visit_root(tolerance, visitor);
+                }
+            });
     }
 }
 

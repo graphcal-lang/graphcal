@@ -455,9 +455,10 @@ fn check_decl_expr_type(
                 src: body_ctx.src.clone(),
                 span: (*type_ann_span).into(),
             })?;
+    let owner = dag.resolved_decl_key_for_local(name);
     let inferred = infer::hir::infer_hir_type_with_owner(
         hir_expr,
-        Some(name.member().as_str()),
+        Some(&owner),
         body_ctx.declared_types,
         dag,
         body_ctx.tir,
@@ -1009,6 +1010,177 @@ pub fn check_dimensions_tir_with_cancellation(
     )?;
 
     Ok(())
+}
+
+/// Canonical nominal identity whose use in a parameter default is queried at
+/// an include boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NominalOverrideIdentity {
+    Index(ResolvedIndexName),
+    Type(ResolvedStructTypeName),
+}
+
+/// Canonical nominal dependencies keyed by the producer parameter default that
+/// uses them.
+pub type OverrideDependencySummary = HashMap<ResolvedDeclName, HashSet<NominalOverrideIdentity>>;
+
+fn probe_param_default_nominal_dependency(
+    probe: &mut crate::tir::typed::TIR,
+    dag_id: &crate::dag_id::DagId,
+    param_name: &ScopedName,
+    identity: &NominalOverrideIdentity,
+    src: &NamedSource<Arc<String>>,
+) -> Result<bool, GraphcalError> {
+    let Some(dag) = probe.dags.get(dag_id) else {
+        return Ok(false);
+    };
+    let Some(param) = dag.params.iter().find(|entry| &entry.name == param_name) else {
+        return Ok(false);
+    };
+    let Some(default_expr) = param.default_expr.clone() else {
+        return Ok(false);
+    };
+    let owner = dag.resolved_decl_key_for_local(param_name);
+    let target = match identity {
+        NominalOverrideIdentity::Index(index) => crate::tir::typed::ResolvedOverrideTarget::Index {
+            overridden: index.to_unowned_def_name(),
+            source: index.clone(),
+            replacement: IndexTypeRef::from_resolved(index.clone()),
+        },
+        NominalOverrideIdentity::Type(struct_type) => {
+            crate::tir::typed::ResolvedOverrideTarget::Type {
+                overridden: struct_type.to_unowned_def_name(),
+                source: struct_type.clone(),
+                replacement: struct_type.clone(),
+            }
+        }
+    };
+    let reconciliation = crate::tir::typed::OverrideReconciliation {
+        orphan_decl: param_name.member().clone(),
+        targets: vec![target],
+        src: src.clone(),
+        include_span: Span::new(0, 0),
+    };
+    let Some(dag) = probe.dags.get_mut(dag_id) else {
+        return Ok(false);
+    };
+    let previous = dag
+        .semantic
+        .override_reconciliations
+        .insert(owner.clone(), vec![reconciliation]);
+
+    let result = (|| {
+        let dag = &probe.dags[dag_id];
+        let declared_types = dag.build_declared_types(src)?;
+        let builtin_fns = builtin_functions();
+        infer::hir::infer_hir_type_with_owner(
+            &default_expr,
+            Some(&owner),
+            &declared_types,
+            dag,
+            probe,
+            &probe.registry,
+            builtin_fns,
+            src,
+        )
+    })();
+    if let Some(dag) = probe.dags.get_mut(dag_id) {
+        match previous {
+            Some(previous) => {
+                dag.semantic
+                    .override_reconciliations
+                    .insert(owner, previous);
+            }
+            None => {
+                dag.semantic.override_reconciliations.remove(&owner);
+            }
+        }
+    }
+
+    match result {
+        Ok(_) => Ok(false),
+        Err(GraphcalError::IncludeMustReconcileOverride { .. }) => Ok(true),
+        Err(error) => Err(error),
+    }
+}
+
+/// Collect canonical nominal dependencies for every checked parameter default
+/// in every DAG module in `tir`.
+///
+/// Ordinary HIR inference is probed before include substitution, so field and
+/// match ownership comes from canonical semantic facts rather than source
+/// spelling. The resulting summary is reusable at every include site.
+///
+/// # Errors
+///
+/// Returns a compiler diagnostic if a supposedly checked TIR can no longer be
+/// inferred consistently.
+pub fn collect_override_dependency_summary(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<OverrideDependencySummary, GraphcalError> {
+    let mut probe = tir.clone();
+    let dag_ids = probe
+        .dags
+        .keys()
+        .filter(|dag_id| {
+            *dag_id == &probe.root_dag_id || dag_id.is_descendant_of(&probe.root_dag_id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut summary = OverrideDependencySummary::new();
+
+    for dag_id in dag_ids {
+        let dag = &probe.dags[&dag_id];
+        let params = dag
+            .params
+            .iter()
+            .filter(|entry| entry.default_expr.is_some())
+            .map(|entry| entry.name.clone())
+            .collect::<Vec<_>>();
+        let mut indexes = dag
+            .semantic
+            .collection_refs
+            .index_defs
+            .keys()
+            .filter(|identity| identity.owner() == &dag_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        indexes.sort();
+        let mut types = dag
+            .semantic
+            .type_defs
+            .struct_types
+            .keys()
+            .filter(|identity| identity.owner() == &dag_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        types.sort();
+        let identities = indexes
+            .into_iter()
+            .map(NominalOverrideIdentity::Index)
+            .chain(types.into_iter().map(NominalOverrideIdentity::Type))
+            .collect::<Vec<_>>();
+
+        for param_name in params {
+            let owner = probe.dags[&dag_id].resolved_decl_key_for_local(&param_name);
+            for identity in &identities {
+                if probe_param_default_nominal_dependency(
+                    &mut probe,
+                    &dag_id,
+                    &param_name,
+                    identity,
+                    src,
+                )? {
+                    summary
+                        .entry(owner.clone())
+                        .or_default()
+                        .insert(identity.clone());
+                }
+            }
+        }
+    }
+    Ok(summary)
 }
 
 /// Check one already-lowered external value expression against a concrete

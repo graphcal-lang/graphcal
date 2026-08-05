@@ -756,8 +756,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let Some(fields) = plot_exprs.figures.get(&entry.name) else {
                 plot_errors.push(super::types::PlotError {
                     name: entry.name.clone(),
-                    message: "internal: malformed TIR is missing checked figure fields"
-                        .to_string(),
+                    message: "internal: malformed TIR is missing checked figure fields".to_string(),
                 });
                 return None;
             };

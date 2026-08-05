@@ -879,12 +879,15 @@ pub node cost: Dimensionless = @phase_cost[Phase.Design];
 
 ### Include overrides must reconcile (`V005`)
 
-If an include overrides a bindable symbol `s` and some kept declaration
-in the merged IR still mentions a name nominally tied to `s` (e.g.,
-a variant literal of an overridden `index`, a field access of an
-overridden `type`), the importer must *also* re-bind that dependent
-declaration. Otherwise the orphan mention has no meaning in the merged
-graph — error `V005`:
+If an include overrides a bindable symbol `s` and some kept parameter
+default still performs an operation nominally tied to `s`, the importer must
+*also* re-bind that dependent parameter. These dependencies include index
+labels, field selection, constructor calls and match patterns, and nominal
+index/type generic arguments. They are compared by canonical semantic owner,
+not by field or constructor spelling: replacing a type with another type that
+happens to have the same `x` field or `Left` constructor still requires
+reconciliation. Otherwise the default would be silently reinterpreted under a
+different nominal contract — error `V005`:
 
 ```graphcal
 // lib.gcl
@@ -905,7 +908,9 @@ include lib(
 ```
 
 `dim` and `param` overrides never trigger V005: their substitution is
-total (algebraic / by value) and leaves no orphan nominal mentions.
+total (algebraic / by value) and leaves no orphan nominal mentions. The
+diagnostic points at the include that introduced the override; explicitly
+binding each reported dependent parameter reconciles it.
 
 ### Re-exports and generics leakage (`V006`)
 

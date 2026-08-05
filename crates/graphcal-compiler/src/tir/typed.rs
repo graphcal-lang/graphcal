@@ -28,6 +28,7 @@ use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolver;
+use crate::syntax::names::NamePath;
 
 mod model;
 pub use model::*;
@@ -444,6 +445,7 @@ fn type_resolve_dag(
     cancellation.checkpoint()?;
     let constructor_refs =
         collect_resolved_constructor_refs(&expressions, &domain_bounds, module_ctx, src)?;
+    let override_reconciliations = resolve_override_reconciliations(&params, module_ctx)?;
     cancellation.checkpoint()?;
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
@@ -462,6 +464,7 @@ fn type_resolve_dag(
         dependencies,
         collection_refs,
         constructor_refs,
+        override_reconciliations,
         type_defs,
         decl_bindings: HashMap::new(),
     };
@@ -474,6 +477,106 @@ fn type_resolve_dag(
         resolved_decl_types,
         semantic,
     })
+}
+
+fn resolve_override_target(
+    target: &crate::ir::override_reconciliation::PendingOverrideTarget,
+    src: &NamedSource<Arc<String>>,
+    include_span: Span,
+    ctx: ModuleTypeContext<'_>,
+) -> Result<ResolvedOverrideTarget, GraphcalError> {
+    use crate::ir::override_reconciliation::PendingOverrideTarget;
+    use crate::registry::declared_type::IndexTypeRef;
+
+    let resolve_error = |error| module_resolve_error(&error, src, include_span);
+    match target {
+        PendingOverrideTarget::Index {
+            overridden,
+            source_owner,
+            replacement,
+            replacement_owner,
+        } => {
+            let source = ctx
+                .resolver
+                .resolve_index_path(source_owner, &NamePath::local(overridden.atom().clone()))
+                .map_err(resolve_error)?;
+            let replacement = match replacement {
+                crate::registry::types::IndexBindingTarget::Declared(name) => {
+                    let resolved = ctx
+                        .resolver
+                        .resolve_index_path(
+                            replacement_owner,
+                            &NamePath::local(name.atom().clone()),
+                        )
+                        .map_err(resolve_error)?;
+                    IndexTypeRef::from_resolved(resolved)
+                }
+                crate::registry::types::IndexBindingTarget::Finite(index) => {
+                    IndexTypeRef::from_finite_index(*index)
+                }
+            };
+            Ok(ResolvedOverrideTarget::Index {
+                overridden: overridden.clone(),
+                source,
+                replacement,
+            })
+        }
+        PendingOverrideTarget::Type {
+            overridden,
+            source_owner,
+            replacement,
+            replacement_owner,
+        } => {
+            let source = ctx
+                .resolver
+                .resolve_struct_type_path(source_owner, &NamePath::local(overridden.atom().clone()))
+                .map_err(resolve_error)?;
+            let replacement = ctx
+                .resolver
+                .resolve_struct_type_path(
+                    replacement_owner,
+                    &NamePath::local(replacement.atom().clone()),
+                )
+                .map_err(resolve_error)?;
+            Ok(ResolvedOverrideTarget::Type {
+                overridden: overridden.clone(),
+                source,
+                replacement,
+            })
+        }
+    }
+}
+
+fn resolve_override_reconciliations(
+    params: &[crate::ir::lower::ParamEntry],
+    ctx: ModuleTypeContext<'_>,
+) -> Result<HashMap<ResolvedDeclName, Vec<OverrideReconciliation>>, GraphcalError> {
+    params
+        .iter()
+        .filter(|entry| !entry.override_reconciliations.is_empty())
+        .map(|entry| {
+            let reconciliations = entry
+                .override_reconciliations
+                .iter()
+                .map(|pending| {
+                    let targets = pending
+                        .targets
+                        .iter()
+                        .map(|target| {
+                            resolve_override_target(target, &pending.src, pending.include_span, ctx)
+                        })
+                        .collect::<Result<Vec<_>, GraphcalError>>()?;
+                    Ok(OverrideReconciliation {
+                        orphan_decl: pending.orphan_decl.clone(),
+                        targets,
+                        src: pending.src.clone(),
+                        include_span: pending.include_span,
+                    })
+                })
+                .collect::<Result<Vec<_>, GraphcalError>>()?;
+            Ok((resolved_decl_key(ctx.owner, &entry.name), reconciliations))
+        })
+        .collect()
 }
 
 fn collect_resolved_type_defs(

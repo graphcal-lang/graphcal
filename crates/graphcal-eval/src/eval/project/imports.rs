@@ -1744,6 +1744,7 @@ mod tests {
                 .unwrap(),
             external_surface: ExternalDeclSurface::default(),
             resolved_dynamic_unit_scales: HashMap::new(),
+            override_dependencies: HashMap::new(),
             dag_tirs: HashMap::new(),
             extern_functions: HashMap::new(),
         }
