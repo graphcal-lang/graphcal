@@ -136,12 +136,12 @@ pub fn compile_with_cancellation(
 
     let root = tir.root();
     let assert_bodies: Vec<AssertBodyEntry> = root
-        .asserts
+        .asserts()
         .iter()
         .map(|entry| {
             let key = root.resolved_decl_key_for_local(&entry.name);
             let body = root
-                .semantic
+                .semantic()
                 .expressions
                 .asserts
                 .get(&key)
@@ -161,7 +161,7 @@ pub fn compile_with_cancellation(
 
     let plot_bodies: Vec<PlotBodyEntry> = tir
         .root()
-        .plots
+        .plots()
         .iter()
         .map(|entry| PlotBodyEntry {
             name: entry.name.clone(),
@@ -172,7 +172,7 @@ pub fn compile_with_cancellation(
 
     let figure_bodies: Vec<FigureBodyEntry> = tir
         .root()
-        .figures
+        .figures()
         .iter()
         .map(|entry| FigureBodyEntry {
             name: entry.name.clone(),
@@ -182,7 +182,7 @@ pub fn compile_with_cancellation(
 
     let layer_bodies: Vec<LayerBodyEntry> = tir
         .root()
-        .layers
+        .layers()
         .iter()
         .map(|entry| LayerBodyEntry {
             name: entry.name.clone(),
@@ -216,7 +216,7 @@ pub fn compile_with_cancellation(
         const_values,
         imported_values: tir
             .root()
-            .imported_bindings
+            .imported_bindings()
             .iter()
             .filter_map(|(name, binding)| {
                 binding.value().map(|value| {
@@ -232,8 +232,8 @@ pub fn compile_with_cancellation(
         plot_bodies,
         figure_bodies,
         layer_bodies,
-        assumes_map: tir.root().assumes_map.clone(),
-        expected_fail: tir.root().expected_fail.clone(),
+        assumes_map: tir.root().assumes_map().clone(),
+        expected_fail: tir.root().expected_fail().clone(),
         domain_constraints,
         struct_field_constraints,
     })
@@ -246,7 +246,7 @@ fn visible_values_with_imports(
     local_const_values: &RuntimeValueMap,
 ) -> RuntimeValueMap {
     let mut values: RuntimeValueMap = dag
-        .imported_bindings
+        .imported_bindings()
         .iter()
         .filter_map(|(name, binding)| {
             binding
@@ -272,7 +272,7 @@ pub fn eval_consts_from_tir_with_cancellation(
     let builtin_fns = builtin_functions();
     let dag = tir.root();
 
-    if dag.consts.is_empty() {
+    if dag.consts().is_empty() {
         return Ok(HashMap::new());
     }
 
@@ -288,7 +288,7 @@ pub fn eval_consts_from_tir_with_cancellation(
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
             builtin_fns,
-            registry: &tir.registry,
+            registry: tir.registry(),
             src,
             tir,
             current_dag: Some(tir.root()),
@@ -297,7 +297,7 @@ pub fn eval_consts_from_tir_with_cancellation(
             host_fns: None,
         };
         let hir_expr = dag
-            .semantic
+            .semantic()
             .expressions
             .consts
             .get(key.as_resolved())
@@ -329,7 +329,7 @@ fn const_eval_order(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<ScopedName>, GraphcalError> {
-    const_eval_order_resolved(dag, &dag.semantic.dependencies, src, cancellation)
+    const_eval_order_resolved(dag, &dag.semantic().dependencies, src, cancellation)
 }
 
 fn const_eval_order_resolved(
@@ -345,7 +345,7 @@ fn const_eval_order_resolved(
     let mut span_by_key: HashMap<ResolvedDeclKey, Span> = HashMap::new();
 
     // Sort consts by name for canonical tie-breaking among incomparable nodes.
-    let mut sorted_consts: Vec<&_> = dag.consts.iter().collect();
+    let mut sorted_consts: Vec<&_> = dag.consts().iter().collect();
     sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in &sorted_consts {
         cancellation.checkpoint()?;
@@ -424,10 +424,10 @@ fn build_runtime_dag(
     let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = dag
-        .params
+        .params()
         .iter()
         .map(DeclRef::Param)
-        .chain(dag.nodes.iter().map(DeclRef::Node))
+        .chain(dag.nodes().iter().map(DeclRef::Node))
         .collect();
     all_decls.sort_by(|a, b| a.name().cmp(b.name()));
 
@@ -451,7 +451,7 @@ fn runtime_eval_order(
     runtime_eval_order_resolved(
         dag,
         decl_spans,
-        &dag.semantic.dependencies,
+        &dag.semantic().dependencies,
         src,
         cancellation,
     )
@@ -536,7 +536,7 @@ pub fn resolve_domain_constraints_with_cancellation(
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir,
         current_dag: Some(tir.root()),
@@ -555,16 +555,16 @@ pub fn resolve_domain_constraints_with_cancellation(
     // `eval/runtime.rs`.
     let decl_iter = tir
         .root()
-        .consts
+        .consts()
         .iter()
         .map(|e| (&e.name, e.span, true))
-        .chain(tir.root().params.iter().map(|e| (&e.name, e.span, false)))
-        .chain(tir.root().nodes.iter().map(|e| (&e.name, e.span, false)));
+        .chain(tir.root().params().iter().map(|e| (&e.name, e.span, false)))
+        .chain(tir.root().nodes().iter().map(|e| (&e.name, e.span, false)));
 
     for (name, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
         let key = tir.root().resolved_decl_key_for_local(name);
-        let domain_bounds = tir.root().semantic.domain_bounds.get(&key);
+        let domain_bounds = tir.root().semantic().domain_bounds.get(&key);
         let Some(domain_bounds) = domain_bounds else {
             continue;
         };
@@ -572,7 +572,10 @@ pub fn resolve_domain_constraints_with_cancellation(
         let constraint_src = domain_bounds.first().map_or(src, |bound| &bound.src);
         let target = resolve_constraint_target(
             &name.to_string(),
-            tir.root().resolved_decl_types.get(name).map(strip_indexed),
+            tir.root()
+                .resolved_decl_types()
+                .get(name)
+                .map(strip_indexed),
             decl_span,
             constraint_src,
         )?;
@@ -813,7 +816,7 @@ pub fn resolve_struct_field_constraints_with_cancellation(
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir,
         current_dag: Some(tir.root()),
@@ -829,12 +832,9 @@ pub fn resolve_struct_field_constraints_with_cancellation(
         &graphcal_compiler::tir::typed::ResolvedStructFieldTypeKey,
     > = std::collections::HashSet::new();
 
-    for (id, dag) in &tir.dags {
+    for (_, dag) in tir.local_dags() {
         cancellation.checkpoint()?;
-        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
-            continue;
-        }
-        for (key, bounds) in &dag.semantic.type_defs.field_bounds {
+        for (key, bounds) in &dag.semantic().type_defs.field_bounds {
             if !seen.insert(key) {
                 continue;
             }
@@ -847,7 +847,7 @@ pub fn resolve_struct_field_constraints_with_cancellation(
             let constraint_src = bounds.first().map_or(src, |bound| &bound.src);
             let target = resolve_constraint_target(
                 &display_name,
-                dag.semantic.type_defs.field_type(key).map(strip_indexed),
+                dag.semantic().type_defs.field_type(key).map(strip_indexed),
                 bound_span,
                 constraint_src,
             )?;
@@ -874,7 +874,7 @@ pub fn resolve_struct_field_constraints_with_cancellation(
             constraints.insert(
                 StructFieldConstraintKey::new(
                     StructTypeRef::with_owner(
-                        tir.root_dag_id.clone(),
+                        tir.root_dag_id().clone(),
                         key.owning_type.to_unowned_def_name(),
                     ),
                     key.constructor.clone(),
@@ -903,12 +903,12 @@ pub fn check_const_struct_field_constraints_at_compile_time(
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for entry in &tir.root().consts {
+    for entry in tir.root().consts() {
         let key = RuntimeDeclKey::for_local_decl(tir.root(), &entry.name);
         if let Some(value) = const_values.get(&key) {
             let owning_type = tir
                 .root()
-                .resolved_decl_types
+                .resolved_decl_types()
                 .get(&entry.name)
                 .and_then(struct_type_ref_from_resolved_type);
             check_const_struct_field_constraints(
@@ -1175,9 +1175,7 @@ mod tests {
     use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
     use graphcal_compiler::syntax::module_resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::{
-        ModuleTypeRegistry, ResolvedDagDependencies, type_resolve_with_modules,
-    };
+    use graphcal_compiler::tir::typed::{ModuleTypeRegistry, type_resolve_with_modules};
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
@@ -1207,7 +1205,7 @@ mod tests {
         let mut module_types = ModuleTypeRegistry::default();
         module_types.insert_graphcal_prelude().unwrap();
         module_types.insert_registry(&dag_id, &ir.registry, src.clone());
-        let tir = type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types).unwrap();
+        let tir = type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types).unwrap();
         (tir, src)
     }
 
@@ -1291,26 +1289,16 @@ mod tests {
     }
 
     #[test]
-    fn compile_uses_semantic_const_deps() {
-        use std::collections::BTreeSet;
-
-        let (mut tir, src) = tir_from_source(
+    fn compile_uses_collected_semantic_const_deps() {
+        let (tir, src) = tir_from_source(
             "const node a: Dimensionless = 1.0;\n\
              const node b: Dimensionless = @a + 1.0;",
         );
-        let dag_id = tir.root_dag_id.clone();
-        let a = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
-        let b = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("b"));
-        let mut resolved = ResolvedDagDependencies::default();
-        resolved.const_deps.insert(a.clone(), BTreeSet::new());
-        resolved.const_deps.insert(b, BTreeSet::from([a]));
-        tir.root_mut().semantic.dependencies = resolved;
-
         let plan = compile(&tir, &src).unwrap();
         assert!(
             (quantity(
                 &plan.const_values[&RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
-                    tir.root_dag_id.clone(),
+                    tir.root_dag_id().clone(),
                     DeclName::expect_valid("b")
                 ))]
             ) - 2.0)
@@ -1320,28 +1308,18 @@ mod tests {
     }
 
     #[test]
-    fn compile_uses_semantic_runtime_deps() {
-        use std::collections::BTreeSet;
-
-        let (mut tir, src) = tir_from_source(
+    fn compile_uses_collected_semantic_runtime_deps() {
+        let (tir, src) = tir_from_source(
             "node a: Dimensionless = 1.0;\n\
              node b: Dimensionless = @a + 1.0;",
         );
-        let dag_id = tir.root_dag_id.clone();
-        let a = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("a"));
-        let b = ResolvedDeclName::from_def(dag_id, DeclName::expect_valid("b"));
-        let mut resolved = ResolvedDagDependencies::default();
-        resolved.runtime_deps.insert(a.clone(), BTreeSet::new());
-        resolved.runtime_deps.insert(b, BTreeSet::from([a]));
-        tir.root_mut().semantic.dependencies = resolved;
-
         let plan = compile(&tir, &src).unwrap();
         let a_pos = plan
             .topo_order
             .iter()
             .position(|name| {
                 name == &RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
-                    tir.root_dag_id.clone(),
+                    tir.root_dag_id().clone(),
                     DeclName::expect_valid("a"),
                 ))
             })
@@ -1351,7 +1329,7 @@ mod tests {
             .iter()
             .position(|name| {
                 name == &RuntimeDeclKey::resolved(ResolvedDeclName::from_def(
-                    tir.root_dag_id.clone(),
+                    tir.root_dag_id().clone(),
                     DeclName::expect_valid("b"),
                 ))
             })

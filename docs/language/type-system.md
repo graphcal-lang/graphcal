@@ -592,7 +592,9 @@ separate "struct" and "union" type categories.
 Constructor payload fields are declared with full DeclTypes: a field may
 carry domain constraints and index axes, as in
 `Budget(dv: Velocity(min: 0.0 m/s)[Maneuver])` or the generic
-`Vector(values: D[Fin(N)])`. What stays ValueType-only is the `Type` generic
+`Vector(values: D[Fin(N)])`. Field names must be unique within each
+constructor; the same field name may be used independently by different
+constructors. What stays ValueType-only is the `Type` generic
 kind: an indexed DeclType such as `Velocity[Maneuver]` cannot be passed as a
 `Type` argument, so `Holder<Velocity[Maneuver]>` is rejected. To parameterize
 structured data over an axis, either index the payload field directly or

@@ -1177,7 +1177,7 @@ fn eval_hir_extern_fn(
             expr.span,
         ));
     };
-    let Some(function) = ctx.tir.extern_functions.get(&key) else {
+    let Some(function) = ctx.tir.extern_functions().get(&key) else {
         return Err(ctx.internal_error(
             format!("extern function `{ext}` has no resolved signature after dimension checking"),
             expr.span,
@@ -1549,7 +1549,7 @@ fn constructor_target<'a>(
     constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
 ) -> Option<&'a ResolvedConstructorTarget> {
     ctx.current_dag
-        .map(|dag| &dag.semantic.constructor_refs)
+        .map(|dag| &dag.semantic().constructor_refs)
         .and_then(|refs| refs.constructor_defs.get(constructor))
 }
 
@@ -1609,7 +1609,7 @@ fn index_def_for_ref<'a>(
         return ctx.registry.indexes.get_finite_index(finite_index);
     }
     ctx.current_dag
-        .map(|dag| &dag.semantic.collection_refs)
+        .map(|dag| &dag.semantic().collection_refs)
         .and_then(|refs| refs.index_defs.get(index_ref.declared_resolved()?))
 }
 
@@ -1677,7 +1677,7 @@ fn map_entry_index_def<'a>(
     match key {
         hir::expr::MapEntryKey::IndexVariant(variant) => ctx
             .current_dag
-            .map(|dag| &dag.semantic.collection_refs)
+            .map(|dag| &dag.semantic().collection_refs)
             .and_then(|refs| refs.index_defs.get(variant.variant.index())),
         hir::expr::MapEntryKey::FinitePosition { .. } => index_def_for_ref(index_ref, ctx),
     }
@@ -2219,11 +2219,11 @@ fn eval_hir_match(
 fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Option<&'a hir::Expr> {
     let key = dag_tir.resolved_decl_key_for_local(name);
     dag_tir
-        .semantic
+        .semantic()
         .expressions
         .consts
         .get(&key)
-        .or_else(|| dag_tir.semantic.expressions.runtime_expr(&key))
+        .or_else(|| dag_tir.semantic().expressions.runtime_expr(&key))
 }
 
 fn eval_hir_dag_call(
@@ -2234,7 +2234,7 @@ fn eval_hir_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let dag_tir = ctx.tir.dags.get(&target.value).ok_or_else(|| {
+    let dag_tir = ctx.tir.dag_registry().get(&target.value).ok_or_else(|| {
         ctx.internal_error(
             format!(
                 "dag `{}` has no compiled TIR (should have been caught by dim-check)",
@@ -2279,7 +2279,7 @@ fn eval_hir_dag_call(
         )
     })?;
     let categories: std::collections::HashMap<&ScopedName, DeclCategory> = dag_tir
-        .source_order
+        .source_order()
         .iter()
         .map(|(name, cat)| (name, *cat))
         .collect();
@@ -2338,17 +2338,17 @@ fn seed_inline_dag_imported_values(
 ) {
     let own_names: std::collections::HashSet<&graphcal_compiler::syntax::decl_name::DeclName> =
         dag_tir
-            .consts
+            .consts()
             .iter()
             .map(|e| e.name.member())
-            .chain(dag_tir.params.iter().map(|e| e.name.member()))
-            .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
+            .chain(dag_tir.params().iter().map(|e| e.name.member()))
+            .chain(dag_tir.nodes().iter().map(|e| e.name.member()))
             .collect();
-    for (scoped, binding) in &dag_tir.imported_bindings {
+    for (scoped, binding) in dag_tir.imported_bindings() {
         let member = scoped.member();
         let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
         let unresolved_local_import =
-            !dag_tir.semantic.decl_bindings.contains_key(scoped) && own_names.contains(member);
+            !dag_tir.semantic().decl_bindings.contains_key(scoped) && own_names.contains(member);
         if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
@@ -2378,13 +2378,13 @@ fn check_inline_dag_asserts(
     ctx: &EvalContext<'_>,
 ) -> Result<(), GraphcalError> {
     let empty_hir_locals = HirLocalValueMap::root();
-    for (name, cat) in &dag_tir.source_order {
+    for (name, cat) in dag_tir.source_order() {
         if !matches!(cat, DeclCategory::Assert) {
             continue;
         }
         let key = dag_tir.resolved_decl_key_for_local(name);
         let body = dag_tir
-            .semantic
+            .semantic()
             .expressions
             .asserts
             .get(&key)
@@ -2394,7 +2394,7 @@ fn check_inline_dag_asserts(
                     call_span,
                 )
             })?;
-        let ef = dag_tir.expected_fail.get(name);
+        let ef = dag_tir.expected_fail().get(name);
         let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
             body,
             ef,

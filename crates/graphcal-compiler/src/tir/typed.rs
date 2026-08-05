@@ -42,7 +42,8 @@ impl TIR {
     /// A prepared evaluator can later receive a constructor value that was not
     /// present in the source text, so every constructor of every concrete type
     /// visible in the entry DAG must be available to checking and evaluation.
-    pub fn prepare_external_value_constructors(&mut self) {
+    #[must_use]
+    pub fn with_external_value_constructors(mut self) -> Self {
         let targets = self
             .root()
             .semantic
@@ -73,6 +74,7 @@ impl TIR {
             .constructor_refs
             .constructor_defs
             .extend(targets);
+        self
     }
 }
 
@@ -179,7 +181,7 @@ impl DagTIR {
 /// source alias strings.
 pub fn type_resolve_with_modules(
     ir: IR,
-    root_dag_id: crate::dag_id::DagId,
+    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
@@ -201,25 +203,48 @@ pub fn type_resolve_with_modules(
 /// Returns a [`GraphcalError`] for invalid types or cancellation.
 pub fn type_resolve_with_modules_and_cancellation(
     ir: IR,
-    root_dag_id: crate::dag_id::DagId,
+    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
+    type_resolve_builder_with_modules_and_cancellation(
+        ir,
+        root_dag_id,
+        src,
+        module_resolver,
+        module_types,
+        cancellation,
+    )
+    .map(TirBuilder::finish)
+}
+
+/// Resolve a root DAG into mutable project-assembly state.
+///
+/// Callers add every file-defined or imported DAG through
+/// [`TirBuilder::insert_dag`] and consume the builder with
+/// [`TirBuilder::finish`] before checking or evaluation.
+pub fn type_resolve_builder_with_modules_and_cancellation(
+    ir: IR,
+    root_dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
-    let owner_for_ctx = root_dag_id.clone();
-    let ctx = ModuleTypeContext::new(&owner_for_ctx, module_resolver, module_types);
+    let ctx = ModuleTypeContext::new(root_dag_id, module_resolver, module_types);
     type_resolve_impl(ir, root_dag_id, src, ctx, cancellation)
 }
 
 fn type_resolve_impl(
     ir: IR,
-    root_dag_id: crate::dag_id::DagId,
+    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TIR, GraphcalError> {
+) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
     let imported_bindings_for_hir = ir.imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
@@ -230,7 +255,7 @@ fn type_resolve_impl(
         &asserts_for_hir,
         &ir.registry,
         src,
-        &root_dag_id,
+        root_dag_id,
         module_ctx,
         &imported_bindings_for_hir,
         cancellation,
@@ -255,16 +280,12 @@ fn type_resolve_impl(
     validate_public_generic_defaults(&root_dag, &ir.external_surface, module_ctx, src)?;
     cancellation.checkpoint()?;
     check_hir_body_policies(&root_dag, &ir.external_surface, module_ctx, src)?;
-    let mut dags = DagRegistry::new();
-    dags.insert(root_dag_id.clone(), root_dag);
-    Ok(TIR {
-        registry: ir.registry,
-        module_types: module_ctx.types.clone(),
-        root_dag_id,
-        dags,
-        module_aliases: HashMap::new(),
-        extern_functions: ir.extern_functions,
-    })
+    Ok(TirBuilder::new(
+        ir.registry,
+        module_ctx.types.clone(),
+        root_dag,
+        ir.extern_functions,
+    ))
 }
 
 /// Resolve type annotations for one DAG body with module-aware type-system
@@ -353,7 +374,6 @@ fn type_resolve_single_impl(
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
 #[expect(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
     reason = "orchestrates per-DAG type resolution across IR declarations and semantic body data"
 )]
 fn type_resolve_dag(
@@ -644,7 +664,7 @@ impl PublicSignatureDependency {
         visibility.map(crate::syntax::module_resolve::SymbolVisibility::is_public)
     }
 
-    fn owner(&self) -> &crate::dag_id::DagId {
+    const fn owner(&self) -> &crate::dag_id::DagId {
         match self {
             Self::Dimension(name) => name.value.owner(),
             Self::Index(name) => name.value.owner(),
@@ -735,14 +755,14 @@ fn collect_public_signature_type_dependencies(
         }
         hir::TypeExprKind::TypeApplication { name, generic_args } => {
             dependencies.push(PublicSignatureDependency::Type(name.clone()));
-            generic_args.iter().for_each(|arg| {
+            for arg in generic_args {
                 collect_public_signature_generic_arg_dependencies(
                     arg,
                     defs,
                     visited_defaults,
                     dependencies,
                 );
-            });
+            }
             if let Some(type_def) = defs.struct_types.get(&name.value) {
                 for param in type_def.generic_params().iter().skip(generic_args.len()) {
                     let key = (name.value.clone(), param.name.clone());

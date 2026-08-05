@@ -41,12 +41,12 @@ fn index_def_for_value_ref<'a>(
     index_name.finite_index().map_or_else(
         || {
             tir.root()
-                .semantic
+                .semantic()
                 .collection_refs
                 .index_defs
                 .get(index_name.declared_resolved()?)
         },
-        |index| tir.registry.indexes.get_finite_index(index),
+        |index| tir.registry().indexes.get_finite_index(index),
     )
 }
 
@@ -66,7 +66,7 @@ pub(super) fn runtime_to_value(
     declared_type: Option<&DeclaredType>,
     tir: &graphcal_compiler::tir::typed::TIR,
 ) -> Value {
-    let registry = &tir.registry;
+    let registry = tir.registry();
     match rv {
         RuntimeValue::Quantity(si_value) => {
             let dimension = match declared_type {
@@ -254,7 +254,7 @@ pub(super) struct EvalLoopResult {
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
 }
 
-/// Core evaluation loop shared by `evaluate_plan` and `extract_runtime_values`.
+/// Core evaluation loop shared by project and prepared-model evaluation.
 ///
 /// Inserts imported and const values, then iterates in topological order.
 /// Unfold expressions carry their resolved axis and are evaluated inline.
@@ -263,26 +263,6 @@ pub(super) struct EvalLoopResult {
 /// Returns all computed values and any per-node errors. Internal invariant
 /// violations are returned immediately rather than being fault-isolated as
 /// ordinary user evaluation failures.
-#[cfg(test)]
-pub(super) fn run_eval_loop(
-    plan: &crate::exec_plan::ExecPlan,
-    tir: &graphcal_compiler::tir::typed::TIR,
-    src: &NamedSource<Arc<String>>,
-    builtin_fns: &BuiltinFunctions,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<EvalLoopResult, GraphcalError> {
-    run_eval_loop_with_bindings(
-        plan,
-        &super::bindings::RuntimeParameterBindings::new(),
-        tir,
-        src,
-        builtin_fns,
-        host_fns,
-        cancellation,
-    )
-}
-
 /// Run the core loop with one plan-validated row of runtime parameter bindings.
 pub(super) fn run_eval_loop_with_bindings(
     plan: &crate::exec_plan::ExecPlan,
@@ -350,7 +330,7 @@ pub(super) fn run_eval_loop_with_bindings(
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
             builtin_fns,
-            registry: &tir.registry,
+            registry: tir.registry(),
             src,
             tir,
             current_dag: Some(tir.root()),
@@ -361,7 +341,7 @@ pub(super) fn run_eval_loop_with_bindings(
 
         let result = tir
             .root()
-            .semantic
+            .semantic()
             .expressions
             .runtime_expr(name.as_resolved())
             .ok_or_else(|| GraphcalError::InternalError {
@@ -415,7 +395,7 @@ fn failed_runtime_dependencies(
     name: &RuntimeDeclKey,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Vec<DeclName> {
-    dag.semantic
+    dag.semantic()
         .dependencies
         .runtime_deps
         .get(name.as_resolved())
@@ -449,7 +429,7 @@ pub(super) fn export_dynamic_unit_scales(
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir,
         current_dag: Some(tir.root()),
@@ -463,49 +443,11 @@ pub(super) fn export_dynamic_unit_scales(
     Ok(scales)
 }
 
-/// Evaluate using TIR + `ExecPlan` (new linear pipeline).
+/// Evaluate using immutable TIR plus one plan and validated runtime bindings.
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes
 /// still evaluate, and dependent nodes receive a `DependencyFailed` error.
 /// Internal invariant violations abort evaluation as `X001`.
-#[cfg(test)]
-pub(super) fn evaluate_plan(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    src: &NamedSource<Arc<String>>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-) -> Result<EvalResult, GraphcalError> {
-    evaluate_plan_with_cancellation(
-        tir,
-        plan,
-        declared_types,
-        src,
-        host_fns,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-#[cfg(test)]
-pub(super) fn evaluate_plan_with_cancellation(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    src: &NamedSource<Arc<String>>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<EvalResult, GraphcalError> {
-    evaluate_plan_with_bindings_and_cancellation(
-        tir,
-        plan,
-        &super::bindings::RuntimeParameterBindings::new(),
-        declared_types,
-        src,
-        host_fns,
-        cancellation,
-    )
-}
-
 /// Evaluate a plan with one row of runtime parameter bindings.
 pub(super) fn evaluate_plan_with_bindings_and_cancellation(
     tir: &graphcal_compiler::tir::typed::TIR,
@@ -528,7 +470,7 @@ pub(super) fn evaluate_plan_with_bindings_and_cancellation(
     .map(|(result, _)| result)
 }
 
-/// Like [`evaluate_plan`], but also returns the raw runtime-value map so
+/// Evaluate a plan and also return the raw runtime-value map so
 /// callers that need both (per-file project evaluation exporting values to
 /// downstream imports) do not have to run the eval loop a second time.
 pub(super) fn evaluate_plan_with_values_and_cancellation(
@@ -581,7 +523,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir,
         current_dag: Some(tir.root()),
@@ -601,16 +543,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             return Some(expr);
         }
         let key = tir.root().resolved_decl_key_for_local(name);
-        let exprs = &tir.root().semantic.expressions;
+        let exprs = &tir.root().semantic().expressions;
         exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
     };
     let expr_map: HashMap<ScopedName, &graphcal_compiler::hir::Expr> = tir
         .root()
-        .consts
+        .consts()
         .iter()
         .map(|e| &e.name)
-        .chain(tir.root().params.iter().map(|e| &e.name))
-        .chain(tir.root().nodes.iter().map(|e| &e.name))
+        .chain(tir.root().params().iter().map(|e| &e.name))
+        .chain(tir.root().nodes().iter().map(|e| &e.name))
         .filter_map(|name| hir_expr_for(name).map(|expr| (name.clone(), expr)))
         .collect();
 
@@ -637,7 +579,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
 
     let consts = tir
         .root()
-        .consts
+        .consts()
         .iter()
         .map(|e| {
             let key = local_key(&e.name);
@@ -647,13 +589,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .collect();
     let params = tir
         .root()
-        .params
+        .params()
         .iter()
         .map(|e| (e.name.clone(), make_result(&e.name)))
         .collect();
     let nodes = tir
         .root()
-        .nodes
+        .nodes()
         .iter()
         .map(|e| (e.name.clone(), make_result(&e.name)))
         .collect();
@@ -661,7 +603,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
 
     let all: Vec<(ScopedName, Result<Value, NodeError>, DeclType)> = tir
         .root()
-        .source_order
+        .source_order()
         .iter()
         .filter_map(|(name, cat)| {
             let decl_type = match cat {
@@ -722,7 +664,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
     // plot that cannot be rendered is reported, never silently dropped
     // (#842).
-    let plot_exprs = &tir.root().semantic.plot_exprs;
+    let plot_exprs = &tir.root().semantic().plot_exprs;
     let mut plot_errors: Vec<super::types::PlotError> = Vec::new();
     let plots: Vec<PlotSpec> = plan
         .plot_bodies
@@ -812,7 +754,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     // maps use, so output entries keep their alias qualification (#813).
     let domain_constraints: HashMap<ScopedName, _> = tir
         .root()
-        .source_order
+        .source_order()
         .iter()
         .filter_map(|(name, _)| {
             plan.domain_constraints
@@ -835,7 +777,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         figures,
         layers,
         assumes_map,
-        base_dim_symbols: tir.registry.dimensions.base_dim_symbols().clone(),
+        base_dim_symbols: tir.registry().dimensions.base_dim_symbols().clone(),
         domain_constraints,
     };
     Ok((result, values))
@@ -1611,7 +1553,7 @@ fn extract_dimension_from_expr(
             // This preserves qualification for imported declarations instead
             // of guessing from the leaf name.
             let declared_type = dag
-                .semantic
+                .semantic()
                 .decl_bindings
                 .iter()
                 .find_map(|(source_name, resolved)| {

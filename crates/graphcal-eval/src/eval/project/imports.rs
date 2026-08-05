@@ -1731,6 +1731,31 @@ mod tests {
     use super::*;
 
     fn empty_evaluated_file() -> EvaluatedFile {
+        let source = "";
+        let src = NamedSource::new("empty.gcl", Arc::new(source.to_string()));
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(
+            graphcal_compiler::syntax::parser::Parser::new(source)
+                .parse_file()
+                .unwrap(),
+        );
+        let dag_id = graphcal_compiler::dag_id::DagId::root_in_package("test", "empty");
+        let ir = graphcal_compiler::ir::lower::lower(&file, &src).unwrap();
+        let mut resolver = graphcal_compiler::syntax::module_resolve::ModuleResolver::default();
+        resolver
+            .add_module(dag_id.clone(), &file.declarations)
+            .unwrap();
+        let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
+        module_types.insert_graphcal_prelude().unwrap();
+        module_types.insert_registry(&dag_id, &ir.registry, src.clone());
+        let tir = graphcal_compiler::tir::typed::type_resolve_with_modules(
+            ir,
+            &dag_id,
+            &src,
+            &resolver,
+            &module_types,
+        )
+        .unwrap();
+
         EvaluatedFile {
             runtime_available: true,
             values: HashMap::new(),
@@ -1739,13 +1764,11 @@ mod tests {
             declared_types: HashMap::new(),
             assertions: HashMap::new(),
             plots: HashMap::new(),
-            registry: graphcal_compiler::registry::types::RegistryBuilder::new()
-                .try_build()
-                .unwrap(),
+            registry: tir.registry().clone(),
             external_surface: ExternalDeclSurface::default(),
             resolved_dynamic_unit_scales: HashMap::new(),
             override_dependencies: HashMap::new(),
-            dag_tirs: HashMap::new(),
+            dag_tirs: tir.dag_registry().clone(),
             extern_functions: HashMap::new(),
         }
     }

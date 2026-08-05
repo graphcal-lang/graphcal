@@ -27,7 +27,9 @@ The outer braces are the declaration's member body, so `type T { ... }` uses nei
 
 Constructors live in a namespace that is distinct from the type
 namespace — a single lexeme can name both a type and a constructor
-without ambiguity.
+without ambiguity. Payload field names must be unique within one constructor.
+The same field name may still appear in different constructors because each
+payload schema is checked independently.
 
 ## Record-Shaped One-Constructor Types
 

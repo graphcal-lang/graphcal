@@ -31,7 +31,7 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
     let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
     module_types.insert_graphcal_prelude().unwrap();
     module_types.insert_registry(&dag_id, &ir.registry, src.clone());
-    crate::tir::typed::type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types)
+    crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types)
 }
 
 /// Dependency names of `decl` in `map`, as leaf strings.

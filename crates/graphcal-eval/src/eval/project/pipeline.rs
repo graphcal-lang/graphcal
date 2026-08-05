@@ -63,13 +63,13 @@ fn compile_single_file_in_project(
 }
 
 fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
-    tir.registry
+    tir.registry()
         .indexes
         .declared_indexes()
         .any(graphcal_compiler::registry::types::IndexDef::is_required)
         || tir
             .root()
-            .semantic
+            .semantic()
             .collection_refs
             .index_defs
             .values()
@@ -77,14 +77,14 @@ fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
 }
 
 fn tir_requires_runtime_inputs(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
-    tir.root().params.iter().any(|p| p.default_expr.is_none()) || tir_has_required_indexes(tir)
+    tir.root().params().iter().any(|p| p.default_expr.is_none()) || tir_has_required_indexes(tir)
 }
 
 fn first_required_index_diagnostic(
     tir: &graphcal_compiler::tir::typed::TIR,
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> Option<(String, miette::SourceSpan)> {
-    for idx_def in tir.registry.indexes.declared_indexes() {
+    for idx_def in tir.registry().indexes.declared_indexes() {
         if idx_def.is_required() {
             let span = ast
                 .declarations
@@ -104,7 +104,7 @@ fn first_required_index_diagnostic(
     }
 
     tir.root()
-        .semantic
+        .semantic()
         .collection_refs
         .index_defs
         .values()
@@ -125,7 +125,7 @@ fn top_level_const_values(
     // Top-level consts are exposed by leaf name at the project import
     // boundary; internal eval routing uses canonical declaration keys.
     tir.root()
-        .consts
+        .consts()
         .iter()
         .filter_map(|entry| {
             let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &entry.name);
@@ -310,8 +310,8 @@ fn store_compiled_file_artifact(
             &compiled.tir,
             file_src,
         )?;
-    let dag_tirs = compiled.tir.dags.clone();
-    let extern_functions = compiled.tir.extern_functions.clone();
+    let dag_tirs = compiled.tir.dag_registry().clone();
+    let extern_functions = compiled.tir.extern_functions().clone();
 
     evaluated_files.insert(
         file_dag_id.clone(),
@@ -323,7 +323,7 @@ fn store_compiled_file_artifact(
             evaluated_values: Vec::new(),
             declared_types: compiled.declared_types,
             assertions: HashMap::new(),
-            registry: compiled.tir.registry,
+            registry: compiled.tir.registry().clone(),
             external_surface,
             resolved_dynamic_unit_scales: HashMap::new(),
             override_dependencies,
@@ -378,8 +378,8 @@ fn evaluate_and_store_file(
             &compiled.tir,
             file_src,
         )?;
-    let dag_tirs = compiled.tir.dags.clone();
-    let extern_functions = compiled.tir.extern_functions.clone();
+    let dag_tirs = compiled.tir.dag_registry().clone();
+    let extern_functions = compiled.tir.extern_functions().clone();
 
     // Evaluated plot specs, requestable by consumers through include brace
     // lists (#847). Includes this file's own plots and the ones it included
@@ -407,7 +407,7 @@ fn evaluate_and_store_file(
                 .into_iter()
                 .map(|(name, result, span)| (name, (result, span)))
                 .collect(),
-            registry: compiled.tir.registry,
+            registry: compiled.tir.registry().clone(),
             external_surface,
             resolved_dynamic_unit_scales,
             override_dependencies,
@@ -553,7 +553,7 @@ fn verify_host_functions(
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
 
     // Deterministic reporting order: earliest declaration first.
-    let mut declared: Vec<_> = tir.extern_functions.iter().collect();
+    let mut declared: Vec<_> = tir.extern_functions().iter().collect();
     declared.sort_by_key(|(_, function)| function.name_span.offset());
 
     for (key, function) in declared {
@@ -573,7 +573,7 @@ fn verify_host_functions(
             && !function.signature.structurally_equivalent(provided)
         {
             let render = |signature: &graphcal_compiler::function_signature::FunctionSignature| {
-                signature.format_with(|dim| tir.registry.dimensions.format_dimension(dim))
+                signature.format_with(|dim| tir.registry().dimensions.format_dimension(dim))
             };
             return Err(CompileError::Eval(GraphcalError::ExternSignatureMismatch {
                 plugin: function.plugin.clone(),
@@ -809,10 +809,10 @@ fn filter_local_runtime_values(
     values: &crate::eval_expr::RuntimeValueMap,
 ) -> HashMap<DeclName, RuntimeValue> {
     tir.root()
-        .params
+        .params()
         .iter()
         .map(|e| &e.name)
-        .chain(tir.root().nodes.iter().map(|e| &e.name))
+        .chain(tir.root().nodes().iter().map(|e| &e.name))
         .filter_map(|name| {
             let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), name);
             values

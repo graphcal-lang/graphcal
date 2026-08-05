@@ -137,7 +137,7 @@ fn resolve_defining_expr<'a>(
     if depth == 0 {
         return Ok(None);
     }
-    let exprs = &ctx.tir.root().semantic.expressions;
+    let exprs = &ctx.tir.root().semantic().expressions;
     let decl_expr = |name: &graphcal_compiler::syntax::decl_name::ResolvedDeclName| {
         exprs.runtime_expr(name).or_else(|| exprs.consts.get(name))
     };
@@ -224,7 +224,7 @@ fn constructor_target<'a>(
     constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
 ) -> Option<&'a ResolvedConstructorTarget> {
     ctx.current_dag
-        .map(|dag| &dag.semantic.constructor_refs)
+        .map(|dag| &dag.semantic().constructor_refs)
         .and_then(|refs| refs.constructor_defs.get(constructor))
 }
 

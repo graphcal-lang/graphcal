@@ -76,25 +76,6 @@ fn cancellation_stops_an_in_flight_evaluation() {
     assert!(error.is_cancelled(), "unexpected outcome: {error:?}");
 }
 
-fn run_mutated_tir_values(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    source: &str,
-) -> crate::eval_expr::RuntimeValueMap {
-    let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
-    let plan = crate::exec_plan::compile(tir, &src).unwrap();
-    let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
-    super::runtime::run_eval_loop(
-        &plan,
-        tir,
-        &src,
-        builtin_fns,
-        &crate::host_fns::demo_registry(),
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-    .unwrap()
-    .values
-}
-
 #[test]
 #[expect(
     clippy::suboptimal_flops,
@@ -207,70 +188,6 @@ fn eval_complex_milestone() {
             .iter()
             .all(|(_, assertion, _)| *assertion == AssertResult::Pass)
     );
-}
-
-#[test]
-fn eval_uses_hir_builtin_dispatch_after_syntax_mutation() {
-    let source = "node y: Dimensionless = sqrt(4.0);";
-    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
-    assert!(!tir.root().semantic.expressions.nodes.is_empty());
-    tir.root_mut().nodes[0].expr.kind =
-        graphcal_compiler::hir::ExprKind::StringLiteral("mutated entry".to_string());
-
-    let values = run_mutated_tir_values(&tir, source);
-    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("y"));
-    let value = values[&key].expect_quantity("y").unwrap();
-    assert!((value - 2.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn eval_uses_hir_lexical_locals_after_syntax_mutation() {
-    let source = "index Phase = { Burn };\nnode y: Dimensionless[Phase] = for p: Phase { match p { Phase.Burn => 1.0 } };";
-    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
-    assert!(!tir.root().semantic.expressions.nodes.is_empty());
-    tir.root_mut().nodes[0].expr.kind =
-        graphcal_compiler::hir::ExprKind::StringLiteral("mutated entry".to_string());
-
-    let values = run_mutated_tir_values(&tir, source);
-    let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("y"));
-    let crate::eval_expr::RuntimeValue::Indexed { entries, .. } = &values[&key] else {
-        panic!("expected indexed value, got {:?}", values[&key]);
-    };
-    let burn = graphcal_compiler::syntax::index_name::IndexEntryKey::named(
-        graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
-    );
-    let value = entries[&burn].expect_quantity("Burn entry").unwrap();
-    assert!((value - 1.0).abs() < f64::EPSILON);
-}
-
-#[test]
-fn eval_assertions_use_hir_body_after_syntax_mutation() {
-    let source = "assert ok = sqrt(4.0) == 2.0;";
-    let mut tir = compile_to_tir(source, "test.gcl").unwrap();
-    assert!(!tir.root().semantic.expressions.asserts.is_empty());
-    let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body =
-        graphcal_compiler::hir::AssertBody::Expr(graphcal_compiler::hir::Expr::new(
-            graphcal_compiler::hir::ExprKind::StringLiteral("mutated entry".to_string()),
-            span,
-        ));
-
-    let src = miette::NamedSource::new("test.gcl", std::sync::Arc::new(source.to_string()));
-    let plan = crate::exec_plan::compile(&tir, &src).unwrap();
-    let declared_types = tir.build_declared_types(&src).unwrap();
-    let result = super::runtime::evaluate_plan(
-        &tir,
-        &plan,
-        &declared_types,
-        &src,
-        &crate::host_fns::demo_registry(),
-    )
-    .unwrap();
-
-    assert!(matches!(
-        result.assertions.as_slice(),
-        [(_, super::types::AssertResult::Pass, _)]
-    ));
 }
 
 #[test]
@@ -864,7 +781,7 @@ node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
 node displayed: Datetime = @meeting -> "america/new_york";
 "#;
     let tir = compile_to_tir(source, "test.gcl").unwrap();
-    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = &tir.root().nodes[0].expr.kind
+    let graphcal_compiler::hir::ExprKind::FnCall { args, .. } = &tir.root().nodes()[0].expr.kind
     else {
         panic!("expected datetime function call");
     };
@@ -3186,7 +3103,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let expr_key = tir
         .root()
         .resolved_decl_key_for_local(&scoped_name("distance"));
-    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
+    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Command"),
@@ -3212,7 +3129,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),
@@ -3244,7 +3161,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let expr_key = tir
         .root()
         .resolved_decl_key_for_local(&scoped_name("distance"));
-    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
+    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
@@ -3270,7 +3187,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),
@@ -3738,7 +3655,7 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
             name: wrap,
             generic_args,
             ..
-        } = &tir.root().resolved_decl_types[&key]
+        } = &tir.root().resolved_decl_types()[&key]
         else {
             panic!("expected generic struct annotation for `{decl}`");
         };
@@ -4095,7 +4012,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir.root().resolved_decl_key_for_local(&scoped_name("burn"));
-    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
+    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
@@ -4128,7 +4045,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),
@@ -4161,7 +4078,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir.root().resolved_decl_key_for_local(&scoped_name("code"));
-    let expr = &tir.root().semantic.expressions.nodes[&expr_key];
+    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
     let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = &expr.kind else {
         panic!("expected `code` to be a for-comprehension, got {expr:?}");
     };
@@ -4188,7 +4105,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         builtin_fns,
-        registry: &tir.registry,
+        registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),

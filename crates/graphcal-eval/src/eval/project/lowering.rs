@@ -175,14 +175,15 @@ pub(in crate::eval::project) fn lower_and_finalize(
     module_types.overlay_visible_units(file_dag_id, &ir.registry, &module_resolver);
 
     let parent_external_surface = ir.external_surface.clone();
-    let mut tir = graphcal_compiler::tir::typed::type_resolve_with_modules_and_cancellation(
-        ir,
-        file_dag_id.clone(),
-        file_src,
-        &module_resolver,
-        &module_types,
-        cancellation,
-    )?;
+    let mut tir =
+        graphcal_compiler::tir::typed::type_resolve_builder_with_modules_and_cancellation(
+            ir,
+            file_dag_id,
+            file_src,
+            &module_resolver,
+            &module_types,
+            cancellation,
+        )?;
     // File roots and inline `dag` blocks are both callable DAG modules. Keep
     // their externally projectable ports in the same compiled representation
     // so an imported file alias can be invoked directly as `@alias(...).out`.
@@ -200,7 +201,8 @@ pub(in crate::eval::project) fn lower_and_finalize(
         cancellation,
     )?;
     cancellation.checkpoint()?;
-    merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files);
+    merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files, file_src)?;
+    let tir = tir.finish();
     graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
         &tir,
         file_src,
@@ -301,7 +303,7 @@ fn module_resolve_compile_error(
     reason = "inline DAG module compilation threads project, dependency artifacts, and module typing context"
 )]
 fn compile_inline_dag_modules<'a>(
-    tir: &mut graphcal_compiler::tir::typed::TIR,
+    tir: &mut graphcal_compiler::tir::typed::TirBuilder,
     project: &'a crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
@@ -312,8 +314,11 @@ fn compile_inline_dag_modules<'a>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     let loaded_file = &project.files[file_dag_id];
-    let parent_values =
-        crate::inline_dag::classify_value_decls_in_tir(tir, parent_external_surface, file_src)?;
+    let parent_values = crate::inline_dag::classify_value_decls_in_dag(
+        tir.root(),
+        parent_external_surface,
+        file_src,
+    )?;
 
     for loaded_dag in &loaded_file.inline_dags {
         cancellation.checkpoint()?;
@@ -354,7 +359,13 @@ fn compile_inline_dag_modules<'a>(
                 cancellation,
             )?;
         compiled_dag.populate_projectable_outputs(&loaded_dag.body);
-        tir.dags.insert(loaded_dag.dag_id.clone(), compiled_dag);
+        tir.insert_dag(compiled_dag).map_err(|error| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: error.to_string(),
+                src: file_src.clone(),
+                span: Span::new(0, 0).into(),
+            })
+        })?;
     }
 
     Ok(())
@@ -365,7 +376,7 @@ fn compile_inline_dag_modules<'a>(
     reason = "DAG lowering threads project, module, dependency, resolver, and cancellation context"
 )]
 fn compile_loaded_dag_module_ir<'a>(
-    tir: &graphcal_compiler::tir::typed::TIR,
+    tir: &graphcal_compiler::tir::typed::TirBuilder,
     project: &'a crate::loader::LoadedProject,
     loaded_dag: &crate::loader::LoadedDag,
     file_src: &NamedSource<Arc<String>>,
@@ -435,7 +446,7 @@ fn compile_loaded_dag_module_ir<'a>(
     let (mut builder, mut unfrozen) =
         graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
             dag_ast.as_ref(),
-            Some(&tir.registry),
+            Some(tir.registry()),
             &ctx.imported_names,
             ctx.imported_bindings,
             file_src,
@@ -663,16 +674,16 @@ fn find_inline_dag_decl_in_declarations<'a>(
 /// body's explicit imports, so `import dep.{const as local}` resolves under the
 /// local alias at inline-call eval time.
 fn merge_dep_dag_tirs(
-    tir: &mut graphcal_compiler::tir::typed::TIR,
+    tir: &mut graphcal_compiler::tir::typed::TirBuilder,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
-) {
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), CompileError> {
     for (alias, binding) in module_map {
         // Imported aliases name their exact reusable DAG target. Included
         // aliases are namespaces for an existing instance and are not callable.
         if binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
-            tir.module_aliases
-                .insert(alias.clone(), binding.target.clone());
+            tir.insert_module_alias(alias.clone(), binding.target.clone());
         }
     }
 
@@ -683,9 +694,7 @@ fn merge_dep_dag_tirs(
         // insertion wins; conflicting cross-file redeclarations are rejected
         // when the declaring files themselves compile.
         for (key, function) in &dep_eval.extern_functions {
-            tir.extern_functions
-                .entry(key.clone())
-                .or_insert_with(|| function.clone());
+            tir.insert_extern_function_if_absent(key.clone(), function.clone());
         }
         for (dep_id, dag_tir) in &dep_eval.dag_tirs {
             if dep_id != dep_dag_id && !dep_id.is_descendant_of(dep_dag_id) {
@@ -697,21 +706,21 @@ fn merge_dep_dag_tirs(
             // Supply deferred values imported from this owning dependency.
             // Canonical target and declared type remain on the same binding
             // record; no independently keyed source/value maps can diverge.
-            for binding in cloned.imported_bindings.values_mut() {
-                if binding.target().owner() != dep_dag_id {
-                    continue;
-                }
-                let source_name = binding.target().to_unowned_def_name();
-                if let Some(value) = dep_eval.const_values.get(&source_name)
-                    && let Some(dt) = dep_eval.declared_types.get(&ScopedName::from(&source_name))
-                {
-                    binding.supply_value(value.clone());
-                    binding.replace_declared_type(dt.clone());
-                }
-            }
-            tir.dags.insert(dep_id.clone(), cloned);
+            cloned.supply_imported_values(
+                dep_dag_id,
+                &dep_eval.const_values,
+                &dep_eval.declared_types,
+            );
+            tir.insert_dag(cloned).map_err(|error| {
+                CompileError::Eval(GraphcalError::InternalError {
+                    message: error.to_string(),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                })
+            })?;
         }
     }
+    Ok(())
 }
 
 fn check_semantic_override_reconciliation(

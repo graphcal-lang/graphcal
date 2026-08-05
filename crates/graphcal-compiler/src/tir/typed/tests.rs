@@ -279,7 +279,7 @@ fn field_constraint_resolution_error_uses_definition_source() {
     // Emulate an importer whose ambient source is unrelated to the imported
     // type definition. The diagnostic must still use `schema_src`.
     let consumer_src = NamedSource::new("consumer.gcl", Arc::new("param p: Price;".to_string()));
-    let error = type_resolve_with_modules(ir, schema_id, &consumer_src, &resolver, &module_types)
+    let error = type_resolve_with_modules(ir, &schema_id, &consumer_src, &resolver, &module_types)
         .unwrap_err();
 
     match error {
@@ -344,23 +344,29 @@ fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         )
     })?;
     module_types.insert_registry(&parent_dag_id, &ir.registry, src.clone());
-    let mut tir =
-        type_resolve_with_modules(ir, parent_dag_id.clone(), &src, &resolver, &module_types)?;
-    compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id, &file.declarations)?;
-    Ok(tir)
+    let mut builder = type_resolve_builder_with_modules_and_cancellation(
+        ir,
+        &parent_dag_id,
+        &src,
+        &resolver,
+        &module_types,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )?;
+    compile_inline_dag_bodies_test(&mut builder, &src, &parent_dag_id, &file.declarations)?;
+    Ok(builder.finish())
 }
 
 /// Compile each inline dag body in `tir` with no self-import
 /// preprocessing. Used by compiler-side integration tests that don't
 /// have access to the eval crate's project pipeline.
 fn compile_inline_dag_bodies_test(
-    tir: &mut TIR,
+    tir: &mut TirBuilder,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
     parent_declarations: &[crate::desugar::desugared_ast::Declaration],
 ) -> Result<(), GraphcalError> {
     let dag_bodies = tir
-        .registry
+        .registry()
         .dags
         .all_dags()
         .map(|(name, dag)| (name.clone(), dag.body.clone()))
@@ -394,13 +400,13 @@ fn compile_inline_dag_bodies_test(
             Span::new(0, 0),
         )
     })?;
-    module_types.insert_registry(parent_dag_id, &tir.registry, src.clone());
+    module_types.insert_registry(parent_dag_id, tir.registry(), src.clone());
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
             name.as_str(),
             &body,
-            &tir.registry,
+            tir.registry(),
             &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),
@@ -411,9 +417,71 @@ fn compile_inline_dag_bodies_test(
         let mut compiled_dag =
             type_resolve_single_with_modules(dag_body_ir, &dag_id, src, &resolver, &module_types)?;
         compiled_dag.populate_projectable_outputs(&body);
-        tir.dags.insert(dag_id, compiled_dag);
+        tir.insert_dag(compiled_dag)
+            .map_err(|error| internal_error(error.to_string(), src, Span::new(0, 0)))?;
     }
     Ok(())
+}
+
+#[test]
+fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
+    let source = "node value: Dimensionless = 1.0;";
+    let raw_file = Parser::new(source).parse_file().unwrap();
+    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
+    let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+    let root_id =
+        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
+    let ir = crate::ir::lower::lower(&file, &src).unwrap();
+    let mut resolver = ModuleResolver::default();
+    resolver
+        .add_module(root_id.clone(), &file.declarations)
+        .unwrap();
+    let mut module_types = ModuleTypeRegistry::default();
+    module_types.insert_graphcal_prelude().unwrap();
+    module_types.insert_registry(&root_id, &ir.registry, src.clone());
+    let mut builder = type_resolve_builder_with_modules_and_cancellation(
+        ir,
+        &root_id,
+        &src,
+        &resolver,
+        &module_types,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap();
+
+    assert_eq!(builder.root().dag_id(), &root_id);
+    let duplicate = builder.root().clone();
+    assert!(matches!(
+        builder.insert_dag(duplicate),
+        Err(DagRegistryError::DuplicateDag { dag_id }) if dag_id == root_id
+    ));
+
+    let tir = builder.finish();
+    assert_eq!(tir.root_dag_id(), &root_id);
+    assert_eq!(tir.root().dag_id(), &root_id);
+    assert_eq!(tir.dag_registry().len(), 1);
+    assert!(tir.dag_registry().get(&root_id).is_some());
+}
+
+#[test]
+fn finalized_tir_keeps_inline_dags_in_the_checked_registry() {
+    let tir = parse_and_type_resolve(
+        "dag child { pub node output: Dimensionless = 1.0; }\n\
+         node result: Dimensionless = @child().output;",
+    )
+    .unwrap();
+    let child_id = tir.root_dag_id().child("child");
+
+    assert_eq!(tir.local_dags().count(), 2);
+    assert_eq!(
+        tir.dag_registry().get(&child_id).unwrap().dag_id(),
+        &child_id
+    );
+    assert!(
+        tir.dag_registry()
+            .iter()
+            .all(|(dag_id, dag)| dag_id == dag.dag_id())
+    );
 }
 
 #[test]
@@ -437,8 +505,7 @@ fn module_aware_type_resolve_records_semantic_deps() {
     module_types.insert_graphcal_prelude().unwrap();
     module_types.insert_registry(&dag_id, &ir.registry, src.clone());
 
-    let tir =
-        type_resolve_with_modules(ir, dag_id.clone(), &src, &resolver, &module_types).unwrap();
+    let tir = type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types).unwrap();
     let deps = &tir.root().semantic.dependencies;
     let c = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
     let d = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("D"));

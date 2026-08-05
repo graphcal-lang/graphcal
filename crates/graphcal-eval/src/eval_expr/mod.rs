@@ -85,10 +85,10 @@ fn runtime_struct_type_def<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a TypeDef> {
     ctx.tir
-        .dags
+        .dag_registry()
         .values()
         .find_map(|dag| {
-            dag.semantic
+            dag.semantic()
                 .type_defs
                 .struct_types
                 .get(type_name.resolved())
@@ -180,8 +180,8 @@ fn imported_binding_value<'a>(
 ) -> Option<&'a RuntimeValue> {
     let key = RuntimeDeclKey::resolved(target.clone());
     match ctx.current_dag {
-        Some(caller_dag) if target.owner() == &caller_dag.dag_id => caller_values.get(&key),
-        _ if target.owner() == &ctx.tir.root_dag_id => {
+        Some(caller_dag) if target.owner() == caller_dag.dag_id() => caller_values.get(&key),
+        _ if target.owner() == ctx.tir.root_dag_id() => {
             ctx.root_values.and_then(|values| values.get(&key))
         }
         _ => None,
@@ -199,7 +199,7 @@ fn imported_binding_value<'a>(
 /// cycle — impossible for a well-typed dag body, but a silently truncated
 /// order would surface later as a misleading "dag has no node X" error.
 fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Result<Vec<ScopedName>, Vec<ScopedName>> {
-    topo_order_for_dag_body_resolved(dag_tir, &dag_tir.semantic.dependencies)
+    topo_order_for_dag_body_resolved(dag_tir, &dag_tir.semantic().dependencies)
 }
 
 type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
@@ -211,7 +211,7 @@ fn topo_order_for_dag_body_resolved(
     use std::collections::BTreeSet;
 
     let mut names: Vec<ScopedName> = dag_tir
-        .source_order
+        .source_order()
         .iter()
         .map(|(name, _)| name.clone())
         .collect();

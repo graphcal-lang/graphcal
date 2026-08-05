@@ -845,9 +845,12 @@ annotation-free input port; requiredness is represented by the missing default.
 ### Private-in-public (`V003`)
 
 A visible declaration must not reference private type-system items
-(`dim`, `type`, `index`, `base dim`) in its written signature. This
-prevents leaking names that importers cannot see. Violating this rule
-is error `V003`:
+(`dim`, `type`, `index`, `base dim`) in its effective signature. This includes
+nested generic arguments and every generic parameter default: omitting a
+public type's argument must not silently select a private type, dimension, or
+index. The compiler checks canonical resolved dependencies, including through
+aliases. This prevents leaking names that importers cannot see. Violating this
+rule is error `V003`:
 
 ```graphcal
 dim TransferSpeed = Length / Time;
@@ -857,6 +860,11 @@ pub node speed: TransferSpeed = 10.0 m/s;
 // Fix: make the dim visible too.
 pub dim TransferSpeed = Length / Time;
 pub node speed: TransferSpeed = 10.0 m/s;
+
+// Defaults are part of the public signature too.
+type Secret { Secret }
+// ERROR: omitting T would expose private type `Secret`.
+pub type Wrapper<T: Type = Secret> { Wrapper(value: T) }
 ```
 
 ### `pub(bind)` indexes and variant literals (`V004`)

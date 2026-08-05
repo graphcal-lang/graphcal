@@ -984,11 +984,9 @@ pub fn check_dimensions_tir_with_cancellation(
     // were already dim-checked in their own file's pipeline, against
     // their own registry — re-checking them here against the importer's
     // registry would fail on types renamed by include bindings.
-    for (id, dag) in &tir.dags {
+    for (_, dag) in tir.local_dags() {
         cancellation.checkpoint()?;
-        if id == &tir.root_dag_id || id.parent().as_ref() == Some(&tir.root_dag_id) {
-            check_dimensions_dag(dag, tir, &tir.registry, builtin_fns, src, cancellation)?;
-        }
+        check_dimensions_dag(dag, tir, &tir.registry, builtin_fns, src, cancellation)?;
     }
 
     // Validate domain constraints on struct/union member fields. The check
@@ -1124,7 +1122,7 @@ pub fn collect_override_dependency_summary(
         .dags
         .keys()
         .filter(|dag_id| {
-            *dag_id == &probe.root_dag_id || dag_id.is_descendant_of(&probe.root_dag_id)
+            *dag_id == probe.root_dag_id() || dag_id.is_descendant_of(probe.root_dag_id())
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1516,10 +1514,7 @@ fn check_field_domain_constraint_targets(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     let mut seen = std::collections::HashSet::new();
-    for (id, dag) in &tir.dags {
-        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
-            continue;
-        }
+    for (_, dag) in tir.local_dags() {
         for (key, bounds) in &dag.semantic.type_defs.field_bounds {
             if !seen.insert(key) {
                 continue;
@@ -1581,10 +1576,7 @@ fn check_field_domain_constraint_dimensions(
 ) -> Result<(), GraphcalError> {
     let mut seen: std::collections::HashSet<&crate::tir::typed::ResolvedStructFieldTypeKey> =
         std::collections::HashSet::new();
-    for (id, dag) in &tir.dags {
-        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
-            continue;
-        }
+    for (_, dag) in tir.local_dags() {
         for (key, bounds) in &dag.semantic.type_defs.field_bounds {
             if !seen.insert(key) {
                 continue;
@@ -1742,10 +1734,7 @@ fn check_no_constraints_on_generic_type_args(
     let walk = |type_expr: &crate::desugar::desugared_ast::TypeExpr| -> Result<(), GraphcalError> {
         check_type_expr_for_generic_arg_constraints(type_expr, src)
     };
-    for (id, dag) in &tir.dags {
-        if id != &tir.root_dag_id && id.parent().as_ref() != Some(&tir.root_dag_id) {
-            continue;
-        }
+    for (_, dag) in tir.local_dags() {
         for entry in &dag.consts {
             walk(&entry.type_ann)?;
         }
@@ -1758,7 +1747,10 @@ fn check_no_constraints_on_generic_type_args(
     }
     for type_def in tir.registry.types.all_types() {
         if let Some(members) = type_def.union_members() {
-            for field in members.iter().flat_map(|member| member.fields()) {
+            for field in members
+                .iter()
+                .flat_map(crate::registry::types::UnionMemberDef::fields)
+            {
                 walk(field.type_ann())?;
             }
         }
@@ -1972,7 +1964,7 @@ fn detect_cross_dag_cycles(
         // registry entry has the AST span; cross-file merged dags fall
         // back to a zero span (no AST in the importer).
         let parent = key.parent();
-        let span = if parent.as_ref() == Some(&tir.root_dag_id) {
+        let span = if parent.as_ref() == Some(tir.root_dag_id()) {
             tir.registry
                 .dags
                 .get(key.name())

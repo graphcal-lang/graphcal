@@ -1027,7 +1027,7 @@ fn build_extern_fn_signatures(
     use graphcal_compiler::function_signature::ValueKind as ExternValueKind;
 
     let mut sigs = HashMap::new();
-    for function in tir.extern_functions.values() {
+    for function in tir.extern_functions().values() {
         cancellation.checkpoint()?;
         let format_monomial = |monomial: &graphcal_compiler::function_signature::DimMonomial| {
             let mut parts: Vec<String> = monomial
@@ -1042,7 +1042,7 @@ fn build_extern_fn_signatures(
                 })
                 .collect();
             if !monomial.fixed.is_dimensionless() {
-                parts.push(tir.registry.dimensions.format_dimension(&monomial.fixed));
+                parts.push(tir.registry().dimensions.format_dimension(&monomial.fixed));
             }
             if parts.is_empty() {
                 "Dimensionless".to_string()

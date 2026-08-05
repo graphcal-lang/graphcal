@@ -382,7 +382,7 @@ impl PreparedProject {
     ) -> Result<Self, CompileError> {
         let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
         let CompiledFile {
-            mut tir,
+            tir,
             declared_types,
             imported_values,
             imported_source_order,
@@ -391,7 +391,7 @@ impl PreparedProject {
             include_debug_names,
             included_plots,
         } = compiled;
-        tir.prepare_external_value_constructors();
+        let tir = tir.with_external_value_constructors();
 
         let parameter_ports =
             build_parameter_ports(plan_id, root_ast, &tir, &plan, &declared_types, &source)?;
@@ -532,7 +532,7 @@ impl PreparedProject {
                 let actual_kind = self
                     .tir
                     .root()
-                    .source_order
+                    .source_order()
                     .iter()
                     .find_map(|(candidate, kind)| (candidate.member() == name).then_some(*kind));
                 return Err(actual_kind.map_or_else(
@@ -572,7 +572,7 @@ impl PreparedProject {
             if port.declared_type != DeclaredType::Bool {
                 return Err(ModelDefinitionError::UnsupportedOutputType {
                     name: port.name.clone(),
-                    actual: port.declared_type.format(&self.tir.registry.dimensions),
+                    actual: port.declared_type.format(&self.tir.registry().dimensions),
                 });
             }
         }
@@ -662,7 +662,7 @@ impl PreparedProject {
         let ctx = EvalContext {
             cancellation,
             builtin_fns,
-            registry: &self.tir.registry,
+            registry: self.tir.registry(),
             src: &self.source,
             tir: &self.tir,
             current_dag: Some(self.tir.root()),
@@ -762,7 +762,7 @@ impl PreparedProject {
                     Some(
                         crate::eval::types::default_unit_label(
                             dimension,
-                            self.tir.registry.dimensions.base_dim_symbols(),
+                            self.tir.registry().dimensions.base_dim_symbols(),
                         )
                         .ok_or_else(|| {
                             ModelDefinitionError::MissingCanonicalUnit {
@@ -790,13 +790,13 @@ impl PreparedProject {
                 let Some(definition) = index_def_for_ref(index, &self.tir) else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),
-                        actual: port.declared_type.format(&self.tir.registry.dimensions),
+                        actual: port.declared_type.format(&self.tir.registry().dimensions),
                     });
                 };
                 let IndexKind::Named { variants } = &definition.kind else {
                     return Err(ModelDefinitionError::UnsupportedInputType {
                         name: port.name.clone(),
-                        actual: port.declared_type.format(&self.tir.registry.dimensions),
+                        actual: port.declared_type.format(&self.tir.registry().dimensions),
                     });
                 };
                 if variants.is_empty() {
@@ -817,7 +817,7 @@ impl PreparedProject {
             _ => {
                 return Err(ModelDefinitionError::UnsupportedInputType {
                     name: port.name.clone(),
-                    actual: port.declared_type.format(&self.tir.registry.dimensions),
+                    actual: port.declared_type.format(&self.tir.registry().dimensions),
                 });
             }
         };
@@ -844,7 +844,7 @@ impl PreparedProject {
         &self,
         errors: &'errors HashMap<RuntimeDeclKey, NodeError>,
     ) -> Option<(ScopedName, &'errors NodeError)> {
-        self.tir.root().source_order.iter().find_map(|(name, _)| {
+        self.tir.root().source_order().iter().find_map(|(name, _)| {
             let key = RuntimeDeclKey::for_local_decl(self.tir.root(), name);
             errors.get(&key).map(|error| {
                 (
@@ -1352,7 +1352,7 @@ impl PreparedProject {
             let actual_kind = self
                 .tir
                 .root()
-                .source_order
+                .source_order()
                 .iter()
                 .find_map(|(candidate, kind)| (candidate.member() == name).then_some(*kind));
             actual_kind.map_or_else(
@@ -1390,7 +1390,7 @@ impl PreparedProject {
         expr: &Expr,
     ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
         let hir =
-            self.lower_closed_binding_expr(expr, &port.value_schema, &self.tir.root_dag_id)?;
+            self.lower_closed_binding_expr(expr, &port.value_schema, self.tir.root_dag_id())?;
         validate_closed_hir(&hir).map_err(|message| {
             CompileError::Eval(GraphcalError::EvalError {
                 message: format!(
@@ -1619,11 +1619,11 @@ impl PreparedProject {
             owner,
             &self.module_resolver,
             &scope,
-            &self.tir.registry.time_zones,
+            &self.tir.registry().time_zones,
         )
         .with_prelude(&prelude);
-        let context = if owner == &self.tir.root_dag_id {
-            context.with_unit_registry(&self.tir.registry.units)
+        let context = if owner == self.tir.root_dag_id() {
+            context.with_unit_registry(&self.tir.registry().units)
         } else {
             context
         };
@@ -1655,7 +1655,7 @@ impl PreparedProject {
         let context = EvalContext {
             cancellation,
             builtin_fns,
-            registry: &self.tir.registry,
+            registry: self.tir.registry(),
             src: &self.source,
             tir: &self.tir,
             current_dag: Some(self.tir.root()),
@@ -1672,7 +1672,7 @@ impl PreparedProject {
             &format!(
                 "cannot bind {actual} to `{}` of type `{}`",
                 port.name,
-                port.declared_type.format(&self.tir.registry.dimensions)
+                port.declared_type.format(&self.tir.registry().dimensions)
             ),
         )
     }
@@ -1715,7 +1715,7 @@ fn build_parameter_ports(
             let runtime_key = RuntimeDeclKey::for_local_decl(tir.root(), &scoped);
             let has_default = tir
                 .root()
-                .params
+                .params()
                 .iter()
                 .find(|entry| entry.name == scoped)
                 .is_some_and(|entry| entry.default_expr.is_some());
@@ -1870,7 +1870,7 @@ fn model_quantity_schema(
         .then(|| {
             crate::eval::types::default_unit_label(
                 dimension,
-                tir.registry.dimensions.base_dim_symbols(),
+                tir.registry().dimensions.base_dim_symbols(),
             )
         })
         .flatten()
@@ -1961,13 +1961,13 @@ fn index_def_for_ref<'tir>(
         || {
             let resolved = index.declared_resolved()?;
             tir.root()
-                .semantic
+                .semantic()
                 .collection_refs
                 .index_defs
                 .get(resolved)
                 .or_else(|| tir.declared_index_def(resolved))
         },
-        |finite| tir.registry.indexes.get_finite_index(finite),
+        |finite| tir.registry().indexes.get_finite_index(finite),
     )
 }
 
