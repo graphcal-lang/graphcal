@@ -370,7 +370,6 @@ fn type_resolve_dag(
 ) -> Result<DagTIRSeed, GraphcalError> {
     cancellation.checkpoint()?;
     let mut resolved_decl_types = HashMap::new();
-    let no_generic_params: &[GenericParamName] = &[];
 
     // A merged dependency declaration's type annotation keeps the dependency
     // file's offsets, so resolution errors must render against its own source
@@ -378,45 +377,33 @@ fn type_resolve_dag(
     for entry in &consts {
         cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_type_expr_inner(
+        let resolved = resolve_ast_type_expr_via_hir(
             &entry.type_ann,
             registry,
-            &entry.type_resolution_owner,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
             entry.type_src.resolve(src),
-            Some(entry_ctx),
+            entry_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &params {
         cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_type_expr_inner(
+        let resolved = resolve_ast_type_expr_via_hir(
             &entry.type_ann,
             registry,
-            &entry.type_resolution_owner,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
             entry.type_src.resolve(src),
-            Some(entry_ctx),
+            entry_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &nodes {
         cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_type_expr_inner(
+        let resolved = resolve_ast_type_expr_via_hir(
             &entry.type_ann,
             registry,
-            &entry.type_resolution_owner,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
             entry.type_src.resolve(src),
-            Some(entry_ctx),
+            entry_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
@@ -1831,13 +1818,11 @@ pub(crate) use ops::{
 
 // ---------------------------------------------------------------------------
 mod type_expr;
-#[cfg(test)]
-use type_expr::resolve_type_expr;
+pub use type_expr::resolve_hir_type_expr;
 use type_expr::{
-    internal_error, module_resolve_error, resolve_generic_default_in_struct_scope,
-    resolve_type_expr_in_struct_scope, resolve_type_expr_inner,
+    internal_error, module_resolve_error, resolve_ast_type_expr_via_hir,
+    resolve_generic_default_in_struct_scope, resolve_type_expr_in_struct_scope,
 };
-pub use type_expr::{resolve_hir_type_expr, resolve_type_expr_with_modules};
 
 #[cfg(test)]
 mod tests;

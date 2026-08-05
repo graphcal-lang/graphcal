@@ -711,7 +711,9 @@ fn lower_single_term_nominal_type(
                     binding.spanned_id(item.term.name.span),
                 )));
             }
-            GenericConstraint::Dim => return Ok(NominalTypeLookup::absent()),
+            // A concrete nominal type with the same leaf takes precedence;
+            // if none exists, dimension lowering below resolves this binding.
+            GenericConstraint::Dim => {}
             GenericConstraint::Index => {
                 return Ok(NominalTypeLookup::Found(TypeExprKind::Index(
                     IndexRef::GenericParam(binding.spanned_id(item.term.name.span)),

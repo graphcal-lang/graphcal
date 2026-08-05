@@ -1,5 +1,4 @@
 use super::*;
-use crate::desugar::desugared_ast::TypeExpr;
 use crate::dimension::{BaseDimId, Rational};
 use crate::registry::prelude::load_prelude;
 use crate::registry::time_scale::TimeScale;
@@ -14,123 +13,78 @@ fn make_registry() -> Registry {
     b.try_build().unwrap()
 }
 
-fn make_dim_term_name(name: &str) -> crate::syntax::span::Spanned<crate::syntax::names::NamePath> {
-    crate::syntax::span::Spanned::new(
-        crate::syntax::names::NamePath::expect_local(name),
-        Span::new(0, 0),
-    )
-}
-
-/// Create a simple dimension `TypeExpr` from a name string like `"Velocity"`.
-fn make_dim_type_expr(name: &str) -> crate::desugar::desugared_ast::TypeExpr {
-    crate::desugar::desugared_ast::TypeExpr {
-        kind: crate::desugar::desugared_ast::TypeExprKind::DimExpr(
-            crate::desugar::desugared_ast::DimExpr {
-                terms: vec![crate::desugar::desugared_ast::DimExprItem {
-                    op: crate::desugar::desugared_ast::MulDivOp::Mul,
-                    term: crate::desugar::desugared_ast::DimTerm {
-                        name: make_dim_term_name(name),
-                        power: None,
-                        span: Span::new(0, 0),
-                    },
-                }],
-                span: Span::new(0, 0),
-            },
-        ),
-        constraints: vec![],
-        span: Span::new(0, 0),
-    }
-}
-
-fn make_registry_with_struct() -> Registry {
-    let mut b = RegistryBuilder::new();
-    load_prelude(&mut b).unwrap();
-    let member = crate::registry::types::UnionMemberDef::try_new(
-        crate::syntax::type_name::ConstructorName::expect_valid("TransferResult"),
-        vec![
-            crate::registry::types::StructField::new(
-                crate::syntax::type_name::FieldName::expect_valid("dv1"),
-                make_dim_type_expr("Velocity"),
-            ),
-            crate::registry::types::StructField::new(
-                crate::syntax::type_name::FieldName::expect_valid("dv2"),
-                make_dim_type_expr("Velocity"),
-            ),
-        ],
-    )
-    .unwrap();
-    b.register_type(
-        crate::registry::types::TypeDef::try_union(
-            StructTypeName::expect_valid("TransferResult"),
-            vec![],
-            vec![member],
-        )
-        .unwrap(),
-    );
-    b.try_build().unwrap()
-}
-
-fn make_registry_with_index() -> Registry {
-    let mut b = RegistryBuilder::new();
-    load_prelude(&mut b).unwrap();
-    b.register_index(crate::registry::types::IndexDef {
-        name: IndexName::expect_valid("Maneuver"),
-        kind: crate::registry::types::IndexKind::Named {
-            variants: vec![
-                crate::syntax::index_name::IndexVariantName::expect_valid("Departure"),
-                crate::syntax::index_name::IndexVariantName::expect_valid("Insertion"),
-            ],
-        },
-    });
-    b.try_build().unwrap()
-}
-
 fn make_src() -> NamedSource<Arc<String>> {
     NamedSource::new("test", Arc::new(String::new()))
 }
 
-/// Parse a type annotation from a param declaration and return the `TypeExpr`.
-fn parse_type(source: &str) -> TypeExpr {
-    // Wrap in a param declaration so the parser can handle it
-    let full = format!("param x: {source} = 0.0;");
-    let raw_file = Parser::new(&full).parse_file().unwrap();
-    let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-    let file = desugared;
-    match &file.declarations[0].kind {
-        crate::desugar::desugared_ast::DeclKind::Param(p) => p.type_ann.clone(),
-        _ => panic!("expected param"),
+/// Resolve a source type through the production AST → HIR → TIR path.
+///
+/// Generic parameters are declared on a synthetic nominal type so HIR builds
+/// the same typed [`hir::GenericScope`] used for real generic field signatures.
+fn resolve_source_type(
+    source_type: &str,
+    dim_params: &[GenericParamName],
+    index_params: &[GenericParamName],
+    nat_params: &[GenericParamName],
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let params = dim_params
+        .iter()
+        .map(|name| format!("{name}: Dim"))
+        .chain(index_params.iter().map(|name| format!("{name}: Index")))
+        .chain(nat_params.iter().map(|name| format!("{name}: Nat")))
+        .collect::<Vec<_>>();
+    if params.is_empty() {
+        let tir = parse_and_type_resolve(&format!("param x: {source_type};"))?;
+        return Ok(tir.root().resolved_decl_types[&ScopedName::parse("x").unwrap()].clone());
     }
+
+    let source = format!(
+        "type ResolutionSubject<{}> {{ ResolutionSubject(value: {source_type}) }}",
+        params.join(", ")
+    );
+    let tir = parse_and_type_resolve(&source)?;
+    tir.root()
+        .semantic
+        .type_defs
+        .field_types
+        .iter()
+        .find(|(key, _)| {
+            key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
+        })
+        .map(|(_, resolved)| resolved.clone())
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: "test type field was not resolved through HIR".to_string(),
+            src: NamedSource::new("test.gcl", Arc::new(source)),
+            span: Span::new(0, 0).into(),
+        })
+}
+
+fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let tir = parse_and_type_resolve(program)?;
+    Ok(tir.root().resolved_decl_types[&ScopedName::parse(name).unwrap()].clone())
 }
 
 #[test]
 fn resolve_dimensionless() {
-    let r = make_registry();
-    let te = parse_type("Dimensionless");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Dimensionless", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Dimensionless);
 }
 
 #[test]
 fn resolve_bool() {
-    let r = make_registry();
-    let te = parse_type("Bool");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Bool", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Bool);
 }
 
 #[test]
 fn resolve_int() {
-    let r = make_registry();
-    let te = parse_type("Int");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Int", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Int);
 }
 
 #[test]
 fn resolve_concrete_dimension() {
-    let r = make_registry();
-    let te = parse_type("Length");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Length", &[], &[], &[]).unwrap();
     assert_eq!(
         resolved,
         ResolvedTypeExpr::Quantity(Dimension::base(BaseDimId::Prelude(
@@ -141,9 +95,7 @@ fn resolve_concrete_dimension() {
 
 #[test]
 fn resolve_compound_dimension() {
-    let r = make_registry();
-    let te = parse_type("Length / Time^2");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Length / Time^2", &[], &[], &[]).unwrap();
     let expected = (Dimension::base(BaseDimId::Prelude(
         crate::dimension::PreludeBaseDimension::Length,
     )) / Dimension::base(BaseDimId::Prelude(
@@ -157,9 +109,11 @@ fn resolve_compound_dimension() {
 
 #[test]
 fn resolve_struct_type() {
-    let r = make_registry_with_struct();
-    let te = parse_type("TransferResult");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolved_param_type(
+        "pub type TransferResult { TransferResult(value: Velocity) }\nparam x: TransferResult;",
+        "x",
+    )
+    .unwrap();
     assert!(
         matches!(resolved, ResolvedTypeExpr::Struct(name, _) if name.as_str() == "TransferResult")
     );
@@ -167,19 +121,15 @@ fn resolve_struct_type() {
 
 #[test]
 fn resolve_generic_dim_param() {
-    let r = make_registry();
     let dim_params = vec![GenericParamName::expect_valid("D")];
-    let te = parse_type("D");
-    let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("D", &dim_params, &[], &[]).unwrap();
     assert!(matches!(resolved, ResolvedTypeExpr::GenericDimParam(name, _) if name.as_str() == "D"));
 }
 
 #[test]
 fn resolve_generic_dim_expr_with_power() {
-    let r = make_registry();
     let dim_params = vec![GenericParamName::expect_valid("D")];
-    let te = parse_type("D^2");
-    let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("D^2", &dim_params, &[], &[]).unwrap();
     match resolved {
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
             assert_eq!(terms.len(), 1);
@@ -197,11 +147,8 @@ fn resolve_generic_dim_expr_with_power() {
 
 #[test]
 fn resolve_mixed_generic_concrete() {
-    let r = make_registry();
     let dim_params = vec![GenericParamName::expect_valid("D")];
-    // D * Length  — this is a DimExpr with a generic and a concrete term
-    let te = parse_type("D * Length");
-    let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("D * Length", &dim_params, &[], &[]).unwrap();
     match resolved {
         ResolvedTypeExpr::GenericDimExpr { terms, .. } => {
             assert_eq!(terms.len(), 2);
@@ -216,9 +163,11 @@ fn resolve_mixed_generic_concrete() {
 
 #[test]
 fn resolve_concrete_indexed() {
-    let r = make_registry_with_index();
-    let te = parse_type("Length[Maneuver]");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolved_param_type(
+        "pub index Maneuver = { Departure, Insertion };\nparam x: Length[Maneuver];",
+        "x",
+    )
+    .unwrap();
     match resolved {
         ResolvedTypeExpr::Indexed { base, indexes } => {
             assert_eq!(
@@ -238,12 +187,9 @@ fn resolve_concrete_indexed() {
 
 #[test]
 fn resolve_generic_indexed() {
-    let r = make_registry();
     let dim_params = vec![GenericParamName::expect_valid("D")];
     let index_params = vec![GenericParamName::expect_valid("I")];
-    let te = parse_type("D[I]");
-    let resolved =
-        resolve_type_expr(&te, &r, &dim_params, &index_params, &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("D[I]", &dim_params, &index_params, &[]).unwrap();
     match resolved {
         ResolvedTypeExpr::Indexed { base, indexes } => {
             assert!(
@@ -260,48 +206,48 @@ fn resolve_generic_indexed() {
 
 #[test]
 fn resolve_unknown_dimension_error() {
-    let r = make_registry();
-    let te = parse_type("UnknownDim");
-    let err = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap_err();
+    let err = resolve_source_type("UnknownDim", &[], &[], &[]).unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownDimension { .. }));
 }
 
 #[test]
 fn quantity_is_semantic_not_a_source_type_constructor() {
-    let registry = make_registry();
-    let type_expr = parse_type("Quantity");
-    let error = resolve_type_expr(&type_expr, &registry, &[], &[], &[], &make_src()).unwrap_err();
+    let error = resolve_source_type("Quantity", &[], &[], &[]).unwrap_err();
     assert!(matches!(error, GraphcalError::UnknownDimension { .. }));
 }
 
 #[test]
 fn resolve_unknown_index_error() {
-    let r = make_registry();
-    let te = parse_type("Length[UnknownIdx]");
-    let err = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap_err();
+    let err = resolve_source_type("Length[UnknownIdx]", &[], &[], &[]).unwrap_err();
     assert!(matches!(err, GraphcalError::UnknownIndex { .. }));
 }
 
 #[test]
 fn resolve_struct_takes_priority_over_dim_param() {
-    // When a name matches both a struct and a generic param,
-    // struct should win (structs are concrete, params are only
-    // in scope inside a function that has that param).
-    // In practice this shouldn't happen because struct names are
-    // PascalCase and generic params are single letters, but let's
-    // make sure the priority is correct.
-    let r = make_registry_with_struct();
-    let dim_params = vec![GenericParamName::expect_valid("TransferResult")];
-    let te = parse_type("TransferResult");
-    let resolved = resolve_type_expr(&te, &r, &dim_params, &[], &[], &make_src()).unwrap();
+    let tir = parse_and_type_resolve(
+        "type TransferResult { TransferResult(value: Velocity) }\n\
+         type ResolutionSubject<TransferResult: Dim> {\n\
+             ResolutionSubject(value: TransferResult)\n\
+         }",
+    )
+    .unwrap();
+    let resolved = tir
+        .root()
+        .semantic
+        .type_defs
+        .field_types
+        .iter()
+        .find(|(key, _)| {
+            key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
+        })
+        .map(|(_, resolved)| resolved)
+        .expect("ResolutionSubject.value should resolve through HIR");
     assert!(matches!(resolved, ResolvedTypeExpr::Struct(..)));
 }
 
 #[test]
 fn resolve_velocity_derived_dimension() {
-    let r = make_registry();
-    let te = parse_type("Velocity");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Velocity", &[], &[], &[]).unwrap();
     let expected = (Dimension::base(BaseDimId::Prelude(
         crate::dimension::PreludeBaseDimension::Length,
     )) / Dimension::base(BaseDimId::Prelude(
@@ -839,49 +785,37 @@ fn convert_generic_index_fails() {
 
 #[test]
 fn resolve_bare_datetime() {
-    let r = make_registry();
-    let te = parse_type("Datetime");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Datetime", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
 }
 
 #[test]
 fn resolve_datetime_utc() {
-    let r = make_registry();
-    let te = parse_type("Datetime<UTC>");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Datetime<UTC>", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::UTC));
 }
 
 #[test]
 fn resolve_datetime_tt() {
-    let r = make_registry();
-    let te = parse_type("Datetime<TT>");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Datetime<TT>", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TT));
 }
 
 #[test]
 fn resolve_datetime_tai() {
-    let r = make_registry();
-    let te = parse_type("Datetime<TAI>");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Datetime<TAI>", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::TAI));
 }
 
 #[test]
 fn resolve_datetime_gpst() {
-    let r = make_registry();
-    let te = parse_type("Datetime<GPST>");
-    let resolved = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap();
+    let resolved = resolve_source_type("Datetime<GPST>", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Datetime(TimeScale::GPST));
 }
 
 #[test]
 fn resolve_datetime_unknown_scale_error() {
-    let r = make_registry();
-    let te = parse_type("Datetime<XYZ>");
-    let err = resolve_type_expr(&te, &r, &[], &[], &[], &make_src()).unwrap_err();
+    let err = resolve_source_type("Datetime<XYZ>", &[], &[], &[]).unwrap_err();
     assert!(matches!(err, GraphcalError::EvalError { .. }));
 }
 
