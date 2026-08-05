@@ -3645,6 +3645,158 @@ fn eval_plot_line_json() {
 }
 
 #[test]
+fn eval_plot_display_units_scale_scalar_and_indexed_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("display_units.gcl");
+    std::fs::write(
+        &file,
+        "index Sample = { A, B };\n\
+         node speed: Velocity[Sample] = { Sample.A: 10.0 m/s, Sample.B: 20.0 m/s };\n\
+         node distance: Length[Sample] = { Sample.A: 1000.0 m, Sample.B: 2000.0 m };\n\
+         node reference_distance: Length = 3000.0 m;\n\
+         pub plot converted = {\n\
+             mark: line,\n\
+             encode: {\n\
+                 x: for sample: Sample { @speed[sample] -> km/h },\n\
+                 y: for sample: Sample { @distance[sample] -> km },\n\
+                 color: @reference_distance -> km,\n\
+             },\n\
+             y_label: \"Custom distance\",\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    let values = spec["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    assert_eq!(values[0]["x"].as_f64(), Some(36.0));
+    assert_eq!(values[1]["x"].as_f64(), Some(72.0));
+    assert_eq!(values[0]["y"].as_f64(), Some(1.0));
+    assert_eq!(values[1]["y"].as_f64(), Some(2.0));
+    assert_eq!(values[0]["color"].as_f64(), Some(3.0));
+    assert_eq!(values[1]["color"].as_f64(), Some(3.0));
+    assert_eq!(
+        spec["encoding"]["x"]["axis"]["title"].as_str(),
+        Some("Velocity (km/h)")
+    );
+    assert_eq!(
+        spec["encoding"]["y"]["axis"]["title"].as_str(),
+        Some("Custom distance"),
+        "an explicit label must not change the converted y data"
+    );
+}
+
+#[test]
+fn eval_plot_display_units_resolve_imported_declarations() {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/plot_import");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"plot_import\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("data.gcl"),
+        "pub index Sample = { A, B };\n\
+         pub const unit display_speed: Velocity = 1.0 km/h;\n\
+         pub const node speed: Velocity[Sample] = {\n\
+             Sample.A: 10.0 m/s,\n\
+             Sample.B: 20.0 m/s,\n\
+         };\n",
+    )
+    .unwrap();
+    let main = root_dir.join("main.gcl");
+    std::fs::write(
+        &main,
+        "import plot_import.data as data;\n\
+         pub plot imported = {\n\
+             mark: line,\n\
+             encode: {\n\
+                 x: for sample: data.Sample {\n\
+                     @data.speed[sample] -> data.display_speed\n\
+                 },\n\
+                 y: for sample: data.Sample { @data.speed[sample] -> km/h },\n\
+             },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", main.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let json = parse_plot_json_stdout(&stdout);
+    let spec = &json[0]["spec"];
+    let values = spec["data"]["values"]
+        .as_array()
+        .expect("expected data values array");
+    assert_eq!(values[0]["x"].as_f64(), Some(36.0));
+    assert_eq!(values[1]["x"].as_f64(), Some(72.0));
+    assert_eq!(
+        spec["encoding"]["x"]["axis"]["title"].as_str(),
+        Some("Velocity (data.display_speed)")
+    );
+}
+
+#[test]
+fn eval_plot_dynamic_display_unit_failure_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("dynamic_display_unit.gcl");
+    std::fs::write(
+        &file,
+        "base dim Money;\n\
+         base unit USD: Money;\n\
+         param rate: Dimensionless = 0.0;\n\
+         unit EUR: Money = (@rate) USD;\n\
+         node price: Money = 100.0 USD;\n\
+         pub plot prices = {\n\
+             mark: point,\n\
+             encode: { x: 1.0, y: @price -> EUR },\n\
+         };\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success(), "invalid display scale must fail");
+    assert_eq!(
+        parse_plot_json_stdout(&String::from_utf8(output.stdout).unwrap()),
+        serde_json::json!([])
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plot `prices` not rendered")
+            && stderr.contains("encoding channel `y`")
+            && stderr.contains("dynamic unit scale must be greater than zero"),
+        "expected the display-unit resolution error: {stderr}"
+    );
+}
+
+#[test]
 fn eval_plot_bar_json() {
     let output = graphcal_bin()
         .args(["eval", &fixture("valid/plot_bar.gcl"), "--plot", "json"])

@@ -24,7 +24,7 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::ast::EncodingChannel;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
-use super::types::{PlotFieldValue, epoch_to_rfc3339};
+use super::types::{DisplayUnit, PlotFieldValue, epoch_to_rfc3339, quantity_display_value};
 
 /// One leaf datum of an encoding channel.
 #[derive(Debug, Clone, PartialEq)]
@@ -86,13 +86,18 @@ impl ChannelData {
 ///
 /// Booleans become the labels `"true"`/`"false"`, matching how a quantity
 /// `Bool` channel encodes (#840). Structs cannot be plotted.
-fn plot_datum_from_leaf(rv: &RuntimeValue) -> Result<PlotDatum, String> {
+fn plot_datum_from_leaf(
+    rv: &RuntimeValue,
+    display_unit: Option<&DisplayUnit>,
+) -> Result<PlotDatum, String> {
     #[expect(
         clippy::cast_precision_loss,
         reason = "plot data loss of precision from i64 to f64 is acceptable"
     )]
     match rv {
-        RuntimeValue::Quantity(v) => Ok(PlotDatum::Number(*v)),
+        RuntimeValue::Quantity(v) => {
+            Ok(PlotDatum::Number(quantity_display_value(*v, display_unit)))
+        }
         RuntimeValue::Complex(_) => Err(
             "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
                 .to_string(),
@@ -113,6 +118,15 @@ fn plot_datum_from_leaf(rv: &RuntimeValue) -> Result<PlotDatum, String> {
 /// Flatten a (possibly nested) runtime value into axes plus row-major leaf
 /// values.
 pub(super) fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData, String> {
+    channel_data_from_runtime_with_display_unit(rv, None)
+}
+
+/// Flatten a runtime value while converting quantity leaves to a requested
+/// rendering unit. Canonical runtime values remain unchanged.
+pub(super) fn channel_data_from_runtime_with_display_unit(
+    rv: &RuntimeValue,
+    display_unit: Option<&DisplayUnit>,
+) -> Result<ChannelData, String> {
     let RuntimeValue::Indexed {
         index_name,
         entries,
@@ -120,7 +134,7 @@ pub(super) fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData
     else {
         return Ok(ChannelData {
             axes: Vec::new(),
-            values: vec![plot_datum_from_leaf(rv)?],
+            values: vec![plot_datum_from_leaf(rv, display_unit)?],
         });
     };
 
@@ -128,7 +142,7 @@ pub(super) fn channel_data_from_runtime(rv: &RuntimeValue) -> Result<ChannelData
     let mut inner_axes: Option<Vec<PlotAxis>> = None;
     let mut values = Vec::new();
     for entry in entries.values() {
-        let entry_data = channel_data_from_runtime(entry)?;
+        let entry_data = channel_data_from_runtime_with_display_unit(entry, display_unit)?;
         match &inner_axes {
             None => inner_axes = Some(entry_data.axes),
             Some(expected) => {
@@ -293,6 +307,36 @@ mod tests {
         let error = channel_data_from_runtime(&RuntimeValue::Complex(ComplexValue::new(1.0, 2.0)))
             .unwrap_err();
         assert!(error.contains("use re(), im(), abs(), or phase()"));
+    }
+
+    #[test]
+    fn display_unit_scales_scalar_and_indexed_quantity_leaves() {
+        let kilometres = DisplayUnit {
+            label: "km".to_string(),
+            scale: 1000.0,
+        };
+        let scalar = channel_data_from_runtime_with_display_unit(
+            &RuntimeValue::Quantity(3000.0),
+            Some(&kilometres),
+        )
+        .unwrap();
+        let indexed = channel_data_from_runtime_with_display_unit(
+            &indexed(
+                "Sample",
+                vec![
+                    ("A", RuntimeValue::Quantity(1000.0)),
+                    ("B", RuntimeValue::Quantity(2000.0)),
+                ],
+            ),
+            Some(&kilometres),
+        )
+        .unwrap();
+
+        assert_eq!(scalar.values, vec![PlotDatum::Number(3.0)]);
+        assert_eq!(
+            indexed.values,
+            vec![PlotDatum::Number(1.0), PlotDatum::Number(2.0)]
+        );
     }
 
     #[test]
