@@ -181,22 +181,22 @@ const fn precedence(op: BinOp) -> u8 {
 /// and `^` (per `docs/language/expressions.md`).
 const UNARY_PREC: u8 = 7;
 
-const fn op_str(op: BinOp) -> &'static str {
+const fn op_token(op: BinOp) -> &'static str {
     match op {
-        BinOp::Add => " + ",
-        BinOp::Sub => " - ",
-        BinOp::Mul => " * ",
-        BinOp::Div => " / ",
-        BinOp::Mod => " % ",
-        BinOp::Pow(_) => " ^ ",
-        BinOp::Eq => " == ",
-        BinOp::Ne => " != ",
-        BinOp::Lt => " < ",
-        BinOp::Gt => " > ",
-        BinOp::Le => " <= ",
-        BinOp::Ge => " >= ",
-        BinOp::And => " && ",
-        BinOp::Or => " || ",
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Mod => "%",
+        BinOp::Pow(_) => "^",
+        BinOp::Eq => "==",
+        BinOp::Ne => "!=",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
     }
 }
 
@@ -264,21 +264,74 @@ fn format_unary_operand(fmt: &mut Formatter<'_>, operand: &Expr) -> RcDoc<'stati
 }
 
 fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> RcDoc<'static> {
+    if matches!(op, BinOp::And | BinOp::Or) {
+        return format_logical_chain(fmt, op, lhs, rhs);
+    }
+
     let lhs_doc = format_binop_child(fmt, lhs, op, false);
     // Drain any comment between lhs and rhs (e.g. `1.0 + // comment\n 2.0`)
     let comment = fmt.drain_comments_before(rhs.span.offset());
     let rhs_doc = format_binop_child(fmt, rhs, op, true);
+    let operator = RcDoc::text(format!(" {} ", op_token(op)));
     match comment {
-        None => lhs_doc.append(RcDoc::text(op_str(op))).append(rhs_doc),
+        None => lhs_doc.append(operator).append(rhs_doc),
         Some(comment) => {
             // Force multi-line: put operator and comment on the lhs line,
             // then rhs on the next line
             lhs_doc
-                .append(RcDoc::text(op_str(op)))
+                .append(operator)
                 .append(comment)
                 .append(RcDoc::line().append(rhs_doc).nest(INDENT))
         }
     }
+}
+
+/// Format a left-associated `&&` or `||` chain as one layout group.
+///
+/// Grouping the whole chain gives every operator the same break decision and
+/// keeps continuation operators aligned. Only the left spine is flattened:
+/// a same-operator expression on the right was explicitly parenthesized in
+/// the source and must remain a distinct subtree for AST equivalence.
+fn format_logical_chain(
+    fmt: &mut Formatter<'_>,
+    op: BinOp,
+    lhs: &Expr,
+    rhs: &Expr,
+) -> RcDoc<'static> {
+    let mut reversed_rhs = vec![rhs];
+    let mut first = lhs;
+    while let ExprKind::BinOp {
+        op: child_op,
+        lhs: child_lhs,
+        rhs: child_rhs,
+    } = &first.kind
+        && *child_op == op
+    {
+        reversed_rhs.push(child_rhs);
+        first = child_lhs;
+    }
+
+    let first_doc = format_binop_child(fmt, first, op, false);
+    reversed_rhs
+        .into_iter()
+        .rev()
+        .fold(first_doc, |doc, term| {
+            let comment = fmt.drain_comments_before(term.span.offset());
+            let term_doc = format_binop_child(fmt, term, op, true);
+            match comment {
+                None => doc
+                    .append(RcDoc::line())
+                    .append(RcDoc::text(op_token(op)))
+                    .append(RcDoc::text(" "))
+                    .append(term_doc),
+                Some(comment) => doc
+                    .append(RcDoc::text(format!(" {} ", op_token(op))))
+                    .append(comment)
+                    .append(term_doc),
+            }
+        })
+        .nest(INDENT)
+        .group()
 }
 
 /// Format a `FnCall` expression with comment handling per argument.

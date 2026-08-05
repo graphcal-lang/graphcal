@@ -558,9 +558,11 @@ formatted text, the formatter re-parses it and verifies the result is the same
 syntax tree as the input (ignoring source positions). If they ever diverge —
 which would be a bug in the formatter, not in your code — formatting fails with
 an error instead of writing a file whose meaning might differ from the source.
-Long attribute argument lists are expanded to one argument per line with a
-trailing comma. Adding a trailing comma to a short source list requests the same
-multiline layout; short lists without one remain inline.
+Breakable layouts target 100 display columns. Long `&&` and `||` chains break
+before their operators, with all continuation operators aligned; short chains
+remain inline. Long attribute argument lists are expanded to one argument per
+line with a trailing comma. Adding a trailing comma to a short source list
+requests the same multiline layout; short lists without one remain inline.
 
 ```bash
 graphcal format [OPTIONS] [PATHS]...

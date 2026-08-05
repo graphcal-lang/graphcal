@@ -55,4 +55,18 @@ mod tests {
         assert_eq!(edits[0].range.start, Position::new(0, 0));
         assert_eq!(edits[0].new_text, "node x: Dimensionless = 1;\n");
     }
+
+    #[test]
+    fn wraps_long_logical_chains() {
+        let source = "pub index Mode = { First, Second, Third, Fourth };\n\
+param priority: Int[Mode];\n\
+assert priorities = @priority[Mode.First] == 1 && @priority[Mode.Second] == 2 && @priority[Mode.Third] == 3 && @priority[Mode.Fourth] == 4;\n";
+        let edits = format_document(source).expect("long chain should produce an edit");
+        assert_eq!(edits.len(), 1);
+        assert!(
+            edits[0]
+                .new_text
+                .contains("\n    && @priority[Mode.Second] == 2")
+        );
+    }
 }
