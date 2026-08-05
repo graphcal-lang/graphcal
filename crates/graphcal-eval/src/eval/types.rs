@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use indexmap::IndexMap;
-use miette::Diagnostic;
+use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::complex_value::ComplexValue;
@@ -851,7 +852,8 @@ pub enum PlotFieldValue {
     Datetime(String),
 }
 
-/// Top-level compile error that wraps both parse and eval errors.
+/// Top-level compile error for parsing, semantic evaluation, and external
+/// parameter binding.
 #[derive(Debug, Error, Diagnostic)]
 pub enum CompileError {
     #[error(transparent)]
@@ -861,6 +863,24 @@ pub enum CompileError {
     #[error(transparent)]
     #[diagnostic(transparent)]
     Eval(#[from] graphcal_compiler::registry::error::GraphcalError),
+
+    /// A value supplied through an external binding format failed semantic
+    /// validation. The boundary source and parameter span deliberately replace
+    /// synthetic expression offsets in the underlying error.
+    #[error("invalid binding for `{name}`: {reason}")]
+    #[diagnostic(code(graphcal::O004))]
+    ExternalBinding {
+        /// Entry-DAG parameter receiving the value.
+        name: DeclName,
+        /// Original compiler/evaluator error rendered at the boundary.
+        reason: String,
+        /// External input source, such as a JSON file.
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        /// Span identifying the parameter in the external input.
+        #[label("value for parameter `{name}`")]
+        span: SourceSpan,
+    },
 }
 
 impl From<graphcal_compiler::cancellation::Cancelled> for CompileError {
@@ -891,14 +911,15 @@ impl CompileError {
     /// can build a line index over the right text without having to look it
     /// up by name.
     ///
-    /// `ParseError` always carries a source; `GraphcalError` may return
-    /// `None` for a few variants representing source-less errors (e.g.
-    /// `FileNotFound`, `CircularImport`).
+    /// `ParseError` and external-binding diagnostics always carry a source;
+    /// `GraphcalError` may return `None` for a few variants representing
+    /// source-less errors (e.g. `FileNotFound`, `CircularImport`).
     #[must_use]
-    pub const fn named_source(&self) -> Option<&miette::NamedSource<std::sync::Arc<String>>> {
+    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
         match self {
             Self::Parse(e) => Some(e.named_source()),
             Self::Eval(e) => e.named_source(),
+            Self::ExternalBinding { src, .. } => Some(src),
         }
     }
 }

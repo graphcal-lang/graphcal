@@ -2070,6 +2070,56 @@ fn eval_input_json_imported_record_keeps_definition_site_field_constraint() {
 }
 
 #[test]
+fn eval_input_json_semantic_error_points_to_input_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let model_path = dir.path().join("model.gcl");
+    let input_path = dir.path().join("input.json");
+    std::fs::write(
+        &model_path,
+        "pub index Row = { A, B };\n\
+         pub index Column = { X, Y };\n\
+         param matrix: Int[Row, Column];\n\
+         node first: Int = @matrix[Row.A, Column.X];\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &input_path,
+        r#"{
+  "matrix": {
+    "index": "Row",
+    "entries": {
+      "A": { "index": "Column", "entries": { "X": 1, "Y": 2 } },
+      "B": { "index": "Column", "entries": { "X": 3, "Y": 4 } }
+    }
+  }
+}"#,
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            model_path.to_str().unwrap(),
+            "--input",
+            input_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!("{}:2:3", input_path.display())),
+        "expected diagnostic to point to the parameter key in input.json: {stderr}"
+    );
+    assert!(
+        stderr.contains("invalid binding for `matrix`")
+            && stderr.contains("value for parameter `matrix`"),
+        "expected diagnostic to identify the affected parameter: {stderr}"
+    );
+}
+
+#[test]
 fn eval_input_json_unknown_param() {
     let dir = std::env::temp_dir().join("graphcal_test_input");
     std::fs::create_dir_all(&dir).unwrap();

@@ -240,6 +240,10 @@ conditionals, comprehensions, matches, scans, and unfolds are rejected. This
 keeps CLI input as typed data rather than injecting a second computation into
 the prepared DAG.
 
+Semantic errors while validating a structured value supplied by `--input` are
+reported against the JSON input file and include the affected entry parameter
+name, rather than being attributed to the first line of the `.gcl` file.
+
 The default `--output-view surface` prints every const, param, and node declared
 by the entry DAG plus the outputs intentionally exposed by each include. A
 brace include contributes only its selected local aliases. A whole-instance
