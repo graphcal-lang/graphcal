@@ -723,7 +723,6 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     // plot that cannot be rendered is reported, never silently dropped
     // (#842).
     let plot_exprs = &tir.root().semantic.plot_exprs;
-    let no_fields: Vec<graphcal_compiler::tir::typed::LoweredPlotField> = Vec::new();
     let mut plot_errors: Vec<super::types::PlotError> = Vec::new();
     let plots: Vec<PlotSpec> = plan
         .plot_bodies
@@ -732,7 +731,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let Some(lowered) = plot_exprs.plots.get(&entry.name) else {
                 plot_errors.push(super::types::PlotError {
                     name: entry.name.clone(),
-                    message: "internal: lowered plot body is missing".to_string(),
+                    message: "internal: malformed TIR is missing a checked plot body".to_string(),
                 });
                 return None;
             };
@@ -754,7 +753,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .figure_bodies
         .iter()
         .filter_map(|entry| {
-            let fields = plot_exprs.figures.get(&entry.name).unwrap_or(&no_fields);
+            let Some(fields) = plot_exprs.figures.get(&entry.name) else {
+                plot_errors.push(super::types::PlotError {
+                    name: entry.name.clone(),
+                    message: "internal: malformed TIR is missing checked figure fields"
+                        .to_string(),
+                });
+                return None;
+            };
             match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
                 Ok(evaluated) => Some(super::types::FigureSpec {
                     name: entry.name.clone(),
@@ -777,7 +783,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .layer_bodies
         .iter()
         .filter_map(|entry| {
-            let fields = plot_exprs.layers.get(&entry.name).unwrap_or(&no_fields);
+            let Some(fields) = plot_exprs.layers.get(&entry.name) else {
+                plot_errors.push(super::types::PlotError {
+                    name: entry.name.clone(),
+                    message: "internal: malformed TIR is missing checked layer fields".to_string(),
+                });
+                return None;
+            };
             match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
                 Ok(evaluated) => Some(super::types::LayerSpec {
                     name: entry.name.clone(),

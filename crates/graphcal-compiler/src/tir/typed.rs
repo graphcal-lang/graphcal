@@ -815,13 +815,9 @@ fn collect_dynamic_unit_refs(
     Ok(())
 }
 
-/// Populate the semantic body's plot expression maps from the IR's lowered
-/// plot/figure/layer entries and run the reference-collection walks over
-/// them.
-///
-/// Plot bodies were lowered (best-effort) at
-/// [`crate::ir::lower::UnfrozenIR::freeze`]; an entry without a complete
-/// body is omitted here, and the runtime then skips that plot.
+/// Populate the semantic body's plot expression maps from the IR's strictly
+/// lowered plot/figure/layer entries and run the reference-collection walks
+/// over them.
 fn collect_plot_exprs(
     plots: &[crate::ir::lower::PlotEntry],
     figures: &[crate::ir::lower::FigureEntry],
@@ -842,9 +838,7 @@ fn collect_plot_exprs(
     };
 
     for entry in plots {
-        let Some(body) = &entry.body else {
-            continue;
-        };
+        let body = &entry.body;
         let body_src = entry.body_src.resolve(src);
         for (_, expr) in &body.encodings {
             collect(
@@ -1087,9 +1081,7 @@ fn check_sink_body_policies(
         }
     }
     for entry in &dag.plots {
-        let Some(body) = &entry.body else {
-            continue;
-        };
+        let body = &entry.body;
         let check_literals =
             !entry.name.is_qualified() && is_explicit_export(entry.name.member().as_str());
         let checker = HirPolicyChecker {

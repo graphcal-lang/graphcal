@@ -254,10 +254,8 @@ pub struct PlotEntry {
     pub name: ScopedName,
     /// Mark shape rendered for this plot.
     pub mark_type: crate::syntax::ast::MarkType,
-    /// Lowered body, or `None` when an expression failed to lower. Plots
-    /// are best-effort at evaluation time: an incomplete body is skipped by
-    /// the runtime instead of failing the compile.
-    pub body: Option<LoweredPlotBody>,
+    /// Strictly lowered semantic body.
+    pub body: LoweredPlotBody,
     /// Source of every expression in the plot body.
     pub(crate) body_src: BodySource,
     /// Whether this plot renders standalone when its file is the entry
@@ -323,8 +321,7 @@ pub struct FigureEntry {
     pub name: ScopedName,
     /// Plots composed by this figure, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
-    /// Lowered field expressions; fields that failed to lower are omitted
-    /// (best-effort, matching plots).
+    /// Strictly lowered field expressions.
     pub fields: Vec<LoweredPlotField>,
     /// Source of every field expression.
     pub(crate) body_src: BodySource,
@@ -336,8 +333,7 @@ pub struct LayerEntry {
     pub name: ScopedName,
     /// Plots composed by this layer, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
-    /// Lowered field expressions; fields that failed to lower are omitted
-    /// (best-effort, matching plots).
+    /// Strictly lowered field expressions.
     pub fields: Vec<LoweredPlotField>,
     /// Source of every field expression.
     pub(crate) body_src: BodySource,
@@ -1242,76 +1238,67 @@ impl UnfrozenIR {
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
 
-        // Plots and figure/layer fields are best-effort at evaluation time:
-        // an expression that fails to lower leaves the body incomplete (the
-        // runtime skips it) instead of failing the compile.
-        let lower_optional = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
-            let expr_ctx = crate::hir::ExprLoweringContext::new(
-                resolution_owner,
-                resolver,
-                &generic_scope,
-                &registry.time_zones,
-            )
-            .with_prelude(&prelude)
-            .with_unit_registry(&registry.units)
-            .with_decl_bindings(&decl_bindings);
-            crate::hir::lower_expr(expr, expr_ctx).ok()
-        };
+        // Sink expressions are semantic program bodies, not optional rendering
+        // hints. Batch compilation lowers every one strictly; tolerant HIR is
+        // reserved for editor-facing incomplete buffers.
         cancellation.checkpoint()?;
         let plots = self
             .plots
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let mut body = LoweredPlotBody::default();
-                let mut complete = true;
-                for encoding in &entry.decl.encodings {
-                    match lower_optional(&encoding.value, &entry.body_resolution_owner) {
-                        Some(lowered) => body.encodings.push((encoding.channel, lowered)),
-                        None => complete = false,
-                    }
-                }
-                for field in &entry.decl.mark.properties {
-                    match lower_optional(&field.value, &entry.body_resolution_owner) {
-                        Some(lowered) => body.mark_properties.push(LoweredPlotField {
-                            name: field.name.value.clone(),
-                            name_span: field.name.span,
-                            value: lowered,
-                        }),
-                        None => complete = false,
-                    }
-                }
-                for field in &entry.decl.properties {
-                    match lower_optional(&field.value, &entry.body_resolution_owner) {
-                        Some(lowered) => body.properties.push(LoweredPlotField {
-                            name: field.name.value.clone(),
-                            name_span: field.name.span,
-                            value: lowered,
-                        }),
-                        None => complete = false,
-                    }
-                }
+                let body_src = entry.body_src.resolve(src);
+                let encodings = entry
+                    .decl
+                    .encodings
+                    .iter()
+                    .map(|encoding| {
+                        lower_in(&encoding.value, &entry.body_resolution_owner, body_src)
+                            .map(|lowered| (encoding.channel, lowered))
+                    })
+                    .collect::<Result<Vec<_>, GraphcalError>>()?;
+                let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField]| {
+                    fields
+                        .iter()
+                        .map(|field| {
+                            Ok(LoweredPlotField {
+                                name: field.name.value.clone(),
+                                name_span: field.name.span,
+                                value: lower_in(
+                                    &field.value,
+                                    &entry.body_resolution_owner,
+                                    body_src,
+                                )?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, GraphcalError>>()
+                };
                 Ok(PlotEntry {
                     name: entry.name.clone(),
                     mark_type: entry.decl.mark.mark_type,
-                    body: complete.then_some(body),
+                    body: LoweredPlotBody {
+                        encodings,
+                        mark_properties: lower_fields(&entry.decl.mark.properties)?,
+                        properties: lower_fields(&entry.decl.properties)?,
+                    },
                     body_src: entry.body_src.clone(),
                     displayed: entry.displayed,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
-                            resolution_owner: &crate::dag_id::DagId| {
+                            resolution_owner: &crate::dag_id::DagId,
+                            body_src: &NamedSource<Arc<String>>| {
             fields
                 .iter()
-                .filter_map(|field| {
-                    Some(LoweredPlotField {
+                .map(|field| {
+                    Ok(LoweredPlotField {
                         name: field.name.value.clone(),
                         name_span: field.name.span,
-                        value: lower_optional(&field.value, resolution_owner)?,
+                        value: lower_in(&field.value, resolution_owner, body_src)?,
                     })
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, GraphcalError>>()
         };
         cancellation.checkpoint()?;
         let figures = self
@@ -1322,7 +1309,11 @@ impl UnfrozenIR {
                 Ok(FigureEntry {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    fields: lower_fields(
+                        &entry.decl.fields,
+                        &entry.body_resolution_owner,
+                        entry.body_src.resolve(src),
+                    )?,
                     body_src: entry.body_src.clone(),
                 })
             })
@@ -1336,7 +1327,11 @@ impl UnfrozenIR {
                 Ok(LayerEntry {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    fields: lower_fields(
+                        &entry.decl.fields,
+                        &entry.body_resolution_owner,
+                        entry.body_src.resolve(src),
+                    )?,
                     body_src: entry.body_src.clone(),
                 })
             })
