@@ -7,7 +7,7 @@ members = ["crates/*"]
 default-members = ["crates/graphcal-cli"]
 
 [workspace.package]
-version = "0.0.1-alpha.19"
+version = "0.0.1-alpha.20"
 edition = "2024"
 rust-version = "1.91"
 description = "Type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations"
@@ -28,16 +28,16 @@ gix = { version = "0.86.0", default-features = false, features = [
   "sha1",
   "worktree-mutation"
 ] }
-graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.19" }
-graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.19" }
-graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.19" }
-graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.19" }
-graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.19" }
-graphcal-package = { path = "crates/graphcal-package", version = "0.0.1-alpha.19" }
-graphcal-plugin-abi = { path = "crates/graphcal-plugin-abi", version = "0.0.1-alpha.19" }
-graphcal-plugin-host = { path = "crates/graphcal-plugin-host", version = "0.0.1-alpha.19" }
-graphcal-plugin-macros = { path = "crates/graphcal-plugin-macros", version = "0.0.1-alpha.19" }
-graphcal-tenax = { path = "crates/graphcal-tenax", version = "0.0.1-alpha.19" }
+graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.20" }
+graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.20" }
+graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.20" }
+graphcal-io = { path = "crates/graphcal-io", version = "0.0.1-alpha.20" }
+graphcal-lsp = { path = "crates/graphcal-lsp", version = "0.0.1-alpha.20" }
+graphcal-package = { path = "crates/graphcal-package", version = "0.0.1-alpha.20" }
+graphcal-plugin-abi = { path = "crates/graphcal-plugin-abi", version = "0.0.1-alpha.20" }
+graphcal-plugin-host = { path = "crates/graphcal-plugin-host", version = "0.0.1-alpha.20" }
+graphcal-plugin-macros = { path = "crates/graphcal-plugin-macros", version = "0.0.1-alpha.20" }
+graphcal-tenax = { path = "crates/graphcal-tenax", version = "0.0.1-alpha.20" }
 hifitime = "4.2.4"
 indexmap = "2.13.0"
 insta = "1.46.3"
