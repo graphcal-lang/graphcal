@@ -424,6 +424,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("DAG call `{name}` is not allowed in a compile-time expression")]
+    #[diagnostic(
+        code(graphcal::G007),
+        help(
+            "a DAG call is an anonymous runtime include; call it from a `node`, `param` default, assertion, or visualization expression instead"
+        )
+    )]
+    DagCallInCompileTime {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("runtime DAG instantiation is not allowed here")]
+        span: SourceSpan,
+    },
+
     #[error("graph reference `@{name}` not allowed in const unit scale")]
     #[diagnostic(
         code(graphcal::D017),
@@ -1886,12 +1901,12 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("unknown param `{name}` in inline dag call to `{dag_name}`")]
+    #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
     #[diagnostic(
         code(graphcal::G003),
-        help("the binding name must match a `param` declared in the called dag")
+        help("the binding name must match a `param` declared in the called DAG")
     )]
-    UnknownInlineDagParam {
+    UnknownDagParam {
         name: String,
         dag_name: String,
         #[source_code]
@@ -1900,12 +1915,12 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("missing required binding(s) {missing:?} in inline dag call to `{dag_name}`")]
+    #[error("missing required binding(s) {missing:?} in DAG call to `{dag_name}`")]
     #[diagnostic(
         code(graphcal::G004),
-        help("every `param` declared in the dag must be bound at each inline call site")
+        help("every required `param` declared in the DAG must be bound at each call site")
     )]
-    MissingInlineDagBindings {
+    MissingDagBindings {
         missing: Vec<String>,
         dag_name: String,
         #[source_code]
@@ -1914,14 +1929,14 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("unknown output `{name}` in inline dag call to `{dag_name}`")]
+    #[error("unknown output `{name}` in DAG call to `{dag_name}`")]
     #[diagnostic(
         code(graphcal::G005),
         help(
-            "the projection after `).` must name a param input port or an explicitly exported node in the called dag"
+            "the projection after `).` must name a param input port or an explicitly exported node in the called DAG"
         )
     )]
-    UnknownInlineDagOutput {
+    UnknownDagOutput {
         name: String,
         dag_name: String,
         #[source_code]
@@ -1930,12 +1945,12 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("inline dag call binding `{param_name}`: expected {expected}, found {found}")]
+    #[error("DAG call binding `{param_name}`: expected {expected}, found {found}")]
     #[diagnostic(
         code(graphcal::G006),
-        help("the binding expression must have the same type as the dag's param declaration")
+        help("the binding expression must have the same type as the DAG's param declaration")
     )]
-    InlineDagArgDimensionMismatch {
+    DagArgTypeMismatch {
         param_name: String,
         expected: String,
         found: String,
@@ -2007,6 +2022,7 @@ impl GraphcalError {
             | Self::MissingHostFunction { src, .. }
             | Self::ExternCallNotAllowed { src, .. }
             | Self::GraphRefInConst { src, .. }
+            | Self::DagCallInCompileTime { src, .. }
             | Self::GraphRefInConstUnit { src, .. }
             | Self::NonConstUnitInConst { src, .. }
             | Self::WrongArity { src, .. }
@@ -2103,10 +2119,10 @@ impl GraphcalError {
             | Self::IncludeMustReconcileOverride { src, .. }
             | Self::GenericsLeakage { src, .. }
             | Self::UnknownDag { src, .. }
-            | Self::UnknownInlineDagParam { src, .. }
-            | Self::MissingInlineDagBindings { src, .. }
-            | Self::UnknownInlineDagOutput { src, .. }
-            | Self::InlineDagArgDimensionMismatch { src, .. } => src,
+            | Self::UnknownDagParam { src, .. }
+            | Self::MissingDagBindings { src, .. }
+            | Self::UnknownDagOutput { src, .. }
+            | Self::DagArgTypeMismatch { src, .. } => src,
         };
         Some(src)
     }

@@ -124,6 +124,7 @@ Note: `hir/types.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mut
 Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `tir/dim_check/helpers.rs`, `tir/typed/ops.rs`, `tir/typed.rs`, and `tir/dim_check/mod.rs` are mutually dependent. `decl/multi.rs` and `decl/mod.rs` are also mutually dependent and appear here because their actual imports depend on AST aggregate/re-export files that sort after the core checker files.
 
 - [ ] `crates/graphcal-compiler/src/ir/imported_binding.rs`
+- [ ] `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
 - [ ] `crates/graphcal-compiler/src/ir/lower.rs`
 - [ ] `crates/graphcal-compiler/src/tir/typed/model.rs`
 - [ ] `crates/graphcal-compiler/src/tir/typed/type_expr.rs`

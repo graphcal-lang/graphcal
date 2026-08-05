@@ -2282,7 +2282,7 @@ node y: Length = @scale(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::MissingInlineDagBindings { missing, .. } if missing == &vec!["factor".to_string()]),
+        matches!(&err, GraphcalError::MissingDagBindings { missing, .. } if missing == &vec!["factor".to_string()]),
         "got: {err:?}"
     );
 }
@@ -2318,7 +2318,7 @@ node y: Length = @id_len(v: @src).result;
 ";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::InlineDagArgDimensionMismatch { .. }),
+        matches!(err, GraphcalError::DagArgTypeMismatch { .. }),
         "got: {err:?}"
     );
 }

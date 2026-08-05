@@ -21,7 +21,7 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
     };
     check_plot_references(ctx, dag)?;
     for entry in &dag.plots {
-        let Some(body) = &entry.body else { continue };
+        let body = &entry.body;
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
         for field in &body.mark_properties {
             let Some(prop) = MarkProperty::from_name(field.name.as_str()) else {

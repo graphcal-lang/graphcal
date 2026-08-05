@@ -371,9 +371,9 @@ Bare and aliased includes create private configured instances. Leading
 `pub include` and `pub(bind) include` forms are parse errors; Graphcal does
 not expose a dependency-controlled output namespace wholesale.
 
-### Inline-DAG call expression
+### DAG call expression
 
-Inside an expression, `@dag(args).out` is sugar for an anonymous
+Inside an expression, `@dag(args).out` is sugar for an anonymous runtime
 `include ... as <synthetic>; @<synthetic>.out`. The projection must name an
 externally projectable value in the DAG: either an explicitly exported node or
 a param input port. Projecting a param reads its effective call binding or,
@@ -389,9 +389,11 @@ dag mission {
 }
 ```
 
-Each call site is a fresh instantiation, and the dag's `assert`
+Each call site is a fresh instantiation, and the DAG's `assert`
 declarations are checked per instantiation just like the `include`
-path. Because an expression has no reporting surface, a failing (or
+path. Calls are runtime graph instantiations regardless of whether the target
+is a file root or a source-nested `dag`, so they are rejected in `const node`
+bodies and domain bounds. Because an expression has no reporting surface, a failing (or
 erroring) assert fails the calling expression itself — the calling
 node reports an evaluation error such as ``assertion `v_positive`
 failed in inline call of dag `checked` (assertion evaluated to
@@ -877,12 +879,15 @@ pub node cost: Dimensionless = @phase_cost[Phase.Design];
 
 ### Include overrides must reconcile (`V005`)
 
-If an include overrides a bindable symbol `s` and some kept declaration
-in the merged IR still mentions a name nominally tied to `s` (e.g.,
-a variant literal of an overridden `index`, a field access of an
-overridden `type`), the importer must *also* re-bind that dependent
-declaration. Otherwise the orphan mention has no meaning in the merged
-graph — error `V005`:
+If an include overrides a bindable symbol `s` and some kept parameter
+default still performs an operation nominally tied to `s`, the importer must
+*also* re-bind that dependent parameter. These dependencies include index
+labels, field selection, constructor calls and match patterns, and nominal
+index/type generic arguments. They are compared by canonical semantic owner,
+not by field or constructor spelling: replacing a type with another type that
+happens to have the same `x` field or `Left` constructor still requires
+reconciliation. Otherwise the default would be silently reinterpreted under a
+different nominal contract — error `V005`:
 
 ```graphcal
 // lib.gcl
@@ -903,7 +908,9 @@ include lib(
 ```
 
 `dim` and `param` overrides never trigger V005: their substitution is
-total (algebraic / by value) and leaves no orphan nominal mentions.
+total (algebraic / by value) and leaves no orphan nominal mentions. The
+diagnostic points at the include that introduced the override; explicitly
+binding each reported dependent parameter reconciles it.
 
 ### Re-exports and generics leakage (`V006`)
 

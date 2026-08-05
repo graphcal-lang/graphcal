@@ -202,6 +202,9 @@ struct EvaluatedFile {
     /// expression references this file's params and cannot be re-evaluated in
     /// the importer's context. Empty when `runtime_available` is `false`.
     resolved_dynamic_unit_scales: HashMap<UnitRef, PositiveFiniteScale>,
+    /// Canonical nominal dependencies of producer parameter defaults, reusable
+    /// at configured include boundaries before body substitution.
+    override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,
     /// Compiled TIRs for this file-root DAG and every inline DAG it contains.
     ///
     /// Entries retain canonical `DagId` keys when cloned into downstream

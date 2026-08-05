@@ -152,6 +152,10 @@ pub struct ParamEntry {
     /// Source of the default expression, when present. An include binding is
     /// importer-owned even though the parameter signature is producer-owned.
     pub(crate) default_src: Option<BodySource>,
+    /// Include overrides whose nominal dependencies must be checked after
+    /// canonical type inference.
+    pub(crate) override_reconciliations:
+        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
 }
 
 /// A node declaration with type annotation and lowered body.
@@ -217,6 +221,9 @@ pub struct UnfrozenParamEntry {
     type_src: BodySource,
     /// Source of the default expression, when present.
     default_src: Option<BodySource>,
+    /// Include overrides awaiting canonical typed dependency checking.
+    override_reconciliations:
+        Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
 }
 
 /// A node declaration awaiting body lowering at [`UnfrozenIR::freeze`].
@@ -254,10 +261,8 @@ pub struct PlotEntry {
     pub name: ScopedName,
     /// Mark shape rendered for this plot.
     pub mark_type: crate::syntax::ast::MarkType,
-    /// Lowered body, or `None` when an expression failed to lower. Plots
-    /// are best-effort at evaluation time: an incomplete body is skipped by
-    /// the runtime instead of failing the compile.
-    pub body: Option<LoweredPlotBody>,
+    /// Strictly lowered semantic body.
+    pub body: LoweredPlotBody,
     /// Source of every expression in the plot body.
     pub(crate) body_src: BodySource,
     /// Whether this plot renders standalone when its file is the entry
@@ -323,8 +328,7 @@ pub struct FigureEntry {
     pub name: ScopedName,
     /// Plots composed by this figure, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
-    /// Lowered field expressions; fields that failed to lower are omitted
-    /// (best-effort, matching plots).
+    /// Strictly lowered field expressions.
     pub fields: Vec<LoweredPlotField>,
     /// Source of every field expression.
     pub(crate) body_src: BodySource,
@@ -336,8 +340,7 @@ pub struct LayerEntry {
     pub name: ScopedName,
     /// Plots composed by this layer, in source order.
     pub plot_names: Vec<Spanned<ScopedName>>,
-    /// Lowered field expressions; fields that failed to lower are omitted
-    /// (best-effort, matching plots).
+    /// Strictly lowered field expressions.
     pub fields: Vec<LoweredPlotField>,
     /// Source of every field expression.
     pub(crate) body_src: BodySource,
@@ -863,6 +866,7 @@ fn build_ir_from_resolved(
                 span: entry.span,
                 type_src: BodySource::own(),
                 default_src,
+                override_reconciliations: Vec::new(),
             })
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1189,6 +1193,7 @@ impl UnfrozenIR {
                     span: entry.span,
                     type_src: entry.type_src.clone(),
                     default_src: entry.default_src.clone(),
+                    override_reconciliations: entry.override_reconciliations.clone(),
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
@@ -1242,76 +1247,67 @@ impl UnfrozenIR {
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
 
-        // Plots and figure/layer fields are best-effort at evaluation time:
-        // an expression that fails to lower leaves the body incomplete (the
-        // runtime skips it) instead of failing the compile.
-        let lower_optional = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
-            let expr_ctx = crate::hir::ExprLoweringContext::new(
-                resolution_owner,
-                resolver,
-                &generic_scope,
-                &registry.time_zones,
-            )
-            .with_prelude(&prelude)
-            .with_unit_registry(&registry.units)
-            .with_decl_bindings(&decl_bindings);
-            crate::hir::lower_expr(expr, expr_ctx).ok()
-        };
+        // Sink expressions are semantic program bodies, not optional rendering
+        // hints. Batch compilation lowers every one strictly; tolerant HIR is
+        // reserved for editor-facing incomplete buffers.
         cancellation.checkpoint()?;
         let plots = self
             .plots
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let mut body = LoweredPlotBody::default();
-                let mut complete = true;
-                for encoding in &entry.decl.encodings {
-                    match lower_optional(&encoding.value, &entry.body_resolution_owner) {
-                        Some(lowered) => body.encodings.push((encoding.channel, lowered)),
-                        None => complete = false,
-                    }
-                }
-                for field in &entry.decl.mark.properties {
-                    match lower_optional(&field.value, &entry.body_resolution_owner) {
-                        Some(lowered) => body.mark_properties.push(LoweredPlotField {
-                            name: field.name.value.clone(),
-                            name_span: field.name.span,
-                            value: lowered,
-                        }),
-                        None => complete = false,
-                    }
-                }
-                for field in &entry.decl.properties {
-                    match lower_optional(&field.value, &entry.body_resolution_owner) {
-                        Some(lowered) => body.properties.push(LoweredPlotField {
-                            name: field.name.value.clone(),
-                            name_span: field.name.span,
-                            value: lowered,
-                        }),
-                        None => complete = false,
-                    }
-                }
+                let body_src = entry.body_src.resolve(src);
+                let encodings = entry
+                    .decl
+                    .encodings
+                    .iter()
+                    .map(|encoding| {
+                        lower_in(&encoding.value, &entry.body_resolution_owner, body_src)
+                            .map(|lowered| (encoding.channel, lowered))
+                    })
+                    .collect::<Result<Vec<_>, GraphcalError>>()?;
+                let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField]| {
+                    fields
+                        .iter()
+                        .map(|field| {
+                            Ok(LoweredPlotField {
+                                name: field.name.value.clone(),
+                                name_span: field.name.span,
+                                value: lower_in(
+                                    &field.value,
+                                    &entry.body_resolution_owner,
+                                    body_src,
+                                )?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, GraphcalError>>()
+                };
                 Ok(PlotEntry {
                     name: entry.name.clone(),
                     mark_type: entry.decl.mark.mark_type,
-                    body: complete.then_some(body),
+                    body: LoweredPlotBody {
+                        encodings,
+                        mark_properties: lower_fields(&entry.decl.mark.properties)?,
+                        properties: lower_fields(&entry.decl.properties)?,
+                    },
                     body_src: entry.body_src.clone(),
                     displayed: entry.displayed,
                 })
             })
             .collect::<Result<Vec<_>, GraphcalError>>()?;
         let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
-                            resolution_owner: &crate::dag_id::DagId| {
+                            resolution_owner: &crate::dag_id::DagId,
+                            body_src: &NamedSource<Arc<String>>| {
             fields
                 .iter()
-                .filter_map(|field| {
-                    Some(LoweredPlotField {
+                .map(|field| {
+                    Ok(LoweredPlotField {
                         name: field.name.value.clone(),
                         name_span: field.name.span,
-                        value: lower_optional(&field.value, resolution_owner)?,
+                        value: lower_in(&field.value, resolution_owner, body_src)?,
                     })
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, GraphcalError>>()
         };
         cancellation.checkpoint()?;
         let figures = self
@@ -1322,7 +1318,11 @@ impl UnfrozenIR {
                 Ok(FigureEntry {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    fields: lower_fields(
+                        &entry.decl.fields,
+                        &entry.body_resolution_owner,
+                        entry.body_src.resolve(src),
+                    )?,
                     body_src: entry.body_src.clone(),
                 })
             })
@@ -1336,7 +1336,11 @@ impl UnfrozenIR {
                 Ok(LayerEntry {
                     name: entry.name.clone(),
                     plot_names: entry.decl.plot_names.clone(),
-                    fields: lower_fields(&entry.decl.fields, &entry.body_resolution_owner),
+                    fields: lower_fields(
+                        &entry.decl.fields,
+                        &entry.body_resolution_owner,
+                        entry.body_src.resolve(src),
+                    )?,
                     body_src: entry.body_src.clone(),
                 })
             })
@@ -1460,46 +1464,58 @@ impl UnfrozenIR {
         self.source_order.push((name, DeclCategory::Node));
     }
 
-    /// Scan param defaults for variant literals of overridden `pub(bind)`
-    /// indexes (and nominally-tied names of overridden types) whose owning
-    /// `param` is not itself re-bound — axiom A8 / diagnostic V005.
+    /// Record include-site nominal override obligations before substitution.
     ///
-    /// Per axiom §1, only `index` and `type` overrides have nominal
-    /// substructure; `dim` and `param` overrides substitute totally and
-    /// never trigger A8.
-    ///
-    /// Other non-bindable declaration kinds (`node`, `const`) are
-    /// guarded at library compile time by V004 (A10c), so their bodies
-    /// cannot mention overridden-symbol nominals once a library is
-    /// accepted. Sink-kind declarations (`assert`, `plot`, `figure`,
-    /// `layer`) pick up the A10(b) private-only carve-out; this check
-    /// stays focused on `param` for that reason.
-    pub fn check_include_reconciles_overrides(
-        &self,
+    /// Field and generic-argument ownership is checked later from canonical
+    /// inferred HIR. Explicit index labels and constructors need a narrow
+    /// registry-backed preflight because substitution can make HIR lowering
+    /// reject them before TIR exists.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the include boundary supplies bindings, canonical owners, registry, and source provenance"
+    )]
+    pub fn record_include_override_reconciliations(
+        &mut self,
         bindings: &HashMap<DeclName, Expr>,
         index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
+        dependency_registry: &Registry,
+        dependency_owner: &crate::dag_id::DagId,
+        importer_owner: &crate::dag_id::DagId,
         importer_src: &NamedSource<Arc<String>>,
         include_span: Span,
     ) -> Result<(), GraphcalError> {
         if index_bindings.is_empty() && type_bindings.is_empty() {
             return Ok(());
         }
-        for param in &self.params {
+        for param in &mut self.params {
             if bindings.contains_key(param.name.member()) {
+                param.override_reconciliations.clear();
                 continue;
             }
             let Some(default_expr) = &param.default_expr else {
                 continue;
             };
-            let mut checker = OverrideReconciliationChecker {
+            NominalOverridePreflight {
                 index_bindings,
                 type_bindings,
-                orphan_decl: param.name.member().as_str(),
+                type_registry: &dependency_registry.types,
+                orphan_decl: param.name.member(),
                 importer_src,
                 include_span,
-            };
-            checker.visit_expr(default_expr)?;
+            }
+            .visit_expr(default_expr)?;
+            param.override_reconciliations.push(
+                crate::ir::override_reconciliation::PendingOverrideReconciliation::new(
+                    param.name.member().clone(),
+                    dependency_owner,
+                    importer_owner,
+                    index_bindings,
+                    type_bindings,
+                    importer_src.clone(),
+                    include_span,
+                ),
+            );
         }
         Ok(())
     }
@@ -1639,31 +1655,36 @@ impl UnfrozenIR {
             self.source_order.push((prefixed, DeclCategory::Const));
         }
 
-        // Merge params — replace defaults with bindings where provided
+        // Merge params — replace defaults with bindings where provided.
+        // Unrebound defaults carry the typed obligations recorded before
+        // substitution until inference observes their canonical owners.
         for mut entry in dep.params {
             let prefixed = entry.name.within_scope(prefix);
-            let default_resolution_owner =
-                if let Some(binding_expr) = bindings.get(entry.name.member()) {
-                    // The binding expression and its spans belong to the immediate
-                    // importer, independently of the producer-owned signature.
-                    entry.default_expr = Some(binding_expr.clone());
-                    entry.default_src = Some(BodySource::own());
-                    importer_owner.clone()
-                } else if let Some(ref mut expr) = entry.default_expr {
-                    // Keep the producer default, substitute its type-level names,
-                    // and carry its existing source across this merge boundary.
-                    substitute_indexes(expr, index_bindings);
-                    substitute_type_names_in_expr(expr, type_bindings);
-                    prefix_expr_refs(expr, prefix, dep_names, dep_scoped_names);
-                    entry.default_src = entry
-                        .default_src
-                        .map(|source| source.or_dependency(dep_src));
-                    merge_resolution_owner(entry.default_resolution_owner)
-                } else {
-                    // Required param without binding — stays None, caught later in exec_plan.
-                    entry.default_src = None;
-                    merge_resolution_owner(entry.default_resolution_owner)
-                };
+            let rebound = bindings.get(entry.name.member());
+            if rebound.is_some() {
+                entry.override_reconciliations.clear();
+            }
+            let default_resolution_owner = if let Some(binding_expr) = rebound {
+                // The binding expression and its spans belong to the immediate
+                // importer, independently of the producer-owned signature.
+                entry.default_expr = Some(binding_expr.clone());
+                entry.default_src = Some(BodySource::own());
+                importer_owner.clone()
+            } else if let Some(ref mut expr) = entry.default_expr {
+                // Keep the producer default, substitute its type-level names,
+                // and carry its existing source across this merge boundary.
+                substitute_indexes(expr, index_bindings);
+                substitute_type_names_in_expr(expr, type_bindings);
+                prefix_expr_refs(expr, prefix, dep_names, dep_scoped_names);
+                entry.default_src = entry
+                    .default_src
+                    .map(|source| source.or_dependency(dep_src));
+                merge_resolution_owner(entry.default_resolution_owner)
+            } else {
+                // Required param without binding — stays None, caught later in exec_plan.
+                entry.default_src = None;
+                merge_resolution_owner(entry.default_resolution_owner)
+            };
             substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
@@ -1676,6 +1697,7 @@ impl UnfrozenIR {
                 span: entry.span,
                 type_src: entry.type_src.or_dependency(dep_src),
                 default_src: entry.default_src,
+                override_reconciliations: entry.override_reconciliations,
             });
             self.source_order.push((prefixed, DeclCategory::Param));
         }
@@ -1871,129 +1893,59 @@ impl UnfrozenIR {
     }
 }
 
-/// Visitor that detects V005 / A8 violations in a param default expression.
+/// Narrow pre-HIR guard for nominal syntax resolved by the producer registry.
 ///
-/// Emits [`GraphcalError::IncludeMustReconcileOverride`] on the first
-/// occurrence of a variant literal `s.v` where `s` is in
-/// `index_bindings`, or of a constructor / as-cast / generic type
-/// argument whose type name is in `type_bindings`. The spans reported
-/// point at the importer's include statement — the error blames the
-/// importer for omitting the required re-binding.
-struct OverrideReconciliationChecker<'a> {
+/// HIR lowering validates explicit labels and constructor patterns against the
+/// substituted registry. An incompatible replacement could therefore fail
+/// before TIR ownership is available. Field and generic-argument dependencies
+/// remain deferred to canonical inference.
+struct NominalOverridePreflight<'a> {
     index_bindings: &'a HashMap<IndexName, types::IndexBindingTarget>,
     type_bindings: &'a HashMap<StructTypeName, StructTypeName>,
-    orphan_decl: &'a str,
+    type_registry: &'a crate::registry::types::TypeRegistry,
+    orphan_decl: &'a DeclName,
     importer_src: &'a NamedSource<Arc<String>>,
     include_span: Span,
 }
 
-impl OverrideReconciliationChecker<'_> {
-    fn orphan_error(
-        &self,
-        overridden_kind: &str,
-        overridden: &str,
-        detail: String,
-    ) -> GraphcalError {
-        GraphcalError::IncludeMustReconcileOverride {
-            overridden: overridden.to_string(),
-            overridden_kind: overridden_kind.to_string(),
+impl NominalOverridePreflight<'_> {
+    fn check_label(&self, index: &IndexName, detail: String) -> Result<(), GraphcalError> {
+        if !self.index_bindings.contains_key(index) {
+            return Ok(());
+        }
+        Err(GraphcalError::IncludeMustReconcileOverride {
+            overridden: index.to_string(),
+            overridden_kind: "index".to_string(),
             orphan_decl: self.orphan_decl.to_string(),
             detail,
             src: self.importer_src.clone(),
             span: self.include_span.into(),
-        }
+        })
     }
 
-    fn check_type_expr(&self, type_expr: &TypeExpr) -> Result<(), GraphcalError> {
-        use crate::desugar::desugared_ast::TypeExprKind;
-        match &type_expr.kind {
-            TypeExprKind::DimExpr(dim_expr) => {
-                for item in &dim_expr.terms {
-                    let name = &item.term.name.value;
-                    if let Some(atom) = name.as_bare()
-                        && self.type_bindings.contains_key(atom.as_str())
-                    {
-                        return Err(self.orphan_error(
-                            "type",
-                            atom.as_str(),
-                            format!("type `{name}`"),
-                        ));
-                    }
-                }
-                Ok(())
-            }
-            TypeExprKind::TypeApplication { name, generic_args } => {
-                if let Some(atom) = name.value.as_bare()
-                    && self.type_bindings.contains_key(atom.as_str())
-                {
-                    return Err(self.orphan_error(
-                        "type",
-                        atom.as_str(),
-                        format!("type `{}`", name.value),
-                    ));
-                }
-                for arg in generic_args {
-                    match arg {
-                        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
-                            self.check_type_expr(type_expr)?;
-                        }
-                        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
-                            for ident in ambiguous_generic_arg_idents(ambiguous) {
-                                if self.type_bindings.contains_key(ident.name.as_str()) {
-                                    return Err(self.orphan_error(
-                                        "type",
-                                        ident.name.as_str(),
-                                        format!("generic argument `{ambiguous}`"),
-                                    ));
-                                }
-                            }
-                        }
-                        crate::desugar::desugared_ast::GenericArg::Index(_)
-                        | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
-                    }
-                }
-                Ok(())
-            }
-            TypeExprKind::ComplexApplication { generic_args }
-            | TypeExprKind::KeyApplication { generic_args } => {
-                for arg in generic_args {
-                    match arg {
-                        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
-                            self.check_type_expr(type_expr)?;
-                        }
-                        crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
-                            for ident in ambiguous_generic_arg_idents(ambiguous) {
-                                if self.type_bindings.contains_key(ident.name.as_str()) {
-                                    return Err(self.orphan_error(
-                                        "type",
-                                        ident.name.as_str(),
-                                        format!("generic argument `{ambiguous}`"),
-                                    ));
-                                }
-                            }
-                        }
-                        crate::desugar::desugared_ast::GenericArg::Index(_)
-                        | crate::desugar::desugared_ast::GenericArg::Nat(_) => {}
-                    }
-                }
-                Ok(())
-            }
-            TypeExprKind::DatetimeApplication { type_args } => {
-                for arg in type_args {
-                    self.check_type_expr(arg)?;
-                }
-                Ok(())
-            }
-            TypeExprKind::Indexed { base, .. } => self.check_type_expr(base),
-            TypeExprKind::Dimensionless
-            | TypeExprKind::Bool
-            | TypeExprKind::Int
-            | TypeExprKind::Datetime => Ok(()),
+    fn check_constructor(
+        &self,
+        constructor: &ConstructorName,
+        detail: String,
+    ) -> Result<(), GraphcalError> {
+        let Some((owning_type, _)) = self.type_registry.lookup_ctor(constructor) else {
+            return Ok(());
+        };
+        if !self.type_bindings.contains_key(&owning_type.name) {
+            return Ok(());
         }
+        Err(GraphcalError::IncludeMustReconcileOverride {
+            overridden: owning_type.name.to_string(),
+            overridden_kind: "type".to_string(),
+            orphan_decl: self.orphan_decl.to_string(),
+            detail,
+            src: self.importer_src.clone(),
+            span: self.include_span.into(),
+        })
     }
 }
 
-impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChecker<'_> {
+impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'_> {
     type Error = GraphcalError;
 
     fn visit_unresolved_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
@@ -2001,23 +1953,13 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
         else {
             return Ok(());
         };
-        // A two-segment path whose head names a rebound index is a variant
-        // literal of that index.
-        if let [head, variant] = path.segments()
-            && self.index_bindings.contains_key(head.name.as_str())
-        {
-            return Err(self.orphan_error(
-                "index",
-                head.name.as_str(),
-                format!("`{}.{}`", head.name, variant.name),
-            ));
+        if let [head, variant] = path.segments() {
+            let index = IndexName::from_atom(head.name.clone());
+            self.check_label(&index, format!("`{}.{}`", head.name, variant.name))?;
         }
-        // A bare path naming a rebound type is a nullary constructor use.
-        if let Some(ident) = path.as_bare()
-            && self.type_bindings.contains_key(ident.name.as_str())
-        {
-            let n = ident.name.as_str();
-            return Err(self.orphan_error("type", n, format!("constructor `{n}`")));
+        if let Some(name) = path.as_bare() {
+            let constructor = ConstructorName::from_atom(name.name.clone());
+            self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
         }
         Ok(())
     }
@@ -2025,16 +1967,9 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
     fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
         if let ExprKind::IndexAccess { args, .. } = &expr.kind {
             for arg in args {
-                if let crate::desugar::desugared_ast::IndexArg::Variant { index, variant } = arg
-                    && self
-                        .index_bindings
-                        .contains_key(index.value.leaf().as_str())
-                {
-                    return Err(self.orphan_error(
-                        "index",
-                        index.value.leaf().as_str(),
-                        format!("`{}.{}`", index.value, variant.value),
-                    ));
+                if let crate::desugar::desugared_ast::IndexArg::Variant { index, variant } = arg {
+                    let name = IndexName::from_atom(index.value.leaf().clone());
+                    self.check_label(&name, format!("`{}.{}`", index.value, variant.value))?;
                 }
             }
         }
@@ -2047,15 +1982,11 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
         entries: &[crate::desugar::desugared_ast::MapEntry],
     ) -> Result<(), Self::Error> {
         for entry in entries {
-            let key = entry.keys.first();
-            if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value
-                && self.index_bindings.contains_key(index_name.leaf().as_str())
-            {
-                return Err(self.orphan_error(
-                    "index",
-                    index_name.leaf().as_str(),
-                    format!("`{}.{}`", index_name, key.variant.value),
-                ));
+            for key in &entry.keys {
+                if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value {
+                    let index = IndexName::from_atom(index_name.leaf().clone());
+                    self.check_label(&index, format!("`{}.{}`", index_name, key.variant.value))?;
+                }
             }
             self.visit_expr(&entry.value)?;
         }
@@ -2073,28 +2004,29 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
             match &arm.pattern {
                 crate::desugar::desugared_ast::MatchPattern::IndexLabel {
                     index, variant, ..
-                } if self
-                    .index_bindings
-                    .contains_key(index.value.leaf().as_str()) =>
-                {
-                    return Err(self.orphan_error(
-                        "index",
-                        index.value.leaf().as_str(),
-                        format!("`{}.{}`", index.value, variant.value),
-                    ));
+                } => {
+                    let name = IndexName::from_atom(index.value.leaf().clone());
+                    self.check_label(&name, format!("`{}.{}`", index.value, variant.value))?;
                 }
                 crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
-                    if let [head, variant] = path.segments()
-                        && self.index_bindings.contains_key(head.name.as_str())
-                    {
-                        return Err(self.orphan_error(
-                            "index",
-                            head.name.as_str(),
-                            format!("`{}.{}`", head.name, variant.name),
-                        ));
+                    if let [head, variant] = path.segments() {
+                        let name = IndexName::from_atom(head.name.clone());
+                        self.check_label(&name, format!("`{}.{}`", head.name, variant.name))?;
+                    }
+                    if let Some(name) = path.as_bare() {
+                        let constructor = ConstructorName::from_atom(name.name.clone());
+                        self.check_constructor(
+                            &constructor,
+                            format!("match constructor `{constructor}`"),
+                        )?;
                     }
                 }
-                _ => {}
+                crate::desugar::desugared_ast::MatchPattern::Constructor { name, .. } => {
+                    self.check_constructor(
+                        &name.value,
+                        format!("match constructor `{}`", name.value),
+                    )?;
+                }
             }
             self.visit_expr(&arm.body)?;
         }
@@ -2106,42 +2038,15 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for OverrideReconciliationChec
         expr: &Expr,
         fields: &[crate::desugar::desugared_ast::FieldInit],
     ) -> Result<(), Self::Error> {
-        if let ExprKind::ConstructorCall {
-            callee,
-            generic_args,
-            ..
-        } = &expr.kind
+        if let ExprKind::ConstructorCall { callee, .. } = &expr.kind
+            && let Some(name) = callee.as_bare()
         {
-            if let Some(constructor) = callee.as_bare() {
-                let n = constructor.name.as_str();
-                if self.type_bindings.contains_key(n) {
-                    return Err(self.orphan_error("type", n, format!("constructor `{n}(...)`")));
-                }
-            }
-            for arg in generic_args {
-                if let crate::desugar::desugared_ast::GenericArg::Type(ty) = arg {
-                    self.check_type_expr(ty)?;
-                }
-            }
+            let constructor = ConstructorName::from_atom(name.name.clone());
+            self.check_constructor(&constructor, format!("constructor `{constructor}(...)`"))?;
         }
-        for f in fields {
-            self.visit_expr(&f.value)?;
-        }
-        Ok(())
-    }
-
-    fn visit_fn_call(&mut self, expr: &Expr, args: &[Expr]) -> Result<(), Self::Error> {
-        if let ExprKind::FnCall { generic_args, .. } = &expr.kind {
-            for ga in generic_args {
-                if let crate::desugar::desugared_ast::GenericArg::Type(ty) = ga {
-                    self.check_type_expr(ty)?;
-                }
-            }
-        }
-        for arg in args {
-            self.visit_expr(arg)?;
-        }
-        Ok(())
+        fields
+            .iter()
+            .try_for_each(|field| self.visit_expr(&field.value))
     }
 }
 
@@ -2426,30 +2331,6 @@ fn substitute_indexes(expr: &mut Expr, bindings: &HashMap<IndexName, types::Inde
     let _ = sub.visit_expr_mut(expr);
 }
 
-fn ambiguous_generic_arg_idents(
-    arg: &crate::desugar::desugared_ast::AmbiguousGenericArg,
-) -> Vec<&crate::syntax::ast::Ident> {
-    fn collect<'a>(
-        arg: &'a crate::desugar::desugared_ast::AmbiguousGenericArg,
-        idents: &mut Vec<&'a crate::syntax::ast::Ident>,
-    ) {
-        match arg {
-            crate::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
-                idents.push(ident);
-            }
-            crate::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
-                for operand in operands {
-                    collect(operand, idents);
-                }
-            }
-        }
-    }
-
-    let mut idents = Vec::new();
-    collect(arg, &mut idents);
-    idents
-}
-
 fn rewrite_ambiguous_generic_arg_names<K>(
     arg: &mut crate::desugar::desugared_ast::AmbiguousGenericArg,
     bindings: &HashMap<K, K>,
@@ -2719,7 +2600,7 @@ fn substitute_type_names_in_expr(
     expr: &mut Expr,
     bindings: &HashMap<StructTypeName, StructTypeName>,
 ) {
-    use crate::desugar::desugared_ast::{GenericArg, IndexArg};
+    use crate::desugar::desugared_ast::IndexArg;
 
     if bindings.is_empty() {
         return;
@@ -2761,9 +2642,7 @@ fn substitute_type_names_in_expr(
                 constructor.name = parsed_name;
             }
             for arg in generic_args.iter_mut() {
-                if let GenericArg::Type(ty) = arg {
-                    substitute_type_expr_nominal_names(ty, bindings);
-                }
+                substitute_generic_arg_nominal_names(arg, bindings);
             }
             for field in fields {
                 substitute_type_names_in_expr(&mut field.value, bindings);
@@ -2773,10 +2652,8 @@ fn substitute_type_names_in_expr(
         ExprKind::FnCall {
             generic_args, args, ..
         } => {
-            for ga in generic_args.iter_mut() {
-                if let GenericArg::Type(ty) = ga {
-                    substitute_type_expr_nominal_names(ty, bindings);
-                }
+            for arg in generic_args.iter_mut() {
+                substitute_generic_arg_nominal_names(arg, bindings);
             }
             for arg in args {
                 substitute_type_names_in_expr(arg, bindings);

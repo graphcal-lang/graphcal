@@ -149,10 +149,10 @@ Across a module boundary, the DAG declaration must be `pub`, and every
 selected or alias-accessed output must be public. Private nodes inside the
 DAG are available only to the DAG body itself.
 
-## Inline DAG Invocation (Expression Form)
+## DAG Calls (Expression Form)
 
-Inside an expression, `@dag(args).out` is sugar for an anonymous
-include — each call site is a fresh instantiation. Arguments are evaluated
+Inside an expression, `@dag(args).out` is sugar for an anonymous runtime
+`include`—each call site is a fresh instantiation. Arguments are evaluated
 in the surrounding expression scope, so they may reference loop variables:
 
 ```
@@ -171,12 +171,16 @@ node distances: Length[Region] = for r: Region {
 ```
 
 The thing immediately after `@` may be a local DAG, an imported module alias,
-or a child reached through either one. File-root and inline-DAG modules use the
-same forms: `@module(args).out` invokes the imported target itself, while
-`@module.dag(args).out` invokes its child. The projection remains mandatory; an
-unprojected DAG instance is not a graph value. The projection may name an
-explicitly exported node or a param input port. A param projection returns its
-effective bound/default value.
+or a child reached through either one. File-root and source-nested `dag` modules
+use the same compiled representation and call forms: `@module(args).out`
+invokes the imported target itself, while `@module.dag(args).out` invokes its
+child. The projection remains mandatory; an unprojected DAG instance is not a
+graph value. The projection may name an explicitly exported node or a param
+input port. A param projection returns its effective bound/default value.
+
+Because a call instantiates a runtime DAG, it is not available in `const node`
+bodies or domain bounds. Put the call in a runtime declaration and reference
+that declaration where runtime values are allowed.
 
 ## Import vs Include
 

@@ -747,7 +747,7 @@ impl<'a> HirRefCollector<'a> {
                     self.walk(&arm.body, table);
                 }
             }
-            hir::ExprKind::InlineDagRef {
+            hir::ExprKind::DagCall {
                 target,
                 args,
                 output,
