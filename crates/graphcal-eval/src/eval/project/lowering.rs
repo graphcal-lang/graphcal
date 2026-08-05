@@ -1410,15 +1410,16 @@ fn seed_imported_type_system(
     for (dep_dag_id, names) in imported_type_system_names {
         let dep_loaded = &project.files[dep_dag_id];
         let source_registered_names = if evaluated_files.contains_key(dep_dag_id) {
-            names.without_dimensions()
+            names.without_resolved_dimensions_and_units()
         } else {
             names.clone()
         };
         if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
-            register_selected_resolved_dimensions(
+            register_selected_resolved_dimensions_and_units(
                 builder,
                 &dep_eval.registry,
                 names,
+                &dep_eval.resolved_dynamic_unit_scales,
                 &dep_loaded.named_source,
             )?;
         }
@@ -1429,17 +1430,6 @@ fn seed_imported_type_system(
             &source_registered_names,
             dep_dag_id,
         )?;
-        // A selectively imported dynamic unit re-lowered from the dep's AST
-        // carries a scale expression that references the dep's own params
-        // and cannot be evaluated in this file's context. Substitute the
-        // concrete scale from the dep's evaluation when available.
-        if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
-            replace_dynamic_units_with_resolved_scales(
-                builder,
-                names,
-                &dep_eval.resolved_dynamic_unit_scales,
-            );
-        }
     }
     for import in extra_registry_builders {
         merge_registry_into_builder_export_filtered(builder, import).map_err(|conflict| {
@@ -1453,30 +1443,28 @@ fn seed_imported_type_system(
     Ok(())
 }
 
-/// Import selected dimensions from the dependency's resolved registry.
+/// Import selected dimensions and units from the dependency's resolved registry.
 ///
-/// Re-registering only the selected declaration's source AST loses sibling
-/// dimensions used by its definition (`Weighted = Base * Mass`). A dimension
-/// is already a closed semantic value after the dependency compiles, so copy
-/// that value and only the base-dimension metadata needed to interpret it.
-fn register_selected_resolved_dimensions(
+/// Re-registering only a selected declaration's source AST loses sibling
+/// dimensions used by a dimension definition (`Weighted = Base * Mass`) or by
+/// a unit annotation (`point: Score`). Both declarations are closed semantic
+/// values after the dependency compiles, so copy them together with the base
+/// dimension metadata needed to preserve canonical identities and formatting.
+fn register_selected_resolved_dimensions_and_units(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     selected: &graphcal_compiler::ir::lower::SelectedDeclarations,
+    resolved_unit_scales: &HashMap<
+        graphcal_compiler::syntax::dimension::UnitRef,
+        graphcal_compiler::registry::types::PositiveFiniteScale,
+    >,
     dep_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for name in selected.dimensions() {
-        let dimension = dep_registry
-            .dimensions
-            .get_dimension(name.as_str())
-            .cloned()
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "resolved dependency registry is missing selected dimension `{name}`"
-                ),
-                src: dep_src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+    fn register_base_dimension_metadata(
+        builder: &mut RegistryBuilder,
+        dep_registry: &Registry,
+        dimension: &graphcal_compiler::dimension::Dimension,
+    ) {
         for (base_id, _) in dimension.iter() {
             if let Some(base_name) = dep_registry.dimensions.base_dim_names().get(base_id) {
                 // Multiple package instances may use the same display leaf for
@@ -1491,42 +1479,47 @@ fn register_selected_resolved_dimensions(
                 builder.set_base_dim_symbol(base_id.clone(), symbol.clone());
             }
         }
+    }
+
+    for name in selected.dimensions() {
+        let dimension = dep_registry
+            .dimensions
+            .get_dimension(name.as_str())
+            .cloned()
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "resolved dependency registry is missing selected dimension `{name}`"
+                ),
+                src: dep_src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        register_base_dimension_metadata(builder, dep_registry, &dimension);
         builder.register_dimension(name.clone(), dimension);
     }
-    Ok(())
-}
 
-/// Overwrite selectively imported dynamic units with their dep-resolved
-/// static scales. Units without a resolved scale keep the dynamic form and
-/// surface the existing loud could-not-be-resolved error if actually used.
-fn replace_dynamic_units_with_resolved_scales(
-    builder: &mut RegistryBuilder,
-    names: &graphcal_compiler::ir::lower::SelectedDeclarations,
-    resolved_scales: &HashMap<
-        graphcal_compiler::syntax::dimension::UnitRef,
-        graphcal_compiler::registry::types::PositiveFiniteScale,
-    >,
-) {
-    use graphcal_compiler::registry::types::UnitScale;
-    for name in names.units() {
-        let unit_ref = graphcal_compiler::syntax::dimension::UnitRef::local(name.clone());
-        let Some(resolved) = resolved_scales.get(&unit_ref) else {
-            continue;
+    for name in selected.units() {
+        use graphcal_compiler::registry::types::UnitScale;
+        use graphcal_compiler::syntax::dimension::UnitRef;
+
+        let unit_ref = UnitRef::local(name.clone());
+        let info = dep_registry
+            .units
+            .get_unit(&unit_ref)
+            .cloned()
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("resolved dependency registry is missing selected unit `{name}`"),
+                src: dep_src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        register_base_dimension_metadata(builder, dep_registry, &info.dimension);
+        let scale = match (&info.scale, resolved_unit_scales.get(&unit_ref)) {
+            (UnitScale::Dynamic { .. }, Some(resolved)) => UnitScale::Static(*resolved),
+            _ => info.scale,
         };
-        let Some(info) = builder.get_unit(&unit_ref) else {
-            continue;
-        };
-        if matches!(info.scale, UnitScale::Dynamic { .. }) {
-            let dim = info.dimension.clone();
-            let constness = info.constness;
-            builder.register_unit_with_scale(
-                unit_ref,
-                dim,
-                UnitScale::Static(*resolved),
-                constness,
-            );
-        }
+        builder.register_unit_with_scale(unit_ref, info.dimension, scale, info.constness);
     }
+
+    Ok(())
 }
 
 /// Merge type-system declarations from a dependency's frozen registry into a
@@ -1573,14 +1566,12 @@ fn merge_registry_into_builder_filtered(
         >,
     )>,
 ) -> Result<(), UnitMergeConflict> {
-    // Import base dimension names (for display formatting).
+    // Import base-dimension metadata for display formatting and registry
+    // invariants. This includes private transitive dependencies of exported
+    // dimensions and units; module resolution still prevents those names from
+    // becoming source-visible in the importer.
     for (id, name) in dep_registry.dimensions.base_dim_names() {
         if dim_bindings.contains_key(name.as_str()) {
-            continue;
-        }
-        if external_surface.is_some_and(|surface| {
-            !surface.is_explicit_export(&DeclName::expect_valid(name.as_str()))
-        }) {
             continue;
         }
         builder.register_base_dimension(

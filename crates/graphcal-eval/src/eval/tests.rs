@@ -2795,6 +2795,37 @@ fn write_custom_unit_constrained_record_type_project(
     (dir, root)
 }
 
+fn write_imported_unit_dependency_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root_dir = dir.path().join("src/unit_dependencies");
+    std::fs::create_dir_all(&root_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"unit_dependencies\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("foundation.gcl"),
+        "pub base dim Score;\n\
+         pub base unit point: Score;\n\
+         pub type Measurement { Measurement(value: Score) }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root_dir.join("rates.gcl"),
+        "import unit_dependencies.foundation as foundation;\n\
+         pub dim ScoreRate = foundation.Score / Time;\n\
+         pub const unit point_per_second: ScoreRate = 1.0 foundation.point / s;\n\
+         pub type RateMeasurement { RateMeasurement(value: ScoreRate) }\n",
+    )
+    .unwrap();
+    let root = root_dir.join("main.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
 fn loaded_file_dag_id(
     project: &crate::loader::LoadedProject,
     file_name: &str,
@@ -2917,6 +2948,55 @@ fn selectively_imported_record_retains_transitive_definition_site_field_types() 
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn selectively_imported_base_unit_retains_custom_dimension_dependency() {
+    let (_dir, root) = write_imported_unit_dependency_project(
+        "import unit_dependencies.foundation.{type Measurement, unit point};\n\
+         param measurement: Measurement;\n\
+         assert nonnegative = @measurement.value >= 0.0 point;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn selectively_imported_derived_unit_retains_aliased_dependencies() {
+    let (_dir, root) = write_imported_unit_dependency_project(
+        "import unit_dependencies.rates.{type RateMeasurement, unit point_per_second};\n\
+         param rate: RateMeasurement;\n\
+         assert nonnegative = @rate.value >= 0.0 point_per_second;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn module_imported_unit_retains_custom_dimension_dependency() {
+    let (_dir, root) = write_imported_unit_dependency_project(
+        "import unit_dependencies.rates as rates;\n\
+         param rate: rates.RateMeasurement;\n\
+         assert nonnegative = @rate.value >= 0.0 rates.point_per_second;\n",
+    );
+
+    compile_to_tir_project(&root, None, &fs()).unwrap();
+}
+
+#[test]
+fn selectively_imported_unit_does_not_expose_its_backing_dimension_name() {
+    let (_dir, root) = write_imported_unit_dependency_project(
+        "import unit_dependencies.foundation.{unit point};\n\
+         param score: Score;\n\
+         assert nonnegative = @score >= 0.0 point;\n",
+    );
+
+    match compile_to_tir_project(&root, None, &fs()) {
+        Err(CompileError::Eval(GraphcalError::UnknownDimension { name, .. })) => {
+            assert_eq!(name.as_str(), "Score");
+        }
+        other => panic!("expected UnknownDimension for Score, got {other:?}"),
+    }
 }
 
 #[test]

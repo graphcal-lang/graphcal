@@ -79,7 +79,7 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 graphcal deps lock --root mission
 ```
 
-See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface and the [Tenax integration guide](https://graphcal.org/docs/tenax-integration/) for persistent model serving. `--set` and `--input` accept recursively closed values, not references or computations. Prepared structured inputs resolve constructors and field units from the canonical expected type, so importing an exported type does not require re-importing its schema implementation dependencies. Configured `include` composition may nest to arbitrary acyclic depth while preserving isolated instance paths. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
+See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface and the [Tenax integration guide](https://graphcal.org/docs/tenax-integration/) for persistent model serving. `--set` and `--input` accept recursively closed values, not references or computations. Imported units and prepared structured inputs retain canonical definition-site metadata, so consumers do not need to re-import backing dimensions or schema implementation dependencies they never name. Configured `include` composition may nest to arbitrary acyclic depth while preserving isolated instance paths. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
 
 ## Editor Support
 
