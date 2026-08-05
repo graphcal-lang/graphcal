@@ -328,6 +328,11 @@ path, and assertion diagnostics use the complete path such as
 `middle.leaf.positive`. An intermediate DAG that exposes a configurable input
 must declare its own `param` and forward it explicitly, as above.
 
+Imports used internally by an included file are isolated with that configured
+instance. Two libraries may each import a local `C` (or use the same module
+alias) from different modules, and each included body continues to read its own
+canonical declaration regardless of include order or nesting.
+
 ### `include` does not require `import` of the DAG
 
 Because the include path is absolute from the package root, no preceding

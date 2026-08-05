@@ -194,6 +194,129 @@ node m: Dimensionless = minimum(for i: Fin(0) { 1.0 });
     );
 }
 
+fn write_imported_binding_collision_project(
+    libraries: &[(&str, f64)],
+    qualified_import: bool,
+    nested: bool,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/collision");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"collision\"\n",
+    )
+    .unwrap();
+
+    for (name, imported_value) in libraries {
+        std::fs::write(
+            package_dir.join(format!("config_{name}.gcl")),
+            format!("pub const node C: Dimensionless = {imported_value:.1};\n"),
+        )
+        .unwrap();
+        let import = if qualified_import {
+            format!("import collision.config_{name} as config;\n")
+        } else {
+            format!("import collision.config_{name}.{{ C }};\n")
+        };
+        let reference = if qualified_import { "@config.C" } else { "@C" };
+        std::fs::write(
+            package_dir.join(format!("leaf_{name}.gcl")),
+            format!(
+                "{import}param p: Dimensionless;\npub node out: Dimensionless = @p + {reference};\n"
+            ),
+        )
+        .unwrap();
+        if nested {
+            std::fs::write(
+                package_dir.join(format!("lib_{name}.gcl")),
+                format!(
+                    "param p: Dimensionless;\ninclude collision.leaf_{name}(p: @p) as leaf;\npub node out: Dimensionless = @leaf.out;\n"
+                ),
+            )
+            .unwrap();
+        }
+    }
+
+    let include_file = if nested { "lib" } else { "leaf" };
+    let includes = libraries
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| {
+            format!(
+                "include collision.{include_file}_{name}(p: {}.0) as {name};",
+                index + 1
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let total = libraries
+        .iter()
+        .map(|(name, _)| format!("@{name}.out"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        format!("{includes}\npub node total: Dimensionless = {total};\n"),
+    )
+    .unwrap();
+
+    (dir, root)
+}
+
+fn assert_imported_binding_collision_values(
+    libraries: &[(&str, f64)],
+    qualified_import: bool,
+    nested: bool,
+) {
+    let (_dir, root) =
+        write_imported_binding_collision_project(libraries, qualified_import, nested);
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|err| panic!("collision project must compile: {err:?}"));
+
+    let mut expected_total = 0.0;
+    for (index, (name, imported_value)) in libraries.iter().enumerate() {
+        #[expect(clippy::cast_precision_loss, reason = "small test fixture index")]
+        let expected = imported_value + (index + 1) as f64;
+        let actual = value_for(&result, &format!("{name}.out"))
+            .si_value()
+            .unwrap();
+        assert!(
+            (actual - expected).abs() < 1e-9,
+            "include `{name}` read another instance's imported value: expected {expected}, got {actual}"
+        );
+        expected_total += expected;
+    }
+    let total = value_for(&result, "total").si_value().unwrap();
+    assert!((total - expected_total).abs() < 1e-9);
+}
+
+#[test]
+fn selective_same_leaf_imports_are_isolated_for_all_include_orders() {
+    let permutations = [
+        [("a", 1.0), ("b", 10.0), ("c", 100.0)],
+        [("a", 1.0), ("c", 100.0), ("b", 10.0)],
+        [("b", 10.0), ("a", 1.0), ("c", 100.0)],
+        [("b", 10.0), ("c", 100.0), ("a", 1.0)],
+        [("c", 100.0), ("a", 1.0), ("b", 10.0)],
+        [("c", 100.0), ("b", 10.0), ("a", 1.0)],
+    ];
+    for permutation in permutations {
+        assert_imported_binding_collision_values(&permutation, false, false);
+    }
+}
+
+#[test]
+fn equal_qualified_aliases_in_included_files_keep_canonical_targets() {
+    assert_imported_binding_collision_values(&[("a", 1.0), ("b", 10.0)], true, false);
+}
+
+#[test]
+fn nested_includes_keep_hidden_imported_bindings_instance_scoped() {
+    assert_imported_binding_collision_values(&[("a", 1.0), ("b", 10.0)], false, true);
+}
+
 fn write_required_runtime_input_type_project(
     main_source: &str,
 ) -> (tempfile::TempDir, std::path::PathBuf) {

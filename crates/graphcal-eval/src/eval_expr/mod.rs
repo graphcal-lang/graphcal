@@ -16,7 +16,6 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::names::ResolvedName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 
 use graphcal_compiler::registry::builtins::BuiltinFunctions;
@@ -174,27 +173,17 @@ fn dag_decl_runtime_key(
     RuntimeDeclKey::resolved(name.clone())
 }
 
-fn imported_value_source_key(
-    source: &graphcal_compiler::ir::lower::ImportedValueSource,
-) -> RuntimeDeclKey {
-    RuntimeDeclKey::resolved(ResolvedName::from_def(
-        source.dag_id.clone(),
-        source.source_name.clone(),
-    ))
-}
-
-fn imported_value_source_value<'a>(
-    source: &graphcal_compiler::ir::lower::ImportedValueSource,
+fn imported_binding_value<'a>(
+    target: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
     caller_values: &'a RuntimeValueMap,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a RuntimeValue> {
+    let key = RuntimeDeclKey::resolved(target.clone());
     match ctx.current_dag {
-        Some(caller_dag) if source.dag_id.eq(&caller_dag.dag_id) => {
-            caller_values.get(&imported_value_source_key(source))
+        Some(caller_dag) if target.owner() == &caller_dag.dag_id => caller_values.get(&key),
+        _ if target.owner() == &ctx.tir.root_dag_id => {
+            ctx.root_values.and_then(|values| values.get(&key))
         }
-        _ if source.dag_id.eq(&ctx.tir.root_dag_id) => ctx
-            .root_values
-            .and_then(|values| values.get(&imported_value_source_key(source))),
         _ => None,
     }
 }

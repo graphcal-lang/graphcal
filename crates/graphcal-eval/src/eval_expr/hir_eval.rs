@@ -24,9 +24,9 @@ use super::builtin_call::{
 };
 use super::{
     EvalContext, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
-    constructor_fields_for_runtime_struct, find_struct_field_constraint,
-    imported_value_source_value, index_ref_matches_resolved, resolve_unit_scale,
-    runtime_struct_type_def, topo_order_for_dag_body,
+    constructor_fields_for_runtime_struct, find_struct_field_constraint, imported_binding_value,
+    index_ref_matches_resolved, resolve_unit_scale, runtime_struct_type_def,
+    topo_order_for_dag_body,
 };
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
@@ -2344,12 +2344,7 @@ fn seed_inline_dag_imported_values(
             .chain(dag_tir.params.iter().map(|e| e.name.member()))
             .chain(dag_tir.nodes.iter().map(|e| e.name.member()))
             .collect();
-    let outer_scope_keys: std::collections::HashSet<&ScopedName> = dag_tir
-        .imported_values
-        .keys()
-        .chain(dag_tir.imported_value_sources.keys())
-        .collect();
-    for scoped in outer_scope_keys {
+    for (scoped, binding) in &dag_tir.imported_bindings {
         let member = scoped.member();
         let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
         let unresolved_local_import =
@@ -2357,16 +2352,9 @@ fn seed_inline_dag_imported_values(
         if unresolved_local_import || dag_values.contains_key(&visible_key) {
             continue;
         }
-        let value = dag_tir
-            .imported_values
-            .get(scoped)
-            .map(|(v, _)| v)
-            .or_else(|| {
-                dag_tir
-                    .imported_value_sources
-                    .get(scoped)
-                    .and_then(|source| imported_value_source_value(source, caller_values, ctx))
-            });
+        let value = binding
+            .value()
+            .or_else(|| imported_binding_value(binding.target(), caller_values, ctx));
         if let Some(value) = value {
             dag_values.insert(visible_key, value.clone());
         }

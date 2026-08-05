@@ -1052,20 +1052,9 @@ pub struct DagTIR {
     pub expected_fail: HashMap<ScopedName, ExpectedFail>,
     /// Resolved type for each const/param/node declaration.
     pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
-    /// Pre-evaluated values imported from dependency files (passed through from IR).
-    pub imported_values: HashMap<
-        ScopedName,
-        (
-            crate::registry::runtime_value::RuntimeValue,
-            crate::registry::declared_type::DeclaredType,
-        ),
-    >,
-    /// Declared types for imported names whose values are supplied by a caller
-    /// or dependency at evaluation time.
-    pub(crate) imported_decl_types:
-        HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
-    /// Runtime source bindings for imported DAG-body values.
-    pub imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    /// Source-visible imported bindings with canonical target, type, and value
+    /// metadata kept atomically.
+    pub imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     /// Value declarations callers may project from this DAG body.
     ///
     /// Contains explicitly exported nodes and all param input ports. A param

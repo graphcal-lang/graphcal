@@ -699,9 +699,8 @@ IR = UnfrozenIR::freeze(registry, owner, resolver, src)
   assert_names
   assumes_map
   expected_fail
-  imported_values
-  imported_decl_types
-  imported_value_sources
+  imported_bindings: HashMap<ScopedName, ImportedBinding>
+    canonical target + declared type + optional pre-evaluated value
   external_surface: ExternalDeclSurface
     explicit_exports  // declarations carrying `pub` / `pub(bind)`
     input_ports       // bindable and projectable annotation-free params
@@ -753,9 +752,7 @@ DagTIR
   assert_names, assumes_map, expected_fail
   resolved_decl_types
   semantic.domain_bounds  // checked, unevaluated HIR bound expressions
-  imported_values
-  imported_decl_types
-  imported_value_sources
+  imported_bindings: HashMap<ScopedName, ImportedBinding>
   projectable_outputs  // explicit node exports + param input ports
 ```
 

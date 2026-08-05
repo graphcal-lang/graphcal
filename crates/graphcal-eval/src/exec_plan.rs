@@ -216,9 +216,16 @@ pub fn compile_with_cancellation(
         const_values,
         imported_values: tir
             .root()
-            .imported_values
+            .imported_bindings
             .iter()
-            .map(|(k, (v, _dt))| (RuntimeDeclKey::for_visible_name(tir.root(), k), v.clone()))
+            .filter_map(|(name, binding)| {
+                binding.value().map(|value| {
+                    (
+                        RuntimeDeclKey::for_visible_name(tir.root(), name),
+                        value.clone(),
+                    )
+                })
+            })
             .collect(),
         topo_order,
         assert_bodies,
@@ -239,9 +246,13 @@ fn visible_values_with_imports(
     local_const_values: &RuntimeValueMap,
 ) -> RuntimeValueMap {
     let mut values: RuntimeValueMap = dag
-        .imported_values
+        .imported_bindings
         .iter()
-        .map(|(name, (value, _))| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
+        .filter_map(|(name, binding)| {
+            binding
+                .value()
+                .map(|value| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
+        })
         .collect();
     values.extend(
         local_const_values

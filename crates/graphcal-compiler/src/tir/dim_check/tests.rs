@@ -160,7 +160,6 @@ fn compile_inline_dag_bodies_test(
             &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),
-            HashMap::new(),
             src,
             parent_dag_id,
         )?;

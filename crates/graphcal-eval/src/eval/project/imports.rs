@@ -1227,12 +1227,13 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
 
                 match import_selective_item(
                     dep,
+                    source_file,
                     orig_name,
                     &local_name,
                     import_item.name.span,
                     file_src,
                     &mut ctx.imported_names,
-                    &mut ctx.imported_values,
+                    &mut ctx.imported_bindings,
                     Some(&mut ctx.imported_source_order),
                 )? {
                     SelectiveImportResult::Const => {}
@@ -1324,11 +1325,12 @@ pub(in crate::eval::project) fn process_non_instantiated_import<'a>(
             }
             import_module_values(
                 dep,
+                source_file,
                 &module_name,
                 import_span,
                 file_src,
                 &mut ctx.imported_names,
-                &mut ctx.imported_values,
+                &mut ctx.imported_bindings,
                 Some(&mut ctx.imported_source_order),
                 is_import,
             )?;
@@ -1446,6 +1448,33 @@ pub(in crate::eval::project) fn check_dag_recursion(
     Ok(())
 }
 
+fn insert_imported_binding(
+    imported_bindings: &mut HashMap<ScopedName, ImportedBinding>,
+    imported_names: &ImportedValueNames,
+    lexical_name: ScopedName,
+    binding: ImportedBinding,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), CompileError> {
+    if imported_bindings.contains_key(&lexical_name) {
+        let first = imported_names
+            .const_names
+            .iter()
+            .chain(&imported_names.param_names)
+            .chain(&imported_names.node_names)
+            .find_map(|(name, first_span)| (name == &lexical_name).then_some(*first_span))
+            .unwrap_or(span);
+        return Err(CompileError::Eval(GraphcalError::DuplicateName {
+            name: lexical_name.to_string(),
+            src: src.clone(),
+            duplicate: span.into(),
+            first: first.into(),
+        }));
+    }
+    imported_bindings.insert(lexical_name, binding);
+    Ok(())
+}
+
 /// Look up a single selective import item in an `EvaluatedFile` and register it.
 ///
 /// Handles `const_values` and values (params/nodes).
@@ -1456,12 +1485,13 @@ pub(in crate::eval::project) fn check_dag_recursion(
 )]
 pub(in crate::eval::project) fn import_selective_item(
     dep: &EvaluatedFile,
+    source_owner: &graphcal_compiler::dag_id::DagId,
     orig_name: &NameAtom,
     local_name: &DeclName,
     span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
-    imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_bindings: &mut HashMap<ScopedName, ImportedBinding>,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<SelectiveImportResult, CompileError> {
     // The dep's `declared_types` is keyed by typed `ScopedName`. Its top-level
@@ -1474,7 +1504,21 @@ pub(in crate::eval::project) fn import_selective_item(
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
         }
-        imported_values.insert(scoped, (rv.clone(), dt));
+        insert_imported_binding(
+            imported_bindings,
+            imported_names,
+            scoped,
+            ImportedBinding::with_value(
+                graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                    source_owner.clone(),
+                    orig_decl,
+                ),
+                dt,
+                rv.clone(),
+            ),
+            src,
+            span,
+        )?;
         Ok(SelectiveImportResult::Const)
     } else if let Some(rv) = dep.values.get(&orig_decl) {
         let dt = imported_declared_type(dep, &orig_decl, src, span)?;
@@ -1500,7 +1544,21 @@ pub(in crate::eval::project) fn import_selective_item(
         if let Some(source_order) = imported_source_order {
             source_order.push((scoped.clone(), category));
         }
-        imported_values.insert(scoped, (rv.clone(), dt));
+        insert_imported_binding(
+            imported_bindings,
+            imported_names,
+            scoped,
+            ImportedBinding::with_value(
+                graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                    source_owner.clone(),
+                    orig_decl,
+                ),
+                dt,
+                rv.clone(),
+            ),
+            src,
+            span,
+        )?;
         Ok(SelectiveImportResult::Runtime)
     } else if dep.has_assert(orig_name) {
         Ok(SelectiveImportResult::Assert)
@@ -1566,11 +1624,12 @@ fn imported_declared_type(
 )]
 pub(in crate::eval::project) fn import_module_values(
     dep: &EvaluatedFile,
+    source_owner: &graphcal_compiler::dag_id::DagId,
     module_name: &ModuleAliasName,
     import_span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
-    imported_values: &mut HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_bindings: &mut HashMap<ScopedName, ImportedBinding>,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
     const_only: bool,
 ) -> Result<(), CompileError> {
@@ -1591,7 +1650,21 @@ pub(in crate::eval::project) fn import_module_values(
         if let Some(ref mut source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
         }
-        imported_values.insert(scoped, (rv.clone(), dt));
+        insert_imported_binding(
+            imported_bindings,
+            imported_names,
+            scoped,
+            ImportedBinding::with_value(
+                graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                    source_owner.clone(),
+                    name.clone(),
+                ),
+                dt,
+                rv.clone(),
+            ),
+            src,
+            import_span,
+        )?;
     }
 
     // Skip runtime values when const_only is true (import semantics).
@@ -1634,7 +1707,21 @@ pub(in crate::eval::project) fn import_module_values(
         if let Some(ref mut source_order) = imported_source_order {
             source_order.push((scoped.clone(), category));
         }
-        imported_values.insert(scoped, (rv.clone(), dt));
+        insert_imported_binding(
+            imported_bindings,
+            imported_names,
+            scoped,
+            ImportedBinding::with_value(
+                graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                    source_owner.clone(),
+                    name.clone(),
+                ),
+                dt,
+                rv.clone(),
+            ),
+            src,
+            import_span,
+        )?;
     }
     Ok(())
 }
@@ -1674,16 +1761,17 @@ mod tests {
 
         let src = NamedSource::new("test.gcl", Arc::new(String::new()));
         let mut imported_names = ImportedValueNames::default();
-        let mut imported_values = HashMap::new();
+        let mut imported_bindings = HashMap::new();
 
         let err = import_selective_item(
             &dep,
+            &graphcal_compiler::dag_id::DagId::root_in_package("test", "dep"),
             &NameAtom::parse("g0").unwrap(),
             &DeclName::expect_valid("g0"),
             Span::new(0, 2),
             &src,
             &mut imported_names,
-            &mut imported_values,
+            &mut imported_bindings,
             None,
         )
         .expect_err("missing declared type must be an internal compile error");
@@ -1694,6 +1782,6 @@ mod tests {
             "unexpected error: {message}"
         );
         assert!(imported_names.const_names.is_empty());
-        assert!(imported_values.is_empty());
+        assert!(imported_bindings.is_empty());
     }
 }

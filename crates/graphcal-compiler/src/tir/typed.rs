@@ -88,12 +88,9 @@ impl DagTIR {
         src: &NamedSource<Arc<String>>,
     ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError>
     {
-        // Layer the sources so the most authoritative wins on key collisions:
-        //   builtins  <  imported_decl_types  <  imported_values  <  resolved_decl_types
-        // A DAG's own resolved decls always shadow imports of the same name —
-        // necessary because `merge_dependency` may propagate placeholder
-        // imported decl types from an inline DAG's self-import back onto the
-        // importer for names the importer already declares itself.
+        // A DAG's own resolved declarations remain authoritative over imported
+        // lexical bindings. The imported binding record keeps type/value/target
+        // metadata atomic, so no collision can mix independently keyed facts.
         let mut declared_types = HashMap::new();
         for constant in crate::builtin::BuiltinConst::ALL {
             declared_types.insert(
@@ -101,11 +98,8 @@ impl DagTIR {
                 crate::registry::declared_type::DeclaredType::Quantity(Dimension::dimensionless()),
             );
         }
-        for (name, dt) in &self.imported_decl_types {
-            declared_types.insert(name.clone(), dt.clone());
-        }
-        for (name, (_rv, dt)) in &self.imported_values {
-            declared_types.insert(name.clone(), dt.clone());
+        for (name, binding) in &self.imported_bindings {
+            declared_types.insert(name.clone(), binding.declared_type().clone());
         }
         for (name, resolved) in &self.resolved_decl_types {
             let dt = resolved_to_declared_type(resolved, src)?;
@@ -225,7 +219,7 @@ fn type_resolve_impl(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
     cancellation.checkpoint()?;
-    let imported_value_sources_for_hir = ir.imported_value_sources.clone();
+    let imported_bindings_for_hir = ir.imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut root_dag = type_resolve_dag(
         ir.consts,
@@ -236,9 +230,7 @@ fn type_resolve_impl(
         src,
         &root_dag_id,
         module_ctx,
-        &ir.imported_values,
-        &ir.imported_decl_types,
-        &imported_value_sources_for_hir,
+        &imported_bindings_for_hir,
         cancellation,
     )?
     .with_body(
@@ -250,9 +242,7 @@ fn type_resolve_impl(
         ir.source_order,
         ir.assumes_map,
         ir.expected_fail,
-        ir.imported_values,
-        ir.imported_decl_types,
-        ir.imported_value_sources,
+        ir.imported_bindings,
         module_ctx,
         src,
     )?;
@@ -318,7 +308,7 @@ fn type_resolve_single_impl(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
     cancellation.checkpoint()?;
-    let imported_value_sources_for_hir = ir.imported_value_sources.clone();
+    let imported_bindings_for_hir = ir.imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut dag = type_resolve_dag(
         ir.consts,
@@ -329,9 +319,7 @@ fn type_resolve_single_impl(
         src,
         dag_id,
         module_ctx,
-        &ir.imported_values,
-        &ir.imported_decl_types,
-        &imported_value_sources_for_hir,
+        &imported_bindings_for_hir,
         cancellation,
     )?
     .with_body(
@@ -343,9 +331,7 @@ fn type_resolve_single_impl(
         ir.source_order,
         ir.assumes_map,
         ir.expected_fail,
-        ir.imported_values,
-        ir.imported_decl_types,
-        ir.imported_value_sources,
+        ir.imported_bindings,
         module_ctx,
         src,
     )?;
@@ -405,15 +391,7 @@ fn type_resolve_dag(
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
-    imported_values: &HashMap<
-        ScopedName,
-        (
-            crate::registry::runtime_value::RuntimeValue,
-            crate::registry::declared_type::DeclaredType,
-        ),
-    >,
-    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
-    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIRSeed, GraphcalError> {
     cancellation.checkpoint()?;
@@ -479,7 +457,7 @@ fn type_resolve_dag(
         &nodes,
         asserts,
         module_ctx,
-        imported_value_sources,
+        imported_bindings,
         registry,
         src,
     )?;
@@ -491,8 +469,7 @@ fn type_resolve_dag(
         &expressions,
         &domain_bounds,
         &resolved_decl_types,
-        imported_values,
-        imported_decl_types,
+        imported_bindings,
         module_ctx,
         src,
     )?;
@@ -504,8 +481,7 @@ fn type_resolve_dag(
     let type_defs = collect_resolved_type_defs(
         &resolved_decl_types,
         &constructor_refs,
-        imported_values,
-        imported_decl_types,
+        imported_bindings,
         module_ctx,
         registry,
         src,
@@ -537,14 +513,7 @@ fn type_resolve_dag(
 fn collect_resolved_type_defs(
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     constructor_refs: &ResolvedConstructorRefs,
-    imported_values: &HashMap<
-        ScopedName,
-        (
-            crate::registry::runtime_value::RuntimeValue,
-            crate::registry::declared_type::DeclaredType,
-        ),
-    >,
-    imported_decl_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -558,11 +527,14 @@ fn collect_resolved_type_defs(
     for resolved in resolved_decl_types.values() {
         collect_struct_type_defs_from_resolved_type(resolved, ctx, registry, src, &mut defs)?;
     }
-    for declared in imported_decl_types
-        .values()
-        .chain(imported_values.values().map(|(_value, declared)| declared))
-    {
-        collect_struct_type_defs_from_declared_type(declared, ctx, registry, src, &mut defs)?;
+    for binding in imported_bindings.values() {
+        collect_struct_type_defs_from_declared_type(
+            binding.declared_type(),
+            ctx,
+            registry,
+            src,
+            &mut defs,
+        )?;
     }
     for target in constructor_refs.constructor_defs.values() {
         record_resolved_struct_type_def(&target.owning_type, ctx, registry, src, &mut defs)?;
@@ -783,14 +755,14 @@ fn lower_resolved_expressions(
     nodes: &[crate::ir::lower::NodeEntry],
     asserts: &[crate::ir::lower::AssertEntry],
     ctx: ModuleTypeContext<'_>,
-    imported_value_sources: &HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<LoweredDagExpressions, GraphcalError> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
     let decl_bindings =
-        collect_hir_decl_bindings(ctx.owner, consts, params, nodes, imported_value_sources);
+        collect_hir_decl_bindings(ctx.owner, consts, params, nodes, imported_bindings);
     let lower_bounds_in = |type_ann: &crate::desugar::desugared_ast::TypeExpr,
                            resolution_owner: &crate::dag_id::DagId,
                            body_src: &NamedSource<Arc<String>>| {
@@ -1336,28 +1308,17 @@ impl DagTIRSeed {
         source_order: Vec<(ScopedName, DeclCategory)>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
         expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
-        imported_values: HashMap<
-            ScopedName,
-            (
-                crate::registry::runtime_value::RuntimeValue,
-                crate::registry::declared_type::DeclaredType,
-            ),
-        >,
-        imported_decl_types: HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
-        imported_value_sources: HashMap<ScopedName, crate::ir::lower::ImportedValueSource>,
+        imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
         module_ctx: ModuleTypeContext<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<DagTIR, GraphcalError> {
         let decl_bindings = collect_resolved_decl_bindings(
-            module_ctx,
+            module_ctx.owner,
             &self.consts,
             &self.params,
             &self.nodes,
-            &imported_values,
-            &imported_decl_types,
-            &imported_value_sources,
-            src,
-        )?;
+            &imported_bindings,
+        );
         let expected_fail = resolve_expected_fail_keys(expected_fail, module_ctx, src)?;
 
         let mut semantic = self.semantic;
@@ -1379,9 +1340,7 @@ impl DagTIRSeed {
             assumes_map,
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
-            imported_values,
-            imported_decl_types,
-            imported_value_sources,
+            imported_bindings,
             projectable_outputs: std::collections::HashSet::new(),
         })
     }

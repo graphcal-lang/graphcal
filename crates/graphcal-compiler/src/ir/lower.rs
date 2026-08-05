@@ -18,22 +18,21 @@ use crate::desugar::desugared_ast::{
     PlotDecl, TypeExpr,
 };
 use crate::dimension::{Dimension, Rational};
+use crate::ir::imported_binding::ImportedBinding;
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
     resolve_with_imported_values,
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
-use crate::registry::declared_type::DeclaredType;
 use crate::registry::dimension_registry::DimensionResolveError;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
-use crate::registry::runtime_value::RuntimeValue;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
-use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
+use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
@@ -359,35 +358,18 @@ pub struct IR {
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
     pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
-    /// Pre-evaluated values imported from dependency files.
-    /// These are injected directly into the execution plan rather than compiled.
-    /// Each entry carries the runtime value and its declared type (for `dim_check`).
-    pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    /// Declared types for imported names that are not backed by a pre-evaluated
-    /// value at this compilation boundary.
+    /// Imported values keyed by their source-visible lexical binding.
     ///
-    /// Inline DAG bodies use this for `import parent.{const}`: the body needs
-    /// the imported name's type during dim-checking, while the concrete value is
-    /// supplied later by the caller or by the dependency that owns the DAG.
-    pub(crate) imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    /// Source bindings for imported values whose runtime value is supplied
-    /// outside this IR.
-    pub(crate) imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    /// Each record atomically retains the canonical declaration target, its
+    /// declared type, and an optional pre-evaluated value. Include merges may
+    /// prefix the lexical key, but never rewrite the canonical target.
+    pub(crate) imported_bindings: HashMap<ScopedName, ImportedBinding>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
     pub(crate) extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
     /// Explicit exports and annotation-free `param` input ports, kept in
     /// distinct roles for downstream boundary checks.
     pub external_surface: ExternalDeclSurface,
-}
-
-/// Runtime source of an imported value visible inside a DAG body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImportedValueSource {
-    /// DAG that owns the original declaration.
-    pub dag_id: crate::dag_id::DagId,
-    /// Original declaration name in the owning DAG.
-    pub source_name: DeclName,
 }
 
 /// Lower an AST into an [`IR`].
@@ -511,8 +493,6 @@ fn lower_to_builder(
         resolved,
         type_anns,
         HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
         dag_id,
         None,
         None,
@@ -528,13 +508,12 @@ fn lower_to_builder(
 /// entries.
 pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<(), GraphcalError>;
 
-/// Lower an AST with pre-evaluated imported values, returning a `RegistryBuilder`
+/// Lower an AST with imported value bindings, returning a `RegistryBuilder`
 /// that can be further mutated before freezing.
 ///
-/// Unlike `lower_to_builder`, this uses `resolve_with_imported_values` which
-/// only adds imported names to the scope (not their expressions). The actual
-/// imported values are stored in `UnfrozenIR::imported_values` and injected
-/// into the execution plan at runtime.
+/// Unlike `lower_to_builder`, this uses `resolve_with_imported_values`, which
+/// adds only imported lexical names to the scope. Canonical targets, declared
+/// types, and optional pre-evaluated values stay atomic in `imported_bindings`.
 ///
 /// # Errors
 ///
@@ -543,26 +522,26 @@ pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<()
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_to_builder_with_imported_values(
+pub fn lower_to_builder_with_imported_bindings(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    lower_to_builder_with_imported_values_and_cancellation(
+    lower_to_builder_with_imported_bindings_and_cancellation(
         ast,
         src,
         imported_names,
-        imported_values,
+        imported_bindings,
         dag_id,
         registry_seed,
         &crate::cancellation::CancellationToken::unbounded(),
     )
 }
 
-/// Lower an AST with imported values and cooperative cancellation.
+/// Lower an AST with imported bindings and cooperative cancellation.
 ///
 /// # Errors
 ///
@@ -571,74 +550,24 @@ pub fn lower_to_builder_with_imported_values(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-pub fn lower_to_builder_with_imported_values_and_cancellation(
+pub fn lower_to_builder_with_imported_bindings_and_cancellation(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
     cancellation.checkpoint()?;
-    let imported_decl_types = imported_values
-        .iter()
-        .map(|(name, (_value, ty))| (name.clone(), ty.clone()))
-        .collect();
-    lower_to_builder_with_imported_value_decls(
-        ast,
-        src,
-        imported_names,
-        imported_values,
-        imported_decl_types,
-        HashMap::new(),
-        dag_id,
-        registry_seed,
-        cancellation,
-    )
-}
-
-/// Lower an AST with imported value names plus declared types for imports whose
-/// runtime values will be supplied later.
-///
-/// This is used for inline DAG bodies that import a parent const. The resolver
-/// needs the local imported name in scope, dim-checking needs its declared type,
-/// and evaluation gets the concrete value from `imported_value_sources`.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "lowering threads imported value metadata plus the registry seed hook"
-)]
-fn lower_to_builder_with_imported_value_decls(
-    ast: &File,
-    src: &NamedSource<Arc<String>>,
-    imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
-    dag_id: &crate::dag_id::DagId,
-    registry_seed: Option<RegistrySeed<'_>>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    cancellation.checkpoint()?;
-    // Step 1: Declaration collection with imported value names in scope
     let resolved = resolve_with_imported_values(ast, src, imported_names)?;
-
-    // Step 2: Extract type annotations from local declarations only
     let type_anns = extract_type_annotations(ast);
-
-    // Step 3: Build registry, augment deps, and construct IR
     let (builder, mut unfrozen) = build_ir_from_resolved(
         ast,
         src,
         resolved,
         type_anns,
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         dag_id,
         None,
         registry_seed,
@@ -659,30 +588,9 @@ fn lower_to_builder_with_imported_value_decls(
 /// Lower a `dag { ... }` body as if it were a standalone file.
 ///
 /// The dag body is a virtual [`File`] whose registry is seeded with the
-/// enclosing file's frozen registry (dimensions, units, types, indexes, and
-/// sibling dags) so that reference resolution and type checking behave exactly as
-/// they would for a top-level declaration. Per Concept 9, the dag body cannot
-/// implicitly reference the enclosing file's `const`/`param`/`node` values
-/// — cross-scope values must be either passed in via the dag's own params or
-/// brought into scope explicitly via `import <self>.{...}`.
-///
-/// The caller is responsible for pre-processing dag-body `import` declarations
-/// (resolving self-imports to local names, classifying items against the
-/// parent's value/type-system surface, recording source bindings) and passing
-/// in:
-///
-/// - `stripped_body`: the dag body with self-import declarations removed.
-///   Cross-file imports inside dag bodies (if any) are still left for the
-///   downstream resolver to handle through the regular import machinery.
-/// - `imported_names`: the resolver scope contribution from preprocessed
-///   self-imports.
-/// - `imported_decl_types`: per-name declared types for those self-imports.
-/// - `imported_value_sources`: per-name source bindings for those
-///   self-imports — recording that the value comes from the parent DAG at
-///   runtime.
-///
-/// The returned `IR` has a `dag_id` formed by appending `dag_name` to
-/// `parent_dag_id`, so nested-scope diagnostics have a stable source location.
+/// enclosing file's frozen registry. Cross-scope values must be passed through
+/// params or explicit imports; every imported lexical name carries one atomic
+/// [`ImportedBinding`] with its canonical target and declared type.
 ///
 /// # Errors
 ///
@@ -692,28 +600,20 @@ fn lower_to_builder_with_imported_value_decls(
     clippy::implicit_hasher,
     reason = "internal API always uses default hasher"
 )]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "dag-module lowering threads pre-processed import metadata + optional parent registry"
-)]
-pub fn lower_dag_module_to_builder_with_imported_value_decls(
+pub fn lower_dag_module_to_builder_with_imported_bindings(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+    lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
         dag_body,
         parent_registry,
         imported_names,
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         src,
         dag_id,
         registry_seed,
@@ -732,15 +632,13 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls(
 )]
 #[expect(
     clippy::too_many_arguments,
-    reason = "dag-module lowering threads import metadata, registry state, and cancellation"
+    reason = "dag-module lowering threads imported bindings, registry state, and cancellation"
 )]
-pub fn lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
+pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -755,9 +653,7 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
         src,
         resolved,
         type_anns,
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         dag_id,
         parent_registry,
         registry_seed,
@@ -767,7 +663,7 @@ pub fn lower_dag_module_to_builder_with_imported_value_decls_and_cancellation(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "dag-body lowering threads pre-processed import metadata + parent registry"
+    reason = "dag-body lowering threads imported bindings plus parent registry"
 )]
 #[cfg(test)]
 pub(crate) fn lower_dag_body_to_ir(
@@ -776,8 +672,7 @@ pub(crate) fn lower_dag_body_to_ir(
     parent_registry: &Registry,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     imported_names: &ImportedValueNames,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
@@ -785,13 +680,11 @@ pub(crate) fn lower_dag_body_to_ir(
         declarations: stripped_body.to_vec(),
     };
     let dag_dag_id = parent_dag_id.child(dag_name);
-    let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_value_decls(
+    let (builder, unfrozen) = lower_dag_module_to_builder_with_imported_bindings(
         &virtual_file,
         Some(parent_registry),
         imported_names,
-        HashMap::new(),
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         src,
         &dag_dag_id,
         None,
@@ -802,12 +695,11 @@ pub(crate) fn lower_dag_body_to_ir(
     unfrozen.freeze(registry, &dag_dag_id, resolver, src)
 }
 
-/// Result of `preprocess_dag_body_self_imports`: imported names, declared
-/// types, source bindings, and the body with self-import declarations stripped.
+/// Result of `preprocess_dag_body_self_imports`: imported names, canonical
+/// bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
-    pub decl_types: HashMap<ScopedName, DeclaredType>,
-    pub value_sources: HashMap<ScopedName, ImportedValueSource>,
+    pub bindings: HashMap<ScopedName, ImportedBinding>,
     pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
 }
 
@@ -830,25 +722,7 @@ fn take_type_ann(
         })
 }
 
-fn resolve_existing_synthetic_child_decl(
-    resolver: &crate::syntax::module_resolve::ModuleResolver,
-    owner: &crate::dag_id::DagId,
-    name: &ScopedName,
-) -> Option<ResolvedDeclName> {
-    let mut qualifier = name.qualifier().iter();
-    let first = qualifier.next()?;
-    let synthetic_owner = qualifier.fold(owner.child(first.as_ref()), |owner, segment| {
-        owner.child(segment.as_ref())
-    });
-    let decl_name = name.member().clone();
-    resolver
-        .modules()
-        .get(&synthetic_owner)
-        .and_then(|module| module.decls().contains_key(&decl_name).then_some(()))
-        .map(|()| ResolvedDeclName::from_def(synthetic_owner, decl_name))
-}
-
-/// Shared implementation for `lower_to_builder` and `lower_to_builder_with_imported_values`.
+/// Shared implementation for local and imported-binding lowering.
 ///
 /// Builds the registry, augments runtime deps for dynamic units, pairs resolved
 /// declarations with type annotations, and constructs the `UnfrozenIR`.
@@ -858,16 +732,14 @@ fn resolve_existing_synthetic_child_decl(
 )]
 #[expect(
     clippy::too_many_arguments,
-    reason = "IR construction threads imported value type/source metadata"
+    reason = "IR construction threads imported bindings and registry state"
 )]
 fn build_ir_from_resolved(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     resolved: ResolvedFile,
     mut type_anns: HashMap<DeclName, TypeExpr>,
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -1028,9 +900,7 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(k, v)| (ScopedName::from(k), v))
             .collect(),
-        imported_values,
-        imported_decl_types,
-        imported_value_sources,
+        imported_bindings,
         external_surface: resolved.external_surface,
         plugin_imports: ast
             .declarations
@@ -1063,12 +933,8 @@ pub struct UnfrozenIR {
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     // Key-lookup only, order irrelevant.
     expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
-    // Key-lookup only, order irrelevant.
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    // Key-lookup only, order irrelevant.
-    imported_decl_types: HashMap<ScopedName, DeclaredType>,
-    // Key-lookup only, order irrelevant.
-    imported_value_sources: HashMap<ScopedName, ImportedValueSource>,
+    // Lexical binding lookup only; each value atomically carries canonical metadata.
+    imported_bindings: HashMap<ScopedName, ImportedBinding>,
     // Explicit exports and named `param` input ports used by downstream
     // import/include boundary checks.
     external_surface: ExternalDeclSurface,
@@ -1139,33 +1005,20 @@ impl UnfrozenIR {
             let canonical = crate::hir::diagnostics::resolved_decl_key(owner, name);
             decl_bindings.insert(name.clone(), canonical);
         }
-        for name in self.imported_values.keys() {
+        for (name, binding) in &self.imported_bindings {
             cancellation.checkpoint()?;
-            let path = name.to_name_path();
-            let canonical = match resolver.resolve_decl_path(owner, &path) {
-                Ok(target_decl) => target_decl,
-                Err(_) => self.imported_value_sources.get(name).map_or_else(
-                    || {
-                        resolve_existing_synthetic_child_decl(resolver, owner, name).unwrap_or_else(
-                            || crate::hir::diagnostics::resolved_decl_key(owner, name),
-                        )
-                    },
-                    |source| {
-                        ResolvedDeclName::from_def(
-                            source.dag_id.clone(),
-                            source.source_name.clone(),
-                        )
-                    },
-                ),
-            };
-            decl_bindings.insert(name.clone(), canonical);
-        }
-        for (name, source) in &self.imported_value_sources {
-            cancellation.checkpoint()?;
-            decl_bindings.insert(
-                name.clone(),
-                ResolvedDeclName::from_def(source.dag_id.clone(), source.source_name.clone()),
-            );
+            if decl_bindings
+                .insert(name.clone(), binding.target().clone())
+                .is_some()
+            {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "imported lexical binding `{name}` collides with a local declaration"
+                    ),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
         }
 
         let generic_scope = crate::hir::GenericScope::new();
@@ -1400,9 +1253,7 @@ impl UnfrozenIR {
             source_order: self.source_order,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
-            imported_values: self.imported_values,
-            imported_decl_types: self.imported_decl_types,
-            imported_value_sources: self.imported_value_sources,
+            imported_bindings: self.imported_bindings,
             external_surface: self.external_surface,
         })
     }
@@ -1620,6 +1471,7 @@ impl UnfrozenIR {
             .source_order
             .iter()
             .map(|(name, _)| name.clone())
+            .chain(dep.imported_bindings.keys().cloned())
             .collect::<HashSet<_>>();
         let dep_scoped_names = &all_dep_scoped_names;
 
@@ -1851,24 +1703,24 @@ impl UnfrozenIR {
             }
         }
 
-        // Propagate the dep's imported-value metadata. Hidden imports used by
-        // the dep's expressions are instance-scoped together with the merged
-        // expressions, preventing two DAG include instances from sharing an
-        // unqualified synthetic name.
-        for (name, value) in dep.imported_values {
-            self.imported_values
-                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
-                .or_insert(value);
-        }
-        for (name, dt) in dep.imported_decl_types {
-            self.imported_decl_types
-                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
-                .or_insert(dt);
-        }
-        for (name, source) in dep.imported_value_sources {
-            self.imported_value_sources
-                .entry(prefix_dep(&name, prefix, dep_names, dep_scoped_names))
-                .or_insert(source);
+        // Hidden imports used by dependency expressions receive the same
+        // lexical instance prefix as those expressions. Their canonical target,
+        // declared type, and optional value remain one unchanged record.
+        for (name, binding) in dep.imported_bindings {
+            let lexical = prefix_dep(&name, prefix, dep_names, dep_scoped_names);
+            if self
+                .imported_bindings
+                .insert(lexical.clone(), binding)
+                .is_some()
+            {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "duplicate imported lexical binding `{lexical}` while merging include instance `{prefix}`"
+                    ),
+                    src: importer_src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
         }
         Ok(())
     }
@@ -5145,6 +4997,8 @@ fn resolve_extern_dim_monomial(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::declared_type::DeclaredType;
+    use crate::syntax::decl_name::ResolvedDeclName;
     use crate::syntax::parser::Parser;
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
@@ -5303,13 +5157,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_dependency_keeps_qualified_imported_value_keys() {
-        // Regression: `prefix_dep` used to re-key a dep's *qualified*
-        // imported value (e.g. `mission.C` from `import lib as mission;`)
-        // with the include-instance prefix, dropping the qualifier — while
-        // the merged expressions kept referencing `@mission.C` (RefPrefixer
-        // skips qualified refs), so the value map and the expressions
-        // diverged.
+    fn merge_dependency_scopes_qualified_import_binding_without_changing_target() {
         let dep_source = "node out: Dimensionless = 2.0;";
         let dep_src = make_src(dep_source);
         let raw_file = Parser::new(dep_source).parse_file().unwrap();
@@ -5326,17 +5174,20 @@ mod tests {
             &crate::dag_id::DagId::root_in_package("test", "dep"),
         )
         .unwrap();
-        // Simulate the loader having pre-evaluated `import lib as mission;`
-        // inside the dep: the imported value is keyed by a qualified name.
         let qualified = ScopedName::qualified(
             ModuleAliasName::expect_valid("mission"),
             DeclName::expect_valid("C"),
         );
-        dep_unfrozen.imported_values.insert(
+        let canonical = ResolvedDeclName::from_def(
+            crate::dag_id::DagId::root_in_package("producer", "config"),
+            DeclName::expect_valid("C"),
+        );
+        dep_unfrozen.imported_bindings.insert(
             qualified.clone(),
-            (
-                RuntimeValue::Quantity(7.0),
+            ImportedBinding::with_value(
+                canonical.clone(),
                 DeclaredType::Quantity(crate::dimension::Dimension::dimensionless()),
+                crate::registry::runtime_value::RuntimeValue::Quantity(7.0),
             ),
         );
 
@@ -5362,10 +5213,11 @@ mod tests {
             .iter()
             .map(|(n, _)| n.member().clone())
             .collect();
+        let instance = ModuleAliasName::expect_valid("inst");
         unfrozen
             .merge_dependency(
                 dep_unfrozen,
-                &ModuleAliasName::expect_valid("inst"),
+                &instance,
                 &HashMap::new(),
                 &dep_names,
                 &HashMap::new(),
@@ -5379,18 +5231,18 @@ mod tests {
             )
             .unwrap();
 
-        assert!(
-            unfrozen.imported_values.contains_key(&qualified),
-            "qualified imported value must keep its qualifier"
-        );
-        assert!(
-            !unfrozen
-                .imported_values
-                .contains_key(&ScopedName::qualified(
-                    ModuleAliasName::expect_valid("inst"),
-                    DeclName::expect_valid("C"),
-                )),
-            "imported value must not be re-keyed with the instance prefix"
-        );
+        let lexical = qualified.within_scope(&instance);
+        let binding = &unfrozen.imported_bindings[&lexical];
+        assert_eq!(binding.target(), &canonical);
+        assert!(matches!(
+            binding.declared_type(),
+            DeclaredType::Quantity(dimension) if dimension.is_dimensionless()
+        ));
+        assert!(matches!(
+            binding.value(),
+            Some(crate::registry::runtime_value::RuntimeValue::Quantity(value))
+                if (*value - 7.0).abs() < f64::EPSILON
+        ));
+        assert!(!unfrozen.imported_bindings.contains_key(&qualified));
     }
 }

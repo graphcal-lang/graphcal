@@ -24,7 +24,7 @@ fn compile_single_file_in_project(
 
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
-        imported_values: HashMap::new(),
+        imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
         imported_type_system_names: HashMap::new(),
         module_map: HashMap::new(),
