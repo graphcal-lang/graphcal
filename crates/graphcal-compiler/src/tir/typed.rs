@@ -16,7 +16,8 @@ use crate::hir::diagnostics::{expr_lower_error_to_graphcal, resolved_decl_key};
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::index_name::IndexName;
+use crate::syntax::dimension::ResolvedDimName;
+use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
@@ -41,7 +42,8 @@ impl TIR {
     /// A prepared evaluator can later receive a constructor value that was not
     /// present in the source text, so every constructor of every concrete type
     /// visible in the entry DAG must be available to checking and evaluation.
-    pub fn prepare_external_value_constructors(&mut self) {
+    #[must_use]
+    pub fn with_external_value_constructors(mut self) -> Self {
         let targets = self
             .root()
             .semantic
@@ -49,14 +51,14 @@ impl TIR {
             .struct_types
             .iter()
             .flat_map(|(owning_type, type_def)| {
-                let members = match &type_def.kind {
+                let members = match &type_def.kind() {
                     crate::registry::type_def::TypeDefKind::Required => &[][..],
                     crate::registry::type_def::TypeDefKind::Union { members } => members.as_slice(),
                 };
                 members.iter().map(|variant| {
                     let constructor = crate::syntax::type_name::ResolvedConstructorName::new(
                         owning_type.owner().clone(),
-                        variant.name.atom().clone(),
+                        variant.name().atom().clone(),
                     );
                     let target = ResolvedConstructorTarget {
                         owning_type: owning_type.clone(),
@@ -72,6 +74,7 @@ impl TIR {
             .constructor_refs
             .constructor_defs
             .extend(targets);
+        self
     }
 }
 
@@ -178,7 +181,7 @@ impl DagTIR {
 /// source alias strings.
 pub fn type_resolve_with_modules(
     ir: IR,
-    root_dag_id: crate::dag_id::DagId,
+    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
@@ -200,25 +203,48 @@ pub fn type_resolve_with_modules(
 /// Returns a [`GraphcalError`] for invalid types or cancellation.
 pub fn type_resolve_with_modules_and_cancellation(
     ir: IR,
-    root_dag_id: crate::dag_id::DagId,
+    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     module_types: &ModuleTypeRegistry,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
+    type_resolve_builder_with_modules_and_cancellation(
+        ir,
+        root_dag_id,
+        src,
+        module_resolver,
+        module_types,
+        cancellation,
+    )
+    .map(TirBuilder::finish)
+}
+
+/// Resolve a root DAG into mutable project-assembly state.
+///
+/// Callers add every file-defined or imported DAG through
+/// [`TirBuilder::insert_dag`] and consume the builder with
+/// [`TirBuilder::finish`] before checking or evaluation.
+pub fn type_resolve_builder_with_modules_and_cancellation(
+    ir: IR,
+    root_dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    module_types: &ModuleTypeRegistry,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
-    let owner_for_ctx = root_dag_id.clone();
-    let ctx = ModuleTypeContext::new(&owner_for_ctx, module_resolver, module_types);
+    let ctx = ModuleTypeContext::new(root_dag_id, module_resolver, module_types);
     type_resolve_impl(ir, root_dag_id, src, ctx, cancellation)
 }
 
 fn type_resolve_impl(
     ir: IR,
-    root_dag_id: crate::dag_id::DagId,
+    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TIR, GraphcalError> {
+) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
     let imported_bindings_for_hir = ir.imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
@@ -229,7 +255,7 @@ fn type_resolve_impl(
         &asserts_for_hir,
         &ir.registry,
         src,
-        &root_dag_id,
+        root_dag_id,
         module_ctx,
         &imported_bindings_for_hir,
         cancellation,
@@ -251,17 +277,15 @@ fn type_resolve_impl(
     cancellation.checkpoint()?;
     augment_runtime_deps_for_dynamic_units(&mut root_dag.semantic);
     cancellation.checkpoint()?;
+    validate_public_generic_defaults(&root_dag, &ir.external_surface, module_ctx, src)?;
+    cancellation.checkpoint()?;
     check_hir_body_policies(&root_dag, &ir.external_surface, module_ctx, src)?;
-    let mut dags = DagRegistry::new();
-    dags.insert(root_dag_id.clone(), root_dag);
-    Ok(TIR {
-        registry: ir.registry,
-        module_types: module_ctx.types.clone(),
-        root_dag_id,
-        dags,
-        module_aliases: HashMap::new(),
-        extern_functions: ir.extern_functions,
-    })
+    Ok(TirBuilder::new(
+        ir.registry,
+        module_ctx.types.clone(),
+        root_dag,
+        ir.extern_functions,
+    ))
 }
 
 /// Resolve type annotations for one DAG body with module-aware type-system
@@ -340,6 +364,8 @@ fn type_resolve_single_impl(
     cancellation.checkpoint()?;
     augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
     cancellation.checkpoint()?;
+    validate_public_generic_defaults(&dag, &ir.external_surface, module_ctx, src)?;
+    cancellation.checkpoint()?;
     check_hir_body_policies(&dag, &ir.external_surface, module_ctx, src)?;
     Ok(dag)
 }
@@ -348,7 +374,6 @@ fn type_resolve_single_impl(
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
 #[expect(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
     reason = "orchestrates per-DAG type resolution across IR declarations and semantic body data"
 )]
 fn type_resolve_dag(
@@ -365,7 +390,6 @@ fn type_resolve_dag(
 ) -> Result<DagTIRSeed, GraphcalError> {
     cancellation.checkpoint()?;
     let mut resolved_decl_types = HashMap::new();
-    let no_generic_params: &[GenericParamName] = &[];
 
     // A merged dependency declaration's type annotation keeps the dependency
     // file's offsets, so resolution errors must render against its own source
@@ -373,45 +397,33 @@ fn type_resolve_dag(
     for entry in &consts {
         cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_type_expr_inner(
+        let resolved = resolve_ast_type_expr_via_hir(
             &entry.type_ann,
             registry,
-            &entry.type_resolution_owner,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
             entry.type_src.resolve(src),
-            Some(entry_ctx),
+            entry_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &params {
         cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_type_expr_inner(
+        let resolved = resolve_ast_type_expr_via_hir(
             &entry.type_ann,
             registry,
-            &entry.type_resolution_owner,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
             entry.type_src.resolve(src),
-            Some(entry_ctx),
+            entry_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
     for entry in &nodes {
         cancellation.checkpoint()?;
         let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_type_expr_inner(
+        let resolved = resolve_ast_type_expr_via_hir(
             &entry.type_ann,
             registry,
-            &entry.type_resolution_owner,
-            no_generic_params,
-            no_generic_params,
-            no_generic_params,
             entry.type_src.resolve(src),
-            Some(entry_ctx),
+            entry_ctx,
         )?;
         resolved_decl_types.insert(entry.name.clone(), resolved);
     }
@@ -611,6 +623,243 @@ fn collect_resolved_type_defs(
     Ok(defs)
 }
 
+#[derive(Debug, Clone)]
+enum PublicSignatureDependency {
+    Dimension(Spanned<ResolvedDimName>),
+    Index(Spanned<ResolvedIndexName>),
+    Type(Spanned<ResolvedStructTypeName>),
+}
+
+impl PublicSignatureDependency {
+    const fn span(&self) -> Span {
+        match self {
+            Self::Dimension(name) => name.span,
+            Self::Index(name) => name.span,
+            Self::Type(name) => name.span,
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Self::Dimension(name) => name.value.as_str().to_string(),
+            Self::Index(name) => name.value.as_str().to_string(),
+            Self::Type(name) => name.value.as_str().to_string(),
+        }
+    }
+
+    const fn kind(&self) -> &'static str {
+        match self {
+            Self::Dimension(_) => "dim",
+            Self::Index(_) => "index",
+            Self::Type(_) => "type",
+        }
+    }
+
+    fn is_public(&self, resolver: &ModuleResolver) -> Option<bool> {
+        let visibility = match self {
+            Self::Dimension(name) => resolver.dimension_visibility(&name.value),
+            Self::Index(name) => resolver.index_visibility(&name.value),
+            Self::Type(name) => resolver.struct_type_visibility(&name.value),
+        };
+        visibility.map(crate::syntax::module_resolve::SymbolVisibility::is_public)
+    }
+
+    const fn owner(&self) -> &crate::dag_id::DagId {
+        match self {
+            Self::Dimension(name) => name.value.owner(),
+            Self::Index(name) => name.value.owner(),
+            Self::Type(name) => name.value.owner(),
+        }
+    }
+}
+
+fn collect_public_signature_generic_arg_dependencies(
+    arg: &hir::GenericArg,
+    defs: &ResolvedTypeDefs,
+    visited_defaults: &mut std::collections::HashSet<(ResolvedStructTypeName, GenericParamName)>,
+    dependencies: &mut Vec<PublicSignatureDependency>,
+) {
+    match arg {
+        hir::GenericArg::Dim(arg) => {
+            collect_public_signature_dim_arg_dependencies(arg, dependencies);
+        }
+        hir::GenericArg::Index(index) => {
+            collect_public_signature_index_dependencies(index, dependencies);
+        }
+        hir::GenericArg::Nat(_) => {}
+        hir::GenericArg::Type(type_expr) => collect_public_signature_type_dependencies(
+            type_expr,
+            defs,
+            visited_defaults,
+            dependencies,
+        ),
+    }
+}
+
+fn collect_public_signature_dim_arg_dependencies(
+    arg: &hir::DimArg,
+    dependencies: &mut Vec<PublicSignatureDependency>,
+) {
+    let hir::DimArg::Expr(expr) = arg else {
+        return;
+    };
+    dependencies.extend(
+        expr.terms
+            .iter()
+            .filter_map(|item| match &item.term.target {
+                hir::DimTermTarget::Dimension(name) => {
+                    Some(PublicSignatureDependency::Dimension(name.clone()))
+                }
+                hir::DimTermTarget::GenericParam(_) => None,
+            }),
+    );
+}
+
+fn collect_public_signature_index_dependencies(
+    index: &hir::IndexRef,
+    dependencies: &mut Vec<PublicSignatureDependency>,
+) {
+    if let hir::IndexRef::Concrete(name) = index {
+        dependencies.push(PublicSignatureDependency::Index(name.clone()));
+    }
+}
+
+fn collect_public_signature_type_dependencies(
+    type_expr: &hir::TypeExpr,
+    defs: &ResolvedTypeDefs,
+    visited_defaults: &mut std::collections::HashSet<(ResolvedStructTypeName, GenericParamName)>,
+    dependencies: &mut Vec<PublicSignatureDependency>,
+) {
+    match &type_expr.kind {
+        hir::TypeExprKind::Builtin(_) | hir::TypeExprKind::GenericTypeParam(_) => {}
+        hir::TypeExprKind::DimExpr(expr) => {
+            dependencies.extend(
+                expr.terms
+                    .iter()
+                    .filter_map(|item| match &item.term.target {
+                        hir::DimTermTarget::Dimension(name) => {
+                            Some(PublicSignatureDependency::Dimension(name.clone()))
+                        }
+                        hir::DimTermTarget::GenericParam(_) => None,
+                    }),
+            );
+        }
+        hir::TypeExprKind::Index(index) | hir::TypeExprKind::Key(index) => {
+            collect_public_signature_index_dependencies(index, dependencies);
+        }
+        hir::TypeExprKind::Struct(name) => {
+            dependencies.push(PublicSignatureDependency::Type(name.clone()));
+        }
+        hir::TypeExprKind::Complex(arg) => {
+            collect_public_signature_dim_arg_dependencies(arg, dependencies);
+        }
+        hir::TypeExprKind::TypeApplication { name, generic_args } => {
+            dependencies.push(PublicSignatureDependency::Type(name.clone()));
+            for arg in generic_args {
+                collect_public_signature_generic_arg_dependencies(
+                    arg,
+                    defs,
+                    visited_defaults,
+                    dependencies,
+                );
+            }
+            if let Some(type_def) = defs.struct_types.get(&name.value) {
+                for param in type_def.generic_params().iter().skip(generic_args.len()) {
+                    let key = (name.value.clone(), param.name.clone());
+                    if !visited_defaults.insert(key.clone()) {
+                        continue;
+                    }
+                    if let Some(default) = defs.generic_defaults.get(&key) {
+                        collect_public_signature_generic_arg_dependencies(
+                            &default.hir,
+                            defs,
+                            visited_defaults,
+                            dependencies,
+                        );
+                    }
+                }
+            }
+        }
+        hir::TypeExprKind::Indexed { base, indexes } => {
+            collect_public_signature_type_dependencies(base, defs, visited_defaults, dependencies);
+            indexes.iter().for_each(|index| {
+                collect_public_signature_index_dependencies(index, dependencies);
+            });
+        }
+    }
+}
+
+/// Validate that defaults in every public generic type are closed over public
+/// canonical type-system declarations.
+///
+/// HIR is the validation boundary: aliases have already resolved to their exact
+/// owner and lexical generic parameters are distinct from module declarations.
+/// This avoids both spelling collisions and false positives from a generic
+/// parameter shadowing a local private declaration.
+fn validate_public_generic_defaults(
+    dag: &DagTIR,
+    external_surface: &ExternalDeclSurface,
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for (type_name, type_def) in &dag.semantic.type_defs.struct_types {
+        if type_name.owner() != ctx.owner
+            || !external_surface.is_explicit_export(&DeclName::from_atom(type_name.atom().clone()))
+        {
+            continue;
+        }
+        let pub_span = ctx
+            .resolver
+            .struct_type_span(type_name)
+            .unwrap_or(Span::new(0, 0));
+        for param in type_def.generic_params() {
+            let key = (type_name.clone(), param.name.clone());
+            let Some(default) = dag.semantic.type_defs.generic_defaults.get(&key) else {
+                continue;
+            };
+            let mut dependencies = Vec::new();
+            let mut visited_defaults = std::collections::HashSet::from([key]);
+            collect_public_signature_generic_arg_dependencies(
+                &default.hir,
+                &dag.semantic.type_defs,
+                &mut visited_defaults,
+                &mut dependencies,
+            );
+            for dependency in dependencies {
+                if dependency.owner() == &crate::registry::prelude::prelude_dag_id() {
+                    continue;
+                }
+                match dependency.is_public(ctx.resolver) {
+                    Some(true) => {}
+                    Some(false) => {
+                        return Err(GraphcalError::PrivateInPublic {
+                            pub_kind: "type".to_string(),
+                            pub_name: type_name.as_str().to_string(),
+                            ref_kind: dependency.kind().to_string(),
+                            ref_name: dependency.name(),
+                            src: src.clone(),
+                            ref_span: dependency.span().into(),
+                            pub_span: pub_span.into(),
+                        });
+                    }
+                    None => {
+                        return Err(GraphcalError::InternalError {
+                            message: format!(
+                                "canonical {} `{}` is missing visibility metadata",
+                                dependency.kind(),
+                                dependency.name()
+                            ),
+                            src: src.clone(),
+                            span: dependency.span().into(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn collect_struct_type_defs_from_declared_type(
     declared: &crate::registry::declared_type::DeclaredType,
     ctx: ModuleTypeContext<'_>,
@@ -706,9 +955,9 @@ fn record_resolved_struct_type_def(
     // the consumer module.
     defs.struct_types.insert(name.clone(), type_def.clone());
 
-    for param in &type_def.generic_params {
+    for param in type_def.generic_params() {
         if let Some(default) = &param.default {
-            let resolved = resolve_generic_default_in_struct_scope(
+            let (hir, resolved) = resolve_generic_default_in_struct_scope(
                 default,
                 param,
                 name,
@@ -726,8 +975,10 @@ fn record_resolved_struct_type_def(
                     defs,
                 )?;
             }
-            defs.generic_defaults
-                .insert((name.clone(), param.name.clone()), resolved);
+            defs.generic_defaults.insert(
+                (name.clone(), param.name.clone()),
+                ResolvedGenericDefault { hir, resolved },
+            );
         }
     }
 
@@ -743,21 +994,21 @@ fn record_resolved_struct_type_def(
         .with_prelude(&prelude)
         .with_unit_registry(&registry.units);
         for member in members {
-            for field in &member.fields {
+            for field in member.fields() {
                 let key = ResolvedStructFieldTypeKey {
                     owning_type: name.clone(),
-                    constructor: member.name.clone(),
-                    field: field.name.clone(),
+                    constructor: member.name().clone(),
+                    field: field.name().clone(),
                 };
                 let resolved = resolve_type_expr_in_struct_scope(
-                    &field.type_ann,
+                    field.type_ann(),
                     name,
                     type_def,
                     ctx,
                     registry,
                     definition_src,
                 )?;
-                let bounds = lower_domain_bounds(&field.type_ann, bound_expr_ctx, definition_src)?;
+                let bounds = lower_domain_bounds(field.type_ann(), bound_expr_ctx, definition_src)?;
                 collect_struct_type_defs_from_resolved_type(
                     &resolved,
                     ctx,
@@ -785,7 +1036,7 @@ fn generic_scope_for_type_def(
 ) -> Result<hir::GenericScope, GraphcalError> {
     let owner = hir::GenericParamOwner::Type(name.clone());
     let mut scope = hir::GenericScope::new();
-    for param in &type_def.generic_params {
+    for param in type_def.generic_params() {
         let constraint = match param.constraint {
             TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
             TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
@@ -1587,13 +1838,11 @@ pub(crate) use ops::{
 
 // ---------------------------------------------------------------------------
 mod type_expr;
-#[cfg(test)]
-use type_expr::resolve_type_expr;
+pub use type_expr::resolve_hir_type_expr;
 use type_expr::{
-    internal_error, module_resolve_error, resolve_generic_default_in_struct_scope,
-    resolve_type_expr_in_struct_scope, resolve_type_expr_inner,
+    internal_error, module_resolve_error, resolve_ast_type_expr_via_hir,
+    resolve_generic_default_in_struct_scope, resolve_type_expr_in_struct_scope,
 };
-pub use type_expr::{resolve_hir_type_expr, resolve_type_expr_with_modules};
 
 #[cfg(test)]
 mod tests;

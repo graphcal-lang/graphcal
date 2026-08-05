@@ -32,7 +32,7 @@ pub fn resolve_exportable_dynamic_unit_scales(
     let empty_locals = HirLocalValueMap::root();
     ctx.tir
         .root()
-        .semantic
+        .semantic()
         .dynamic_unit_scales
         .values()
         .filter(|entry| !entry.spelling.is_qualified())
@@ -128,7 +128,7 @@ pub fn resolve_unit_scale(
                 let scale_hir = ctx
                     .tir
                     .root()
-                    .semantic
+                    .semantic()
                     .dynamic_unit_scales
                     .get(item.name.value.resolved())
                     .ok_or_else(|| {

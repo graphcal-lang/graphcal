@@ -508,13 +508,14 @@ impl ModuleTypeRegistry {
             );
         }
         for type_def in registry.types.all_types() {
-            let type_name = ResolvedStructTypeName::from_def(owner.clone(), type_def.name.clone());
+            let type_name =
+                ResolvedStructTypeName::from_def(owner.clone(), type_def.name().clone());
             self.struct_types
                 .insert(type_name.clone(), type_def.clone());
             if let Some(members) = type_def.union_members() {
                 for member in members {
                     self.constructors.insert(
-                        ResolvedConstructorName::from_def(owner.clone(), member.name.clone()),
+                        ResolvedConstructorName::from_def(owner.clone(), member.name().clone()),
                         ModuleConstructorDef {
                             owning_type: type_name.clone(),
                             type_def: type_def.clone(),
@@ -658,14 +659,135 @@ impl StructFieldConstraintKey {
 // DAG registry
 // ---------------------------------------------------------------------------
 
-/// Map from canonical [`DagId`](crate::dag_id::DagId) to its
-/// compiled per-DAG TIR.
+/// Failure to add a DAG to a checked TIR registry.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DagRegistryError {
+    /// A canonical DAG identity can occur only once in one compiled registry.
+    #[error("DAG `{dag_id}` is already present in the TIR registry")]
+    DuplicateDag { dag_id: crate::dag_id::DagId },
+}
+
+/// Checked registry of compiled DAG modules.
 ///
-/// Holds every DAG in scope at this file: the file's own top-level body
-/// (keyed by [`TIR::root_dag_id`]), every inline `dag X { ... }` child
-/// (keyed by `parent_dag_id.child(name)`), and every dep DAG merged in
-/// by `merge_dep_dag_tirs` (keyed by the dep's canonical id).
-pub type DagRegistry = HashMap<crate::dag_id::DagId, DagTIR>;
+/// The root DAG is stored directly, so its presence is structural. Every other
+/// entry is keyed internally from [`DagTIR::dag_id`], so a caller cannot pair a
+/// DAG body with a different map key. The API exposes no removal operation;
+/// consequently every registry always has exactly one designated, reachable root.
+#[derive(Debug, Clone)]
+pub struct DagRegistry {
+    root: DagTIR,
+    other_dags: HashMap<crate::dag_id::DagId, DagTIR>,
+}
+
+impl DagRegistry {
+    fn new(root: DagTIR) -> Self {
+        Self {
+            root,
+            other_dags: HashMap::new(),
+        }
+    }
+
+    /// Canonical identity of this registry's root DAG.
+    #[must_use]
+    pub const fn root_id(&self) -> &crate::dag_id::DagId {
+        self.root.dag_id()
+    }
+
+    /// Borrow the root DAG.
+    #[must_use]
+    pub const fn root(&self) -> &DagTIR {
+        &self.root
+    }
+
+    const fn root_mut(&mut self) -> &mut DagTIR {
+        &mut self.root
+    }
+
+    fn insert(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
+        let dag_id = dag.dag_id.clone();
+        if &dag_id == self.root_id() {
+            return Err(DagRegistryError::DuplicateDag { dag_id });
+        }
+        match self.other_dags.entry(dag_id.clone()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(dag);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                Err(DagRegistryError::DuplicateDag { dag_id })
+            }
+        }
+    }
+
+    /// Look up one DAG by canonical identity.
+    #[must_use]
+    pub fn get(&self, dag_id: &crate::dag_id::DagId) -> Option<&DagTIR> {
+        if dag_id == self.root_id() {
+            Some(&self.root)
+        } else {
+            self.other_dags.get(dag_id)
+        }
+    }
+
+    pub(crate) fn get_mut(&mut self, dag_id: &crate::dag_id::DagId) -> Option<&mut DagTIR> {
+        if dag_id == self.root.dag_id() {
+            Some(&mut self.root)
+        } else {
+            self.other_dags.get_mut(dag_id)
+        }
+    }
+
+    /// Iterate over canonical identities and DAG bodies.
+    pub fn iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
+        std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
+    }
+
+    /// Iterate over canonical DAG identities.
+    pub fn keys(&self) -> impl Iterator<Item = &crate::dag_id::DagId> {
+        std::iter::once(self.root.dag_id()).chain(self.other_dags.keys())
+    }
+
+    /// Iterate over DAG bodies.
+    pub fn values(&self) -> impl Iterator<Item = &DagTIR> {
+        std::iter::once(&self.root).chain(self.other_dags.values())
+    }
+
+    /// Number of DAG modules in this registry, including its root.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.other_dags.len() + 1
+    }
+
+    /// A checked registry is never empty because construction requires a root.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+}
+
+impl<'a> IntoIterator for &'a DagRegistry {
+    type Item = (&'a crate::dag_id::DagId, &'a DagTIR);
+    type IntoIter = std::iter::Chain<
+        std::iter::Once<(&'a crate::dag_id::DagId, &'a DagTIR)>,
+        std::collections::hash_map::Iter<'a, crate::dag_id::DagId, DagTIR>,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
+    }
+}
+
+impl std::ops::Index<&crate::dag_id::DagId> for DagRegistry {
+    type Output = DagTIR;
+
+    fn index(&self, index: &crate::dag_id::DagId) -> &Self::Output {
+        if index == self.root_id() {
+            &self.root
+        } else {
+            &self.other_dags[index]
+        }
+    }
+}
 
 /// Canonical dependency maps for one DAG body, collected from HIR expressions.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -726,6 +848,23 @@ pub struct ResolvedStructFieldTypeKey {
     pub field: FieldName,
 }
 
+/// One generic-parameter default after canonical HIR lowering and semantic
+/// resolution.
+///
+/// The HIR form preserves the canonical declarations named by dimension,
+/// index, and nominal-type defaults. The resolved form is used for generic
+/// substitution. Keeping both in one record prevents visibility checks from
+/// trying to recover erased alias identity from a concrete dimension value.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "crate-only prevents the public model glob re-export from exposing resolution internals"
+)]
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedGenericDefault {
+    pub(crate) hir: hir::GenericArg,
+    pub(crate) resolved: ResolvedGenericArg,
+}
+
 /// Canonical type definitions referenced by module-aware TIR.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
@@ -737,7 +876,7 @@ pub struct ResolvedTypeDefs {
     pub field_bounds: HashMap<ResolvedStructFieldTypeKey, Vec<ResolvedDomainBound>>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
     pub(crate) generic_defaults:
-        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericArg>,
+        HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericDefault>,
 }
 
 impl ResolvedTypeDefs {
@@ -922,92 +1061,69 @@ pub struct ResolvedConstructorTarget {
 // TIR struct
 // ---------------------------------------------------------------------------
 
-/// Typed Intermediate Representation of a single Graphcal file.
+/// Mutable assembly state for a project TIR.
 ///
-/// Wraps a file-scoped [`Registry`] plus a flat [`DagRegistry`] of every
-/// DAG in scope. The file's own top-level body lives at
-/// `dags[&root_dag_id]`; inline `dag X { ... }` children live at
-/// `dags[&root_dag_id.child(name)]`; cross-file dep DAGs merged in by
-/// `merge_dep_dag_tirs` live at their own canonical
-/// [`DagId`](crate::dag_id::DagId).
-#[derive(Debug, Clone)]
-pub struct TIR {
-    /// The type/unit/dimension/index/struct registry, shared by every DAG
-    /// in this file.
-    pub registry: Registry,
-    /// Canonical module-owned type-system definitions used by HIR references.
-    pub(in crate::tir::typed) module_types: ModuleTypeRegistry,
-    /// Canonical id of the file itself; the key under which the file's
-    /// own top-level body lives in `dags`.
-    pub root_dag_id: crate::dag_id::DagId,
-    /// Every DAG reachable from this file. Always contains an entry for
-    /// `root_dag_id`. Inline children and merged dep DAGs are inserted by
-    /// the project pipeline.
-    pub dags: DagRegistry,
-    /// Maps each whole-module import alias to the exact canonical file-root or
-    /// inline-DAG target it binds. Used by [`TIR::lookup_call_target`] for both
-    /// direct `@alias(args)` calls and descendant `@alias.dag(args)` calls.
-    pub module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
-    /// Resolved extern function signatures declared by `import plugin`
-    /// blocks in this file (and, after `merge_dep_dag_tirs`, its deps),
-    /// keyed by canonical plugin identity plus function name.
-    pub extern_functions:
+/// Type resolution creates this builder with a mandatory root DAG. Project
+/// lowering may then add file-defined child DAGs, imported DAG modules, aliases,
+/// and module registries through checked methods. [`Self::finish`] consumes the
+/// mutable shell and exposes an immutable [`TIR`].
+#[derive(Debug)]
+pub struct TirBuilder {
+    registry: Registry,
+    module_types: ModuleTypeRegistry,
+    dags: DagRegistry,
+    module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
+    extern_functions:
         HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
 }
 
-impl TIR {
-    /// Borrow the file's own top-level [`DagTIR`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `root_dag_id` is not in `dags`. Construction sites
-    /// (`type_resolve_with_modules`) populate this entry; the invariant must
-    /// not be broken by callers.
+impl TirBuilder {
+    pub(in crate::tir::typed) fn new(
+        registry: Registry,
+        module_types: ModuleTypeRegistry,
+        root: DagTIR,
+        extern_functions: HashMap<
+            crate::syntax::plugin::ExternFnKey,
+            crate::ir::lower::ExternFunctionEntry,
+        >,
+    ) -> Self {
+        Self {
+            registry,
+            module_types,
+            dags: DagRegistry::new(root),
+            module_aliases: HashMap::new(),
+            extern_functions,
+        }
+    }
+
+    /// Borrow the file-root DAG during assembly.
     #[must_use]
-    #[expect(
-        clippy::expect_used,
-        reason = "TIR invariant: root entry always present"
-    )]
-    pub fn root(&self) -> &DagTIR {
-        self.dags
-            .get(&self.root_dag_id)
-            .expect("TIR.dags must contain root_dag_id")
+    pub const fn root(&self) -> &DagTIR {
+        self.dags.root()
     }
 
-    /// Mutably borrow the file's own top-level [`DagTIR`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `root_dag_id` is not in `dags`.
-    #[expect(
-        clippy::expect_used,
-        reason = "TIR invariant: root entry always present"
-    )]
-    pub fn root_mut(&mut self) -> &mut DagTIR {
-        self.dags
-            .get_mut(&self.root_dag_id)
-            .expect("TIR.dags must contain root_dag_id")
+    /// Mutably borrow the file-root DAG during assembly.
+    pub const fn root_mut(&mut self) -> &mut DagTIR {
+        self.dags.root_mut()
     }
 
-    /// Look up a unit by its canonical defining-module identity.
+    /// Borrow the root file's registry while compiling child DAG modules.
     #[must_use]
-    pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
-        self.module_types.get_unit(name)
+    pub const fn registry(&self) -> &Registry {
+        &self.registry
     }
 
-    /// Look up a declared index by its canonical defining-module identity.
+    /// Add a compiled DAG under its own canonical identity.
     ///
-    /// The per-DAG collection-reference cache contains indexes mentioned by
-    /// value expressions. Prepared recursive schemas also need indexes reached
-    /// only through nominal field types, so those consumers use this complete
-    /// module registry as their fallback.
-    #[must_use]
-    pub fn declared_index_def(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
-        self.module_types.get_index(name)
+    /// # Errors
+    ///
+    /// Returns [`DagRegistryError::DuplicateDag`] rather than replacing an
+    /// existing root, child, or dependency DAG.
+    pub fn insert_dag(&mut self, dag: DagTIR) -> Result<(), DagRegistryError> {
+        self.dags.insert(dag)
     }
 
-    /// Add an inline module's canonical type-system registry after the file TIR
-    /// has been constructed.
+    /// Add an inline module's canonical type-system registry.
     pub fn insert_module_registry(
         &mut self,
         owner: &crate::dag_id::DagId,
@@ -1020,13 +1136,119 @@ impl TIR {
             .overlay_visible_units(owner, registry, resolver);
     }
 
+    /// Bind a source module alias to its canonical callable DAG target.
+    pub fn insert_module_alias(
+        &mut self,
+        alias: ModuleAliasName,
+        target: crate::dag_id::DagId,
+    ) -> Option<crate::dag_id::DagId> {
+        self.module_aliases.insert(alias, target)
+    }
+
+    /// Merge one canonical extern signature without replacing an earlier copy.
+    pub fn insert_extern_function_if_absent(
+        &mut self,
+        key: crate::syntax::plugin::ExternFnKey,
+        function: crate::ir::lower::ExternFunctionEntry,
+    ) {
+        self.extern_functions.entry(key).or_insert(function);
+    }
+
+    /// Finalize project assembly into an immutable, structurally valid TIR.
+    #[must_use]
+    pub fn finish(self) -> TIR {
+        TIR {
+            registry: self.registry,
+            module_types: self.module_types,
+            dags: self.dags,
+            module_aliases: self.module_aliases,
+            extern_functions: self.extern_functions,
+        }
+    }
+}
+
+/// Immutable Typed Intermediate Representation of one Graphcal file and every
+/// canonical DAG module reachable from it.
+///
+/// Root presence and DAG key/body identity are enforced by the private checked
+/// [`DagRegistry`]. Safe clients can inspect but cannot remove, replace, or
+/// re-key finalized DAG bodies.
+#[derive(Debug, Clone)]
+pub struct TIR {
+    pub(crate) registry: Registry,
+    pub(in crate::tir::typed) module_types: ModuleTypeRegistry,
+    pub(crate) dags: DagRegistry,
+    module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
+    pub(crate) extern_functions:
+        HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry>,
+}
+
+impl TIR {
+    /// Borrow the root DAG. Root presence is guaranteed by [`DagRegistry`].
+    #[must_use]
+    pub const fn root(&self) -> &DagTIR {
+        self.dags.root()
+    }
+
+    pub(crate) const fn root_mut(&mut self) -> &mut DagTIR {
+        self.dags.root_mut()
+    }
+
+    /// Canonical identity of the root DAG.
+    #[must_use]
+    pub const fn root_dag_id(&self) -> &crate::dag_id::DagId {
+        self.dags.root_id()
+    }
+
+    /// Borrow the root file's immutable type/unit/index registry.
+    #[must_use]
+    pub const fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
+    /// Borrow every reachable DAG through the read-only checked registry.
+    #[must_use]
+    pub const fn dag_registry(&self) -> &DagRegistry {
+        &self.dags
+    }
+
+    /// Iterate over every DAG owned by this file, including the root and all
+    /// nested descendants. Inline `dag` syntax and file modules use the same
+    /// canonical representation and traversal.
+    pub fn local_dags(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
+        let root = self.root_dag_id();
+        self.dags
+            .iter()
+            .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
+    }
+
+    /// Borrow resolved extern function signatures.
+    #[must_use]
+    pub const fn extern_functions(
+        &self,
+    ) -> &HashMap<crate::syntax::plugin::ExternFnKey, crate::ir::lower::ExternFunctionEntry> {
+        &self.extern_functions
+    }
+
+    /// Look up a unit by its canonical defining-module identity.
+    #[must_use]
+    pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
+        self.module_types.get_unit(name)
+    }
+
+    /// Look up a declared index by its canonical defining-module identity.
+    #[must_use]
+    pub fn declared_index_def(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
+        self.module_types.get_index(name)
+    }
+
     /// Returns true if this file declares any required param or required index.
-    ///
-    /// Such files cannot be evaluated standalone; they must be bound via a
-    /// parameterized include from another file.
     #[must_use]
     pub fn is_library(&self) -> bool {
-        self.root().params.iter().any(|p| p.default_expr.is_none())
+        self.root()
+            .params
+            .iter()
+            .any(|param| param.default_expr.is_none())
             || self
                 .registry
                 .indexes
@@ -1034,14 +1256,12 @@ impl TIR {
                 .any(crate::registry::types::IndexDef::is_required)
     }
 
-    /// Build a concrete `DeclaredType` map from the file root's resolved
-    /// types plus its imported-value metadata. Adds builtin constants as
-    /// `Dimensionless`.
+    /// Build a concrete `DeclaredType` map from the root DAG.
     ///
     /// # Errors
     ///
-    /// Returns a [`GraphcalError`] if any resolved type contains unresolved generic
-    /// parameters.
+    /// Returns a [`GraphcalError`] if any resolved type contains unresolved
+    /// generic parameters.
     pub fn build_declared_types(
         &self,
         src: &NamedSource<Arc<String>>,
@@ -1050,27 +1270,14 @@ impl TIR {
         self.root().build_declared_types(src)
     }
 
-    /// Resolve a user-typed inline-DAG call path to the corresponding
-    /// [`DagTIR`] in [`Self::dags`].
-    ///
-    /// - A path headed by an imported alias resolves from the exact file-root
-    ///   or inline-DAG target bound to that alias. The alias itself is callable;
-    ///   remaining segments descend through child DAGs.
-    /// - A path with no imported-alias head resolves from
-    ///   `root_dag_id.child(name)` for same-file calls.
-    ///
-    /// Returns `None` when the path doesn't resolve (unknown alias, no
-    /// matching DAG, etc.); call sites surface a structured error.
+    /// Resolve a user-typed DAG call path to a canonical compiled module.
     #[must_use]
     pub fn lookup_call_target(&self, path: &crate::syntax::ast::ModulePath) -> Option<&DagTIR> {
         let id = self.resolve_call_path(path)?;
         self.dags.get(&id)
     }
 
-    /// Build the canonical [`DagId`](crate::dag_id::DagId) that
-    /// `path` refers to under this file's scope. An imported alias maps directly
-    /// to its exact target even when it is the path's only segment; otherwise a
-    /// single-segment path names a same-file child DAG.
+    /// Build the canonical DAG identity that a source call path denotes.
     #[must_use]
     pub fn resolve_call_path(
         &self,
@@ -1086,7 +1293,7 @@ impl TIR {
                         owner.child(segment.name.as_str())
                     }),
             ),
-            None if path.segments.len() == 1 => Some(self.root_dag_id.child(head)),
+            None if path.segments.len() == 1 => Some(self.root_dag_id().child(head)),
             None => None,
         }
     }
@@ -1095,49 +1302,121 @@ impl TIR {
 /// The per-DAG compiled body — every field that's specific to one DAG (the
 /// file's own top-level body or an inline `dag X { ... }` child).
 ///
-/// Inserted into [`TIR::dags`] by `type_resolve_with_modules` (one entry per
-/// file root) and by the project pipeline's
-/// `compile_inline_dag_bodies` / `merge_dep_dag_tirs`.
+/// Stored in the checked [`DagRegistry`]: type resolution installs the file
+/// root, and project assembly adds inline and dependency DAGs through
+/// [`TirBuilder::insert_dag`].
 #[derive(Debug, Clone)]
 pub struct DagTIR {
-    /// Canonical identity of this DAG. Equal to the key under which this
-    /// `DagTIR` is stored in [`TIR::dags`]; carried inline so the struct
-    /// is self-describing when passed by reference.
-    pub dag_id: crate::dag_id::DagId,
-    /// Const declarations in source order.
-    pub consts: Vec<crate::ir::lower::ConstEntry>,
-    /// Param declarations in source order.
-    pub params: Vec<crate::ir::lower::ParamEntry>,
-    /// Node declarations in source order.
-    pub nodes: Vec<crate::ir::lower::NodeEntry>,
-    /// Assert declarations in source order.
-    pub asserts: Vec<crate::ir::lower::AssertEntry>,
-    /// Plot declarations in source order.
-    pub plots: Vec<crate::ir::lower::PlotEntry>,
-    /// Figure declarations in source order.
-    pub figures: Vec<crate::ir::lower::FigureEntry>,
-    /// Layer declarations in source order.
-    pub layers: Vec<crate::ir::lower::LayerEntry>,
-    /// Plot aliases from include brace lists (#847).
+    pub(crate) dag_id: crate::dag_id::DagId,
+    pub(crate) consts: Vec<crate::ir::lower::ConstEntry>,
+    pub(crate) params: Vec<crate::ir::lower::ParamEntry>,
+    pub(crate) nodes: Vec<crate::ir::lower::NodeEntry>,
+    pub(crate) asserts: Vec<crate::ir::lower::AssertEntry>,
+    pub(crate) plots: Vec<crate::ir::lower::PlotEntry>,
+    pub(crate) figures: Vec<crate::ir::lower::FigureEntry>,
+    pub(crate) layers: Vec<crate::ir::lower::LayerEntry>,
     pub(crate) included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
-    /// Authoritative semantic facts for this checked DAG body.
-    pub semantic: DagSemanticBody,
-    /// All declaration names in source order with their category.
-    pub source_order: Vec<(ScopedName, DeclCategory)>,
-    /// Mapping from assert name to the list of declarations that assume it.
-    pub assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-    /// Mapping from assert name to its expected-fail configuration.
-    pub expected_fail: HashMap<ScopedName, ExpectedFail>,
-    /// Resolved type for each const/param/node declaration.
-    pub resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
-    /// Source-visible imported bindings with canonical target, type, and value
-    /// metadata kept atomically.
-    pub imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    /// Value declarations callers may project from this DAG body.
-    ///
-    /// Contains explicitly exported nodes and all param input ports. A param
-    /// projection reads its effective bound/default value. Private nodes remain
-    /// absent, and this compiled set preserves the rule when cross-file DAG
-    /// merging no longer has the source AST.
+    pub(crate) semantic: DagSemanticBody,
+    pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
+    pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
+    pub(crate) expected_fail: HashMap<ScopedName, ExpectedFail>,
+    pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
+    pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) projectable_outputs: std::collections::HashSet<DeclName>,
+}
+
+impl DagTIR {
+    #[must_use]
+    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
+        &self.dag_id
+    }
+
+    #[must_use]
+    pub fn consts(&self) -> &[crate::ir::lower::ConstEntry] {
+        &self.consts
+    }
+
+    #[must_use]
+    pub fn params(&self) -> &[crate::ir::lower::ParamEntry] {
+        &self.params
+    }
+
+    #[must_use]
+    pub fn nodes(&self) -> &[crate::ir::lower::NodeEntry] {
+        &self.nodes
+    }
+
+    #[must_use]
+    pub fn asserts(&self) -> &[crate::ir::lower::AssertEntry] {
+        &self.asserts
+    }
+
+    #[must_use]
+    pub fn plots(&self) -> &[crate::ir::lower::PlotEntry] {
+        &self.plots
+    }
+
+    #[must_use]
+    pub fn figures(&self) -> &[crate::ir::lower::FigureEntry] {
+        &self.figures
+    }
+
+    #[must_use]
+    pub fn layers(&self) -> &[crate::ir::lower::LayerEntry] {
+        &self.layers
+    }
+
+    #[must_use]
+    pub const fn semantic(&self) -> &DagSemanticBody {
+        &self.semantic
+    }
+
+    #[must_use]
+    pub fn source_order(&self) -> &[(ScopedName, DeclCategory)] {
+        &self.source_order
+    }
+
+    #[must_use]
+    pub const fn assumes_map(&self) -> &HashMap<ScopedName, Vec<ScopedName>> {
+        &self.assumes_map
+    }
+
+    #[must_use]
+    pub const fn expected_fail(&self) -> &HashMap<ScopedName, ExpectedFail> {
+        &self.expected_fail
+    }
+
+    #[must_use]
+    pub const fn resolved_decl_types(&self) -> &HashMap<ScopedName, ResolvedTypeExpr> {
+        &self.resolved_decl_types
+    }
+
+    #[must_use]
+    pub const fn imported_bindings(
+        &self,
+    ) -> &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding> {
+        &self.imported_bindings
+    }
+
+    /// Supply evaluated values for imported bindings owned by one dependency.
+    /// Canonical target, declared type, and value remain in the same record.
+    pub fn supply_imported_values(
+        &mut self,
+        owner: &crate::dag_id::DagId,
+        values: &HashMap<DeclName, crate::registry::runtime_value::RuntimeValue>,
+        declared_types: &HashMap<ScopedName, crate::registry::declared_type::DeclaredType>,
+    ) {
+        for binding in self.imported_bindings.values_mut() {
+            if binding.target().owner() != owner {
+                continue;
+            }
+            let source_name = binding.target().to_unowned_def_name();
+            if let Some(value) = values.get(&source_name)
+                && let Some(declared_type) = declared_types.get(&ScopedName::from(&source_name))
+            {
+                binding.supply_value(value.clone());
+                binding.replace_declared_type(declared_type.clone());
+            }
+        }
+    }
 }

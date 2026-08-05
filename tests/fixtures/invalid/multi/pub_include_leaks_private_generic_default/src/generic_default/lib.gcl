@@ -1,0 +1,7 @@
+pub(bind) type Element {
+    Element(size: Length),
+}
+
+pub type Wrapper<T: Type = Element> {
+    Wrapper(value: T),
+}

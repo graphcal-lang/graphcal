@@ -1,12 +1,36 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+use thiserror::Error;
 
 use crate::desugar::desugared_ast::{GenericConstraint, TypeExpr};
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName, StructTypeName};
 
+/// A typed field in a constructor payload.
+///
+/// Fields can only enter a [`UnionMemberDef`] through
+/// [`UnionMemberDef::try_new`], which enforces uniqueness within that
+/// constructor.
 #[derive(Debug, Clone)]
 pub struct StructField {
-    pub name: FieldName,
-    pub type_ann: TypeExpr,
+    name: FieldName,
+    type_ann: TypeExpr,
+}
+
+impl StructField {
+    #[must_use]
+    pub const fn new(name: FieldName, type_ann: TypeExpr) -> Self {
+        Self { name, type_ann }
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &FieldName {
+        &self.name
+    }
+
+    #[must_use]
+    pub const fn type_ann(&self) -> &TypeExpr {
+        &self.type_ann
+    }
 }
 
 /// A member (constructor) of a tagged-union type.
@@ -17,10 +41,48 @@ pub struct StructField {
 #[derive(Debug, Clone)]
 pub struct UnionMemberDef {
     /// Constructor name.
-    pub name: ConstructorName,
+    name: ConstructorName,
     /// Payload fields for this constructor. An empty `Vec` means a unit
-    /// constructor (`Coast`).
-    pub fields: Vec<StructField>,
+    /// constructor (`Coast`). Field names are unique by construction.
+    fields: Vec<StructField>,
+}
+
+impl UnionMemberDef {
+    /// Construct a union member while enforcing unique payload-field names.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeDefError::DuplicateConstructorField`] with both field
+    /// positions when the payload repeats a name.
+    pub fn try_new(name: ConstructorName, fields: Vec<StructField>) -> Result<Self, TypeDefError> {
+        let mut first_positions: HashMap<FieldName, usize> = HashMap::new();
+        for (duplicate_index, field) in fields.iter().enumerate() {
+            match first_positions.entry(field.name.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(duplicate_index);
+                }
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    return Err(TypeDefError::DuplicateConstructorField {
+                        constructor: name,
+                        field: field.name.clone(),
+                        first_index: *entry.get(),
+                        duplicate_index,
+                    });
+                }
+            }
+        }
+        Ok(Self { name, fields })
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &ConstructorName {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn fields(&self) -> &[StructField] {
+        &self.fields
+    }
 }
 
 /// The kind of a type definition.
@@ -76,15 +138,88 @@ pub struct TypeGenericParam {
     pub(crate) default: Option<crate::desugar::desugared_ast::GenericArg>,
 }
 
+/// Failure to construct a semantically valid nominal type definition.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum TypeDefError {
+    /// One constructor payload repeated a field name.
+    #[error("constructor `{constructor}` declares field `{field}` more than once")]
+    DuplicateConstructorField {
+        constructor: ConstructorName,
+        field: FieldName,
+        first_index: usize,
+        duplicate_index: usize,
+    },
+    /// A tagged union repeated a constructor name.
+    #[error("constructor `{constructor}` is declared more than once")]
+    DuplicateConstructor { constructor: ConstructorName },
+}
+
 /// A registered type definition: either a required type stub or a tagged union.
+///
+/// Its fields are private so registry clients cannot bypass checked union-member
+/// construction or replace a validated definition with malformed parts.
 #[derive(Debug, Clone)]
 pub struct TypeDef {
-    pub name: StructTypeName,
-    pub generic_params: Vec<TypeGenericParam>,
-    pub(crate) kind: TypeDefKind,
+    name: StructTypeName,
+    generic_params: Vec<TypeGenericParam>,
+    kind: TypeDefKind,
 }
 
 impl TypeDef {
+    /// Construct a required (unbound) type declaration.
+    #[must_use]
+    pub const fn required(name: StructTypeName, generic_params: Vec<TypeGenericParam>) -> Self {
+        Self {
+            name,
+            generic_params,
+            kind: TypeDefKind::Required,
+        }
+    }
+
+    /// Construct a tagged union after checking constructor uniqueness.
+    ///
+    /// Payload-field uniqueness has already been enforced by
+    /// [`UnionMemberDef::try_new`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TypeDefError::DuplicateConstructor`] when two members repeat
+    /// a constructor name.
+    pub fn try_union(
+        name: StructTypeName,
+        generic_params: Vec<TypeGenericParam>,
+        members: Vec<UnionMemberDef>,
+    ) -> Result<Self, TypeDefError> {
+        let mut constructors = HashSet::new();
+        for member in &members {
+            if !constructors.insert(member.name.clone()) {
+                return Err(TypeDefError::DuplicateConstructor {
+                    constructor: member.name.clone(),
+                });
+            }
+        }
+        Ok(Self {
+            name,
+            generic_params,
+            kind: TypeDefKind::Union { members },
+        })
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &StructTypeName {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn generic_params(&self) -> &[TypeGenericParam] {
+        &self.generic_params
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> &TypeDefKind {
+        &self.kind
+    }
+
     /// Returns the union members if this is a tagged union.
     ///
     /// Returns `None` only for a required (unbound) type stub.

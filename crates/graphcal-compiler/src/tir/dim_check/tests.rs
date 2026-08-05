@@ -60,14 +60,16 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
             span: Span::new(0, 0).into(),
         })?;
     module_types.insert_registry(&parent_dag_id, &ir.registry, src.clone());
-    let mut tir = crate::tir::typed::type_resolve_with_modules(
+    let mut builder = crate::tir::typed::type_resolve_builder_with_modules_and_cancellation(
         ir,
-        parent_dag_id.clone(),
+        &parent_dag_id,
         &src,
         &resolver,
         &module_types,
+        &crate::cancellation::CancellationToken::unbounded(),
     )?;
-    compile_inline_dag_bodies_test(&mut tir, &src, &parent_dag_id, &file.declarations)?;
+    compile_inline_dag_bodies_test(&mut builder, &src, &parent_dag_id, &file.declarations)?;
+    let tir = builder.finish();
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
 }
@@ -88,7 +90,7 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     module_types.insert_graphcal_prelude().unwrap();
     module_types.insert_registry(&dag_id, &ir.registry, src.clone());
     let tir =
-        crate::tir::typed::type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types)
+        crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types)
             .unwrap();
     (tir, src)
 }
@@ -97,13 +99,13 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
 /// Used by compiler-side integration tests that don't have access to the
 /// eval crate's project pipeline.
 fn compile_inline_dag_bodies_test(
-    tir: &mut crate::tir::typed::TIR,
+    tir: &mut crate::tir::typed::TirBuilder,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
     parent_declarations: &[crate::desugar::desugared_ast::Declaration],
 ) -> Result<(), GraphcalError> {
     let dag_bodies = tir
-        .registry
+        .registry()
         .dags
         .all_dags()
         .map(|(name, dag)| (name.clone(), dag.body.clone()))
@@ -150,13 +152,13 @@ fn compile_inline_dag_bodies_test(
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    module_types.insert_registry(parent_dag_id, &tir.registry, src.clone());
+    module_types.insert_registry(parent_dag_id, tir.registry(), src.clone());
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
             name.as_str(),
             &body,
-            &tir.registry,
+            tir.registry(),
             &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),
@@ -172,7 +174,12 @@ fn compile_inline_dag_bodies_test(
             &module_types,
         )?;
         compiled_dag.populate_projectable_outputs(&body);
-        tir.dags.insert(dag_id, compiled_dag);
+        tir.insert_dag(compiled_dag)
+            .map_err(|error| GraphcalError::InternalError {
+                message: error.to_string(),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
     }
     Ok(())
 }

@@ -36,7 +36,7 @@ impl RuntimeDeclKey {
     /// identity.
     #[must_use]
     pub(crate) fn for_visible_name(dag: &DagTIR, name: &ScopedName) -> Self {
-        if let Some(resolved) = dag.semantic.decl_bindings.get(name) {
+        if let Some(resolved) = dag.semantic().decl_bindings.get(name) {
             return Self::Resolved(resolved.clone());
         }
         Self::local_or_leaf(dag, name)

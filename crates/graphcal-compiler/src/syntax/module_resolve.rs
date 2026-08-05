@@ -52,7 +52,7 @@ pub enum SymbolVisibility {
 impl SymbolVisibility {
     /// Returns whether the symbol is visible outside its owning module.
     #[must_use]
-    const fn is_public(self) -> bool {
+    pub(crate) const fn is_public(self) -> bool {
         matches!(self, Self::Public | Self::PublicBind)
     }
 
@@ -1301,6 +1301,49 @@ impl ModuleResolver {
     #[must_use]
     pub const fn modules(&self) -> &HashMap<DagId, ModuleSymbols> {
         &self.modules
+    }
+
+    /// Visibility of a canonical dimension declaration.
+    #[must_use]
+    pub(crate) fn dimension_visibility(&self, name: &ResolvedDimName) -> Option<SymbolVisibility> {
+        self.modules
+            .get(name.owner())?
+            .dimensions
+            .get(&name.to_unowned_def_name())
+            .map(ModuleSymbol::visibility)
+    }
+
+    /// Visibility of a canonical index declaration.
+    #[must_use]
+    pub(crate) fn index_visibility(&self, name: &ResolvedIndexName) -> Option<SymbolVisibility> {
+        self.modules
+            .get(name.owner())?
+            .indexes
+            .get(&name.to_unowned_def_name())
+            .map(ModuleIndexSymbol::visibility)
+    }
+
+    /// Visibility of a canonical nominal type declaration.
+    #[must_use]
+    pub(crate) fn struct_type_visibility(
+        &self,
+        name: &ResolvedStructTypeName,
+    ) -> Option<SymbolVisibility> {
+        self.modules
+            .get(name.owner())?
+            .struct_types
+            .get(&name.to_unowned_def_name())
+            .map(ModuleTypeSymbol::visibility)
+    }
+
+    /// Source span of a canonical nominal type declaration.
+    #[must_use]
+    pub(crate) fn struct_type_span(&self, name: &ResolvedStructTypeName) -> Option<Span> {
+        self.modules
+            .get(name.owner())?
+            .struct_types
+            .get(&name.to_unowned_def_name())
+            .map(ModuleTypeSymbol::span)
     }
 
     /// Borrow all module import scopes.

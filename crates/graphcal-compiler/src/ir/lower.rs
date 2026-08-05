@@ -1931,11 +1931,11 @@ impl NominalOverridePreflight<'_> {
         let Some((owning_type, _)) = self.type_registry.lookup_ctor(constructor) else {
             return Ok(());
         };
-        if !self.type_bindings.contains_key(&owning_type.name) {
+        if !self.type_bindings.contains_key(owning_type.name()) {
             return Ok(());
         }
         Err(GraphcalError::IncludeMustReconcileOverride {
-            overridden: owning_type.name.to_string(),
+            overridden: owning_type.name().to_string(),
             overridden_kind: "type".to_string(),
             orphan_decl: self.orphan_decl.to_string(),
             detail,
@@ -3687,38 +3687,89 @@ fn register_type_decl(
         })
         .collect();
 
-    let kind = match &t.body {
-        crate::desugar::desugared_ast::TypeDeclBody::Required => types::TypeDefKind::Required,
+    let type_def = match &t.body {
+        crate::desugar::desugared_ast::TypeDeclBody::Required => {
+            types::TypeDef::required(t.name.value.clone(), generic_params)
+        }
         crate::desugar::desugared_ast::TypeDeclBody::Constructors(type_members) => {
             // Every constructor carries its payload inline; no per-constructor
-            // TypeDef is synthesized. The constructor namespace lives on the
-            // registry and points back to this type.
+            // TypeDef is synthesized. Checked construction keeps duplicate
+            // payload fields out of the registry even for non-parser AST callers.
             let members = type_members
                 .iter()
-                .map(|m| {
-                    let fields = m.payload.as_ref().map_or_else(Vec::new, |fs| {
-                        fs.iter()
-                            .map(|f| types::StructField {
-                                name: f.name.value.clone(),
-                                type_ann: f.type_ann.clone(),
-                            })
-                            .collect()
-                    });
-                    types::UnionMemberDef {
-                        name: ConstructorName::expect_valid(m.name.value.as_str()),
+                .map(|member| {
+                    let payload = member.payload.as_deref().unwrap_or_default();
+                    let fields = payload
+                        .iter()
+                        .map(|field| {
+                            types::StructField::new(
+                                field.name.value.clone(),
+                                field.type_ann.clone(),
+                            )
+                        })
+                        .collect();
+                    types::UnionMemberDef::try_new(
+                        ConstructorName::expect_valid(member.name.value.as_str()),
                         fields,
-                    }
+                    )
+                    .map_err(|error| match error {
+                        types::TypeDefError::DuplicateConstructorField {
+                            constructor,
+                            field,
+                            first_index,
+                            duplicate_index,
+                        } => GraphcalError::DuplicateConstructorField {
+                            type_name: t.name.value.clone(),
+                            constructor,
+                            field,
+                            src: src.clone(),
+                            duplicate: payload[duplicate_index].name.span.into(),
+                            first: payload[first_index].name.span.into(),
+                        },
+                        types::TypeDefError::DuplicateConstructor { constructor } => {
+                            GraphcalError::InternalError {
+                                message: format!(
+                                    "checked union member unexpectedly reported duplicate constructor `{constructor}`"
+                                ),
+                                src: src.clone(),
+                                span: member.name.span.into(),
+                            }
+                        }
+                    })
                 })
-                .collect();
-            types::TypeDefKind::Union { members }
+                .collect::<Result<Vec<_>, _>>()?;
+            types::TypeDef::try_union(t.name.value.clone(), generic_params, members).map_err(
+                |error| match error {
+                    types::TypeDefError::DuplicateConstructor { constructor } => {
+                        let mut declarations = type_members
+                            .iter()
+                            .filter(|member| member.name.value.as_str() == constructor.as_str());
+                        let first = declarations
+                            .next()
+                            .map_or(t.name.span, |member| member.name.span);
+                        let duplicate =
+                            declarations.next().map_or(first, |member| member.name.span);
+                        GraphcalError::DuplicateName {
+                            name: constructor.to_string(),
+                            src: src.clone(),
+                            duplicate: duplicate.into(),
+                            first: first.into(),
+                        }
+                    }
+                    types::TypeDefError::DuplicateConstructorField { .. } => {
+                        GraphcalError::InternalError {
+                            message: "validated union member lost its field-uniqueness invariant"
+                                .to_string(),
+                            src: src.clone(),
+                            span: t.name.span.into(),
+                        }
+                    }
+                },
+            )?
         }
     };
 
-    registry.register_type(types::TypeDef {
-        name: t.name.value.clone(),
-        generic_params,
-        kind,
-    });
+    registry.register_type(type_def);
     Ok(())
 }
 
@@ -4814,7 +4865,7 @@ fn resolve_extern_struct_return(
              returns must use a type declared in (or imported into) the declaring file"
         )));
     };
-    if !type_def.generic_params.is_empty() {
+    if !type_def.generic_params().is_empty() {
         return Err(invalid(format!(
             "record type `{leaf}` is generic; generic struct returns are not supported in \
              this phase"
@@ -4832,7 +4883,7 @@ fn resolve_extern_struct_return(
         .map(|field| {
             let kind = resolve_extern_struct_field(field, registry, src)?;
             Ok(StructShapeField {
-                name: field.name.clone(),
+                name: field.name().clone(),
                 kind,
             })
         })
@@ -4859,15 +4910,15 @@ fn resolve_extern_struct_field(
         message: format!(
             "field `{}` has a type that cannot cross the plugin boundary; struct-return \
              fields support Bool, Int, and quantity types in this phase",
-            field.name
+            field.name()
         ),
         src: src.clone(),
-        span: field.type_ann.span.into(),
+        span: field.type_ann().span.into(),
     };
-    if !field.type_ann.constraints.is_empty() {
+    if !field.type_ann().constraints.is_empty() {
         return Err(unsupported());
     }
-    match &field.type_ann.kind {
+    match &field.type_ann().kind {
         TypeExprKind::Bool => Ok(StructFieldKind::Bool),
         TypeExprKind::Int => Ok(StructFieldKind::Int),
         TypeExprKind::Dimensionless => Ok(StructFieldKind::Quantity(
@@ -5102,6 +5153,54 @@ mod tests {
         let err = parse_and_lower("param x: Dimensionless = 1.0;\nnode x: Dimensionless = 2.0;")
             .unwrap_err();
         assert!(matches!(err, GraphcalError::DuplicateName { .. }));
+    }
+
+    #[test]
+    fn duplicate_constructor_field_declarations_are_rejected() {
+        let err =
+            parse_and_lower("pub type Pair { Pair(value: Length, other: Bool, value: Time) }")
+                .unwrap_err();
+        assert!(matches!(
+            err,
+            GraphcalError::DuplicateConstructorField {
+                type_name,
+                constructor,
+                field,
+                ..
+            } if type_name.as_str() == "Pair"
+                && constructor.as_str() == "Pair"
+                && field.as_str() == "value"
+        ));
+    }
+
+    #[test]
+    fn same_field_name_in_distinct_constructors_is_valid() {
+        parse_and_lower("pub type Choice { Left(value: Length), Right(value: Time) }").unwrap();
+    }
+
+    #[test]
+    fn checked_union_member_api_rejects_duplicate_fields() {
+        let field = types::StructField::new(
+            crate::syntax::type_name::FieldName::expect_valid("value"),
+            crate::desugar::desugared_ast::TypeExpr {
+                kind: crate::desugar::desugared_ast::TypeExprKind::Dimensionless,
+                constraints: Vec::new(),
+                span: Span::new(0, 0),
+            },
+        );
+        let error = types::UnionMemberDef::try_new(
+            ConstructorName::expect_valid("Pair"),
+            vec![field.clone(), field],
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            types::TypeDefError::DuplicateConstructorField {
+                first_index: 0,
+                duplicate_index: 1,
+                ..
+            }
+        ));
     }
 
     #[test]

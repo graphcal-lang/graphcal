@@ -9,43 +9,21 @@ use crate::hir;
 use crate::hir::diagnostics::hir_lower_error_to_graphcal;
 use crate::nat::NatPolyForm;
 use crate::registry::error::GraphcalError;
-use crate::registry::time_scale::TimeScale;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint};
 use crate::syntax::dimension::{DimName, ResolvedDimName};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
-use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
-use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName, StructTypeName};
+use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName};
 
 use super::{
     ModuleTypeContext, ModuleTypeRegistry, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,
-    ResolvedIndex, ResolvedTypeExpr, nat_overflow_error, normalize_nat_expr,
+    ResolvedIndex, ResolvedTypeExpr, nat_overflow_error,
 };
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Type resolution
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Type resolution (single TypeExpr)
-// ---------------------------------------------------------------------------
-
-fn require_local_type_level_path<'a>(
-    path: &'a NamePath,
-    span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> Result<&'a str, GraphcalError> {
-    path.as_bare()
-        .map(NameAtom::as_str)
-        .ok_or_else(|| GraphcalError::EvalError {
-            message: format!(
-                "qualified type-level reference `{path}` needs module-aware resolution"
-            ),
-            src: src.clone(),
-            span: span.into(),
-        })
-}
 
 pub(super) fn module_resolve_error(
     err: &ModuleResolveError,
@@ -69,10 +47,6 @@ pub(super) fn internal_error(
         src: src.clone(),
         span: span.into(),
     }
-}
-
-const fn module_lookup_is_absent(err: &ModuleResolveError) -> bool {
-    matches!(err, ModuleResolveError::UnknownName { .. })
 }
 
 fn type_lower_error_to_graphcal(
@@ -218,7 +192,7 @@ pub fn resolve_hir_type_expr(
     resolve_hir_type_expr_inner(type_ann, ctx)
 }
 
-fn resolve_ast_type_expr_via_hir(
+pub(super) fn resolve_ast_type_expr_via_hir(
     type_ann: &TypeExpr,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -512,7 +486,7 @@ struct ResolvedGenericSubstitutions {
 
 impl ResolvedGenericSubstitutions {
     fn from_resolved_prefix(type_def: &TypeDef, resolved_args: &[ResolvedGenericArg]) -> Self {
-        type_def.generic_params.iter().zip(resolved_args).fold(
+        type_def.generic_params().iter().zip(resolved_args).fold(
             Self::default(),
             |mut substitutions, (param, arg)| {
                 match arg {
@@ -818,9 +792,9 @@ fn check_type_application_arity(
     span: Span,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    let total_params = type_def.generic_params.len();
+    let total_params = type_def.generic_params().len();
     let required_count = type_def
-        .generic_params
+        .generic_params()
         .iter()
         .rposition(|param| param.default.is_none())
         .map_or(0, |index| index.saturating_add(1));
@@ -856,12 +830,12 @@ fn resolve_hir_type_application(
         ctx.src,
     )?;
 
-    let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
-    for (param, arg) in type_def.generic_params.iter().zip(generic_args) {
+    let mut resolved_args = Vec::with_capacity(type_def.generic_params().len());
+    for (param, arg) in type_def.generic_params().iter().zip(generic_args) {
         resolved_args.push(resolve_hir_generic_arg_for_param(param, arg, ctx)?);
     }
 
-    for param in type_def.generic_params.iter().skip(generic_args.len()) {
+    for param in type_def.generic_params().iter().skip(generic_args.len()) {
         let default = param
             .default
             .as_ref()
@@ -954,7 +928,7 @@ fn generic_scope_for_type(
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<hir::GenericScope, GraphcalError> {
     let mut scope = hir::GenericScope::new();
-    for param in &type_def.generic_params {
+    for param in type_def.generic_params() {
         let constraint = generic_constraint(param.constraint);
         let id = hir::GenericParamId::new(
             hir::GenericParamOwner::Type(type_owner.clone()),
@@ -1000,7 +974,7 @@ fn lower_generic_default(
 ) -> Result<hir::GenericArg, GraphcalError> {
     let mut scope = hir::GenericScope::new();
     for earlier in type_def
-        .generic_params
+        .generic_params()
         .iter()
         .take_while(|earlier| earlier.name != param.name)
     {
@@ -1027,188 +1001,6 @@ fn lower_generic_default(
     .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "resolves one AST index path against generic params, local registry, and module context"
-)]
-fn resolve_index_expr_name(
-    path: &NamePath,
-    span: Span,
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedIndex, GraphcalError> {
-    if let Some(atom) = path.as_bare() {
-        let text = atom.as_str();
-        if nat_params.iter().any(|param| param.as_str() == text) {
-            return Err(GraphcalError::ExpectedIndexFoundNat {
-                expression: text.to_string(),
-                src: src.clone(),
-                span: span.into(),
-            });
-        }
-        if let Some(gp) = index_params.iter().find(|p| p.as_str() == text) {
-            return Ok(ResolvedIndex::GenericParam(gp.clone(), span));
-        }
-    }
-
-    if let Some(ctx) = module_ctx {
-        match ctx.resolver.resolve_index_path(ctx.owner, path) {
-            Ok(resolved) => {
-                if ctx.types.get_index(&resolved).is_some() {
-                    return Ok(ResolvedIndex::Concrete(resolved, span));
-                }
-                return Err(GraphcalError::UnknownIndex {
-                    name: resolved.to_unowned_def_name(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
-            Err(err) if path.is_bare() && module_lookup_is_absent(&err) => {}
-            Err(err) => return Err(module_resolve_error(&err, src, span)),
-        }
-    }
-
-    let text = require_local_type_level_path(path, span, src)?;
-    if registry.indexes.get_index(text).is_some() {
-        Ok(ResolvedIndex::Concrete(
-            ResolvedIndexName::from_def(owner.clone(), IndexName::expect_valid(text)),
-            span,
-        ))
-    } else {
-        Err(GraphcalError::UnknownIndex {
-            name: IndexName::expect_valid(text),
-            src: src.clone(),
-            span: span.into(),
-        })
-    }
-}
-
-fn resolve_concrete_index_path(
-    path: &NamePath,
-    span: Span,
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<Option<ResolvedIndexName>, GraphcalError> {
-    if let Some(ctx) = module_ctx {
-        match ctx.resolver.resolve_index_path(ctx.owner, path) {
-            Ok(resolved) => {
-                let Some(index) = ctx.types.get_index(&resolved) else {
-                    return Err(GraphcalError::UnknownIndex {
-                        name: resolved.to_unowned_def_name(),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
-                };
-                if matches!(
-                    index.kind,
-                    crate::registry::types::IndexKind::Named { .. }
-                        | crate::registry::types::IndexKind::RequiredNamed
-                ) {
-                    return Ok(Some(resolved));
-                }
-                return Ok(None);
-            }
-            Err(err) if module_lookup_is_absent(&err) => {}
-            Err(_) if path.is_bare() => {
-                // A bare non-local name may still be a prelude or registry-only
-                // compatibility entry. Fall through to the leaf-keyed registry.
-            }
-            Err(err) => return Err(module_resolve_error(&err, src, span)),
-        }
-    }
-
-    let Some(atom) = path.as_bare() else {
-        return Ok(None);
-    };
-    let Some(index) = registry.indexes.get_index(atom.as_str()) else {
-        return Ok(None);
-    };
-    Ok(matches!(
-        index.kind,
-        crate::registry::types::IndexKind::Named { .. }
-            | crate::registry::types::IndexKind::RequiredNamed
-    )
-    .then(|| ResolvedIndexName::from_def(owner.clone(), IndexName::from_atom(atom.clone()))))
-}
-
-type ResolvedStructTypeLookup<'a> = Option<(ResolvedStructTypeName, &'a TypeDef)>;
-
-fn resolve_struct_type_path<'a>(
-    path: &NamePath,
-    span: Span,
-    registry: &'a Registry,
-    owner: &crate::dag_id::DagId,
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'a>>,
-) -> Result<ResolvedStructTypeLookup<'a>, GraphcalError> {
-    if let Some(ctx) = module_ctx {
-        match ctx.resolver.resolve_struct_type_path(ctx.owner, path) {
-            Ok(resolved) => {
-                if let Some(type_def) = ctx.types.get_struct_type(&resolved) {
-                    return Ok(Some((resolved, type_def)));
-                }
-                return Err(GraphcalError::UnknownStructType {
-                    name: resolved.to_string(),
-                    src: src.clone(),
-                    span: span.into(),
-                });
-            }
-            Err(err) if module_lookup_is_absent(&err) => {}
-            Err(_err) if path.is_bare() => {}
-            Err(err) => return Err(module_resolve_error(&err, src, span)),
-        }
-    }
-
-    let Some(atom) = path.as_bare() else {
-        return Ok(None);
-    };
-    Ok(registry.types.get_type(atom.as_str()).map(|type_def| {
-        (
-            ResolvedStructTypeName::from_def(
-                owner.clone(),
-                StructTypeName::from_atom(atom.clone()),
-            ),
-            type_def,
-        )
-    }))
-}
-
-fn resolve_dimension_path(
-    path: &NamePath,
-    span: Span,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<Option<Dimension>, GraphcalError> {
-    if let Some(ctx) = module_ctx {
-        match ctx.resolver.resolve_dimension_path(ctx.owner, path) {
-            Ok(resolved) => {
-                return ctx
-                    .types
-                    .get_dimension(&resolved)
-                    .cloned()
-                    .map(Some)
-                    .ok_or_else(|| GraphcalError::UnknownDimension {
-                        name: resolved.to_unowned_def_name(),
-                        src: src.clone(),
-                        span: span.into(),
-                    });
-            }
-            Err(err) if path.is_bare() && module_lookup_is_absent(&err) => {}
-            Err(err) => return Err(module_resolve_error(&err, src, span)),
-        }
-    }
-
-    let text = require_local_type_level_path(path, span, src)?;
-    Ok(registry.dimensions.get_dimension(text).cloned())
-}
-
 pub(super) fn resolve_generic_default_in_struct_scope(
     default: &crate::desugar::desugared_ast::GenericArg,
     param: &crate::registry::types::TypeGenericParam,
@@ -1217,7 +1009,7 @@ pub(super) fn resolve_generic_default_in_struct_scope(
     ctx: ModuleTypeContext<'_>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedGenericArg, GraphcalError> {
+) -> Result<(hir::GenericArg, ResolvedGenericArg), GraphcalError> {
     let prelude = hir::PreludeTypeScope::graphcal();
     let resolve_ctx = HirTypeResolutionContext {
         src,
@@ -1227,7 +1019,8 @@ pub(super) fn resolve_generic_default_in_struct_scope(
         prelude: &prelude,
     };
     let hir_arg = lower_generic_default(default, param, type_owner, type_def, resolve_ctx)?;
-    resolve_hir_generic_arg_for_param(param, &hir_arg, resolve_ctx)
+    let resolved = resolve_hir_generic_arg_for_param(param, &hir_arg, resolve_ctx)?;
+    Ok((hir_arg, resolved))
 }
 
 pub(super) fn resolve_type_expr_in_struct_scope(
@@ -1248,799 +1041,4 @@ pub(super) fn resolve_type_expr_in_struct_scope(
     };
     let hir_type = lower_type_expr_in_generic_scope(type_expr, type_owner, type_def, resolve_ctx)?;
     resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
-}
-
-/// Resolve a `TypeExpr` into a `ResolvedTypeExpr` for tests that do not need a
-/// module-aware path context.
-///
-/// Production callers should use [`resolve_type_expr_with_modules`] so the
-/// owner comes from the loaded project/module model instead of a synthetic
-/// test owner.
-///
-/// `dim_params` and `index_params` are the generic parameters in scope (empty
-/// for top-level declarations, non-empty inside function signatures).
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if a name cannot be resolved (not a known
-/// dimension, struct, index, or in-scope generic parameter).
-/// dimension, struct, index, or in-scope generic parameter).
-#[cfg(test)]
-pub(super) fn resolve_type_expr(
-    type_ann: &TypeExpr,
-    registry: &Registry,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let owner = crate::dag_id::DagId::root_in_package("test", "type_resolution");
-    resolve_type_expr_inner(
-        type_ann,
-        registry,
-        &owner,
-        dim_params,
-        index_params,
-        nat_params,
-        src,
-        None,
-    )
-}
-
-/// Resolve a `TypeExpr` with an optional module-aware path context.
-pub fn resolve_type_expr_with_modules(
-    type_ann: &TypeExpr,
-    registry: &Registry,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    resolve_type_expr_inner(
-        type_ann,
-        registry,
-        module_ctx.owner,
-        dim_params,
-        index_params,
-        nat_params,
-        src,
-        Some(module_ctx),
-    )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "recursive resolver threads generic parameter scopes and optional module context"
-)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "single dispatch over every TypeExprKind variant"
-)]
-pub(super) fn resolve_type_expr_inner(
-    type_ann: &TypeExpr,
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    if let Some(ctx) = module_ctx
-        && dim_params.is_empty()
-        && index_params.is_empty()
-        && nat_params.is_empty()
-    {
-        return resolve_ast_type_expr_via_hir(type_ann, registry, src, ctx);
-    }
-
-    match &type_ann.kind {
-        TypeExprKind::Dimensionless => Ok(ResolvedTypeExpr::Dimensionless),
-        TypeExprKind::Bool => Ok(ResolvedTypeExpr::Bool),
-        TypeExprKind::Int => Ok(ResolvedTypeExpr::Int),
-        TypeExprKind::Datetime => Ok(ResolvedTypeExpr::Datetime(TimeScale::UTC)),
-        TypeExprKind::DatetimeApplication { type_args } => {
-            resolve_datetime_application(type_ann, type_args.as_slice(), src)
-        }
-        TypeExprKind::ComplexApplication { generic_args } => resolve_complex_application(
-            type_ann,
-            generic_args,
-            registry,
-            owner,
-            dim_params,
-            index_params,
-            nat_params,
-            src,
-            module_ctx,
-        ),
-        TypeExprKind::KeyApplication { generic_args } => resolve_key_application(
-            type_ann,
-            generic_args,
-            registry,
-            owner,
-            dim_params,
-            index_params,
-            nat_params,
-            src,
-            module_ctx,
-        ),
-
-        TypeExprKind::Indexed { base, indexes } => {
-            let resolved_base = resolve_type_expr_inner(
-                base,
-                registry,
-                owner,
-                dim_params,
-                index_params,
-                nat_params,
-                src,
-                module_ctx,
-            )?;
-            let mut resolved_indexes = Vec::with_capacity(indexes.len());
-            for idx in indexes {
-                match idx {
-                    crate::desugar::desugared_ast::IndexExpr::Finite { cardinality, span } => {
-                        let form = normalize_nat_expr(cardinality, nat_params, src)?;
-                        resolved_indexes.push(ResolvedIndex::Finite(form, *span));
-                    }
-                    crate::desugar::desugared_ast::IndexExpr::BareNat(nat_expr) => {
-                        return Err(GraphcalError::ExpectedIndexFoundNat {
-                            expression: nat_expr.to_string(),
-                            src: src.clone(),
-                            span: nat_expr.span().into(),
-                        });
-                    }
-                    crate::desugar::desugared_ast::IndexExpr::Name(path) => {
-                        resolved_indexes.push(resolve_index_expr_name(
-                            &path.value,
-                            path.span,
-                            registry,
-                            owner,
-                            index_params,
-                            nat_params,
-                            src,
-                            module_ctx,
-                        )?);
-                    }
-                }
-            }
-            Ok(ResolvedTypeExpr::Indexed {
-                base: Box::new(resolved_base),
-                indexes: resolved_indexes,
-            })
-        }
-
-        TypeExprKind::DimExpr(dim_expr) => resolve_dim_expr(
-            dim_expr,
-            registry,
-            owner,
-            dim_params,
-            index_params,
-            nat_params,
-            src,
-            module_ctx,
-        ),
-
-        TypeExprKind::TypeApplication { name, generic_args } => resolve_type_application(
-            type_ann,
-            name,
-            generic_args.as_slice(),
-            registry,
-            owner,
-            dim_params,
-            index_params,
-            nat_params,
-            src,
-            module_ctx,
-        ),
-    }
-}
-
-/// Resolve a dimension expression to either a [`ResolvedTypeExpr::Quantity`],
-/// [`ResolvedTypeExpr::GenericDimExpr`], [`ResolvedTypeExpr::IndexArg`],
-/// [`ResolvedTypeExpr::Struct`], or [`ResolvedTypeExpr::GenericDimParam`].
-///
-/// A single-term, no-power expression is first checked against named indexes,
-/// struct types, and generic dimension parameters. Multi-term expressions with
-/// generic params become `GenericDimExpr`; fully concrete expressions become `Quantity`.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "resolves ambiguous nominal or dimension syntax with all generic scopes"
-)]
-fn resolve_dim_expr(
-    dim_expr: &crate::desugar::desugared_ast::DimExpr,
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    // Single-term, no power: may be a nominal type-level reference rather than
-    // a dimension expression denoting a quantity type.
-    if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() {
-        let term = &dim_expr.terms[0].term;
-        if let Some(index) = resolve_concrete_index_path(
-            &term.name.value,
-            term.name.span,
-            registry,
-            owner,
-            src,
-            module_ctx,
-        )? {
-            return Ok(ResolvedTypeExpr::IndexArg(ResolvedIndex::Concrete(
-                index, term.span,
-            )));
-        }
-        if let Some(atom) = term.name.value.as_bare()
-            && let Some(gp) = index_params.iter().find(|p| p.as_str() == atom.as_str())
-        {
-            return Ok(ResolvedTypeExpr::IndexArg(ResolvedIndex::GenericParam(
-                gp.clone(),
-                term.span,
-            )));
-        }
-        if let Some((type_name, type_def)) = resolve_struct_type_path(
-            &term.name.value,
-            term.name.span,
-            registry,
-            owner,
-            src,
-            module_ctx,
-        )? {
-            return if type_def.generic_params.is_empty() {
-                Ok(ResolvedTypeExpr::Struct(type_name, term.span))
-            } else {
-                resolve_known_type_application(
-                    term.span,
-                    type_name,
-                    type_def,
-                    &[],
-                    registry,
-                    owner,
-                    dim_params,
-                    index_params,
-                    nat_params,
-                    src,
-                    module_ctx,
-                )
-            };
-        }
-        if let Some(atom) = term.name.value.as_bare()
-            && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
-        {
-            return Ok(ResolvedTypeExpr::GenericDimParam(gp.clone(), term.span));
-        }
-    }
-
-    let has_generic = dim_expr.terms.iter().any(|item| {
-        item.term
-            .name
-            .value
-            .as_bare()
-            .is_some_and(|atom| dim_params.iter().any(|p| p.as_str() == atom.as_str()))
-    });
-
-    if has_generic {
-        let terms = dim_expr
-            .terms
-            .iter()
-            .map(|item| {
-                resolve_dim_term_in_generic_expr(item, registry, dim_params, src, module_ctx)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ResolvedTypeExpr::GenericDimExpr {
-            terms,
-            span: dim_expr.span,
-        })
-    } else {
-        let result = dim_expr.terms.iter().try_fold(
-            Dimension::dimensionless(),
-            |acc, item| -> Result<Dimension, GraphcalError> {
-                let base = concrete_dimension_for_term(item, registry, src, module_ctx)?;
-                let exp = item.term.power.unwrap_or(Rational::ONE);
-                let overflow_err = || GraphcalError::DimensionOverflow {
-                    src: src.clone(),
-                    span: item.term.span.into(),
-                };
-                let powered = base.pow(exp).map_err(|_| overflow_err())?;
-                match item.op {
-                    MulDivOp::Mul => (acc * powered).map_err(|_| overflow_err()),
-                    MulDivOp::Div => (acc / powered).map_err(|_| overflow_err()),
-                }
-            },
-        )?;
-        Ok(ResolvedTypeExpr::Quantity(result))
-    }
-}
-
-fn resolve_dim_term_in_generic_expr(
-    item: &crate::desugar::desugared_ast::DimExprItem,
-    registry: &Registry,
-    dim_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedDimTerm, GraphcalError> {
-    let power = item.term.power.unwrap_or(Rational::ONE);
-    let op = item.op;
-    if let Some(atom) = item.term.name.value.as_bare()
-        && let Some(gp) = dim_params.iter().find(|p| p.as_str() == atom.as_str())
-    {
-        return Ok(ResolvedDimTerm::GenericParam {
-            name: gp.clone(),
-            power,
-            op,
-            span: item.term.span,
-        });
-    }
-    concrete_dimension_for_term(item, registry, src, module_ctx)
-        .map(|dim| ResolvedDimTerm::Concrete { dim, power, op })
-}
-
-fn concrete_dimension_for_term(
-    item: &crate::desugar::desugared_ast::DimExprItem,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<Dimension, GraphcalError> {
-    resolve_dimension_path(
-        &item.term.name.value,
-        item.term.name.span,
-        registry,
-        src,
-        module_ctx,
-    )?
-    .ok_or_else(|| {
-        let name = item
-            .term
-            .name
-            .value
-            .as_bare()
-            .map_or_else(|| item.term.name.value.display_path(), ToString::to_string);
-        GraphcalError::UnknownDimension {
-            name: DimName::expect_valid(name),
-            src: src.clone(),
-            span: item.term.span.into(),
-        }
-    })
-}
-
-/// Resolve a `Datetime<TimeScale>` application to a [`ResolvedTypeExpr::Datetime`].
-///
-/// The argument list is expected to hold exactly one type argument that
-/// parses as a [`TimeScale`] identifier (`UTC`, `TAI`, `TT`, …). Surfaced as
-/// a dedicated helper rather than living inside [`resolve_type_application`]
-/// so the dispatch in [`resolve_type_expr`] is on the AST variant rather than
-/// a string compare of the built-in name.
-fn resolve_datetime_application(
-    type_ann: &TypeExpr,
-    type_args: &[TypeExpr],
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    if type_args.len() != 1 {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `Datetime` expects 0 or 1 type argument(s), got {}",
-                type_args.len()
-            ),
-            src: src.clone(),
-            span: type_ann.span.into(),
-        });
-    }
-    let arg = &type_args[0];
-    match &arg.kind {
-        TypeExprKind::DimExpr(dim_expr)
-            if dim_expr.terms.len() == 1 && dim_expr.terms[0].term.power.is_none() =>
-        {
-            let term = &dim_expr.terms[0].term;
-            let name = require_local_type_level_path(&term.name.value, term.name.span, src)?;
-            name.parse::<TimeScale>().map_or_else(
-                |_| {
-                    Err(GraphcalError::EvalError {
-                        message: format!(
-                            "unknown time scale `{name}`; \
-                         expected one of: UTC, TAI, TT, TDB, ET, GPST, GST, BDT"
-                        ),
-                        src: src.clone(),
-                        span: arg.span.into(),
-                    })
-                },
-                |scale| Ok(ResolvedTypeExpr::Datetime(scale)),
-            )
-        }
-        _ => Err(GraphcalError::EvalError {
-            message: "expected a time scale name (e.g., UTC, TAI, TT, TDB, GPST)".to_string(),
-            src: src.clone(),
-            span: arg.span.into(),
-        }),
-    }
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "passes full type resolution context from resolve_type_expr"
-)]
-fn resolve_complex_application(
-    type_ann: &TypeExpr,
-    generic_args: &[crate::desugar::desugared_ast::GenericArg],
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let [arg] = generic_args else {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `Complex` expects 1 generic argument, got {}",
-                generic_args.len()
-            ),
-            src: src.clone(),
-            span: type_ann.span.into(),
-        });
-    };
-    let param = crate::registry::types::TypeGenericParam {
-        name: GenericParamName::expect_valid("D"),
-        constraint: TypeGenericConstraint::Dim,
-        default: None,
-    };
-    let resolved = resolve_type_arg_for_param(
-        &param,
-        arg,
-        registry,
-        owner,
-        dim_params,
-        index_params,
-        nat_params,
-        src,
-        module_ctx,
-    )?;
-    let ResolvedGenericArg::Dim(dimension) = resolved else {
-        return Err(internal_error(
-            "Complex dimension argument resolved to a non-dimension sort".to_string(),
-            src,
-            arg.span(),
-        ));
-    };
-    Ok(ResolvedTypeExpr::Complex {
-        dimension,
-        span: type_ann.span,
-    })
-}
-
-/// Resolve the built-in `Key<I>` application by checking its single generic
-/// argument against a synthetic `I: Index` parameter.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "passes full type resolution context from resolve_type_expr"
-)]
-fn resolve_key_application(
-    type_ann: &TypeExpr,
-    generic_args: &[crate::desugar::desugared_ast::GenericArg],
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let [arg] = generic_args else {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "type `Key` expects 1 generic argument, got {}",
-                generic_args.len()
-            ),
-            src: src.clone(),
-            span: type_ann.span.into(),
-        });
-    };
-    let param = crate::registry::types::TypeGenericParam {
-        name: GenericParamName::expect_valid("I"),
-        constraint: TypeGenericConstraint::Index,
-        default: None,
-    };
-    let resolved = resolve_type_arg_for_param(
-        &param,
-        arg,
-        registry,
-        owner,
-        dim_params,
-        index_params,
-        nat_params,
-        src,
-        module_ctx,
-    )?;
-    let ResolvedGenericArg::Index(index) = resolved else {
-        return Err(internal_error(
-            "Key index argument resolved to a non-index sort".to_string(),
-            src,
-            arg.span(),
-        ));
-    };
-    Ok(ResolvedTypeExpr::Key {
-        index,
-        span: type_ann.span,
-    })
-}
-
-/// Resolve a user-defined type application like `Vec3<Length, ECI>` to a
-/// [`ResolvedTypeExpr`] by looking the name up in the type registry and
-/// substituting defaults for any trailing optional parameters.
-///
-/// Built-in parameterized types (`Datetime<...>`) reach [`resolve_type_expr`]
-/// through their own AST variant and never enter this function.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "passes full type resolution context from resolve_type_expr"
-)]
-fn resolve_type_application(
-    type_ann: &TypeExpr,
-    name: &crate::syntax::span::Spanned<NamePath>,
-    generic_args: &[crate::desugar::desugared_ast::GenericArg],
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let (type_name, type_def) =
-        resolve_struct_type_path(&name.value, name.span, registry, owner, src, module_ctx)?
-            .ok_or_else(|| GraphcalError::UnknownStructType {
-                name: name.value.display_path(),
-                src: src.clone(),
-                span: name.span.into(),
-            })?;
-    resolve_known_type_application(
-        type_ann.span,
-        type_name,
-        type_def,
-        generic_args,
-        registry,
-        owner,
-        dim_params,
-        index_params,
-        nat_params,
-        src,
-        module_ctx,
-    )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "passes a resolved type declaration plus the full type resolution context"
-)]
-fn resolve_known_type_application(
-    span: Span,
-    type_name: ResolvedStructTypeName,
-    type_def: &TypeDef,
-    generic_args: &[crate::desugar::desugared_ast::GenericArg],
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    check_type_application_arity(type_name.as_str(), type_def, generic_args.len(), span, src)?;
-    let mut resolved_args = Vec::with_capacity(type_def.generic_params.len());
-    for (param, arg) in type_def.generic_params.iter().zip(generic_args) {
-        let resolved = resolve_type_arg_for_param(
-            param,
-            arg,
-            registry,
-            owner,
-            dim_params,
-            index_params,
-            nat_params,
-            src,
-            module_ctx,
-        )?;
-        resolved_args.push(resolved);
-    }
-    for param in type_def.generic_params.iter().skip(generic_args.len()) {
-        let default_expr = param
-            .default
-            .as_ref()
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!(
-                    "internal: generic parameter `{}` has no default",
-                    param.name
-                ),
-                src: src.clone(),
-                span: span.into(),
-            })?;
-        let default_ctx = module_ctx
-            .map(|ctx| ModuleTypeContext::new(type_name.owner(), ctx.resolver, ctx.types));
-        let mut resolved = resolve_type_arg_for_param(
-            param,
-            default_expr,
-            registry,
-            type_name.owner(),
-            dim_params,
-            index_params,
-            nat_params,
-            src,
-            default_ctx,
-        )?;
-        instantiate_params_in_default(
-            &mut resolved,
-            type_def,
-            &resolved_args,
-            src,
-            default_expr.span(),
-        )?;
-        resolved_args.push(resolved);
-    }
-    Ok(ResolvedTypeExpr::GenericStruct {
-        name: type_name,
-        generic_args: resolved_args,
-        span,
-    })
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "keeps sorted generic-argument dispatch and its shared resolution context together"
-)]
-fn resolve_type_arg_for_param(
-    param: &crate::registry::types::TypeGenericParam,
-    arg: &crate::desugar::desugared_ast::GenericArg,
-    registry: &Registry,
-    owner: &crate::dag_id::DagId,
-    dim_params: &[GenericParamName],
-    index_params: &[GenericParamName],
-    nat_params: &[GenericParamName],
-    src: &NamedSource<Arc<String>>,
-    module_ctx: Option<ModuleTypeContext<'_>>,
-) -> Result<ResolvedGenericArg, GraphcalError> {
-    let resolve_as_type = || {
-        let ambiguous_as_type;
-        let type_expr = match arg {
-            crate::desugar::desugared_ast::GenericArg::Type(type_expr) => type_expr,
-            crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
-                ambiguous_as_type = hir::lower::ambiguous_generic_arg_as_type(ambiguous);
-                &ambiguous_as_type
-            }
-            crate::desugar::desugared_ast::GenericArg::Index(_) => {
-                return Err(generic_sort_error(param, "Index", arg.span(), src));
-            }
-            crate::desugar::desugared_ast::GenericArg::Nat(_) => {
-                return Err(generic_sort_error(param, "Nat", arg.span(), src));
-            }
-        };
-        resolve_type_expr_inner(
-            type_expr,
-            registry,
-            owner,
-            dim_params,
-            index_params,
-            nat_params,
-            src,
-            module_ctx,
-        )
-    };
-
-    match param.constraint {
-        TypeGenericConstraint::Nat => {
-            let ambiguous_as_nat;
-            let nat = match arg {
-                crate::desugar::desugared_ast::GenericArg::Nat(nat) => nat,
-                crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous) => {
-                    ambiguous_as_nat = hir::lower::ambiguous_generic_arg_as_nat(ambiguous);
-                    &ambiguous_as_nat
-                }
-                crate::desugar::desugared_ast::GenericArg::Index(_) => {
-                    return Err(generic_sort_error(param, "Index", arg.span(), src));
-                }
-                crate::desugar::desugared_ast::GenericArg::Type(_) => {
-                    return Err(generic_sort_error(param, "type", arg.span(), src));
-                }
-            };
-            normalize_nat_expr(nat, nat_params, src)
-                .map(|form| ResolvedGenericArg::Nat(form, nat.span()))
-        }
-        TypeGenericConstraint::Dim => resolved_type_as_dim_arg(resolve_as_type()?)
-            .map(ResolvedGenericArg::Dim)
-            .ok_or_else(|| generic_sort_error(param, "non-dimension type", arg.span(), src)),
-        TypeGenericConstraint::Index => {
-            if let crate::desugar::desugared_ast::GenericArg::Index(index) = arg {
-                let resolved = match index {
-                    crate::desugar::desugared_ast::IndexExpr::Finite { cardinality, span } => {
-                        ResolvedIndex::Finite(
-                            normalize_nat_expr(cardinality, nat_params, src)?,
-                            *span,
-                        )
-                    }
-                    crate::desugar::desugared_ast::IndexExpr::Name(path) => {
-                        resolve_index_expr_name(
-                            &path.value,
-                            path.span,
-                            registry,
-                            owner,
-                            index_params,
-                            nat_params,
-                            src,
-                            module_ctx,
-                        )?
-                    }
-                    crate::desugar::desugared_ast::IndexExpr::BareNat(nat) => {
-                        return Err(GraphcalError::ExpectedIndexFoundNat {
-                            expression: nat.to_string(),
-                            src: src.clone(),
-                            span: nat.span().into(),
-                        });
-                    }
-                };
-                return Ok(ResolvedGenericArg::Index(resolved));
-            }
-            if let crate::desugar::desugared_ast::GenericArg::Nat(nat) = arg {
-                return Err(GraphcalError::ExpectedIndexFoundNat {
-                    expression: nat.to_string(),
-                    src: src.clone(),
-                    span: nat.span().into(),
-                });
-            }
-            match resolve_as_type()? {
-                ResolvedTypeExpr::IndexArg(index) => Ok(ResolvedGenericArg::Index(index)),
-                _ => Err(generic_sort_error(param, "non-index type", arg.span(), src)),
-            }
-        }
-        TypeGenericConstraint::Type => match resolve_as_type()? {
-            ResolvedTypeExpr::IndexArg(_) => {
-                Err(generic_sort_error(param, "Index", arg.span(), src))
-            }
-            ResolvedTypeExpr::Indexed { .. } => Err(generic_sort_error(
-                param,
-                "indexed declaration type",
-                arg.span(),
-                src,
-            )),
-            resolved => Ok(ResolvedGenericArg::Type(resolved)),
-        },
-    }
-}
-
-fn resolved_type_as_dim_arg(resolved: ResolvedTypeExpr) -> Option<ResolvedDimArg> {
-    match resolved {
-        ResolvedTypeExpr::Dimensionless => Some(ResolvedDimArg::Dimensionless),
-        ResolvedTypeExpr::Quantity(dim) => Some(ResolvedDimArg::Concrete(dim)),
-        ResolvedTypeExpr::GenericDimParam(name, span) => {
-            Some(ResolvedDimArg::GenericParam(name, span))
-        }
-        ResolvedTypeExpr::GenericDimExpr { terms, span } => {
-            Some(ResolvedDimArg::Expr { terms, span })
-        }
-        _ => None,
-    }
-}
-
-fn generic_sort_error(
-    param: &crate::registry::types::TypeGenericParam,
-    actual: &str,
-    span: Span,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
-    let expected = match param.constraint {
-        TypeGenericConstraint::Dim => "Dim",
-        TypeGenericConstraint::Index => "Index",
-        TypeGenericConstraint::Nat => "Nat",
-        TypeGenericConstraint::Type => "Type",
-    };
-    GraphcalError::EvalError {
-        message: format!(
-            "generic parameter `{}` expects an argument of sort `{expected}`, got {actual}",
-            param.name
-        ),
-        src: src.clone(),
-        span: span.into(),
-    }
 }

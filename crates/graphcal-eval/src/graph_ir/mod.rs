@@ -93,16 +93,15 @@ pub fn project_tir(tir: &TIR) -> GraphIr {
     let root = project_dag(tir, tir.root());
 
     let mut child_dags: Vec<&DagTIR> = tir
-        .dags
-        .values()
-        .filter(|dag| dag.dag_id.is_descendant_of(&tir.root_dag_id))
+        .local_dags()
+        .filter_map(|(dag_id, dag)| (dag_id != tir.root_dag_id()).then_some(dag))
         .collect();
-    child_dags.sort_by(|a, b| a.dag_id.cmp(&b.dag_id));
+    child_dags.sort_by(|a, b| a.dag_id().cmp(b.dag_id()));
     let children: Vec<GraphCluster> = child_dags.iter().map(|dag| project_dag(tir, dag)).collect();
 
     let mut edges: BTreeSet<GraphEdge> = BTreeSet::new();
     for dag in std::iter::once(tir.root()).chain(child_dags) {
-        let deps = &dag.semantic.dependencies;
+        let deps = &dag.semantic().dependencies;
         for (dependent, dep_set) in deps.const_deps.iter().chain(deps.runtime_deps.iter()) {
             for dep in dep_set {
                 edges.insert(GraphEdge {
@@ -146,7 +145,7 @@ pub fn project_tir(tir: &TIR) -> GraphIr {
 /// Project one DAG body's const/param/node declarations, in source order.
 fn project_dag(tir: &TIR, dag: &DagTIR) -> GraphCluster {
     let nodes = dag
-        .source_order
+        .source_order()
         .iter()
         .filter_map(|(name, category)| {
             let kind = match category {
@@ -160,9 +159,9 @@ fn project_dag(tir: &TIR, dag: &DagTIR) -> GraphCluster {
             };
             let id = dag.resolved_decl_key_for_local(name);
             let type_label = dag
-                .resolved_decl_types
+                .resolved_decl_types()
                 .get(name)
-                .map(|ty| ty.format(&tir.registry));
+                .map(|ty| ty.format(tir.registry()));
             Some(GraphNode {
                 id,
                 kind,
@@ -171,7 +170,7 @@ fn project_dag(tir: &TIR, dag: &DagTIR) -> GraphCluster {
         })
         .collect();
     GraphCluster {
-        dag_id: dag.dag_id.clone(),
+        dag_id: dag.dag_id().clone(),
         nodes,
     }
 }
@@ -202,7 +201,7 @@ mod tests {
         let mut module_types = ModuleTypeRegistry::default();
         module_types.insert_graphcal_prelude().unwrap();
         module_types.insert_registry(&dag_id, &ir.registry, src.clone());
-        type_resolve_with_modules(ir, dag_id, &src, &resolver, &module_types).unwrap()
+        type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types).unwrap()
     }
 
     /// Compile through the full project pipeline (loader + inline-DAG body

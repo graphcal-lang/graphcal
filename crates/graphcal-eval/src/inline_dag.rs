@@ -19,7 +19,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::tir::typed::{TIR, resolved_to_declared_type};
+use graphcal_compiler::tir::typed::resolved_to_declared_type;
 
 use crate::import_surface::{
     ImportItemPresence, file_import_item_presence, import_item_not_found_error,
@@ -195,7 +195,7 @@ pub fn preprocess_dag_body_self_imports(
 /// Classify the value-kind decls in a file's AST for use as the
 /// `parent_consts` / `parent_runtime_names` arguments of
 /// [`preprocess_dag_body_self_imports`]. Pairs with
-/// [`classify_value_decls_in_tir`] — same shape, different input source.
+/// [`classify_value_decls_in_dag`] — same shape, different input source.
 ///
 /// Used by `process_deferred_dag_includes` for the inline-DAG include
 /// path: when the parent file's TIR isn't yet type-resolved, the AST
@@ -230,7 +230,7 @@ pub fn classify_value_decls_in_ast(
     values
 }
 
-/// Classify the value-kind decls of a type-resolved root [`TIR`] into the
+/// Classify the value-kind declarations of one type-resolved DAG into the
 /// same `(consts, runtime_names)` shape returned by
 /// [`classify_value_decls_in_ast`]. Pairs with that helper — TIR-stage
 /// callers (where the parent file is already type-resolved) get real
@@ -241,32 +241,31 @@ pub fn classify_value_decls_in_ast(
 ///
 /// Returns a [`GraphcalError`] if any resolved const type cannot be lowered
 /// back to a [`DeclaredType`].
-pub fn classify_value_decls_in_tir(
-    tir: &TIR,
+pub fn classify_value_decls_in_dag(
+    root: &graphcal_compiler::tir::typed::DagTIR,
     parent_external_surface: &ExternalDeclSurface,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ParentValueDecls, GraphcalError> {
-    let root = tir.root();
     let mut values = ParentValueDecls::default();
-    for entry in &root.consts {
+    for entry in root.consts() {
         let name = entry.name.member().clone();
         if !parent_external_surface.is_explicit_export(&name) {
             continue;
         }
-        let Some(resolved) = root.resolved_decl_types.get(&entry.name) else {
+        let Some(resolved) = root.resolved_decl_types().get(&entry.name) else {
             continue;
         };
         values
             .consts
             .insert(name, resolved_to_declared_type(resolved, src)?);
     }
-    for entry in &root.params {
+    for entry in root.params() {
         let name = entry.name.member().clone();
         if parent_external_surface.is_input_port(&name) {
             values.runtime.insert(name);
         }
     }
-    for entry in &root.nodes {
+    for entry in root.nodes() {
         let name = entry.name.member().clone();
         if parent_external_surface.is_explicit_export(&name) {
             values.runtime.insert(name);
