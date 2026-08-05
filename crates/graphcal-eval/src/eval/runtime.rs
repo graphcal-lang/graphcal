@@ -1499,6 +1499,15 @@ fn evaluate_plot(
     let empty_locals = HirLocalValueMap::root();
     let mut channel_data = Vec::new();
     for (channel, expr) in &lowered.encodings {
+        // A rendering conversion is part of the channel's data contract, not
+        // only axis decoration. Resolve it once, fail loudly if its dynamic
+        // scale is invalid, and use the same metadata for values and labels.
+        let display_unit = extract_flat_display_unit(expr, ctx, values).map_err(|e| {
+            format!(
+                "encoding channel `{channel}`: {}",
+                eval_failed_node_error(&e)
+            )
+        })?;
         let data = if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
             super::plot_data::ChannelData::unindexed_label(s.clone())
         } else {
@@ -1508,12 +1517,14 @@ fn evaluate_plot(
                     eval_failed_node_error(&e)
                 )
             })?;
-            super::plot_data::channel_data_from_runtime(&rv)
-                .map_err(|e| format!("encoding channel `{channel}`: {e}"))?
+            super::plot_data::channel_data_from_runtime_with_display_unit(
+                &rv,
+                display_unit.as_ref(),
+            )
+            .map_err(|e| format!("encoding channel `{channel}`: {e}"))?
         };
 
-        // Extract axis metadata: dimension from graph refs, display unit from expression
-        let meta = extract_encoding_axis_meta(expr, declared_types, ctx, values);
+        let meta = extract_encoding_axis_meta(expr, declared_types, ctx, display_unit.as_ref());
         encoding_meta.push((*channel, meta));
 
         channel_data.push((*channel, data));
@@ -1565,18 +1576,13 @@ fn extract_encoding_axis_meta(
     expr: &graphcal_compiler::hir::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
+    display_unit: Option<&DisplayUnit>,
 ) -> AxisMeta {
-    let dimension_label = extract_dimension_from_expr(expr, declared_types, ctx.registry);
-    // Axis metadata is best-effort decoration: a failing display scale already
-    // surfaces as a per-node error on the plotted declaration itself.
-    let unit_label = extract_flat_display_unit(expr, ctx, values)
-        .ok()
-        .flatten()
-        .map(|du| du.label);
+    let dimension_label =
+        extract_dimension_from_expr(expr, declared_types, ctx.registry, ctx.tir.root());
     AxisMeta {
         dimension_label,
-        unit_label,
+        unit_label: display_unit.map(|unit| unit.label.clone()),
     }
 }
 
@@ -1585,23 +1591,36 @@ fn extract_dimension_from_expr(
     expr: &graphcal_compiler::hir::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
     registry: &Registry,
+    dag: &graphcal_compiler::tir::typed::DagTIR,
 ) -> Option<String> {
     use graphcal_compiler::hir::ExprKind;
     match &expr.kind {
         ExprKind::GraphRef(target) => {
-            // Top-level decls are always `Local`-form names in declared_types.
-            let dt = declared_types.get(&ScopedName::local(target.value.to_unowned_def_name()))?;
-            dimension_label_from_declared_type(dt, registry)
+            // Resolve the canonical HIR identity back to the typed source key.
+            // This preserves qualification for imported declarations instead
+            // of guessing from the leaf name.
+            let declared_type = dag
+                .semantic
+                .decl_bindings
+                .iter()
+                .find_map(|(source_name, resolved)| {
+                    (resolved == &target.value).then(|| declared_types.get(source_name))
+                })
+                .flatten()
+                .or_else(|| {
+                    declared_types.get(&ScopedName::local(target.value.to_unowned_def_name()))
+                })?;
+            dimension_label_from_declared_type(declared_type, registry)
         }
         ExprKind::ForComp { body, .. } => {
-            extract_dimension_from_expr(body, declared_types, registry)
+            extract_dimension_from_expr(body, declared_types, registry, dag)
         }
         ExprKind::IndexAccess { expr: inner, .. } | ExprKind::Convert { expr: inner, .. } => {
-            extract_dimension_from_expr(inner, declared_types, registry)
+            extract_dimension_from_expr(inner, declared_types, registry, dag)
         }
         ExprKind::BinOp { lhs, .. } => {
             // For binary ops like `@x[m] * @x[m]`, try left first
-            extract_dimension_from_expr(lhs, declared_types, registry)
+            extract_dimension_from_expr(lhs, declared_types, registry, dag)
         }
         _ => None,
     }

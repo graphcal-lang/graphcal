@@ -137,8 +137,16 @@ title is formatted as "Dimension (unit)":
 - `@power` with display unit `W` produces axis title **"Power (W)"**
 - Dimensionless values produce no automatic title
 
+A display-unit conversion in an encoding also converts the rendered numeric
+data: Graphcal divides each canonical value by the target unit's scale before
+serializing the Vega-Lite rows. This applies consistently to scalar and indexed
+channels; calculation values remain canonical internally. If a dynamic display
+unit cannot be resolved, rendering fails rather than emitting unconverted data
+under a converted label.
+
 You can override auto-generated titles with explicit `x_label` or `y_label`
-properties:
+properties. A label override changes only the title, not the channel's numeric
+conversion:
 
 ```gcl
 plot custom_labels = {
