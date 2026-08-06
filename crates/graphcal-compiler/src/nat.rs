@@ -77,6 +77,7 @@ impl Monomial {
     /// variables and the multiplicative factor contributed by bound variables.
     ///
     /// Returns `None` if arithmetic overflows.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn substitute(
         &self,

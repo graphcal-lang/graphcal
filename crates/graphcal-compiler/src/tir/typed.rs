@@ -1856,12 +1856,12 @@ impl DagTIRSeed {
 
 // ---------------------------------------------------------------------------
 mod ops;
-#[cfg(test)]
-use ops::unify_nat_poly_form;
-pub use ops::{resolved_to_declared_type, unify_resolved_type};
+pub use ops::resolved_to_declared_type;
 pub(crate) use ops::{
     substitute_resolved_generic_arg, substitute_resolved_type, substitute_resolved_type_with_types,
 };
+#[cfg(test)]
+use ops::{unify_nat_poly_form, unify_resolved_type};
 
 // ---------------------------------------------------------------------------
 mod type_expr;

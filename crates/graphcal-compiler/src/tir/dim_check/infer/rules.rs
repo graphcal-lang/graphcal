@@ -87,7 +87,7 @@ fn fin_key_additive_rule(
              or use to_int() and fin_key()",
         );
     }
-    if !rhs.ty.is_int_like() {
+    if rhs.ty != InferredType::Int {
         return reject("`k + c` takes an integer constant addend");
     }
     let Some(addend) = rhs_const_int else {
@@ -159,43 +159,27 @@ pub(super) fn binop_rule(
             }
             Ok(InferredType::Bool)
         }
-        // Equality: operands must be unindexed and have the same ValueType
-        // (Int and Fin(N) are compatible).
+        // Equality operands must be unindexed and have the same value type.
         BinOp::Eq | BinOp::Ne => {
             let lhs_type = comparison_operand_type(lhs, registry, src)?;
             let rhs_type = comparison_operand_type(rhs, registry, src)?;
-            if matches!(
-                lhs_type,
-                InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
-            ) || matches!(
-                rhs_type,
-                InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
-            ) {
+            if matches!(lhs_type, InferredType::IndexArg(_))
+                || matches!(rhs_type, InferredType::IndexArg(_))
+            {
+                let (found, span) = if matches!(lhs_type, InferredType::IndexArg(_)) {
+                    (lhs_type, lhs.span)
+                } else {
+                    (rhs_type, rhs.span)
+                };
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "value expression".to_string(),
-                    found: if matches!(
-                        lhs_type,
-                        InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
-                    ) {
-                        format_inferred_type(lhs_type, registry)
-                    } else {
-                        format_inferred_type(rhs_type, registry)
-                    },
-                    help: "named index labels are not values; use `match` for index case analysis"
-                        .to_string(),
+                    found: format_inferred_type(found, registry),
+                    help: "Index arguments are type-level identities, not values".to_string(),
                     src: src.clone(),
-                    span: if matches!(
-                        lhs_type,
-                        InferredType::NamedIndexCase(_) | InferredType::IndexArg(_)
-                    ) {
-                        lhs.span
-                    } else {
-                        rhs.span
-                    }
-                    .into(),
+                    span: span.into(),
                 });
             }
-            if lhs_type == rhs_type || (lhs_type.is_int_like() && rhs_type.is_int_like()) {
+            if lhs_type == rhs_type {
                 return Ok(InferredType::Bool);
             }
             if let (Some(lhs_dim), Some(rhs_dim)) =
@@ -238,8 +222,9 @@ pub(super) fn binop_rule(
                     .into(),
                 });
             }
-            if lhs_type.is_int_like() || rhs_type.is_int_like() {
-                if !lhs_type.is_int_like() || !rhs_type.is_int_like() {
+            if matches!(lhs_type, InferredType::Int) || matches!(rhs_type, InferredType::Int) {
+                if !matches!(lhs_type, InferredType::Int) || !matches!(rhs_type, InferredType::Int)
+                {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: format_inferred_type(lhs_type, registry),
                         found: format_inferred_type(rhs_type, registry),
@@ -299,7 +284,7 @@ pub(super) fn binop_rule(
                     span: rhs.span.into(),
                 });
             }
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
+            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
                 return Ok(InferredType::Int);
             }
             match (lhs_type, rhs_type) {
@@ -409,7 +394,7 @@ pub(super) fn binop_rule(
             Ok(InferredType::Quantity(lhs_dim))
         }
         BinOp::Mul => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
+            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
                 return Ok(InferredType::Int);
             }
             let (lhs_dim, lhs_complex) = match lhs_type {
@@ -434,7 +419,7 @@ pub(super) fn binop_rule(
             }
         }
         BinOp::Div => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
+            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
                 return Ok(InferredType::Int);
             }
             let (lhs_dim, lhs_complex) = match lhs_type {
@@ -459,7 +444,7 @@ pub(super) fn binop_rule(
             }
         }
         BinOp::Mod => {
-            if lhs_type.is_int_like() && rhs_type.is_int_like() {
+            if matches!(lhs_type, InferredType::Int) && matches!(rhs_type, InferredType::Int) {
                 return Ok(InferredType::Int);
             }
             Err(GraphcalError::DimensionMismatch {
@@ -475,10 +460,10 @@ pub(super) fn binop_rule(
             })
         }
         BinOp::Pow(exponent) => {
-            // Int/Fin powers remain integer-only. Exact integer syntax is
+            // Int powers remain integer-only. Exact integer syntax is
             // preferred; right-associated constant Int chains retain their
             // existing checked constant folding.
-            if lhs_type.is_int_like() {
+            if matches!(lhs_type, InferredType::Int) {
                 let int_exp = match exponent {
                     PowerExponent::Exact(exact) if exact.is_integer() => Some(exact.numerator()),
                     PowerExponent::Runtime => rhs_const_int,
@@ -601,17 +586,6 @@ pub(super) fn unary_rule(
             InferredType::Quantity(_) | InferredType::Complex(_) | InferredType::Int => {
                 Ok(operand.ty.clone())
             }
-            InferredType::CoordinateIndexLabel { dimension, .. } => {
-                Ok(InferredType::Quantity(dimension.clone()))
-            }
-            InferredType::Fin(_) => Err(GraphcalError::DimensionMismatch {
-                expected: "Int or Quantity".to_string(),
-                found: format_inferred_type(&operand.ty, registry),
-                help: "Fin(N loop variables are bounded natural indexes; convert explicitly before negating)"
-                    .to_string(),
-                src: src.clone(),
-                span: operand.span.into(),
-            }),
             other => Err(GraphcalError::DimensionMismatch {
                 expected: "Int or Quantity".to_string(),
                 found: format_inferred_type(other, registry),
@@ -619,7 +593,7 @@ pub(super) fn unary_rule(
                 src: src.clone(),
                 span: operand.span.into(),
             }),
-        }
+        },
     }
 }
 

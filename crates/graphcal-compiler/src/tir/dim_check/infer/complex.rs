@@ -61,9 +61,7 @@ pub(super) fn infer(
             .cloned()
             .map(InferredType::Quantity),
         ComplexFn::Absolute => match &arguments[0] {
-            InferredType::Complex(dimension)
-            | InferredType::Quantity(dimension)
-            | InferredType::CoordinateIndexLabel { dimension, .. } => {
+            InferredType::Complex(dimension) | InferredType::Quantity(dimension) => {
                 Ok(InferredType::Quantity(dimension.clone()))
             }
             _ => Err(ComplexTypeError::ExpectedQuantityOrComplex { argument: 0 }),
@@ -83,8 +81,7 @@ pub(super) fn infer(
                 }
                 Ok(InferredType::Complex(Dimension::dimensionless()))
             }
-            InferredType::Quantity(dimension)
-            | InferredType::CoordinateIndexLabel { dimension, .. } => {
+            InferredType::Quantity(dimension) => {
                 if !dimension.is_dimensionless() {
                     return Err(ComplexTypeError::ExpectedDimensionless { argument: 0 });
                 }
