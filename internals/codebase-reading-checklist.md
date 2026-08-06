@@ -209,22 +209,36 @@ Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_exp
 - [ ] `crates/graphcal-eval/src/exec_plan.rs`
 - [ ] `crates/graphcal-eval/src/import_surface.rs`
 
-## Stage 14 - Project loading and runtime orchestration
+## Stage 14 - Project loading, checking, and runtime orchestration
 
-Note: `eval/types.rs`, `eval/display.rs`, `loader.rs`, `eval/plot_data.rs`, `eval/runtime.rs`, `eval/project/pipeline.rs`, `eval/project/prepared.rs`, `eval/project/mod.rs`, and `eval/mod.rs` form a mutually dependent group.
+Note: loader I/O, pure project checking, and runtime preparation are now
+separate module families. `project_compiler/model.rs` supplies the internal
+pass model; `eval/project/prepare.rs` is the only transition that consumes
+`CheckedProject` into an execution plan.
 
 - [ ] `crates/graphcal-eval/src/eval/types.rs`
 - [ ] `crates/graphcal-eval/src/eval/display.rs`
 - [ ] `crates/graphcal-eval/src/loader.rs`
+- [ ] `crates/graphcal-eval/src/inline_dag.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/template.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/model.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/recursion.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/imports.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/lowering.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/session.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/mod.rs`
+- [ ] `crates/graphcal-eval/src/eval/declared_type.rs`
 - [ ] `crates/graphcal-eval/src/eval/plot_data.rs`
 - [ ] `crates/graphcal-eval/src/eval/runtime.rs`
+- [ ] `crates/graphcal-eval/src/eval/project/output.rs`
+- [ ] `crates/graphcal-eval/src/eval/project/prepared.rs`
+- [ ] `crates/graphcal-eval/src/eval/project/prepare.rs`
 - [ ] `crates/graphcal-eval/src/eval/project/mod.rs`
 - [ ] `crates/graphcal-eval/src/eval/mod.rs`
-- [ ] `crates/graphcal-eval/src/inline_dag.rs`
-- [ ] `crates/graphcal-eval/src/eval/project/lowering.rs`
-- [ ] `crates/graphcal-eval/src/eval/project/imports.rs`
-- [ ] `crates/graphcal-eval/src/eval/project/pipeline.rs`
-- [ ] `crates/graphcal-eval/src/eval/project/prepared.rs`
 - [ ] `crates/graphcal-eval/src/eval/tests.rs`
 - [ ] `crates/graphcal-eval/src/graph_ir/mod.rs`
 - [ ] `crates/graphcal-eval/src/graph_ir/dot.rs`

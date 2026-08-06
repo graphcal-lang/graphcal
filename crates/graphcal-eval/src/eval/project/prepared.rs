@@ -32,10 +32,11 @@ use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeError, Value};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
 
-use super::pipeline::{
+use crate::project_compiler::{CompiledFile, IncludeDebugNameMap};
+
+use super::output::{
     apply_include_debug_names, output_decl_type, push_output_value, remap_include_debug_name,
 };
-use super::{CompiledFile, IncludeDebugNameMap};
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 

@@ -1,18 +1,19 @@
-//! Orchestration: top-level compilation and evaluation pipelines for multi-file projects.
+//! Dependency-ordered whole-project checking orchestration.
 
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
-    reason = "submodule of project/ uses parent types extensively"
+    reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
+use graphcal_compiler::desugar::desugared_ast::DeclKind;
 
 /// Validate inline-DAG recursion before constructing project-wide scopes.
 ///
 /// This preserves source-level diagnostic ordering: a recursive instance graph
 /// is rejected before resolver inheritance attempts to inspect that invalid
 /// synthetic scope.
-pub(in crate::eval::project) fn validate_project_dag_recursion(
+pub(in crate::project_compiler) fn validate_project_dag_recursion(
     project: &crate::loader::LoadedProject,
 ) -> Result<(), CompileError> {
     project.files.values().try_for_each(|loaded_file| {
@@ -25,7 +26,7 @@ pub(in crate::eval::project) fn validate_project_dag_recursion(
                 _ => None,
             })
             .collect();
-        imports::check_dag_recursion(&definitions, &loaded_file.named_source)
+        recursion::check_dag_recursion(&definitions, &loaded_file.named_source)
     })
 }
 
@@ -90,56 +91,6 @@ fn compile_single_file_in_project(
     )
 }
 
-fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
-    tir.root_declared_indexes()
-        .any(graphcal_compiler::registry::types::IndexDef::is_required)
-        || tir
-            .root()
-            .semantic()
-            .collection_refs
-            .index_defs
-            .values()
-            .any(|definition| definition.is_required())
-}
-
-fn first_required_index_diagnostic(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    ast: &graphcal_compiler::desugar::desugared_ast::File,
-) -> Option<(String, miette::SourceSpan)> {
-    for idx_def in tir.root_declared_indexes() {
-        if idx_def.is_required() {
-            let span = ast
-                .declarations
-                .iter()
-                .find_map(|d| {
-                    if let DeclKind::Index(idx) = &d.kind
-                        && idx.name.value.as_str() == idx_def.name.as_str()
-                    {
-                        Some(d.span.into())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| miette::SourceSpan::from((0, 0)));
-            return Some((idx_def.name.to_string(), span));
-        }
-    }
-
-    tir.root()
-        .semantic()
-        .collection_refs
-        .index_defs
-        .values()
-        .find(|idx_def| idx_def.is_required())
-        .map(|idx_def| {
-            // Owner-qualified required indexes can enter through module type
-            // resolution. The reference span is not retained in index_defs, so
-            // point at the importing file as a whole rather than fabricating a
-            // declaration span.
-            (idx_def.name.to_string(), miette::SourceSpan::from((0, 0)))
-        })
-}
-
 fn top_level_const_values(
     tir: &graphcal_compiler::tir::typed::TIR,
     const_values: &crate::eval_expr::RuntimeValueMap,
@@ -157,113 +108,6 @@ fn top_level_const_values(
                 .map(|value| (entry.name.member().clone(), value))
         })
         .collect()
-}
-
-pub(super) const fn output_decl_type(category: DeclCategory) -> Option<DeclType> {
-    match category {
-        DeclCategory::Const => Some(DeclType::Const),
-        DeclCategory::Param => Some(DeclType::Param),
-        DeclCategory::Node => Some(DeclType::Node),
-        DeclCategory::Assert | DeclCategory::Plot | DeclCategory::Figure | DeclCategory::Layer => {
-            None
-        }
-    }
-}
-
-pub(super) fn remap_include_debug_name(
-    name: &ScopedName,
-    aliases: &IncludeDebugNameMap,
-) -> ScopedName {
-    let Some((first, rest)) = name.qualifier().split_first() else {
-        return name.clone();
-    };
-    let Some(display) = aliases.get(first) else {
-        return name.clone();
-    };
-    ScopedName::qualified_path(
-        std::iter::once(display.clone()).chain(rest.iter().cloned()),
-        name.member().clone(),
-    )
-}
-
-/// Replace private synthetic include scopes with unambiguous human-readable
-/// target leaves at the presentation boundary.
-pub(super) fn apply_include_debug_names(result: &mut EvalResult, aliases: &IncludeDebugNameMap) {
-    if aliases.is_empty() {
-        return;
-    }
-
-    result
-        .consts
-        .iter_mut()
-        .chain(result.params.iter_mut())
-        .chain(result.nodes.iter_mut())
-        .for_each(|(name, _)| *name = remap_include_debug_name(name, aliases));
-    result
-        .all
-        .iter_mut()
-        .for_each(|(name, _, _)| *name = remap_include_debug_name(name, aliases));
-    result.output_surface = std::mem::take(&mut result.output_surface)
-        .into_iter()
-        .map(|name| remap_include_debug_name(&name, aliases))
-        .collect();
-    result
-        .assertions
-        .iter_mut()
-        .for_each(|(name, _, _)| *name = remap_include_debug_name(name, aliases));
-    result
-        .plots
-        .iter_mut()
-        .for_each(|plot| plot.name = remap_include_debug_name(&plot.name, aliases));
-    result
-        .plot_errors
-        .iter_mut()
-        .for_each(|plot| plot.name = remap_include_debug_name(&plot.name, aliases));
-    result.figures.iter_mut().for_each(|figure| {
-        figure.name = remap_include_debug_name(&figure.name, aliases);
-        figure
-            .plot_names
-            .iter_mut()
-            .for_each(|name| *name = remap_include_debug_name(name, aliases));
-    });
-    result.layers.iter_mut().for_each(|layer| {
-        layer.name = remap_include_debug_name(&layer.name, aliases);
-        layer
-            .plot_names
-            .iter_mut()
-            .for_each(|name| *name = remap_include_debug_name(name, aliases));
-    });
-    result.assumes_map = std::mem::take(&mut result.assumes_map)
-        .into_iter()
-        .map(|(name, assumers)| {
-            (
-                remap_include_debug_name(&name, aliases),
-                assumers
-                    .into_iter()
-                    .map(|assumer| remap_include_debug_name(&assumer, aliases))
-                    .collect(),
-            )
-        })
-        .collect();
-    result.domain_constraints = std::mem::take(&mut result.domain_constraints)
-        .into_iter()
-        .map(|(name, constraint)| (remap_include_debug_name(&name, aliases), constraint))
-        .collect();
-}
-
-pub(super) fn push_output_value(
-    (name, result, decl_type): OutputValue,
-    consts: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
-    params: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
-    nodes: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
-    all: &mut Vec<OutputValue>,
-) {
-    match decl_type {
-        DeclType::Const => consts.push((name.clone(), result.clone())),
-        DeclType::Param => params.push((name.clone(), result.clone())),
-        DeclType::Node => nodes.push((name.clone(), result.clone())),
-    }
-    all.push((name, result, decl_type));
 }
 
 /// Store one pure compile-time module artifact for downstream imports.
@@ -308,7 +152,7 @@ fn store_module_artifact(
 ///
 /// Dependencies produce compile-time artifacts only. No runtime schedule,
 /// assertion, dynamic scale, plot, or host call is executed by this loop.
-pub(in crate::eval::project) fn check_project_perfile(
+pub(in crate::project_compiler) fn check_project_perfile(
     project: &crate::loader::LoadedProject,
     host_metadata: &crate::host_fns::HostFunctionMetadata,
     module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
@@ -375,45 +219,6 @@ pub(in crate::eval::project) fn check_project_perfile(
         src: NamedSource::new("internal", Arc::new(String::new())),
         span: Span::new(0, 0).into(),
     }))
-}
-
-/// Continue a checked project to one reusable execution plan.
-pub(in crate::eval::project) fn prepare_checked_project(
-    checked: CheckedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<super::prepared::PreparedProject, CompileError> {
-    cancellation.checkpoint()?;
-    let CheckedProject {
-        compiled,
-        source,
-        root_ast,
-        module_resolver,
-    } = checked;
-    if tir_has_required_indexes(&compiled.tir)
-        && let Some((name, span)) = first_required_index_diagnostic(&compiled.tir, &root_ast)
-    {
-        return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-            name,
-            src: source,
-            span,
-        }));
-    }
-
-    let plan = crate::exec_plan::compile_checked_with_cancellation(
-        &compiled.tir,
-        &compiled.checked_execution_facts,
-        &source,
-        cancellation,
-    )?;
-    super::prepared::PreparedProject::from_compiled(
-        compiled,
-        plan,
-        source,
-        host_fns.clone(),
-        module_resolver,
-        &root_ast,
-    )
 }
 
 /// Load-time verification of every extern function declared by a file.

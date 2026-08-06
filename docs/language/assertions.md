@@ -212,8 +212,9 @@ Assertions:
 - Valid on `node` and `param` declarations. Using `#[assumes]` on `const node` is an
   error (A006) because constants do not depend on runtime values.
 - Multiple assertions can be listed: `#[assumes(a, b, c)]`.
-- Cross-file: you can import an assert via `import` and reference it in
-  `#[assumes]`.
+- Cross-file assertions must be selected from an explicit `include` instance;
+  the resulting instance-local alias may then be referenced in `#[assumes]`.
+  A pure `import` cannot expose an assertion (`M024`).
 
 ### `#[expected_fail]`
 

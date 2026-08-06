@@ -11,7 +11,7 @@ fn parse_and_desugar(source: &str) -> crate::desugar::desugared_ast::File {
     crate::syntax::desugar::desugar_multi_decls_in_file(raw_file)
 }
 
-fn parse_and_resolve(source: &str) -> Result<ResolvedFile, GraphcalError> {
+fn parse_and_resolve(source: &str) -> Result<CollectedFile, GraphcalError> {
     let file = parse_and_desugar(source);
     resolve(&file, &make_src(source))
 }

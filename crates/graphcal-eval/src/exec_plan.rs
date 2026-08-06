@@ -990,7 +990,7 @@ pub fn resolve_struct_field_constraints_with_cancellation(
 
 /// Walk every top-level const value and validate it against resolved
 /// struct-field constraints. Used both inside [`compile`] and from the
-/// `check`-only path in `eval/project/lowering.rs` so that struct-field
+/// check-only path in `project_compiler/lowering.rs` so that struct-field
 /// violations on const nodes surface under `graphcal check`, not only
 /// during full evaluation.
 ///

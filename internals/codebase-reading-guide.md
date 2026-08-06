@@ -433,7 +433,8 @@ The compiler crate owns the functional core through TIR.
 | `syntax/parser/`              | Parser for declarations, expressions, types, tables           |
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
 | `desugar/`                    | Phase walker and the `Desugared` AST alias module             |
-| `hir/`                        | The single resolution stage; resolved type/value expressions  |
+| `hir/`                        | Canonical semantic type/value expressions and lowering boundary |
+| `ir/instance.rs`              | Typed template-instance edges and binding environments         |
 | `ir/lower.rs`                 | IR assembly, body-source provenance, strict HIR freeze boundary |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
@@ -443,15 +444,28 @@ The compiler crate owns the functional core through TIR.
 
 ### 2.2 `graphcal-eval`
 
-The evaluator owns project loading, cross-file orchestration, execution-plan
-compilation, and expression evaluation.
+The evaluation crate contains the loader shell, a compiler-facing pure project
+checking layer, and the runtime evaluator. The checked boundary keeps source
+elaboration out of runtime modules even though both currently share this crate.
 
-| Path                    | Purpose                                                       |
-| ----------------------- | ------------------------------------------------------------- |
-| `loader.rs`             | `LoadedProject`, `LoadedFile`, `LoadedDag`, import resolution |
-| `eval/project/`         | Multi-file compile/eval orchestration                         |
-| `inline_dag.rs`         | Inline DAG compilation helpers                                |
-| `decl_key.rs`           | Runtime declaration keys backed by `ResolvedName<Decl>`       |
+| Path                              | Purpose                                                        |
+| --------------------------------- | -------------------------------------------------------------- |
+| `loader.rs`                       | `LoadedProject`, source arena, and loader-resolved module edges |
+| `project_compiler/session.rs`     | Public `ProjectCompiler` and validated `CheckedProject`         |
+| `project_compiler/imports.rs`     | Compile-time imports and typed instance requests                |
+| `project_compiler/recursion.rs`   | Inline-DAG instance cycle detection                             |
+| `project_compiler/generic_leakage.rs` | Include-boundary generic visibility checks                  |
+| `project_compiler/template.rs`    | Canonical shared pre-HIR template store                         |
+| `project_compiler/model.rs`       | Internal typed pass artifacts and instance requests             |
+| `project_compiler/lowering.rs`    | Pure project IR/TIR elaboration                                 |
+| `project_compiler/pipeline.rs`    | Dependency-ordered project checking                             |
+| `project_compiler/qualified_refs.rs` | Module-aware ambiguous reference classification             |
+| `project_compiler/registry_merge.rs` | Frontend-only registry composition                          |
+| `eval/project/prepare.rs`         | Checked-project to runtime-plan transition                      |
+| `eval/project/prepared.rs`        | Reusable typed binding and evaluation API                       |
+| `eval/project/output.rs`          | Presentation-only output projection                            |
+| `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
+| `decl_key.rs`                     | Runtime declaration keys backed by `ResolvedName<Decl>`         |
 | `exec_plan.rs`          | Const evaluation, runtime topological order, domain prep      |
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
 | `eval/runtime.rs`       | Evaluation loop                                               |
@@ -1044,28 +1058,41 @@ For a first pass, read in pipeline order:
 28. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
 29. `crates/graphcal-io/src/lib.rs`
 30. `crates/graphcal-eval/src/loader.rs`
-31. `crates/graphcal-eval/src/eval/project/pipeline.rs`
-32. `crates/graphcal-eval/src/eval/project/lowering.rs`
-33. `crates/graphcal-eval/src/inline_dag.rs`
-34. `crates/graphcal-eval/src/exec_plan.rs`
-35. `crates/graphcal-eval/src/decl_key.rs`
-36. `crates/graphcal-eval/src/eval/runtime.rs`
-37. `crates/graphcal-eval/src/eval_expr/mod.rs`
-38. `crates/graphcal-eval/src/eval_expr/numeric.rs`
-39. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-40. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-41. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-42. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-43. `crates/graphcal-eval/src/eval_expr/datetime.rs`
-44. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-45. `crates/graphcal-eval/src/eval/types.rs`
-46. `crates/graphcal-eval/src/eval/plot_data.rs`
-47. `crates/graphcal-eval/src/graph_ir/mod.rs`
-48. `crates/graphcal-package/src/lib.rs`
-49. `crates/graphcal-cli/src/main.rs`
-50. `crates/graphcal-cli/src/deps.rs`
-51. `crates/graphcal-lsp/src/server.rs`
-52. `crates/graphcal-fmt/src/lib.rs`
+31. `crates/graphcal-eval/src/inline_dag.rs`
+32. `crates/graphcal-eval/src/project_compiler/template.rs`
+33. `crates/graphcal-eval/src/project_compiler/model.rs`
+34. `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
+35. `crates/graphcal-eval/src/project_compiler/recursion.rs`
+36. `crates/graphcal-eval/src/project_compiler/imports.rs`
+37. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
+38. `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
+39. `crates/graphcal-eval/src/project_compiler/lowering.rs`
+40. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+41. `crates/graphcal-eval/src/project_compiler/session.rs`
+42. `crates/graphcal-eval/src/project_compiler/mod.rs`
+43. `crates/graphcal-eval/src/exec_plan.rs`
+44. `crates/graphcal-eval/src/decl_key.rs`
+45. `crates/graphcal-eval/src/eval/declared_type.rs`
+46. `crates/graphcal-eval/src/eval/runtime.rs`
+47. `crates/graphcal-eval/src/eval_expr/mod.rs`
+48. `crates/graphcal-eval/src/eval_expr/numeric.rs`
+49. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+50. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+51. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+52. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+53. `crates/graphcal-eval/src/eval_expr/datetime.rs`
+54. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+55. `crates/graphcal-eval/src/eval/project/output.rs`
+56. `crates/graphcal-eval/src/eval/project/prepared.rs`
+57. `crates/graphcal-eval/src/eval/project/prepare.rs`
+58. `crates/graphcal-eval/src/eval/types.rs`
+59. `crates/graphcal-eval/src/eval/plot_data.rs`
+60. `crates/graphcal-eval/src/graph_ir/mod.rs`
+61. `crates/graphcal-package/src/lib.rs`
+62. `crates/graphcal-cli/src/main.rs`
+63. `crates/graphcal-cli/src/deps.rs`
+64. `crates/graphcal-lsp/src/server.rs`
+65. `crates/graphcal-fmt/src/lib.rs`
 
 For an exhaustive dependency-ordered checklist, use
 `internals/codebase-reading-checklist.md`. After the core pipeline, read
