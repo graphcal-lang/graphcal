@@ -176,7 +176,7 @@ impl DagTIR {
 /// Qualified source paths such as `lib.Length`, `lib.Vec3<...>`, and
 /// `lib.Phase` are first lowered into HIR canonical references using
 /// `module_resolver`; TIR then consumes those HIR references and reads the
-/// corresponding definition from `module_types`. Runtime-facing values still
+/// corresponding definition from `project_types`. Runtime-facing values still
 /// keep display leaves for diagnostics, but semantic lookup no longer depends on
 /// source alias strings.
 pub fn type_resolve_with_modules(
@@ -184,14 +184,14 @@ pub fn type_resolve_with_modules(
     root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    module_types: &ModuleTypeRegistry,
+    project_types: &ProjectTypeStore,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_with_modules_and_cancellation(
         ir,
         root_dag_id,
         src,
         module_resolver,
-        module_types,
+        project_types,
         &crate::cancellation::CancellationToken::unbounded(),
     )
 }
@@ -206,7 +206,7 @@ pub fn type_resolve_with_modules_and_cancellation(
     root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    module_types: &ModuleTypeRegistry,
+    project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_builder_with_modules_and_cancellation(
@@ -214,7 +214,7 @@ pub fn type_resolve_with_modules_and_cancellation(
         root_dag_id,
         src,
         module_resolver,
-        module_types,
+        project_types,
         cancellation,
     )
     .map(TirBuilder::finish)
@@ -230,11 +230,11 @@ pub fn type_resolve_builder_with_modules_and_cancellation(
     root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    module_types: &ModuleTypeRegistry,
+    project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
-    let ctx = ModuleTypeContext::new(root_dag_id, module_resolver, module_types);
+    let ctx = ModuleTypeContext::new(root_dag_id, module_resolver, project_types);
     type_resolve_impl(ir, root_dag_id, src, ctx, cancellation)
 }
 
@@ -295,14 +295,14 @@ pub fn type_resolve_single_with_modules(
     dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    module_types: &ModuleTypeRegistry,
+    project_types: &ProjectTypeStore,
 ) -> Result<DagTIR, GraphcalError> {
     type_resolve_single_with_modules_and_cancellation(
         ir,
         dag_id,
         src,
         module_resolver,
-        module_types,
+        project_types,
         &crate::cancellation::CancellationToken::unbounded(),
     )
 }
@@ -317,11 +317,11 @@ pub fn type_resolve_single_with_modules_and_cancellation(
     dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
-    module_types: &ModuleTypeRegistry,
+    project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
     cancellation.checkpoint()?;
-    let ctx = ModuleTypeContext::new(dag_id, module_resolver, module_types);
+    let ctx = ModuleTypeContext::new(dag_id, module_resolver, project_types);
     type_resolve_single_impl(ir, dag_id, src, ctx, cancellation)
 }
 
@@ -977,7 +977,7 @@ fn record_resolved_struct_type_def(
     if defs.struct_types.contains_key(name) {
         return Ok(());
     }
-    let Some(type_def) = ctx.types.get_struct_type(name) else {
+    let Some(type_def) = ctx.types.get_struct_type_handle(name).cloned() else {
         return Ok(());
     };
     let definition_src = ctx.types.source_for_owner(name.owner()).unwrap_or(src);
@@ -987,7 +987,8 @@ fn record_resolved_struct_type_def(
     // not only the types named directly by entry declarations: a prepared
     // boundary value can contain nested records whose names never appear in
     // the consumer module.
-    defs.struct_types.insert(name.clone(), type_def.clone());
+    defs.struct_types
+        .insert(name.clone(), Arc::clone(&type_def));
 
     for param in type_def.generic_params() {
         if let Some(default) = &param.default {
@@ -995,7 +996,7 @@ fn record_resolved_struct_type_def(
                 default,
                 param,
                 name,
-                type_def,
+                type_def.as_ref(),
                 ctx,
                 registry,
                 definition_src,
@@ -1017,7 +1018,7 @@ fn record_resolved_struct_type_def(
     }
 
     if let Some(members) = type_def.union_members() {
-        let generic_scope = generic_scope_for_type_def(name, type_def, definition_src)?;
+        let generic_scope = generic_scope_for_type_def(name, type_def.as_ref(), definition_src)?;
         let prelude = hir::PreludeTypeScope::graphcal();
         let bound_expr_ctx = hir::ExprLoweringContext::new(
             name.owner(),
@@ -1037,7 +1038,7 @@ fn record_resolved_struct_type_def(
                 let resolved = resolve_type_expr_in_struct_scope(
                     field.type_ann(),
                     name,
-                    type_def,
+                    type_def.as_ref(),
                     ctx,
                     registry,
                     definition_src,

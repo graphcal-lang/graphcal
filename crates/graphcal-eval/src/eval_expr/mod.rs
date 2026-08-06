@@ -86,16 +86,7 @@ fn runtime_struct_type_def<'a>(
     type_name: &StructTypeRef,
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a TypeDef> {
-    ctx.tir
-        .dag_registry()
-        .values()
-        .find_map(|dag| {
-            dag.semantic()
-                .type_defs
-                .struct_types
-                .get(type_name.resolved())
-        })
-        .or_else(|| ctx.registry.types.get_type(type_name.as_str()))
+    ctx.tir.struct_type_def(type_name.resolved())
 }
 
 fn constructor_fields_for_runtime_struct<'a>(

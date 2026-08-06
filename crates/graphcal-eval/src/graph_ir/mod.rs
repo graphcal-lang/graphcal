@@ -181,7 +181,7 @@ mod tests {
     use graphcal_compiler::ir::lower::lower;
     use graphcal_compiler::syntax::module_resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::{ModuleTypeRegistry, type_resolve_with_modules};
+    use graphcal_compiler::tir::typed::{ProjectTypeStore, type_resolve_with_modules};
     use miette::NamedSource;
     use std::sync::Arc;
 
@@ -198,10 +198,10 @@ mod tests {
         resolver
             .add_module(dag_id.clone(), &file.declarations)
             .unwrap();
-        let mut module_types = ModuleTypeRegistry::default();
-        module_types.insert_graphcal_prelude().unwrap();
-        module_types.insert_registry(&dag_id, &ir.registry, src.clone());
-        type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types).unwrap()
+        let mut project_types = ProjectTypeStore::default();
+        project_types.insert_graphcal_prelude().unwrap();
+        project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
+        type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types).unwrap()
     }
 
     /// Compile through the full project pipeline (loader + inline-DAG body

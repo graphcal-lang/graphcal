@@ -2847,6 +2847,55 @@ node bad: Mass = mass + length;
     }
 
     #[test]
+    fn same_leaf_imported_types_resolve_to_their_canonical_defining_files() {
+        use crate::resolve::{SymbolLocation, resolve_symbol_at};
+
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"app\"\n"),
+            (
+                "src/app/left.gcl",
+                "pub base dim Measure;\npub base unit u: Measure;\n",
+            ),
+            (
+                "src/app/right.gcl",
+                "pub base dim Measure;\npub base unit u: Measure;\n",
+            ),
+            (
+                "src/app/main.gcl",
+                "import app.left as left;\n\
+                 import app.right as right;\n\
+                 node left_value: left.Measure = 1.0 left.u;\n\
+                 node right_value: right.Measure = 2.0 right.u;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/app/main.gcl");
+        let left_uri =
+            Url::from_file_path(dir.path().join("src/app/left.gcl").canonicalize().unwrap())
+                .unwrap();
+        let right_uri =
+            Url::from_file_path(dir.path().join("src/app/right.gcl").canonicalize().unwrap())
+                .unwrap();
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean canonical-owner analysis, got diagnostics: {:?}",
+            analysis.diagnostics,
+        );
+
+        for (spelling, expected_uri) in [("left.Measure", left_uri), ("right.Measure", right_uri)] {
+            let offset = text.find(spelling).unwrap() + spelling.find('.').unwrap() + 2;
+            let resolved = resolve_symbol_at(&analysis, offset)
+                .unwrap_or_else(|| panic!("resolve `{spelling}`"));
+            let SymbolLocation::Imported(imported) = resolved.location else {
+                panic!("expected `{spelling}` to resolve to an imported definition");
+            };
+            assert_eq!(imported.uri, expected_uri);
+        }
+    }
+
+    #[test]
     fn parse_error_in_imported_file_routes_to_imported_uri() {
         // lib.gcl has a syntax error; main.gcl is fine. The diagnostic must
         // surface on lib.gcl's URI, not main.gcl's URI.

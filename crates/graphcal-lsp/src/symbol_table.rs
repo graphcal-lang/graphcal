@@ -12,11 +12,15 @@ use graphcal_compiler::desugar::desugared_ast::{
 use graphcal_compiler::hir;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName};
+use graphcal_compiler::syntax::index_name::{IndexName, ResolvedIndexName};
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::type_name::GenericParamName;
+use graphcal_compiler::syntax::type_name::{
+    GenericParamName, ResolvedStructTypeName, StructTypeName,
+};
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
 use graphcal_compiler::registry::builtins::builtin_functions;
@@ -2231,7 +2235,9 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
         };
         match category {
             SymbolCategory::Dimension => {
-                if let Some(dim) = registry.dimensions.get_dimension(name)
+                let resolved =
+                    ResolvedDimName::from_def(dag_id.clone(), DimName::expect_valid(name));
+                if let Some(dim) = tir.dimension(&resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     def_mut.type_description = Some(format!(
@@ -2241,14 +2247,9 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                 }
             }
             SymbolCategory::Unit => {
-                // Definition symbols are file-local declarations, so the
-                // registry key is always the bare reference.
-                if let Some(unit_info) =
-                    registry
-                        .units
-                        .get_unit(&graphcal_compiler::syntax::dimension::UnitRef::local(
-                            graphcal_compiler::syntax::dimension::UnitName::expect_valid(name),
-                        ))
+                let resolved =
+                    ResolvedUnitName::from_def(dag_id.clone(), UnitName::expect_valid(name));
+                if let Some(unit_info) = tir.unit_info(&resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     let scale_str = match &unit_info.scale {
@@ -2267,7 +2268,9 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                 }
             }
             SymbolCategory::Index => {
-                if let Some(idx_def) = registry.indexes.get_index(name)
+                let resolved =
+                    ResolvedIndexName::from_def(dag_id.clone(), IndexName::expect_valid(name));
+                if let Some(idx_def) = tir.declared_index_def(&resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     match &idx_def.kind {
@@ -2311,7 +2314,11 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                 }
             }
             SymbolCategory::StructType => {
-                if let Some(type_def) = registry.types.get_type(name)
+                let resolved = ResolvedStructTypeName::from_def(
+                    dag_id.clone(),
+                    StructTypeName::expect_valid(name),
+                );
+                if let Some(type_def) = tir.struct_type_def(&resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     let desc = type_def.union_members().map_or_else(

@@ -164,16 +164,18 @@ fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<Qualifi
 
 /// Pure compile-time artifact for one dependency module.
 ///
-/// It contains interfaces, canonical definitions, checked DAG templates,
-/// constants, and extern signatures. Runtime node values, assertion outcomes,
+/// It contains interfaces, a frontend registry scope, checked DAG templates,
+/// constants, and extern signatures. Canonical definitions live once in the
+/// project type store; runtime node values, assertion outcomes,
 /// resolved dynamic scales, rendered plots, and presentation data are absent.
 struct ModuleArtifact {
     /// Compile-time constants keyed by dependency-local name.
     const_values: HashMap<DeclName, RuntimeValue>,
     /// Declared types for compile-time constants and DAG interfaces.
     declared_types: HashMap<ScopedName, DeclaredType>,
-    /// The file's frozen frontend registry.
-    registry: Registry,
+    /// The file's frozen leaf-keyed registry used only to seed downstream
+    /// frontend declaration construction and formatting metadata.
+    frontend_registry: Registry,
     /// Explicit exports and annotation-free `param` input ports, classified
     /// separately for import/include boundary checks.
     external_surface: ExternalDeclSurface,
@@ -361,11 +363,11 @@ impl CheckedProject {
     }
 }
 
-/// Immutable project-wide services shared by every module lowering pass.
-#[derive(Clone, Copy)]
+/// Project-wide semantic services shared by every module lowering pass.
 struct ProjectSemanticContext<'project> {
     project: &'project crate::loader::LoadedProject,
     module_resolver: &'project graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    project_types: &'project mut graphcal_compiler::tir::typed::ProjectTypeStore,
 }
 
 /// Typed request for one concrete DAG instance (file-level or inline).
@@ -479,9 +481,9 @@ struct ImportContext<'a> {
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
-    /// Registry surfaces of module-imported dependencies, merged into the
-    /// importer's registry builder before its own declarations register.
-    extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
+    /// Frontend registry surfaces of module-imported dependencies, merged into
+    /// the importer's local builder before its own declarations register.
+    frontend_registry_imports: Vec<FrontendRegistryImport<'a>>,
     include_instances: Vec<IncludeInstanceRequest>,
 }
 
@@ -501,8 +503,8 @@ impl DynamicUnitBoundary {
 
 /// A module-imported dependency's registry surface, queued for merging into
 /// the importer's registry builder.
-struct ModuleRegistryImport<'a> {
-    /// The dependency's frozen registry.
+struct FrontendRegistryImport<'a> {
+    /// The dependency's frozen frontend registry.
     registry: &'a Registry,
     /// The dependency's external declaration surface. Registry items cross
     /// only when explicitly exported; input ports remain a distinct role.

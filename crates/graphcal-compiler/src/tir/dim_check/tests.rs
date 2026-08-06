@@ -51,21 +51,21 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
                 })?;
         }
     }
-    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
-    module_types
+    let mut project_types = crate::tir::typed::ProjectTypeStore::default();
+    project_types
         .insert_graphcal_prelude()
         .map_err(|err| GraphcalError::InternalError {
             message: format!("test module type prelude failed: {err}"),
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    module_types.insert_registry(&parent_dag_id, &ir.registry, src.clone());
+    project_types.insert_local_registry(&parent_dag_id, &ir.registry, src.clone());
     let mut builder = crate::tir::typed::type_resolve_builder_with_modules_and_cancellation(
         ir,
         &parent_dag_id,
         &src,
         &resolver,
-        &module_types,
+        &project_types,
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     compile_inline_dag_bodies_test(&mut builder, &src, &parent_dag_id, &file.declarations)?;
@@ -86,11 +86,11 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     resolver
         .add_module(dag_id.clone(), &file.declarations)
         .unwrap();
-    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
-    module_types.insert_graphcal_prelude().unwrap();
-    module_types.insert_registry(&dag_id, &ir.registry, src.clone());
+    let mut project_types = crate::tir::typed::ProjectTypeStore::default();
+    project_types.insert_graphcal_prelude().unwrap();
+    project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
     let tir =
-        crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types)
+        crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types)
             .unwrap();
     (tir, src)
 }
@@ -162,15 +162,15 @@ fn compile_inline_dag_bodies_test(
             }
         }
     }
-    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
-    module_types
+    let mut project_types = crate::tir::typed::ProjectTypeStore::default();
+    project_types
         .insert_graphcal_prelude()
         .map_err(|err| GraphcalError::InternalError {
             message: format!("test module type prelude failed: {err}"),
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    module_types.insert_registry(parent_dag_id, tir.registry(), src.clone());
+    project_types.insert_local_registry(parent_dag_id, tir.registry(), src.clone());
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
@@ -184,13 +184,13 @@ fn compile_inline_dag_bodies_test(
             parent_dag_id,
         )?;
         let dag_id = parent_dag_id.child(name.as_str());
-        module_types.insert_registry(&dag_id, &dag_body_ir.registry, src.clone());
+        project_types.insert_local_registry(&dag_id, &dag_body_ir.registry, src.clone());
         let mut compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
             dag_body_ir,
             &dag_id,
             src,
             &resolver,
-            &module_types,
+            &project_types,
         )?;
         compiled_dag.populate_projectable_outputs(&body);
         tir.insert_dag(compiled_dag)

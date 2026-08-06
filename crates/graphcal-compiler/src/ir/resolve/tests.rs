@@ -28,10 +28,10 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError>
     resolver
         .add_module(dag_id.clone(), &file.declarations)
         .unwrap();
-    let mut module_types = crate::tir::typed::ModuleTypeRegistry::default();
-    module_types.insert_graphcal_prelude().unwrap();
-    module_types.insert_registry(&dag_id, &ir.registry, src.clone());
-    crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types)
+    let mut project_types = crate::tir::typed::ProjectTypeStore::default();
+    project_types.insert_graphcal_prelude().unwrap();
+    project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
+    crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types)
 }
 
 /// Dependency names of `decl` in `map`, as leaf strings.

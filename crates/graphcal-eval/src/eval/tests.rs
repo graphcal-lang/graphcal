@@ -232,6 +232,207 @@ fn pure_module_import_can_call_an_instance_with_dynamic_units() {
 }
 
 #[test]
+fn repeated_dag_calls_keep_dynamic_unit_scales_instance_scoped() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\nparam amount: Money = 100.0 EUR;\npub node converted: Money = @amount -> USD;\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\nnode low: lib.Money = @lib(rate: 1.5).converted;\nnode high: lib.Money = @lib(rate: 3.0).converted;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert_quantity_value(&result, "low", 150.0);
+    assert_quantity_value(&result, "high", 300.0);
+}
+
+#[test]
+fn project_type_store_keeps_imported_definitions_under_their_canonical_owner() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub base dim Measure;\npub base unit u: Measure;\npub index Axis = { A };\npub type Item { Item(value: Measure) }\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\nnode value: lib.Measure = 1.0 lib.u;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let dependency = loaded_file_dag_id(&project, "lib.gcl");
+    let importer = tir.root_dag_id().clone();
+
+    let dependency_dimension = graphcal_compiler::syntax::dimension::ResolvedDimName::from_def(
+        dependency.clone(),
+        graphcal_compiler::syntax::dimension::DimName::expect_valid("Measure"),
+    );
+    let importer_dimension = graphcal_compiler::syntax::dimension::ResolvedDimName::from_def(
+        importer.clone(),
+        graphcal_compiler::syntax::dimension::DimName::expect_valid("Measure"),
+    );
+    assert!(tir.dimension(&dependency_dimension).is_some());
+    assert!(tir.dimension(&importer_dimension).is_none());
+
+    let dependency_unit = graphcal_compiler::syntax::dimension::ResolvedUnitName::from_def(
+        dependency.clone(),
+        graphcal_compiler::syntax::dimension::UnitName::expect_valid("u"),
+    );
+    let importer_unit = graphcal_compiler::syntax::dimension::ResolvedUnitName::from_def(
+        importer.clone(),
+        graphcal_compiler::syntax::dimension::UnitName::expect_valid("u"),
+    );
+    assert!(tir.unit_info(&dependency_unit).is_some());
+    assert!(tir.unit_info(&importer_unit).is_none());
+
+    let dependency_index = graphcal_compiler::syntax::index_name::ResolvedIndexName::from_def(
+        dependency.clone(),
+        graphcal_compiler::syntax::index_name::IndexName::expect_valid("Axis"),
+    );
+    let importer_index = graphcal_compiler::syntax::index_name::ResolvedIndexName::from_def(
+        importer.clone(),
+        graphcal_compiler::syntax::index_name::IndexName::expect_valid("Axis"),
+    );
+    assert!(tir.declared_index_def(&dependency_index).is_some());
+    assert!(tir.declared_index_def(&importer_index).is_none());
+
+    let dependency_type = graphcal_compiler::syntax::type_name::ResolvedStructTypeName::from_def(
+        dependency,
+        graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
+    );
+    let importer_type = graphcal_compiler::syntax::type_name::ResolvedStructTypeName::from_def(
+        importer,
+        graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
+    );
+    assert!(tir.struct_type_def(&dependency_type).is_some());
+    assert!(tir.struct_type_def(&importer_type).is_none());
+}
+
+#[test]
+fn diamond_imports_install_one_canonical_shared_definition() {
+    use graphcal_compiler::syntax::dimension::{
+        DimName, ResolvedDimName, ResolvedUnitName, UnitName,
+    };
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "shared.gcl",
+                "pub base dim SharedMeasure;\npub base unit su: SharedMeasure;\n",
+            ),
+            (
+                "left.gcl",
+                "import pipeline.shared as left_shared;\nconst node left_value: left_shared.SharedMeasure = 1.0 left_shared.su;\n",
+            ),
+            (
+                "right.gcl",
+                "import pipeline.shared as right_shared;\nconst node right_value: right_shared.SharedMeasure = 2.0 right_shared.su;\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.left as left;\nimport pipeline.right as right;\nnode result: Dimensionless = 1.0;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let shared = loaded_file_dag_id(&project, "shared.gcl");
+    let aliases = [
+        loaded_file_dag_id(&project, "left.gcl"),
+        loaded_file_dag_id(&project, "right.gcl"),
+        tir.root_dag_id().clone(),
+    ];
+    let dimension = DimName::expect_valid("SharedMeasure");
+    let unit = UnitName::expect_valid("su");
+
+    assert!(
+        tir.dimension(&ResolvedDimName::from_def(
+            shared.clone(),
+            dimension.clone()
+        ))
+        .is_some()
+    );
+    assert!(
+        tir.unit_info(&ResolvedUnitName::from_def(shared, unit.clone()))
+            .is_some()
+    );
+    for alias_owner in aliases {
+        assert!(
+            tir.dimension(&ResolvedDimName::from_def(
+                alias_owner.clone(),
+                dimension.clone(),
+            ))
+            .is_none()
+        );
+        assert!(
+            tir.unit_info(&ResolvedUnitName::from_def(alias_owner, unit.clone()))
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn same_leaf_definitions_from_distinct_modules_keep_distinct_canonical_owners() {
+    use graphcal_compiler::syntax::dimension::{
+        DimName, ResolvedDimName, ResolvedUnitName, UnitName,
+    };
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "left.gcl",
+                "pub base dim Measure;\npub base unit u: Measure;\n",
+            ),
+            (
+                "right.gcl",
+                "pub base dim Measure;\npub base unit u: Measure;\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.left as left;\nimport pipeline.right as right;\nnode left_value: left.Measure = 1.0 left.u;\nnode right_value: right.Measure = 2.0 right.u;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let left = loaded_file_dag_id(&project, "left.gcl");
+    let right = loaded_file_dag_id(&project, "right.gcl");
+    let root_owner = tir.root_dag_id().clone();
+    let dimension = DimName::expect_valid("Measure");
+    let unit = UnitName::expect_valid("u");
+
+    for owner in [left, right] {
+        assert!(
+            tir.dimension(&ResolvedDimName::from_def(owner.clone(), dimension.clone()))
+                .is_some()
+        );
+        assert!(
+            tir.unit_info(&ResolvedUnitName::from_def(owner, unit.clone()))
+                .is_some()
+        );
+    }
+    assert!(
+        tir.dimension(&ResolvedDimName::from_def(root_owner.clone(), dimension,))
+            .is_none()
+    );
+    assert!(
+        tir.unit_info(&ResolvedUnitName::from_def(root_owner, unit))
+            .is_none()
+    );
+}
+
+#[test]
 fn checked_project_preparation_does_not_recompile_dependencies() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

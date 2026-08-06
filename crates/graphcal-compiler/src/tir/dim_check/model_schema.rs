@@ -470,12 +470,7 @@ fn index_definition<'tir>(
             index: index.clone(),
         });
     };
-    tir.root()
-        .semantic
-        .collection_refs
-        .index_defs
-        .get(resolved)
-        .or_else(|| tir.declared_index_def(resolved))
+    tir.declared_index_def(resolved)
         .map(Some)
         .ok_or_else(|| ConcreteModelTypeError::UnknownIndex {
             index: index.clone(),

@@ -401,33 +401,34 @@ impl ResolvedIndex {
     }
 }
 
-/// Canonical type-system definitions keyed by [`ResolvedName`](crate::syntax::names::ResolvedName) identities.
-///
-/// The standalone [`Registry`] remains leaf-keyed for now because runtime values and
-/// declaration types still use local names. This registry is the module-aware
-/// lookup side table used by TIR resolution: qualified source paths are first
-/// resolved through [`ModuleResolver`] to canonical owners, then looked up here
-/// instead of by source alias text or a dotted string.
+/// Canonical constructor metadata retained with its owning nominal definition.
 #[derive(Debug, Clone)]
-pub struct ModuleConstructorDef {
+pub struct ProjectConstructorDef {
     pub(crate) owning_type: ResolvedStructTypeName,
-    pub(crate) type_def: TypeDef,
+    pub(crate) type_def: Arc<TypeDef>,
     pub(crate) variant: UnionMemberDef,
 }
 
+/// Authoritative project type-system definitions keyed by
+/// [`ResolvedName`](crate::syntax::names::ResolvedName) identities.
+///
+/// [`Registry`] is a frontend construction and formatting artifact. Semantic
+/// resolution maps source spellings through [`ModuleResolver`] and reads the
+/// resulting owner-qualified identity from this store; imported aliases are
+/// never installed as additional canonical definitions.
 #[derive(Debug, Default, Clone)]
-pub struct ModuleTypeRegistry {
+pub struct ProjectTypeStore {
     dimensions: HashMap<ResolvedDimName, Dimension>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
-    indexes: HashMap<ResolvedIndexName, IndexDef>,
-    struct_types: HashMap<ResolvedStructTypeName, TypeDef>,
-    constructors: HashMap<ResolvedConstructorName, ModuleConstructorDef>,
+    indexes: HashMap<ResolvedIndexName, Arc<IndexDef>>,
+    struct_types: HashMap<ResolvedStructTypeName, Arc<TypeDef>>,
+    constructors: HashMap<ResolvedConstructorName, ProjectConstructorDef>,
     sources: HashMap<crate::dag_id::DagId, NamedSource<Arc<String>>>,
 }
 
-/// Error from constructing the module type registry's prelude entries.
+/// Error from constructing the project type store's prelude entries.
 #[derive(Debug, Error)]
-pub enum PreludeTypeRegistryError {
+pub enum PreludeProjectTypeStoreError {
     /// Built-in dimension exponent arithmetic failed.
     #[error(transparent)]
     Rational(#[from] RationalError),
@@ -436,14 +437,14 @@ pub enum PreludeTypeRegistryError {
     RegistryBuild(#[from] RegistryBuildError),
 }
 
-impl ModuleTypeRegistry {
+impl ProjectTypeStore {
     /// Insert canonical Graphcal prelude dimensions under the synthetic prelude owner.
     ///
     /// # Errors
     ///
     /// Returns an error only if the built-in prelude itself fails to construct,
     /// which would be a compiler bug.
-    pub fn insert_graphcal_prelude(&mut self) -> Result<(), PreludeTypeRegistryError> {
+    pub fn insert_graphcal_prelude(&mut self) -> Result<(), PreludeProjectTypeStoreError> {
         let mut builder = RegistryBuilder::new();
         crate::registry::prelude::load_prelude(&mut builder)?;
         let registry = builder.try_build()?;
@@ -470,78 +471,121 @@ impl ModuleTypeRegistry {
         Ok(())
     }
 
-    /// Insert every type-system definition from `registry` under `owner` and
-    /// retain the source file indexed by those definitions' spans.
+    /// Insert every definition from a registry known to contain one module's
+    /// local frontend declarations.
     ///
-    /// This is intentionally an owner-qualified view over existing registries,
-    /// not a new source of truth. It lets module-aware resolution validate that
-    /// `alias.Name` denotes the definition owned by the dependency selected by
-    /// the loader while keeping diagnostics anchored to that definition file.
-    pub fn insert_registry(
+    /// Multi-module project compilation should use
+    /// [`Self::insert_resolver_subtree`] so copied import aliases cannot become
+    /// canonical definitions owned by the importer.
+    pub fn insert_local_registry(
         &mut self,
         owner: &crate::dag_id::DagId,
         registry: &Registry,
         source: NamedSource<Arc<String>>,
     ) {
         for (name, dim) in registry.dimensions.all_dimensions() {
-            self.dimensions.insert(
-                ResolvedDimName::from_def(owner.clone(), name.clone()),
-                dim.clone(),
-            );
+            self.dimensions
+                .entry(ResolvedDimName::from_def(owner.clone(), name.clone()))
+                .or_insert_with(|| dim.clone());
         }
         for (reference, _, _) in registry.units.all_units() {
             if reference.is_qualified() {
                 continue;
             }
             if let Some(info) = registry.units.get_unit(reference) {
-                self.units.insert(
-                    ResolvedUnitName::from_def(owner.clone(), reference.name().clone()),
-                    info.clone(),
-                );
+                self.units
+                    .entry(ResolvedUnitName::from_def(
+                        owner.clone(),
+                        reference.name().clone(),
+                    ))
+                    .or_insert_with(|| info.clone());
             }
         }
         for index in registry.indexes.declared_indexes() {
-            self.indexes.insert(
-                ResolvedIndexName::from_def(owner.clone(), index.name.clone()),
-                index.clone(),
-            );
+            self.indexes
+                .entry(ResolvedIndexName::from_def(
+                    owner.clone(),
+                    index.name.clone(),
+                ))
+                .or_insert_with(|| Arc::new(index.clone()));
         }
         for type_def in registry.types.all_types() {
-            let type_name =
-                ResolvedStructTypeName::from_def(owner.clone(), type_def.name().clone());
-            self.struct_types
-                .insert(type_name.clone(), type_def.clone());
-            if let Some(members) = type_def.union_members() {
-                for member in members {
-                    self.constructors.insert(
-                        ResolvedConstructorName::from_def(owner.clone(), member.name().clone()),
-                        ModuleConstructorDef {
-                            owning_type: type_name.clone(),
-                            type_def: type_def.clone(),
-                            variant: member.clone(),
-                        },
-                    );
-                }
-            }
+            self.insert_struct_type(owner, type_def);
         }
-        self.sources.insert(owner.clone(), source);
+        self.sources.entry(owner.clone()).or_insert(source);
     }
 
-    /// Overlay unit entries as visible from `owner`, resolving aliases and
-    /// selective imports to their canonical defining modules.
-    pub fn overlay_visible_units(
+    /// Insert only definitions declared by resolver modules rooted at `owner`.
+    ///
+    /// The frontend registry may also contain copied selective imports and
+    /// alias-qualified units. Resolver module tables distinguish those scope
+    /// bindings from native definitions, so this operation keeps the canonical
+    /// store free of importer-owned copies. Existing entries are retained so
+    /// every derived per-DAG index keeps sharing the first canonical `Arc`.
+    pub fn insert_resolver_subtree(
         &mut self,
         owner: &crate::dag_id::DagId,
         registry: &Registry,
+        source: &NamedSource<Arc<String>>,
         resolver: &ModuleResolver,
     ) {
-        for (reference, _, _) in registry.units.all_units() {
-            let Ok(resolved_unit) = resolver.resolve_unit_path(owner, &reference.to_name_path())
-            else {
-                continue;
-            };
-            if let Some(info) = registry.units.get_unit(reference) {
-                self.units.insert(resolved_unit, info.clone());
+        resolver
+            .modules()
+            .iter()
+            .filter(|(module_id, _)| *module_id == owner || module_id.is_descendant_of(owner))
+            .for_each(|(module_id, symbols)| {
+                for name in symbols.dimensions().keys() {
+                    if let Some(dimension) = registry.dimensions.get_dimension(name.as_str()) {
+                        self.dimensions
+                            .entry(ResolvedDimName::from_def(module_id.clone(), name.clone()))
+                            .or_insert_with(|| dimension.clone());
+                    }
+                }
+                for name in symbols.units().keys() {
+                    let reference = crate::syntax::dimension::UnitRef::local(name.clone());
+                    if let Some(info) = registry.units.get_unit(&reference) {
+                        self.units
+                            .entry(ResolvedUnitName::from_def(module_id.clone(), name.clone()))
+                            .or_insert_with(|| info.clone());
+                    }
+                }
+                for name in symbols.indexes().keys() {
+                    if let Some(index) = registry.indexes.get_index(name.as_str()) {
+                        self.indexes
+                            .entry(ResolvedIndexName::from_def(module_id.clone(), name.clone()))
+                            .or_insert_with(|| Arc::new(index.clone()));
+                    }
+                }
+                for name in symbols.struct_types().keys() {
+                    if let Some(type_def) = registry.types.get_type(name.as_str()) {
+                        self.insert_struct_type(module_id, type_def);
+                    }
+                }
+                self.sources
+                    .entry(module_id.clone())
+                    .or_insert_with(|| source.clone());
+            });
+    }
+
+    fn insert_struct_type(&mut self, owner: &crate::dag_id::DagId, type_def: &TypeDef) {
+        let type_name = ResolvedStructTypeName::from_def(owner.clone(), type_def.name().clone());
+        let type_def = Arc::clone(
+            self.struct_types
+                .entry(type_name.clone())
+                .or_insert_with(|| Arc::new(type_def.clone())),
+        );
+        if let Some(members) = type_def.union_members() {
+            for member in members {
+                self.constructors
+                    .entry(ResolvedConstructorName::from_def(
+                        owner.clone(),
+                        member.name().clone(),
+                    ))
+                    .or_insert_with(|| ProjectConstructorDef {
+                        owning_type: type_name.clone(),
+                        type_def: Arc::clone(&type_def),
+                        variant: member.clone(),
+                    });
             }
         }
     }
@@ -566,11 +610,24 @@ impl ModuleTypeRegistry {
 
     #[must_use]
     pub(crate) fn get_index(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
+        self.indexes.get(name).map(AsRef::as_ref)
+    }
+
+    #[must_use]
+    pub(crate) fn get_index_handle(&self, name: &ResolvedIndexName) -> Option<&Arc<IndexDef>> {
         self.indexes.get(name)
     }
 
     #[must_use]
     pub(crate) fn get_struct_type(&self, name: &ResolvedStructTypeName) -> Option<&TypeDef> {
+        self.struct_types.get(name).map(AsRef::as_ref)
+    }
+
+    #[must_use]
+    pub(crate) fn get_struct_type_handle(
+        &self,
+        name: &ResolvedStructTypeName,
+    ) -> Option<&Arc<TypeDef>> {
         self.struct_types.get(name)
     }
 
@@ -579,7 +636,7 @@ impl ModuleTypeRegistry {
     pub(crate) fn lookup_constructor(
         &self,
         constructor: &ResolvedConstructorName,
-    ) -> Option<&ModuleConstructorDef> {
+    ) -> Option<&ProjectConstructorDef> {
         self.constructors.get(constructor)
     }
 }
@@ -589,7 +646,7 @@ impl ModuleTypeRegistry {
 pub struct ModuleTypeContext<'a> {
     pub(in crate::tir::typed) owner: &'a crate::dag_id::DagId,
     pub(in crate::tir::typed) resolver: &'a ModuleResolver,
-    pub(in crate::tir::typed) types: &'a ModuleTypeRegistry,
+    pub(in crate::tir::typed) types: &'a ProjectTypeStore,
 }
 
 impl<'a> ModuleTypeContext<'a> {
@@ -597,7 +654,7 @@ impl<'a> ModuleTypeContext<'a> {
     pub(crate) const fn new(
         owner: &'a crate::dag_id::DagId,
         resolver: &'a ModuleResolver,
-        types: &'a ModuleTypeRegistry,
+        types: &'a ProjectTypeStore,
     ) -> Self {
         Self {
             owner,
@@ -811,10 +868,9 @@ pub struct ResolvedDagDependencies {
 /// Canonical HIR-derived index references used by collection/index inference.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCollectionRefs {
-    /// Canonical index definitions observed while collecting the refs
-    /// or owner-qualified declaration types that runtime collection semantics
-    /// may need (for example `unfold` over a declared indexed node).
-    pub index_defs: HashMap<ResolvedIndexName, IndexDef>,
+    /// Shared handles to canonical index definitions observed while collecting
+    /// refs or owner-qualified declaration types needed by collection semantics.
+    pub index_defs: HashMap<ResolvedIndexName, Arc<IndexDef>>,
 }
 
 /// Canonical HIR-derived constructor references used by constructor and match inference.
@@ -892,8 +948,8 @@ impl ResolvedStructFieldSemantics {
 /// Canonical type definitions referenced by module-aware TIR.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
-    /// Struct/tagged-union definitions keyed by canonical owner/name.
-    pub struct_types: HashMap<ResolvedStructTypeName, TypeDef>,
+    /// Shared handles to project-store nominal definitions keyed by canonical identity.
+    pub struct_types: HashMap<ResolvedStructTypeName, Arc<TypeDef>>,
     /// Atomic field semantics resolved in each owning type's generic scope.
     fields: HashMap<ResolvedStructFieldTypeKey, ResolvedStructFieldSemantics>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
@@ -1037,7 +1093,7 @@ pub struct DagSemanticBody {
 #[derive(Debug, Clone)]
 pub struct ResolvedConstructorTarget {
     pub owning_type: ResolvedStructTypeName,
-    pub(crate) type_def: TypeDef,
+    pub(crate) type_def: Arc<TypeDef>,
     pub variant: UnionMemberDef,
 }
 
@@ -1049,12 +1105,12 @@ pub struct ResolvedConstructorTarget {
 ///
 /// Type resolution creates this builder with a mandatory root DAG. Project
 /// lowering may then add file-defined child DAGs, imported DAG modules, aliases,
-/// and module registries through checked methods. [`Self::finish`] consumes the
+/// and the completed canonical project type store. [`Self::finish`] consumes the
 /// mutable shell and exposes an immutable [`TIR`].
 #[derive(Debug)]
 pub struct TirBuilder {
     registry: Registry,
-    module_types: ModuleTypeRegistry,
+    project_types: ProjectTypeStore,
     dags: DagRegistry,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     extern_functions:
@@ -1064,7 +1120,7 @@ pub struct TirBuilder {
 impl TirBuilder {
     pub(in crate::tir::typed) fn new(
         registry: Registry,
-        module_types: ModuleTypeRegistry,
+        project_types: ProjectTypeStore,
         root: DagTIR,
         extern_functions: HashMap<
             crate::syntax::plugin::ExternFnKey,
@@ -1073,7 +1129,7 @@ impl TirBuilder {
     ) -> Self {
         Self {
             registry,
-            module_types,
+            project_types,
             dags: DagRegistry::new(root),
             module_aliases: HashMap::new(),
             extern_functions,
@@ -1107,17 +1163,9 @@ impl TirBuilder {
         self.dags.insert(dag)
     }
 
-    /// Add an inline module's canonical type-system registry.
-    pub fn insert_module_registry(
-        &mut self,
-        owner: &crate::dag_id::DagId,
-        registry: &Registry,
-        source: NamedSource<Arc<String>>,
-        resolver: &ModuleResolver,
-    ) {
-        self.module_types.insert_registry(owner, registry, source);
-        self.module_types
-            .overlay_visible_units(owner, registry, resolver);
+    /// Install the completed canonical type store after child DAG compilation.
+    pub fn replace_project_type_store(&mut self, project_types: ProjectTypeStore) {
+        self.project_types = project_types;
     }
 
     /// Bind a source module alias to its canonical callable DAG target.
@@ -1143,7 +1191,7 @@ impl TirBuilder {
     pub fn finish(self) -> TIR {
         TIR {
             registry: self.registry,
-            module_types: self.module_types,
+            project_types: self.project_types,
             dags: self.dags,
             module_aliases: self.module_aliases,
             extern_functions: self.extern_functions,
@@ -1160,7 +1208,7 @@ impl TirBuilder {
 #[derive(Debug, Clone)]
 pub struct TIR {
     pub(crate) registry: Registry,
-    pub(in crate::tir::typed) module_types: ModuleTypeRegistry,
+    pub(in crate::tir::typed) project_types: ProjectTypeStore,
     pub(crate) dags: DagRegistry,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
     pub(crate) extern_functions:
@@ -1184,10 +1232,16 @@ impl TIR {
         self.dags.root_id()
     }
 
-    /// Borrow the root file's immutable type/unit/index registry.
+    /// Borrow the root file's immutable frontend/formatting registry.
     #[must_use]
     pub const fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    /// Borrow the authoritative owner-qualified project type store.
+    #[must_use]
+    pub const fn project_type_store(&self) -> &ProjectTypeStore {
+        &self.project_types
     }
 
     /// Borrow every reachable DAG through the read-only checked registry.
@@ -1217,19 +1271,35 @@ impl TIR {
     /// Look up a dimension by its canonical defining-module identity.
     #[must_use]
     pub fn dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
-        self.module_types.get_dimension(name)
+        self.project_types.get_dimension(name)
     }
 
     /// Look up a unit by its canonical defining-module identity.
     #[must_use]
     pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {
-        self.module_types.get_unit(name)
+        self.project_types.get_unit(name)
     }
 
     /// Look up a declared index by its canonical defining-module identity.
     #[must_use]
     pub fn declared_index_def(&self, name: &ResolvedIndexName) -> Option<&IndexDef> {
-        self.module_types.get_index(name)
+        self.project_types.get_index(name)
+    }
+
+    /// Look up a nominal type by its canonical defining-module identity.
+    #[must_use]
+    pub fn struct_type_def(&self, name: &ResolvedStructTypeName) -> Option<&TypeDef> {
+        self.project_types.get_struct_type(name)
+    }
+
+    /// Iterate canonical index definitions owned by the root module.
+    pub fn root_declared_indexes(&self) -> impl Iterator<Item = &IndexDef> {
+        let owner = self.root_dag_id();
+        self.project_types
+            .indexes
+            .iter()
+            .filter(move |(name, _)| name.owner() == owner)
+            .map(|(_, definition)| definition.as_ref())
     }
 
     /// Returns true if this file declares any required param or required index.
@@ -1240,9 +1310,7 @@ impl TIR {
             .iter()
             .any(|param| param.default_expr.is_none())
             || self
-                .registry
-                .indexes
-                .declared_indexes()
+                .root_declared_indexes()
                 .any(crate::registry::types::IndexDef::is_required)
     }
 

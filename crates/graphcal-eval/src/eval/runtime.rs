@@ -39,13 +39,7 @@ fn index_def_for_value_ref<'a>(
     tir: &'a graphcal_compiler::tir::typed::TIR,
 ) -> Option<&'a IndexDef> {
     index_name.finite_index().map_or_else(
-        || {
-            tir.root()
-                .semantic()
-                .collection_refs
-                .index_defs
-                .get(index_name.declared_resolved()?)
-        },
+        || tir.declared_index_def(index_name.declared_resolved()?),
         |index| tir.registry().indexes.get_finite_index(index),
     )
 }
@@ -104,7 +98,7 @@ pub(super) fn runtime_to_value(
         } => {
             let public_type_name = type_name.clone();
             let registry_type_name = declared_struct_type_ref(declared_type).unwrap_or(type_name);
-            let type_def = registry.types.get_type(registry_type_name.as_str());
+            let type_def = tir.struct_type_def(registry_type_name.resolved());
 
             // Build a substitution map from generic param names to concrete DeclaredTypes
             // when we have concrete type args from the declared type.
