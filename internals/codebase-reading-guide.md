@@ -144,7 +144,11 @@ ExecPlan
   |
   |  crates/graphcal-eval/src/eval/runtime.rs
   v
-EvalResult
+RuntimeEvaluation  (SI values + contained errors + root result)
+  |
+  |  crates/graphcal-eval/src/eval/project/prepared.rs
+  v
+EvalResult  (public project output assembly)
 ```
 
 The pipeline is forward-only: parser sugar is removed before IR assembly,
@@ -372,9 +376,17 @@ not collide. Const and runtime declaration evaluation read the authoritative
 read directly from `DagTIR`, not copied into `ExecPlan`.
 
 `eval/runtime.rs` evaluates declarations in topological order. A failed node is
-contained as a `NodeError`; independent nodes can still evaluate. Internal
-`RuntimeValue`s are converted to user-facing `Value`s with dimensions and
-display units before they appear in `EvalResult`.
+contained as a `NodeError`; independent nodes can still evaluate. One
+`RuntimeEvaluation` retains the SI-normalized value map, contained-error map,
+and display-aware root result together. `PreparedProject` then assembles the
+normal project-level `EvalResult`.
+
+`graphcal dump` is deliberately only a debugging shell: each stage stops at an
+existing pipeline boundary and pretty-prints that boundary's Rust `Debug`
+representation. It does not define a serialization schema or a parallel
+inspection model. HIR is not exposed because frozen per-DAG `IR` values are
+currently consumed during checking rather than retained as one complete
+pre-check project artifact.
 
 ## 2. Workspace Map
 
@@ -523,6 +535,7 @@ Subcommands:
 | `eval`   | Compile and evaluate a `.gcl` file           |
 | `check`  | Parse and type-check without evaluation      |
 | `format` | Format files or check formatting             |
+| `dump`   | Debug-print pipeline artifacts (experimental) |
 | `graph`  | Export a dependency graph                    |
 | `deps`   | Manage package dependencies / lockfiles      |
 | `lsp`    | Start the language server                    |
@@ -537,7 +550,9 @@ Key files:
   `graphcal-package`'s pure model.
 - `json_input.rs` reads bounded JSON input for params.
 - `overrides.rs` parses `--set` and `--input` parameter overrides.
-- `display.rs` renders text output.
+- `display.rs` renders normal eval text output.
+- `dump.rs` selects one pipeline boundary and pretty-prints its unstable Rust
+  `Debug` representation.
 - `plot.rs` renders plot/figure/layer output.
 
 ### 2.7 `graphcal-lsp`
@@ -986,6 +1001,7 @@ Important test locations:
 - `crates/graphcal-eval/tests/declaration_order.rs`
 - `crates/graphcal-fmt/tests/format_tests.rs`
 - `crates/graphcal-cli/tests/cli.rs`
+- `crates/graphcal-cli/tests/dump.rs`
 
 Useful commands:
 

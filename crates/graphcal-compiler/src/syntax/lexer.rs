@@ -8,6 +8,51 @@ use std::num::NonZeroUsize;
 
 const LEXER_MAX_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
+/// Complete output of lexing one physical source string.
+///
+/// Unknown characters are skipped by the lexer and retained as the first error
+/// span, matching the parser's lexical-error contract.
+#[derive(Debug)]
+pub struct TokenizedSource {
+    tokens: Vec<(Token, Span)>,
+    source_metadata: SourceMetadata,
+    first_error_span: Option<Span>,
+}
+
+impl TokenizedSource {
+    /// Parser-facing syntax tokens and their byte spans in source order.
+    #[must_use]
+    pub fn tokens(&self) -> &[(Token, Span)] {
+        &self.tokens
+    }
+
+    /// Formatter trivia collected while lexing.
+    #[must_use]
+    pub const fn source_metadata(&self) -> &SourceMetadata {
+        &self.source_metadata
+    }
+
+    /// First unrecognized source region, if any.
+    #[must_use]
+    pub const fn first_error_span(&self) -> Option<Span> {
+        self.first_error_span
+    }
+}
+
+/// Tokenize one source string to completion.
+#[must_use]
+pub fn tokenize(source: &str) -> TokenizedSource {
+    let mut lexer = Lexer::new(source);
+    let tokens = std::iter::from_fn(|| lexer.next_token()).collect();
+    let first_error_span = lexer.first_error_span();
+    let source_metadata = lexer.into_source_metadata();
+    TokenizedSource {
+        tokens,
+        source_metadata,
+        first_error_span,
+    }
+}
+
 /// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
 ///
 /// # Internal design

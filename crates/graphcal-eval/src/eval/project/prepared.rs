@@ -430,6 +430,16 @@ impl PreparedProject {
         &self.output_ports
     }
 
+    /// Borrow the internal execution plan for unstable debugging output.
+    ///
+    /// The concrete plan type remains private so downstream code cannot depend
+    /// on it as a runtime API. Its [`std::fmt::Debug`] representation has no
+    /// compatibility guarantee.
+    #[must_use]
+    pub fn debug_plan(&self) -> impl std::fmt::Debug + '_ {
+        &self.plan
+    }
+
     /// Begin constructing one plan-scoped parameter row.
     #[must_use]
     pub fn binding_builder(&self) -> ParameterBindingBuilder<'_> {
@@ -506,6 +516,41 @@ impl PreparedProject {
             cancellation,
         )?;
         self.assemble_normal_result(eval_result, cancellation)
+    }
+
+    /// Evaluate one validated row and retain the evaluator's internal values
+    /// and contained errors for unstable debugging output.
+    ///
+    /// Unlike [`Self::evaluate`], this does not assemble dependency-instance
+    /// values into the normal project-level public result.
+    pub fn evaluate_runtime(
+        &self,
+        row: &ParameterBindingRow,
+    ) -> Result<crate::eval::RuntimeEvaluation, CompileError> {
+        self.evaluate_runtime_with_cancellation(
+            row,
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+    }
+
+    /// Evaluate one row for debugging with cooperative cancellation.
+    pub fn evaluate_runtime_with_cancellation(
+        &self,
+        row: &ParameterBindingRow,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<crate::eval::RuntimeEvaluation, CompileError> {
+        self.validate_row_identity(row)?;
+        Ok(
+            super::super::runtime::evaluate_plan_with_values_and_bindings_and_cancellation(
+                &self.tir,
+                &self.plan,
+                &row.bindings,
+                &self.declared_types,
+                &self.source,
+                &self.host_fns,
+                cancellation,
+            )?,
+        )
     }
 
     /// Select a transport-independent recursive typed model interface.

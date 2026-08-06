@@ -75,6 +75,12 @@ graphcal eval analysis.gcl --plot browser
 # Canonically format source (with a 100-column target for breakable layouts)
 graphcal format rocket.gcl
 
+# Debug-print the internal execution plan without running ordinary nodes (experimental)
+graphcal dump plan rocket.gcl
+
+# Debug-print one explicitly requested runtime evaluation
+graphcal dump runtime rocket.gcl
+
 # Export the dependency graph as Graphviz DOT (experimental)
 graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 

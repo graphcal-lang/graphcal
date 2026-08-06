@@ -14,6 +14,7 @@
 
 mod deps;
 mod display;
+mod dump;
 mod json_input;
 mod model;
 mod overrides;
@@ -120,6 +121,11 @@ enum Commands {
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
+    },
+    /// Debug-print compiler and evaluator pipeline artifacts (experimental)
+    Dump {
+        #[command(subcommand)]
+        command: dump::DumpCommands,
     },
     /// Export the dependency graph of a .gcl file (experimental)
     Graph {
@@ -291,6 +297,14 @@ fn run_command(cli: Cli) {
         Commands::Format { paths, check } => {
             run_format(&paths, check);
         }
+        Commands::Dump { command } => match dump::run(command) {
+            Ok(dump::DumpStatus::Success) => {}
+            Ok(dump::DumpStatus::ProgramErrors) => process::exit(1),
+            Err(error) => {
+                eprintln!("{:?}", miette::Report::new(error));
+                process::exit(2);
+            }
+        },
         Commands::Graph { file, format, root } => {
             run_graph(&file, &format, root.as_deref());
         }

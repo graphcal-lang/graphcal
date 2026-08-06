@@ -33,6 +33,7 @@ pub use project::{
     prepare_from_project_with_host_fns_and_cancellation,
 };
 
+pub use runtime::RuntimeEvaluation;
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit,
     EvalOutputView, EvalResult, FigureSpec, LayerSpec, MarkProperty, NodeError, PlotError,
