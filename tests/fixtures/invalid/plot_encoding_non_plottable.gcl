@@ -1,0 +1,9 @@
+type Pair {
+    Pair(value: Dimensionless),
+}
+node pair: Pair = Pair(value: 1.0);
+
+plot invalid = {
+    mark: point,
+    encode: { x: @pair },
+};

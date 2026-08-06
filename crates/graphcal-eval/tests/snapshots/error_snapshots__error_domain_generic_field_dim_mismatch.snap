@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+domain bound dimension mismatch on `Box.value`: type has dimension Time, but min bound has dimension Length
+    Diagnostic severity: error
+Begin snippet for domain_generic_field_dim_mismatch.gcl starting at line 2, column 1
+
+snippet line 2: type Box<D: Dim> {
+snippet line 3:     Box(value: D(min: 0.5 m)),
+    label at line 3, columns 18 to 27: dimension mismatch in domain bound
+snippet line 4: }
+diagnostic help: domain bounds must have the same dimension as the constrained type
+diagnostic code: graphcal::C002

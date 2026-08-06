@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+domain constraints are not supported on generic type arguments
+    Diagnostic severity: error
+Begin snippet for domain_generic_default_constraint.gcl starting at line 4, column 1
+
+snippet line 4: }
+snippet line 5: type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> {
+    label at line 5, columns 35 to 44: constraint not allowed here
+snippet line 6:     Bad(value: T),
+diagnostic help: put the constraint on the field in the struct definition, not on the generic type argument
+diagnostic code: graphcal::C006

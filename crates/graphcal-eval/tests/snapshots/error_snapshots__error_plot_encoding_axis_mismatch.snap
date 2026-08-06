@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+plot encoding channels range over incompatible index axes
+    Diagnostic severity: error
+Begin snippet for plot_encoding_axis_mismatch.gcl starting at line 7, column 1
+
+snippet line 7:         x: for step: Step { step },
+snippet line 8:         y: for side: Side { side },
+    label at line 8, columns 12 to 34: this channel cannot align with the shared plot rows
+snippet line 9:     },
+diagnostic help: `x` ranges over plot_encoding_axis_mismatch.Step, `y` ranges over plot_encoding_axis_mismatch.Side; every channel must range over a subset of one channel's axes
+diagnostic code: graphcal::D034
