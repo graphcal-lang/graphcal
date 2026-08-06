@@ -5239,7 +5239,7 @@ fn import_of_plot_is_an_error() {
 }
 
 #[test]
-fn instantiated_include_plot_evaluates_against_instance() {
+fn empty_and_configured_include_plots_evaluate_against_their_instances() {
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/pkg");
     std::fs::create_dir_all(&root_dir).unwrap();
@@ -5258,7 +5258,8 @@ fn instantiated_include_plot_evaluates_against_instance() {
     let main = root_dir.join("main.gcl");
     std::fs::write(
         &main,
-        "include pkg.eng(scale: 10.0).{ scaled_plot as sp };\n\
+        "include pkg.eng().{ scaled_plot as default_plot };\n\
+         include pkg.eng(scale: 10.0).{ scaled_plot as configured_plot };\n\
          param own: Dimensionless = 5.0;\n",
     )
     .unwrap();
@@ -5274,14 +5275,24 @@ fn instantiated_include_plot_evaluates_against_instance() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json = parse_plot_json_stdout(&stdout);
-    assert_eq!(json[0]["name"].as_str(), Some("sp"));
+    assert_eq!(json[0]["name"].as_str(), Some("default_plot"));
     assert_eq!(
         json[0]["spec"]["data"]["values"][0]["x"].as_f64(),
-        Some(10.0),
-        "included plot must evaluate against the instance's bindings: {stdout}"
+        Some(1.0),
+        "default-bound plot must use its own instance: {stdout}"
     );
     assert_eq!(
         json[0]["spec"]["data"]["values"][0]["y"].as_f64(),
+        Some(2.0)
+    );
+    assert_eq!(json[1]["name"].as_str(), Some("configured_plot"));
+    assert_eq!(
+        json[1]["spec"]["data"]["values"][0]["x"].as_f64(),
+        Some(10.0),
+        "configured plot must use its own instance: {stdout}"
+    );
+    assert_eq!(
+        json[1]["spec"]["data"]["values"][0]["y"].as_f64(),
         Some(20.0)
     );
 }

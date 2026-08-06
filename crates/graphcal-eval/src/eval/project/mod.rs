@@ -373,19 +373,20 @@ struct ProjectSemanticContext<'project> {
     module_resolver: &'project graphcal_compiler::syntax::module_resolve::ModuleResolver,
 }
 
-/// A deferred include of a DAG (file-level or inline) — compile its body
-/// and merge into the importer's IR after the importer's own decls are
-/// lowered.
+/// Typed request for one concrete DAG instance (file-level or inline).
+///
+/// Elaboration compiles the referenced template and merges this instance into
+/// the importer after its local declarations have been lowered.
 ///
 /// A file include (`include lib(args).{...}`) is a DAG whose source is
 /// the file root; an inline DAG include (`include dag(args)` /
 /// `include lib.dag(args)`) is a DAG inside some file. After the flat
 /// TIR registry, both are uniformly addressed by canonical [`DagId`].
-struct DeferredDagInclude {
+struct IncludeInstanceRequest {
     /// Identifies the source kind and any kind-specific data (file's AST
     /// vs inline dag's body + parent context).
-    source: DeferredDagSource,
-    /// Private merge namespace for this configured instance. Only the named
+    source: IncludeTemplateSource,
+    /// Private merge namespace for this instance. Only the named
     /// variant is source-visible; selective includes use an opaque identity.
     instance_scope: IncludeInstanceScope,
     /// Target leaf retained for human-readable debug output when unambiguous.
@@ -414,7 +415,7 @@ struct DeferredDagInclude {
     /// plot name (#847).
     requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
     /// Span of the include declaration (for diagnostics).
-    import_span: Span,
+    include_span: Span,
     /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
     /// included assertions). Key = original name in dep.
     import_item_attributes:
@@ -424,9 +425,8 @@ struct DeferredDagInclude {
     pub_reexport_items: HashSet<DeclName>,
 }
 
-/// What is being included — distinguishes file roots from inline DAGs and
-/// carries the kind-specific data the deferred processor needs.
-enum DeferredDagSource {
+/// Template referenced by an include instance request.
+enum IncludeTemplateSource {
     /// File include — body is the dependency's full AST. Its own import and
     /// include declarations are processed recursively for each instance.
     File {
@@ -487,7 +487,7 @@ struct ImportContext<'a> {
     /// Registry surfaces of module-imported dependencies, merged into the
     /// importer's registry builder before its own declarations register.
     extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
-    deferred_dag_includes: Vec<DeferredDagInclude>,
+    include_instances: Vec<IncludeInstanceRequest>,
 }
 
 /// Whether a registry merge crosses a pure import boundary or belongs to one
@@ -531,14 +531,14 @@ pub(in crate::eval::project) enum SelectiveImportResult {
 }
 
 /// Resolve namespace-alias graph references in one compilation body's AST and
-/// deferred include bindings: rewrite
+/// pending include bindings: rewrite
 /// `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
 /// `GraphRef(Qualified { module: alias, member: field })` when
 /// `(alias, field)` matches an imported namespace member. The qualification is
 /// preserved structurally throughout the IR / eval pipeline — there is no
 /// flat-string boundary.
 ///
-/// Deferred bindings are extracted from the canonical loaded AST before the
+/// Include bindings are extracted from the canonical loaded AST before the
 /// body AST is cloned and rewritten. Rewriting both representations together
 /// ensures a nested instantiation can prefix sibling-instance references using
 /// their full qualified identity.
@@ -548,14 +548,14 @@ pub(in crate::eval::project) enum SelectiveImportResult {
 fn rewrite_qualified_refs_in_compilation_body<'a>(
     ast: &'a graphcal_compiler::desugar::desugared_ast::File,
     imported_names: &ImportedValueNames,
-    deferred_dag_includes: &mut [DeferredDagInclude],
+    include_instances: &mut [IncludeInstanceRequest],
 ) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
     let alias_pairs = collect_qualified_pairs(imported_names);
     if alias_pairs.is_empty() {
         return std::borrow::Cow::Borrowed(ast);
     }
 
-    for binding in deferred_dag_includes
+    for binding in include_instances
         .iter_mut()
         .flat_map(|include| include.bindings.values_mut())
     {

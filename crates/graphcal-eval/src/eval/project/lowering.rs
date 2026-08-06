@@ -80,7 +80,7 @@ fn imported_runtime_unit_reference(
 
 fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
     let mut leaf_counts: HashMap<ModuleAliasName, usize> = HashMap::new();
-    ctx.deferred_dag_includes
+    ctx.include_instances
         .iter()
         .filter(|include| matches!(include.instance_scope, IncludeInstanceScope::Anonymous(_)))
         .for_each(|include| {
@@ -90,7 +90,7 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
                 .or_insert(1);
         });
 
-    ctx.deferred_dag_includes
+    ctx.include_instances
         .iter()
         .filter(|include| matches!(include.instance_scope, IncludeInstanceScope::Anonymous(_)))
         .filter(|include| leaf_counts.get(&include.debug_scope) == Some(&1))
@@ -104,8 +104,8 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
         .collect()
 }
 
-/// Lower the AST to IR, process deferred instantiated imports, and type-resolve
-/// the final `CompiledFile`.
+/// Lower the AST to IR, elaborate explicit include instances, and type-resolve
+/// the final [`CompiledFile`].
 #[expect(
     clippy::too_many_lines,
     reason = "project lowering coordinates resolver, TIR, and plan construction"
@@ -170,7 +170,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
 
     // Snapshot the consumer-facing output surface before include bodies are
     // merged. The file's own declarations and imported values are visible;
-    // each deferred include contributes only its selected/projectable outputs.
+    // each include instance contributes only its selected/projectable outputs.
     let output_surface: HashSet<ScopedName> = unfrozen
         .source_order
         .iter()
@@ -183,20 +183,20 @@ pub(in crate::eval::project) fn lower_and_finalize(
         })
         .map(|(name, _)| name.clone())
         .chain(
-            ctx.deferred_dag_includes
+            ctx.include_instances
                 .iter()
                 .flat_map(|include| include.surface_outputs.iter().cloned()),
         )
         .collect();
 
-    // Process every deferred DAG include (file-level instantiated, inline
-    // DAG, qualified inline DAG) through one path: compile each source's
-    // body to IR and merge into the importer.
-    process_deferred_dag_includes(
+    // Elaborate every file-root, local-inline, and qualified-inline include
+    // through one instance path: compile its template and merge the concrete
+    // instance into the importer.
+    elaborate_include_instances(
         project,
         file_dag_id,
         file_dag_id,
-        &ctx.deferred_dag_includes,
+        &ctx.include_instances,
         module_artifacts,
         file_src,
         file_ast,
@@ -484,7 +484,7 @@ fn compile_loaded_dag_module_ir<'a>(
         imported_type_system_names: HashMap::new(),
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
-        deferred_dag_includes: Vec::new(),
+        include_instances: Vec::new(),
     };
 
     process_dag_body_import_declarations(
@@ -516,7 +516,7 @@ fn compile_loaded_dag_module_ir<'a>(
     let dag_ast = rewrite_qualified_refs_in_compilation_body(
         &dag_ast,
         &ctx.imported_names,
-        &mut ctx.deferred_dag_includes,
+        &mut ctx.include_instances,
     );
     let mut registry_seed = |builder: &mut RegistryBuilder| {
         seed_imported_type_system(
@@ -540,11 +540,11 @@ fn compile_loaded_dag_module_ir<'a>(
             cancellation,
         )?;
 
-    process_deferred_dag_includes(
+    elaborate_include_instances(
         project,
         &loaded_dag.dag_id,
         &loaded_dag.parent_dag_id,
-        &ctx.deferred_dag_includes,
+        &ctx.include_instances,
         module_artifacts,
         file_src,
         dag_ast.as_ref(),
@@ -774,7 +774,7 @@ fn merge_dep_dag_tirs(
                 continue;
             }
             let mut cloned = dag_tir.clone();
-            // Supply deferred values imported from this owning dependency.
+            // Supply compile-time values imported from this owning dependency.
             // Canonical target and declared type remain on the same binding
             // record; no independently keyed source/value maps can diverge.
             cloned.supply_imported_values(
@@ -797,16 +797,16 @@ fn merge_dep_dag_tirs(
 fn check_semantic_override_reconciliation(
     dependencies: &graphcal_compiler::tir::dim_check::OverrideDependencySummary,
     source_dag_id: &graphcal_compiler::dag_id::DagId,
-    deferred: &DeferredDagInclude,
+    instance: &IncludeInstanceRequest,
     importer_src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::syntax::index_name::ResolvedIndexName;
     use graphcal_compiler::syntax::type_name::ResolvedStructTypeName;
     use graphcal_compiler::tir::dim_check::NominalOverrideIdentity;
 
-    let mut overridden_indexes = deferred.index_bindings.keys().cloned().collect::<Vec<_>>();
+    let mut overridden_indexes = instance.index_bindings.keys().cloned().collect::<Vec<_>>();
     overridden_indexes.sort();
-    let mut overridden_types = deferred.type_bindings.keys().cloned().collect::<Vec<_>>();
+    let mut overridden_types = instance.type_bindings.keys().cloned().collect::<Vec<_>>();
     overridden_types.sort();
     let mut defaults = dependencies
         .iter()
@@ -815,7 +815,7 @@ fn check_semantic_override_reconciliation(
     defaults.sort_by_key(|(param, _)| (*param).clone());
 
     for (param, dependencies) in defaults {
-        if deferred.bindings.contains_key(&param.to_unowned_def_name()) {
+        if instance.bindings.contains_key(&param.to_unowned_def_name()) {
             continue;
         }
         for overridden in &overridden_indexes {
@@ -831,7 +831,7 @@ fn check_semantic_override_reconciliation(
                         orphan_decl: param.as_str().to_string(),
                         detail: format!("canonical dependency on index `{overridden}`"),
                         src: importer_src.clone(),
-                        span: deferred.import_span.into(),
+                        span: instance.include_span.into(),
                     },
                 ));
             }
@@ -849,7 +849,7 @@ fn check_semantic_override_reconciliation(
                         orphan_decl: param.as_str().to_string(),
                         detail: format!("canonical dependency on type `{overridden}`"),
                         src: importer_src.clone(),
-                        span: deferred.import_span.into(),
+                        span: instance.include_span.into(),
                     },
                 ));
             }
@@ -858,8 +858,8 @@ fn check_semantic_override_reconciliation(
     Ok(())
 }
 
-/// Process every deferred DAG include (file-level instantiated, same-file
-/// inline DAG, cross-file qualified inline DAG) through one path:
+/// Elaborate every file-root, same-file inline, and cross-file qualified
+/// include through one concrete-instance path:
 ///
 /// 1. Resolve the include's source — file include reads the dep's full
 ///    AST; inline DAG include reads the dag block's body and pre-processes
@@ -881,11 +881,11 @@ fn check_semantic_override_reconciliation(
     clippy::too_many_lines,
     reason = "single cohesive include pipeline: source resolution, registry merge, validation, IR merge"
 )]
-fn process_deferred_dag_includes(
+fn elaborate_include_instances(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     importer_file_dag_id: &graphcal_compiler::dag_id::DagId,
-    deferred_dag_includes: &[DeferredDagInclude],
+    include_instances: &[IncludeInstanceRequest],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     importer_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
@@ -901,9 +901,9 @@ fn process_deferred_dag_includes(
     > = HashMap::new();
     let mut source_order_blocks = Vec::new();
 
-    for deferred in deferred_dag_includes {
+    for instance in include_instances {
         cancellation.checkpoint()?;
-        let merge_prefix = deferred.instance_scope.merge_scope_name();
+        let merge_prefix = instance.instance_scope.merge_scope_name();
         // ---- 1. Resolve source body + lower to IR ------------------------
         let (
             mut dep_unfrozen,
@@ -913,8 +913,8 @@ fn process_deferred_dag_includes(
             body_for_leakage_check,
             body_decls_for_aliases,
             source_override_dependencies,
-        ) = match &deferred.source {
-            DeferredDagSource::File { dep_dag_id } => {
+        ) = match &instance.source {
+            IncludeTemplateSource::File { dep_dag_id } => {
                 let dep_loaded = &project.files[dep_dag_id];
                 let dep_src = &dep_loaded.named_source;
                 let mut body_ctx = ImportContext {
@@ -924,7 +924,7 @@ fn process_deferred_dag_includes(
                     imported_type_system_names: HashMap::new(),
                     module_map: HashMap::new(),
                     extra_registry_builders: Vec::new(),
-                    deferred_dag_includes: Vec::new(),
+                    include_instances: Vec::new(),
                 };
                 imports::process_file_body_declarations(
                     project,
@@ -936,7 +936,7 @@ fn process_deferred_dag_includes(
                 let rewritten_body = rewrite_qualified_refs_in_compilation_body(
                     &dep_loaded.ast,
                     &body_ctx.imported_names,
-                    &mut body_ctx.deferred_dag_includes,
+                    &mut body_ctx.include_instances,
                 );
                 let instance_dag_id = importer_dag_id.child(merge_prefix.as_str());
                 let mut registry_seed = |builder: &mut RegistryBuilder| {
@@ -959,11 +959,11 @@ fn process_deferred_dag_includes(
                         cancellation,
                     )?;
                 dep_unfrozen.retarget_existing_resolution_owners(dep_dag_id);
-                process_deferred_dag_includes(
+                elaborate_include_instances(
                     project,
                     &instance_dag_id,
                     importer_file_dag_id,
-                    &body_ctx.deferred_dag_includes,
+                    &body_ctx.include_instances,
                     module_artifacts,
                     dep_src,
                     rewritten_body.as_ref(),
@@ -986,7 +986,7 @@ fn process_deferred_dag_includes(
                         .map(|artifact| &artifact.override_dependencies),
                 )
             }
-            DeferredDagSource::InlineDag {
+            IncludeTemplateSource::InlineDag {
                 dag_body,
                 dag_imported_names,
                 dag_id,
@@ -1017,7 +1017,7 @@ fn process_deferred_dag_includes(
                     imported_type_system_names: HashMap::new(),
                     module_map: HashMap::new(),
                     extra_registry_builders: Vec::new(),
-                    deferred_dag_includes: Vec::new(),
+                    include_instances: Vec::new(),
                 };
                 if let Some(loaded_inline) = loaded_inline {
                     process_dag_body_import_declarations(
@@ -1044,7 +1044,7 @@ fn process_deferred_dag_includes(
                     importer_src,
                 )?;
                 // For cross-file includes, supply concrete parent values to the
-                // deferred canonical self-import bindings. Same-file includes
+                // pending canonical self-import bindings. Same-file includes
                 // resolve them from the importer at runtime.
                 if parent_dag_id != importer_file_dag_id
                     && let Some(parent_eval) = module_artifacts.get(parent_dag_id)
@@ -1074,7 +1074,7 @@ fn process_deferred_dag_includes(
                 let stripped_body = rewrite_qualified_refs_in_compilation_body(
                     &stripped_body,
                     &body_ctx.imported_names,
-                    &mut body_ctx.deferred_dag_includes,
+                    &mut body_ctx.include_instances,
                 );
 
                 let dag_dag_id = importer_dag_id.child(merge_prefix.as_str());
@@ -1099,11 +1099,11 @@ fn process_deferred_dag_includes(
                         cancellation,
                     )?;
                 dag_unfrozen.retarget_existing_resolution_owners(dag_id);
-                process_deferred_dag_includes(
+                elaborate_include_instances(
                     project,
                     &dag_dag_id,
                     importer_file_dag_id,
-                    &body_ctx.deferred_dag_includes,
+                    &body_ctx.include_instances,
                     module_artifacts,
                     importer_src,
                     stripped_body.as_ref(),
@@ -1133,25 +1133,25 @@ fn process_deferred_dag_includes(
         // accidentally satisfy its own binding.
         let index_binding_candidates = capture_index_binding_candidates(
             builder,
-            &deferred.index_bindings,
-            &deferred.index_binding_spans,
+            &instance.index_bindings,
+            &instance.index_binding_spans,
             importer_src,
-            deferred.import_span,
+            instance.include_span,
         )?;
 
         // ---- 2. Merge dep registry into importer's --------------------
         merge_registry_into_builder(
             builder,
             &dep_registry,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            &deferred.dim_bindings,
+            &instance.index_bindings,
+            &instance.type_bindings,
+            &instance.dim_bindings,
         )
         .map_err(|conflict| {
             CompileError::Eval(GraphcalError::ConflictingImportedUnit {
                 name: conflict.name,
                 src: importer_src.clone(),
-                span: deferred.import_span.into(),
+                span: instance.include_span.into(),
             })
         })?;
 
@@ -1159,13 +1159,13 @@ fn process_deferred_dag_includes(
         validate_index_binding_contracts(
             body_decls_for_aliases,
             &dep_registry,
-            &deferred.index_bindings,
-            &deferred.index_binding_spans,
-            &deferred.dim_bindings,
+            &instance.index_bindings,
+            &instance.index_binding_spans,
+            &instance.dim_bindings,
             &index_binding_candidates,
             builder,
             importer_src,
-            deferred.import_span,
+            instance.include_span,
         )?;
 
         // ---- 4. Validation checks -----------------------------------------
@@ -1177,30 +1177,30 @@ fn process_deferred_dag_includes(
             Some(dependencies) => check_semantic_override_reconciliation(
                 dependencies,
                 &dep_resolution_owner,
-                deferred,
+                instance,
                 importer_src,
             )?,
             None => dep_unfrozen.record_include_override_reconciliations(
-                &deferred.bindings,
-                &deferred.index_bindings,
-                &deferred.type_bindings,
+                &instance.bindings,
+                &instance.index_bindings,
+                &instance.type_bindings,
                 &dep_registry,
                 &dep_resolution_owner,
                 importer_dag_id,
                 importer_src,
-                deferred.import_span,
+                instance.include_span,
             )?,
         }
         check_generics_leakage(
             body_for_leakage_check,
-            &deferred.pub_reexport_items,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            &deferred.dim_bindings,
+            &instance.pub_reexport_items,
+            &instance.index_bindings,
+            &instance.type_bindings,
+            &instance.dim_bindings,
             &importer_external_surface,
             &importer_local_type_names,
             importer_src,
-            deferred.import_span,
+            instance.include_span,
         )?;
 
         // ---- 5. Merge dep IR into importer's IR ---------------------------
@@ -1208,40 +1208,40 @@ fn process_deferred_dag_includes(
         unfrozen.merge_dependency(
             dep_unfrozen,
             &merge_prefix,
-            &deferred.bindings,
+            &instance.bindings,
             &dep_names,
-            &deferred.index_bindings,
-            &deferred.type_bindings,
-            &deferred.dim_bindings,
-            &deferred.assertion_aliases,
-            &deferred.import_item_attributes,
-            &deferred.requested_plots,
+            &instance.index_bindings,
+            &instance.type_bindings,
+            &instance.dim_bindings,
+            &instance.assertion_aliases,
+            &instance.import_item_attributes,
+            &instance.requested_plots,
             importer_dag_id,
             importer_src,
             &dep_src,
         )?;
 
         // ---- 6. Add selective aliases -------------------------------------
-        if let Some(selective) = &deferred.selective_names {
+        if let Some(selective) = &instance.selective_names {
             add_selective_aliases_inner(
                 body_decls_for_aliases,
                 selective,
                 &merge_prefix,
                 &AliasSubstitutions {
-                    index: &deferred.index_bindings,
-                    r#type: &deferred.type_bindings,
-                    dim: &deferred.dim_bindings,
+                    index: &instance.index_bindings,
+                    r#type: &instance.type_bindings,
+                    dim: &instance.dim_bindings,
                 },
                 &AliasResolutionOwners {
                     r#type: &dep_resolution_owner,
                     body: importer_dag_id,
                 },
-                deferred.import_span,
+                instance.include_span,
                 unfrozen,
             );
         }
         source_order_blocks.push((
-            deferred.import_span,
+            instance.include_span,
             unfrozen.source_order.split_off(source_order_start),
         ));
     }

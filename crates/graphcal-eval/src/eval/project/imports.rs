@@ -69,7 +69,7 @@ pub(in crate::eval::project) struct InlineDagIncludeTarget<'a> {
     pub(in crate::eval::project) boundary: IncludeVisibilityBoundary,
 }
 
-/// Populate one file body's import context, including deferred configured DAGs.
+/// Populate one file body's pure imports and concrete include requests.
 ///
 /// Both top-level file compilation and recursive file-DAG instantiation use
 /// this path. Keeping import classification here prevents nested instances
@@ -800,8 +800,8 @@ pub(in crate::eval::project) fn process_file_include<'a>(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
 
-    ctx.deferred_dag_includes.push(DeferredDagInclude {
-        source: DeferredDagSource::File {
+    ctx.include_instances.push(IncludeInstanceRequest {
+        source: IncludeTemplateSource::File {
             dep_dag_id: import_dag_id.clone(),
         },
         instance_scope,
@@ -815,7 +815,7 @@ pub(in crate::eval::project) fn process_file_include<'a>(
         assertion_aliases,
         surface_outputs,
         requested_plots,
-        import_span: decl.span,
+        include_span: decl.span,
         import_item_attributes,
         pub_reexport_items,
     });
@@ -833,7 +833,7 @@ pub(in crate::eval::project) fn process_file_include<'a>(
 /// handled identically.
 #[expect(
     clippy::too_many_lines,
-    reason = "binding validation, scope registration, and deferred include setup form a single cohesive pipeline"
+    reason = "binding validation, scope registration, and instance request setup form one pipeline"
 )]
 pub(in crate::eval::project) fn process_inline_dag_include(
     target: &InlineDagIncludeTarget<'_>,
@@ -1015,8 +1015,8 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
 
-    ctx.deferred_dag_includes.push(DeferredDagInclude {
-        source: DeferredDagSource::InlineDag {
+    ctx.include_instances.push(IncludeInstanceRequest {
+        source: IncludeTemplateSource::InlineDag {
             dag_body,
             dag_imported_names,
             dag_id: dag_id.clone(),
@@ -1033,7 +1033,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
         assertion_aliases,
         surface_outputs,
         requested_plots,
-        import_span: decl.span,
+        include_span: decl.span,
         import_item_attributes,
         pub_reexport_items,
     });
