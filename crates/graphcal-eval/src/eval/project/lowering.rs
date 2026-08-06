@@ -61,7 +61,7 @@ fn imported_runtime_unit_reference(
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
 ) -> Option<(String, Span)> {
     let mut invalid = None;
-    dag.semantic().visit_unit_references(&mut |unit, span| {
+    dag.visit_unit_references(&mut |unit, span| {
         if invalid.is_none()
             && unit.spelling().qualifier().is_some_and(|alias| {
                 is_imported_dynamic_unit(
@@ -287,40 +287,17 @@ pub(in crate::eval::project) fn lower_and_finalize(
         cancellation,
     )?;
 
-    // Resolve domain constraints at compile time so malformed bounds (such as
-    // C003 min > max) surface under `graphcal check` instead of only at `eval`.
-    // Target-family, Int, and datetime-scale checks are pure type checks handled
-    // in `dim_check`; ordering requires evaluated bound expressions and therefore
-    // const values, so we evaluate consts here too. The resulting plan is
-    // discarded — `exec_plan::compile` recomputes both as part of its run.
-    {
-        let const_values =
-            crate::exec_plan::eval_consts_from_tir_with_cancellation(&tir, file_src, cancellation)?;
-        let _ = crate::exec_plan::resolve_domain_constraints_with_cancellation(
-            &tir,
-            &const_values,
-            file_src,
-            cancellation,
-        )?;
-        let field_constraints =
-            crate::exec_plan::resolve_struct_field_constraints_with_cancellation(
-                &tir,
-                &const_values,
-                file_src,
-                cancellation,
-            )?;
-        crate::exec_plan::check_const_struct_field_constraints_at_compile_time(
-            &tir,
-            &const_values,
-            &field_constraints,
-            file_src,
-        )?;
-    }
+    // Retain constant values and resolved constraints on the checked artifact:
+    // dependency interface construction and runtime preparation consume these
+    // same immutable facts instead of recomputing semantically significant work.
+    let checked_execution_facts =
+        crate::exec_plan::check_execution_facts_with_cancellation(&tir, file_src, cancellation)?;
 
     let declared_types = tir.build_declared_types(file_src)?;
 
     Ok(CompiledFile {
         tir,
+        checked_execution_facts,
         declared_types,
         imported_values: saved_imported_values,
         imported_source_order: ctx.imported_source_order,

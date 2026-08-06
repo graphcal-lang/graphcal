@@ -311,11 +311,7 @@ impl DimCheckContext<'_> {
     ) -> Option<&crate::hir::Expr> {
         let dag = self.dag?;
         let key = dag.resolved_decl_key_for_local(name);
-        dag.semantic
-            .expressions
-            .consts
-            .get(&key)
-            .or_else(|| dag.semantic.expressions.runtime_expr(&key))
+        dag.value_expr(&key)
     }
 
     /// Look up the module-aware HIR assertion body for a local assertion.
@@ -330,12 +326,9 @@ impl DimCheckContext<'_> {
             span: span.into(),
         })?;
         let key = dag.resolved_decl_key_for_local(name);
-        dag.semantic
-            .expressions
-            .asserts
-            .get(&key)
+        dag.assert_body(&key)
             .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("semantic HIR body missing for assertion `{name}`"),
+                message: format!("TIR assertion entry missing for `{name}`"),
                 src: self.src.clone(),
                 span: span.into(),
             })
@@ -449,7 +442,7 @@ fn check_decl_expr_type(
         body_ctx
             .hir_expr_for_decl(name)
             .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("semantic HIR expression missing for declaration `{name}`"),
+                message: format!("value declaration record missing while checking `{name}`"),
                 src: body_ctx.src.clone(),
                 span: (*type_ann_span).into(),
             })?;
@@ -1150,7 +1143,7 @@ pub fn concrete_constructor_applications(
 ) -> Result<Vec<ConcreteNominalTypeApplication>, GraphcalError> {
     let mut applications = HashSet::new();
     let mut error = None;
-    dag.semantic.visit_expressions(&mut |expr| {
+    dag.visit_expressions(&mut |expr| {
         if error.is_some() {
             return;
         }
@@ -2024,7 +2017,7 @@ fn collect_dag_call_targets_from_dag(
     dag: &crate::tir::typed::DagTIR,
     out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
 ) {
-    dag.semantic.visit_expressions(&mut |expr| {
+    dag.visit_expressions(&mut |expr| {
         if let crate::hir::ExprKind::DagCall { target, .. } = &expr.kind {
             out.insert(target.value.clone());
         }

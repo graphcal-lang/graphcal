@@ -379,6 +379,7 @@ impl PreparedProject {
         let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
         let CompiledFile {
             tir,
+            checked_execution_facts: _,
             declared_types,
             imported_values,
             imported_source_order,
@@ -646,7 +647,7 @@ impl PreparedProject {
             generic_nat_bindings: None,
             host_fns: Some(&self.host_fns),
         };
-        for assertion in &self.plan.assert_bodies {
+        for assertion in self.tir.root().asserts() {
             let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
                 &assertion.body,
                 self.plan.expected_fail.get(&assertion.name),

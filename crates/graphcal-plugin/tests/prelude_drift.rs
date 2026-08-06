@@ -93,7 +93,7 @@ fn compile(dir: &Path, source: &str, registry: &HostFunctionRegistry) -> Result<
     std::fs::write(&entry, source).expect("write test project");
     let fs = RealFileSystem::default();
     let project = load_project(&entry, None, &fs)?;
-    graphcal_eval::eval::compile_to_tir_from_project_with_host_fns(&project, registry)?;
+    graphcal_eval::eval::check_project_with_host_fns(&project, registry)?;
     Ok(())
 }
 

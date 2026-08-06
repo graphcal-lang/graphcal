@@ -24,12 +24,12 @@ pub use project::{
     compile_and_eval_from_project, compile_and_eval_from_project_with_cancellation,
     compile_and_eval_from_project_with_host_fns,
     compile_and_eval_from_project_with_host_fns_and_cancellation, compile_and_eval_project,
-    compile_to_tir, compile_to_tir_from_project, compile_to_tir_from_project_with_cancellation,
-    compile_to_tir_from_project_with_host_fns,
-    compile_to_tir_from_project_with_host_fns_and_cancellation, compile_to_tir_project,
     prepare_from_project, prepare_from_project_with_host_fns,
     prepare_from_project_with_host_fns_and_cancellation,
 };
+#[cfg(test)]
+pub(crate) use project::{compile_to_tir, compile_to_tir_project};
+
 pub use types::{
     AssertResult, AxisMeta, CompileError, CompositionProperty, DeclType, DisplayUnit,
     EvalOutputView, EvalResult, FigureSpec, LayerSpec, MarkProperty, NodeError, PlotError,

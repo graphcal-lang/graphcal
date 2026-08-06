@@ -288,7 +288,7 @@ pub(super) fn run_eval_loop_with_bindings(
     }
 
     // Insert const values into the lookup table.
-    for (name, val) in &plan.const_values {
+    for (name, val) in plan.const_values.iter() {
         values.insert(name.clone(), val.clone());
     }
 
@@ -344,11 +344,9 @@ pub(super) fn run_eval_loop_with_bindings(
 
         let result = tir
             .root()
-            .semantic()
-            .expressions
             .runtime_expr(name.as_resolved())
             .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("semantic TIR missing HIR runtime expression for `{name}`"),
+                message: format!("TIR runtime declaration missing for `{name}`"),
                 src: src.clone(),
                 span: Span::new(0, 0).into(),
             })
@@ -490,8 +488,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             return Some(expr);
         }
         let key = tir.root().resolved_decl_key_for_local(name);
-        let exprs = &tir.root().semantic().expressions;
-        exprs.consts.get(&key).or_else(|| exprs.runtime_expr(&key))
+        tir.root().value_expr(&key)
     };
     let expr_map: HashMap<ScopedName, &graphcal_compiler::hir::Expr> = tir
         .root()
@@ -586,8 +583,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     // An assertion whose body references a failed declaration reports the
     // dependency failure (with its root cause) instead of evaluating over a
     // value map where the failed name is simply absent (#814).
-    let assertions: Vec<(ScopedName, AssertResult, Span)> = plan
-        .assert_bodies
+    let assertions: Vec<(ScopedName, AssertResult, Span)> = tir
+        .root()
+        .asserts()
         .iter()
         .map(|entry| {
             let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
@@ -611,20 +609,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
     // plot that cannot be rendered is reported, never silently dropped
     // (#842).
-    let plot_exprs = &tir.root().semantic().plot_exprs;
     let mut plot_errors: Vec<super::types::PlotError> = Vec::new();
-    let plots: Vec<PlotSpec> = plan
-        .plot_bodies
+    let plots: Vec<PlotSpec> = tir
+        .root()
+        .plots()
         .iter()
         .filter_map(|entry| {
-            let Some(lowered) = plot_exprs.plots.get(&entry.name) else {
-                plot_errors.push(super::types::PlotError {
-                    name: entry.name.clone(),
-                    message: "internal: malformed TIR is missing a checked plot body".to_string(),
-                });
-                return None;
-            };
-            evaluate_plot(entry, lowered, &values, &errors, &ctx, declared_types)
+            evaluate_plot(entry, &values, &errors, &ctx, declared_types)
                 .map_err(|message| {
                     plot_errors.push(super::types::PlotError {
                         name: entry.name.clone(),
@@ -638,18 +629,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
 
     // Evaluate figure declarations; a failing field reports the figure
     // instead of silently dropping the property (#845).
-    let figures: Vec<super::types::FigureSpec> = plan
-        .figure_bodies
+    let figures: Vec<super::types::FigureSpec> = tir
+        .root()
+        .figures()
         .iter()
         .filter_map(|entry| {
-            let Some(fields) = plot_exprs.figures.get(&entry.name) else {
-                plot_errors.push(super::types::PlotError {
-                    name: entry.name.clone(),
-                    message: "internal: malformed TIR is missing checked figure fields".to_string(),
-                });
-                return None;
-            };
-            match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
+            match eval_composition_fields(&entry.fields, &entry.plot_names, &values, &ctx) {
                 Ok(evaluated) => Some(super::types::FigureSpec {
                     name: entry.name.clone(),
                     plot_names: evaluated.plot_names,
@@ -667,18 +652,12 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .collect();
 
     // Evaluate layer declarations
-    let layers: Vec<super::types::LayerSpec> = plan
-        .layer_bodies
+    let layers: Vec<super::types::LayerSpec> = tir
+        .root()
+        .layers()
         .iter()
         .filter_map(|entry| {
-            let Some(fields) = plot_exprs.layers.get(&entry.name) else {
-                plot_errors.push(super::types::PlotError {
-                    name: entry.name.clone(),
-                    message: "internal: malformed TIR is missing checked layer fields".to_string(),
-                });
-                return None;
-            };
-            match eval_composition_fields(fields, &entry.plot_names, &values, &ctx) {
+            match eval_composition_fields(&entry.fields, &entry.plot_names, &values, &ctx) {
                 Ok(evaluated) => Some(super::types::LayerSpec {
                     name: entry.name.clone(),
                     plot_names: evaluated.plot_names,
@@ -1364,16 +1343,15 @@ fn eval_plot_property(
 
 /// Evaluate a plot declaration, producing a `PlotSpec`.
 ///
-/// The lowered HIR body carries the expressions; the source declaration
-/// supplies the mark type. String literals are handled directly (they are
+/// The authoritative TIR plot record carries both its lowered HIR body and
+/// mark metadata. String literals are handled directly (they are
 /// not runtime values in Graphcal).
 ///
 /// Returns `Err` with a human-readable reason when the plot cannot be
 /// rendered: a referenced declaration failed to evaluate, or one of the
 /// plot's own expressions failed (#842).
 fn evaluate_plot(
-    entry: &crate::exec_plan::PlotBodyEntry,
-    lowered: &graphcal_compiler::tir::typed::LoweredPlotBody,
+    entry: &graphcal_compiler::ir::lower::PlotEntry,
     values: &RuntimeValueMap,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
     ctx: &EvalContext<'_>,
@@ -1381,6 +1359,7 @@ fn evaluate_plot(
 ) -> Result<PlotSpec, String> {
     // A reference to a failed declaration must report the root cause, not a
     // generic lookup failure on the missing value.
+    let lowered = &entry.body;
     let body_exprs = lowered
         .encodings
         .iter()

@@ -219,8 +219,7 @@ node x: Dimensionless = 1.0;
     let project = load_project(&root, None, &fs).unwrap();
     let mut registry = HostFunctionRegistry::new();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    let err = graphcal_eval::eval::compile_to_tir_from_project_with_host_fns(&project, &registry)
-        .unwrap_err();
+    let err = graphcal_eval::eval::check_project_with_host_fns(&project, &registry).unwrap_err();
     assert!(
         matches!(
             err,

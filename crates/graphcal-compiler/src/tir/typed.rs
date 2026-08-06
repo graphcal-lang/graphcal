@@ -275,7 +275,7 @@ fn type_resolve_impl(
         src,
     )?;
     cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(&mut root_dag.semantic);
+    augment_runtime_deps_for_dynamic_units(&mut root_dag);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(&root_dag, &ir.external_surface, module_ctx, src)?;
     cancellation.checkpoint()?;
@@ -362,7 +362,7 @@ fn type_resolve_single_impl(
         src,
     )?;
     cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(&mut dag.semantic);
+    augment_runtime_deps_for_dynamic_units(&mut dag);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(&dag, &ir.external_surface, module_ctx, src)?;
     cancellation.checkpoint()?;
@@ -429,14 +429,10 @@ fn type_resolve_dag(
     }
 
     cancellation.checkpoint()?;
-    let LoweredDagExpressions {
-        exprs: expressions,
-        domain_bounds,
-    } = lower_resolved_expressions(
+    let domain_bounds = lower_declaration_domain_bounds(
         &consts,
         &params,
         &nodes,
-        asserts,
         module_ctx,
         imported_bindings,
         registry,
@@ -444,10 +440,13 @@ fn type_resolve_dag(
     )?;
     cancellation.checkpoint()?;
     let dependencies =
-        collect_resolved_dag_dependencies(&consts, &params, &nodes, &expressions, module_ctx, src)?;
+        collect_resolved_dag_dependencies(&consts, &params, &nodes, module_ctx, src)?;
     cancellation.checkpoint()?;
     let collection_refs = collect_resolved_collection_refs(
-        &expressions,
+        &consts,
+        &params,
+        &nodes,
+        asserts,
         &domain_bounds,
         &resolved_decl_types,
         imported_bindings,
@@ -455,8 +454,15 @@ fn type_resolve_dag(
         src,
     )?;
     cancellation.checkpoint()?;
-    let constructor_refs =
-        collect_resolved_constructor_refs(&expressions, &domain_bounds, module_ctx, src)?;
+    let constructor_refs = collect_resolved_constructor_refs(
+        &consts,
+        &params,
+        &nodes,
+        asserts,
+        &domain_bounds,
+        module_ctx,
+        src,
+    )?;
     let override_reconciliations = resolve_override_reconciliations(&params, module_ctx)?;
     cancellation.checkpoint()?;
     let type_defs = collect_resolved_type_defs(
@@ -470,9 +476,7 @@ fn type_resolve_dag(
     let bindable_nominals = collect_bindable_nominals(module_ctx, src)?;
 
     let semantic = DagSemanticBody {
-        expressions,
         domain_bounds,
-        plot_exprs: ResolvedPlotExprs::default(),
         dynamic_unit_scales: HashMap::new(),
         dependencies,
         collection_refs,
@@ -1085,27 +1089,19 @@ fn generic_scope_for_type_def(
     Ok(scope)
 }
 
-/// Assemble the semantic expression maps from the IR's lowered bodies and
-/// lower the declaration domain bounds.
+/// Lower only the domain-bound expressions embedded in declaration signatures.
 ///
-/// Bodies were lowered to HIR at [`crate::ir::lower::UnfrozenIR::freeze`];
-/// this step keys them by canonical declaration identity and lowers the
-/// type-annotation domain-bound expressions, which live in declaration
-/// signatures rather than bodies.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "expression lowering needs declaration slices, module identity, timezone registry, and diagnostics source"
-)]
-fn lower_resolved_expressions(
+/// Value and assertion bodies already have one authoritative HIR owner on their
+/// declaration records; this pass must not clone them into semantic side maps.
+fn lower_declaration_domain_bounds(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
-    asserts: &[crate::ir::lower::AssertEntry],
     ctx: ModuleTypeContext<'_>,
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
-) -> Result<LoweredDagExpressions, GraphcalError> {
+) -> Result<HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>, GraphcalError> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
     let decl_bindings =
@@ -1124,50 +1120,44 @@ fn lower_resolved_expressions(
         .with_decl_bindings(&decl_bindings);
         lower_domain_bounds(type_ann, expr_ctx, body_src)
     };
-    let mut exprs = ResolvedExpressions::default();
     let mut domain_bounds = HashMap::new();
 
     // Domain-bound and key errors for a merged dependency body must render
     // against the dependency's own source, not the importer's `src` (#868).
-    for entry in consts {
-        let signature_src = entry.type_src.resolve(src);
-        let key = resolved_decl_key(ctx.owner, &entry.name);
-        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, signature_src)?;
+    for (name, type_ann, resolution_owner, signature_src) in consts
+        .iter()
+        .map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_resolution_owner,
+                entry.type_src.resolve(src),
+            )
+        })
+        .chain(params.iter().map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_resolution_owner,
+                entry.type_src.resolve(src),
+            )
+        }))
+        .chain(nodes.iter().map(|entry| {
+            (
+                &entry.name,
+                &entry.type_ann,
+                &entry.type_resolution_owner,
+                entry.type_src.resolve(src),
+            )
+        }))
+    {
+        let bounds = lower_bounds_in(type_ann, resolution_owner, signature_src)?;
         if !bounds.is_empty() {
-            domain_bounds.insert(key.clone(), bounds);
+            domain_bounds.insert(resolved_decl_key(ctx.owner, name), bounds);
         }
-        exprs.consts.insert(key, entry.expr.clone());
-    }
-    for entry in params {
-        let signature_src = entry.type_src.resolve(src);
-        let key = resolved_decl_key(ctx.owner, &entry.name);
-        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, signature_src)?;
-        if !bounds.is_empty() {
-            domain_bounds.insert(key.clone(), bounds);
-        }
-        let Some(expr) = &entry.default_expr else {
-            continue;
-        };
-        exprs.param_defaults.insert(key, expr.clone());
-    }
-    for entry in nodes {
-        let signature_src = entry.type_src.resolve(src);
-        let key = resolved_decl_key(ctx.owner, &entry.name);
-        let bounds = lower_bounds_in(&entry.type_ann, &entry.type_resolution_owner, signature_src)?;
-        if !bounds.is_empty() {
-            domain_bounds.insert(key.clone(), bounds);
-        }
-        exprs.nodes.insert(key, entry.expr.clone());
-    }
-    for entry in asserts {
-        let key = resolved_decl_key(ctx.owner, &entry.name);
-        exprs.asserts.insert(key, entry.body.clone());
     }
 
-    Ok(LoweredDagExpressions {
-        exprs,
-        domain_bounds,
-    })
+    Ok(domain_bounds)
 }
 
 /// Collect semantic index/constructor definitions reached only from dynamic
@@ -1194,10 +1184,9 @@ fn collect_dynamic_unit_refs(
     Ok(())
 }
 
-/// Populate the semantic body's plot expression maps from the IR's strictly
-/// lowered plot/figure/layer entries and run the reference-collection walks
-/// over them.
-fn collect_plot_exprs(
+/// Collect canonical references from the authoritative plot/figure/layer
+/// records without cloning their HIR bodies into side maps.
+fn collect_plot_refs(
     plots: &[crate::ir::lower::PlotEntry],
     figures: &[crate::ir::lower::FigureEntry],
     layers: &[crate::ir::lower::LayerEntry],
@@ -1205,8 +1194,6 @@ fn collect_plot_exprs(
     src: &NamedSource<Arc<String>>,
     semantic: &mut DagSemanticBody,
 ) -> Result<(), GraphcalError> {
-    let mut plot_exprs = ResolvedPlotExprs::default();
-
     let collect = |expr: &hir::Expr,
                    expr_src: &NamedSource<Arc<String>>,
                    collection_refs: &mut ResolvedCollectionRefs,
@@ -1235,17 +1222,12 @@ fn collect_plot_exprs(
                 &mut semantic.constructor_refs,
             )?;
         }
-        plot_exprs.plots.insert(entry.name.clone(), body.clone());
     }
 
-    for (name, fields, body_src, is_figure) in figures
+    for (fields, body_src) in figures
         .iter()
-        .map(|entry| (&entry.name, &entry.fields, &entry.body_src, true))
-        .chain(
-            layers
-                .iter()
-                .map(|entry| (&entry.name, &entry.fields, &entry.body_src, false)),
-        )
+        .map(|entry| (&entry.fields, &entry.body_src))
+        .chain(layers.iter().map(|entry| (&entry.fields, &entry.body_src)))
     {
         let body_src = body_src.resolve(src);
         for field in fields {
@@ -1256,14 +1238,8 @@ fn collect_plot_exprs(
                 &mut semantic.constructor_refs,
             )?;
         }
-        if is_figure {
-            plot_exprs.figures.insert(name.clone(), fields.clone());
-        } else {
-            plot_exprs.layers.insert(name.clone(), fields.clone());
-        }
     }
 
-    semantic.plot_exprs = plot_exprs;
     Ok(())
 }
 
@@ -1287,13 +1263,6 @@ fn lower_domain_bounds(
             })
         })
         .collect()
-}
-
-/// Output of [`lower_resolved_expressions`]: the lowered declaration bodies
-/// plus the HIR domain bounds collected while lowering them.
-struct LoweredDagExpressions {
-    exprs: ResolvedExpressions,
-    domain_bounds: HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
 }
 
 /// HIR-level body policies that replaced the retired syntax-AST scope checks.
@@ -1320,15 +1289,8 @@ fn check_hir_body_policies(
     for entry in &dag.consts {
         let key = dag.resolved_decl_key_for_local(&entry.name);
         let body_src = entry.body_src.resolve(src);
-        let expr = semantic.expressions.consts.get(&key).ok_or_else(|| {
-            internal_error(
-                format!("semantic HIR expression missing for const `{}`", entry.name),
-                body_src,
-                entry.span,
-            )
-        })?;
         HirPolicyChecker { ctx, src: body_src }.check_expr(
-            expr,
+            &entry.expr,
             BodyPhase::CompileTime,
             local(&key),
         )?;
@@ -1338,22 +1300,14 @@ fn check_hir_body_policies(
     for entry in &dag.nodes {
         let key = dag.resolved_decl_key_for_local(&entry.name);
         let body_src = entry.body_src.resolve(src);
-        let expr = semantic.expressions.nodes.get(&key).ok_or_else(|| {
-            internal_error(
-                format!("semantic HIR expression missing for node `{}`", entry.name),
-                body_src,
-                entry.span,
-            )
-        })?;
         HirPolicyChecker { ctx, src: body_src }.check_expr(
-            expr,
+            &entry.expr,
             BodyPhase::Runtime,
             local(&key),
         )?;
     }
     for entry in &dag.params {
-        let key = dag.resolved_decl_key_for_local(&entry.name);
-        let Some(expr) = semantic.expressions.param_defaults.get(&key) else {
+        let Some(expr) = &entry.default_expr else {
             continue;
         };
         let default_src = entry.default_src.as_ref().ok_or_else(|| {
@@ -1448,16 +1402,9 @@ fn check_sink_body_policies(
     for entry in &dag.asserts {
         let key = dag.resolved_decl_key_for_local(&entry.name);
         let body_src = entry.body_src.resolve(src);
-        let body = dag.semantic.expressions.asserts.get(&key).ok_or_else(|| {
-            internal_error(
-                format!("semantic HIR body missing for assert `{}`", entry.name),
-                body_src,
-                entry.span,
-            )
-        })?;
         let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
         let checker = HirPolicyChecker { ctx, src: body_src };
-        match body {
+        match &entry.body {
             hir::AssertBody::Expr(expr) => {
                 checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
             }
@@ -1831,9 +1778,9 @@ impl DagTIRSeed {
             }
         }
         collect_dynamic_unit_refs(module_ctx, &mut semantic)?;
-        collect_plot_exprs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
+        collect_plot_refs(&plots, &figures, &layers, module_ctx, src, &mut semantic)?;
 
-        Ok(DagTIR {
+        let mut dag = DagTIR {
             dag_id: self.dag_id,
             consts: self.consts,
             params: self.params,
@@ -1843,6 +1790,7 @@ impl DagTIRSeed {
             figures,
             layers,
             included_plots,
+            declaration_index: DagDeclarationIndex::default(),
             semantic,
             source_order,
             assumes_map,
@@ -1850,7 +1798,17 @@ impl DagTIRSeed {
             resolved_decl_types: self.resolved_decl_types,
             imported_bindings,
             projectable_outputs: std::collections::HashSet::new(),
-        })
+        };
+        dag.index_declaration_records()
+            .map_err(|duplicate| GraphcalError::InternalError {
+                message: format!(
+                    "duplicate checked declaration record `{}` while building TIR index",
+                    duplicate.name
+                ),
+                src: src.clone(),
+                span: duplicate.span.into(),
+            })?;
+        Ok(dag)
     }
 }
 

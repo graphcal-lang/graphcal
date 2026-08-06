@@ -274,12 +274,10 @@ fn store_module_artifact(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
-    let const_values = crate::exec_plan::eval_consts_from_tir_with_cancellation(
+    let top_level_consts = top_level_const_values(
         &compiled.tir,
-        file_src,
-        cancellation,
-    )?;
-    let top_level_consts = top_level_const_values(&compiled.tir, &const_values);
+        compiled.checked_execution_facts.const_values.as_ref(),
+    );
     let override_dependencies =
         graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
             &compiled.tir,
@@ -388,7 +386,12 @@ pub(in crate::eval::project) fn prepare_checked_project(
         }));
     }
 
-    let plan = crate::exec_plan::compile_with_cancellation(&compiled.tir, &source, cancellation)?;
+    let plan = crate::exec_plan::compile_checked_with_cancellation(
+        &compiled.tir,
+        &compiled.checked_execution_facts,
+        &source,
+        cancellation,
+    )?;
     super::prepared::PreparedProject::from_compiled(
         compiled,
         plan,

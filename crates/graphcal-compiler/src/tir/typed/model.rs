@@ -7,7 +7,6 @@ use thiserror::Error;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational, RationalError};
 use crate::hir;
-use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::nat::NatPolyForm;
 use crate::registry::declared_type::IndexTypeRef;
@@ -809,27 +808,6 @@ pub struct ResolvedDagDependencies {
     pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
 }
 
-/// HIR expressions for value declarations.
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedExpressions {
-    /// Const declaration expression keyed by its canonical declaration identity.
-    pub consts: HashMap<ResolvedDeclName, hir::Expr>,
-    /// Param default expression keyed by its canonical declaration identity.
-    pub(crate) param_defaults: HashMap<ResolvedDeclName, hir::Expr>,
-    /// Node expression keyed by its canonical declaration identity.
-    pub nodes: HashMap<ResolvedDeclName, hir::Expr>,
-    /// Assert body keyed by its canonical declaration identity.
-    pub asserts: HashMap<ResolvedDeclName, hir::AssertBody>,
-}
-
-impl ResolvedExpressions {
-    /// Look up the HIR expression for a runtime declaration (param default or node).
-    #[must_use]
-    pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
-        self.param_defaults.get(key).or_else(|| self.nodes.get(key))
-    }
-}
-
 /// Canonical HIR-derived index references used by collection/index inference.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCollectionRefs {
@@ -1024,19 +1002,14 @@ pub(crate) enum BindableNominalIdentity {
     Type(ResolvedStructTypeName),
 }
 
-/// Authoritative semantic body facts for a checked DAG.
+/// Derived semantic facts for a checked DAG.
 ///
-/// The source-shaped declaration entries on [`DagTIR`] retain spans,
-/// formatting, and declaration metadata. This structure carries the semantic
-/// program model used by checking and evaluation.
+/// Authoritative HIR bodies remain on the declaration records in [`DagTIR`].
+/// This structure stores only facts derived or indexed from those bodies.
 #[derive(Debug, Clone, Default)]
 pub struct DagSemanticBody {
-    /// HIR expressions for const/default/node expressions.
-    pub expressions: ResolvedExpressions,
     /// Domain bounds per declaration, lowered to HIR, in source order.
     pub domain_bounds: HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
-    /// Plot/figure/layer expressions lowered to HIR, keyed by declaration name.
-    pub plot_exprs: ResolvedPlotExprs,
     /// Source-qualified dynamic unit definitions keyed by canonical unit identity.
     ///
     /// Each entry carries the validated declared/base dimensions and strictly
@@ -1058,99 +1031,6 @@ pub struct DagSemanticBody {
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.
     pub decl_bindings: HashMap<ScopedName, ResolvedDeclName>,
-}
-
-impl DagSemanticBody {
-    /// Visit every source unit reference used by this DAG's semantic expressions.
-    pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::ResolvedUnitRef, Span)) {
-        self.visit_expressions(&mut |expr| match &expr.kind {
-            hir::ExprKind::UnitLiteral { unit, .. } => unit
-                .terms
-                .iter()
-                .for_each(|term| visitor(&term.name.value, term.name.span)),
-            hir::ExprKind::Convert { target, .. } => target
-                .terms
-                .iter()
-                .for_each(|term| visitor(&term.name.value, term.name.span)),
-            _ => {}
-        });
-    }
-
-    /// Visit every semantic HIR expression node in this DAG.
-    ///
-    /// This root list is exhaustive: declaration and assertion bodies, value
-    /// and constructor-field bounds, visualization bodies, and dynamic unit
-    /// scales all participate. Analyses that need whole-DAG facts use this
-    /// method rather than maintaining incomplete side tables per body kind.
-    pub(crate) fn visit_expressions(&self, visitor: &mut impl FnMut(&hir::Expr)) {
-        let visit_root = |expr: &hir::Expr, visitor: &mut _| hir::visit_expr(expr, visitor);
-
-        self.expressions
-            .consts
-            .values()
-            .chain(self.expressions.param_defaults.values())
-            .chain(self.expressions.nodes.values())
-            .chain(
-                self.domain_bounds
-                    .values()
-                    .flatten()
-                    .map(|bound| &bound.value),
-            )
-            .chain(
-                self.type_defs
-                    .constrained_fields()
-                    .flat_map(|(_, field)| field.domain_bounds().iter())
-                    .map(|bound| &bound.value),
-            )
-            .chain(self.plot_exprs.plots.values().flat_map(|body| {
-                body.encodings
-                    .iter()
-                    .map(|(_, expr)| expr)
-                    .chain(body.mark_properties.iter().map(|field| &field.value))
-                    .chain(body.properties.iter().map(|field| &field.value))
-            }))
-            .chain(
-                self.plot_exprs
-                    .figures
-                    .values()
-                    .chain(self.plot_exprs.layers.values())
-                    .flatten()
-                    .map(|field| &field.value),
-            )
-            .chain(self.dynamic_unit_scales.values().map(|entry| &entry.expr))
-            .for_each(|expr| visit_root(expr, visitor));
-
-        self.expressions
-            .asserts
-            .values()
-            .for_each(|body| match body {
-                hir::AssertBody::Expr(expr) => visit_root(expr, visitor),
-                hir::AssertBody::Tolerance {
-                    actual,
-                    expected,
-                    tolerance,
-                } => {
-                    visit_root(actual, visitor);
-                    visit_root(expected, visitor);
-                    visit_root(tolerance, visitor);
-                }
-            });
-    }
-}
-
-/// Plot/figure/layer expressions lowered to HIR.
-///
-/// Evaluation walks these lowered bodies instead of the source-shaped
-/// declarations; the source entries on [`DagTIR`] keep spans and mark/plot
-/// metadata for diagnostics and output shaping.
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedPlotExprs {
-    /// Lowered plot bodies keyed by the plot's declaration name.
-    pub plots: HashMap<ScopedName, LoweredPlotBody>,
-    /// Lowered figure field expressions keyed by the figure's declaration name.
-    pub figures: HashMap<ScopedName, Vec<LoweredPlotField>>,
-    /// Lowered layer field expressions keyed by the layer's declaration name.
-    pub layers: HashMap<ScopedName, Vec<LoweredPlotField>>,
 }
 
 /// A resolved constructor and the tagged-union member it constructs.
@@ -1409,6 +1289,29 @@ impl TIR {
     }
 }
 
+/// Index into an authoritative value-declaration record.
+#[derive(Debug, Clone, Copy)]
+enum ValueDeclarationSlot {
+    Const(usize),
+    Param(usize),
+    Node(usize),
+}
+
+/// Derived lookup indexes for declaration records. Bodies remain owned solely
+/// by the category-specific vectors on [`DagTIR`].
+#[derive(Debug, Clone, Default)]
+pub(super) struct DagDeclarationIndex {
+    values: HashMap<ResolvedDeclName, ValueDeclarationSlot>,
+    assertions: HashMap<ResolvedDeclName, usize>,
+}
+
+/// A duplicate discovered while indexing records that passed frontend checks.
+#[derive(Debug)]
+pub(super) struct DuplicateDeclarationRecord {
+    pub(crate) name: ScopedName,
+    pub(crate) span: Span,
+}
+
 /// The per-DAG compiled body — every field that's specific to one DAG (the
 /// file's own top-level body or an inline `dag X { ... }` child).
 ///
@@ -1426,6 +1329,7 @@ pub struct DagTIR {
     pub(crate) figures: Vec<crate::ir::lower::FigureEntry>,
     pub(crate) layers: Vec<crate::ir::lower::LayerEntry>,
     pub(crate) included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
+    pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
     pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
@@ -1479,6 +1383,156 @@ impl DagTIR {
     #[must_use]
     pub const fn semantic(&self) -> &DagSemanticBody {
         &self.semantic
+    }
+
+    /// Build identity-to-record indexes after all declaration vectors are installed.
+    pub(super) fn index_declaration_records(&mut self) -> Result<(), DuplicateDeclarationRecord> {
+        let mut index = DagDeclarationIndex::default();
+        for (slot, name, span) in
+            self.consts
+                .iter()
+                .enumerate()
+                .map(|(slot, entry)| (ValueDeclarationSlot::Const(slot), &entry.name, entry.span))
+                .chain(self.params.iter().enumerate().map(|(slot, entry)| {
+                    (ValueDeclarationSlot::Param(slot), &entry.name, entry.span)
+                }))
+                .chain(self.nodes.iter().enumerate().map(|(slot, entry)| {
+                    (ValueDeclarationSlot::Node(slot), &entry.name, entry.span)
+                }))
+        {
+            let key = self.resolved_decl_key_for_local(name);
+            if index.values.insert(key, slot).is_some() {
+                return Err(DuplicateDeclarationRecord {
+                    name: name.clone(),
+                    span,
+                });
+            }
+        }
+        for (slot, entry) in self.asserts.iter().enumerate() {
+            let key = self.resolved_decl_key_for_local(&entry.name);
+            if index.assertions.insert(key, slot).is_some() {
+                return Err(DuplicateDeclarationRecord {
+                    name: entry.name.clone(),
+                    span: entry.span,
+                });
+            }
+        }
+        self.declaration_index = index;
+        Ok(())
+    }
+
+    /// Look up the single authoritative HIR expression owned by a const.
+    #[must_use]
+    pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
+        match self.declaration_index.values.get(key) {
+            Some(ValueDeclarationSlot::Const(slot)) => Some(&self.consts[*slot].expr),
+            Some(ValueDeclarationSlot::Param(_) | ValueDeclarationSlot::Node(_)) | None => None,
+        }
+    }
+
+    /// Look up the single authoritative HIR expression owned by a param or node.
+    #[must_use]
+    pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
+        match self.declaration_index.values.get(key) {
+            Some(ValueDeclarationSlot::Param(slot)) => self.params[*slot].default_expr.as_ref(),
+            Some(ValueDeclarationSlot::Node(slot)) => Some(&self.nodes[*slot].expr),
+            Some(ValueDeclarationSlot::Const(_)) | None => None,
+        }
+    }
+
+    /// Look up any value declaration's authoritative HIR expression.
+    #[must_use]
+    pub fn value_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
+        self.const_expr(key).or_else(|| self.runtime_expr(key))
+    }
+
+    /// Look up the single authoritative HIR body owned by an assertion.
+    #[must_use]
+    pub fn assert_body(&self, key: &ResolvedDeclName) -> Option<&hir::AssertBody> {
+        self.declaration_index
+            .assertions
+            .get(key)
+            .map(|slot| &self.asserts[*slot].body)
+    }
+
+    /// Visit every source unit reference used by this DAG.
+    pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::ResolvedUnitRef, Span)) {
+        self.visit_expressions(&mut |expr| match &expr.kind {
+            hir::ExprKind::UnitLiteral { unit, .. } => unit
+                .terms
+                .iter()
+                .for_each(|term| visitor(&term.name.value, term.name.span)),
+            hir::ExprKind::Convert { target, .. } => target
+                .terms
+                .iter()
+                .for_each(|term| visitor(&term.name.value, term.name.span)),
+            _ => {}
+        });
+    }
+
+    /// Visit every semantic HIR expression node in this DAG.
+    pub(crate) fn visit_expressions(&self, visitor: &mut impl FnMut(&hir::Expr)) {
+        let visit_root = |expr: &hir::Expr, visitor: &mut _| hir::visit_expr(expr, visitor);
+
+        self.consts
+            .iter()
+            .map(|entry| &entry.expr)
+            .chain(
+                self.params
+                    .iter()
+                    .filter_map(|entry| entry.default_expr.as_ref()),
+            )
+            .chain(self.nodes.iter().map(|entry| &entry.expr))
+            .chain(
+                self.semantic
+                    .domain_bounds
+                    .values()
+                    .flatten()
+                    .map(|bound| &bound.value),
+            )
+            .chain(
+                self.semantic
+                    .type_defs
+                    .constrained_fields()
+                    .flat_map(|(_, field)| field.domain_bounds().iter())
+                    .map(|bound| &bound.value),
+            )
+            .chain(self.plots.iter().flat_map(|entry| {
+                entry
+                    .body
+                    .encodings
+                    .iter()
+                    .map(|(_, expr)| expr)
+                    .chain(entry.body.mark_properties.iter().map(|field| &field.value))
+                    .chain(entry.body.properties.iter().map(|field| &field.value))
+            }))
+            .chain(
+                self.figures
+                    .iter()
+                    .flat_map(|entry| &entry.fields)
+                    .chain(self.layers.iter().flat_map(|entry| &entry.fields))
+                    .map(|field| &field.value),
+            )
+            .chain(
+                self.semantic
+                    .dynamic_unit_scales
+                    .values()
+                    .map(|entry| &entry.expr),
+            )
+            .for_each(|expr| visit_root(expr, visitor));
+
+        self.asserts.iter().for_each(|entry| match &entry.body {
+            hir::AssertBody::Expr(expr) => visit_root(expr, visitor),
+            hir::AssertBody::Tolerance {
+                actual,
+                expected,
+                tolerance,
+            } => {
+                visit_root(actual, visitor);
+                visit_root(expected, visitor);
+                visit_root(tolerance, visitor);
+            }
+        });
     }
 
     #[must_use]
