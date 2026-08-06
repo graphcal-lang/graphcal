@@ -6,6 +6,7 @@
     reason = "submodule of project/ uses parent types extensively"
 )]
 use super::*;
+use graphcal_compiler::desugar::desugared_ast::Declaration;
 
 fn is_imported_dynamic_unit(
     alias: &ModuleAliasName,
@@ -122,6 +123,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         project,
         module_resolver,
         project_types,
+        module_templates,
     } = semantic_context;
     let include_debug_names = include_debug_name_map(&ctx);
     // Snapshot the source-facing output values before IR lowering consumes the
@@ -194,9 +196,9 @@ pub(in crate::eval::project) fn lower_and_finalize(
     elaborate_include_instances(
         project,
         file_dag_id,
-        file_dag_id,
         &ctx.include_instances,
         module_artifacts,
+        module_templates,
         file_src,
         file_ast,
         &mut builder,
@@ -209,9 +211,11 @@ pub(in crate::eval::project) fn lower_and_finalize(
         .try_build()
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
     cancellation.checkpoint()?;
-    let ir = unfrozen.freeze_with_cancellation(
-        registry,
+    let ir = store_and_freeze_module_template(
+        module_templates,
         file_dag_id,
+        unfrozen,
+        registry,
         module_resolver,
         file_src,
         cancellation,
@@ -262,6 +266,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         module_artifacts,
         module_resolver,
         project_types,
+        module_templates,
         cancellation,
     )?;
     tir.replace_project_type_store(project_types.clone());
@@ -356,6 +361,7 @@ fn compile_inline_dag_modules<'a>(
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &mut graphcal_compiler::tir::typed::ProjectTypeStore,
+    module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     let loaded_file = &project.files[file_dag_id];
@@ -367,14 +373,17 @@ fn compile_inline_dag_modules<'a>(
 
     for loaded_dag in &loaded_file.inline_dags {
         cancellation.checkpoint()?;
+        let dag_body = loaded_dag.body(loaded_file);
         let dag_ir = compile_loaded_dag_module_ir(
             tir,
             project,
             loaded_dag,
+            dag_body,
             file_src,
             &parent_values,
             module_artifacts,
             module_resolver,
+            module_templates,
             cancellation,
         )?;
         // Inline DAG definitions join the same canonical project store. The
@@ -395,7 +404,7 @@ fn compile_inline_dag_modules<'a>(
                 project_types,
                 cancellation,
             )?;
-        compiled_dag.populate_projectable_outputs(&loaded_dag.body);
+        compiled_dag.populate_projectable_outputs(dag_body);
         tir.insert_dag(compiled_dag).map_err(|error| {
             CompileError::Eval(GraphcalError::InternalError {
                 message: error.to_string(),
@@ -410,22 +419,35 @@ fn compile_inline_dag_modules<'a>(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "DAG lowering threads project, module, dependency, resolver, and cancellation context"
+    clippy::too_many_lines,
+    reason = "one template-lowering transaction threads project semantic services and cancellation"
 )]
 fn compile_loaded_dag_module_ir<'a>(
     tir: &graphcal_compiler::tir::typed::TirBuilder,
     project: &'a crate::loader::LoadedProject,
     loaded_dag: &crate::loader::LoadedDag,
+    dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     parent_values: &crate::inline_dag::ParentValueDecls,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
     cancellation.checkpoint()?;
+    if let Some(template) = module_templates.get(&loaded_dag.dag_id) {
+        return freeze_inline_module_template(
+            &template,
+            loaded_dag,
+            parent_values,
+            module_resolver,
+            file_src,
+            cancellation,
+        );
+    }
     let parent_loaded = &project.files[&loaded_dag.parent_dag_id];
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
-        &loaded_dag.body,
+        dag_body,
         &loaded_dag.parent_dag_id,
         &parent_loaded.ast,
         parent_values,
@@ -446,6 +468,7 @@ fn compile_loaded_dag_module_ir<'a>(
     process_dag_body_import_declarations(
         project,
         loaded_dag,
+        dag_body,
         file_src,
         module_artifacts,
         &mut ctx,
@@ -453,6 +476,7 @@ fn compile_loaded_dag_module_ir<'a>(
     process_dag_body_include_declarations(
         project,
         loaded_dag,
+        dag_body,
         file_src,
         module_artifacts,
         &mut ctx,
@@ -499,9 +523,9 @@ fn compile_loaded_dag_module_ir<'a>(
     elaborate_include_instances(
         project,
         &loaded_dag.dag_id,
-        &loaded_dag.parent_dag_id,
         &ctx.include_instances,
         module_artifacts,
+        module_templates,
         file_src,
         dag_ast.as_ref(),
         &mut builder,
@@ -513,13 +537,55 @@ fn compile_loaded_dag_module_ir<'a>(
     let registry = builder
         .try_build()
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
-    Ok(unfrozen.freeze_with_cancellation(
-        registry,
+    store_and_freeze_module_template(
+        module_templates,
         &loaded_dag.dag_id,
+        unfrozen,
+        registry,
         module_resolver,
         file_src,
         cancellation,
+    )
+}
+
+fn freeze_inline_module_template(
+    template: &ElaboratedModuleTemplate,
+    loaded_dag: &crate::loader::LoadedDag,
+    parent_values: &crate::inline_dag::ParentValueDecls,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+    let mut unfrozen = template.unfrozen.clone();
+    unfrozen.refine_imported_binding_types(&loaded_dag.parent_dag_id, |name| {
+        parent_values.const_declared_type(name).cloned()
+    });
+    Ok(unfrozen.freeze_with_cancellation(
+        template.frontend_registry.clone(),
+        &loaded_dag.dag_id,
+        module_resolver,
+        src,
+        cancellation,
     )?)
+}
+
+fn store_and_freeze_module_template(
+    module_templates: &mut ModuleTemplateStore,
+    dag_id: &graphcal_compiler::dag_id::DagId,
+    unfrozen: graphcal_compiler::ir::lower::UnfrozenIR,
+    registry: Registry,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+    module_templates.insert(
+        dag_id.clone(),
+        ElaboratedModuleTemplate {
+            unfrozen: unfrozen.clone(),
+            frontend_registry: registry.clone(),
+        },
+    );
+    Ok(unfrozen.freeze_with_cancellation(registry, dag_id, module_resolver, src, cancellation)?)
 }
 
 fn registry_build_compile_error(
@@ -571,11 +637,12 @@ fn extend_imported_bindings(
 fn process_dag_body_import_declarations<'a>(
     project: &crate::loader::LoadedProject,
     loaded_dag: &crate::loader::LoadedDag,
+    dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
-    for decl in &loaded_dag.body {
+    for decl in dag_body {
         let DeclKind::Import(import_decl) = &decl.kind else {
             continue;
         };
@@ -604,11 +671,12 @@ fn process_dag_body_import_declarations<'a>(
 fn process_dag_body_include_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     loaded_dag: &crate::loader::LoadedDag,
+    dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
-    for decl in &loaded_dag.body {
+    for decl in dag_body {
         let DeclKind::Include(include_decl) = &decl.kind else {
             continue;
         };
@@ -840,9 +908,9 @@ fn check_semantic_override_reconciliation(
 fn elaborate_include_instances(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
-    importer_file_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_templates: &mut ModuleTemplateStore,
     importer_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     builder: &mut RegistryBuilder,
@@ -851,10 +919,6 @@ fn elaborate_include_instances(
 ) -> Result<(), CompileError> {
     let importer_external_surface = super::extract_external_decl_surface(importer_ast);
     let importer_local_type_names = collect_local_type_names(importer_ast);
-    let empty_resolved: HashMap<
-        crate::loader::ModulePathKey,
-        crate::loader::InlineBodyImportResolution,
-    > = HashMap::new();
     let mut source_order_blocks = Vec::new();
 
     for instance in include_instances {
@@ -866,46 +930,75 @@ fn elaborate_include_instances(
             dep_registry,
             dep_src,
             dep_resolution_owner,
-            body_for_leakage_check,
             body_decls_for_aliases,
             source_override_dependencies,
-        ) = match &instance.source {
-            IncludeTemplateSource::File { dep_dag_id } => {
-                let dep_loaded = &project.files[dep_dag_id];
-                let dep_src = &dep_loaded.named_source;
-                let mut body_ctx = ImportContext {
-                    imported_names: ImportedValueNames::default(),
-                    imported_bindings: HashMap::new(),
-                    imported_source_order: Vec::new(),
-                    imported_type_system_names: HashMap::new(),
-                    module_map: HashMap::new(),
-                    frontend_registry_imports: Vec::new(),
-                    include_instances: Vec::new(),
-                };
-                imports::process_file_body_declarations(
+        ) = if let Some(template) = module_templates.get(&instance.template.dag_id) {
+            let source_file = &project.files[&instance.template.source_file];
+            let declarations = if instance.template.is_file_root() {
+                source_file.ast.declarations.as_slice()
+            } else {
+                source_file
+                    .inline_dags
+                    .iter()
+                    .find(|loaded| loaded.dag_id == instance.template.dag_id)
+                    .map(|loaded| loaded.body(source_file))
+                    .ok_or_else(|| {
+                        CompileError::Eval(GraphcalError::InternalError {
+                            message: format!(
+                                "inline DAG template `{}` is unavailable",
+                                instance.template.dag_id
+                            ),
+                            src: importer_src.clone(),
+                            span: instance.include_span.into(),
+                        })
+                    })?
+            };
+            (
+                template.unfrozen.clone(),
+                template.frontend_registry.clone(),
+                source_file.named_source.clone(),
+                instance.template.dag_id.clone(),
+                declarations,
+                module_artifacts
+                    .get(&instance.template.source_file)
+                    .map(|artifact| &artifact.override_dependencies),
+            )
+        } else if instance.template.is_file_root() {
+            let dep_dag_id = &instance.template.dag_id;
+            let dep_loaded = &project.files[dep_dag_id];
+            let dep_src = &dep_loaded.named_source;
+            let mut body_ctx = ImportContext {
+                imported_names: ImportedValueNames::default(),
+                imported_bindings: HashMap::new(),
+                imported_source_order: Vec::new(),
+                imported_type_system_names: HashMap::new(),
+                module_map: HashMap::new(),
+                frontend_registry_imports: Vec::new(),
+                include_instances: Vec::new(),
+            };
+            imports::process_file_body_declarations(
+                project,
+                dep_dag_id,
+                module_artifacts,
+                &mut body_ctx,
+                cancellation,
+            )?;
+            let rewritten_body = rewrite_qualified_refs_in_compilation_body(
+                &dep_loaded.ast,
+                &body_ctx.imported_names,
+                &mut body_ctx.include_instances,
+            );
+            let mut registry_seed = |builder: &mut RegistryBuilder| {
+                seed_imported_type_system(
+                    builder,
                     project,
-                    dep_dag_id,
+                    &body_ctx.imported_type_system_names,
+                    &body_ctx.frontend_registry_imports,
                     module_artifacts,
-                    &mut body_ctx,
-                    cancellation,
-                )?;
-                let rewritten_body = rewrite_qualified_refs_in_compilation_body(
-                    &dep_loaded.ast,
-                    &body_ctx.imported_names,
-                    &mut body_ctx.include_instances,
-                );
-                let instance_dag_id = importer_dag_id.child(merge_prefix.as_str());
-                let mut registry_seed = |builder: &mut RegistryBuilder| {
-                    seed_imported_type_system(
-                        builder,
-                        project,
-                        &body_ctx.imported_type_system_names,
-                        &body_ctx.frontend_registry_imports,
-                        module_artifacts,
-                        dep_src,
-                    )
-                };
-                let (mut dep_builder, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_builder_with_imported_bindings_and_cancellation(
+                    dep_src,
+                )
+            };
+            let (mut dep_builder, mut dep_unfrozen) = graphcal_compiler::ir::lower::lower_to_builder_with_imported_bindings_and_cancellation(
                         rewritten_body.as_ref(),
                         dep_src,
                         &body_ctx.imported_names,
@@ -914,137 +1007,118 @@ fn elaborate_include_instances(
                         Some(&mut registry_seed),
                         cancellation,
                     )?;
-                dep_unfrozen.retarget_existing_resolution_owners(dep_dag_id);
-                elaborate_include_instances(
-                    project,
-                    &instance_dag_id,
-                    importer_file_dag_id,
-                    &body_ctx.include_instances,
-                    module_artifacts,
-                    dep_src,
-                    rewritten_body.as_ref(),
-                    &mut dep_builder,
-                    &mut dep_unfrozen,
-                    cancellation,
-                )?;
-                let dep_registry = dep_builder
-                    .try_build()
-                    .map_err(|err| registry_build_compile_error(&err, dep_src))?;
-                (
-                    dep_unfrozen,
-                    dep_registry,
-                    dep_src.clone(),
-                    dep_dag_id.clone(),
-                    &dep_loaded.ast,
-                    dep_loaded.ast.declarations.as_slice(),
-                    module_artifacts
-                        .get(dep_dag_id)
-                        .map(|artifact| &artifact.override_dependencies),
-                )
-            }
-            IncludeTemplateSource::InlineDag {
-                dag_body,
-                dag_imported_names,
-                dag_id,
+            dep_unfrozen.retarget_existing_resolution_owners(dep_dag_id);
+            elaborate_include_instances(
+                project,
+                dep_dag_id,
+                &body_ctx.include_instances,
+                module_artifacts,
+                module_templates,
+                dep_src,
+                rewritten_body.as_ref(),
+                &mut dep_builder,
+                &mut dep_unfrozen,
+                cancellation,
+            )?;
+            let dep_registry = dep_builder
+                .try_build()
+                .map_err(|err| registry_build_compile_error(&err, dep_src))?;
+            let template = module_templates.insert(
+                dep_dag_id.clone(),
+                ElaboratedModuleTemplate {
+                    unfrozen: dep_unfrozen,
+                    frontend_registry: dep_registry,
+                },
+            );
+            (
+                template.unfrozen.clone(),
+                template.frontend_registry.clone(),
+                dep_src.clone(),
+                dep_dag_id.clone(),
+                dep_loaded.ast.declarations.as_slice(),
+                module_artifacts
+                    .get(dep_dag_id)
+                    .map(|artifact| &artifact.override_dependencies),
+            )
+        } else {
+            let dag_id = &instance.template.dag_id;
+            let parent_dag_id = &instance.template.source_file;
+            let parent_loaded = &project.files[parent_dag_id];
+            let loaded_inline = parent_loaded
+                .inline_dags
+                .iter()
+                .find(|loaded| &loaded.dag_id == dag_id)
+                .ok_or_else(|| {
+                    CompileError::Eval(GraphcalError::InternalError {
+                        message: format!("inline DAG template `{dag_id}` is unavailable"),
+                        src: importer_src.clone(),
+                        span: instance.include_span.into(),
+                    })
+                })?;
+            let parent_values = crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
+            let inline_body = loaded_inline.body(parent_loaded);
+            let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
+                inline_body,
                 parent_dag_id,
-            } => {
-                let parent_loaded = &project.files[parent_dag_id];
-                let loaded_inline = parent_loaded
-                    .inline_dags
-                    .iter()
-                    .find(|d| &d.dag_id == dag_id);
-                let parent_values =
-                    crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast);
-                let parent_resolved_imports =
-                    loaded_inline.map_or(&empty_resolved, |d| &d.resolved_imports);
-                let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
-                    &dag_body.declarations,
-                    parent_dag_id,
-                    &parent_loaded.ast,
-                    &parent_values,
-                    parent_resolved_imports,
+                &parent_loaded.ast,
+                &parent_values,
+                &loaded_inline.resolved_imports,
+                importer_src,
+            )?;
+
+            let mut body_ctx = ImportContext {
+                imported_names: ImportedValueNames::default(),
+                imported_bindings: HashMap::new(),
+                imported_source_order: Vec::new(),
+                imported_type_system_names: HashMap::new(),
+                module_map: HashMap::new(),
+                frontend_registry_imports: Vec::new(),
+                include_instances: Vec::new(),
+            };
+            process_dag_body_import_declarations(
+                project,
+                loaded_inline,
+                inline_body,
+                importer_src,
+                module_artifacts,
+                &mut body_ctx,
+            )?;
+            process_dag_body_include_declarations(
+                project,
+                loaded_inline,
+                inline_body,
+                importer_src,
+                module_artifacts,
+                &mut body_ctx,
+            )?;
+            extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);
+            let mut imported_bindings = body_ctx.imported_bindings;
+            extend_imported_bindings(
+                &mut imported_bindings,
+                self_imports.bindings,
+                &body_ctx.imported_names,
+                importer_src,
+            )?;
+            let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
+                declarations: self_imports.stripped_body,
+            };
+            let stripped_body = rewrite_qualified_refs_in_compilation_body(
+                &stripped_body,
+                &body_ctx.imported_names,
+                &mut body_ctx.include_instances,
+            );
+
+            let mut registry_seed = |builder: &mut RegistryBuilder| {
+                seed_imported_type_system(
+                    builder,
+                    project,
+                    &body_ctx.imported_type_system_names,
+                    &body_ctx.frontend_registry_imports,
+                    module_artifacts,
                     importer_src,
-                )?;
-
-                let mut body_ctx = ImportContext {
-                    imported_names: dag_imported_names.clone(),
-                    imported_bindings: HashMap::new(),
-                    imported_source_order: Vec::new(),
-                    imported_type_system_names: HashMap::new(),
-                    module_map: HashMap::new(),
-                    frontend_registry_imports: Vec::new(),
-                    include_instances: Vec::new(),
-                };
-                if let Some(loaded_inline) = loaded_inline {
-                    process_dag_body_import_declarations(
-                        project,
-                        loaded_inline,
-                        importer_src,
-                        module_artifacts,
-                        &mut body_ctx,
-                    )?;
-                    process_dag_body_include_declarations(
-                        project,
-                        loaded_inline,
-                        importer_src,
-                        module_artifacts,
-                        &mut body_ctx,
-                    )?;
-                }
-                extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);
-                let mut imported_bindings = body_ctx.imported_bindings;
-                extend_imported_bindings(
-                    &mut imported_bindings,
-                    self_imports.bindings,
-                    &body_ctx.imported_names,
-                    importer_src,
-                )?;
-                // For cross-file includes, supply concrete parent values to the
-                // pending canonical self-import bindings. Same-file includes
-                // resolve them from the importer at runtime.
-                if parent_dag_id != importer_file_dag_id
-                    && let Some(parent_eval) = module_artifacts.get(parent_dag_id)
-                {
-                    for binding in imported_bindings.values_mut() {
-                        if binding.target().owner() != parent_dag_id {
-                            continue;
-                        }
-                        let source_name = binding.target().to_unowned_def_name();
-                        let Some(value) = parent_eval.const_values.get(&source_name) else {
-                            continue;
-                        };
-                        let Some(dt) = parent_eval
-                            .declared_types
-                            .get(&ScopedName::from(&source_name))
-                        else {
-                            continue;
-                        };
-                        binding.supply_value(value.clone());
-                        binding.replace_declared_type(dt.clone());
-                    }
-                }
-
-                let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
-                    declarations: self_imports.stripped_body,
-                };
-                let stripped_body = rewrite_qualified_refs_in_compilation_body(
-                    &stripped_body,
-                    &body_ctx.imported_names,
-                    &mut body_ctx.include_instances,
-                );
-
-                let dag_dag_id = importer_dag_id.child(merge_prefix.as_str());
-                let mut registry_seed = |builder: &mut RegistryBuilder| {
-                    seed_imported_type_system(
-                        builder,
-                        project,
-                        &body_ctx.imported_type_system_names,
-                        &body_ctx.frontend_registry_imports,
-                        module_artifacts,
-                        importer_src,
-                    )
-                };
-                let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
+                )
+            };
+            let (mut dag_builder, mut dag_unfrozen) = graphcal_compiler::ir::lower::lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
                         stripped_body.as_ref(),
                         None,
                         &body_ctx.imported_names,
@@ -1054,35 +1128,51 @@ fn elaborate_include_instances(
                         Some(&mut registry_seed),
                         cancellation,
                     )?;
-                dag_unfrozen.retarget_existing_resolution_owners(dag_id);
-                elaborate_include_instances(
-                    project,
-                    &dag_dag_id,
-                    importer_file_dag_id,
-                    &body_ctx.include_instances,
-                    module_artifacts,
-                    importer_src,
-                    stripped_body.as_ref(),
-                    &mut dag_builder,
-                    &mut dag_unfrozen,
-                    cancellation,
-                )?;
-                let dag_registry = dag_builder
-                    .try_build()
-                    .map_err(|err| registry_build_compile_error(&err, importer_src))?;
-                (
-                    dag_unfrozen,
-                    dag_registry,
-                    importer_src.clone(),
-                    dag_id.clone(),
-                    dag_body,
-                    dag_body.declarations.as_slice(),
-                    module_artifacts
-                        .get(parent_dag_id)
-                        .map(|artifact| &artifact.override_dependencies),
-                )
-            }
+            dag_unfrozen.retarget_existing_resolution_owners(dag_id);
+            elaborate_include_instances(
+                project,
+                dag_id,
+                &body_ctx.include_instances,
+                module_artifacts,
+                module_templates,
+                importer_src,
+                stripped_body.as_ref(),
+                &mut dag_builder,
+                &mut dag_unfrozen,
+                cancellation,
+            )?;
+            let dag_registry = dag_builder
+                .try_build()
+                .map_err(|err| registry_build_compile_error(&err, importer_src))?;
+            let template = module_templates.insert(
+                dag_id.clone(),
+                ElaboratedModuleTemplate {
+                    unfrozen: dag_unfrozen,
+                    frontend_registry: dag_registry,
+                },
+            );
+            (
+                template.unfrozen.clone(),
+                template.frontend_registry.clone(),
+                importer_src.clone(),
+                dag_id.clone(),
+                inline_body,
+                module_artifacts
+                    .get(parent_dag_id)
+                    .map(|artifact| &artifact.override_dependencies),
+            )
         };
+
+        if let Some(source_artifact) = module_artifacts.get(&instance.template.source_file) {
+            dep_unfrozen.supply_imported_bindings(&instance.template.source_file, |source_name| {
+                let value = source_artifact.const_values.get(source_name)?.clone();
+                let declared_type = source_artifact
+                    .declared_types
+                    .get(&ScopedName::from(source_name))?
+                    .clone();
+                Some((value, declared_type))
+            });
+        }
 
         // Capture importer-owned candidates before the dependency registry is
         // merged, so a dependency declaration with the same leaf name cannot
@@ -1148,7 +1238,7 @@ fn elaborate_include_instances(
             )?,
         }
         check_generics_leakage(
-            body_for_leakage_check,
+            body_decls_for_aliases,
             &instance.pub_reexport_items,
             &instance.index_bindings,
             &instance.type_bindings,
@@ -2090,7 +2180,7 @@ fn collect_ambiguous_generic_names(
     reason = "the check needs the dep AST, the three substitution maps, and the importer's visibility tables"
 )]
 fn check_generics_leakage(
-    dep_ast: &graphcal_compiler::desugar::desugared_ast::File,
+    dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     pub_reexport_items: &HashSet<DeclName>,
     index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
@@ -2104,7 +2194,7 @@ fn check_generics_leakage(
         return Ok(());
     }
 
-    for decl in &dep_ast.declarations {
+    for decl in dep_declarations {
         // Is this decl part of the importer's re-exported surface?
         let (decl_name, decl_kind_str) = match &decl.kind {
             DeclKind::Param(p) => (p.name.value.to_string(), "param"),

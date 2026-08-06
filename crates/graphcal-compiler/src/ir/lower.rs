@@ -19,6 +19,7 @@ use crate::desugar::desugared_ast::{
 };
 use crate::dimension::{Dimension, Rational};
 use crate::ir::imported_binding::ImportedBinding;
+use crate::ir::instance::{InstanceBindingEnvironment, InstanceIndexBindingTarget, InstanceRecord};
 use crate::ir::resolve::{
     DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
     resolve_with_imported_values,
@@ -32,13 +33,15 @@ use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
-use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitName, UnitRef};
-use crate::syntax::index_name::IndexName;
+use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
+use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName, UnitRef};
+use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
-use crate::syntax::names::{NameAtom, NamePath};
+use crate::syntax::names::{NameAtom, NameNamespace, NamePath, ResolvedName};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::{ConstructorName, GenericParamName, StructTypeName};
+use crate::syntax::type_name::{
+    ConstructorName, GenericParamName, ResolvedStructTypeName, StructTypeName,
+};
 use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 // ---------------------------------------------------------------------------
@@ -124,6 +127,8 @@ impl BodySource {
 #[derive(Debug, Clone)]
 pub struct ConstEntry {
     pub name: ScopedName,
+    /// Canonical semantic owner, independent of the source-facing scoped name.
+    pub(crate) declaration_owner: crate::dag_id::DagId,
     pub type_ann: TypeExpr,
     /// Module scope used to resolve this declaration's type annotation and
     /// domain-bound expressions. Merged include outputs keep the producer's
@@ -141,6 +146,8 @@ pub struct ConstEntry {
 #[derive(Debug, Clone)]
 pub struct ParamEntry {
     pub name: ScopedName,
+    /// Canonical semantic owner, independent of the source-facing scoped name.
+    pub(crate) declaration_owner: crate::dag_id::DagId,
     pub type_ann: TypeExpr,
     /// Module scope used to resolve this parameter's type annotation and
     /// domain-bound expressions.
@@ -162,6 +169,8 @@ pub struct ParamEntry {
 #[derive(Debug, Clone)]
 pub struct NodeEntry {
     pub name: ScopedName,
+    /// Canonical semantic owner, independent of the source-facing scoped name.
+    pub(crate) declaration_owner: crate::dag_id::DagId,
     pub type_ann: TypeExpr,
     /// Module scope used to resolve this node's type annotation and
     /// domain-bound expressions.
@@ -178,6 +187,8 @@ pub struct NodeEntry {
 #[derive(Debug, Clone)]
 pub struct AssertEntry {
     pub name: ScopedName,
+    /// Canonical semantic owner, independent of the source-facing scoped name.
+    pub(crate) declaration_owner: crate::dag_id::DagId,
     pub body: crate::hir::AssertBody,
     pub span: Span,
     /// Source of the assertion body and its spans.
@@ -191,6 +202,7 @@ pub struct AssertEntry {
 #[derive(Debug, Clone)]
 pub struct UnfrozenConstEntry {
     name: ScopedName,
+    declaration_owner: crate::dag_id::DagId,
     type_ann: TypeExpr,
     /// Module scope for the declaration signature (type annotation and domain bounds).
     type_resolution_owner: crate::dag_id::DagId,
@@ -208,6 +220,7 @@ pub struct UnfrozenConstEntry {
 #[derive(Debug, Clone)]
 pub struct UnfrozenParamEntry {
     name: ScopedName,
+    declaration_owner: crate::dag_id::DagId,
     type_ann: TypeExpr,
     /// Module scope for the parameter signature (type annotation and domain bounds).
     type_resolution_owner: crate::dag_id::DagId,
@@ -230,6 +243,7 @@ pub struct UnfrozenParamEntry {
 #[derive(Debug, Clone)]
 pub struct UnfrozenNodeEntry {
     name: ScopedName,
+    declaration_owner: crate::dag_id::DagId,
     type_ann: TypeExpr,
     /// Module scope for the declaration signature (type annotation and domain bounds).
     type_resolution_owner: crate::dag_id::DagId,
@@ -247,6 +261,7 @@ pub struct UnfrozenNodeEntry {
 #[derive(Debug, Clone)]
 pub struct UnfrozenAssertEntry {
     name: ScopedName,
+    declaration_owner: crate::dag_id::DagId,
     body: AssertBody,
     /// Module scope for the assertion body expression(s).
     body_resolution_owner: crate::dag_id::DagId,
@@ -429,6 +444,8 @@ pub struct IR {
     /// Explicit exports and annotation-free `param` input ports, kept in
     /// distinct roles for downstream boundary checks.
     pub external_surface: ExternalDeclSurface,
+    /// Explicit typed template-instance graph assembled by include elaboration.
+    pub(crate) instances: Vec<InstanceRecord>,
 }
 
 /// Lower an AST into an [`IR`].
@@ -838,6 +855,7 @@ fn build_ir_from_resolved(
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenConstEntry {
                 name: ScopedName::from(decl_name),
+                declaration_owner: dag_id.clone(),
                 type_ann,
                 type_resolution_owner: dag_id.clone(),
                 expr: entry.expr,
@@ -859,6 +877,7 @@ fn build_ir_from_resolved(
             let default_src = entry.default_expr.as_ref().map(|_| BodySource::own());
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
+                declaration_owner: dag_id.clone(),
                 type_ann,
                 type_resolution_owner: dag_id.clone(),
                 default_expr: entry.default_expr,
@@ -880,6 +899,7 @@ fn build_ir_from_resolved(
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
             Ok(UnfrozenNodeEntry {
                 name: ScopedName::from(decl_name),
+                declaration_owner: dag_id.clone(),
                 type_ann,
                 type_resolution_owner: dag_id.clone(),
                 expr: entry.expr,
@@ -900,6 +920,7 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|entry| UnfrozenAssertEntry {
                 name: ScopedName::from(entry.name),
+                declaration_owner: dag_id.clone(),
                 body: entry.body,
                 body_resolution_owner: dag_id.clone(),
                 span: entry.span,
@@ -978,12 +999,14 @@ fn build_ir_from_resolved(
                 _ => None,
             })
             .collect(),
+        instances: Vec::new(),
     };
 
     Ok((builder, unfrozen))
 }
 
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
+#[derive(Debug, Clone)]
 pub struct UnfrozenIR {
     consts: Vec<UnfrozenConstEntry>,
     params: Vec<UnfrozenParamEntry>,
@@ -1011,6 +1034,8 @@ pub struct UnfrozenIR {
     /// Plugin-import declarations, awaiting signature resolution against the
     /// frozen registry in [`UnfrozenIR::freeze`].
     plugin_imports: Vec<crate::desugar::desugared_ast::PluginImportDecl>,
+    /// Explicit typed template-instance graph assembled by include elaboration.
+    instances: Vec<InstanceRecord>,
 }
 
 impl UnfrozenIR {
@@ -1064,15 +1089,24 @@ impl UnfrozenIR {
         // instances and dag self-imports) bind their written names to
         // canonical identities for the lowering below.
         let mut decl_bindings = HashMap::new();
-        for name in self
+        for (name, declaration_owner) in self
             .consts
             .iter()
-            .map(|entry| &entry.name)
-            .chain(self.params.iter().map(|entry| &entry.name))
-            .chain(self.nodes.iter().map(|entry| &entry.name))
+            .map(|entry| (&entry.name, &entry.declaration_owner))
+            .chain(
+                self.params
+                    .iter()
+                    .map(|entry| (&entry.name, &entry.declaration_owner)),
+            )
+            .chain(
+                self.nodes
+                    .iter()
+                    .map(|entry| (&entry.name, &entry.declaration_owner)),
+            )
         {
             cancellation.checkpoint()?;
-            let canonical = crate::hir::diagnostics::resolved_decl_key(owner, name);
+            let canonical =
+                ResolvedDeclName::from_def(declaration_owner.clone(), name.member().clone());
             decl_bindings.insert(name.clone(), canonical);
         }
         for (name, binding) in &self.imported_bindings {
@@ -1148,6 +1182,7 @@ impl UnfrozenIR {
                 cancellation.checkpoint()?;
                 Ok(ConstEntry {
                     name: entry.name.clone(),
+                    declaration_owner: entry.declaration_owner.clone(),
                     type_ann: entry.type_ann.clone(),
                     type_resolution_owner: entry.type_resolution_owner.clone(),
                     expr: lower_in(
@@ -1187,6 +1222,7 @@ impl UnfrozenIR {
                 };
                 Ok(ParamEntry {
                     name: entry.name.clone(),
+                    declaration_owner: entry.declaration_owner.clone(),
                     type_ann: entry.type_ann.clone(),
                     type_resolution_owner: entry.type_resolution_owner.clone(),
                     default_expr,
@@ -1205,6 +1241,7 @@ impl UnfrozenIR {
                 cancellation.checkpoint()?;
                 Ok(NodeEntry {
                     name: entry.name.clone(),
+                    declaration_owner: entry.declaration_owner.clone(),
                     type_ann: entry.type_ann.clone(),
                     type_resolution_owner: entry.type_resolution_owner.clone(),
                     expr: lower_in(
@@ -1227,6 +1264,7 @@ impl UnfrozenIR {
                 let body_src = entry.body_src.resolve(src);
                 Ok(AssertEntry {
                     name: entry.name.clone(),
+                    declaration_owner: entry.declaration_owner.clone(),
                     body: {
                         let expr_ctx = crate::hir::ExprLoweringContext::new(
                             &entry.body_resolution_owner,
@@ -1368,6 +1406,7 @@ impl UnfrozenIR {
             dynamic_unit_scales,
             imported_bindings: self.imported_bindings,
             external_surface: self.external_surface,
+            instances: self.instances,
         })
     }
 
@@ -1385,18 +1424,22 @@ impl UnfrozenIR {
             entry.body_resolution_owner = owner.clone();
         }
         for entry in &mut self.consts {
+            entry.declaration_owner = owner.clone();
             entry.type_resolution_owner = owner.clone();
             entry.body_resolution_owner = owner.clone();
         }
         for entry in &mut self.params {
+            entry.declaration_owner = owner.clone();
             entry.type_resolution_owner = owner.clone();
             entry.default_resolution_owner = owner.clone();
         }
         for entry in &mut self.nodes {
+            entry.declaration_owner = owner.clone();
             entry.type_resolution_owner = owner.clone();
             entry.body_resolution_owner = owner.clone();
         }
         for entry in &mut self.asserts {
+            entry.declaration_owner = owner.clone();
             entry.body_resolution_owner = owner.clone();
         }
         for entry in &mut self.plots {
@@ -1408,6 +1451,55 @@ impl UnfrozenIR {
         for entry in &mut self.layers {
             entry.body_resolution_owner = owner.clone();
         }
+    }
+
+    /// Replace provisional type metadata on deferred imported bindings.
+    ///
+    /// Same-file inline DAGs can be elaborated before their parent is fully
+    /// typed. The canonical template remains reusable; freezing that template
+    /// later refines only bindings owned by the parent interface.
+    pub fn refine_imported_binding_types(
+        &mut self,
+        owner: &crate::dag_id::DagId,
+        mut resolve: impl FnMut(&DeclName) -> Option<crate::registry::declared_type::DeclaredType>,
+    ) {
+        self.imported_bindings
+            .values_mut()
+            .filter(|binding| binding.target().owner() == owner)
+            .for_each(|binding| {
+                let source_name = binding.target().to_unowned_def_name();
+                if let Some(declared_type) = resolve(&source_name) {
+                    binding.replace_declared_type(declared_type);
+                }
+            });
+    }
+
+    /// Supply canonical compile-time values to deferred imported bindings.
+    ///
+    /// The template remains context-free in the project cache. Each concrete
+    /// instantiation enriches only bindings owned by `owner`, preserving the
+    /// canonical target identity and replacing provisional type metadata
+    /// atomically with the value.
+    pub fn supply_imported_bindings(
+        &mut self,
+        owner: &crate::dag_id::DagId,
+        mut resolve: impl FnMut(
+            &DeclName,
+        ) -> Option<(
+            crate::registry::runtime_value::RuntimeValue,
+            crate::registry::declared_type::DeclaredType,
+        )>,
+    ) {
+        self.imported_bindings
+            .values_mut()
+            .filter(|binding| binding.target().owner() == owner)
+            .for_each(|binding| {
+                let source_name = binding.target().to_unowned_def_name();
+                if let Some((value, declared_type)) = resolve(&source_name) {
+                    binding.supply_value(value);
+                    binding.replace_declared_type(declared_type);
+                }
+            });
     }
 
     /// Add a const alias: a synthetic const declaration that references another const.
@@ -1424,6 +1516,7 @@ impl UnfrozenIR {
     ) {
         self.consts.push(UnfrozenConstEntry {
             name: name.clone(),
+            declaration_owner: body_resolution_owner.clone(),
             type_ann,
             type_resolution_owner,
             expr,
@@ -1451,6 +1544,7 @@ impl UnfrozenIR {
     ) {
         self.nodes.push(UnfrozenNodeEntry {
             name: name.clone(),
+            declaration_owner: body_resolution_owner.clone(),
             type_ann,
             type_resolution_owner,
             expr,
@@ -1615,7 +1709,7 @@ impl UnfrozenIR {
     )]
     pub fn merge_dependency(
         &mut self,
-        dep: Self,
+        mut dep: Self,
         prefix: &ModuleAliasName,
         bindings: &HashMap<DeclName, Expr>,
         dep_names: &HashSet<DeclName>,
@@ -1669,6 +1763,16 @@ impl UnfrozenIR {
                 })
         }
 
+        fn rebase_resolved_name<Ns: NameNamespace>(
+            name: &ResolvedName<Ns>,
+            dependency_owner: &crate::dag_id::DagId,
+            instance_owner: &crate::dag_id::DagId,
+        ) -> ResolvedName<Ns> {
+            let owner =
+                rebase_instance_owner(name.owner().clone(), dependency_owner, instance_owner);
+            ResolvedName::from_def(owner, name.to_unowned_def_name())
+        }
+
         // Include-time type-system bindings rewrite selected producer names
         // to importer-side identifiers. Keep those rewritten bodies/signatures
         // in the importer scope; otherwise preserve producer scope so an
@@ -1696,6 +1800,129 @@ impl UnfrozenIR {
                     merge_resolution_owner(producer_owner)
                 }
             };
+
+        let value_ports = dep
+            .params
+            .iter()
+            .filter(|entry| !entry.name.is_qualified())
+            .map(|entry| {
+                let template = ResolvedDeclName::from_def(
+                    dependency_owner.clone(),
+                    entry.name.member().clone(),
+                );
+                let concrete =
+                    ResolvedDeclName::from_def(instance_owner.clone(), entry.name.member().clone());
+                (template, concrete)
+            })
+            .collect::<HashMap<_, _>>();
+        let explicitly_bound_values = bindings
+            .keys()
+            .map(|name| ResolvedDeclName::from_def(dependency_owner.clone(), name.clone()))
+            .collect();
+        let indexes = index_bindings
+            .iter()
+            .map(|(source, target)| {
+                let source = ResolvedIndexName::from_def(dependency_owner.clone(), source.clone());
+                let target = match target {
+                    types::IndexBindingTarget::Declared(target) => {
+                        InstanceIndexBindingTarget::Declared(ResolvedIndexName::from_def(
+                            importer_owner.clone(),
+                            target.clone(),
+                        ))
+                    }
+                    types::IndexBindingTarget::Finite(target) => {
+                        InstanceIndexBindingTarget::Finite(*target)
+                    }
+                };
+                (source, target)
+            })
+            .collect();
+        let types = type_bindings
+            .iter()
+            .map(|(source, target)| {
+                (
+                    ResolvedStructTypeName::from_def(dependency_owner.clone(), source.clone()),
+                    ResolvedStructTypeName::from_def(importer_owner.clone(), target.clone()),
+                )
+            })
+            .collect();
+        let dimensions = dim_bindings
+            .iter()
+            .map(|(source, target)| {
+                (
+                    ResolvedDimName::from_def(dependency_owner.clone(), source.clone()),
+                    ResolvedDimName::from_def(importer_owner.clone(), target.clone()),
+                )
+            })
+            .collect();
+        let mut instance_records = vec![InstanceRecord {
+            id: crate::dag_id::InstanceId::new(instance_owner.clone(), dependency_owner.clone()),
+            parent_owner: importer_owner.clone(),
+            bindings: InstanceBindingEnvironment {
+                value_ports,
+                explicitly_bound_values,
+                indexes,
+                types,
+                dimensions,
+            },
+        }];
+        instance_records.extend(std::mem::take(&mut dep.instances).into_iter().map(
+            |mut record| {
+                record.parent_owner =
+                    rebase_instance_owner(record.parent_owner, dependency_owner, &instance_owner);
+                record.id = crate::dag_id::InstanceId::new(
+                    rebase_instance_owner(
+                        record.id.owner().clone(),
+                        dependency_owner,
+                        &instance_owner,
+                    ),
+                    record.id.template().clone(),
+                );
+                record
+                    .bindings
+                    .value_ports
+                    .values_mut()
+                    .for_each(|concrete| {
+                        *concrete =
+                            rebase_resolved_name(concrete, dependency_owner, &instance_owner);
+                    });
+                record.bindings.indexes.values_mut().for_each(|target| {
+                    if let InstanceIndexBindingTarget::Declared(concrete) = target {
+                        *concrete =
+                            rebase_resolved_name(concrete, dependency_owner, &instance_owner);
+                    }
+                });
+                record.bindings.types.values_mut().for_each(|concrete| {
+                    *concrete = rebase_resolved_name(concrete, dependency_owner, &instance_owner);
+                });
+                record
+                    .bindings
+                    .dimensions
+                    .values_mut()
+                    .for_each(|concrete| {
+                        *concrete =
+                            rebase_resolved_name(concrete, dependency_owner, &instance_owner);
+                    });
+                record
+            },
+        ));
+        for record in instance_records {
+            if self
+                .instances
+                .iter()
+                .any(|existing| existing.id.owner() == record.id.owner())
+            {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "duplicate concrete instance identity `{}`",
+                        record.id.owner()
+                    ),
+                    src: importer_src.clone(),
+                    span: Span::new(0, 0).into(),
+                });
+            }
+            self.instances.push(record);
+        }
 
         // Source-order entries are declarations owned by the dependency,
         // including declarations already nested by an inner include. Imported
@@ -1780,6 +2007,11 @@ impl UnfrozenIR {
             let uses_dynamic_unit = expr_uses_local_units(&entry.expr, &dynamic_unit_names);
             self.consts.push(UnfrozenConstEntry {
                 name: prefixed,
+                declaration_owner: rebase_instance_owner(
+                    entry.declaration_owner,
+                    dependency_owner,
+                    &instance_owner,
+                ),
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
@@ -1831,6 +2063,11 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             self.params.push(UnfrozenParamEntry {
                 name: prefixed,
+                declaration_owner: rebase_instance_owner(
+                    entry.declaration_owner,
+                    dependency_owner,
+                    &instance_owner,
+                ),
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 default_expr: entry.default_expr,
@@ -1854,6 +2091,11 @@ impl UnfrozenIR {
             let uses_dynamic_unit = expr_uses_local_units(&entry.expr, &dynamic_unit_names);
             self.nodes.push(UnfrozenNodeEntry {
                 name: prefixed,
+                declaration_owner: rebase_instance_owner(
+                    entry.declaration_owner,
+                    dependency_owner,
+                    &instance_owner,
+                ),
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
@@ -1896,6 +2138,11 @@ impl UnfrozenIR {
             let merged_name = merged_assert_name(&entry.name);
             self.asserts.push(UnfrozenAssertEntry {
                 name: merged_name.clone(),
+                declaration_owner: rebase_instance_owner(
+                    entry.declaration_owner,
+                    dependency_owner,
+                    &instance_owner,
+                ),
                 body: entry.body,
                 body_resolution_owner: merge_body_resolution_owner(
                     entry.body_resolution_owner,

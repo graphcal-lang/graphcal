@@ -114,7 +114,40 @@ impl std::fmt::Display for ModulePathKey {
     }
 }
 
-/// A single inline `dag X { ... }` block lifted out of its enclosing file.
+/// Validated path from a file AST root to one nested inline-DAG body.
+///
+/// Construction is private and requires at least one declaration index, so a
+/// locator cannot accidentally denote the file root.
+#[derive(Debug, Clone)]
+struct DagBodyLocator(Box<[usize]>);
+
+impl DagBodyLocator {
+    fn new(path: Vec<usize>) -> Self {
+        assert!(!path.is_empty(), "an inline DAG locator cannot be empty");
+        Self(path.into_boxed_slice())
+    }
+
+    #[expect(
+        clippy::expect_used,
+        clippy::unreachable,
+        reason = "private locators are validated while traversing the immutable owning AST"
+    )]
+    fn resolve<'a>(&self, ast: &'a File) -> &'a [Declaration] {
+        let mut declarations = ast.declarations.as_slice();
+        for index in &*self.0 {
+            let declaration = declarations
+                .get(*index)
+                .expect("loader-created inline DAG locator must remain in bounds");
+            let DeclKind::Dag(dag) = &declaration.kind else {
+                unreachable!("loader-created inline DAG locator must address DAG declarations")
+            };
+            declarations = &dag.body;
+        }
+        declarations
+    }
+}
+
+/// A single inline `dag X { ... }` block indexed within its enclosing file.
 ///
 /// Produced by the loader so that downstream stages can iterate inline DAGs
 /// uniformly with file DAGs, looking up `resolved_imports` for both the body's
@@ -129,14 +162,23 @@ pub struct LoadedDag {
     pub(crate) parent_dag_id: DagId,
     /// The dag declaration's name in source.
     name: String,
-    /// Raw declarations from the dag body, in source order.
-    pub(crate) body: Vec<Declaration>,
+    /// Stable locator into the owning file AST, which remains the single body owner.
+    body_locator: DagBodyLocator,
     /// Loader-resolved DAG identities for each `import` declaration in the
-    /// body, keyed by the import path's display string. Self-imports map to
+    /// body, keyed by its typed span-free module path. Self-imports map to
     /// `parent_dag_id`; cross-file imports map to the dependency file's id.
     /// Imports whose path fails to resolve at load time are absent here; the
     /// downstream resolver surfaces a structured error for them.
     pub(crate) resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
+}
+
+impl LoadedDag {
+    /// Borrow this DAG's authoritative body from its owning file AST.
+    #[must_use]
+    pub(crate) fn body<'a>(&self, file: &'a LoadedFile) -> &'a [Declaration] {
+        debug_assert_eq!(self.parent_dag_id, file.dag_id);
+        self.body_locator.resolve(&file.ast)
+    }
 }
 
 /// A single loaded and parsed file.
@@ -157,14 +199,9 @@ pub struct LoadedFile {
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
     resolved_imports: HashMap<ModulePathKey, DagId>,
-    /// Inline `dag X { ... }` blocks lifted from this file, with
-    /// per-dag pre-resolved imports. Order matches source order.
-    ///
-    /// Same source as the inline-dag declarations on `ast` — they coexist
-    /// during the C1/C2 transition. Once the resolver is unified
-    /// (Slice C step 2) the AST view will stop being the authority for
-    /// dag-body compilation and `inline_dags` will be the single source of
-    /// truth.
+    /// Inline `dag X { ... }` metadata indexed from this file, with per-DAG
+    /// pre-resolved imports. Entries retain source preorder and borrow their
+    /// authoritative bodies from `ast` through validated locators.
     pub(crate) inline_dags: Vec<LoadedDag>,
 }
 
@@ -527,7 +564,7 @@ impl LoadedProject {
             let loaded = &self.files[dag_id];
             resolver.add_module(loaded.dag_id.clone(), &loaded.ast.declarations)?;
             for inline in &loaded.inline_dags {
-                resolver.add_module(inline.dag_id.clone(), &inline.body)?;
+                resolver.add_module(inline.dag_id.clone(), inline.body(loaded))?;
             }
         }
 
@@ -544,7 +581,7 @@ impl LoadedProject {
                 add_include_instance_modules(
                     &mut resolver,
                     &inline.dag_id,
-                    &inline.body,
+                    inline.body(loaded),
                     &inline.resolved_imports,
                     &self.files,
                 )?;
@@ -575,14 +612,14 @@ impl LoadedProject {
                 inherit_include_instance_scopes(
                     &mut resolver,
                     &inline.dag_id,
-                    &inline.body,
+                    inline.body(loaded),
                     &inline.resolved_imports,
                     &self.files,
                 )?;
                 register_module_imports(
                     &mut resolver,
                     &inline.dag_id,
-                    &inline.body,
+                    inline.body(loaded),
                     &inline.resolved_imports,
                     &self.files,
                 )?;
@@ -602,7 +639,7 @@ impl LoadedProject {
                 link_include_instance_indexes(
                     &mut resolver,
                     &inline.dag_id,
-                    &inline.body,
+                    inline.body(loaded),
                     &inline.resolved_imports,
                     &self.files,
                 )?;
@@ -861,7 +898,7 @@ fn module_declarations<'a>(
         file.inline_dags
             .iter()
             .find(|inline| inline.dag_id == *target)
-            .map(|inline| inline.body.as_slice())
+            .map(|inline| inline.body(file))
     })
 }
 
@@ -1694,7 +1731,13 @@ fn lift_package_inline_dags(
     context: &PackageInlineLiftContext<'_>,
 ) -> Vec<LoadedDag> {
     let mut out = Vec::new();
-    lift_package_inline_dags_from_declarations(&ast.declarations, self_dag_id, context, &mut out);
+    lift_package_inline_dags_from_declarations(
+        &ast.declarations,
+        self_dag_id,
+        context,
+        &[],
+        &mut out,
+    );
     out
 }
 
@@ -1702,23 +1745,26 @@ fn lift_package_inline_dags_from_declarations(
     declarations: &[Declaration],
     lexical_parent_id: &DagId,
     context: &PackageInlineLiftContext<'_>,
+    parent_path: &[usize],
     out: &mut Vec<LoadedDag>,
 ) {
-    for decl in declarations {
+    for (index, decl) in declarations.iter().enumerate() {
         let DeclKind::Dag(dag) = &decl.kind else {
             continue;
         };
         let name = dag.name.value.to_string();
         let dag_id = lexical_parent_id.child(name.as_str());
         let resolved_imports = resolve_package_inline_body_imports(&dag.body, &dag_id, context);
+        let mut body_path = parent_path.to_vec();
+        body_path.push(index);
         out.push(LoadedDag {
             dag_id: dag_id.clone(),
             parent_dag_id: context.file_dag_id.clone(),
             name,
-            body: dag.body.clone(),
+            body_locator: DagBodyLocator::new(body_path.clone()),
             resolved_imports,
         });
-        lift_package_inline_dags_from_declarations(&dag.body, &dag_id, context, out);
+        lift_package_inline_dags_from_declarations(&dag.body, &dag_id, context, &body_path, out);
     }
 }
 
@@ -2119,7 +2165,7 @@ fn lift_inline_dags<F: FileSystemReader>(
         fs,
         file_stem,
     };
-    lift_inline_dags_from_declarations(&ast.declarations, self_dag_id, &context, &mut out);
+    lift_inline_dags_from_declarations(&ast.declarations, self_dag_id, &context, &[], &mut out);
     out
 }
 
@@ -2140,23 +2186,26 @@ fn lift_inline_dags_from_declarations<F: FileSystemReader>(
     declarations: &[Declaration],
     lexical_parent_id: &DagId,
     context: &InlineLiftContext<'_, F>,
+    parent_path: &[usize],
     out: &mut Vec<LoadedDag>,
 ) {
-    for decl in declarations {
+    for (index, decl) in declarations.iter().enumerate() {
         let DeclKind::Dag(dag) = &decl.kind else {
             continue;
         };
         let name = dag.name.value.to_string();
         let dag_id = lexical_parent_id.child(name.as_str());
         let resolved_imports = resolve_inline_body_imports(&dag.body, &dag_id, context);
+        let mut body_path = parent_path.to_vec();
+        body_path.push(index);
         out.push(LoadedDag {
             dag_id: dag_id.clone(),
             parent_dag_id: context.file_dag_id.clone(),
             name,
-            body: dag.body.clone(),
+            body_locator: DagBodyLocator::new(body_path.clone()),
             resolved_imports,
         });
-        lift_inline_dags_from_declarations(&dag.body, &dag_id, context, out);
+        lift_inline_dags_from_declarations(&dag.body, &dag_id, context, &body_path, out);
     }
 }
 
@@ -2248,6 +2297,7 @@ fn lift_inline_dags_by_stem(ast: &File, path: &Path, self_dag_id: &DagId) -> Vec
         self_dag_id,
         file_stem,
         &same_file_dag_ids,
+        &[],
         &mut out,
     );
     out
@@ -2259,9 +2309,10 @@ fn lift_inline_dags_by_stem_from_declarations(
     lexical_parent_id: &DagId,
     file_stem: &str,
     same_file_dag_ids: &HashSet<DagId>,
+    parent_path: &[usize],
     out: &mut Vec<LoadedDag>,
 ) {
-    for decl in declarations {
+    for (index, decl) in declarations.iter().enumerate() {
         let DeclKind::Dag(dag) = &decl.kind else {
             continue;
         };
@@ -2294,11 +2345,13 @@ fn lift_inline_dags_by_stem_from_declarations(
                 (key, resolution)
             })
             .collect();
+        let mut body_path = parent_path.to_vec();
+        body_path.push(index);
         out.push(LoadedDag {
             dag_id: dag_id.clone(),
             parent_dag_id: file_dag_id.clone(),
             name,
-            body: dag.body.clone(),
+            body_locator: DagBodyLocator::new(body_path.clone()),
             resolved_imports,
         });
         lift_inline_dags_by_stem_from_declarations(
@@ -2307,6 +2360,7 @@ fn lift_inline_dags_by_stem_from_declarations(
             &dag_id,
             file_stem,
             same_file_dag_ids,
+            &body_path,
             out,
         );
     }

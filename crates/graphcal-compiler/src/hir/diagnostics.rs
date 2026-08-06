@@ -1,8 +1,6 @@
-//! Conversions from HIR lowering diagnostics to spanned [`GraphcalError`]s,
-//! plus the canonical declaration-key derivation shared by the IR freeze
-//! boundary and TIR.
+//! Conversions from HIR lowering diagnostics to spanned [`GraphcalError`]s.
 
-use crate::syntax::decl_name::{DeclNameNamespace, ResolvedDeclName};
+use crate::syntax::decl_name::DeclNameNamespace;
 use crate::syntax::index_name::IndexNameNamespace;
 use std::sync::Arc;
 
@@ -11,25 +9,8 @@ use miette::NamedSource;
 use crate::hir;
 use crate::registry::error::GraphcalError;
 use crate::syntax::index_name::IndexName;
-use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolveError;
 use crate::syntax::names::NameNamespace;
-
-/// Derive the canonical declaration key for an entry name under `owner`.
-///
-/// Qualified entry names (merged include instances) extend the owner with
-/// their qualifier segments, matching the instance modules the loader
-/// registers.
-#[must_use]
-pub fn resolved_decl_key(owner: &crate::dag_id::DagId, name: &ScopedName) -> ResolvedDeclName {
-    let owner = name
-        .qualifier()
-        .iter()
-        .fold(owner.clone(), |owner, segment| {
-            owner.child(segment.as_ref())
-        });
-    ResolvedDeclName::from_def(owner, name.member().clone())
-}
 
 /// Convert a HIR expression-lowering failure into a spanned diagnostic.
 #[expect(

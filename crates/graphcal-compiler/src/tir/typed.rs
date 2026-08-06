@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::dimension::Dimension;
 use crate::hir;
-use crate::hir::diagnostics::{expr_lower_error_to_graphcal, resolved_decl_key};
+use crate::hir::diagnostics::expr_lower_error_to_graphcal;
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
@@ -136,37 +136,21 @@ impl DagTIR {
         }
     }
 
-    /// Return the resolved declaration key for a declaration visible from this DAG.
+    /// Return the canonical identity recorded for a declaration visible from
+    /// this DAG.
     ///
-    /// Qualified source keys synthesize a child owner under this DAG so
-    /// source-facing entries still use resolved identities instead of
-    /// source-keyed runtime maps.
+    /// Authoritative declarations always have an explicit binding. The local
+    /// fallback exists only for diagnostic probes of unknown names; notably it
+    /// does not infer a concrete owner from a source-facing qualifier.
     #[must_use]
     pub fn resolved_decl_key_for_local(&self, name: &ScopedName) -> ResolvedDeclName {
-        if let Some(resolved) = self.semantic.decl_bindings.get(name) {
-            return resolved.clone();
-        }
-        if self.resolved_decl_types.contains_key(name)
-            || self
-                .source_order
-                .iter()
-                .any(|(source_name, _)| source_name == name)
-        {
-            return resolved_decl_key(&self.dag_id, name);
-        }
-        if !name.is_qualified() {
-            let mut candidates = self
-                .resolved_decl_types
-                .keys()
-                .filter(|candidate| candidate.member() == name.member())
-                .map(|candidate| resolved_decl_key(&self.dag_id, candidate));
-            if let Some(candidate) = candidates.next()
-                && candidates.next().is_none()
-            {
-                return candidate;
-            }
-        }
-        resolved_decl_key(&self.dag_id, name)
+        self.semantic
+            .decl_bindings
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| {
+                ResolvedDeclName::from_def(self.dag_id.clone(), name.member().clone())
+            })
     }
 }
 
@@ -271,6 +255,7 @@ fn type_resolve_impl(
         ir.expected_fail,
         ir.dynamic_unit_scales,
         ir.imported_bindings,
+        ir.instances,
         module_ctx,
         src,
     )?;
@@ -358,6 +343,7 @@ fn type_resolve_single_impl(
         ir.expected_fail,
         ir.dynamic_unit_scales,
         ir.imported_bindings,
+        ir.instances,
         module_ctx,
         src,
     )?;
@@ -620,7 +606,13 @@ fn resolve_override_reconciliations(
                     })
                 })
                 .collect::<Result<Vec<_>, GraphcalError>>()?;
-            Ok((resolved_decl_key(ctx.owner, &entry.name), reconciliations))
+            Ok((
+                ResolvedDeclName::from_def(
+                    entry.declaration_owner.clone(),
+                    entry.name.member().clone(),
+                ),
+                reconciliations,
+            ))
         })
         .collect()
 }
@@ -1105,8 +1097,7 @@ fn lower_declaration_domain_bounds(
 ) -> Result<HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>, GraphcalError> {
     let generic_scope = hir::GenericScope::new();
     let prelude = hir::PreludeTypeScope::graphcal();
-    let decl_bindings =
-        collect_hir_decl_bindings(ctx.owner, consts, params, nodes, imported_bindings);
+    let decl_bindings = collect_hir_decl_bindings(consts, params, nodes, imported_bindings);
     let lower_bounds_in = |type_ann: &crate::desugar::desugared_ast::TypeExpr,
                            resolution_owner: &crate::dag_id::DagId,
                            body_src: &NamedSource<Arc<String>>| {
@@ -1125,11 +1116,12 @@ fn lower_declaration_domain_bounds(
 
     // Domain-bound and key errors for a merged dependency body must render
     // against the dependency's own source, not the importer's `src` (#868).
-    for (name, type_ann, resolution_owner, signature_src) in consts
+    for (name, declaration_owner, type_ann, resolution_owner, signature_src) in consts
         .iter()
         .map(|entry| {
             (
                 &entry.name,
+                &entry.declaration_owner,
                 &entry.type_ann,
                 &entry.type_resolution_owner,
                 entry.type_src.resolve(src),
@@ -1138,6 +1130,7 @@ fn lower_declaration_domain_bounds(
         .chain(params.iter().map(|entry| {
             (
                 &entry.name,
+                &entry.declaration_owner,
                 &entry.type_ann,
                 &entry.type_resolution_owner,
                 entry.type_src.resolve(src),
@@ -1146,6 +1139,7 @@ fn lower_declaration_domain_bounds(
         .chain(nodes.iter().map(|entry| {
             (
                 &entry.name,
+                &entry.declaration_owner,
                 &entry.type_ann,
                 &entry.type_resolution_owner,
                 entry.type_src.resolve(src),
@@ -1154,7 +1148,10 @@ fn lower_declaration_domain_bounds(
     {
         let bounds = lower_bounds_in(type_ann, resolution_owner, signature_src)?;
         if !bounds.is_empty() {
-            domain_bounds.insert(resolved_decl_key(ctx.owner, name), bounds);
+            domain_bounds.insert(
+                ResolvedDeclName::from_def(declaration_owner.clone(), name.member().clone()),
+                bounds,
+            );
         }
     }
 
@@ -1750,16 +1747,25 @@ impl DagTIRSeed {
         expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
         dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
+        instances: Vec<crate::ir::instance::InstanceRecord>,
         module_ctx: ModuleTypeContext<'_>,
         src: &NamedSource<Arc<String>>,
     ) -> Result<DagTIR, GraphcalError> {
-        let decl_bindings = collect_resolved_decl_bindings(
-            module_ctx.owner,
+        let mut decl_bindings = collect_resolved_decl_bindings(
             &self.consts,
             &self.params,
             &self.nodes,
             &imported_bindings,
         );
+        decl_bindings.extend(asserts.iter().map(|entry| {
+            (
+                entry.name.clone(),
+                ResolvedDeclName::from_def(
+                    entry.declaration_owner.clone(),
+                    entry.name.member().clone(),
+                ),
+            )
+        }));
         let expected_fail = resolve_expected_fail_keys(expected_fail, module_ctx, src)?;
 
         let mut semantic = self.semantic;
@@ -1798,6 +1804,7 @@ impl DagTIRSeed {
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
             imported_bindings,
+            instances,
             projectable_outputs: std::collections::HashSet::new(),
         };
         dag.index_declaration_records()

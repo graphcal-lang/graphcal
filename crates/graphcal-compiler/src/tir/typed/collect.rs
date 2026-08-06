@@ -4,7 +4,6 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::hir;
-use crate::hir::diagnostics::resolved_decl_key;
 use crate::ir::resolve::{ExpectedFail, ParsedExpectedFail};
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
@@ -199,7 +198,10 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in consts {
         let body_src = entry.body_src.resolve(src);
-        let key = resolved_decl_key(ctx.owner, &entry.name);
+        let key = ResolvedDeclName::from_def(
+            entry.declaration_owner.clone(),
+            entry.name.member().clone(),
+        );
         let mut deps = hir::collect_expr_dependencies(&entry.expr);
         for graph_ref in &deps.graph_refs {
             // `@const_name` in a const body is a const dependency. Non-const
@@ -217,7 +219,10 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in params {
-        let key = resolved_decl_key(ctx.owner, &entry.name);
+        let key = ResolvedDeclName::from_def(
+            entry.declaration_owner.clone(),
+            entry.name.member().clone(),
+        );
         let deps = entry.default_expr.as_ref().map_or_else(
             hir::ExprDependencies::default,
             hir::collect_expr_dependencies,
@@ -226,7 +231,10 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in nodes {
-        let key = resolved_decl_key(ctx.owner, &entry.name);
+        let key = ResolvedDeclName::from_def(
+            entry.declaration_owner.clone(),
+            entry.name.member().clone(),
+        );
         let deps = hir::collect_expr_dependencies(&entry.expr);
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
@@ -895,7 +903,6 @@ fn collect_resolved_constructor_refs_from_assert_body(
 }
 
 pub(super) fn collect_hir_decl_bindings(
-    owner: &crate::dag_id::DagId,
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
@@ -903,13 +910,24 @@ pub(super) fn collect_hir_decl_bindings(
 ) -> HashMap<ScopedName, ResolvedDeclName> {
     let mut bindings = HashMap::new();
 
-    for name in consts
+    for (name, declaration_owner) in consts
         .iter()
-        .map(|entry| &entry.name)
-        .chain(params.iter().map(|entry| &entry.name))
-        .chain(nodes.iter().map(|entry| &entry.name))
+        .map(|entry| (&entry.name, &entry.declaration_owner))
+        .chain(
+            params
+                .iter()
+                .map(|entry| (&entry.name, &entry.declaration_owner)),
+        )
+        .chain(
+            nodes
+                .iter()
+                .map(|entry| (&entry.name, &entry.declaration_owner)),
+        )
     {
-        bindings.insert(name.clone(), resolved_decl_key(owner, name));
+        bindings.insert(
+            name.clone(),
+            ResolvedDeclName::from_def(declaration_owner.clone(), name.member().clone()),
+        );
     }
 
     bindings.extend(
@@ -921,13 +939,12 @@ pub(super) fn collect_hir_decl_bindings(
 }
 
 pub(super) fn collect_resolved_decl_bindings(
-    owner: &crate::dag_id::DagId,
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
 ) -> HashMap<ScopedName, ResolvedDeclName> {
-    collect_hir_decl_bindings(owner, consts, params, nodes, imported_bindings)
+    collect_hir_decl_bindings(consts, params, nodes, imported_bindings)
 }
 
 pub(super) fn resolve_expected_fail_keys(

@@ -87,6 +87,38 @@ pub struct DagId {
     segments: NonEmpty<Arc<str>>,
 }
 
+/// Typed identity of one concrete include or DAG-call instance.
+///
+/// `owner` is the fresh runtime namespace allocated at the call/include site;
+/// `template` is the canonical reusable DAG definition it instantiates. Keeping
+/// both prevents a concrete instance from being mistaken for its source module
+/// merely because their declaration leaves have the same spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InstanceId {
+    owner: DagId,
+    template: DagId,
+}
+
+impl InstanceId {
+    /// Construct an explicit instance identity from its concrete owner and template.
+    #[must_use]
+    pub const fn new(owner: DagId, template: DagId) -> Self {
+        Self { owner, template }
+    }
+
+    /// Concrete owner allocated to this instance.
+    #[must_use]
+    pub const fn owner(&self) -> &DagId {
+        &self.owner
+    }
+
+    /// Canonical module/DAG template instantiated here.
+    #[must_use]
+    pub const fn template(&self) -> &DagId {
+        &self.template
+    }
+}
+
 /// Returned by [`DagId::from_relative_path`] when the path is not a valid
 /// graphcal source path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

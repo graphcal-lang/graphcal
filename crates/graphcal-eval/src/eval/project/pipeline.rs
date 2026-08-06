@@ -40,6 +40,7 @@ fn compile_single_file_in_project(
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &mut graphcal_compiler::tir::typed::ProjectTypeStore,
+    module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
@@ -78,6 +79,7 @@ fn compile_single_file_in_project(
             project,
             module_resolver,
             project_types,
+            module_templates,
         },
         file_dag_id,
         file_src,
@@ -317,6 +319,7 @@ pub(in crate::eval::project) fn check_project_perfile(
         HashMap::new();
     let root_source = &project.files[&project.root].named_source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
+    let mut module_templates = ModuleTemplateStore::default();
     project_types
         .insert_graphcal_prelude()
         .map_err(|error| GraphcalError::InternalError {
@@ -333,6 +336,7 @@ pub(in crate::eval::project) fn check_project_perfile(
             &module_artifacts,
             &module_resolver,
             &mut project_types,
+            &mut module_templates,
             cancellation,
         )?;
         let loaded_file = &project.files[file_dag_id];

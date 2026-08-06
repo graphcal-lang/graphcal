@@ -801,9 +801,7 @@ pub(in crate::eval::project) fn process_file_include<'a>(
     };
 
     ctx.include_instances.push(IncludeInstanceRequest {
-        source: IncludeTemplateSource::File {
-            dep_dag_id: import_dag_id.clone(),
-        },
+        template: ModuleTemplateRef::file(import_dag_id.clone()),
         instance_scope,
         debug_scope: derive_module_name_from_import_path(&include_decl.path),
         bindings,
@@ -876,7 +874,6 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     let dag_body = graphcal_compiler::desugar::desugared_ast::File {
         declarations: dag_def.body.clone(),
     };
-    let dag_imported_names = ImportedValueNames::default();
 
     // Classify bindings against the DAG body's declarations. Typed index
     // compatibility is deferred to the same registry-backed path as file DAGs.
@@ -1016,11 +1013,9 @@ pub(in crate::eval::project) fn process_inline_dag_include(
     };
 
     ctx.include_instances.push(IncludeInstanceRequest {
-        source: IncludeTemplateSource::InlineDag {
-            dag_body,
-            dag_imported_names,
+        template: ModuleTemplateRef {
+            source_file: parent_dag_id.clone(),
             dag_id: dag_id.clone(),
-            parent_dag_id: parent_dag_id.clone(),
         },
         instance_scope,
         debug_scope: ModuleAliasName::expect_valid(dag_name),
