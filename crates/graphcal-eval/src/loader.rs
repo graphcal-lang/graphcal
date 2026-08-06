@@ -533,7 +533,7 @@ impl LoadedProject {
 
         for dag_id in &self.load_order {
             let loaded = &self.files[dag_id];
-            add_instantiated_include_modules(
+            add_include_instance_modules(
                 &mut resolver,
                 &loaded.dag_id,
                 &loaded.ast.declarations,
@@ -541,7 +541,7 @@ impl LoadedProject {
                 &self.files,
             )?;
             for inline in &loaded.inline_dags {
-                add_instantiated_include_modules(
+                add_include_instance_modules(
                     &mut resolver,
                     &inline.dag_id,
                     &inline.body,
@@ -557,7 +557,7 @@ impl LoadedProject {
         // the next composition level.
         for dag_id in &self.load_order {
             let loaded = &self.files[dag_id];
-            inherit_instantiated_include_scopes(
+            inherit_include_instance_scopes(
                 &mut resolver,
                 &loaded.dag_id,
                 &loaded.ast.declarations,
@@ -572,7 +572,7 @@ impl LoadedProject {
                 &self.files,
             )?;
             for inline in &loaded.inline_dags {
-                inherit_instantiated_include_scopes(
+                inherit_include_instance_scopes(
                     &mut resolver,
                     &inline.dag_id,
                     &inline.body,
@@ -591,14 +591,14 @@ impl LoadedProject {
 
         for dag_id in &self.load_order {
             let loaded = &self.files[dag_id];
-            link_instantiated_include_indexes(
+            link_include_instance_indexes(
                 &mut resolver,
                 &loaded.dag_id,
                 &loaded.ast.declarations,
                 &loaded.resolved_imports,
             )?;
             for inline in &loaded.inline_dags {
-                link_instantiated_include_indexes(
+                link_include_instance_indexes(
                     &mut resolver,
                     &inline.dag_id,
                     &inline.body,
@@ -630,7 +630,7 @@ impl ResolvedModuleLookup for HashMap<ModulePathKey, InlineBodyImportResolution>
     }
 }
 
-fn add_instantiated_include_modules(
+fn add_include_instance_modules(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
@@ -641,7 +641,7 @@ fn add_instantiated_include_modules(
         let DeclKind::Include(include) = &decl.kind else {
             continue;
         };
-        let Some(instance_scope) = instantiated_include_scope(include) else {
+        let Some(instance_scope) = include_instance_scope(include) else {
             continue;
         };
         let prefix = instance_scope.merge_scope_name();
@@ -665,7 +665,7 @@ fn add_instantiated_include_modules(
 /// The synthetic module starts with the source declarations, while this pass
 /// adds the source's selective public re-exports and module aliases after all
 /// canonical import edges have been registered.
-fn inherit_instantiated_include_scopes(
+fn inherit_include_instance_scopes(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
@@ -676,7 +676,7 @@ fn inherit_instantiated_include_scopes(
         let DeclKind::Include(include) = &declaration.kind else {
             continue;
         };
-        let Some(instance_scope) = instantiated_include_scope(include) else {
+        let Some(instance_scope) = include_instance_scope(include) else {
             continue;
         };
         let Some(file_target) =
@@ -691,16 +691,16 @@ fn inherit_instantiated_include_scopes(
     Ok(())
 }
 
-/// Make each instantiated include's own indexes resolvable by their bare names
+/// Make each configured include's own indexes resolvable by their bare names
 /// inside the importing module.
 ///
-/// The synthetic include modules created by [`add_instantiated_include_modules`]
+/// The synthetic include modules created by [`add_include_instance_modules`]
 /// already hold the dependency's index declarations. This pass copies those
 /// indexes into the importer's symbol table (skipping any the include binds or
 /// overrides) so the inlined dependency bodies — `for s: Step`, `T[Step]`,
 /// `Step.A` — resolve against the importer's merged registry. See
 /// [`graphcal_compiler::syntax::module_resolve::ModuleResolver::inline_instantiated_include_indexes`].
-fn link_instantiated_include_indexes(
+fn link_include_instance_indexes(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
     owner: &DagId,
     declarations: &[Declaration],
@@ -710,7 +710,7 @@ fn link_instantiated_include_indexes(
         let DeclKind::Include(include) = &decl.kind else {
             continue;
         };
-        let Some(instance_scope) = instantiated_include_scope(include) else {
+        let Some(instance_scope) = include_instance_scope(include) else {
             continue;
         };
         let prefix = instance_scope.merge_scope_name();
@@ -737,7 +737,7 @@ fn link_instantiated_include_indexes(
     Ok(())
 }
 
-fn instantiated_include_scope<P: Phase>(include: &IncludeDecl<P>) -> Option<IncludeInstanceScope> {
+fn include_instance_scope<P: Phase>(include: &IncludeDecl<P>) -> Option<IncludeInstanceScope> {
     (!include.param_bindings.is_empty()).then(|| include.instance_scope())
 }
 
@@ -781,7 +781,7 @@ fn register_module_imports(
                 if let Some(target) =
                     resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
                 {
-                    let synthetic_owner = instantiated_include_scope(include).map(|scope| {
+                    let synthetic_owner = include_instance_scope(include).map(|scope| {
                         let prefix = scope.merge_scope_name();
                         owner.child(prefix.as_str())
                     });

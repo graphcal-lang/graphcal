@@ -52,7 +52,7 @@ fn compile_single_file_in_project(
         imported_type_system_names: HashMap::new(),
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
-        deferred_dag_includes: Vec::new(),
+        include_instances: Vec::new(),
     };
 
     imports::process_file_body_declarations(
@@ -63,12 +63,12 @@ fn compile_single_file_in_project(
         cancellation,
     )?;
 
-    // For module imports/includes, resolve qualified references in body and
-    // deferred binding expressions before lowering either representation.
+    // Resolve qualified references in both the body and pending include
+    // bindings before lowering either representation.
     let file_ast = rewrite_qualified_refs_in_compilation_body(
         &loaded_file.ast,
         &ctx.imported_names,
-        &mut ctx.deferred_dag_includes,
+        &mut ctx.include_instances,
     );
 
     // Lower to IR and finalize compilation.

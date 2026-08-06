@@ -62,12 +62,12 @@ fn write_pipeline_project(
 }
 
 #[test]
-fn empty_and_default_equivalent_includes_produce_the_same_instance_value() {
+fn empty_and_default_equivalent_includes_share_instance_semantics() {
     let (_directory, root) = write_pipeline_project(
         &[
             (
                 "lib.gcl",
-                "param input: Dimensionless = 2.0;\npub node output: Dimensionless = @input * 3.0;\n",
+                "param input: Dimensionless = 2.0;\npub node output: Dimensionless = @input * 3.0;\nassert positive = @output > 0.0;\n",
             ),
             (
                 "main.gcl",
@@ -80,6 +80,17 @@ fn empty_and_default_equivalent_includes_produce_the_same_instance_value() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert_quantity_value(&result, "defaults.output", 6.0);
     assert_quantity_value(&result, "configured.output", 6.0);
+    assert_eq!(
+        result
+            .assertions
+            .iter()
+            .map(|(name, outcome, _)| (name.to_string(), outcome))
+            .collect::<Vec<_>>(),
+        [
+            ("defaults.positive".to_string(), &AssertResult::Pass),
+            ("configured.positive".to_string(), &AssertResult::Pass),
+        ]
+    );
 }
 
 #[test]
