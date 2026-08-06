@@ -2556,6 +2556,25 @@ param port: Outer<Int>;
 }
 
 #[test]
+fn model_schema_required_indexes_have_distinct_validated_and_concrete_states() {
+    let source = r"
+pub(bind) index Axis;
+pub type Vector<I: Index> { Vector(values: Dimensionless[I]) }
+param port: Vector<Axis>;
+";
+    let (tir, src, identity, generic_args) = model_port_application(source);
+
+    let validated = ValidatedModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
+    assert_eq!(validated.constructors(&src).unwrap().len(), 1);
+
+    let error = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap_err();
+    assert!(matches!(
+        error,
+        ConcreteModelTypeError::RequiredIndex { .. }
+    ));
+}
+
+#[test]
 fn symbolic_static_fin_key_obligation_passes_below_cardinality() {
     let source = r"
 type T<N: Nat> { T(x: Int(min: to_int(key(Fin(N), 1)))) }

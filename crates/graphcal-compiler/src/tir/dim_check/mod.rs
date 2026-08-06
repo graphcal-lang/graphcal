@@ -38,6 +38,7 @@ mod plot;
 
 pub use model_schema::{
     ConcreteModelConstructor, ConcreteModelField, ConcreteModelType, ConcreteModelTypeError,
+    ValidatedModelType,
 };
 #[cfg(test)]
 mod tests;

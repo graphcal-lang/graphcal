@@ -805,7 +805,7 @@ fn collect_concrete_nominal_applications(
             if !applications.insert(application) {
                 return Ok(());
             }
-            let model_type = graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
+            let model_type = graphcal_compiler::tir::dim_check::ValidatedModelType::try_new(
                 tir,
                 identity,
                 generic_args,
