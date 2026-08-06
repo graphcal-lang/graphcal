@@ -1,14 +1,16 @@
 //! Import processing functions for project-based compilation.
 
+use super::recursion;
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
-    reason = "submodule of project/ uses parent types extensively"
+    reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
 use crate::import_surface::{
     ProjectDeclIdentity, ProjectDeclKind, decl_identity, import_item_not_found_error,
 };
+use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::names::NameAtom;
@@ -50,7 +52,7 @@ struct DepDeclIndex<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::eval::project) enum IncludeVisibilityBoundary {
+pub(in crate::project_compiler) enum IncludeVisibilityBoundary {
     Local,
     CrossModule,
 }
@@ -61,12 +63,12 @@ impl IncludeVisibilityBoundary {
     }
 }
 
-pub(in crate::eval::project) struct InlineDagIncludeTarget<'a> {
-    pub(in crate::eval::project) dag_def: &'a graphcal_compiler::desugar::desugared_ast::DagDecl,
-    pub(in crate::eval::project) dag_id: &'a graphcal_compiler::dag_id::DagId,
-    pub(in crate::eval::project) dag_name: &'a str,
-    pub(in crate::eval::project) parent_dag_id: &'a graphcal_compiler::dag_id::DagId,
-    pub(in crate::eval::project) boundary: IncludeVisibilityBoundary,
+pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
+    pub(in crate::project_compiler) dag_def: &'a graphcal_compiler::desugar::desugared_ast::DagDecl,
+    pub(in crate::project_compiler) dag_id: &'a graphcal_compiler::dag_id::DagId,
+    pub(in crate::project_compiler) dag_name: &'a str,
+    pub(in crate::project_compiler) parent_dag_id: &'a graphcal_compiler::dag_id::DagId,
+    pub(in crate::project_compiler) boundary: IncludeVisibilityBoundary,
 }
 
 /// Populate one file body's pure imports and concrete include requests.
@@ -78,7 +80,7 @@ pub(in crate::eval::project) struct InlineDagIncludeTarget<'a> {
     clippy::too_many_lines,
     reason = "file imports plus file/inline/qualified include routing are one declaration pass"
 )]
-pub(in crate::eval::project) fn process_file_body_declarations<'a>(
+pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
@@ -97,7 +99,7 @@ pub(in crate::eval::project) fn process_file_body_declarations<'a>(
                 _ => None,
             })
             .collect();
-    check_dag_recursion(&dag_definitions, file_src)?;
+    recursion::check_dag_recursion(&dag_definitions, file_src)?;
 
     for (_declaration, import, target) in loaded_file.imports_with_dag_ids() {
         cancellation.checkpoint()?;
@@ -605,7 +607,7 @@ fn classify_param_bindings(
     clippy::too_many_lines,
     reason = "binding validation and scope registration form a single cohesive pipeline"
 )]
-pub(in crate::eval::project) fn process_file_include<'a>(
+pub(in crate::project_compiler) fn process_file_include<'a>(
     project: &'a crate::loader::LoadedProject,
     import_dag_id: &graphcal_compiler::dag_id::DagId,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
@@ -833,7 +835,7 @@ pub(in crate::eval::project) fn process_file_include<'a>(
     clippy::too_many_lines,
     reason = "binding validation, scope registration, and instance request setup form one pipeline"
 )]
-pub(in crate::eval::project) fn process_inline_dag_include(
+pub(in crate::project_compiler) fn process_inline_dag_include(
     target: &InlineDagIncludeTarget<'_>,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
@@ -1043,7 +1045,7 @@ pub(in crate::eval::project) fn process_inline_dag_include(
 ///
 /// For example, `include pkg.lib.double(...)` where `pkg/lib.gcl` defines
 /// `dag double { ... }`.
-pub(in crate::eval::project) fn is_bare_module_dag_ref(
+pub(in crate::project_compiler) fn is_bare_module_dag_ref(
     import_path: &ModulePath,
     resolved_dag_id: &graphcal_compiler::dag_id::DagId,
     project: &crate::loader::LoadedProject,
@@ -1074,7 +1076,7 @@ pub(in crate::eval::project) fn is_bare_module_dag_ref(
     clippy::too_many_lines,
     reason = "visibility check adds necessary logic to the import processing"
 )]
-pub(in crate::eval::project) fn process_pure_import<'a>(
+pub(in crate::project_compiler) fn process_pure_import<'a>(
     project: &crate::loader::LoadedProject,
     import_dag_id: &graphcal_compiler::dag_id::DagId,
     import_path: &graphcal_compiler::desugar::desugared_ast::ModulePath,
@@ -1265,89 +1267,6 @@ pub(in crate::eval::project) fn process_pure_import<'a>(
     Ok(())
 }
 
-/// Check for recursive DAG instantiation.
-///
-/// Builds a dependency graph of inline DAGs and detects cycles.
-/// Returns an error if a DAG directly or indirectly includes itself.
-pub(in crate::eval::project) fn check_dag_recursion(
-    dag_definitions: &HashMap<DeclName, &graphcal_compiler::desugar::desugared_ast::DagDecl>,
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<(), CompileError> {
-    fn dfs<'a>(
-        node: &'a DeclName,
-        deps: &HashMap<&'a DeclName, Vec<&'a DeclName>>,
-        visited: &mut HashSet<&'a DeclName>,
-        in_stack: &mut HashSet<&'a DeclName>,
-        path: &mut Vec<&'a DeclName>,
-    ) -> Option<Vec<String>> {
-        if in_stack.contains(node) {
-            #[expect(
-                clippy::expect_used,
-                reason = "DFS invariant: in_stack ⇒ node is on path"
-            )]
-            let cycle_start = path
-                .iter()
-                .position(|n| *n == node)
-                .expect("DFS invariant: in_stack ⇒ node is on path");
-            let mut cycle: Vec<String> = path[cycle_start..]
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
-            cycle.push(node.to_string());
-            return Some(cycle);
-        }
-        if visited.contains(node) {
-            return None;
-        }
-        visited.insert(node);
-        in_stack.insert(node);
-        path.push(node);
-
-        if let Some(neighbors) = deps.get(node) {
-            for &neighbor in neighbors {
-                if let Some(cycle) = dfs(neighbor, deps, visited, in_stack, path) {
-                    return Some(cycle);
-                }
-            }
-        }
-
-        in_stack.remove(node);
-        path.pop();
-        None
-    }
-
-    // Build adjacency list: dag_name -> set of dag names it includes.
-    let mut deps: HashMap<&DeclName, Vec<&DeclName>> = HashMap::new();
-    for (name, dag) in dag_definitions {
-        let mut includes = Vec::new();
-        for decl in &dag.body {
-            if let DeclKind::Include(inc) = &decl.kind
-                && inc.path.segments.len() == 1
-            {
-                let target = DeclName::from_atom(inc.path.segments[0].name.clone());
-                if let Some((target_name, _)) = dag_definitions.get_key_value(&target) {
-                    includes.push(target_name);
-                }
-            }
-        }
-        deps.insert(name, includes);
-    }
-
-    let mut visited: HashSet<&DeclName> = HashSet::new();
-    let mut in_stack: HashSet<&DeclName> = HashSet::new();
-    for name in dag_definitions.keys() {
-        if let Some(cycle) = dfs(name, &deps, &mut visited, &mut in_stack, &mut Vec::new()) {
-            let cycle_str = cycle.join(" -> ");
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: format!("recursive DAG instantiation: {cycle_str}"),
-                src: file_src.clone(),
-                span: dag_definitions[name].span.into(),
-            }));
-        }
-    }
-    Ok(())
-}
-
 fn insert_imported_binding(
     imported_bindings: &mut HashMap<ScopedName, ImportedBinding>,
     imported_names: &ImportedValueNames,
@@ -1380,7 +1299,7 @@ fn insert_imported_binding(
     clippy::too_many_arguments,
     reason = "helper mutates imported name/value/source-order collections together"
 )]
-pub(in crate::eval::project) fn import_selective_item(
+pub(in crate::project_compiler) fn import_selective_item(
     dep: &ModuleArtifact,
     source_owner: &graphcal_compiler::dag_id::DagId,
     orig_name: &NameAtom,
@@ -1445,7 +1364,7 @@ fn imported_declared_type(
     clippy::too_many_arguments,
     reason = "helper mutates imported name/value/source-order collections together"
 )]
-pub(in crate::eval::project) fn import_module_values(
+pub(in crate::project_compiler) fn import_module_values(
     dep: &ModuleArtifact,
     source_owner: &graphcal_compiler::dag_id::DagId,
     module_name: &ModuleAliasName,

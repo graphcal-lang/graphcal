@@ -205,13 +205,11 @@ pub fn preprocess_dag_body_self_imports(
 /// [`preprocess_dag_body_self_imports`]. Pairs with
 /// [`classify_value_decls_in_dag`] — same shape, different input source.
 ///
-/// Used by `process_deferred_dag_includes` for the inline-DAG include
-/// path: when the parent file's TIR isn't yet type-resolved, the AST
-/// tells us which names exist and which kind they are. Const types are
-/// placeholder `Dimensionless` — the cross-file path overrides them with
-/// real types from the parent's `EvaluatedFile.declared_types`; the
-/// same-file path lets the importer's own resolved types win at
-/// dim-check time.
+/// Used when an inline template is first elaborated before its parent file is
+/// fully checked. The AST identifies declaration roles, while const types start
+/// as `Dimensionless` placeholders. Canonical parent-interface types refine the
+/// cached template before standalone checking, and concrete cross-file constant
+/// values are supplied only to an instance-local clone.
 pub fn classify_value_decls_in_ast(
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> ParentValueDecls {

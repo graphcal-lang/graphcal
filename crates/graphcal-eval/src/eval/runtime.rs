@@ -25,10 +25,10 @@ use graphcal_compiler::registry::declared_type::{
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{IndexDef, Registry};
 
+use super::declared_type::resolve_field_declared_type;
 use super::display::{
     attach_display_units, extract_flat_display_unit, format_coordinate, format_coordinate_exact,
 };
-use super::project::resolve_field_declared_type;
 use super::types::{
     AssertResult, AxisMeta, DeclType, DisplayUnit, EvalResult, NodeError, PlotFieldValue, PlotSpec,
     Value,

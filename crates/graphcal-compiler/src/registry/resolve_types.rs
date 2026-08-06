@@ -72,59 +72,59 @@ impl std::fmt::Display for DeclCategory {
 }
 
 // ---------------------------------------------------------------------------
-// Entry types for resolved declarations
+// Entry types for collected declaration shells
 // ---------------------------------------------------------------------------
 
-/// A resolved const declaration (before type annotation is added).
+/// A collected const declaration awaiting type and HIR lowering.
 #[derive(Debug)]
-pub struct ResolvedConstEntry {
+pub struct CollectedConstEntry {
     pub(crate) name: DeclName,
     pub(crate) expr: Expr,
     pub(crate) span: Span,
 }
 
-/// A resolved param declaration (before type annotation is added).
+/// A collected parameter declaration awaiting type and HIR lowering.
 #[derive(Debug)]
-pub struct ResolvedParamEntry {
+pub struct CollectedParamEntry {
     pub(crate) name: DeclName,
     pub(crate) default_expr: Option<Expr>,
     pub(crate) span: Span,
 }
 
-/// A resolved node declaration (before type annotation is added).
+/// A collected node declaration awaiting type and HIR lowering.
 #[derive(Debug)]
-pub struct ResolvedNodeEntry {
+pub struct CollectedNodeEntry {
     pub(crate) name: DeclName,
     pub(crate) expr: Expr,
     pub(crate) span: Span,
 }
 
-/// A resolved assert declaration.
+/// A collected assertion declaration awaiting HIR lowering.
 #[derive(Debug)]
-pub struct ResolvedAssertEntry {
+pub struct CollectedAssertEntry {
     pub(crate) name: DeclName,
     pub(crate) body: AssertBody,
     pub(crate) span: Span,
 }
 
-/// A resolved plot declaration.
+/// A collected plot declaration awaiting HIR lowering.
 #[derive(Debug)]
-pub struct ResolvedPlotEntry {
+pub struct CollectedPlotEntry {
     pub(crate) name: DeclName,
     pub(crate) decl: PlotDecl,
     pub(crate) span: Span,
 }
 
-/// A resolved figure declaration.
+/// A collected figure declaration awaiting HIR lowering.
 #[derive(Debug)]
-pub struct ResolvedFigureEntry {
+pub struct CollectedFigureEntry {
     pub name: DeclName,
     pub decl: FigureDecl,
 }
 
-/// A resolved layer declaration.
+/// A collected layer declaration awaiting HIR lowering.
 #[derive(Debug)]
-pub struct ResolvedLayerEntry {
+pub struct CollectedLayerEntry {
     pub name: DeclName,
     pub decl: LayerDecl,
 }
@@ -360,21 +360,21 @@ impl ExternalDeclSurface {
 
 /// The result of declaration collection: declarations separated by category.
 #[derive(Debug)]
-pub(crate) struct ResolvedFile {
+pub(crate) struct CollectedFile {
     /// Const declarations in source order.
-    pub(crate) consts: Vec<ResolvedConstEntry>,
+    pub(crate) consts: Vec<CollectedConstEntry>,
     /// Param declarations in source order.
-    pub(crate) params: Vec<ResolvedParamEntry>,
+    pub(crate) params: Vec<CollectedParamEntry>,
     /// Node declarations in source order.
-    pub(crate) nodes: Vec<ResolvedNodeEntry>,
+    pub(crate) nodes: Vec<CollectedNodeEntry>,
     /// Assert declarations in source order.
-    pub(crate) asserts: Vec<ResolvedAssertEntry>,
+    pub(crate) asserts: Vec<CollectedAssertEntry>,
     /// Plot declarations in source order.
-    pub(crate) plots: Vec<ResolvedPlotEntry>,
+    pub(crate) plots: Vec<CollectedPlotEntry>,
     /// Figure declarations in source order.
-    pub(crate) figures: Vec<ResolvedFigureEntry>,
+    pub(crate) figures: Vec<CollectedFigureEntry>,
     /// Layer declarations in source order.
-    pub(crate) layers: Vec<ResolvedLayerEntry>,
+    pub(crate) layers: Vec<CollectedLayerEntry>,
     /// All declaration names in source order with their category.
     pub(crate) source_order: Vec<(DeclName, DeclCategory)>,
     /// Set of all assert names (for checking `@assert_name` errors).

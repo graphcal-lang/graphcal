@@ -21,7 +21,7 @@ use crate::dimension::{Dimension, Rational};
 use crate::ir::imported_binding::ImportedBinding;
 use crate::ir::instance::{InstanceBindingEnvironment, InstanceIndexBindingTarget, InstanceRecord};
 use crate::ir::resolve::{
-    DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail, ResolvedFile,
+    CollectedFile, DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail,
     resolve_with_imported_values,
 };
 use crate::ir::resolve::{ImportedNames, resolve_with_imports};
@@ -813,7 +813,7 @@ fn take_type_ann(
 fn build_ir_from_resolved(
     ast: &File,
     src: &NamedSource<Arc<String>>,
-    resolved: ResolvedFile,
+    resolved: CollectedFile,
     mut type_anns: HashMap<DeclName, TypeExpr>,
     imported_bindings: HashMap<ScopedName, ImportedBinding>,
     dag_id: &crate::dag_id::DagId,

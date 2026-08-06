@@ -1,40 +1,16 @@
-//! Project-based compilation: loading multi-file projects, resolving qualified
-//! references, lowering to IR, and applying parameter overrides.
+//! Runtime preparation and evaluation for a checked project.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
-use miette::NamedSource;
-
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind, ModulePath};
+use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::{DimName, UnitRef};
-use graphcal_compiler::syntax::index_name::IndexName;
-use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
-use graphcal_compiler::syntax::phase::Desugared;
-use graphcal_compiler::syntax::span::Span;
-use graphcal_compiler::syntax::span::Spanned;
-use graphcal_compiler::syntax::type_name::StructTypeName;
-use graphcal_compiler::syntax::visitor::ExprVisitorMut;
 
-pub(in crate::eval::project) use crate::import_surface::{
-    ImportItemPresence, decl_has_external_role, extract_external_decl_surface,
-    file_exposes_import_item, file_has_import_item, file_import_item_presence,
-};
-use graphcal_compiler::ir::imported_binding::ImportedBinding;
-use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
-use graphcal_compiler::registry::declared_type::DeclaredType;
-use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
-use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{IndexBindingTarget, Registry, RegistryBuilder};
+use crate::eval::types::{CompileError, EvalResult};
+use crate::project_compiler::check_project_with_host_fns_and_cancellation;
 
-use super::types::{CompileError, DeclType, EvalResult, NodeError, Value};
-
-mod imports;
-mod lowering;
-mod pipeline;
+mod output;
+mod prepare;
 mod prepared;
 
 pub use prepared::{
@@ -46,846 +22,12 @@ pub use prepared::{
     TenaxV2RowOutcome,
 };
 
-// ---------------------------------------------------------------------------
-// Project-based compilation: `LoadedProject` → TIR / EvalResult
-// ---------------------------------------------------------------------------
-
-/// A binding map whose **key** is the dependency-side name and whose **value**
-/// is the importer-side name the dep name resolves to. Used for type and
-/// dimension bindings on instantiated includes. The aliased name keeps the
-/// directional convention discoverable everywhere the map shape appears in a
-/// signature.
-type DepToImporter<T> = HashMap<T, T>;
-
-/// Dependency index port to a resolved importer-side declared or structural axis.
-type IndexBindings = HashMap<IndexName, IndexBindingTarget>;
-
-/// One typed value in normal result assembly.
-type OutputValue = (ScopedName, Result<Value, NodeError>, DeclType);
-
-/// Presentation aliases for private selective-include scopes.
-///
-/// Keys are collision-free synthetic IR qualifiers; values are human-readable
-/// target leaves retained only when that leaf is unambiguous in the importer.
-type IncludeDebugNameMap = HashMap<ModuleAliasName, ModuleAliasName>;
-
-/// A selective import/include alias.
-///
-/// `original` is the dependency-side declaration name; `local` is the name
-/// introduced into the importer. Keeping the two roles named prevents call
-/// sites from swapping a raw `(String, String)` pair.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::eval::project) struct ImportAlias {
-    original: DeclName,
-    local: DeclName,
-}
-
-/// Derive a module name (the leaf segment) from a `ModulePath`.
-///
-/// Used as the include-instance alias for the bare `include path(args);`
-/// form and as the module-qualifier name for `import path;`.
-fn derive_module_name_from_import_path(import_path: &ModulePath) -> ModuleAliasName {
-    ModuleAliasName::from_atom(import_path.leaf().name.clone())
-}
-
-/// Visitor that recognizes `FieldAccess(GraphRef(alias), field)` and rewrites
-/// it to a qualified `GraphRef` when `(alias, field)` matches an imported
-/// module-namespace member.
-///
-/// `@bar.field` parses as `FieldAccess(GraphRef(bar), field)`. For the
-/// `include foo() as bar;` and `import foo as bar;` namespace forms, the
-/// dependency's items are registered as qualified `ScopedName`s. The rewriter
-/// promotes the access to a typed qualified `GraphRef` directly — no
-/// `Qualified*Ref` variant or flat-string boundary involved.
-struct AliasFieldAccessRewriter<'a> {
-    qualified_pairs: &'a HashSet<QualifiedMember>,
-}
-
-impl ExprVisitorMut<Desugared> for AliasFieldAccessRewriter<'_> {
-    type Error = std::convert::Infallible;
-
-    fn visit_expr_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        // Recurse first; chained `@bar.x.y` becomes
-        // `FieldAccess(FieldAccess(GraphRef(bar), x), y)`. We promote the
-        // inner `FieldAccess(GraphRef(bar), x)` to a qualified `GraphRef`,
-        // leaving the outer `.y` as a struct-field access on the
-        // resulting qualified node value.
-        self.dispatch_mut(expr)?;
-
-        let promote = if let ExprKind::FieldAccess { expr: inner, field } = &expr.kind
-            && let ExprKind::GraphRef(qualifier_name) = &inner.kind
-            && !qualifier_name.value.is_qualified()
-            && self.qualified_pairs.contains(&QualifiedMember {
-                module: ModuleAliasName::from_atom(qualifier_name.value.member().atom().clone()),
-                member: DeclName::from_atom(field.value.atom().clone()),
-            }) {
-            let merged_span = qualifier_name.span.merge(field.span);
-            Some(ExprKind::GraphRef(Spanned {
-                value: ScopedName::qualified(
-                    ModuleAliasName::from_atom(qualifier_name.value.member().atom().clone()),
-                    DeclName::from_atom(field.value.atom().clone()),
-                ),
-                span: merged_span,
-            }))
-        } else {
-            None
-        };
-        if let Some(kind) = promote {
-            expr.kind = kind;
-        }
-        Ok(())
-    }
-}
-
-/// `(module, member)` pair identifying a qualified import alias for the
-/// field-access rewriter — distinct from a flat `(String, String)` tuple so
-/// the two halves cannot be swapped at call sites.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct QualifiedMember {
-    module: ModuleAliasName,
-    member: DeclName,
-}
-
-/// Promote `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
-/// `GraphRef` in-place. This is the only producer of qualified graph
-/// references in the project pipeline — qualified const references come
-/// out of reference resolution directly.
-fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<QualifiedMember>) {
-    if qualified_pairs.is_empty() {
-        return;
-    }
-    let mut rewriter = AliasFieldAccessRewriter { qualified_pairs };
-    let _ = rewriter.visit_expr_mut(expr);
-}
-
-// ---------------------------------------------------------------------------
-// Per-file compilation types and pipeline
-// ---------------------------------------------------------------------------
-
-/// Pure compile-time artifact for one dependency module.
-///
-/// It contains interfaces, a frontend registry scope, checked DAG templates,
-/// constants, and extern signatures. Canonical definitions live once in the
-/// project type store; runtime node values, assertion outcomes,
-/// resolved dynamic scales, rendered plots, and presentation data are absent.
-struct ModuleArtifact {
-    /// Compile-time constants keyed by dependency-local name.
-    const_values: HashMap<DeclName, RuntimeValue>,
-    /// Declared types for compile-time constants and DAG interfaces.
-    declared_types: HashMap<ScopedName, DeclaredType>,
-    /// The file's frozen leaf-keyed registry used only to seed downstream
-    /// frontend declaration construction and formatting metadata.
-    frontend_registry: Registry,
-    /// Explicit exports and annotation-free `param` input ports, classified
-    /// separately for import/include boundary checks.
-    external_surface: ExternalDeclSurface,
-    /// Canonical nominal dependencies of producer parameter defaults, reusable
-    /// at configured include boundaries before body substitution.
-    override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,
-    /// Compiled TIRs for this file-root DAG and every inline DAG it contains.
-    ///
-    /// Entries retain canonical `DagId` keys when cloned into downstream
-    /// importers. Imported aliases resolve to those identities before TIR, so
-    /// file-root calls (`@alias(args).out`) and child calls
-    /// (`@alias.dag(args).out`) share the same lookup.
-    dag_tirs: graphcal_compiler::tir::typed::DagRegistry,
-    /// Resolved extern function signatures declared by this file's
-    /// `import plugin` blocks. Merged into importers' TIRs alongside
-    /// `dag_tirs` so cross-file qualified inline calls into dag bodies that
-    /// use extern functions can resolve their signatures at eval time.
-    extern_functions: HashMap<
-        graphcal_compiler::syntax::plugin::ExternFnKey,
-        graphcal_compiler::ir::lower::ExternFunctionEntry,
-    >,
-}
-
-/// The result of compiling a single file within a project context.
-///
-/// Produced by [`compile_single_file_in_project`] and consumed by project
-/// checking or root runtime preparation.
-struct CompiledFile {
-    tir: graphcal_compiler::tir::typed::TIR,
-    checked_execution_facts: crate::exec_plan::CheckedExecutionFacts,
-    declared_types: HashMap<ScopedName, DeclaredType>,
-    /// Imported values for this file (cloned before being consumed by IR).
-    /// Used by the root file to enrich output with imported value names.
-    imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    /// Imported value categories in source order (for root output).
-    imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    /// Values belonging to this file's consumer-facing output surface.
-    ///
-    /// The set contains the file's own declarations, imported names, selected
-    /// include aliases, and projectable outputs of whole-instance includes.
-    output_surface: HashSet<ScopedName>,
-    /// Human-readable aliases for unambiguous private include scopes.
-    include_debug_names: IncludeDebugNameMap,
-}
-
-/// One whole-project compilation session.
-///
-/// The session builds the canonical module resolver exactly once and owns the
-/// continuation from loaded syntax to a fully checked project. Runtime
-/// preparation can then consume that checked result without compiling the
-/// project again.
-pub struct ProjectCompiler<'project> {
-    project: &'project crate::loader::LoadedProject,
-    host_metadata: crate::host_fns::HostFunctionMetadata,
-    cancellation: graphcal_compiler::cancellation::CancellationToken,
-    module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
-}
-
-impl<'project> ProjectCompiler<'project> {
-    /// Start a compilation session with an embedder-supplied host registry.
-    ///
-    /// # Errors
-    ///
-    /// Returns a module-resolution diagnostic when the loaded project cannot
-    /// form one canonical project scope.
-    pub fn new(
-        project: &'project crate::loader::LoadedProject,
-        host_metadata: &crate::host_fns::HostFunctionMetadata,
-    ) -> Result<Self, CompileError> {
-        Self::with_cancellation(
-            project,
-            host_metadata,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
-    }
-
-    /// Start a cooperatively cancellable compilation session.
-    ///
-    /// # Errors
-    ///
-    /// Returns a module-resolution diagnostic or cancellation.
-    pub fn with_cancellation(
-        project: &'project crate::loader::LoadedProject,
-        host_metadata: &crate::host_fns::HostFunctionMetadata,
-        cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<Self, CompileError> {
-        cancellation.checkpoint()?;
-        pipeline::validate_project_dag_recursion(project)?;
-        let root_source = &project.files[&project.root].named_source;
-        let module_resolver = project
-            .build_module_resolver()
-            .map_err(|error| lowering::module_resolve_compile_error(error, root_source))?;
-        Ok(Self {
-            project,
-            host_metadata: host_metadata.clone(),
-            cancellation: cancellation.clone(),
-            module_resolver,
-        })
-    }
-
-    /// Compile every module once and return the reusable checked continuation.
-    ///
-    /// # Errors
-    ///
-    /// Returns a compile diagnostic or cancellation.
-    pub fn check(self) -> Result<CheckedProject, CompileError> {
-        pipeline::check_project_perfile(
-            self.project,
-            &self.host_metadata,
-            self.module_resolver,
-            &self.cancellation,
-        )
-    }
-}
-
-/// A fully checked project that has not yet been prepared or evaluated.
-///
-/// This is the reusable semantic boundary shared by `check`, `graph`, the
-/// LSP, and runtime preparation. Its fields are private so callers cannot
-/// fabricate a value that skipped mandatory project checks.
-pub struct CheckedProject {
-    compiled: CompiledFile,
-    source: NamedSource<Arc<String>>,
-    root_ast: graphcal_compiler::desugar::desugared_ast::File,
-    module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
-}
-
-impl std::fmt::Debug for CheckedProject {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("CheckedProject")
-            .field("root", self.compiled.tir.root_dag_id())
-            .field("modules", &self.compiled.tir.dag_registry().len())
-            .finish_non_exhaustive()
-    }
-}
-
-impl CheckedProject {
-    /// Borrow the checked typed program.
-    #[must_use]
-    pub const fn tir(&self) -> &graphcal_compiler::tir::typed::TIR {
-        &self.compiled.tir
-    }
-
-    /// Borrow the canonical resolver built by this compilation session.
-    #[must_use]
-    pub const fn module_resolver(
-        &self,
-    ) -> &graphcal_compiler::syntax::module_resolve::ModuleResolver {
-        &self.module_resolver
-    }
-
-    /// Whether the entry DAG still requires runtime inputs.
-    #[must_use]
-    pub fn is_library(&self) -> bool {
-        self.compiled.tir.is_library()
-    }
-
-    /// Continue to runtime preparation with callable host functions.
-    ///
-    /// # Errors
-    ///
-    /// Returns a plan, input-interface, plugin, or cancellation diagnostic.
-    pub fn prepare_with_host_fns_and_cancellation(
-        self,
-        host_fns: &crate::host_fns::HostFunctionRegistry,
-        cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<PreparedProject, CompileError> {
-        pipeline::prepare_checked_project(self, host_fns, cancellation)
-    }
-
-    /// Continue to runtime preparation without a cancellation deadline.
-    ///
-    /// # Errors
-    ///
-    /// Returns a plan, input-interface, or plugin diagnostic.
-    pub fn prepare_with_host_fns(
-        self,
-        host_fns: &crate::host_fns::HostFunctionRegistry,
-    ) -> Result<PreparedProject, CompileError> {
-        self.prepare_with_host_fns_and_cancellation(
-            host_fns,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
-    }
-}
-
-/// Project-wide semantic services shared by every module lowering pass.
-struct ProjectSemanticContext<'project> {
-    project: &'project crate::loader::LoadedProject,
-    module_resolver: &'project graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    project_types: &'project mut graphcal_compiler::tir::typed::ProjectTypeStore,
-    module_templates: &'project mut ModuleTemplateStore,
-}
-
-/// Typed request for one concrete DAG instance (file-level or inline).
-///
-/// Elaboration compiles the referenced template and merges this instance into
-/// the importer after its local declarations have been lowered.
-///
-/// A file include (`include lib(args).{...}`) is a DAG whose source is
-/// the file root; an inline DAG include (`include dag(args)` /
-/// `include lib.dag(args)`) is a DAG inside some file. After the flat
-/// TIR registry, both are uniformly addressed by canonical [`DagId`].
-struct IncludeInstanceRequest {
-    /// Canonical shared module template instantiated by this request.
-    template: ModuleTemplateRef,
-    /// Private merge namespace for this instance. Only the named
-    /// variant is source-visible; selective includes use an opaque identity.
-    instance_scope: IncludeInstanceScope,
-    /// Target leaf retained for human-readable debug output when unambiguous.
-    debug_scope: ModuleAliasName,
-    /// Param bindings: `param_name` → binding expression.
-    bindings: HashMap<DeclName, Expr>,
-    /// Index bindings: dependency port → resolved importer-side axis.
-    index_bindings: IndexBindings,
-    /// Importer-source value span for each index binding, keyed by dep-side name.
-    index_binding_spans: HashMap<IndexName, Span>,
-    /// Type bindings: `dep_type_name` → `importer_type_name`.
-    type_bindings: DepToImporter<StructTypeName>,
-    /// Dimension bindings: `dep_dim_name` → `importer_dim_name`.
-    dim_bindings: DepToImporter<DimName>,
-    /// For selective includes: the selected names and their local aliases.
-    /// `None` for module-form includes (all names accessible via `prefix::`).
-    selective_names: Option<Vec<ImportAlias>>,
-    /// Selected assertions exposed in this concrete instance, keyed from the
-    /// producer leaf to the importer-local assertion name.
-    assertion_aliases: HashMap<DeclName, DeclName>,
-    /// Values this include intentionally exposes on the importer's output
-    /// surface. Merged implementation values not listed here remain available
-    /// to the all-values debug view.
-    surface_outputs: Vec<ScopedName>,
-    /// Plots requested by the include brace list, keyed by the dep-side
-    /// plot name (#847).
-    requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
-    /// Span of the include declaration (for diagnostics).
-    include_span: Span,
-    /// Per-import-item attributes (e.g., `#[expected_fail(...)]` on
-    /// included assertions). Key = original name in dep.
-    import_item_attributes:
-        HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
-    /// Original names of selective items marked `pub` in the importer's
-    /// brace list. Module-form includes never export outputs.
-    pub_reexport_items: HashSet<DeclName>,
-}
-
-/// Stable reference to one reusable file-root or inline-DAG module template.
-///
-/// `source_file` owns source provenance and self-import scope; `dag_id`
-/// identifies the exact template within that file. Keeping both fields avoids
-/// recovering containment from path-string conventions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ModuleTemplateRef {
-    source_file: graphcal_compiler::dag_id::DagId,
-    dag_id: graphcal_compiler::dag_id::DagId,
-}
-
-impl ModuleTemplateRef {
-    fn file(dag_id: graphcal_compiler::dag_id::DagId) -> Self {
-        Self {
-            source_file: dag_id.clone(),
-            dag_id,
-        }
-    }
-
-    fn is_file_root(&self) -> bool {
-        self.source_file == self.dag_id
-    }
-}
-
-/// Reusable elaborated pre-HIR template shared by every concrete instance.
-///
-/// Bodies remain pre-HIR so instance bindings and nominal substitutions can be
-/// applied without reparsing or re-running module import/include elaboration.
-#[derive(Debug)]
-struct ElaboratedModuleTemplate {
-    unfrozen: graphcal_compiler::ir::lower::UnfrozenIR,
-    frontend_registry: Registry,
-}
-
-/// Project-session cache containing exactly one elaborated template per DAG.
-#[derive(Default)]
-struct ModuleTemplateStore {
-    templates: HashMap<graphcal_compiler::dag_id::DagId, Arc<ElaboratedModuleTemplate>>,
-}
-
-impl ModuleTemplateStore {
-    fn get(
-        &self,
-        dag_id: &graphcal_compiler::dag_id::DagId,
-    ) -> Option<Arc<ElaboratedModuleTemplate>> {
-        self.templates.get(dag_id).map(Arc::clone)
-    }
-
-    fn insert(
-        &mut self,
-        dag_id: graphcal_compiler::dag_id::DagId,
-        template: ElaboratedModuleTemplate,
-    ) -> Arc<ElaboratedModuleTemplate> {
-        match self.templates.entry(dag_id) {
-            std::collections::hash_map::Entry::Occupied(entry) => Arc::clone(entry.get()),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                Arc::clone(entry.insert(Arc::new(template)))
-            }
-        }
-    }
-}
-
-/// Canonical routing metadata for one module alias in the project pipeline.
-///
-/// `target` identifies the exact file-root or inline DAG module bound to the
-/// alias; it is never collapsed to the containing source file.
-#[derive(Debug, Clone)]
-struct ProjectModuleBinding {
-    target: graphcal_compiler::dag_id::DagId,
-    span: Span,
-    role: graphcal_compiler::syntax::module_resolve::ModuleAliasRole,
-}
-
-impl ProjectModuleBinding {
-    const fn span(&self) -> Span {
-        self.span
-    }
-}
-
-/// Mutable state accumulated while processing import declarations.
-///
-/// Bundles the various collections that [`compile_single_file_in_project`] builds
-/// during its import-processing loop, avoiding excessive parameter counts in the
-/// extracted helper functions.
-struct ImportContext<'a> {
-    imported_names: ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
-    imported_source_order: Vec<(ScopedName, DeclCategory)>,
-    imported_type_system_names: HashMap<
-        graphcal_compiler::dag_id::DagId,
-        graphcal_compiler::ir::lower::SelectedDeclarations,
-    >,
-    module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
-    /// Frontend registry surfaces of module-imported dependencies, merged into
-    /// the importer's local builder before its own declarations register.
-    frontend_registry_imports: Vec<FrontendRegistryImport<'a>>,
-    include_instances: Vec<IncludeInstanceRequest>,
-}
-
-/// Whether a registry merge crosses a pure import boundary or belongs to one
-/// concrete include instance.
-#[derive(Debug, Clone, Copy)]
-enum DynamicUnitBoundary {
-    PureImport,
-    ConcreteInstance,
-}
-
-impl DynamicUnitBoundary {
-    const fn includes_dynamic_units(self) -> bool {
-        matches!(self, Self::ConcreteInstance)
-    }
-}
-
-/// A module-imported dependency's registry surface, queued for merging into
-/// the importer's registry builder.
-struct FrontendRegistryImport<'a> {
-    /// The dependency's frozen frontend registry.
-    registry: &'a Registry,
-    /// The dependency's external declaration surface. Registry items cross
-    /// only when explicitly exported; input ports remain a distinct role.
-    external_surface: &'a ExternalDeclSurface,
-    /// The import alias that keys the dependency's `pub` units in the
-    /// importer's unit scope (`alias.unit`).
-    unit_alias: ModuleAliasName,
-    /// Runtime-dependent units cross only concrete instance boundaries.
-    dynamic_unit_boundary: DynamicUnitBoundary,
-    /// The import-statement span, localizing merge-conflict diagnostics.
-    import_span: Span,
-}
-
-/// Result of looking up one selective import item in a [`ModuleArtifact`].
-#[derive(Debug)]
-pub(in crate::eval::project) enum SelectiveImportResult {
-    /// A compile-time constant was found and registered.
-    Const,
-    /// The name was not a compile-time constant.
-    NotFound,
-}
-
-/// Resolve namespace-alias graph references in one compilation body's AST and
-/// pending include bindings: rewrite
-/// `FieldAccess(GraphRef(Local(alias)), field)` to a qualified
-/// `GraphRef(Qualified { module: alias, member: field })` when
-/// `(alias, field)` matches an imported namespace member. The qualification is
-/// preserved structurally throughout the IR / eval pipeline — there is no
-/// flat-string boundary.
-///
-/// Include bindings are extracted from the canonical loaded AST before the
-/// body AST is cloned and rewritten. Rewriting both representations together
-/// ensures a nested instantiation can prefix sibling-instance references using
-/// their full qualified identity.
-///
-/// If there are no qualified members, returns a borrowed reference to the
-/// original AST.
-fn rewrite_qualified_refs_in_compilation_body<'a>(
-    ast: &'a graphcal_compiler::desugar::desugared_ast::File,
-    imported_names: &ImportedValueNames,
-    include_instances: &mut [IncludeInstanceRequest],
-) -> std::borrow::Cow<'a, graphcal_compiler::desugar::desugared_ast::File> {
-    let alias_pairs = collect_qualified_pairs(imported_names);
-    if alias_pairs.is_empty() {
-        return std::borrow::Cow::Borrowed(ast);
-    }
-
-    for binding in include_instances
-        .iter_mut()
-        .flat_map(|include| include.bindings.values_mut())
-    {
-        rewrite_alias_field_access(binding, &alias_pairs);
-    }
-
-    let mut ast = ast.clone();
-    for decl in &mut ast.declarations {
-        rewrite_decl_exprs(decl, &alias_pairs);
-    }
-    std::borrow::Cow::Owned(ast)
-}
-
-/// Collect `(module, member)` pairs from imported namespace registrations.
-///
-/// Module-form `import`/`include` registers each dep declaration as qualified
-/// `ScopedName`s; selective imports register local `ScopedName`s. The pairs
-/// returned here drive the `@alias.member` rewrite — bare locals do not
-/// participate.
-fn collect_qualified_pairs(imported: &ImportedValueNames) -> HashSet<QualifiedMember> {
-    let mut pairs = HashSet::new();
-    let entries = imported
-        .const_names
-        .iter()
-        .chain(imported.param_names.iter())
-        .chain(imported.node_names.iter());
-    for (scoped, _) in entries {
-        if let [module] = scoped.qualifier() {
-            pairs.insert(QualifiedMember {
-                module: module.clone(),
-                member: scoped.member().clone(),
-            });
-        }
-    }
-    pairs
-}
-
-/// Apply the alias-field-access rewrite to a single declaration's expressions.
-fn rewrite_decl_exprs(
-    decl: &mut graphcal_compiler::desugar::desugared_ast::Declaration,
-    alias_pairs: &HashSet<QualifiedMember>,
-) {
-    let rewrite = |e: &mut Expr| {
-        rewrite_alias_field_access(e, alias_pairs);
-    };
-    match &mut decl.kind {
-        DeclKind::Param(p) => {
-            if let Some(ref mut value) = p.value {
-                rewrite(value);
-            }
-        }
-        DeclKind::Node(n) => rewrite(&mut n.value),
-        DeclKind::ConstNode(c) => rewrite(&mut c.value),
-        DeclKind::Assert(a) => match &mut a.body {
-            graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(e) => rewrite(e),
-            graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
-                actual,
-                expected,
-                tolerance,
-                ..
-            } => {
-                rewrite(actual);
-                rewrite(expected);
-                rewrite(tolerance);
-            }
-        },
-        DeclKind::Include(include_decl) => {
-            for binding in &mut include_decl.param_bindings {
-                rewrite(&mut binding.value);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Resolve a struct field's declared type, handling generic type parameter substitution.
-///
-/// If the field's type annotation references a generic type parameter (e.g., `D` in
-/// `Vec3<D: Dim, F: Type>`), the substitution map provides the concrete type.
-/// Otherwise, falls back to direct registry resolution.
-pub(super) fn resolve_field_declared_type(
-    field: &graphcal_compiler::registry::types::StructField,
-    generic_sub: &HashMap<&str, DeclaredType>,
-    registry: &Registry,
-) -> Option<DeclaredType> {
-    // Check if the field type is a bare generic param reference (e.g., `D`)
-    if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::DimExpr(dim_expr) =
-        &field.type_ann().kind
-        && dim_expr.terms.len() == 1
-        && dim_expr.terms[0].term.power.is_none()
-        && let Some(name) = dim_expr.terms[0]
-            .term
-            .name
-            .value
-            .as_bare()
-            .map(graphcal_compiler::syntax::names::NameAtom::as_str)
-        && let Some(concrete) = generic_sub.get(name)
-    {
-        return Some(concrete.clone());
-    }
-    if let graphcal_compiler::desugar::desugared_ast::TypeExprKind::ComplexApplication {
-        generic_args,
-    } = &field.type_ann().kind
-        && let [dimension_arg] = generic_args.as_slice()
-    {
-        let dimension = resolve_field_dimension_arg(dimension_arg, generic_sub, registry);
-        if let Some(dimension) = dimension {
-            return Some(DeclaredType::Complex(dimension));
-        }
-    }
-    // Non-generic: resolve directly from the registry. Overflow in dimension
-    // arithmetic is treated as "no declared type info" here — the value will
-    // render as a raw quantity, and dim_check would have already flagged the
-    // overflow as a real error during compilation.
-    registry
-        .dimensions
-        .resolve_type_expr(field.type_ann())
-        .ok()
-        .flatten()
-        .map(DeclaredType::Quantity)
-}
-
-fn resolve_field_dimension_arg(
-    arg: &graphcal_compiler::syntax::ast::GenericArg<graphcal_compiler::syntax::phase::Desugared>,
-    generic_sub: &HashMap<&str, DeclaredType>,
-    registry: &Registry,
-) -> Option<graphcal_compiler::dimension::Dimension> {
-    use graphcal_compiler::syntax::ast::GenericArg;
-    match arg {
-        GenericArg::Type(type_expr) => resolve_field_dimension(type_expr, generic_sub, registry),
-        GenericArg::Ambiguous(ambiguous) => {
-            resolve_ambiguous_field_dimension(ambiguous, generic_sub, registry)
-        }
-        GenericArg::Index(_) | GenericArg::Nat(_) => None,
-    }
-}
-
-fn resolve_ambiguous_field_dimension(
-    arg: &graphcal_compiler::syntax::ast::AmbiguousGenericArg,
-    generic_sub: &HashMap<&str, DeclaredType>,
-    registry: &Registry,
-) -> Option<graphcal_compiler::dimension::Dimension> {
-    use graphcal_compiler::syntax::ast::AmbiguousGenericArg;
-    match arg {
-        AmbiguousGenericArg::Name(name) => {
-            field_dimension_name(name.name.as_str(), generic_sub, registry)
-        }
-        AmbiguousGenericArg::Mul(operands, _) => {
-            let mut operands = operands.iter();
-            let first = resolve_ambiguous_field_dimension(operands.next()?, generic_sub, registry)?;
-            operands.try_fold(first, |product, operand| {
-                product
-                    .checked_mul(&resolve_ambiguous_field_dimension(
-                        operand,
-                        generic_sub,
-                        registry,
-                    )?)
-                    .ok()
-            })
-        }
-    }
-}
-
-fn resolve_field_dimension(
-    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
-    generic_sub: &HashMap<&str, DeclaredType>,
-    registry: &Registry,
-) -> Option<graphcal_compiler::dimension::Dimension> {
-    use graphcal_compiler::desugar::desugared_ast::{MulDivOp, TypeExprKind};
-    match &type_expr.kind {
-        TypeExprKind::Dimensionless => {
-            Some(graphcal_compiler::dimension::Dimension::dimensionless())
-        }
-        TypeExprKind::DimExpr(dim_expr) => dim_expr.terms.iter().try_fold(
-            graphcal_compiler::dimension::Dimension::dimensionless(),
-            |acc, item| {
-                let name = item.term.name.value.leaf().as_str();
-                let dimension = field_dimension_name(name, generic_sub, registry)?;
-                let powered = dimension
-                    .pow(
-                        item.term
-                            .power
-                            .unwrap_or(graphcal_compiler::dimension::Rational::ONE),
-                    )
-                    .ok()?;
-                match item.op {
-                    MulDivOp::Mul => acc.checked_mul(&powered).ok(),
-                    MulDivOp::Div => acc.checked_div(&powered).ok(),
-                }
-            },
-        ),
-        TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime
-        | TypeExprKind::DatetimeApplication { .. }
-        | TypeExprKind::ComplexApplication { .. }
-        | TypeExprKind::KeyApplication { .. }
-        | TypeExprKind::Indexed { .. }
-        | TypeExprKind::TypeApplication { .. } => None,
-    }
-}
-
-fn field_dimension_name(
-    name: &str,
-    generic_sub: &HashMap<&str, DeclaredType>,
-    registry: &Registry,
-) -> Option<graphcal_compiler::dimension::Dimension> {
-    generic_sub
-        .get(name)
-        .and_then(|declared| match declared {
-            DeclaredType::Quantity(dimension) => Some(dimension.clone()),
-            _ => None,
-        })
-        .or_else(|| registry.dimensions.get_dimension(name).cloned())
-}
-
-// ---------------------------------------------------------------------------
-// Public API functions
-// ---------------------------------------------------------------------------
-
-/// Compile a loaded project into the reusable checked-program boundary.
-///
-/// # Errors
-///
-/// Returns a compile diagnostic when any project module is invalid.
-pub fn check_project(
-    project: &crate::loader::LoadedProject,
-) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_fns(project, &crate::host_fns::demo_registry())
-}
-
-/// Check a project with embedder-provided extern implementations and metadata.
-///
-/// # Errors
-///
-/// Returns a compile or plugin-signature diagnostic.
-pub fn check_project_with_host_fns(
-    project: &crate::loader::LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_metadata(project, &host_fns.metadata())
-}
-
-/// Check a project using non-callable extern signature metadata.
-///
-/// # Errors
-///
-/// Returns a compile or plugin-signature diagnostic.
-pub fn check_project_with_host_metadata(
-    project: &crate::loader::LoadedProject,
-    host_metadata: &crate::host_fns::HostFunctionMetadata,
-) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_metadata_and_cancellation(
-        project,
-        host_metadata,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-/// Check a project once with cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a compile, plugin-signature, or cancellation diagnostic.
-pub fn check_project_with_host_fns_and_cancellation(
-    project: &crate::loader::LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_metadata_and_cancellation(project, &host_fns.metadata(), cancellation)
-}
-
-/// Check a project with non-callable metadata and cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a compile, plugin-signature, or cancellation diagnostic.
-pub fn check_project_with_host_metadata_and_cancellation(
-    project: &crate::loader::LoadedProject,
-    host_metadata: &crate::host_fns::HostFunctionMetadata,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProject, CompileError> {
-    ProjectCompiler::with_cancellation(project, host_metadata, cancellation)?.check()
-}
-
-/// Test-only projection of a fully checked project into its TIR.
-#[cfg(test)]
-pub fn compile_to_tir_from_project(
-    project: &crate::loader::LoadedProject,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    check_project(project).map(|checked| checked.compiled.tir)
-}
-
 /// Prepare a loaded project once for repeated typed evaluation.
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] for loading-independent compilation, type, plan,
-/// plugin, or cancellation failures.
+/// Returns a [`CompileError`] for compilation, type, plan, plugin, or
+/// cancellation failures.
 pub fn prepare_from_project(
     project: &crate::loader::LoadedProject,
 ) -> Result<PreparedProject, CompileError> {
@@ -893,6 +35,10 @@ pub fn prepare_from_project(
 }
 
 /// Prepare with an embedder-supplied host-function registry.
+///
+/// # Errors
+///
+/// Returns a compile, plan, interface, or plugin diagnostic.
 pub fn prepare_from_project_with_host_fns(
     project: &crate::loader::LoadedProject,
     host_fns: &crate::host_fns::HostFunctionRegistry,
@@ -905,6 +51,10 @@ pub fn prepare_from_project_with_host_fns(
 }
 
 /// Prepare with host functions and cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a compile, plan, interface, plugin, or cancellation diagnostic.
 pub fn prepare_from_project_with_host_fns_and_cancellation(
     project: &crate::loader::LoadedProject,
     host_fns: &crate::host_fns::HostFunctionRegistry,
@@ -914,22 +64,22 @@ pub fn prepare_from_project_with_host_fns_and_cancellation(
         .prepare_with_host_fns_and_cancellation(host_fns, cancellation)
 }
 
-/// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
+/// Compile and evaluate a loaded project.
 ///
-/// Compiles every module to a pure artifact in topological order, prepares the
-/// checked root once, and evaluates only the root's explicit runtime instances.
-/// Imports never create hidden default instances.
+/// Imports remain compile-time-only; runtime work covers the entry DAG and
+/// explicit include/call instances.
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] if any pipeline stage fails.
+/// Returns a [`CompileError`] if any checking, preparation, binding, or
+/// evaluation stage fails.
 #[expect(
     clippy::implicit_hasher,
-    reason = "public API accepts HashMap without requiring specific hasher"
+    reason = "public API accepts HashMap without requiring a specific hasher"
 )]
 pub fn compile_and_eval_from_project(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, Expr>,
 ) -> Result<EvalResult, CompileError> {
     compile_and_eval_from_project_with_cancellation(
         project,
@@ -942,19 +92,16 @@ pub fn compile_and_eval_from_project(
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] for invalid source, evaluation failure, or
-/// cancellation.
+/// Returns a compile, binding, evaluation, or cancellation diagnostic.
 #[expect(
     clippy::implicit_hasher,
-    reason = "public API accepts HashMap without requiring specific hasher"
+    reason = "public API accepts HashMap without requiring a specific hasher"
 )]
 pub fn compile_and_eval_from_project_with_cancellation(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, Expr>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalResult, CompileError> {
-    // The built-in demo registry is the standard embedder injection for
-    // runtime host calls (see `crate::host_fns`).
     compile_and_eval_from_project_with_host_fns_and_cancellation(
         project,
         overrides,
@@ -963,24 +110,18 @@ pub fn compile_and_eval_from_project_with_cancellation(
     )
 }
 
-/// Like [`compile_and_eval_from_project`], with an embedder-supplied host
-/// function registry backing extern (plugin) calls.
-///
-/// Every extern function declared by an `import plugin` block must have a
-/// registry entry; a missing entry is a load-time
-/// [`MissingHostFunction`](graphcal_compiler::registry::error::GraphcalError::MissingHostFunction)
-/// diagnostic.
+/// Compile and evaluate with an embedder-supplied host-function registry.
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] if any pipeline stage fails.
+/// Returns a compile, plugin, binding, or evaluation diagnostic.
 #[expect(
     clippy::implicit_hasher,
-    reason = "public API accepts HashMap without requiring specific hasher"
+    reason = "public API accepts HashMap without requiring a specific hasher"
 )]
 pub fn compile_and_eval_from_project_with_host_fns(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, Expr>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<EvalResult, CompileError> {
     compile_and_eval_from_project_with_host_fns_and_cancellation(
@@ -991,20 +132,18 @@ pub fn compile_and_eval_from_project_with_host_fns(
     )
 }
 
-/// Compile and evaluate with embedder host functions and cooperative
-/// cancellation.
+/// Compile and evaluate with host functions and cooperative cancellation.
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] for invalid source, evaluation failure, or
-/// cancellation.
+/// Returns a compile, plugin, binding, evaluation, or cancellation diagnostic.
 #[expect(
     clippy::implicit_hasher,
-    reason = "public API accepts HashMap without requiring specific hasher"
+    reason = "public API accepts HashMap without requiring a specific hasher"
 )]
 pub fn compile_and_eval_from_project_with_host_fns_and_cancellation(
     project: &crate::loader::LoadedProject,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, Expr>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalResult, CompileError> {
@@ -1019,54 +158,23 @@ pub fn compile_and_eval_from_project_with_host_fns_and_cancellation(
     prepared.evaluate_with_cancellation(&row, cancellation)
 }
 
-/// Full pipeline for multi-file projects with parameter overrides.
+/// Load, compile, and evaluate a multi-file project.
 ///
-/// Loads every module reachable from `root_path`, checks imports and includes,
-/// and evaluates the root's explicit runtime graph.
-///
-/// All filesystem access goes through the provided [`graphcal_io::FileSystemReader`].
+/// All filesystem access goes through the supplied reader.
 ///
 /// # Errors
 ///
-/// Returns a [`CompileError`] if loading, parsing, resolution, or evaluation fails.
+/// Returns a loading, parsing, checking, or evaluation diagnostic.
 #[expect(
     clippy::implicit_hasher,
-    reason = "public API accepts HashMap without requiring specific hasher"
+    reason = "public API accepts HashMap without requiring a specific hasher"
 )]
 pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
-    overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    overrides: &HashMap<DeclName, Expr>,
     project_root: Option<&Path>,
     fs: &F,
 ) -> Result<EvalResult, CompileError> {
     let project = crate::loader::load_project(root_path, project_root, fs)?;
     compile_and_eval_from_project(&project, overrides)
-}
-
-/// Test-only convenience projection from source through [`CheckedProject`].
-#[cfg(test)]
-pub fn compile_to_tir(
-    source: &str,
-    name: &str,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    let project = crate::loader::LoadedProject::from_source(source, name)?;
-    compile_to_tir_from_project(&project)
-}
-
-/// Test-only convenience projection for a loaded multi-file project.
-#[cfg(test)]
-pub fn compile_to_tir_project<F: graphcal_io::FileSystemReader>(
-    root_path: &Path,
-    project_root: Option<&Path>,
-    fs: &F,
-) -> Result<
-    (
-        graphcal_compiler::tir::typed::TIR,
-        crate::loader::LoadedProject,
-    ),
-    CompileError,
-> {
-    let project = crate::loader::load_project(root_path, project_root, fs)?;
-    let tir = compile_to_tir_from_project(&project)?;
-    Ok((tir, project))
 }

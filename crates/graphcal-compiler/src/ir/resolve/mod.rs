@@ -18,8 +18,8 @@ use crate::registry::prelude::{
     PRELUDE_BUILTIN_TYPE_NAMES, PRELUDE_DIMENSION_NAMES, PRELUDE_UNIT_NAMES,
 };
 use crate::registry::resolve_types::{
-    ExternalDeclSurface, ResolvedAssertEntry, ResolvedConstEntry, ResolvedFigureEntry,
-    ResolvedLayerEntry, ResolvedNodeEntry, ResolvedParamEntry, ResolvedPlotEntry,
+    CollectedAssertEntry, CollectedConstEntry, CollectedFigureEntry, CollectedLayerEntry,
+    CollectedNodeEntry, CollectedParamEntry, CollectedPlotEntry, ExternalDeclSurface,
 };
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -27,11 +27,11 @@ use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
+pub(crate) use crate::registry::resolve_types::{CollectedFile, is_time_scale_name};
 pub use crate::registry::resolve_types::{
     DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
     ParsedExpectedFail,
 };
-pub(crate) use crate::registry::resolve_types::{ResolvedFile, is_time_scale_name};
 pub use crate::syntax::module_name::ScopedName;
 
 // Re-export items from submodules (crate-internal only).
@@ -253,13 +253,13 @@ fn check_value_namespace_collisions(
 
 /// Result of collecting local declarations from the AST.
 struct CollectedDeclarations {
-    consts: Vec<ResolvedConstEntry>,
-    params: Vec<ResolvedParamEntry>,
-    nodes: Vec<ResolvedNodeEntry>,
-    asserts: Vec<ResolvedAssertEntry>,
-    plots: Vec<ResolvedPlotEntry>,
-    figures: Vec<ResolvedFigureEntry>,
-    layers: Vec<ResolvedLayerEntry>,
+    consts: Vec<CollectedConstEntry>,
+    params: Vec<CollectedParamEntry>,
+    nodes: Vec<CollectedNodeEntry>,
+    asserts: Vec<CollectedAssertEntry>,
+    plots: Vec<CollectedPlotEntry>,
+    figures: Vec<CollectedFigureEntry>,
+    layers: Vec<CollectedLayerEntry>,
     source_order: Vec<(DeclName, DeclCategory)>,
     assert_names: HashSet<DeclName>,
     external_surface: ExternalDeclSurface,
@@ -466,47 +466,47 @@ fn collect_local_declarations(
             | DeclKind::Dag(_) => {}
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
             DeclKind::Assert(a) => {
-                asserts.push(ResolvedAssertEntry {
+                asserts.push(CollectedAssertEntry {
                     name: a.name.value.clone(),
                     body: a.body.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Plot(p) => {
-                plots.push(ResolvedPlotEntry {
+                plots.push(CollectedPlotEntry {
                     name: p.name.value.clone(),
                     decl: p.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Figure(f) => {
-                figures.push(ResolvedFigureEntry {
+                figures.push(CollectedFigureEntry {
                     name: f.name.value.clone(),
                     decl: f.clone(),
                 });
             }
             DeclKind::Layer(l) => {
-                layers.push(ResolvedLayerEntry {
+                layers.push(CollectedLayerEntry {
                     name: l.name.value.clone(),
                     decl: l.clone(),
                 });
             }
             DeclKind::Param(p) => {
-                params.push(ResolvedParamEntry {
+                params.push(CollectedParamEntry {
                     name: p.name.value.clone(),
                     default_expr: p.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::ConstNode(c) => {
-                consts.push(ResolvedConstEntry {
+                consts.push(CollectedConstEntry {
                     name: c.name.value.clone(),
                     expr: c.value.clone(),
                     span: decl.span,
                 });
             }
             DeclKind::Node(n) => {
-                nodes.push(ResolvedNodeEntry {
+                nodes.push(CollectedNodeEntry {
                     name: n.name.value.clone(),
                     expr: n.value.clone(),
                     span: decl.span,
@@ -1014,7 +1014,7 @@ pub(crate) struct ImportedNames {
 /// Returns a [`GraphcalError`] if duplicate names or invalid declaration
 /// shells are found.
 #[cfg(test)]
-fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<ResolvedFile, GraphcalError> {
+fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<CollectedFile, GraphcalError> {
     resolve_with_imports(file, src, &ImportedNames::default())
 }
 
@@ -1032,7 +1032,7 @@ pub(crate) fn resolve_with_imports(
     file: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
-) -> Result<ResolvedFile, GraphcalError> {
+) -> Result<CollectedFile, GraphcalError> {
     let mut names: HashMap<ScopedName, Span> = HashMap::new();
 
     // Pre-populate with imported names (they don't get duplicate-checked against
@@ -1062,40 +1062,40 @@ pub(crate) fn resolve_with_imports(
 
     // Prepend imported declarations so they appear before local ones in eval order.
     // Strip TypeExpr from imported tuples and convert to entry types.
-    let mut all_consts: Vec<ResolvedConstEntry> = imported
+    let mut all_consts: Vec<CollectedConstEntry> = imported
         .consts
         .iter()
-        .map(|(name, _, expr, span)| ResolvedConstEntry {
+        .map(|(name, _, expr, span)| CollectedConstEntry {
             name: name.clone(),
             expr: expr.clone(),
             span: *span,
         })
         .collect();
     all_consts.extend(local.consts);
-    let mut all_params: Vec<ResolvedParamEntry> = imported
+    let mut all_params: Vec<CollectedParamEntry> = imported
         .params
         .iter()
-        .map(|(name, _, expr, span)| ResolvedParamEntry {
+        .map(|(name, _, expr, span)| CollectedParamEntry {
             name: name.clone(),
             default_expr: Some(expr.clone()),
             span: *span,
         })
         .collect();
     all_params.extend(local.params);
-    let mut all_nodes: Vec<ResolvedNodeEntry> = imported
+    let mut all_nodes: Vec<CollectedNodeEntry> = imported
         .nodes
         .iter()
-        .map(|(name, _, expr, span)| ResolvedNodeEntry {
+        .map(|(name, _, expr, span)| CollectedNodeEntry {
             name: name.clone(),
             expr: expr.clone(),
             span: *span,
         })
         .collect();
     all_nodes.extend(local.nodes);
-    let mut all_asserts: Vec<ResolvedAssertEntry> = imported
+    let mut all_asserts: Vec<CollectedAssertEntry> = imported
         .asserts
         .iter()
-        .map(|(name, body, span)| ResolvedAssertEntry {
+        .map(|(name, body, span)| CollectedAssertEntry {
             name: name.clone(),
             body: body.clone(),
             span: *span,
@@ -1125,7 +1125,7 @@ pub(crate) fn resolve_with_imports(
     // Validate external signatures: exports and input ports must not reference private type-system items.
     validate_private_in_public(file, src, &local.external_surface)?;
 
-    Ok(ResolvedFile {
+    Ok(CollectedFile {
         consts: all_consts,
         params: all_params,
         nodes: all_nodes,
@@ -1157,7 +1157,7 @@ pub(crate) fn resolve_with_imported_values(
     file: &File,
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
-) -> Result<ResolvedFile, GraphcalError> {
+) -> Result<CollectedFile, GraphcalError> {
     let mut names: HashMap<ScopedName, Span> = HashMap::new();
 
     // Pre-populate with imported names. The scope here mixes typed imported
@@ -1196,7 +1196,7 @@ pub(crate) fn resolve_with_imported_values(
     // Validate external signatures: exports and input ports must not reference private type-system items.
     validate_private_in_public(file, src, &local.external_surface)?;
 
-    Ok(ResolvedFile {
+    Ok(CollectedFile {
         consts: local.consts,
         params: local.params,
         nodes: local.nodes,

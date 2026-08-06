@@ -1,7 +1,7 @@
 //! Import-surface classification for Graphcal files.
 //!
-//! This module is shared by the project pipeline and inline-DAG self-import
-//! preprocessing. Keeping it outside `eval::project` avoids a circular module
+//! This module is shared by the pure project compiler and inline-DAG self-import
+//! preprocessing. Keeping it outside `project_compiler` avoids a circular module
 //! dependency while preserving one source of truth for import namespace and
 //! visibility rules.
 

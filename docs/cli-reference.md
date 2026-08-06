@@ -597,7 +597,7 @@ graphcal format --check
 
 ## `graphcal check`
 
-Check `.gcl` files for type/dimension errors without evaluation. Performs parsing and type/dimension checking.
+Check `.gcl` files without runtime evaluation. This performs parsing, module and name resolution, type/dimension/policy validation, compile-time constant checks, and extern-signature verification. It does not evaluate ordinary nodes, assertions, dynamic unit scales, or callable host functions.
 
 ```bash
 graphcal check [PATHS]...
