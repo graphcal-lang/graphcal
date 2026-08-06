@@ -13,7 +13,7 @@ mod tests;
 pub(crate) mod types;
 
 pub use crate::project_compiler::{
-    CheckedProject, ProjectCompiler, check_project, check_project_with_host_fns,
+    CheckedProject, HirProject, ProjectCompiler, check_project, check_project_with_host_fns,
     check_project_with_host_fns_and_cancellation, check_project_with_host_metadata,
     check_project_with_host_metadata_and_cancellation,
 };

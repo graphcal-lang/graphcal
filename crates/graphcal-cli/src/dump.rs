@@ -11,7 +11,8 @@ use thiserror::Error;
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::parser::{ParseError, Parser};
 use graphcal_eval::eval::{
-    CompileError, ParameterBindingRow, PreparedProject, check_project_with_host_fns,
+    CompileError, ParameterBindingRow, PreparedProject, ProjectCompiler,
+    check_project_with_host_fns,
 };
 use graphcal_eval::loader::{build_rooted_filesystem, load_project};
 use graphcal_io::FileSystemReader;
@@ -35,6 +36,8 @@ pub enum DumpCommands {
     Desugared(FileArgs),
     /// Debug-print the loaded project and canonical module resolver
     Modules(FileArgs),
+    /// Debug-print the complete canonically resolved project
+    Hir(FileArgs),
     /// Debug-print the fully checked typed program
     Tir(FileArgs),
     /// Debug-print the prepared execution plan without runtime evaluation
@@ -137,6 +140,7 @@ pub fn run(command: DumpCommands) -> Result<DumpStatus, DumpError> {
         DumpCommands::Ast(args) => run_ast(&args),
         DumpCommands::Desugared(args) => run_desugared(&args),
         DumpCommands::Modules(args) => run_modules(&args),
+        DumpCommands::Hir(args) => run_hir(&args),
         DumpCommands::Tir(args) => run_tir(&args),
         DumpCommands::Plan(args) => run_plan(&args),
         DumpCommands::Runtime(args) => run_runtime(&args),
@@ -179,6 +183,14 @@ fn run_modules(args: &FileArgs) -> Result<DumpStatus, DumpError> {
         .build_module_resolver()
         .map_err(|source| DumpError::ModuleIndex { source })?;
     write_debug(&(project, resolver))?;
+    Ok(DumpStatus::Success)
+}
+
+fn run_hir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
+    let fs = build_rooted_filesystem(&args.file, args.root.as_deref());
+    let project = load_project(&args.file, args.root.as_deref(), &fs)?;
+    let hir = ProjectCompiler::new(&project)?.lower()?;
+    write_debug(&hir)?;
     Ok(DumpStatus::Success)
 }
 

@@ -222,12 +222,14 @@ pass model; `eval/project/prepare.rs` is the only transition that consumes
 - [ ] `crates/graphcal-eval/src/inline_dag.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/template.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/model.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/hir_project.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/recursion.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/imports.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/lowering.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/checking.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/pipeline.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/session.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/mod.rs`

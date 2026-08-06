@@ -11,15 +11,12 @@ use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, File};
-use graphcal_compiler::ir::imported_binding::ImportedBinding;
+use graphcal_compiler::ir::imported_binding::HirImportedBinding;
 use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
-use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::tir::typed::resolved_to_declared_type;
 
 use crate::import_surface::{
     ImportItemPresence, file_import_item_presence, import_item_not_found_error,
@@ -30,21 +27,13 @@ use crate::import_surface::{
 /// input ports as distinct source roles, though both are rejected as imports.
 #[derive(Debug, Clone, Default)]
 pub struct ParentValueDecls {
-    consts: HashMap<DeclName, DeclaredType>,
+    consts: HashSet<DeclName>,
     runtime: HashSet<DeclName>,
 }
 
 impl ParentValueDecls {
-    /// Borrow the canonical declared type of one importable parent constant.
-    #[must_use]
-    pub(crate) fn const_declared_type(&self, name: &DeclName) -> Option<&DeclaredType> {
-        self.consts.get(name)
-    }
-}
-
-impl ParentValueDecls {
-    fn external_const_type(&self, name: &str) -> Option<&DeclaredType> {
-        self.consts.get(name)
+    fn is_external_const(&self, name: &str) -> bool {
+        self.consts.contains(name)
     }
 
     fn is_external_runtime(&self, name: &str) -> bool {
@@ -63,8 +52,8 @@ impl ParentValueDecls {
 /// - Marked `type`, `dim`, `unit`, and `index` items are visibility-checked in
 ///   exactly that namespace. A type item does not import a same-named constructor.
 /// - Bare term `const` items are added to `ImportedValueNames::const_names` and
-///   receive one canonical imported binding carrying the parent's declaration
-///   identity and declared type. Evaluation may fill its deferred value later.
+///   receive one canonical HIR binding to the parent's declaration. Static
+///   checking attaches the resolved type and any available value later.
 /// - Bare term `param` / non-const `node` items are rejected with
 ///   `ImportRuntimeItem` — runtime values must be passed via the dag's own
 ///   params.
@@ -96,7 +85,7 @@ pub fn preprocess_dag_body_self_imports(
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {
     let mut names = ImportedValueNames::default();
-    let mut bindings: HashMap<ScopedName, ImportedBinding> = HashMap::new();
+    let mut bindings: HashMap<ScopedName, HirImportedBinding> = HashMap::new();
     let mut stripped_body: Vec<Declaration> = Vec::with_capacity(body.len());
 
     for decl in body {
@@ -158,32 +147,32 @@ pub fn preprocess_dag_body_self_imports(
                             // pipeline. A same-named constructor is a separate
                             // bare term item.
                         }
-                        ImportItemNamespace::Term => {
-                            match parent_values.external_const_type(orig_name.as_str()) {
-                                Some(dt) => {
-                                    let scoped = ScopedName::local(local_name);
-                                    names.const_names.push((scoped.clone(), span));
-                                    bindings.insert(
-                                        scoped,
-                                        ImportedBinding::deferred(
-                                            graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
-                                                parent_dag_id.clone(),
-                                                DeclName::from_atom(orig_name.clone()),
-                                            ),
-                                            dt.clone(),
+                        ImportItemNamespace::Term => match (
+                            parent_values.is_external_const(orig_name.as_str()),
+                            parent_values.is_external_runtime(orig_name.as_str()),
+                        ) {
+                            (true, _) => {
+                                let scoped = ScopedName::local(local_name);
+                                names.const_names.push((scoped.clone(), span));
+                                bindings.insert(
+                                    scoped,
+                                    HirImportedBinding::new(
+                                        graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                                            parent_dag_id.clone(),
+                                            DeclName::from_atom(orig_name.clone()),
                                         ),
-                                    );
-                                }
-                                None if parent_values.is_external_runtime(orig_name.as_str()) => {
-                                    return Err(GraphcalError::ImportRuntimeItem {
-                                        name: orig_name.to_string(),
-                                        src: src.clone(),
-                                        span: span.into(),
-                                    });
-                                }
-                                None => {}
+                                    ),
+                                );
                             }
-                        }
+                            (false, true) => {
+                                return Err(GraphcalError::ImportRuntimeItem {
+                                    name: orig_name.to_string(),
+                                    src: src.clone(),
+                                    span: span.into(),
+                                });
+                            }
+                            (false, false) => {}
+                        },
                     }
                 }
             }
@@ -200,26 +189,15 @@ pub fn preprocess_dag_body_self_imports(
     })
 }
 
-/// Classify the value-kind decls in a file's AST for use as the
-/// `parent_consts` / `parent_runtime_names` arguments of
-/// [`preprocess_dag_body_self_imports`]. Pairs with
-/// [`classify_value_decls_in_dag`] — same shape, different input source.
-///
-/// Used when an inline template is first elaborated before its parent file is
-/// fully checked. The AST identifies declaration roles, while const types start
-/// as `Dimensionless` placeholders. Canonical parent-interface types refine the
-/// cached template before standalone checking, and concrete cross-file constant
-/// values are supplied only to an instance-local clone.
+/// Classify parent declarations by the source roles visible to an inline DAG.
 pub fn classify_value_decls_in_ast(
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> ParentValueDecls {
-    let placeholder =
-        || DeclaredType::Quantity(graphcal_compiler::dimension::Dimension::dimensionless());
     let mut values = ParentValueDecls::default();
     for decl in &ast.declarations {
         match &decl.kind {
             DeclKind::ConstNode(c) if c.visibility.is_public() => {
-                values.consts.insert(c.name.value.clone(), placeholder());
+                values.consts.insert(c.name.value.clone());
             }
             DeclKind::Param(p) => {
                 // Params are named input ports across import/include boundaries,
@@ -234,48 +212,4 @@ pub fn classify_value_decls_in_ast(
         }
     }
     values
-}
-
-/// Classify the value-kind declarations of one type-resolved DAG into the
-/// same `(consts, runtime_names)` shape returned by
-/// [`classify_value_decls_in_ast`]. Pairs with that helper — TIR-stage
-/// callers (where the parent file is already type-resolved) get real
-/// declared types from `resolved_decl_types` instead of the AST-side
-/// `Dimensionless` placeholders.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if any resolved const type cannot be lowered
-/// back to a [`DeclaredType`].
-pub fn classify_value_decls_in_dag(
-    root: &graphcal_compiler::tir::typed::DagTIR,
-    parent_external_surface: &ExternalDeclSurface,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ParentValueDecls, GraphcalError> {
-    let mut values = ParentValueDecls::default();
-    for entry in root.consts() {
-        let name = entry.name.member().clone();
-        if !parent_external_surface.is_explicit_export(&name) {
-            continue;
-        }
-        let Some(resolved) = root.resolved_decl_types().get(&entry.name) else {
-            continue;
-        };
-        values
-            .consts
-            .insert(name, resolved_to_declared_type(resolved, src)?);
-    }
-    for entry in root.params() {
-        let name = entry.name.member().clone();
-        if parent_external_surface.is_input_port(&name) {
-            values.runtime.insert(name);
-        }
-    }
-    for entry in root.nodes() {
-        let name = entry.name.member().clone();
-        if parent_external_surface.is_explicit_export(&name) {
-            values.runtime.insert(name);
-        }
-    }
-    Ok(values)
 }

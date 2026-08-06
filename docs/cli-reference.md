@@ -638,8 +638,8 @@ graphcal check my_project/
     `graphcal dump` pretty-prints internal Rust data structures with `Debug`.
     The command defines no stable schema, and output may change after any
     implementation refactor. It may include complete source text, absolute
-    paths, and loaded plugin bytes; inspect it before sharing or attaching it to
-    a public issue.
+    paths, and runtime values; inspect it before sharing or attaching it to a
+    public issue. Raw loaded-plugin byte buffers are always redacted.
 
 Debug-print one compiler or evaluator artifact:
 
@@ -654,6 +654,7 @@ graphcal dump <STAGE> <FILE> [OPTIONS]
 | `ast` | Parser-produced `File<Raw>` (`raw-ast` is an alias) |
 | `desugared` | `File<Desugared>` after parser sugar removal (`desugared-ast` is an alias) |
 | `modules` | Raw `LoadedProject` together with its canonical `ModuleResolver` |
+| `hir` | Complete `HirProject` after elaboration and canonical reference resolution, before static checking |
 | `tir` | Fully checked raw `TIR` |
 | `plan` | Raw `ExecPlan` produced by runtime preparation |
 | `runtime` | One raw `RuntimeEvaluation`, including SI values and contained errors |
@@ -661,13 +662,17 @@ graphcal dump <STAGE> <FILE> [OPTIONS]
 
 There is intentionally no `all` stage, JSON format, filtering language, record
 envelope, or compatibility guarantee. Run the specific stage needed for a
-debugging session. HIR is also absent because the pipeline does not currently
-retain one complete pre-check whole-project HIR artifact.
+debugging session. `HirProject` is an actual compiler continuation rather than
+a dump-only projection: it owns every file-root and inline-DAG HIR module, and
+static checking consumes it to produce `CheckedProject`.
 
 `source`, `tokens`, `ast`, and `desugared` never follow imports. `modules` stops
-before HIR lowering. `tir` and `plan` do not evaluate ordinary runtime
-parameters, nodes, assertions, dynamic unit scales, or callable host functions.
-Only `runtime` and `result` perform ordinary runtime evaluation.
+before HIR lowering. `hir` resolves the complete project but does not construct
+TIR, check expression types/dimensions, evaluate constants, or verify host
+signatures. Consequently, `hir` remains available when a later static check
+fails. `tir` and `plan` do not evaluate ordinary runtime parameters, nodes,
+assertions, dynamic unit scales, or callable host functions. Only `runtime` and
+`result` perform ordinary runtime evaluation.
 
 Examples:
 
@@ -675,6 +680,7 @@ Examples:
 graphcal dump tokens model.gcl
 graphcal dump ast model.gcl
 graphcal dump modules src/mission/main.gcl --root .
+graphcal dump hir model.gcl
 graphcal dump tir model.gcl
 graphcal dump plan model.gcl
 graphcal dump runtime model.gcl --set 'mass=1200 kg'

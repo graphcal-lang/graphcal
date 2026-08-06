@@ -6,8 +6,8 @@ use std::sync::Arc;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{
     AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
-    DomainBound, ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl,
-    ParamDecl, PlotDecl, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnitDecl, UnitExpr,
+    ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
+    PlotDecl, TypeDecl, TypeDeclBody, TypeExprKind, UnitDecl, UnitExpr,
 };
 use graphcal_compiler::hir;
 use graphcal_compiler::syntax::attribute::AttributeName;
@@ -24,10 +24,10 @@ use graphcal_compiler::syntax::type_name::{
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
 use graphcal_compiler::registry::builtins::builtin_functions;
-use graphcal_compiler::registry::format::format_unit_expr_with_config;
+use graphcal_compiler::registry::format::format_unit_terms_with_config;
 use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
 use graphcal_compiler::registry::types::{IndexKind, Registry, UnitScale};
-use graphcal_compiler::tir::typed::{ResolvedIndex, ResolvedTypeExpr, TIR};
+use graphcal_compiler::tir::typed::{ResolvedDomainBound, ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
 
@@ -2096,21 +2096,24 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 /// Format a domain bound expression as a human-readable string.
 ///
 /// Handles the common cases: number literals, unit-annotated literals, and negated forms.
-fn format_bound_expr(expr: &graphcal_compiler::desugar::desugared_ast::Expr) -> String {
+fn format_bound_expr(expr: &hir::Expr) -> String {
     match &expr.kind {
-        ExprKind::Number(v) => format_number(*v),
-        ExprKind::Integer(v) => v.to_string(),
-        ExprKind::UnitLiteral { value, unit } => {
-            let num = format_number(*value);
-            let unit_str = format_unit_expr_with_config(unit, true);
-            format!("{num} {unit_str}")
+        hir::ExprKind::Number(value) => format_number(*value),
+        hir::ExprKind::Integer(value) => value.to_string(),
+        hir::ExprKind::UnitLiteral { value, unit } => {
+            let number = format_number(*value);
+            let unit = format_unit_terms_with_config(
+                unit.terms
+                    .iter()
+                    .map(|item| (item.op, item.name.value.to_string(), item.power)),
+                true,
+            );
+            format!("{number} {unit}")
         }
-        ExprKind::UnaryOp {
-            op: graphcal_compiler::desugar::desugared_ast::UnaryOp::Neg,
+        hir::ExprKind::UnaryOp {
+            op: graphcal_compiler::syntax::ast::UnaryOp::Neg,
             operand,
-        } => {
-            format!("-{}", format_bound_expr(operand))
-        }
+        } => format!("-{}", format_bound_expr(operand)),
         // For complex expressions, fall back to "..."
         _ => "...".to_string(),
     }
@@ -2119,7 +2122,7 @@ fn format_bound_expr(expr: &graphcal_compiler::desugar::desugared_ast::Expr) -> 
 /// Format a constraint clause from domain bounds.
 ///
 /// Returns a string like `(min: 100 kg, max: 2000 kg)` or an empty string if no constraints.
-fn format_constraints(constraints: &[DomainBound]) -> String {
+fn format_constraints(constraints: &[ResolvedDomainBound]) -> String {
     if constraints.is_empty() {
         return String::new();
     }
@@ -2136,7 +2139,7 @@ fn format_constraints(constraints: &[DomainBound]) -> String {
 /// between the base type and the index suffix: `Velocity(min: 0 m/s)[Maneuver]`.
 fn format_type_with_constraints(
     resolved: &ResolvedTypeExpr,
-    constraints: &[DomainBound],
+    constraints: &[ResolvedDomainBound],
     registry: &Registry,
 ) -> String {
     let constraint_str = format_constraints(constraints);
@@ -2157,18 +2160,6 @@ fn format_type_with_constraints(
     }
 }
 
-/// Extract domain constraints from a `TypeExpr`, looking through `Indexed` wrappers.
-fn extract_constraints(type_expr: &TypeExpr) -> &[DomainBound] {
-    if !type_expr.constraints.is_empty() {
-        return &type_expr.constraints;
-    }
-    // For indexed types, the constraints are on the base type
-    if let TypeExprKind::Indexed { base, .. } = &type_expr.kind {
-        return &base.constraints;
-    }
-    &[]
-}
-
 /// Enrich a symbol table with type information from a TIR.
 ///
 /// `dag_id` selects which DAG's resolved declaration types to use — the
@@ -2185,33 +2176,13 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
     let registry = tir.registry();
 
     if let Some(dag) = tir.dag_registry().get(dag_id) {
-        // Build a map from declaration name to its AST TypeExpr constraints.
-        let mut decl_constraints: HashMap<String, &[DomainBound]> = HashMap::new();
-        for e in dag.params() {
-            let constraints = extract_constraints(&e.type_ann);
-            if !constraints.is_empty() {
-                decl_constraints.insert(e.name.to_string(), constraints);
-            }
-        }
-        for e in dag.nodes() {
-            let constraints = extract_constraints(&e.type_ann);
-            if !constraints.is_empty() {
-                decl_constraints.insert(e.name.to_string(), constraints);
-            }
-        }
-        for e in dag.consts() {
-            let constraints = extract_constraints(&e.type_ann);
-            if !constraints.is_empty() {
-                decl_constraints.insert(e.name.to_string(), constraints);
-            }
-        }
-
         // Enrich param/node/const declarations with resolved types + constraints.
         for (name, resolved_type) in dag.resolved_decl_types() {
             let name_str = name.to_string();
-            let key = SymbolKey::TopLevel(name_str.clone());
+            let key = SymbolKey::TopLevel(name_str);
             if let Some(def) = table.definitions.get_mut(&key) {
-                let type_desc = decl_constraints.get(&name_str).map_or_else(
+                let semantic_key = dag.resolved_decl_key_for_local(name);
+                let type_desc = dag.semantic().domain_bounds.get(&semantic_key).map_or_else(
                     || resolved_type.format(registry),
                     |constraints| {
                         format_type_with_constraints(resolved_type, constraints, registry)

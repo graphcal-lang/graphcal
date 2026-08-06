@@ -1,14 +1,33 @@
-//! Canonical imported value bindings at the IR/TIR boundary.
+//! Canonical imported value bindings at the HIR/TIR boundary.
 //!
-//! A source-visible import spelling is only a lexical key. Its semantic target,
-//! declared type, and optional pre-evaluated value must travel together so an
-//! include merge cannot independently collide or mix those facts.
+//! HIR records only a lexical binding's canonical target. Checked type and
+//! optional compile-time value facts are attached when HIR becomes TIR.
 
 use crate::registry::declared_type::DeclaredType;
 use crate::registry::runtime_value::RuntimeValue;
 use crate::syntax::decl_name::ResolvedDeclName;
 
-/// Semantic facts attached to one source-visible imported value binding.
+/// Canonical target of one source-visible import at the HIR boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HirImportedBinding {
+    target: ResolvedDeclName,
+}
+
+impl HirImportedBinding {
+    /// Record the canonical declaration selected by a lexical import.
+    #[must_use]
+    pub const fn new(target: ResolvedDeclName) -> Self {
+        Self { target }
+    }
+
+    /// Canonical declaration selected by this lexical binding.
+    #[must_use]
+    pub const fn target(&self) -> &ResolvedDeclName {
+        &self.target
+    }
+}
+
+/// Checked facts attached to one source-visible imported value binding.
 ///
 /// The containing map is keyed by the lexical [`ScopedName`](crate::syntax::module_name::ScopedName)
 /// used in the current DAG. `target` is the canonical declaration identity and

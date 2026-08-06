@@ -10,7 +10,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use graphcal_compiler::desugar::desugared_ast::{Expr, ModulePath};
-use graphcal_compiler::ir::imported_binding::ImportedBinding;
+use graphcal_compiler::ir::imported_binding::{HirImportedBinding, ImportedBinding};
 use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -30,7 +30,9 @@ pub(in crate::project_compiler) use crate::import_surface::{
     file_exposes_import_item, file_has_import_item, file_import_item_presence,
 };
 
+mod checking;
 mod generic_leakage;
+mod hir_project;
 mod imports;
 mod lowering;
 mod model;
@@ -41,11 +43,12 @@ mod registry_merge;
 mod session;
 mod template;
 
+pub use hir_project::HirProject;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
-    DepToImporter, DynamicUnitBoundary, FrontendRegistryImport, ImportAlias, ImportContext,
-    IncludeInstanceRequest, IndexBindings, ModuleArtifact, ProjectModuleBinding,
-    ProjectSemanticContext, SelectiveImportResult,
+    DepToImporter, DynamicUnitBoundary, FrontendRegistryImport, HirFile, HirModuleArtifact,
+    ImportAlias, ImportContext, IncludeInstanceRequest, IndexBindings, ModuleArtifact,
+    ProjectModuleBinding, ProjectSemanticContext,
 };
 use qualified_refs::rewrite_qualified_refs_in_compilation_body;
 pub(crate) use session::CheckedProjectRuntimeParts;

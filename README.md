@@ -75,6 +75,9 @@ graphcal eval analysis.gcl --plot browser
 # Canonically format source (with a 100-column target for breakable layouts)
 graphcal format rocket.gcl
 
+# Debug-print the canonically resolved project before static checking (experimental)
+graphcal dump hir rocket.gcl
+
 # Debug-print the internal execution plan without running ordinary nodes (experimental)
 graphcal dump plan rocket.gcl
 

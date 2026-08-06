@@ -14,25 +14,20 @@ use super::{CompiledFile, lowering, pipeline};
 /// One whole-project compilation session.
 pub struct ProjectCompiler<'project> {
     project: &'project LoadedProject,
-    host_metadata: crate::host_fns::HostFunctionMetadata,
     cancellation: graphcal_compiler::cancellation::CancellationToken,
     module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
 }
 
 impl<'project> ProjectCompiler<'project> {
-    /// Start a compilation session with embedder-supplied host metadata.
+    /// Start a compilation session for one loaded project.
     ///
     /// # Errors
     ///
     /// Returns a module-resolution diagnostic when the loaded project cannot
     /// form one canonical project scope.
-    pub fn new(
-        project: &'project LoadedProject,
-        host_metadata: &crate::host_fns::HostFunctionMetadata,
-    ) -> Result<Self, CompileError> {
+    pub fn new(project: &'project LoadedProject) -> Result<Self, CompileError> {
         Self::with_cancellation(
             project,
-            host_metadata,
             &graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
     }
@@ -44,7 +39,6 @@ impl<'project> ProjectCompiler<'project> {
     /// Returns a module-resolution diagnostic or cancellation.
     pub fn with_cancellation(
         project: &'project LoadedProject,
-        host_metadata: &crate::host_fns::HostFunctionMetadata,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, CompileError> {
         cancellation.checkpoint()?;
@@ -55,24 +49,47 @@ impl<'project> ProjectCompiler<'project> {
             .map_err(|error| lowering::module_resolve_compile_error(error, root_source))?;
         Ok(Self {
             project,
-            host_metadata: host_metadata.clone(),
             cancellation: cancellation.clone(),
             module_resolver,
         })
     }
 
-    /// Compile every module once and return the reusable checked continuation.
+    /// Lower every module exactly once into the authoritative HIR boundary.
     ///
     /// # Errors
     ///
-    /// Returns a compile diagnostic or cancellation.
-    pub fn check(self) -> Result<CheckedProject, CompileError> {
-        pipeline::check_project_perfile(
-            self.project,
-            &self.host_metadata,
-            self.module_resolver,
-            &self.cancellation,
-        )
+    /// Returns a loading, elaboration, canonical-resolution, or cancellation
+    /// diagnostic. Static type/dimension checks and host verification are not
+    /// performed.
+    pub fn lower(self) -> Result<super::HirProject<'project>, CompileError> {
+        pipeline::lower_project_perfile(self.project, self.module_resolver, &self.cancellation)
+    }
+}
+
+impl super::HirProject<'_> {
+    /// Consume HIR and perform every mandatory static check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a type, dimension, policy, constant, host-signature, or
+    /// cancellation diagnostic.
+    pub fn check_with_host_metadata(
+        self,
+        host_metadata: &crate::host_fns::HostFunctionMetadata,
+    ) -> Result<CheckedProject, CompileError> {
+        pipeline::check_hir_project(self, host_metadata)
+    }
+
+    /// Consume HIR and check it against one executable host registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a static-check or host-signature diagnostic.
+    pub fn check_with_host_fns(
+        self,
+        host_fns: &crate::host_fns::HostFunctionRegistry,
+    ) -> Result<CheckedProject, CompileError> {
+        self.check_with_host_metadata(&host_fns.metadata())
     }
 }
 
@@ -198,7 +215,9 @@ pub fn check_project_with_host_metadata_and_cancellation(
     host_metadata: &crate::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CheckedProject, CompileError> {
-    ProjectCompiler::with_cancellation(project, host_metadata, cancellation)?.check()
+    ProjectCompiler::with_cancellation(project, cancellation)?
+        .lower()?
+        .check_with_host_metadata(host_metadata)
 }
 
 /// Test-only projection of a fully checked project into its TIR.

@@ -1142,12 +1142,12 @@ pub(crate) fn resolve_with_imports(
     })
 }
 
-/// Resolve names with pre-evaluated imported value names in scope.
+/// Resolve names with imported value declarations in lexical scope.
 ///
 /// Unlike [`resolve_with_imports`], this does **not** inject imported expressions
-/// into the DAG. Imported names are only used for scope checking (so that
-/// references to imported values are recognized as valid). The actual values
-/// are injected later via the execution plan.
+/// into the DAG. Imported names are used only for scope checking. HIR lowering
+/// attaches canonical targets, and static checking later attaches declared
+/// types and any available compile-time values.
 ///
 /// # Errors
 ///

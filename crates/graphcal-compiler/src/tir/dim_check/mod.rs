@@ -1016,6 +1016,45 @@ pub enum NominalOverrideIdentity {
 /// uses them.
 pub type OverrideDependencySummary = HashMap<ResolvedDeclName, HashSet<NominalOverrideIdentity>>;
 
+/// Refine include override obligations from independently checked source modules.
+///
+/// HIR records each possible nominal override before substituting an include
+/// instance. Once a source module has been checked, its canonical dependency
+/// summary distinguishes a true dependency on the replaced nominal from an
+/// unrelated use of the replacement type or index itself.
+pub fn reconcile_external_override_dependencies<S>(
+    tir: &mut crate::tir::typed::TIR,
+    summary: &OverrideDependencySummary,
+    complete_owners: &HashSet<crate::dag_id::DagId, S>,
+) where
+    S: std::hash::BuildHasher,
+{
+    tir.root_mut()
+        .semantic
+        .override_reconciliations
+        .retain(|_, reconciliations| {
+            reconciliations.retain_mut(|reconciliation| {
+                if !complete_owners.contains(reconciliation.source_decl.owner()) {
+                    return true;
+                }
+                let dependencies = summary.get(&reconciliation.source_decl);
+                reconciliation.targets.retain(|target| {
+                    let source = match target {
+                        crate::tir::typed::ResolvedOverrideTarget::Index { source, .. } => {
+                            NominalOverrideIdentity::Index(source.clone())
+                        }
+                        crate::tir::typed::ResolvedOverrideTarget::Type { source, .. } => {
+                            NominalOverrideIdentity::Type(source.clone())
+                        }
+                    };
+                    dependencies.is_some_and(|dependencies| dependencies.contains(&source))
+                });
+                !reconciliation.targets.is_empty()
+            });
+            !reconciliations.is_empty()
+        });
+}
+
 /// Collect canonical nominal dependencies for every checked parameter default
 /// in every DAG module in `tir`.
 ///
@@ -1517,12 +1556,13 @@ fn check_domain_constraint_targets_dag(
     let decl_iter = dag
         .consts
         .iter()
-        .map(|e| (&e.name, &e.type_ann, e.span))
-        .chain(dag.params.iter().map(|e| (&e.name, &e.type_ann, e.span)))
-        .chain(dag.nodes.iter().map(|e| (&e.name, &e.type_ann, e.span)));
+        .map(|entry| (&entry.name, entry.span))
+        .chain(dag.params.iter().map(|entry| (&entry.name, entry.span)))
+        .chain(dag.nodes.iter().map(|entry| (&entry.name, entry.span)));
 
-    for (name, type_ann, decl_span) in decl_iter {
-        if extract_domain_bounds(type_ann).is_empty() {
+    for (name, decl_span) in decl_iter {
+        let key = dag.resolved_decl_key_for_local(name);
+        if !dag.semantic.domain_bounds.contains_key(&key) {
             continue;
         }
         let Some(resolved) = dag.resolved_decl_types.get(name) else {
@@ -1564,22 +1604,6 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) ->
         | ResolvedTypeExpr::GenericDimParam(_, _)
         | ResolvedTypeExpr::GenericDimExpr { .. } => None,
     }
-}
-
-/// Extract `DomainBound`s from a `TypeExpr`, handling indexed types.
-///
-/// For `Velocity(min: 0)[Maneuver]`, the constraints are on the base `Velocity`,
-/// not on the outer `Indexed` wrapper.
-fn extract_domain_bounds(
-    type_ann: &crate::desugar::desugared_ast::TypeExpr,
-) -> &[crate::desugar::desugared_ast::DomainBound] {
-    if !type_ann.constraints.is_empty() {
-        return &type_ann.constraints;
-    }
-    if let crate::desugar::desugared_ast::TypeExprKind::Indexed { base, .. } = &type_ann.kind {
-        return &base.constraints;
-    }
-    &[]
 }
 
 /// Reject constraints on struct/union fields outside the explicitly
@@ -1874,9 +1898,9 @@ fn check_one_bound_with_display_name(
 /// semantics. Issue #450 Position 4: surface a clear compile-time error
 /// directing the user to put the constraint on the field instead.
 ///
-/// Walks every `TypeExpr` reachable through declarations and type-defs
-/// in the file. (Type-args themselves can be `TypeApplication`s nested
-/// inside other applications, so the walk recurses.)
+/// Declaration annotations are validated while crossing the HIR boundary, so
+/// only syntax-backed type definitions remain to be checked here. Type
+/// arguments can contain nested applications, so this walk still recurses.
 fn check_no_constraints_on_generic_type_args(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -1884,17 +1908,6 @@ fn check_no_constraints_on_generic_type_args(
     let walk = |type_expr: &crate::desugar::desugared_ast::TypeExpr| -> Result<(), GraphcalError> {
         check_type_expr_for_generic_arg_constraints(type_expr, src)
     };
-    for (_, dag) in tir.local_dags() {
-        for entry in &dag.consts {
-            walk(&entry.type_ann)?;
-        }
-        for entry in &dag.params {
-            walk(&entry.type_ann)?;
-        }
-        for entry in &dag.nodes {
-            walk(&entry.type_ann)?;
-        }
-    }
     // Type definitions are module-owned semantic facts. Walking the root
     // registry here misses definitions declared by inline DAGs, while walking
     // every reachable definition would diagnose imported source against the

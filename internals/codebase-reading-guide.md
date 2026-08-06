@@ -17,9 +17,9 @@ and how many semantic invariants they carry:
   user wrote.
 - **IR** means **Intermediate Representation**. In general compiler terminology,
   an IR is any representation between syntax and execution. In Graphcal,
-  `IR` specifically means the declaration-level representation for one DAG body:
-  checked declaration lists, dependency edges, visibility/import metadata, and a
-  registry built from declarations.
+  `IR` specifically means the resolved declaration-level representation for one
+  DAG body: declaration shells with HIR bodies, visibility/import metadata, and
+  a registry built from declarations. It is not yet statically checked TIR.
 - **HIR** means **High-level Intermediate Representation**. It is still close to
   source expression/type structure, but reference positions are semantic rather
   than syntactic. HIR replaces source paths with canonical owner-qualified names,
@@ -96,8 +96,9 @@ Some names in this pipeline can sound misleading if read too literally:
 
 - IR is not another copy of the AST; it is the declaration and registry view of
   one DAG body, with HIR bodies after the freeze boundary.
-- HIR is "high-level" because it keeps expression/type tree shapes, not because
-  it is a whole-program representation of its own.
+- HIR is "high-level" because it keeps expression/type tree shapes. Each
+  frozen `IR` owns one DAG module's HIR, while `HirProject` is the complete
+  project-level phase value that owns those modules before checking.
 - TIR is not just HIR with types; it is the checked, per-DAG program model.
 
 `DagTIR` keeps source-facing declarations for diagnostics and presentation, but
@@ -132,11 +133,16 @@ UnfrozenIR + ModuleResolver
   |  UnfrozenIR::freeze — the single resolution stage
   |  crates/graphcal-compiler/src/hir/
   v
-IR  (HIR bodies: canonical type/value expression references)
+IR  (one DAG module's HIR bodies and canonical references)
   |
+  |  crates/graphcal-eval/src/project_compiler/pipeline.rs
+  v
+HirProject  (every file-root and inline-DAG IR; no checked/runtime facts)
+  |
+  |  crates/graphcal-eval/src/project_compiler/checking.rs
   |  crates/graphcal-compiler/src/tir/
   v
-TIR  (DagTIR + DagSemanticBody)
+CheckedProject / TIR  (DagTIR + DagSemanticBody)
   |
   |  crates/graphcal-eval/src/exec_plan.rs
   v
@@ -270,9 +276,9 @@ the diagnostic, so IDE consumers keep working on incomplete code. The strict
 batch pipeline never observes one.
 
 TIR stores HIR expressions and HIR-derived semantic metadata in
-`DagSemanticBody`. Declaration shells (names, spans, type annotations) remain
-syntactic for source-facing features such as diagnostics, formatting, and LSP
-presentation.
+`DagSemanticBody`. Frozen declaration shells retain source-facing names, spans,
+and provenance for diagnostics and editor presentation, while their value type
+annotations and domain-bound expressions are already HIR.
 
 ### 1.5 IR Assembly and the Freeze Boundary
 
@@ -285,25 +291,28 @@ The assembly stage (syntactic, pre-resolution):
   and attribute placement on declaration shells.
 - Builds the leaf-keyed `Registry` for dimensions, units, indexes,
   struct/union types, and functions.
-- Carries import metadata and pre-evaluated imported values across file/DAG
-  boundaries.
+- Carries import metadata and canonical `HirImportedBinding` targets across
+  file/DAG boundaries; checked types and optional constant values do not exist
+  at this phase.
 - Hosts include instantiation (`merge_dependency`: prefixing and index/type
   rebinding as reference-path rewrites) and override application, which must
   happen before resolution.
 
 The freeze boundary (`UnfrozenIR::freeze(registry, owner, resolver, src)`):
 
-- Lowers every const/param/node/assert body to HIR (strict — an unresolvable
-  reference fails the compile with a spanned diagnostic).
+- Lowers every const/param/node type annotation, declaration domain bound, and
+  const/param/node/assert body to HIR (strict — an unresolvable reference fails
+  the compile with a spanned diagnostic).
 - Lowers plot/figure/layer bodies best-effort (an incomplete plot body is
   skipped by the runtime instead of failing the compile).
 
 One `IR` represents one DAG body: either a file root or an inline `dag` block.
-Entry names stay source-shaped `ScopedName`s for presentation, but bodies are
-HIR; owner-qualified declaration dependencies are collected from those HIR
-bodies during TIR construction. Scope policies that need resolved references
-(no runtime `@` in `const node` bodies, no `@assert` references, A10 variant
-literal rules) run over HIR during type resolution.
+`HirProject` owns exactly one such frozen module for every loaded file root and
+inline DAG. Entry names stay source-shaped `ScopedName`s for presentation, but
+value-declaration signatures and bodies are HIR; owner-qualified declaration
+dependencies are collected from those HIR bodies during TIR construction. Scope policies that need resolved
+references (no runtime `@` in `const node` bodies, no `@assert` references, A10
+variant literal rules) run when `HirProject` is consumed by checking.
 
 ### 1.6 TIR and Dimension Checking
 
@@ -314,10 +323,15 @@ In the module-aware project path, TIR resolution receives both a
 `ModuleResolver` and the project-wide `ProjectTypeStore`. The resolver maps
 source aliases to canonical identities; the store is the authoritative lookup
 for owner-qualified dimensions, units, indexes, nominal types, and
-constructors. Declaration bodies arrive already lowered to HIR; syntax type
-annotations (signature-level) are lowered to HIR here, then resolved against
-that store. Checked DAG body construction uses `type_resolve_with_modules()`
-for file roots and `type_resolve_single_with_modules()` for inline DAG bodies.
+constructors. Value-declaration bodies, type annotations, and domain bounds
+arrive already lowered to HIR. TIR resolves canonical HIR type references
+against the store without re-reading source paths; declaration bounds move into
+checked semantic storage without another lowering pass. Before TIR
+construction, each `HirImportedBinding` is replaced by
+an atomic checked `ImportedBinding` carrying the same canonical target, its
+resolved declared type, and an optional dependency constant value. TIR validates
+that no lexical key or canonical target changed across the boundary. Checked
+DAG body construction then consumes each HIR module.
 
 The TIR is not flat:
 
@@ -384,9 +398,8 @@ normal project-level `EvalResult`.
 `graphcal dump` is deliberately only a debugging shell: each stage stops at an
 existing pipeline boundary and pretty-prints that boundary's Rust `Debug`
 representation. It does not define a serialization schema or a parallel
-inspection model. HIR is not exposed because frozen per-DAG `IR` values are
-currently consumed during checking rather than retained as one complete
-pre-check project artifact.
+inspection model. `dump hir` prints the production `HirProject` continuation;
+static checking consumes that same value to produce `CheckedProject`.
 
 ## 2. Workspace Map
 
@@ -469,8 +482,10 @@ elaboration out of runtime modules even though both currently share this crate.
 | `project_compiler/generic_leakage.rs` | Include-boundary generic visibility checks                  |
 | `project_compiler/template.rs`    | Canonical shared pre-HIR template store                         |
 | `project_compiler/model.rs`       | Internal typed pass artifacts and instance requests             |
-| `project_compiler/lowering.rs`    | Pure project IR/TIR elaboration                                 |
-| `project_compiler/pipeline.rs`    | Dependency-ordered project checking                             |
+| `project_compiler/hir_project.rs` | Complete resolved-project phase value                            |
+| `project_compiler/lowering.rs`    | Pure per-file and inline-DAG HIR elaboration                     |
+| `project_compiler/checking.rs`    | HIR-to-TIR interface resolution and mandatory static checks      |
+| `project_compiler/pipeline.rs`    | Dependency-ordered HIR lowering and checking continuations       |
 | `project_compiler/qualified_refs.rs` | Module-aware ambiguous reference classification             |
 | `project_compiler/registry_merge.rs` | Frontend-only registry composition                          |
 | `eval/project/prepare.rs`         | Checked-project to runtime-plan transition                      |
@@ -903,8 +918,8 @@ at the stage where each product first has the information it needs:
 
 | Step                          | Merged Product                                                   | Stage                             | Why Here                                                                                                                       |
 | ----------------------------- | ---------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Import scope assembly         | canonical constant bindings and module/source aliases            | before current-file IR lowering   | The current file needs source spellings resolved while lowering declarations; no runtime value map is imported.                |
-| Canonical type-store assembly | native owner-qualified dimensions, units, indexes, and types      | project session / TIR resolution  | Resolver aliases point to one canonical definition instead of copying definitions under importer keys.                         |
+| Import scope assembly         | canonical constant targets and module/source aliases             | before current-file HIR lowering  | HIR records canonical targets only; checked types and optional constant values are attached later.                             |
+| Canonical type-store assembly | native owner-qualified dimensions, units, indexes, and types      | complete HIR -> TIR checking      | Every HIR module contributes before checking, so resolver aliases point to one canonical definition without checked dependencies feeding lowering. |
 | Frontend registry seeding     | leaf/alias views needed to build local declarations               | local IR registry builder         | This is a construction boundary only; copied frontend views are filtered out of the canonical store.                            |
 | Module-template elaboration   | one shared `UnfrozenIR`/frontend-registry template per canonical `DagId` | project-session template store | Repeated include/call sites reuse import processing and body lowering rather than recompiling the source template.              |
 | Instantiated include assembly | instance-specialized declarations plus a typed binding environment | unfrozen IR builder             | The current monomorphizing implementation exposes declarations to the importer graph while retaining the template/instance edge. |
@@ -924,12 +939,14 @@ source-facing prefixes are lookup/presentation names, not the source of semantic
 identity. This owner also scopes dynamic units, so repeated instances may use
 the same unit spelling with different scale environments.
 
-`ProjectCompiler` builds the `ModuleResolver` once, then grows one
-`ProjectTypeStore` in dependency order. Each module contributes only definitions
-native to resolver modules in its subtree; dependency aliases never become new
-importer-owned definitions. A successful `CheckedProject` retains the final TIR,
-constant pool, and resolved constraints, and runtime preparation continues from
-that checked result.
+`ProjectCompiler` builds the `ModuleResolver` once and lowers every loaded
+module into `HirProject` using HIR-only dependency interfaces. HIR import
+bindings contain canonical targets but cannot express checked types or values.
+Checking then builds one `ProjectTypeStore` from the complete HIR project,
+attaches checked imported interfaces, consumes each HIR body into TIR, and runs
+all mandatory checks. Dependency aliases never become importer-owned semantic
+definitions. A successful `CheckedProject` retains the final TIR, constant pool,
+and resolved constraints, and runtime preparation continues from that result.
 
 Package locking is adjacent to, not part of, this compile/eval pipeline. The
 `graphcal deps lock` shell materializes Git dependencies and writes

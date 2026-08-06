@@ -13,8 +13,7 @@ use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::type_name::GenericParamName;
-use crate::syntax::type_name::ResolvedStructTypeName;
+use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName};
 
 /// Canonical identity for a generic parameter in a lexical generic scope.
 ///
@@ -61,6 +60,22 @@ impl BuiltinType {
     pub(crate) const fn datetime_utc() -> Self {
         Self::Datetime(TimeScale::UTC)
     }
+}
+
+/// A canonically resolved declaration type and its HIR domain bounds.
+#[derive(Debug, Clone)]
+pub struct TypeAnnotation {
+    pub type_expr: TypeExpr,
+    pub domain_bounds: Vec<DomainBound>,
+    pub span: Span,
+}
+
+/// One declaration domain bound lowered to HIR at the same boundary as its type.
+#[derive(Debug, Clone)]
+pub struct DomainBound {
+    pub kind: crate::syntax::ast::DomainBoundKind,
+    pub value: crate::hir::Expr,
+    pub span: Span,
 }
 
 /// A resolved type expression that still preserves source-level structure.

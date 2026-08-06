@@ -42,29 +42,32 @@ pub(super) fn seed_imported_type_system(
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     frontend_registry_imports: &[FrontendRegistryImport<'_>],
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for (dep_dag_id, names) in imported_type_system_names {
         let dep_loaded = &project.files[dep_dag_id];
-        let source_registered_names = if module_artifacts.contains_key(dep_dag_id) {
-            names.without_resolved_dimensions_and_units()
-        } else {
-            names.clone()
-        };
-        if let Some(dep_eval) = module_artifacts.get(dep_dag_id) {
-            register_selected_resolved_dimensions_and_units(
-                builder,
-                &dep_eval.frontend_registry,
-                names,
-                &dep_loaded.named_source,
-            )?;
-        }
+        let artifact =
+            module_artifacts
+                .get(dep_dag_id)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "HIR interface for imported module `{dep_dag_id}` is unavailable"
+                    ),
+                    src: file_src.clone(),
+                    span: Span::new(0, 0).into(),
+                })?;
+        register_selected_resolved_dimensions_and_units(
+            builder,
+            &artifact.frontend_registry,
+            names,
+            &dep_loaded.named_source,
+        )?;
         graphcal_compiler::ir::lower::register_selected_declarations(
             &dep_loaded.ast,
             builder,
             &dep_loaded.named_source,
-            &source_registered_names,
+            &names.without_resolved_dimensions_and_units(),
             dep_dag_id,
         )?;
     }

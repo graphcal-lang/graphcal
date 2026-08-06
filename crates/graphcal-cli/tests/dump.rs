@@ -84,7 +84,7 @@ fn syntax_stages_do_not_follow_missing_imports_but_modules_does() {
 }
 
 #[test]
-fn tir_prints_the_checked_artifact_and_prints_nothing_on_check_failure() {
+fn hir_exists_before_static_checking_and_tir_requires_validation() {
     let valid = fixture("valid/rocket.gcl");
     let output = run(&["dump", "tir", valid.to_str().unwrap()]);
     assert!(
@@ -95,10 +95,24 @@ fn tir_prints_the_checked_artifact_and_prints_nothing_on_check_failure() {
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("TIR {"));
 
     let dir = tempfile::tempdir().unwrap();
-    let invalid = write_source(dir.path(), "node bad: Length = 1.0 s;\n");
-    let output = run(&["dump", "tir", invalid.to_str().unwrap()]);
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    let invalid = write_source(dir.path(), "node bad: Length(min: 0.0 m) = 1.0 s;\n");
+    let hir = run(&["dump", "hir", invalid.to_str().unwrap()]);
+    assert!(
+        hir.status.success(),
+        "{}",
+        String::from_utf8_lossy(&hir.stderr)
+    );
+    let hir_stdout = String::from_utf8_lossy(&hir.stdout);
+    assert!(hir_stdout.starts_with("HirProject {"));
+    assert!(hir_stdout.contains("bad"));
+    assert!(hir_stdout.contains("type_ann: TypeAnnotation"));
+    assert!(hir_stdout.contains("domain_bounds: ["));
+    assert!(hir_stdout.contains("value: Expr"));
+    assert!(!hir_stdout.contains("type_resolution_owner"));
+
+    let tir = run(&["dump", "tir", invalid.to_str().unwrap()]);
+    assert!(!tir.status.success());
+    assert!(tir.stdout.is_empty());
 }
 
 #[test]
@@ -158,6 +172,7 @@ fn command_surface_has_only_individual_debug_stages() {
         "ast",
         "desugared",
         "modules",
+        "hir",
         "tir",
         "plan",
         "runtime",
@@ -166,6 +181,5 @@ fn command_surface_has_only_individual_debug_stages() {
         assert!(stdout.contains(stage), "missing stage {stage}:\n{stdout}");
     }
     assert!(!stdout.contains("  all"));
-    assert!(!stdout.contains("  hir"));
     assert!(!stdout.contains("json"));
 }

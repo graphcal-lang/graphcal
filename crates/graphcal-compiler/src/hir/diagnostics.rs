@@ -6,11 +6,177 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::desugar::desugared_ast::{TypeExpr, TypeExprKind};
 use crate::hir;
 use crate::registry::error::GraphcalError;
+use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_resolve::ModuleResolveError;
 use crate::syntax::names::NameNamespace;
+use crate::syntax::span::Span;
+
+/// Reject source-only type syntax that has no valid HIR representation.
+pub fn validate_type_annotation(
+    type_expr: &TypeExpr,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match &type_expr.kind {
+        TypeExprKind::Indexed { base, .. } => validate_type_annotation(base, src),
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            validate_generic_args(generic_args.iter(), src)
+        }
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
+            validate_generic_args(generic_args.iter(), src)
+        }
+        TypeExprKind::DatetimeApplication { type_args } => type_args.iter().try_for_each(|arg| {
+            if let Some(bound) = arg.constraints.first() {
+                return Err(GraphcalError::GenericTypeArgDomainConstraint {
+                    src: src.clone(),
+                    span: bound.span.into(),
+                });
+            }
+            validate_type_annotation(arg, src)
+        }),
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime
+        | TypeExprKind::DimExpr(_) => Ok(()),
+    }
+}
+
+fn validate_generic_args<'a>(
+    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    generic_args.into_iter().try_for_each(|arg| match arg {
+        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
+            if let Some(bound) = type_expr.constraints.first() {
+                return Err(GraphcalError::GenericTypeArgDomainConstraint {
+                    src: src.clone(),
+                    span: bound.span.into(),
+                });
+            }
+            validate_type_annotation(type_expr, src)
+        }
+        crate::desugar::desugared_ast::GenericArg::Index(_)
+        | crate::desugar::desugared_ast::GenericArg::Nat(_)
+        | crate::desugar::desugared_ast::GenericArg::Ambiguous(_) => Ok(()),
+    })
+}
+
+/// Convert a HIR type-lowering failure while preserving source-category
+/// diagnostics that are only knowable at the syntax-to-HIR boundary.
+pub fn type_lower_error_to_graphcal(
+    err: &hir::HirLowerError,
+    type_ann: &TypeExpr,
+    src: &NamedSource<Arc<String>>,
+) -> GraphcalError {
+    if let hir::HirLowerError::UnknownTypePath { path, span } = err {
+        if type_expr_has_index_name_at_span(type_ann, *span)
+            && let Ok(name) = IndexName::try_new(path.clone())
+        {
+            return GraphcalError::UnknownIndex {
+                name,
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        if type_expr_has_dim_term_at_span(type_ann, *span)
+            && let Ok(name) = DimName::try_new(path.clone())
+        {
+            return GraphcalError::UnknownDimension {
+                name,
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+    }
+    hir_lower_error_to_graphcal(err, src)
+}
+
+fn generic_args_have_index_name_at_span<'a>(
+    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
+    span: Span,
+) -> bool {
+    generic_args.into_iter().any(|arg| {
+        matches!(
+            arg,
+            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
+                if type_expr_has_index_name_at_span(type_expr, span)
+        )
+    })
+}
+
+fn generic_args_have_dim_term_at_span<'a>(
+    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
+    span: Span,
+) -> bool {
+    generic_args.into_iter().any(|arg| {
+        matches!(
+            arg,
+            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
+                if type_expr_has_dim_term_at_span(type_expr, span)
+        ) || matches!(
+            arg,
+            crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous)
+                if ambiguous.span() == span
+        )
+    })
+}
+
+fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
+    match &type_ann.kind {
+        TypeExprKind::Indexed { base, indexes } => {
+            type_expr_has_index_name_at_span(base, span)
+                || indexes.iter().any(|index| match index {
+                    crate::desugar::desugared_ast::IndexExpr::Name(name) => name.span == span,
+                    crate::desugar::desugared_ast::IndexExpr::Finite { .. }
+                    | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => false,
+                })
+        }
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            generic_args_have_index_name_at_span(generic_args, span)
+        }
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
+            generic_args_have_index_name_at_span(generic_args, span)
+        }
+        TypeExprKind::DatetimeApplication { type_args } => type_args
+            .iter()
+            .any(|arg| type_expr_has_index_name_at_span(arg, span)),
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime
+        | TypeExprKind::DimExpr(_) => false,
+    }
+}
+
+fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
+    match &type_ann.kind {
+        TypeExprKind::DimExpr(dim_expr) => dim_expr
+            .terms
+            .iter()
+            .any(|item| item.term.name.span == span),
+        TypeExprKind::Indexed { base, .. } => type_expr_has_dim_term_at_span(base, span),
+        TypeExprKind::TypeApplication { generic_args, .. } => {
+            generic_args_have_dim_term_at_span(generic_args, span)
+        }
+        TypeExprKind::ComplexApplication { generic_args }
+        | TypeExprKind::KeyApplication { generic_args } => {
+            generic_args_have_dim_term_at_span(generic_args, span)
+        }
+        TypeExprKind::DatetimeApplication { type_args } => type_args
+            .iter()
+            .any(|arg| type_expr_has_dim_term_at_span(arg, span)),
+        TypeExprKind::Dimensionless
+        | TypeExprKind::Bool
+        | TypeExprKind::Int
+        | TypeExprKind::Datetime => false,
+    }
+}
 
 /// Convert a HIR expression-lowering failure into a spanned diagnostic.
 #[expect(

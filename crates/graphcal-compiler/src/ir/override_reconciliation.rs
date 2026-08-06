@@ -21,6 +21,7 @@ use crate::syntax::type_name::StructTypeName;
 /// bindable nominal declarations replaced by that include.
 #[derive(Debug, Clone)]
 pub struct PendingOverrideReconciliation {
+    pub(crate) source_decl: crate::syntax::decl_name::ResolvedDeclName,
     pub(crate) orphan_decl: DeclName,
     pub(crate) targets: Vec<PendingOverrideTarget>,
     pub(crate) src: NamedSource<Arc<String>>,
@@ -57,6 +58,10 @@ impl PendingOverrideReconciliation {
             }))
             .collect();
         Self {
+            source_decl: crate::syntax::decl_name::ResolvedDeclName::from_def(
+                source_owner.clone(),
+                orphan_decl.clone(),
+            ),
             orphan_decl,
             targets,
             src,
