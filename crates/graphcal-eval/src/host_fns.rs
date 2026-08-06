@@ -243,7 +243,7 @@ impl HostFunctionRegistry {
     ///
     /// Re-registering the same `(plugin, name)` replaces the previous
     /// closure — the embedder owns the registry contents.
-    fn register(
+    pub(crate) fn register(
         &mut self,
         plugin: PluginPath,
         name: FnName,

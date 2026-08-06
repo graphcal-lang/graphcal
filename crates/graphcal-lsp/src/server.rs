@@ -32,8 +32,7 @@ use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, Valu
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
-    CompileError, EvalResult, Value, compile_and_eval_from_project_with_host_fns_and_cancellation,
-    compile_to_tir_from_project_with_host_fns_and_cancellation,
+    CheckedProject, CompileError, EvalResult, Value, check_project_with_host_fns_and_cancellation,
 };
 use graphcal_eval::loader::LoadedProject;
 
@@ -854,12 +853,6 @@ fn run_analysis_with_cancellation(
     let root_ast = &project.files[&project.root].ast;
     let import_links = collect_import_links(&project, cancellation)?;
     cancellation.checkpoint()?;
-    // The project resolver backs the symbol table's reference walk: bodies
-    // are tolerantly lowered to HIR and references keyed from canonical
-    // identities. A resolver failure (e.g. duplicate symbols) degrades to
-    // an empty resolver — references then surface via the spelling fallback.
-    let module_resolver = project.build_module_resolver().unwrap_or_default();
-
     // Extern (plugin) registry for this pass: the built-in demo plugin plus
     // the project's vendored wasm plugins. The plugin host outlives passes,
     // so unchanged modules come from its content-hash cache.
@@ -869,38 +862,37 @@ fn run_analysis_with_cancellation(
     cancellation.checkpoint()?;
 
     // Stage 2: Compile TIR from the project.
-    match compile_to_tir_from_project_with_host_fns_and_cancellation(
-        &project,
-        &host_fns,
-        cancellation,
-    ) {
-        Ok(tir) => {
+    match check_project_with_host_fns_and_cancellation(&project, &host_fns, cancellation) {
+        Ok(checked) => {
             cancellation.checkpoint()?;
+            let tir = checked.tir();
+            let module_resolver = checked.module_resolver();
             // Full success: symbol table from AST + TIR enrichment.
             let mut symbol_table =
-                symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
+                symbol_table::build_from_ast(root_ast, text, &project.root, module_resolver);
             cancellation.checkpoint()?;
-            symbol_table::enrich_from_tir(&mut symbol_table, &tir, &project.root);
+            symbol_table::enrich_from_tir(&mut symbol_table, tir, &project.root);
 
             cancellation.checkpoint()?;
             let imported_definitions = collect_imported_definitions(
                 uri,
                 &project,
-                Some(&tir),
-                &module_resolver,
+                Some(tir),
+                module_resolver,
                 cancellation,
             )?;
             cancellation.checkpoint()?;
             let fn_signatures = build_fn_signatures();
-            let extern_fn_signatures = build_extern_fn_signatures(&tir, cancellation)?;
+            let extern_fn_signatures = build_extern_fn_signatures(tir, cancellation)?;
+            let import_surfaces = collect_import_surfaces(&project, module_resolver, cancellation)?;
             // Library files (required param/index not yet bound) cannot be evaluated
             // standalone. Skip the eval pipeline so editors don't surface false-positive
             // `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics when the
             // user opens such a file for editing.
-            let (mut diagnostics, eval_values) = if tir.is_library() {
+            let (mut diagnostics, eval_values) = if checked.is_library() {
                 (HashMap::new(), HashMap::new())
             } else {
-                run_eval_from_project(&project, uri, text, &symbol_table, &host_fns, cancellation)?
+                run_eval_from_checked(checked, uri, text, &symbol_table, &host_fns, cancellation)?
             };
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default();
@@ -909,7 +901,7 @@ fn run_analysis_with_cancellation(
                 source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
-                import_surfaces: collect_import_surfaces(&project, &module_resolver, cancellation)?,
+                import_surfaces,
                 diagnostics: Arc::new(diagnostics),
                 eval_values,
                 fn_signatures,
@@ -921,7 +913,9 @@ fn run_analysis_with_cancellation(
         Err(error) if error.is_cancelled() => Err(Cancelled),
         Err(error) => {
             cancellation.checkpoint()?;
-            // TIR failed (type/dim error) but parse succeeded — use AST for partial info.
+            // A failed session has no checked resolver continuation. Rebuild a
+            // best-effort resolver only for partial editor information.
+            let module_resolver = project.build_module_resolver().unwrap_or_default();
             let symbol_table =
                 symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
             cancellation.checkpoint()?;
@@ -949,20 +943,22 @@ fn run_analysis_with_cancellation(
 type EvalAnalysisOutput = (HashMap<Url, Vec<Diagnostic>>, HashMap<ScopedName, String>);
 
 /// Run evaluation from a loaded project and extract diagnostics and formatted values.
-fn run_eval_from_project(
-    project: &LoadedProject,
+fn run_eval_from_checked(
+    checked: CheckedProject,
     uri: &Url,
     text: &str,
     symbol_table: &SymbolTable,
     host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
     cancellation: &CancellationToken,
 ) -> std::result::Result<EvalAnalysisOutput, Cancelled> {
-    match compile_and_eval_from_project_with_host_fns_and_cancellation(
-        project,
-        &HashMap::new(),
-        host_fns,
-        cancellation,
-    ) {
+    let result = match checked.prepare_with_host_fns_and_cancellation(host_fns, cancellation) {
+        Ok(prepared) => match prepared.binding_builder().finish() {
+            Ok(row) => prepared.evaluate_with_cancellation(&row, cancellation),
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
+    match result {
         Ok(result) => {
             cancellation.checkpoint()?;
             let diagnostics = eval_result_to_diagnostics(&result, text, symbol_table);

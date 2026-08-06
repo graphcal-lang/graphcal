@@ -258,6 +258,162 @@ struct CompiledFile {
     included_plots: Vec<super::types::PlotSpec>,
 }
 
+/// One whole-project compilation session.
+///
+/// The session builds the canonical module resolver exactly once and owns the
+/// continuation from loaded syntax to a fully checked project. Runtime
+/// preparation can then consume that checked result without compiling the
+/// project again.
+pub struct ProjectCompiler<'project> {
+    project: &'project crate::loader::LoadedProject,
+    host_fns: crate::host_fns::HostFunctionRegistry,
+    cancellation: graphcal_compiler::cancellation::CancellationToken,
+    module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
+}
+
+impl<'project> ProjectCompiler<'project> {
+    /// Start a compilation session with an embedder-supplied host registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a module-resolution diagnostic when the loaded project cannot
+    /// form one canonical project scope.
+    pub fn new(
+        project: &'project crate::loader::LoadedProject,
+        host_fns: &crate::host_fns::HostFunctionRegistry,
+    ) -> Result<Self, CompileError> {
+        Self::with_cancellation(
+            project,
+            host_fns,
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+    }
+
+    /// Start a cooperatively cancellable compilation session.
+    ///
+    /// # Errors
+    ///
+    /// Returns a module-resolution diagnostic or cancellation.
+    pub fn with_cancellation(
+        project: &'project crate::loader::LoadedProject,
+        host_fns: &crate::host_fns::HostFunctionRegistry,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<Self, CompileError> {
+        cancellation.checkpoint()?;
+        pipeline::validate_project_dag_recursion(project)?;
+        let root_source = &project.files[&project.root].named_source;
+        let module_resolver = project
+            .build_module_resolver()
+            .map_err(|error| lowering::module_resolve_compile_error(error, root_source))?;
+        Ok(Self {
+            project,
+            host_fns: host_fns.clone(),
+            cancellation: cancellation.clone(),
+            module_resolver,
+        })
+    }
+
+    /// Compile every module once and return the reusable checked continuation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a compile diagnostic or cancellation.
+    pub fn check(self) -> Result<CheckedProject, CompileError> {
+        pipeline::check_project_perfile(
+            self.project,
+            &self.host_fns,
+            self.module_resolver,
+            &self.cancellation,
+        )
+    }
+}
+
+/// A fully checked project that has not yet been prepared or evaluated.
+///
+/// This is the reusable semantic boundary shared by `check`, `graph`, the
+/// LSP, and runtime preparation. Its fields are private so callers cannot
+/// fabricate a value that skipped mandatory project checks.
+pub struct CheckedProject {
+    compiled: CompiledFile,
+    source: NamedSource<Arc<String>>,
+    root_ast: graphcal_compiler::desugar::desugared_ast::File,
+    module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    dependency_assertions: Vec<(ScopedName, AssertResult, Span)>,
+}
+
+impl std::fmt::Debug for CheckedProject {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CheckedProject")
+            .field("root", self.compiled.tir.root_dag_id())
+            .field("modules", &self.compiled.tir.dag_registry().len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl CheckedProject {
+    /// Borrow the checked typed program.
+    #[must_use]
+    pub const fn tir(&self) -> &graphcal_compiler::tir::typed::TIR {
+        &self.compiled.tir
+    }
+
+    /// Borrow the canonical resolver built by this compilation session.
+    #[must_use]
+    pub const fn module_resolver(
+        &self,
+    ) -> &graphcal_compiler::syntax::module_resolve::ModuleResolver {
+        &self.module_resolver
+    }
+
+    /// Whether the entry DAG still requires runtime inputs.
+    #[must_use]
+    pub fn is_library(&self) -> bool {
+        self.compiled.tir.is_library()
+    }
+
+    /// Consume the checked project and return its typed program.
+    #[must_use]
+    pub fn into_tir(self) -> graphcal_compiler::tir::typed::TIR {
+        self.compiled.tir
+    }
+
+    /// Continue to runtime preparation with callable host functions.
+    ///
+    /// # Errors
+    ///
+    /// Returns a plan, input-interface, plugin, or cancellation diagnostic.
+    pub fn prepare_with_host_fns_and_cancellation(
+        self,
+        host_fns: &crate::host_fns::HostFunctionRegistry,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<PreparedProject, CompileError> {
+        pipeline::prepare_checked_project(self, host_fns, cancellation)
+    }
+
+    /// Continue to runtime preparation without a cancellation deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns a plan, input-interface, or plugin diagnostic.
+    pub fn prepare_with_host_fns(
+        self,
+        host_fns: &crate::host_fns::HostFunctionRegistry,
+    ) -> Result<PreparedProject, CompileError> {
+        self.prepare_with_host_fns_and_cancellation(
+            host_fns,
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+    }
+}
+
+/// Immutable project-wide services shared by every module lowering pass.
+#[derive(Clone, Copy)]
+struct ProjectSemanticContext<'project> {
+    project: &'project crate::loader::LoadedProject,
+    module_resolver: &'project graphcal_compiler::syntax::module_resolve::ModuleResolver,
+}
+
 /// A deferred include of a DAG (file-level or inline) — compile its body
 /// and merge into the importer's IR after the importer's own decls are
 /// lowered.
@@ -657,6 +813,46 @@ fn field_dimension_name(
 // Public API functions
 // ---------------------------------------------------------------------------
 
+/// Compile a loaded project into the reusable checked-program boundary.
+///
+/// # Errors
+///
+/// Returns a compile diagnostic when any project module is invalid.
+pub fn check_project(
+    project: &crate::loader::LoadedProject,
+) -> Result<CheckedProject, CompileError> {
+    check_project_with_host_fns(project, &crate::host_fns::demo_registry())
+}
+
+/// Check a project with embedder-provided extern implementations and metadata.
+///
+/// # Errors
+///
+/// Returns a compile or plugin-signature diagnostic.
+pub fn check_project_with_host_fns(
+    project: &crate::loader::LoadedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+) -> Result<CheckedProject, CompileError> {
+    check_project_with_host_fns_and_cancellation(
+        project,
+        host_fns,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Check a project once with cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a compile, plugin-signature, or cancellation diagnostic.
+pub fn check_project_with_host_fns_and_cancellation(
+    project: &crate::loader::LoadedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CheckedProject, CompileError> {
+    ProjectCompiler::with_cancellation(project, host_fns, cancellation)?.check()
+}
+
 /// Compile a [`LoadedProject`](crate::loader::LoadedProject) to TIR without evaluating.
 ///
 /// Resolves imports from `use` declarations in the root file, lowers to IR,
@@ -726,7 +922,8 @@ pub fn compile_to_tir_from_project_with_host_fns_and_cancellation(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    pipeline::compile_to_tir_project_perfile(project, host_fns, cancellation)
+    check_project_with_host_fns_and_cancellation(project, host_fns, cancellation)
+        .map(CheckedProject::into_tir)
 }
 
 /// Prepare a loaded project once for repeated typed evaluation.
@@ -759,7 +956,8 @@ pub fn prepare_from_project_with_host_fns_and_cancellation(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<PreparedProject, CompileError> {
-    pipeline::prepare_project_perfile(project, host_fns, cancellation)
+    check_project_with_host_fns_and_cancellation(project, host_fns, cancellation)?
+        .prepare_with_host_fns_and_cancellation(host_fns, cancellation)
 }
 
 /// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
@@ -858,7 +1056,8 @@ pub fn compile_and_eval_from_project_with_host_fns_and_cancellation(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalResult, CompileError> {
-    let prepared = pipeline::prepare_project_perfile(project, host_fns, cancellation)?;
+    let prepared = check_project_with_host_fns_and_cancellation(project, host_fns, cancellation)?
+        .prepare_with_host_fns_and_cancellation(host_fns, cancellation)?;
     let mut bindings = prepared.binding_builder();
     for (name, expression) in overrides {
         cancellation.checkpoint()?;

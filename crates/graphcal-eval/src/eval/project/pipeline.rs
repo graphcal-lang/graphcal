@@ -7,15 +7,38 @@
 )]
 use super::*;
 
+/// Validate inline-DAG recursion before constructing project-wide scopes.
+///
+/// This preserves source-level diagnostic ordering: a recursive instance graph
+/// is rejected before resolver inheritance attempts to inspect that invalid
+/// synthetic scope.
+pub(in crate::eval::project) fn validate_project_dag_recursion(
+    project: &crate::loader::LoadedProject,
+) -> Result<(), CompileError> {
+    project.files.values().try_for_each(|loaded_file| {
+        let definitions = loaded_file
+            .ast
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                DeclKind::Dag(dag) => Some((dag.name.value.clone(), dag)),
+                _ => None,
+            })
+            .collect();
+        imports::check_dag_recursion(&definitions, &loaded_file.named_source)
+    })
+}
+
 /// Compile a single file within a project, using dependency artifacts for imports.
 ///
 /// Builds import bindings, lowers to IR, applies any compile-time include
-/// bindings, and type-resolves to TIR. Both [`prepare_project_perfile`] and
-/// [`compile_to_tir_project_perfile`] call this for each file in the project.
+/// bindings, and type-resolves to TIR. The project compilation session calls
+/// this exactly once for each file in topological order.
 fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
@@ -52,7 +75,10 @@ fn compile_single_file_in_project(
 
     // Lower to IR and finalize compilation.
     lowering::lower_and_finalize(
-        project,
+        ProjectSemanticContext {
+            project,
+            module_resolver,
+        },
         file_dag_id,
         file_src,
         &file_ast,
@@ -420,26 +446,33 @@ fn evaluate_and_store_file(
     Ok(())
 }
 
-/// Compile a complete project into one reusable root prepared plan.
+/// Compile a complete project into one reusable checked continuation.
 ///
-/// Dependencies are still compiled/evaluated in topological order so imported
-/// constants and standalone library values retain their existing semantics.
-/// The root file stops after plan construction and output-assembly capture.
-pub(in crate::eval::project) fn prepare_project_perfile(
+/// Dependencies retain the current per-file artifact semantics during this
+/// migration, but the topological loop and canonical module resolver now have
+/// exactly one owner. `check`, preparation, evaluation, and the LSP all
+/// continue from the returned [`CheckedProject`].
+pub(in crate::eval::project) fn check_project_perfile(
     project: &crate::loader::LoadedProject,
     host_fns: &crate::host_fns::HostFunctionRegistry,
+    module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<super::prepared::PreparedProject, CompileError> {
+) -> Result<CheckedProject, CompileError> {
     cancellation.checkpoint()?;
     let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
         HashMap::new();
 
     for file_dag_id in &project.load_order {
         cancellation.checkpoint()?;
-        let is_root = *file_dag_id == project.root;
-        let compiled =
-            compile_single_file_in_project(project, file_dag_id, &evaluated_files, cancellation)?;
-        let file_src = &project.files[file_dag_id].named_source;
+        let compiled = compile_single_file_in_project(
+            project,
+            file_dag_id,
+            &evaluated_files,
+            &module_resolver,
+            cancellation,
+        )?;
+        let loaded_file = &project.files[file_dag_id];
+        let file_src = &loaded_file.named_source;
         verify_host_functions(
             project,
             file_dag_id,
@@ -449,20 +482,7 @@ pub(in crate::eval::project) fn prepare_project_perfile(
             cancellation,
         )?;
 
-        if is_root {
-            if tir_has_required_indexes(&compiled.tir)
-                && let Some((name, span)) =
-                    first_required_index_diagnostic(&compiled.tir, &project.files[file_dag_id].ast)
-            {
-                return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-                    name,
-                    src: file_src.clone(),
-                    span,
-                }));
-            }
-
-            let plan =
-                crate::exec_plan::compile_with_cancellation(&compiled.tir, file_src, cancellation)?;
+        if *file_dag_id == project.root {
             let dep_import_spans = build_dep_import_spans(project);
             let mut dependency_assertions = Vec::new();
             for dep_dag_id in &project.load_order {
@@ -483,25 +503,16 @@ pub(in crate::eval::project) fn prepare_project_perfile(
                     );
                 }
             }
-            let module_resolver = project.build_module_resolver().map_err(|error| {
-                CompileError::Eval(GraphcalError::EvalError {
-                    message: error.to_string(),
-                    src: file_src.clone(),
-                    span: Span::new(0, 0).into(),
-                })
-            })?;
-            return super::prepared::PreparedProject::from_compiled(
+            return Ok(CheckedProject {
                 compiled,
-                plan,
-                file_src.clone(),
-                host_fns.clone(),
+                source: file_src.clone(),
+                root_ast: loaded_file.ast.clone(),
                 module_resolver,
-                &project.files[file_dag_id].ast,
                 dependency_assertions,
-            );
+            });
         }
 
-        let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
+        let external_surface = extract_external_decl_surface(&loaded_file.ast);
         if tir_requires_runtime_inputs(&compiled.tir) {
             store_compiled_file_artifact(
                 compiled,
@@ -529,6 +540,42 @@ pub(in crate::eval::project) fn prepare_project_perfile(
         src: NamedSource::new("internal", Arc::new(String::new())),
         span: Span::new(0, 0).into(),
     }))
+}
+
+/// Continue a checked project to one reusable execution plan.
+pub(in crate::eval::project) fn prepare_checked_project(
+    checked: CheckedProject,
+    host_fns: &crate::host_fns::HostFunctionRegistry,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<super::prepared::PreparedProject, CompileError> {
+    cancellation.checkpoint()?;
+    let CheckedProject {
+        compiled,
+        source,
+        root_ast,
+        module_resolver,
+        dependency_assertions,
+    } = checked;
+    if tir_has_required_indexes(&compiled.tir)
+        && let Some((name, span)) = first_required_index_diagnostic(&compiled.tir, &root_ast)
+    {
+        return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
+            name,
+            src: source,
+            span,
+        }));
+    }
+
+    let plan = crate::exec_plan::compile_with_cancellation(&compiled.tir, &source, cancellation)?;
+    super::prepared::PreparedProject::from_compiled(
+        compiled,
+        plan,
+        source,
+        host_fns.clone(),
+        module_resolver,
+        &root_ast,
+        dependency_assertions,
+    )
 }
 
 /// Load-time verification of every extern function declared by a file.
@@ -722,82 +769,6 @@ fn build_dep_import_spans(
     }
 
     spans
-}
-
-/// Compile a project to TIR using per-file evaluation.
-///
-/// Non-root files are compiled to dependency artifacts. Files that can run
-/// standalone are evaluated to produce `RuntimeValue`s for downstream imports;
-/// library files with required runtime inputs keep compile-time artifacts only.
-/// The root file stops at TIR and returns it.
-pub(in crate::eval::project) fn compile_to_tir_project_perfile(
-    project: &crate::loader::LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    cancellation.checkpoint()?;
-    let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
-        HashMap::new();
-
-    for file_dag_id in &project.load_order {
-        cancellation.checkpoint()?;
-        let is_root = *file_dag_id == project.root;
-        let compiled =
-            compile_single_file_in_project(project, file_dag_id, &evaluated_files, cancellation)?;
-
-        // Compile-only consumers (`graphcal check`, LSP analysis) must
-        // report the same load-time extern diagnostics evaluation does
-        // (P003, P005–P010): a declaration whose plugin is missing or
-        // whose manifest disagrees is a compile error, not something to
-        // discover on the first evaluation.
-        verify_host_functions(
-            project,
-            file_dag_id,
-            &compiled.tir,
-            &project.files[file_dag_id].named_source,
-            host_fns,
-            cancellation,
-        )?;
-
-        if is_root {
-            return Ok(compiled.tir);
-        }
-
-        // Skip standalone evaluation for files with required params or indexes,
-        // while still retaining compile-time artifacts for downstream imports.
-        if tir_requires_runtime_inputs(&compiled.tir) {
-            let file_src = &project.files[file_dag_id].named_source;
-            let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
-            store_compiled_file_artifact(
-                compiled,
-                file_dag_id,
-                file_src,
-                external_surface,
-                &mut evaluated_files,
-                cancellation,
-            )?;
-            continue;
-        }
-
-        let file_src = &project.files[file_dag_id].named_source;
-        let external_surface = extract_external_decl_surface(&project.files[file_dag_id].ast);
-        evaluate_and_store_file(
-            compiled,
-            file_dag_id,
-            file_src,
-            external_surface,
-            &mut evaluated_files,
-            host_fns,
-            cancellation,
-        )?;
-    }
-
-    let internal_src = NamedSource::new("internal", Arc::new(String::new()));
-    Err(CompileError::Eval(GraphcalError::EvalError {
-        message: "internal: root file not found in load_order".to_string(),
-        src: internal_src,
-        span: (0, 0).into(),
-    }))
 }
 
 /// Filter an evaluated runtime-value map to only locally-defined param/node

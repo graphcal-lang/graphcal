@@ -166,6 +166,50 @@ fn legacy_import_artifacts_expose_assertions_and_runtime_unit_scales() {
 }
 
 #[test]
+fn checked_project_preparation_does_not_recompile_dependencies() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "import plugin \"graphcal:session-test\" as test {\n    fn count(x: Dimensionless) -> Dimensionless;\n}\npub node output: Dimensionless = test.count(2.0);\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib().{ output };\nnode result: Dimensionless = @output;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed_calls = Arc::clone(&calls);
+    let mut host_fns = crate::host_fns::HostFunctionRegistry::new();
+    host_fns.register(
+        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:session-test"),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid("count"),
+        move |arguments| {
+            observed_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(arguments[0].clone())
+        },
+    );
+
+    let checked = check_project_with_host_fns(&project, &host_fns).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let prepared = checked.prepare_with_host_fns(&host_fns).unwrap();
+    let row = prepared.binding_builder().finish().unwrap();
+    let result = prepared.evaluate(&row).unwrap();
+    assert_quantity_value(&result, "result", 2.0);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "preparing/evaluating a checked project recompiled its dependency"
+    );
+}
+
+#[test]
 fn cancellation_stops_an_in_flight_evaluation() {
     use std::{
         collections::HashMap,
