@@ -45,7 +45,7 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
     reason = "project lowering coordinates resolver, TIR, and plan construction"
 )]
 pub(in crate::eval::project) fn lower_and_finalize(
-    project: &crate::loader::LoadedProject,
+    semantic_context: ProjectSemanticContext<'_>,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     file_ast: &graphcal_compiler::desugar::desugared_ast::File,
@@ -54,6 +54,10 @@ pub(in crate::eval::project) fn lower_and_finalize(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
+    let ProjectSemanticContext {
+        project,
+        module_resolver,
+    } = semantic_context;
     let include_debug_names = include_debug_name_map(&ctx);
     // Snapshot the source-facing output values before IR lowering consumes the
     // canonical imported-binding records.
@@ -133,10 +137,6 @@ pub(in crate::eval::project) fn lower_and_finalize(
     )?;
 
     cancellation.checkpoint()?;
-    let module_resolver = project
-        .build_module_resolver()
-        .map_err(|err| module_resolve_compile_error(err, file_src))?;
-    cancellation.checkpoint()?;
     let registry = builder
         .try_build()
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
@@ -144,7 +144,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     let ir = unfrozen.freeze_with_cancellation(
         registry,
         file_dag_id,
-        &module_resolver,
+        module_resolver,
         file_src,
         cancellation,
     )?;
@@ -172,7 +172,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     // selective-import spellings. Overlay those entries last so dynamic units
     // retain any dependency-evaluated static scale while their HIR identity
     // remains canonical.
-    module_types.overlay_visible_units(file_dag_id, &ir.registry, &module_resolver);
+    module_types.overlay_visible_units(file_dag_id, &ir.registry, module_resolver);
 
     let parent_external_surface = ir.external_surface.clone();
     let mut tir =
@@ -180,7 +180,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
             ir,
             file_dag_id,
             file_src,
-            &module_resolver,
+            module_resolver,
             &module_types,
             cancellation,
         )?;
@@ -196,7 +196,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         file_src,
         &parent_external_surface,
         evaluated_files,
-        &module_resolver,
+        module_resolver,
         &module_types,
         cancellation,
     )?;
@@ -253,7 +253,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     })
 }
 
-fn module_resolve_compile_error(
+pub(super) fn module_resolve_compile_error(
     err: graphcal_compiler::syntax::module_resolve::ModuleResolveError,
     src: &NamedSource<Arc<String>>,
 ) -> CompileError {
@@ -279,16 +279,21 @@ fn module_resolve_compile_error(
             span: span.into(),
         }),
         graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateSymbol {
+            name,
+            first,
             duplicate,
             ..
         }
         | graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
+            name,
+            first,
             duplicate,
             ..
-        } => CompileError::Eval(GraphcalError::EvalError {
-            message: err.to_string(),
+        } => CompileError::Eval(GraphcalError::DuplicateName {
+            name,
             src: src.clone(),
-            span: duplicate.into(),
+            duplicate: duplicate.into(),
+            first: first.into(),
         }),
         other => CompileError::Eval(GraphcalError::EvalError {
             message: other.to_string(),
