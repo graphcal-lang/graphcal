@@ -1,6 +1,6 @@
 use super::*;
 use crate::dimension::BaseDimId;
-use crate::registry::declared_type::IndexTypeRef;
+use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::module_name::ScopedName;
@@ -93,6 +93,24 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
         crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types)
             .unwrap();
     (tir, src)
+}
+
+fn model_port_application(
+    source: &str,
+) -> (
+    crate::tir::typed::TIR,
+    NamedSource<Arc<String>>,
+    StructTypeRef,
+    Vec<DeclaredGenericArg>,
+) {
+    let (tir, src) = module_aware_tir(source);
+    let declared_types = tir.build_declared_types(&src).unwrap();
+    let DeclaredType::Struct(identity, generic_args) =
+        &declared_types[&ScopedName::parse("port").unwrap()]
+    else {
+        panic!("expected `port` to be a concrete model struct");
+    };
+    (tir, src, identity.clone(), generic_args.clone())
 }
 
 /// Compile each inline dag body in `tir` with no self-import preprocessing.
@@ -2427,19 +2445,133 @@ fn model_schema_rejects_undischarged_generic_field_obligation() {
 pub type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
 param port: Box<Time>;
 ";
-    let (tir, src) = module_aware_tir(source);
-    let declared_types = tir.build_declared_types(&src).unwrap();
-    let DeclaredType::Struct(identity, generic_args) =
-        &declared_types[&ScopedName::parse("port").unwrap()]
-    else {
-        panic!("expected a concrete model struct port");
-    };
+    let (tir, src, identity, generic_args) = model_port_application(source);
 
-    let error = concrete_model_constructors(&tir, identity, generic_args, &src).unwrap_err();
+    let error = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap_err();
     assert!(
-        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        matches!(
+            error,
+            ConcreteModelTypeError::Compiler(GraphcalError::DomainDimensionMismatch { .. })
+        ),
         "got: {error:?}"
     );
+}
+
+#[test]
+fn model_schema_type_rejects_too_few_and_too_many_args_for_phantom_generic() {
+    let source = r"
+pub type Phantom<N: Nat> { Phantom }
+param port: Phantom<1>;
+";
+    let (tir, src, identity, generic_args) = model_port_application(source);
+    assert_eq!(generic_args.len(), 1);
+
+    let too_few = ConcreteModelType::try_new(&tir, &identity, &[], &src).unwrap_err();
+    assert!(matches!(
+        too_few,
+        ConcreteModelTypeError::GenericArityMismatch {
+            expected: 1,
+            actual: 0,
+            ..
+        }
+    ));
+
+    let too_many_args = vec![generic_args[0].clone(), generic_args[0].clone()];
+    let too_many = ConcreteModelType::try_new(&tir, &identity, &too_many_args, &src).unwrap_err();
+    assert!(matches!(
+        too_many,
+        ConcreteModelTypeError::GenericArityMismatch {
+            expected: 1,
+            actual: 2,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn model_schema_type_rejects_wrong_generic_sort_before_expansion() {
+    let source = r"
+pub type Phantom<N: Nat> { Phantom }
+param port: Phantom<1>;
+";
+    let (tir, src, identity, _) = model_port_application(source);
+    let wrong_sort = [DeclaredGenericArg::Type(DeclaredType::Int)];
+
+    let error = ConcreteModelType::try_new(&tir, &identity, &wrong_sort, &src).unwrap_err();
+    assert!(matches!(
+        error,
+        ConcreteModelTypeError::GenericSortMismatch {
+            expected: crate::registry::type_def::TypeGenericConstraint::Nat,
+            actual: crate::registry::type_def::TypeGenericConstraint::Type,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn model_schema_type_accepts_complete_defaulted_args_from_compiler() {
+    let source = r"
+pub type Defaults<N: Nat = 2, T: Type = Int> { Defaults(value: T) }
+param port: Defaults;
+";
+    let (tir, src, identity, generic_args) = model_port_application(source);
+    assert_eq!(generic_args.len(), 2);
+
+    let omitted_defaults = ConcreteModelType::try_new(&tir, &identity, &[], &src).unwrap_err();
+    assert!(matches!(
+        omitted_defaults,
+        ConcreteModelTypeError::GenericArityMismatch {
+            expected: 2,
+            actual: 0,
+            ..
+        }
+    ));
+
+    let model_type = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
+    let constructors = model_type.constructors(&src).unwrap();
+    assert_eq!(constructors.len(), 1);
+    assert_eq!(constructors[0].fields().len(), 1);
+    assert_eq!(
+        constructors[0].fields()[0].declared_type(),
+        &DeclaredType::Int
+    );
+}
+
+#[test]
+fn model_schema_type_expands_nested_concrete_type_args() {
+    let source = r"
+pub type Inner<T: Type> { Inner(value: T) }
+pub type Outer<T: Type> { Outer(value: Inner<T>) }
+param port: Outer<Int>;
+";
+    let (tir, src, identity, generic_args) = model_port_application(source);
+    let model_type = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
+    let constructors = model_type.constructors(&src).unwrap();
+
+    assert!(matches!(
+        constructors[0].fields()[0].declared_type(),
+        DeclaredType::Struct(_, nested_args)
+            if matches!(nested_args.as_slice(), [DeclaredGenericArg::Type(DeclaredType::Int)])
+    ));
+}
+
+#[test]
+fn model_schema_required_indexes_have_distinct_validated_and_concrete_states() {
+    let source = r"
+pub(bind) index Axis;
+pub type Vector<I: Index> { Vector(values: Dimensionless[I]) }
+param port: Vector<Axis>;
+";
+    let (tir, src, identity, generic_args) = model_port_application(source);
+
+    let validated = ValidatedModelType::try_new(&tir, &identity, &generic_args, &src).unwrap();
+    assert_eq!(validated.constructors(&src).unwrap().len(), 1);
+
+    let error = ConcreteModelType::try_new(&tir, &identity, &generic_args, &src).unwrap_err();
+    assert!(matches!(
+        error,
+        ConcreteModelTypeError::RequiredIndex { .. }
+    ));
 }
 
 #[test]

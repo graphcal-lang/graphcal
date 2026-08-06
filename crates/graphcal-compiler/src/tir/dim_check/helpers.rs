@@ -28,8 +28,7 @@ pub(super) fn types_match(declared: &DeclaredType, inferred: &InferredType) -> b
     match (declared, inferred) {
         (DeclaredType::Quantity(d), inferred) => inferred.quantity_dimension() == Some(d),
         (DeclaredType::Complex(d), InferredType::Complex(inferred)) => d == inferred,
-        (DeclaredType::Bool, InferredType::Bool) => true,
-        (DeclaredType::Int, inferred) if inferred.is_int_like() => true,
+        (DeclaredType::Bool, InferredType::Bool) | (DeclaredType::Int, InferredType::Int) => true,
         (DeclaredType::Datetime(d), InferredType::Datetime(i)) => d == i,
         (DeclaredType::IndexArg(d), InferredType::IndexArg(i))
         | (DeclaredType::Key(d), InferredType::Key(i)) => i.matches_ref(d),
@@ -86,8 +85,8 @@ pub(super) fn resolved_type_matches_inferred(
         (ResolvedTypeExpr::Dimensionless, inferred) => inferred
             .quantity_dimension()
             .is_some_and(Dimension::is_dimensionless),
-        (ResolvedTypeExpr::Bool, InferredType::Bool) => true,
-        (ResolvedTypeExpr::Int, inferred) => inferred.is_int_like(),
+        (ResolvedTypeExpr::Bool, InferredType::Bool)
+        | (ResolvedTypeExpr::Int, InferredType::Int) => true,
         (ResolvedTypeExpr::Datetime(expected), InferredType::Datetime(actual)) => {
             expected == actual
         }
@@ -218,9 +217,6 @@ pub(super) fn struct_type_def_for_inferred<'a>(
 /// Format an inferred type for display in diagnostics.
 #[must_use]
 pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
-    if let InferredType::Fin(bound) = it {
-        return format!("Fin({})", bound.format());
-    }
     DeclaredType::from(it).format(&registry.dimensions)
 }
 
@@ -247,16 +243,12 @@ pub(super) fn format_distinct_inferred_types(
 impl From<&InferredType> for DeclaredType {
     fn from(it: &InferredType) -> Self {
         match it {
-            InferredType::Quantity(d) | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
-                Self::Quantity(d.clone())
-            }
+            InferredType::Quantity(d) => Self::Quantity(d.clone()),
             InferredType::Complex(d) => Self::Complex(d.clone()),
             InferredType::Bool => Self::Bool,
-            InferredType::Int | InferredType::Fin(_) => Self::Int,
+            InferredType::Int => Self::Int,
             InferredType::Datetime(scale) => Self::Datetime(*scale),
-            InferredType::NamedIndexCase(index) | InferredType::IndexArg(index) => {
-                Self::IndexArg(index.type_ref().clone())
-            }
+            InferredType::IndexArg(index) => Self::IndexArg(index.type_ref().clone()),
             InferredType::Key(index) => Self::Key(index.type_ref().clone()),
             InferredType::Struct(n, args) => Self::Struct(
                 n.type_ref().clone(),
@@ -321,14 +313,11 @@ pub fn expect_quantity(
     span: crate::syntax::span::Span,
 ) -> Result<Dimension, GraphcalError> {
     let found_kind = match inferred {
-        InferredType::Quantity(d) | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
-            return Ok(d.clone());
-        }
+        InferredType::Quantity(d) => return Ok(d.clone()),
         InferredType::Complex(_) => "a Complex value",
         InferredType::Bool => "a Bool value",
-        InferredType::Int | InferredType::Fin(_) => "an Int value",
+        InferredType::Int => "an Int value",
         InferredType::Datetime(_) => "a Datetime value",
-        InferredType::NamedIndexCase(_) => "a named-index loop variable",
         InferredType::Key(_) => "an index-key value",
         InferredType::IndexArg(_) => "an Index argument",
         InferredType::Struct(..) => "a struct",

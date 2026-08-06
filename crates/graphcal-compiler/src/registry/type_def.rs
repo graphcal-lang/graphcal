@@ -128,6 +128,17 @@ impl From<GenericConstraint> for TypeGenericConstraint {
     }
 }
 
+impl std::fmt::Display for TypeGenericConstraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Dim => "Dim",
+            Self::Index => "Index",
+            Self::Nat => "Nat",
+            Self::Type => "Type",
+        })
+    }
+}
+
 /// A generic parameter on a type definition.
 #[derive(Debug, Clone)]
 pub struct TypeGenericParam {

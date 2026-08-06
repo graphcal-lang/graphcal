@@ -805,12 +805,14 @@ fn collect_concrete_nominal_applications(
             if !applications.insert(application) {
                 return Ok(());
             }
-            for constructor in graphcal_compiler::tir::dim_check::concrete_model_constructors(
+            let model_type = graphcal_compiler::tir::dim_check::ValidatedModelType::try_new(
                 tir,
                 identity,
                 generic_args,
                 src,
-            )? {
+            )
+            .map_err(|error| error.into_graphcal_error(src))?;
+            for constructor in model_type.constructors(src)? {
                 for field in constructor.fields() {
                     collect_concrete_nominal_applications(
                         field.declared_type(),

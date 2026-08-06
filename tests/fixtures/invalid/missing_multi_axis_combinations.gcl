@@ -1,0 +1,6 @@
+pub index Row = { First, Second };
+pub index Column = { Left, Right };
+
+param values: Dimensionless[Row, Column] = {
+    (Row.First, Column.Left): 1.0,
+};

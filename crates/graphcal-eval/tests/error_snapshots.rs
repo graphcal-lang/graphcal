@@ -535,6 +535,14 @@ fn error_missing_variants() {
 }
 
 #[test]
+fn error_missing_multi_axis_combinations() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/missing_multi_axis_combinations.gcl");
+    let rendered = render_error(source, "missing_multi_axis_combinations.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_extra_variants() {
     let source = include_str!("../../../tests/fixtures/invalid/extra_variants.gcl");
     let rendered = render_error(source, "extra_variants.gcl");
@@ -1052,6 +1060,44 @@ fn error_domain_union_member_violation() {
 fn error_domain_generic_arg_constraint() {
     let source = include_str!("../../../tests/fixtures/invalid/domain_generic_arg_constraint.gcl");
     let rendered = render_error(source, "domain_generic_arg_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_generic_field_dim_mismatch() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/domain_generic_field_dim_mismatch.gcl");
+    let rendered = render_error(source, "domain_generic_field_dim_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_generic_default_constraint() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/domain_generic_default_constraint.gcl");
+    let rendered = render_error(source, "domain_generic_default_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_domain_inline_dag_generic_constraint() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/domain_inline_dag_generic_constraint.gcl");
+    let rendered = render_error(source, "domain_inline_dag_generic_constraint.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_plot_encoding_non_plottable() {
+    let source = include_str!("../../../tests/fixtures/invalid/plot_encoding_non_plottable.gcl");
+    let rendered = render_error(source, "plot_encoding_non_plottable.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_plot_encoding_axis_mismatch() {
+    let source = include_str!("../../../tests/fixtures/invalid/plot_encoding_axis_mismatch.gcl");
+    let rendered = render_error(source, "plot_encoding_axis_mismatch.gcl");
     insta::assert_snapshot!(rendered);
 }
 

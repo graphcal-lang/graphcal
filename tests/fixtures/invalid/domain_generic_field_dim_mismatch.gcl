@@ -1,0 +1,6 @@
+// Generic field bounds are checked after concrete dimension substitution.
+type Box<D: Dim> {
+    Box(value: D(min: 0.5 m)),
+}
+
+node bad: Box<Time> = Box<Time>(value: 1.0 s);

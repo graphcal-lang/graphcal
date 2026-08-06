@@ -208,16 +208,11 @@ fn plot_leaf_kind(
             axes.push(index.type_ref().clone());
             crate::stack::with_stack_growth(|| plot_leaf_kind(element, axes))
         }
-        InferredType::Quantity(dimension)
-        | InferredType::CoordinateIndexLabel { dimension, .. } => {
-            Some(PlotLeafKind::Quantity(dimension.clone()))
-        }
+        InferredType::Quantity(dimension) => Some(PlotLeafKind::Quantity(dimension.clone())),
         InferredType::Bool => Some(PlotLeafKind::Bool),
-        InferredType::Int | InferredType::Fin(_) => Some(PlotLeafKind::Int),
+        InferredType::Int => Some(PlotLeafKind::Int),
         InferredType::Datetime(scale) => Some(PlotLeafKind::Datetime(*scale)),
-        InferredType::NamedIndexCase(index) | InferredType::Key(index) => {
-            Some(PlotLeafKind::Key(index.type_ref().clone()))
-        }
+        InferredType::Key(index) => Some(PlotLeafKind::Key(index.type_ref().clone())),
         InferredType::Complex(_) | InferredType::IndexArg(_) | InferredType::Struct(_, _) => None,
     }
 }
@@ -305,21 +300,13 @@ fn check_property_value(
             }
             match infer_expression_type(ctx, dag, &field.value)? {
                 InferredType::Int => Ok(()),
-                InferredType::Quantity(d)
-                | InferredType::CoordinateIndexLabel { dimension: d, .. }
-                    if d.is_dimensionless() =>
-                {
-                    Ok(())
-                }
-                InferredType::Quantity(d)
-                | InferredType::CoordinateIndexLabel { dimension: d, .. } => {
-                    Err(GraphcalError::PlotPropertyDimensioned {
-                        property,
-                        dimension: ctx.registry.dimensions.format_dimension(&d),
-                        src: ctx.src.clone(),
-                        span: field.value.span.into(),
-                    })
-                }
+                InferredType::Quantity(d) if d.is_dimensionless() => Ok(()),
+                InferredType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
+                    property,
+                    dimension: ctx.registry.dimensions.format_dimension(&d),
+                    src: ctx.src.clone(),
+                    span: field.value.span.into(),
+                }),
                 other => Err(mismatch(format_inferred_type(&other, ctx.registry))),
             }
         }

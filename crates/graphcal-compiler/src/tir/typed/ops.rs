@@ -1,14 +1,22 @@
-use std::collections::{BTreeMap, HashMap};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
-use crate::dimension::{Dimension, Rational};
-use crate::nat::{Monomial, NatPolyForm};
+use crate::dimension::Dimension;
+#[cfg(test)]
+use crate::dimension::Rational;
+#[cfg(test)]
+use crate::nat::Monomial;
+use crate::nat::NatPolyForm;
 use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
 use crate::registry::error::GraphcalError;
+#[cfg(test)]
 use crate::registry::types::Registry;
+#[cfg(test)]
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::GenericParamName;
@@ -263,6 +271,7 @@ fn resolved_index_to_inferred(
     Ok(crate::tir::dim_check::InferredIndex::from_ref(reference))
 }
 
+#[cfg(test)]
 fn resolved_index_matches_inferred(
     expected: &ResolvedIndex,
     actual: &crate::tir::dim_check::InferredIndex,
@@ -274,6 +283,7 @@ fn resolved_index_matches_inferred(
     }
 }
 
+#[cfg(test)]
 fn resolved_index_display_name(index: &ResolvedIndex) -> IndexName {
     match index {
         ResolvedIndex::Concrete(name, _) => name.to_unowned_def_name(),
@@ -294,6 +304,7 @@ fn resolved_index_display_name(index: &ResolvedIndex) -> IndexName {
 /// - If no unbound vars remain: checks evaluated form == target.
 /// - If exactly one unbound var appears only linearly (degree 1): solves the linear equation.
 /// - Otherwise: returns an error (ambiguous or non-linear in unbound vars).
+#[cfg(test)]
 pub(in crate::tir::typed) fn unify_nat_poly_form(
     form: &NatPolyForm,
     target: u64,
@@ -312,6 +323,7 @@ pub(in crate::tir::typed) fn unify_nat_poly_form(
     )
 }
 
+#[cfg(test)]
 fn unify_nat_generic_arg(
     expected: &NatPolyForm,
     actual: &NatPolyForm,
@@ -329,12 +341,14 @@ fn unify_nat_generic_arg(
     )
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum NatUnificationSite<'a> {
     Index(&'a IndexName),
     GenericArgument(&'a NatPolyForm),
 }
 
+#[cfg(test)]
 impl NatUnificationSite<'_> {
     fn mismatch(
         self,
@@ -425,6 +439,7 @@ impl NatUnificationSite<'_> {
     }
 }
 
+#[cfg(test)]
 fn solve_nat_poly_form(
     form: &NatPolyForm,
     target: u64,
@@ -526,6 +541,7 @@ fn solve_nat_poly_form(
 /// If `key` is not yet in `sub`, inserts `(key, value)`. If `key` is already bound
 /// to a value equal to `value`, succeeds. Otherwise, calls `on_conflict` with the
 /// previously bound value and the new value to produce an error.
+#[cfg(test)]
 fn bind_or_check<K, V, E>(
     sub: &mut HashMap<K, V>,
     key: K,
@@ -560,14 +576,11 @@ where
     reason = "complex generic unification requires many match arms"
 )]
 #[expect(
-    clippy::implicit_hasher,
-    reason = "always called with standard HashMap"
-)]
-#[expect(
     clippy::too_many_arguments,
     reason = "unification needs all substitution maps, registry, and source context"
 )]
-pub fn unify_resolved_type(
+#[cfg(test)]
+pub(in crate::tir::typed) fn unify_resolved_type(
     resolved: &ResolvedTypeExpr,
     actual: &crate::tir::dim_check::InferredType,
     dim_sub: &mut HashMap<GenericParamName, Dimension>,
@@ -670,7 +683,7 @@ pub fn unify_resolved_type(
         }
 
         ResolvedTypeExpr::Int => {
-            if !actual.is_int_like() {
+            if *actual != InferredType::Int {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
                     found: crate::tir::dim_check::format_inferred_type(actual, registry),
@@ -1030,6 +1043,7 @@ fn resolved_dim_arg_as_type(arg: &ResolvedDimArg) -> ResolvedTypeExpr {
     clippy::too_many_arguments,
     reason = "generic-argument unification shares all substitution maps with type unification"
 )]
+#[cfg(test)]
 fn unify_resolved_generic_arg(
     expected: &ResolvedGenericArg,
     actual: &InferredGenericArg,

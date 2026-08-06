@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+encoding channel `x` cannot plot values of type Pair
+    Diagnostic severity: error
+Begin snippet for plot_encoding_non_plottable.gcl starting at line 7, column 1
+
+snippet line 7:     mark: point,
+snippet line 8:     encode: { x: @pair },
+    label at line 8, columns 18 to 22: not a plottable value
+snippet line 9: };
+diagnostic help: plot quantities, Int, Bool, Datetime, index keys, or a contextual string literal; project algebraic or Complex values to a plottable field first
+diagnostic code: graphcal::D033

@@ -1,0 +1,10 @@
+index Step = { Start, End };
+index Side = { Left, Right };
+
+plot invalid = {
+    mark: point,
+    encode: {
+        x: for step: Step { step },
+        y: for side: Side { side },
+    },
+};

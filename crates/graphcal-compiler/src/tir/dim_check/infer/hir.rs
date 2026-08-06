@@ -1346,7 +1346,7 @@ fn infer_hir_fn_call(
                 t if t
                     .quantity_dimension()
                     .is_some_and(Dimension::is_dimensionless) => {}
-                t if t.is_int_like() => {}
+                InferredType::Int => {}
                 _ => {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Dimensionless or Int".to_string(),
@@ -1557,7 +1557,7 @@ fn infer_extern_fn_call(
                 }
             }
             ValueKind::Int => {
-                if !arg_type.is_int_like() {
+                if arg_type != InferredType::Int {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Int".to_string(),
                         found: format_inferred_type(&arg_type, registry),
@@ -1811,7 +1811,7 @@ fn infer_hir_type_conversion(
     )?;
     match kind {
         TypeConversionFn::ToFloat => {
-            if !arg_type.is_int_like() {
+            if arg_type != InferredType::Int {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
                     found: format_inferred_type(&arg_type, registry),
@@ -2427,7 +2427,7 @@ fn infer_hir_key_form(
                     span: axis_span.into(),
                 });
             };
-            if !arg_type.is_int_like() {
+            if arg_type != InferredType::Int {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "a static Nat position".to_string(),
                     found: format_inferred_type(&arg_type, registry),
@@ -2478,7 +2478,7 @@ fn infer_hir_key_form(
                     span: axis_span.into(),
                 });
             }
-            if !arg_type.is_int_like() {
+            if arg_type != InferredType::Int {
                 return Err(GraphcalError::DimensionMismatch {
                     expected: "Int".to_string(),
                     found: format_inferred_type(&arg_type, registry),
@@ -2774,20 +2774,6 @@ fn infer_hir_index_access(
                         }
                         check_constant_finite_index_index(index_expr, &index_form, src)?;
                     }
-                    InferredType::Fin(ref fin_bound) => {
-                        if !fin_bound.is_leq(&index_form) {
-                            return Err(GraphcalError::EvalError {
-                                message: format!(
-                                    "index out of bounds: expression has type Fin({}) but array has size {}",
-                                    fin_bound.format(),
-                                    index_form.format(),
-                                ),
-                                src: src.clone(),
-                                span: index_expr.span.into(),
-                            });
-                        }
-                        check_constant_finite_index_index(index_expr, &index_form, src)?;
-                    }
                     _ => {
                         return Err(GraphcalError::EvalError {
                             message: format!(
@@ -3071,11 +3057,9 @@ fn inferred_index_is_concrete(index: &InferredIndex) -> bool {
 
 fn inferred_type_is_concrete(inferred: &InferredType) -> bool {
     match inferred {
-        InferredType::CoordinateIndexLabel { index, .. }
-        | InferredType::NamedIndexCase(index)
-        | InferredType::Key(index)
-        | InferredType::IndexArg(index) => inferred_index_is_concrete(index),
-        InferredType::Fin(form) => form.is_constant(),
+        InferredType::Key(index) | InferredType::IndexArg(index) => {
+            inferred_index_is_concrete(index)
+        }
         InferredType::Struct(_, args) => args.iter().all(|arg| match arg {
             InferredGenericArg::Dim(_) => true,
             InferredGenericArg::Index(index) => inferred_index_is_concrete(index),
@@ -3319,28 +3303,13 @@ fn validate_concrete_type_obligations_inner(
             validate_concrete_index(index, ctx)?;
             validate_concrete_type_obligations_inner(element, ctx, stack)
         }
-        InferredType::CoordinateIndexLabel { index, .. }
-        | InferredType::NamedIndexCase(index)
-        | InferredType::Key(index)
-        | InferredType::IndexArg(index) => validate_concrete_index(index, ctx),
-        InferredType::Fin(form) if !form.is_constant() => Err(GraphcalError::EvalError {
-            message: format!(
-                "unresolved finite-index obligation `Fin({})`",
-                form.format()
-            ),
-            src: ctx.src.clone(),
-            span: ctx.span.into(),
-        }),
-        InferredType::Fin(form) if form.constant() == 0 => Err(GraphcalError::EvalError {
-            message: "Fin(0) is invalid: finite indexes must contain at least one key".to_string(),
-            src: ctx.src.clone(),
-            span: ctx.span.into(),
-        }),
+        InferredType::Key(index) | InferredType::IndexArg(index) => {
+            validate_concrete_index(index, ctx)
+        }
         InferredType::Quantity(_)
         | InferredType::Complex(_)
         | InferredType::Bool
         | InferredType::Int
-        | InferredType::Fin(_)
         | InferredType::Datetime(_) => Ok(()),
     }
 }
@@ -4680,7 +4649,7 @@ fn infer_hir_match(
         src,
     )?;
     match &scrutinee_type {
-        InferredType::NamedIndexCase(index_identity) | InferredType::Key(index_identity) => {
+        InferredType::Key(index_identity) => {
             if index_identity.finite_index_form().is_some() {
                 return Err(GraphcalError::EvalError {
                     message: format!(

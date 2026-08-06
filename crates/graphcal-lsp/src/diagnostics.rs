@@ -490,6 +490,53 @@ plot p = {
     }
 
     #[test]
+    fn generic_field_and_type_argument_constraints_retain_codes_and_ranges() {
+        let cases = [
+            (
+                r"
+type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+node bad: Box<Time> = Box<Time>(x: 1.0 s);
+",
+                "graphcal::C002",
+                1,
+            ),
+            (
+                r"
+type Wrapper<T: Type> { Wrapper(value: T) }
+type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> { Bad(value: T) }
+",
+                "graphcal::C006",
+                2,
+            ),
+            (
+                r"
+dag nested {
+    type Wrapper<T: Type> { Wrapper(value: T) }
+    type Bad { Bad(value: Wrapper<Length(min: 0.0 m)>) }
+}
+",
+                "graphcal::C006",
+                3,
+            ),
+        ];
+
+        for (source, expected_code, expected_line) in cases {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    matches!(
+                        &diagnostic.code,
+                        Some(NumberOrString::String(code)) if code == expected_code
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing {expected_code}: {diagnostics:?}"));
+            assert_eq!(diagnostic.range.start.line, expected_line);
+            assert_ne!(diagnostic.range, Range::default());
+        }
+    }
+
+    #[test]
     fn epoch_static_time_scale_argument_produces_no_diagnostics() {
         let source = "node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");";
         let diagnostics = produce_diagnostics(source, "test.gcl");

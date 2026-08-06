@@ -36,7 +36,10 @@ mod infer;
 mod model_schema;
 mod plot;
 
-pub use model_schema::{ConcreteModelConstructor, ConcreteModelField, concrete_model_constructors};
+pub use model_schema::{
+    ConcreteModelConstructor, ConcreteModelField, ConcreteModelType, ConcreteModelTypeError,
+    ValidatedModelType,
+};
 #[cfg(test)]
 mod tests;
 
@@ -48,16 +51,11 @@ pub use crate::registry::declared_type::DeclaredType;
 /// finite indexes additionally carry their normalized Nat form so generic axes
 /// such as `Fin(N + 1)` are not encoded in or compared through synthetic strings.
 #[derive(Debug, Clone, Eq)]
-pub struct InferredIndex {
+pub(crate) struct InferredIndex {
     reference: IndexTypeRef,
 }
 
 impl InferredIndex {
-    #[must_use]
-    pub fn with_owner(owner: crate::dag_id::DagId, name: IndexName) -> Self {
-        Self::from_ref(IndexTypeRef::with_owner(owner, name))
-    }
-
     #[must_use]
     pub(crate) fn from_resolved(resolved: ResolvedIndexName) -> Self {
         Self {
@@ -147,18 +145,11 @@ impl std::fmt::Display for InferredIndex {
 /// Equality is owner-sensitive; leaf-only names must be resolved before they
 /// become inferred semantic types.
 #[derive(Debug, Clone, Eq)]
-pub struct InferredStructType {
+pub(crate) struct InferredStructType {
     reference: StructTypeRef,
 }
 
 impl InferredStructType {
-    #[must_use]
-    pub fn with_owner(owner: crate::dag_id::DagId, name: StructTypeName) -> Self {
-        Self {
-            reference: StructTypeRef::with_owner(owner, name),
-        }
-    }
-
     #[must_use]
     pub(crate) fn from_resolved(resolved: ResolvedStructTypeName) -> Self {
         Self {
@@ -219,7 +210,7 @@ impl std::ops::Deref for InferredStructType {
 
 /// A generic argument inferred at a constructor or type-application site.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InferredGenericArg {
+pub(crate) enum InferredGenericArg {
     Dim(Dimension),
     Index(InferredIndex),
     Nat(crate::nat::NatPolyForm),
@@ -228,35 +219,14 @@ pub enum InferredGenericArg {
 
 /// The inferred type of an expression.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InferredType {
+pub(crate) enum InferredType {
     Quantity(Dimension),
     /// A complex quantity whose real and imaginary components share one dimension.
     Complex(Dimension),
-    /// A quantity produced by iterating a declared coordinate index.
-    ///
-    /// TODO(#1073): no longer constructed — coordinate loop variables are
-    /// `Key`-typed and expose their quantity through `coord()`; remove.
-    CoordinateIndexLabel {
-        index: InferredIndex,
-        dimension: Dimension,
-    },
     Bool,
     Int,
-    /// A bounded natural number `Fin(N)`: the type of loop variables over `Fin(N)`.
-    ///
-    /// A value of type `Fin(N)` satisfies `0 <= value < N`. This enables compile-time
-    /// bounds checking: `v[i]` is valid when `i : Fin(N)` and `v : T[M]` with `N <= M`.
-    ///
-    /// TODO(#1073): no longer constructed — `Fin` loop variables are
-    /// `Key<Fin(N)>`-typed and expose integers through `to_int()`; remove.
-    Fin(NatPolyForm),
     /// A datetime instant in a specific time scale.
     Datetime(TimeScale),
-    /// A named-index case bound by a `for` comprehension.
-    ///
-    /// TODO(#1073): no longer constructed — loop variables are `Key`-typed;
-    /// remove together with `CoordinateIndexLabel` and `Fin`.
-    NamedIndexCase(InferredIndex),
     /// An index-key value of type `Key<I>`: a first-class element key of
     /// axis `I`.
     Key(InferredIndex),
@@ -273,12 +243,6 @@ pub enum InferredType {
 }
 
 impl InferredType {
-    /// Returns `true` if this type is `Int` or `Fin(N)` (integer-like).
-    #[must_use]
-    pub(crate) const fn is_int_like(&self) -> bool {
-        matches!(self, Self::Int | Self::Fin(_))
-    }
-
     #[must_use]
     pub(crate) const fn complex_dimension(&self) -> Option<&Dimension> {
         match self {
@@ -289,9 +253,7 @@ impl InferredType {
 
     const fn quantity_dimension(&self) -> Option<&Dimension> {
         match self {
-            Self::Quantity(dimension) | Self::CoordinateIndexLabel { dimension, .. } => {
-                Some(dimension)
-            }
+            Self::Quantity(dimension) => Some(dimension),
             _ => None,
         }
     }
@@ -1823,10 +1785,7 @@ fn expected_bound_from_inferred(inferred: &InferredType) -> Option<ExpectedBound
         InferredType::Int => Some(ExpectedBound::Int),
         InferredType::Datetime(scale) => Some(ExpectedBound::Datetime(*scale)),
         InferredType::Complex(_)
-        | InferredType::CoordinateIndexLabel { .. }
         | InferredType::Bool
-        | InferredType::Fin(_)
-        | InferredType::NamedIndexCase(_)
         | InferredType::Key(_)
         | InferredType::IndexArg(_)
         | InferredType::Struct(..) => None,

@@ -1,0 +1,7 @@
+// Constraints nested in generic defaults have no enforcement site.
+type Wrapper<T: Type> {
+    Wrapper(value: T),
+}
+type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> {
+    Bad(value: T),
+}
