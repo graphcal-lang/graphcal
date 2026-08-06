@@ -36,7 +36,9 @@ mod infer;
 mod model_schema;
 mod plot;
 
-pub use model_schema::{ConcreteModelConstructor, ConcreteModelField, concrete_model_constructors};
+pub use model_schema::{
+    ConcreteModelConstructor, ConcreteModelField, ConcreteModelType, ConcreteModelTypeError,
+};
 #[cfg(test)]
 mod tests;
 

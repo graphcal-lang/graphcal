@@ -1816,40 +1816,43 @@ fn model_value_schema_inner(
                 });
             }
             let result = (|| {
-                graphcal_compiler::tir::dim_check::concrete_model_constructors(
+                let model_type = graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
                     tir,
                     identity,
                     generic_args,
                     source,
-                )?
-                .into_iter()
-                .map(|constructor| {
-                    let fields = constructor
-                        .fields()
-                        .iter()
-                        .map(|field| {
-                            Ok(ModelFieldSchema {
-                                name: field.name().clone(),
-                                value: model_value_schema_inner(
-                                    field.declared_type(),
-                                    tir,
-                                    source,
-                                    visiting,
-                                )?,
+                )
+                .map_err(|error| error.into_graphcal_error(source))?;
+                model_type
+                    .constructors(source)?
+                    .into_iter()
+                    .map(|constructor| {
+                        let fields = constructor
+                            .fields()
+                            .iter()
+                            .map(|field| {
+                                Ok(ModelFieldSchema {
+                                    name: field.name().clone(),
+                                    value: model_value_schema_inner(
+                                        field.declared_type(),
+                                        tir,
+                                        source,
+                                        visiting,
+                                    )?,
+                                })
                             })
+                            .collect::<Result<Vec<_>, GraphcalError>>()?;
+                        Ok(ModelConstructorSchema {
+                            name: constructor.name().clone(),
+                            fields,
                         })
-                        .collect::<Result<Vec<_>, GraphcalError>>()?;
-                    Ok(ModelConstructorSchema {
-                        name: constructor.name().clone(),
-                        fields,
                     })
-                })
-                .collect::<Result<Vec<_>, GraphcalError>>()
-                .map(|constructors| ModelValueSchema::Algebraic {
-                    identity: identity.clone(),
-                    generic_args: generic_args.clone(),
-                    constructors,
-                })
+                    .collect::<Result<Vec<_>, GraphcalError>>()
+                    .map(|constructors| ModelValueSchema::Algebraic {
+                        identity: identity.clone(),
+                        generic_args: generic_args.clone(),
+                        constructors,
+                    })
             })();
             visiting.remove(identity);
             result
