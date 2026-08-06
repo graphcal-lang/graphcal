@@ -34,6 +34,137 @@ fn find_value(result: &EvalResult, name: &str) -> f64 {
         .unwrap()
 }
 
+fn assert_quantity_value(result: &EvalResult, name: &str, expected: f64) {
+    let actual = find_value(result, name);
+    assert!(
+        (actual - expected).abs() < f64::EPSILON,
+        "expected `{name}` to equal {expected}, got {actual}"
+    );
+}
+
+/// Write a small package-shaped project for pipeline regression tests.
+fn write_pipeline_project(
+    files: &[(&str, &str)],
+    root: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let source_root = directory.path().join("src/pipeline");
+    std::fs::create_dir_all(&source_root).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"pipeline\"\n",
+    )
+    .unwrap();
+    for (name, source) in files {
+        std::fs::write(source_root.join(name), source).unwrap();
+    }
+    (directory, source_root.join(root))
+}
+
+#[test]
+fn empty_and_default_equivalent_includes_produce_the_same_instance_value() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param input: Dimensionless = 2.0;\npub node output: Dimensionless = @input * 3.0;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib() as defaults;\ninclude pipeline.lib(input: 2.0) as configured;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert_quantity_value(&result, "defaults.output", 6.0);
+    assert_quantity_value(&result, "configured.output", 6.0);
+}
+
+#[test]
+fn repeated_empty_includes_keep_distinct_output_names() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param input: Dimensionless = 2.0;\npub node output: Dimensionless = @input;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib() as first;\ninclude pipeline.lib() as second;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert_quantity_value(&result, "first.output", 2.0);
+    assert_quantity_value(&result, "second.output", 2.0);
+}
+
+#[test]
+fn nested_configured_includes_keep_instance_local_bindings_and_assertions() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "leaf.gcl",
+                "param input: Dimensionless;\npub node output: Dimensionless = @input;\nassert positive = @output > 0.0;\n",
+            ),
+            (
+                "middle.gcl",
+                "param input: Dimensionless;\ninclude pipeline.leaf(input: @input) as leaf;\npub node output: Dimensionless = @leaf.output;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.middle(input: 2.0) as first;\ninclude pipeline.middle(input: 5.0) as second;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert_quantity_value(&result, "first.output", 2.0);
+    assert_quantity_value(&result, "second.output", 5.0);
+    assert_eq!(
+        result
+            .assertions
+            .iter()
+            .filter(|(_, outcome, _)| *outcome == AssertResult::Pass)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn legacy_import_artifacts_expose_assertions_and_runtime_unit_scales() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\npub assert rate_positive = @rate > 0.0;\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\nimport pipeline.lib.{ rate_positive };\nnode price: lib.Money = 3.0 lib.EUR;\n#[assumes(rate_positive)]\nnode checked: Bool = true;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert_quantity_value(&result, "price", 6.0);
+    assert!(
+        result
+            .assertions
+            .iter()
+            .any(
+                |(name, outcome, _)| name.member().as_str() == "rate_positive"
+                    && *outcome == AssertResult::Pass
+            )
+    );
+}
+
 #[test]
 fn cancellation_stops_an_in_flight_evaluation() {
     use std::{
