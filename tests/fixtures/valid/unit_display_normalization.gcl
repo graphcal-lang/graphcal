@@ -1,4 +1,4 @@
-// Issue #577: a unit literal whose terms repeat a base unit (e.g., `m/s/s`)
+// Issue #577: a quantity literal whose terms repeat a base unit (e.g., `m/s/s`)
 // must render in canonical normalized form so the displayed label parses
 // back to the same dimensional monomial. Before the fix, `1.0 m/s/s` would
 // print as `1 m/s * s`, which is mathematically `m`.

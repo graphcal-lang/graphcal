@@ -552,7 +552,7 @@ impl<'a> HirRefCollector<'a> {
                 self.walk(then_branch, table);
                 self.walk(else_branch, table);
             }
-            hir::ExprKind::UnitLiteral { unit, .. } => {
+            hir::ExprKind::QuantityLiteral { unit, .. } => {
                 self.collect_unit_expr_refs(unit, table);
             }
             hir::ExprKind::Convert {
@@ -2055,7 +2055,7 @@ fn collect_constraint_expr_refs(
     table: &mut SymbolTable,
 ) {
     match &expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => {
+        ExprKind::QuantityLiteral { unit, .. } => {
             collect_unit_expr_refs(unit, table);
         }
         ExprKind::UnaryOp { operand, .. } => {
@@ -2095,12 +2095,12 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
 
 /// Format a domain bound expression as a human-readable string.
 ///
-/// Handles the common cases: number literals, unit-annotated literals, and negated forms.
+/// Handles the common cases: number literals, quantity literals, and negated forms.
 fn format_bound_expr(expr: &hir::Expr) -> String {
     match &expr.kind {
         hir::ExprKind::Number(value) => format_number(*value),
         hir::ExprKind::Integer(value) => value.to_string(),
-        hir::ExprKind::UnitLiteral { value, unit } => {
+        hir::ExprKind::QuantityLiteral { value, unit } => {
             let number = format_number(*value);
             let unit = format_unit_terms_with_config(
                 unit.terms

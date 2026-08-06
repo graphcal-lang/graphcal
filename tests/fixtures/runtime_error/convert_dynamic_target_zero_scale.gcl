@@ -1,6 +1,6 @@
 // convert_dynamic_target_zero_scale.gcl -- a dynamic unit used only as a
 // conversion target must fail loudly when its scale is non-positive,
-// matching the behavior of unit literals (#648 N1).
+// matching the behavior of quantity literals (#648 N1).
 pub base dim Money;
 pub base unit USD: Money;
 param rate: Dimensionless = 0.0;

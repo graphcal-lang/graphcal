@@ -1484,7 +1484,7 @@ fn evaluate_plot(
 ///
 /// Walks the expression tree to find `@`-references (graph refs) and looks up
 /// their declared type for the dimension. Also extracts display unit info from
-/// unit literals and conversion targets.
+/// quantity literals and conversion targets.
 fn extract_encoding_axis_meta(
     expr: &graphcal_compiler::hir::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,

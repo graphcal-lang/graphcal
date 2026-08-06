@@ -82,14 +82,14 @@ fn collect_unit_names(
     names
 }
 
-/// Collect every unit name mentioned by `UnitLiteral` / `Convert` nodes.
+/// Collect every unit name mentioned by `QuantityLiteral` / `Convert` nodes.
 fn collect_unit_names_from_hir(
     expr: &hir::Expr,
     names: &mut std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName>,
 ) {
     // Recursion choke point: recurses once per tree level.
     crate::stack::with_stack_growth(|| match &expr.kind {
-        hir::ExprKind::UnitLiteral { unit, .. } => {
+        hir::ExprKind::QuantityLiteral { unit, .. } => {
             for term in &unit.terms {
                 names.insert(term.name.value.resolved().clone());
             }
@@ -488,7 +488,7 @@ fn collect_resolved_collection_refs_from_expr_inner(
         | hir::ExprKind::GraphRef(_)
         | hir::ExprKind::LocalRef(_)
         | hir::ExprKind::ConstRef(_)
-        | hir::ExprKind::UnitLiteral { .. } => Ok(()),
+        | hir::ExprKind::QuantityLiteral { .. } => Ok(()),
         hir::ExprKind::VariantLiteral(variant) => record_resolved_collection_index(
             variant.variant.index(),
             ctx,
@@ -781,7 +781,7 @@ fn collect_resolved_constructor_refs_from_expr_inner(
         | hir::ExprKind::TypeSystemRef(_)
         | hir::ExprKind::GraphRef(_)
         | hir::ExprKind::LocalRef(_)
-        | hir::ExprKind::UnitLiteral { .. }
+        | hir::ExprKind::QuantityLiteral { .. }
         | hir::ExprKind::VariantLiteral(_) => Ok(()),
         hir::ExprKind::ConstRef(target) => {
             if let hir::ConstRef::Constructor(constructor) = &target.value {

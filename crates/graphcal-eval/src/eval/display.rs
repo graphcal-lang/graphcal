@@ -45,7 +45,7 @@ fn attach_display_units_depth<'a>(
     depth: usize,
 ) -> Result<(), GraphcalError> {
     match (&mut *value, &expr.kind) {
-        (Value::Quantity { display_unit, .. }, ExprKind::UnitLiteral { unit, .. }) => {
+        (Value::Quantity { display_unit, .. }, ExprKind::QuantityLiteral { unit, .. }) => {
             *display_unit = Some(resolve_unit_to_display(unit, ctx, values)?);
         }
         (Value::Quantity { display_unit, .. }, ExprKind::Convert { target, .. })
@@ -301,7 +301,9 @@ pub(super) fn extract_flat_display_unit(
     values: &RuntimeValueMap,
 ) -> Result<Option<DisplayUnit>, GraphcalError> {
     match &expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => resolve_unit_to_display(unit, ctx, values).map(Some),
+        ExprKind::QuantityLiteral { unit, .. } => {
+            resolve_unit_to_display(unit, ctx, values).map(Some)
+        }
         ExprKind::Convert { target, .. } => resolve_unit_to_display(target, ctx, values).map(Some),
         ExprKind::MapLiteral { entries } => entries.first().map_or(Ok(None), |e| {
             extract_flat_display_unit(&e.value, ctx, values)

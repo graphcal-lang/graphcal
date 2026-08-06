@@ -129,10 +129,10 @@ fn preserves_blank_line_between_declarations() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn reciprocal_and_grouped_unit_literals_round_trip() {
+fn reciprocal_and_grouped_quantity_literals_round_trip() {
     let source = "param frequency: Frequency = 2.0 1/s;\n\
 param speed: Velocity = 3.0 (m/s);\n";
-    let formatted = format_source(source).expect("unit literals should format");
+    let formatted = format_source(source).expect("quantity literals should format");
     assert_eq!(
         formatted,
         "param frequency: Frequency = 2.0 1/s;\n\
@@ -140,7 +140,7 @@ param speed: Velocity = 3.0 m/s;\n"
     );
     graphcal_compiler::syntax::parser::Parser::new(&formatted)
         .parse_file()
-        .expect("formatted unit literals should parse");
+        .expect("formatted quantity literals should parse");
     assert_eq!(format_source(&formatted).unwrap(), formatted);
 }
 

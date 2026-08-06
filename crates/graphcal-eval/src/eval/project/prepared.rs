@@ -2073,8 +2073,8 @@ fn validate_closed_hir(expr: &graphcal_compiler::hir::Expr) -> Result<(), &'stat
         | HirExprKind::ZonedDateTimeLiteral(_)
         | HirExprKind::IanaTimeZoneLiteral(_)
         | HirExprKind::VariantLiteral(_) => Ok(()),
-        HirExprKind::UnitLiteral { value, .. } if value.is_finite() => Ok(()),
-        HirExprKind::UnitLiteral { .. } => Err("quantity values must be finite"),
+        HirExprKind::QuantityLiteral { value, .. } if value.is_finite() => Ok(()),
+        HirExprKind::QuantityLiteral { .. } => Err("quantity values must be finite"),
         HirExprKind::ConstRef(reference) if matches!(reference.value, ConstRef::Constructor(_)) => {
             Ok(())
         }

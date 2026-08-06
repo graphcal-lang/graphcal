@@ -1222,7 +1222,7 @@ fn resolve_constraint_target(
 
 /// Format a bound expression for display (e.g., `"100 kg"`, `"0.01 N"`).
 ///
-/// For simple expressions (numbers, unit literals, unary negation), the
+/// For simple expressions (numbers, quantity literals, unary negation), the
 /// original syntactic form is preserved. For complex expressions, the
 /// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
 fn exact_domain_int_bound(
@@ -1254,7 +1254,7 @@ fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: 
     match &expr.kind {
         ExprKind::Number(n) => graphcal_compiler::registry::format::format_number(*n),
         ExprKind::Integer(n) => format!("{n}"),
-        ExprKind::UnitLiteral { value, unit } => {
+        ExprKind::QuantityLiteral { value, unit } => {
             let unit_str = graphcal_compiler::registry::format::format_unit_terms_with_config(
                 unit.terms
                     .iter()

@@ -123,7 +123,7 @@ fn parse_param_with_dim_type() {
             }
             assert!(matches!(
                 p.value.as_ref().unwrap().kind,
-                ExprKind::UnitLiteral { .. }
+                ExprKind::QuantityLiteral { .. }
             ));
         }
         _ => panic!("expected param"),

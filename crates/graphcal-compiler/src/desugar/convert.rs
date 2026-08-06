@@ -510,7 +510,7 @@ impl From<ExprKind<Raw>> for ExprKind<Desugared> {
             ExprKind::Bool(b) => Self::Bool(b),
             ExprKind::StringLiteral(s) => Self::StringLiteral(s),
             ExprKind::GraphRef(r) => Self::GraphRef(r),
-            ExprKind::UnitLiteral { value, unit } => Self::UnitLiteral { value, unit },
+            ExprKind::QuantityLiteral { value, unit } => Self::QuantityLiteral { value, unit },
             ExprKind::UnresolvedRef(r) => Self::UnresolvedRef(r),
             // Recursive — convert children.
             ExprKind::BinOp { op, lhs, rhs } => Self::BinOp {

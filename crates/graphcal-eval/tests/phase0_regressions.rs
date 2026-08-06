@@ -58,11 +58,11 @@ fn non_finite_numeric_literal_is_rejected() {
 }
 
 #[test]
-fn overflowing_unit_literal_is_rejected() {
+fn overflowing_quantity_literal_is_rejected() {
     assert_rejected_or_decl_error(
         "node x: Length = 1e308 km;",
         "x",
-        "BUG: overflowing unit literal accepted",
+        "BUG: overflowing quantity literal accepted",
     );
 }
 

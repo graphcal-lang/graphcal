@@ -767,7 +767,7 @@ signed_integer
    = [ "-" ], NUMBER;  (* Must be an integer (no decimal point or exponent). *)
 
 (* --- Unit expressions --- *)
-(* Used in unit declarations, unit literals, and conversion targets.
+(* Used in unit declarations, quantity literals, and conversion targets.
    Unit expressions share dim_expr's structure and exponent grammar. Unit
    references follow the same scoping rules as every other imported category:
    a bare IDENT names a local declaration, a selective import, or a prelude

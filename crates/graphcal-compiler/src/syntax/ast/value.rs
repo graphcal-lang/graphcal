@@ -653,7 +653,7 @@ fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
         | ExprKind::UnaryOp { .. }
         | ExprKind::FnCall { .. }
         | ExprKind::If { .. }
-        | ExprKind::UnitLiteral { .. }
+        | ExprKind::QuantityLiteral { .. }
         | ExprKind::Convert { .. }
         | ExprKind::DisplayTimezone { .. }
         | ExprKind::FieldAccess { .. }
@@ -708,8 +708,8 @@ pub enum ExprKind<P: Phase = Raw> {
         then_branch: Box<Expr<P>>,
         else_branch: Box<Expr<P>>,
     },
-    /// Unit-annotated literal: `400 km`, `9.80665 m/s^2`
-    UnitLiteral { value: f64, unit: UnitExpr },
+    /// Quantity literal: `400 km`, `9.80665 m/s^2`
+    QuantityLiteral { value: f64, unit: UnitExpr },
     /// Conversion: `expr -> unit_expr`
     Convert {
         expr: Box<Expr<P>>,

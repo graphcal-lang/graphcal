@@ -185,7 +185,7 @@ param speed: Velocity = 3.0 (m/s);
 Only the exact integer `1` is valid as a reciprocal numerator. The formatter
 normalizes redundant grouping, so `3.0 (m/s)` formats as `3.0 m/s`.
 
-The SI value produced by a unit literal must remain finite. For example, a literal whose numeric value times its unit scale overflows is an error rather than `inf`.
+The SI value produced by a quantity literal must remain finite. For example, a literal whose numeric value times its unit scale overflows is an error rather than `inf`.
 
 ## Unit Conversion
 

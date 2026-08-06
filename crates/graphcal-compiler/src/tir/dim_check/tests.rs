@@ -360,7 +360,7 @@ fn check_dimensionless_arithmetic() {
 }
 
 #[test]
-fn check_length_unit_literal() {
+fn check_length_quantity_literal() {
     let types = check("param alt: Length = 400.0 km;").unwrap();
     let length = Dimension::base(BaseDimId::Prelude(
         crate::dimension::PreludeBaseDimension::Length,
@@ -1691,7 +1691,7 @@ const unit double_mile: Length = 2.0 mile;";
 }
 
 #[test]
-fn const_node_rejects_runtime_unit_literal() {
+fn const_node_rejects_runtime_quantity_literal() {
     let source = "\
 unit mile: Length = 1609.344 m;
 const node distance: Length = 1.0 mile;";
@@ -1715,7 +1715,7 @@ const node distance: Length(min: 1.0 mile) = 1609.344 m;";
 }
 
 #[test]
-fn const_node_accepts_const_unit_literal() {
+fn const_node_accepts_const_quantity_literal() {
     let source = "\
 const unit mile: Length = 1609.344 m;
 const node distance: Length = 1.0 mile;";
@@ -2126,7 +2126,7 @@ node v: Dimensionless[Fin(3)] = for i: Fin(3) { to_float(to_int(i)) };";
 // -----------------------------------------------------------------------
 
 #[test]
-fn domain_bound_unit_literal_matches() {
+fn domain_bound_quantity_literal_matches() {
     let source = "param m: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;";
     check(source).unwrap();
 }

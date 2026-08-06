@@ -533,7 +533,7 @@ fn infer_hir_type_inner(
                 span: name.span.into(),
             });
         }
-        hir::ExprKind::UnitLiteral { unit, .. } => infer_hir_unit_literal(unit, tir, src)?,
+        hir::ExprKind::QuantityLiteral { unit, .. } => infer_hir_quantity_literal(unit, tir, src)?,
         hir::ExprKind::VariantLiteral(variant) => {
             check_index_override_dependency(
                 local_types,
@@ -840,7 +840,7 @@ fn infer_hir_type_inner(
     Ok(inferred)
 }
 
-fn infer_hir_unit_literal(
+fn infer_hir_quantity_literal(
     unit: &hir::ResolvedUnitExpr,
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,

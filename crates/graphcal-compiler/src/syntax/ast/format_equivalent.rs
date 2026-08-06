@@ -1844,8 +1844,8 @@ impl FormatEquivalent for ExprKind {
                     && then_branch.format_equivalent(other_then_branch)
                     && else_branch.format_equivalent(other_else_branch)
             }
-            Self::UnitLiteral { value, unit } => {
-                let Self::UnitLiteral {
+            Self::QuantityLiteral { value, unit } => {
+                let Self::QuantityLiteral {
                     value: other_value,
                     unit: other_unit,
                 } = other

@@ -1613,7 +1613,7 @@ impl HirPolicyChecker<'_> {
             | hir::ExprKind::TypeSystemRef(_)
             | hir::ExprKind::ConstRef(_)
             | hir::ExprKind::LocalRef(_) => Ok(()),
-            hir::ExprKind::UnitLiteral { unit, .. } => self.check_unit_expr(unit, phase),
+            hir::ExprKind::QuantityLiteral { unit, .. } => self.check_unit_expr(unit, phase),
             hir::ExprKind::GraphRef(target) => {
                 // Use the whole `@name` span (the reference Spanned covers
                 // only the name) so the label includes the sigil.
