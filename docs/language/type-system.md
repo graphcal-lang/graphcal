@@ -436,7 +436,7 @@ declaration can still use the conventional `type T { T(...) }` spelling: the
 type name and its constructor name do not compete in type, index, or value
 positions.
 
-Units are referenced only in unit syntax, such as unit literals and conversion
+Units are referenced only in unit syntax, such as quantity literals and conversion
 targets. A unit name can match a type, index, or value leaf without changing
 which declaration a type, index, or value position resolves.
 

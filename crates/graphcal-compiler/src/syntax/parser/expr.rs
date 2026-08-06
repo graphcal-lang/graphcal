@@ -721,7 +721,7 @@ impl Parser<'_> {
                 let unit_expr = self.parse_unit_expr()?;
                 let full_span = span.merge(unit_expr.span);
                 Ok(Expr::new(
-                    ExprKind::UnitLiteral {
+                    ExprKind::QuantityLiteral {
                         value,
                         unit: unit_expr,
                     },
@@ -1150,31 +1150,31 @@ mod tests {
     }
 
     #[test]
-    fn parse_unit_literal() {
+    fn parse_quantity_literal() {
         let file = Parser::new("param alt: Length = 400.0 km;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
-                ExprKind::UnitLiteral { value, unit } => {
+                ExprKind::QuantityLiteral { value, unit } => {
                     assert!((value - 400.0).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 1);
                     assert_eq!(unit.terms[0].name.value.to_string(), "km");
                 }
-                _ => panic!("expected UnitLiteral"),
+                _ => panic!("expected QuantityLiteral"),
             },
             _ => panic!("expected param"),
         }
     }
 
     #[test]
-    fn parse_compound_unit_literal() {
+    fn parse_compound_quantity_literal() {
         let file = Parser::new("const node g0: Acceleration = 9.80665 m/s^2;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::ConstNode(c) => match &c.value.kind {
-                ExprKind::UnitLiteral { value, unit } => {
+                ExprKind::QuantityLiteral { value, unit } => {
                     assert!((value - 9.80665).abs() < f64::EPSILON);
                     assert_eq!(unit.terms.len(), 2);
                     assert_eq!(unit.terms[0].name.value.to_string(), "m");
@@ -1185,17 +1185,17 @@ mod tests {
                         Some(crate::dimension::Rational::from(2))
                     );
                 }
-                _ => panic!("expected UnitLiteral"),
+                _ => panic!("expected QuantityLiteral"),
             },
             _ => panic!("expected const"),
         }
     }
 
     #[test]
-    fn parse_reciprocal_unit_literal() {
+    fn parse_reciprocal_quantity_literal() {
         let expr = Parser::new("2.0 1/s").parse_single_expr().unwrap();
-        let ExprKind::UnitLiteral { value, unit } = &expr.kind else {
-            panic!("expected reciprocal UnitLiteral");
+        let ExprKind::QuantityLiteral { value, unit } = &expr.kind else {
+            panic!("expected reciprocal QuantityLiteral");
         };
         assert!((*value - 2.0).abs() < f64::EPSILON);
         assert_eq!(unit.terms.len(), 1);
@@ -1204,10 +1204,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_grouped_unit_literal() {
+    fn parse_grouped_quantity_literal() {
         let expr = Parser::new("3.0 (m/s)").parse_single_expr().unwrap();
-        let ExprKind::UnitLiteral { value, unit } = &expr.kind else {
-            panic!("expected grouped UnitLiteral");
+        let ExprKind::QuantityLiteral { value, unit } = &expr.kind else {
+            panic!("expected grouped QuantityLiteral");
         };
         assert!((*value - 3.0).abs() < f64::EPSILON);
         assert_eq!(unit.terms.len(), 2);
@@ -1218,18 +1218,18 @@ mod tests {
     }
 
     #[test]
-    fn division_by_parenthesized_unit_literal_remains_arithmetic() {
+    fn division_by_parenthesized_quantity_literal_remains_arithmetic() {
         let expr = Parser::new("1.0 / (2.0 m)").parse_single_expr().unwrap();
         let ExprKind::BinOp { op, lhs, rhs } = &expr.kind else {
             panic!("expected arithmetic division");
         };
         assert_eq!(*op, BinOp::Div);
         assert!(matches!(lhs.kind, ExprKind::Number(value) if (value - 1.0).abs() < f64::EPSILON));
-        assert!(matches!(rhs.kind, ExprKind::UnitLiteral { .. }));
+        assert!(matches!(rhs.kind, ExprKind::QuantityLiteral { .. }));
     }
 
     #[test]
-    fn reciprocal_unit_literal_requires_exact_integer_one() {
+    fn reciprocal_quantity_literal_requires_exact_integer_one() {
         for source in ["2.0 1.0/s", "2.0 1_0/s"] {
             let error = Parser::new(source).parse_single_expr().unwrap_err();
             assert!(
@@ -1284,16 +1284,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_qualified_unit_literal() {
+    fn parse_qualified_quantity_literal() {
         let file = Parser::new("node d: Length = 2.0 u.mile;")
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
-                ExprKind::UnitLiteral { unit, .. } => {
+                ExprKind::QuantityLiteral { unit, .. } => {
                     assert_eq!(unit.terms[0].name.value.to_string(), "u.mile");
                 }
-                _ => panic!("expected UnitLiteral"),
+                _ => panic!("expected QuantityLiteral"),
             },
             _ => panic!("expected node"),
         }
@@ -2057,9 +2057,9 @@ mod tests {
     }
 
     #[test]
-    fn single_expr_unit_literal() {
+    fn single_expr_quantity_literal() {
         let expr = Parser::new("450.0 s").parse_single_expr().unwrap();
-        assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+        assert!(matches!(expr.kind, ExprKind::QuantityLiteral { .. }));
     }
 
     #[test]
@@ -2078,9 +2078,9 @@ mod tests {
     }
 
     #[test]
-    fn single_expr_compound_unit() {
+    fn single_expr_compound_quantity_literal() {
         let expr = Parser::new("9.80665 m/s^2").parse_single_expr().unwrap();
-        assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+        assert!(matches!(expr.kind, ExprKind::QuantityLiteral { .. }));
     }
 
     #[test]

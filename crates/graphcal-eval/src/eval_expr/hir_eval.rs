@@ -84,7 +84,7 @@ fn eval_hir_expr_inner(
             ),
             name.span,
         )),
-        hir::ExprKind::UnitLiteral { value, unit } => {
+        hir::ExprKind::QuantityLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx)?;
             checked_unit_scaled_value(*value, scale, expr.span, ctx)
         }

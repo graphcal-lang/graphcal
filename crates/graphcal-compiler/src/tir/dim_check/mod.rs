@@ -651,7 +651,7 @@ fn check_ineffective_conversions_inner(
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
-        | ExprKind::UnitLiteral { .. }
+        | ExprKind::QuantityLiteral { .. }
         | ExprKind::VariantLiteral(_) => Ok(()),
     }
 }
@@ -819,7 +819,7 @@ fn statically_known_tolerance(expr: &crate::hir::Expr) -> Option<f64> {
             reason = "tolerance literals are small integers"
         )]
         crate::hir::ExprKind::Integer(i) => Some(*i as f64),
-        crate::hir::ExprKind::UnitLiteral { value, .. } => Some(*value),
+        crate::hir::ExprKind::QuantityLiteral { value, .. } => Some(*value),
         crate::hir::ExprKind::UnaryOp {
             op: crate::syntax::ast::UnaryOp::Neg,
             operand,

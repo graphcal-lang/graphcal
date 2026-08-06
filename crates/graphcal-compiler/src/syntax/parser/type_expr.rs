@@ -1456,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_unit_literal_stops_before_parenthesized_arithmetic_divisor() {
+    fn parse_quantity_literal_stops_before_parenthesized_arithmetic_divisor() {
         let source = "node x: Dimensionless = 459.3 W / (1.0 m^2);";
         Parser::new(source).parse_file().unwrap();
     }

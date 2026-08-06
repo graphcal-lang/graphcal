@@ -622,7 +622,7 @@ node x: Dimensionless = match @r {
                         panic!("expected Named")
                     };
                     assert_eq!(spanned.value.leaf().as_str(), "Maneuver");
-                    assert!(matches!(body.kind, ExprKind::UnitLiteral { .. }));
+                    assert!(matches!(body.kind, ExprKind::QuantityLiteral { .. }));
                 }
                 other => panic!("expected ForComp, got {other:?}"),
             },

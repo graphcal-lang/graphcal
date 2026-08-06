@@ -37,7 +37,7 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    numeric::finite_quantity(value * scale, "unit literal value")
+    numeric::finite_quantity(value * scale, "quantity literal value")
         .map(RuntimeValue::Quantity)
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }

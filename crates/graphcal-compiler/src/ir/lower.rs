@@ -3002,7 +3002,7 @@ fn substitute_type_names_in_expr(
         | ExprKind::Integer(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
-        | ExprKind::UnitLiteral { .. }
+        | ExprKind::QuantityLiteral { .. }
         | ExprKind::GraphRef(_) => {}
 
         // A bare reference path naming a rebound type is a nullary
@@ -3753,7 +3753,7 @@ fn expr_uses_local_units(expr: &Expr, unit_names: &HashSet<UnitName>) -> bool {
                 return Ok(());
             }
             let unit = match &expr.kind {
-                ExprKind::UnitLiteral { unit, .. } => Some(unit),
+                ExprKind::QuantityLiteral { unit, .. } => Some(unit),
                 ExprKind::Convert { target, .. } => Some(target),
                 _ => None,
             };
@@ -4507,7 +4507,7 @@ fn eval_coordinate_expr(
             ensure_finite(*value, expr.span)?,
             Dimension::dimensionless(),
         )),
-        ExprKind::UnitLiteral { value, unit } => {
+        ExprKind::QuantityLiteral { value, unit } => {
             let (dimension, scale) = registry
                 .resolve_unit_expr(unit)
                 .map_err(|error| unit_resolve_to_graphcal(error, src, unit.span))?;
@@ -4741,7 +4741,7 @@ fn coordinate_display_unit(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(Option<String>, f64), GraphcalError> {
     let unit = match &start_expr.kind {
-        ExprKind::UnitLiteral { unit, .. } => unit,
+        ExprKind::QuantityLiteral { unit, .. } => unit,
         ExprKind::UnaryOp {
             op: crate::desugar::desugared_ast::UnaryOp::Neg,
             operand,

@@ -638,7 +638,7 @@ pub enum ExprKind {
         then_branch: Box<Expr>,
         else_branch: Box<Expr>,
     },
-    UnitLiteral {
+    QuantityLiteral {
         value: f64,
         unit: ResolvedUnitExpr,
     },
@@ -755,7 +755,7 @@ fn collect_expr_dependencies_into_inner(expr: &Expr, deps: &mut ExprDependencies
         | ExprKind::TypeSystemRef(_)
         | ExprKind::LocalRef(_)
         | ExprKind::VariantLiteral(_)
-        | ExprKind::UnitLiteral { .. } => {}
+        | ExprKind::QuantityLiteral { .. } => {}
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());
         }
@@ -865,7 +865,7 @@ fn visit_expr_inner(expr: &Expr, visitor: &mut impl FnMut(&Expr)) {
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
-        | ExprKind::UnitLiteral { .. }
+        | ExprKind::QuantityLiteral { .. }
         | ExprKind::VariantLiteral(_) => {}
         ExprKind::BinOp { lhs, rhs, .. } => {
             visit_expr(lhs, visitor);
@@ -1076,7 +1076,7 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
-        | ExprKind::UnitLiteral { .. }
+        | ExprKind::QuantityLiteral { .. }
         | ExprKind::VariantLiteral(_) => None,
         ExprKind::FnCall { callee, args, .. } => {
             if let FunctionRef::External(ext) = &callee.value {
@@ -1299,7 +1299,7 @@ impl<'a> ExprLowerer<'a> {
             | ast::ExprKind::StringLiteral(_)
             | ast::ExprKind::UnresolvedRef(_)
             | ast::ExprKind::GraphRef(_)
-            | ast::ExprKind::UnitLiteral { .. } => Vec::new(),
+            | ast::ExprKind::QuantityLiteral { .. } => Vec::new(),
             ast::ExprKind::BinOp { lhs, rhs, .. } => vec![lhs, rhs],
             ast::ExprKind::UnaryOp { operand, .. } => vec![operand],
             ast::ExprKind::FnCall { args, .. } => args.iter().collect(),
@@ -1397,7 +1397,7 @@ impl<'a> ExprLowerer<'a> {
                 then_branch: Box::new(self.lower_expr(then_branch)),
                 else_branch: Box::new(self.lower_expr(else_branch)),
             },
-            ast::ExprKind::UnitLiteral { value, unit } => ExprKind::UnitLiteral {
+            ast::ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral {
                 value: *value,
                 unit: self.lower_unit_expr(unit)?,
             },
@@ -2765,7 +2765,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_qualified_unit_literal_to_canonical_owner() {
+    fn lowers_qualified_quantity_literal_to_canonical_owner() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub base dim Currency; pub base unit credit: Currency;");
@@ -2781,8 +2781,8 @@ mod tests {
         )
         .unwrap();
 
-        let ExprKind::UnitLiteral { unit, .. } = expr.kind else {
-            panic!("expected unit literal, got {expr:?}");
+        let ExprKind::QuantityLiteral { unit, .. } = expr.kind else {
+            panic!("expected quantity literal, got {expr:?}");
         };
         let [term] = unit.terms.as_slice() else {
             panic!("expected one unit term, got {:?}", unit.terms);

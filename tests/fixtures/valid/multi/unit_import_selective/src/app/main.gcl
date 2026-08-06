@@ -1,5 +1,5 @@
 // A selectively imported unit joins this file's bare unit scope, so the
-// bare name works in conversion targets and unit literals.
+// bare name works in conversion targets and quantity literals.
 import app.units.{ unit mile };
 
 param a: Length = 3218.688 m;

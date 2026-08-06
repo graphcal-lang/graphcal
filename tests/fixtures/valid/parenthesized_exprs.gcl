@@ -2,7 +2,7 @@
 //
 // Exercises:
 // 1. Parenthesized grouping in dim expressions
-// 2. Parenthesized sub-expressions in unit literals (arithmetic context)
+// 2. Parenthesized sub-expressions in quantity literals (arithmetic context)
 // --- Parenthesized dim expressions ---
 // Voltage = kg * m^2 / (A * s^3)
 pub dim Voltage = Mass * Length^2 / ElectricCurrent / Time^3;

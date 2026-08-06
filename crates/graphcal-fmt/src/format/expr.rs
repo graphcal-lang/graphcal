@@ -63,7 +63,7 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
             then_branch,
             else_branch,
         } => format_if(fmt, condition, then_branch, else_branch),
-        ExprKind::UnitLiteral { value: _, unit } => {
+        ExprKind::QuantityLiteral { value: _, unit } => {
             // Recover the full literal from source to preserve number formatting
             let unit_start = unit.span.offset();
             let lit_source = &fmt.source[expr.span.offset()..unit_start];

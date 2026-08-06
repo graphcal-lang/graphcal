@@ -511,7 +511,7 @@ mod tests {
         let overrides = json_to_overrides(r#"{"dry_mass": "1500.0 kg"}"#).unwrap();
         assert!(overrides.contains_key(&DeclName::expect_valid("dry_mass")));
         let expr = &overrides[&DeclName::expect_valid("dry_mass")];
-        assert!(matches!(expr.kind, ExprKind::UnitLiteral { .. }));
+        assert!(matches!(expr.kind, ExprKind::QuantityLiteral { .. }));
     }
 
     #[test]
