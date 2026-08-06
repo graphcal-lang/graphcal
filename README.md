@@ -75,20 +75,8 @@ graphcal eval analysis.gcl --plot browser
 # Canonically format source (with a 100-column target for breakable layouts)
 graphcal format rocket.gcl
 
-# Debug-print the canonically resolved project before static checking (experimental)
-graphcal dump hir rocket.gcl
-
-# Debug-print the internal execution plan without running ordinary nodes (experimental)
-graphcal dump plan rocket.gcl
-
-# Debug-print one explicitly requested runtime evaluation
-graphcal dump runtime rocket.gcl
-
 # Export the dependency graph as Graphviz DOT (experimental)
 graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
-
-# Prepare exact-rev Git dependencies for a package project
-graphcal deps lock --root mission
 ```
 
 See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface and the [Tenax integration guide](https://graphcal.org/docs/tenax-integration/) for persistent model serving. `--set` and `--input` accept recursively closed values, not references or computations. Imported constants, static units, and prepared structured inputs retain canonical definition-site metadata, so consumers do not need to re-import backing dimensions or schema implementation dependencies they never name. Imports remain compile-time-only blueprints; explicit `include` instances own runtime assertions and dynamic unit scales. Configured `include` composition may nest to arbitrary acyclic depth while preserving isolated instance paths and internal imports. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax.
