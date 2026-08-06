@@ -137,32 +137,87 @@ fn nested_configured_includes_keep_instance_local_bindings_and_assertions() {
 }
 
 #[test]
-fn legacy_import_artifacts_expose_assertions_and_runtime_unit_scales() {
+fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
+    let (_directory, assertion_root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param rate: Dimensionless = 2.0;\npub assert rate_positive = @rate > 0.0;\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib.{ rate_positive };\n#[assumes(rate_positive)]\nnode checked: Bool = true;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let assertion_error =
+        compile_to_tir_project(&assertion_root, None, &fs()).expect_err("assert import must fail");
+    assert!(
+        matches!(
+            assertion_error,
+            CompileError::Eval(GraphcalError::ImportAssertionItem { .. })
+        ),
+        "unexpected assertion-import error: {assertion_error:?}"
+    );
+
+    let (_directory, unit_root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\n",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\nnode price: lib.Money = 3.0 lib.EUR;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let unit_error =
+        compile_to_tir_project(&unit_root, None, &fs()).expect_err("runtime unit import must fail");
+    assert!(
+        matches!(
+            unit_error,
+            CompileError::Eval(GraphcalError::ImportRuntimeUnit { .. })
+        ),
+        "unexpected runtime-unit import error: {unit_error:?}"
+    );
+
+    std::fs::write(
+        &unit_root,
+        "import pipeline.lib as lib;\nconst unit LocalEUR: lib.Money = 1.0 lib.EUR;\n",
+    )
+    .unwrap();
+    let unit_definition_error = compile_to_tir_project(&unit_root, None, &fs())
+        .expect_err("runtime unit in a static unit definition must fail");
+    assert!(
+        matches!(
+            unit_definition_error,
+            CompileError::Eval(GraphcalError::ImportRuntimeUnit { .. })
+        ),
+        "unexpected unit-definition import error: {unit_definition_error:?}"
+    );
+}
+
+#[test]
+fn pure_module_import_can_call_an_instance_with_dynamic_units() {
     let (_directory, root) = write_pipeline_project(
         &[
             (
                 "lib.gcl",
-                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\npub assert rate_positive = @rate > 0.0;\n",
+                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\nparam amount: Money = 100.0 USD;\npub node converted: Money = @amount -> EUR;\n",
             ),
             (
                 "main.gcl",
-                "import pipeline.lib as lib;\nimport pipeline.lib.{ rate_positive };\nnode price: lib.Money = 3.0 lib.EUR;\n#[assumes(rate_positive)]\nnode checked: Bool = true;\n",
+                "import pipeline.lib as lib;\nnode result: lib.Money = @lib().converted;\n",
             ),
         ],
         "main.gcl",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
-    assert_quantity_value(&result, "price", 6.0);
-    assert!(
-        result
-            .assertions
-            .iter()
-            .any(
-                |(name, outcome, _)| name.member().as_str() == "rate_positive"
-                    && *outcome == AssertResult::Pass
-            )
-    );
+    assert_quantity_value(&result, "result", 100.0);
 }
 
 #[test]
@@ -197,7 +252,11 @@ fn checked_project_preparation_does_not_recompile_dependencies() {
     );
 
     let checked = check_project_with_host_fns(&project, &host_fns).unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "static checking invoked a callable host function"
+    );
     let prepared = checked.prepare_with_host_fns(&host_fns).unwrap();
     let row = prepared.binding_builder().finish().unwrap();
     let result = prepared.evaluate(&row).unwrap();
@@ -205,7 +264,7 @@ fn checked_project_preparation_does_not_recompile_dependencies() {
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,
-        "preparing/evaluating a checked project recompiled its dependency"
+        "the explicit include should invoke its host function exactly once"
     );
 }
 
@@ -5722,10 +5781,13 @@ fn eval_overrides_reject_included_implementation_params() {
     overrides.insert(DeclName::expect_valid("b_shared"), parse_expr("30.0"));
     let result = compile_and_eval_project(&root, &overrides, None, &fs());
     match result {
-        Err(CompileError::Eval(GraphcalError::OverrideUnknownParam { name })) => {
+        Err(CompileError::Eval(GraphcalError::OverrideNotAParam {
+            name,
+            actual_kind: graphcal_compiler::ir::resolve::DeclCategory::Node,
+        })) => {
             assert!(name.as_str() == "a_shared" || name.as_str() == "b_shared");
         }
-        other => panic!("expected imported parameter override rejection, got {other:?}"),
+        other => panic!("expected included implementation override rejection, got {other:?}"),
     }
 }
 

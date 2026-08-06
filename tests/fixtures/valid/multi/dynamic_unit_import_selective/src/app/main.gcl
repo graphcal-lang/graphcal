@@ -1,6 +1,3 @@
-// Selective-import form of #823: the dep-resolved dynamic unit scale replaces
-// the unevaluable dynamic form at the import boundary.
-import app.fx.{ dim Money, unit USD, unit EUR };
-
-param mine: Money = 100.0 USD;
-node p: Money = @mine -> EUR;
+// Select an output from one explicit default-bound instance whose evaluation
+// uses an instance-local dynamic unit.
+include app.fx().{ p };

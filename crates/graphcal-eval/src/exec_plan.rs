@@ -70,7 +70,7 @@ pub struct ExecPlan {
     /// Evaluated const values (in base SI units).
     /// Key-lookup only, order irrelevant.
     pub(crate) const_values: RuntimeValueMap,
-    /// Pre-evaluated values imported from dependency files.
+    /// Compile-time constants imported from dependency module artifacts.
     /// These are injected directly into the evaluation environment.
     /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
     pub(crate) imported_values: RuntimeValueMap,

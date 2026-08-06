@@ -281,8 +281,8 @@ pub(super) fn run_eval_loop_with_bindings(
     let mut values: RuntimeValueMap = HashMap::new();
     let mut errors: HashMap<RuntimeDeclKey, NodeError> = HashMap::new();
 
-    // Insert imported values into the lookup table (pre-evaluated by dependency files).
-    // Imported values keep their original `ScopedName` qualification.
+    // Insert imported compile-time constants into the lookup table.
+    // They keep their original `ScopedName` qualification.
     for (name, val) in &plan.imported_values {
         values.insert(name.clone(), val.clone());
     }
@@ -411,42 +411,6 @@ fn failed_runtime_dependencies(
         .unwrap_or_default()
 }
 
-/// Resolve the file's own dynamic-unit scales against its final runtime
-/// values, for export to module importers (see
-/// [`crate::eval_expr::resolve_exportable_dynamic_unit_scales`]).
-pub(super) fn export_dynamic_unit_scales(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
-    values: &RuntimeValueMap,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<
-    HashMap<
-        graphcal_compiler::syntax::dimension::UnitRef,
-        graphcal_compiler::registry::types::PositiveFiniteScale,
-    >,
-    graphcal_compiler::cancellation::Cancelled,
-> {
-    cancellation.checkpoint()?;
-    let builtin_fns = builtin_functions();
-    let ctx = EvalContext {
-        cancellation: cancellation.clone(),
-        builtin_fns,
-        registry: tir.registry(),
-        src,
-        tir,
-        current_dag: Some(tir.root()),
-        root_values: Some(values),
-        struct_field_constraints: Some(&plan.struct_field_constraints),
-        generic_nat_bindings: None,
-        // Dimension checking rejects extern calls in unit scale expressions.
-        host_fns: None,
-    };
-    let scales = crate::eval_expr::resolve_exportable_dynamic_unit_scales(values, &ctx);
-    cancellation.checkpoint()?;
-    Ok(scales)
-}
-
 /// Evaluate using immutable TIR plus one plan and validated runtime bindings.
 ///
 /// Runtime errors are contained per-node: if a node fails, independent nodes
@@ -472,28 +436,6 @@ pub(super) fn evaluate_plan_with_bindings_and_cancellation(
         cancellation,
     )
     .map(|(result, _)| result)
-}
-
-/// Evaluate a plan and also return the raw runtime-value map so
-/// callers that need both (per-file project evaluation exporting values to
-/// downstream imports) do not have to run the eval loop a second time.
-pub(super) fn evaluate_plan_with_values_and_cancellation(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    src: &NamedSource<Arc<String>>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(EvalResult, RuntimeValueMap), GraphcalError> {
-    evaluate_plan_with_values_and_bindings_and_cancellation(
-        tir,
-        plan,
-        &super::bindings::RuntimeParameterBindings::new(),
-        declared_types,
-        src,
-        host_fns,
-        cancellation,
-    )
 }
 
 #[expect(

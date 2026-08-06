@@ -37,7 +37,7 @@ pub(in crate::eval::project) fn validate_project_dag_recursion(
 fn compile_single_file_in_project(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
-    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
@@ -53,14 +53,12 @@ fn compile_single_file_in_project(
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
         deferred_dag_includes: Vec::new(),
-        included_debug_values: Vec::new(),
-        included_plot_specs: Vec::new(),
     };
 
     imports::process_file_body_declarations(
         project,
         file_dag_id,
-        evaluated_files,
+        module_artifacts,
         &mut ctx,
         cancellation,
     )?;
@@ -83,7 +81,7 @@ fn compile_single_file_in_project(
         file_src,
         &file_ast,
         ctx,
-        evaluated_files,
+        module_artifacts,
         cancellation,
     )
 }
@@ -100,10 +98,6 @@ fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
             .index_defs
             .values()
             .any(graphcal_compiler::registry::types::IndexDef::is_required)
-}
-
-fn tir_requires_runtime_inputs(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
-    tir.root().params().iter().any(|p| p.default_expr.is_none()) || tir_has_required_indexes(tir)
 }
 
 fn first_required_index_diagnostic(
@@ -256,11 +250,11 @@ pub(super) fn apply_include_debug_names(result: &mut EvalResult, aliases: &Inclu
 }
 
 pub(super) fn push_output_value(
-    (name, result, decl_type): EvaluatedOutputValue,
+    (name, result, decl_type): OutputValue,
     consts: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
     params: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
     nodes: &mut Vec<(ScopedName, Result<Value, NodeError>)>,
-    all: &mut Vec<EvaluatedOutputValue>,
+    all: &mut Vec<OutputValue>,
 ) {
     match decl_type {
         DeclType::Const => consts.push((name.clone(), result.clone())),
@@ -270,58 +264,13 @@ pub(super) fn push_output_value(
     all.push((name, result, decl_type));
 }
 
-/// Assemble the complete evaluated state retained at a project-file boundary.
-///
-/// The direct result contains this file's own and merged values. Empty-argument
-/// file includes remain pre-evaluated artifacts, so their complete debug values
-/// and their selected imported aliases are added here without changing runtime
-/// semantics.
-fn assemble_file_output_values(
-    compiled: &CompiledFile,
-    eval_result: &EvalResult,
-) -> Vec<EvaluatedOutputValue> {
-    let mut values = eval_result.all.clone();
-    let mut seen: HashSet<ScopedName> = values.iter().map(|(name, _, _)| name.clone()).collect();
-
-    values.extend(
-        compiled
-            .included_debug_values
-            .iter()
-            .filter(|(name, _, _)| seen.insert(name.clone()))
-            .cloned(),
-    );
-    values.extend(
-        compiled
-            .imported_source_order
-            .iter()
-            .filter_map(|(name, category)| {
-                if !seen.insert(name.clone()) {
-                    return None;
-                }
-                let decl_type = output_decl_type(*category)?;
-                let (runtime, declared_type) = compiled.imported_values.get(name)?;
-                let value = super::super::runtime::runtime_to_value(
-                    runtime,
-                    Some(declared_type),
-                    &compiled.tir,
-                );
-                Some((name.clone(), Ok(value), decl_type))
-            }),
-    );
-    values
-}
-
-/// Store a compiled-but-not-evaluated non-root file for downstream compile-time imports.
-///
-/// Library files with required params or indexes cannot produce runtime values
-/// standalone, but their registry, declared types, consts, and DAG metadata are
-/// still needed by importers.
-fn store_compiled_file_artifact(
+/// Store one pure compile-time module artifact for downstream imports.
+fn store_module_artifact(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     external_surface: ExternalDeclSurface,
-    evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &mut HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
@@ -340,104 +289,13 @@ fn store_compiled_file_artifact(
     let dag_tirs = compiled.tir.dag_registry().clone();
     let extern_functions = compiled.tir.extern_functions().clone();
 
-    evaluated_files.insert(
+    module_artifacts.insert(
         file_dag_id.clone(),
-        EvaluatedFile {
-            runtime_available: false,
-            plots: HashMap::new(),
-            values: HashMap::new(),
+        ModuleArtifact {
             const_values: top_level_consts,
-            evaluated_values: Vec::new(),
             declared_types: compiled.declared_types,
-            assertions: HashMap::new(),
             registry: compiled.tir.registry().clone(),
             external_surface,
-            resolved_dynamic_unit_scales: HashMap::new(),
-            override_dependencies,
-            dag_tirs,
-            extern_functions,
-        },
-    );
-    Ok(())
-}
-
-/// Evaluate and store a non-root file, producing an [`EvaluatedFile`] for downstream imports.
-fn evaluate_and_store_file(
-    compiled: CompiledFile,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
-    file_src: &NamedSource<Arc<String>>,
-    external_surface: ExternalDeclSurface,
-    evaluated_files: &mut HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), CompileError> {
-    cancellation.checkpoint()?;
-    let plan = crate::exec_plan::compile_with_cancellation(&compiled.tir, file_src, cancellation)?;
-    // One eval-loop run yields both the public result and the raw values
-    // exported to downstream imports (this used to evaluate the whole file
-    // twice).
-    let (mut eval_result, runtime_values) =
-        super::super::runtime::evaluate_plan_with_values_and_cancellation(
-            &compiled.tir,
-            &plan,
-            &compiled.declared_types,
-            file_src,
-            host_fns,
-            cancellation,
-        )?;
-    apply_include_debug_names(&mut eval_result, &compiled.include_debug_names);
-    let file_runtime_values = filter_local_runtime_values(&compiled.tir, &runtime_values);
-    let top_level_consts = top_level_const_values(&compiled.tir, &plan.const_values);
-    // Dynamic-unit scales resolve against this file's final values here, so
-    // module importers can carry the units across as static scales.
-    let resolved_dynamic_unit_scales = super::super::runtime::export_dynamic_unit_scales(
-        &compiled.tir,
-        &plan,
-        &runtime_values,
-        file_src,
-        cancellation,
-    )?;
-
-    // Capture dag TIRs so cross-file qualified inline calls can merge them
-    // into the importer's TIR::dags under module-prefixed keys.
-    let override_dependencies =
-        graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
-            &compiled.tir,
-            file_src,
-            cancellation,
-        )?;
-    let dag_tirs = compiled.tir.dag_registry().clone();
-    let extern_functions = compiled.tir.extern_functions().clone();
-
-    // Evaluated plot specs, requestable by consumers through include brace
-    // lists (#847). Includes this file's own plots and the ones it included
-    // itself (for `pub`-item re-export chains); keys are local leaf names.
-    let plots: HashMap<DeclName, crate::eval::PlotSpec> = eval_result
-        .plots
-        .iter()
-        .chain(compiled.included_plots.iter())
-        .filter(|spec| !spec.name.is_qualified())
-        .map(|spec| (spec.name.member().clone(), spec.clone()))
-        .collect();
-    let evaluated_values = assemble_file_output_values(&compiled, &eval_result);
-
-    evaluated_files.insert(
-        file_dag_id.clone(),
-        EvaluatedFile {
-            runtime_available: true,
-            plots,
-            values: file_runtime_values,
-            const_values: top_level_consts,
-            evaluated_values,
-            declared_types: compiled.declared_types,
-            assertions: eval_result
-                .assertions
-                .into_iter()
-                .map(|(name, result, span)| (name, (result, span)))
-                .collect(),
-            registry: compiled.tir.registry().clone(),
-            external_surface,
-            resolved_dynamic_unit_scales,
             override_dependencies,
             dag_tirs,
             extern_functions,
@@ -448,18 +306,16 @@ fn evaluate_and_store_file(
 
 /// Compile a complete project into one reusable checked continuation.
 ///
-/// Dependencies retain the current per-file artifact semantics during this
-/// migration, but the topological loop and canonical module resolver now have
-/// exactly one owner. `check`, preparation, evaluation, and the LSP all
-/// continue from the returned [`CheckedProject`].
+/// Dependencies produce compile-time artifacts only. No runtime schedule,
+/// assertion, dynamic scale, plot, or host call is executed by this loop.
 pub(in crate::eval::project) fn check_project_perfile(
     project: &crate::loader::LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
+    host_metadata: &crate::host_fns::HostFunctionMetadata,
     module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CheckedProject, CompileError> {
     cancellation.checkpoint()?;
-    let mut evaluated_files: HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile> =
+    let mut module_artifacts: HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact> =
         HashMap::new();
 
     for file_dag_id in &project.load_order {
@@ -467,7 +323,7 @@ pub(in crate::eval::project) fn check_project_perfile(
         let compiled = compile_single_file_in_project(
             project,
             file_dag_id,
-            &evaluated_files,
+            &module_artifacts,
             &module_resolver,
             cancellation,
         )?;
@@ -478,61 +334,28 @@ pub(in crate::eval::project) fn check_project_perfile(
             file_dag_id,
             &compiled.tir,
             file_src,
-            host_fns,
+            host_metadata,
             cancellation,
         )?;
 
         if *file_dag_id == project.root {
-            let dep_import_spans = build_dep_import_spans(project);
-            let mut dependency_assertions = Vec::new();
-            for dep_dag_id in &project.load_order {
-                cancellation.checkpoint()?;
-                if *dep_dag_id == project.root {
-                    continue;
-                }
-                if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
-                    let import_span = dep_import_spans
-                        .get(dep_dag_id)
-                        .copied()
-                        .unwrap_or(Span::new(0, 0));
-                    dependency_assertions.extend(
-                        dep_eval
-                            .assertions
-                            .iter()
-                            .map(|(name, (result, _))| (name.clone(), result.clone(), import_span)),
-                    );
-                }
-            }
             return Ok(CheckedProject {
                 compiled,
                 source: file_src.clone(),
                 root_ast: loaded_file.ast.clone(),
                 module_resolver,
-                dependency_assertions,
             });
         }
 
         let external_surface = extract_external_decl_surface(&loaded_file.ast);
-        if tir_requires_runtime_inputs(&compiled.tir) {
-            store_compiled_file_artifact(
-                compiled,
-                file_dag_id,
-                file_src,
-                external_surface,
-                &mut evaluated_files,
-                cancellation,
-            )?;
-        } else {
-            evaluate_and_store_file(
-                compiled,
-                file_dag_id,
-                file_src,
-                external_surface,
-                &mut evaluated_files,
-                host_fns,
-                cancellation,
-            )?;
-        }
+        store_module_artifact(
+            compiled,
+            file_dag_id,
+            file_src,
+            external_surface,
+            &mut module_artifacts,
+            cancellation,
+        )?;
     }
 
     Err(CompileError::Eval(GraphcalError::InternalError {
@@ -554,7 +377,6 @@ pub(in crate::eval::project) fn prepare_checked_project(
         source,
         root_ast,
         module_resolver,
-        dependency_assertions,
     } = checked;
     if tir_has_required_indexes(&compiled.tir)
         && let Some((name, span)) = first_required_index_diagnostic(&compiled.tir, &root_ast)
@@ -574,7 +396,6 @@ pub(in crate::eval::project) fn prepare_checked_project(
         host_fns.clone(),
         module_resolver,
         &root_ast,
-        dependency_assertions,
     )
 }
 
@@ -596,7 +417,7 @@ fn verify_host_functions(
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
+    host_metadata: &crate::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
@@ -608,9 +429,9 @@ fn verify_host_functions(
     for (key, function) in declared {
         cancellation.checkpoint()?;
         if key.plugin.source_kind() == PluginSourceKind::WasmModule {
-            verify_wasm_plugin(project, file_dag_id, function, src, host_fns)?;
+            verify_wasm_plugin(project, file_dag_id, function, src, host_metadata)?;
         }
-        if !host_fns.contains(key) {
+        if !host_metadata.contains(key) {
             return Err(CompileError::Eval(GraphcalError::MissingHostFunction {
                 plugin: function.plugin.clone(),
                 name: function.name.clone(),
@@ -618,7 +439,7 @@ fn verify_host_functions(
                 span: function.name_span.into(),
             }));
         }
-        if let Some(provided) = host_fns.provided_signature(key)
+        if let Some(provided) = host_metadata.provided_signature(key)
             && !function.signature.structurally_equivalent(provided)
         {
             let render = |signature: &graphcal_compiler::function_signature::FunctionSignature| {
@@ -645,7 +466,7 @@ fn verify_wasm_plugin(
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     function: &graphcal_compiler::ir::lower::ExternFunctionEntry,
     src: &NamedSource<Arc<String>>,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
+    host_metadata: &crate::host_fns::HostFunctionMetadata,
 ) -> Result<(), CompileError> {
     if file_dag_id.package() != project.root.package() {
         return Err(CompileError::Eval(
@@ -695,7 +516,7 @@ fn verify_wasm_plugin(
         Some(Ok(_)) => {}
     }
 
-    match host_fns.plugin_failure(&function.plugin) {
+    match host_metadata.plugin_failure(&function.plugin) {
         Some(crate::host_fns::PluginRegistrationError::ForbiddenImport { module, name }) => {
             Err(CompileError::Eval(GraphcalError::PluginForbiddenImport {
                 plugin: function.plugin.clone(),
@@ -715,83 +536,4 @@ fn verify_wasm_plugin(
         }
         None => Ok(()),
     }
-}
-
-/// Map each dependency file to the root-level import statement span that brought it in.
-///
-/// Direct imports get the span of their own `import` declaration in the root file.
-/// Transitive imports inherit the root-level import span of the direct import
-/// that started the chain. When a transitive dependency is reachable from multiple
-/// root imports, the first root import in source order wins.
-fn build_dep_import_spans(
-    project: &crate::loader::LoadedProject,
-) -> HashMap<graphcal_compiler::dag_id::DagId, Span> {
-    let root_file = &project.files[&project.root];
-    let mut spans: HashMap<graphcal_compiler::dag_id::DagId, Span> = HashMap::new();
-
-    // Process root's direct imports/includes in source order.
-    // For each, DFS into its transitive dependencies, propagating the root span.
-    // `entry().or_insert()` ensures the first root import/include (in source order) to reach
-    // a transitive dep determines its attribution.
-    let root_decl_dag_ids: Vec<(Span, graphcal_compiler::dag_id::DagId)> = root_file
-        .imports_with_dag_ids()
-        .map(|(d, _, c)| (d.span, c.clone()))
-        .chain(
-            root_file
-                .includes_with_dag_ids()
-                .map(|(d, _, c)| (d.span, c.clone())),
-        )
-        .collect();
-    for (root_span, canonical) in root_decl_dag_ids {
-        let mut stack = vec![canonical];
-        while let Some(dag_id) = stack.pop() {
-            if dag_id == project.root {
-                continue;
-            }
-            // Only process if not already attributed.
-            if let std::collections::hash_map::Entry::Vacant(entry) = spans.entry(dag_id.clone()) {
-                entry.insert(root_span);
-                // Push this file's own imports/includes for transitive propagation.
-                if let Some(file) = project.files.get(&dag_id) {
-                    for (_decl, _imp, c) in file.imports_with_dag_ids() {
-                        if !spans.contains_key(c) {
-                            stack.push(c.clone());
-                        }
-                    }
-                    for (_decl, _inc, c) in file.includes_with_dag_ids() {
-                        if !spans.contains_key(c) {
-                            stack.push(c.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    spans
-}
-
-/// Filter an evaluated runtime-value map to only locally-defined param/node
-/// values (not imported, not consts) for passing to downstream files.
-///
-/// Pure filter over an already-evaluated map: the eval loop runs once in
-/// [`evaluate_plan_with_values`](super::super::runtime::evaluate_plan_with_values),
-/// not again here.
-fn filter_local_runtime_values(
-    tir: &graphcal_compiler::tir::typed::TIR,
-    values: &crate::eval_expr::RuntimeValueMap,
-) -> HashMap<DeclName, RuntimeValue> {
-    tir.root()
-        .params()
-        .iter()
-        .map(|e| &e.name)
-        .chain(tir.root().nodes().iter().map(|e| &e.name))
-        .filter_map(|name| {
-            let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), name);
-            values
-                .get(&key)
-                .cloned()
-                .map(|value| (name.member().clone(), value))
-        })
-        .collect()
 }

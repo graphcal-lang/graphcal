@@ -2367,9 +2367,9 @@ fn eval_hir_dag_call(
     })
 }
 
-/// Seed an inline dag instantiation's value map with the dag's imported
-/// (outer-scope) values: pre-evaluated imports plus values resolvable from
-/// the caller's scope. Values already provided by call-site bindings win.
+/// Seed an inline DAG instance with imported compile-time constants and
+/// outer-scope values resolvable from the caller. Values already provided by
+/// call-site bindings win.
 fn seed_inline_dag_imported_values(
     dag_tir: &DagTIR,
     dag_values: &mut RuntimeValueMap,

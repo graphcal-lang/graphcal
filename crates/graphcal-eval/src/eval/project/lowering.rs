@@ -7,6 +7,77 @@
 )]
 use super::*;
 
+fn is_imported_dynamic_unit(
+    alias: &ModuleAliasName,
+    name: &graphcal_compiler::syntax::dimension::UnitName,
+    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+) -> bool {
+    module_map.get(alias).is_some_and(|binding| {
+        binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag
+            && module_artifacts
+                .get(&binding.target)
+                .is_some_and(|artifact| {
+                    artifact
+                        .external_surface
+                        .is_explicit_export(&DeclName::from_atom(name.atom().clone()))
+                        && artifact
+                            .registry
+                            .units
+                            .all_units()
+                            .any(|(candidate, _, scale)| {
+                                !candidate.is_qualified()
+                                    && candidate.name() == name
+                                    && scale.is_dynamic()
+                            })
+                })
+    })
+}
+
+fn remap_imported_dynamic_unit_error(
+    error: GraphcalError,
+    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+) -> GraphcalError {
+    match error {
+        GraphcalError::UnknownUnit { name, src, span }
+            if name.qualifier().is_some_and(|alias| {
+                is_imported_dynamic_unit(alias, name.name(), module_map, module_artifacts)
+            }) =>
+        {
+            GraphcalError::ImportRuntimeUnit {
+                name: name.to_string(),
+                src,
+                span,
+            }
+        }
+        other => other,
+    }
+}
+
+fn imported_runtime_unit_reference(
+    dag: &graphcal_compiler::tir::typed::DagTIR,
+    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+) -> Option<(String, Span)> {
+    let mut invalid = None;
+    dag.semantic().visit_unit_references(&mut |unit, span| {
+        if invalid.is_none()
+            && unit.spelling().qualifier().is_some_and(|alias| {
+                is_imported_dynamic_unit(
+                    alias,
+                    unit.spelling().name(),
+                    module_map,
+                    module_artifacts,
+                )
+            })
+        {
+            invalid = Some((unit.to_string(), span));
+        }
+    });
+    invalid
+}
+
 fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
     let mut leaf_counts: HashMap<ModuleAliasName, usize> = HashMap::new();
     ctx.deferred_dag_includes
@@ -24,11 +95,6 @@ fn include_debug_name_map(ctx: &ImportContext<'_>) -> IncludeDebugNameMap {
         .filter(|include| matches!(include.instance_scope, IncludeInstanceScope::Anonymous(_)))
         .filter(|include| leaf_counts.get(&include.debug_scope) == Some(&1))
         .filter(|include| !ctx.module_map.contains_key(&include.debug_scope))
-        .filter(|include| {
-            !ctx.included_debug_values
-                .iter()
-                .any(|(name, _, _)| name.qualifier().first() == Some(&include.debug_scope))
-        })
         .map(|include| {
             (
                 include.instance_scope.merge_scope_name(),
@@ -50,7 +116,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     file_src: &NamedSource<Arc<String>>,
     file_ast: &graphcal_compiler::desugar::desugared_ast::File,
     ctx: ImportContext<'_>,
-    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
@@ -84,7 +150,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
             project,
             &ctx.imported_type_system_names,
             &ctx.extra_registry_builders,
-            evaluated_files,
+            module_artifacts,
             file_src,
         )
     };
@@ -97,7 +163,10 @@ pub(in crate::eval::project) fn lower_and_finalize(
             file_dag_id,
             Some(&mut registry_seed),
             cancellation,
-        )?;
+        )
+        .map_err(|error| {
+            remap_imported_dynamic_unit_error(error, &ctx.module_map, module_artifacts)
+        })?;
 
     // Snapshot the consumer-facing output surface before include bodies are
     // merged. The file's own declarations and imported values are visible;
@@ -128,7 +197,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         file_dag_id,
         file_dag_id,
         &ctx.deferred_dag_includes,
-        evaluated_files,
+        module_artifacts,
         file_src,
         file_ast,
         &mut builder,
@@ -163,15 +232,14 @@ pub(in crate::eval::project) fn lower_and_finalize(
             span: Span::new(0, 0).into(),
         })?;
     module_types.insert_registry(file_dag_id, &ir.registry, file_src.clone());
-    for (dep_dag_id, evaluated) in evaluated_files {
+    for (dep_dag_id, artifact) in module_artifacts {
         cancellation.checkpoint()?;
         let dep_src = &project.files[dep_dag_id].named_source;
-        module_types.insert_registry(dep_dag_id, &evaluated.registry, dep_src.clone());
+        module_types.insert_registry(dep_dag_id, &artifact.registry, dep_src.clone());
     }
-    // The aggregate root registry may expose dependency units under aliases or
-    // selective-import spellings. Overlay those entries last so dynamic units
-    // retain any dependency-evaluated static scale while their HIR identity
-    // remains canonical.
+    // The aggregate root registry may expose dependency static units under
+    // aliases or selective-import spellings. Overlay those entries last while
+    // retaining their canonical HIR identity.
     module_types.overlay_visible_units(file_dag_id, &ir.registry, module_resolver);
 
     let parent_external_surface = ir.external_surface.clone();
@@ -184,6 +252,16 @@ pub(in crate::eval::project) fn lower_and_finalize(
             &module_types,
             cancellation,
         )?;
+    if let Some((name, span)) =
+        imported_runtime_unit_reference(tir.root(), &ctx.module_map, module_artifacts)
+    {
+        return Err(GraphcalError::ImportRuntimeUnit {
+            name,
+            src: file_src.clone(),
+            span: span.into(),
+        }
+        .into());
+    }
     // File roots and inline `dag` blocks are both callable DAG modules. Keep
     // their externally projectable ports in the same compiled representation
     // so an imported file alias can be invoked directly as `@alias(...).out`.
@@ -195,13 +273,13 @@ pub(in crate::eval::project) fn lower_and_finalize(
         file_dag_id,
         file_src,
         &parent_external_surface,
-        evaluated_files,
+        module_artifacts,
         module_resolver,
         &module_types,
         cancellation,
     )?;
     cancellation.checkpoint()?;
-    merge_dep_dag_tirs(&mut tir, &ctx.module_map, evaluated_files, file_src)?;
+    merge_dep_dag_tirs(&mut tir, &ctx.module_map, module_artifacts, file_src)?;
     let tir = tir.finish();
     graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
         &tir,
@@ -247,9 +325,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
         imported_values: saved_imported_values,
         imported_source_order: ctx.imported_source_order,
         output_surface,
-        included_debug_values: ctx.included_debug_values,
         include_debug_names,
-        included_plots: ctx.included_plot_specs,
     })
 }
 
@@ -313,7 +389,7 @@ fn compile_inline_dag_modules<'a>(
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     parent_external_surface: &ExternalDeclSurface,
-    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_types: &graphcal_compiler::tir::typed::ModuleTypeRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -333,7 +409,7 @@ fn compile_inline_dag_modules<'a>(
             loaded_dag,
             file_src,
             &parent_values,
-            evaluated_files,
+            module_artifacts,
             module_resolver,
             cancellation,
         )?;
@@ -386,7 +462,7 @@ fn compile_loaded_dag_module_ir<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     file_src: &NamedSource<Arc<String>>,
     parent_values: &crate::inline_dag::ParentValueDecls,
-    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
@@ -409,16 +485,20 @@ fn compile_loaded_dag_module_ir<'a>(
         module_map: HashMap::new(),
         extra_registry_builders: Vec::new(),
         deferred_dag_includes: Vec::new(),
-        included_debug_values: Vec::new(),
-        included_plot_specs: Vec::new(),
     };
 
-    process_dag_body_import_declarations(project, loaded_dag, file_src, evaluated_files, &mut ctx)?;
+    process_dag_body_import_declarations(
+        project,
+        loaded_dag,
+        file_src,
+        module_artifacts,
+        &mut ctx,
+    )?;
     process_dag_body_include_declarations(
         project,
         loaded_dag,
         file_src,
-        evaluated_files,
+        module_artifacts,
         &mut ctx,
     )?;
 
@@ -444,7 +524,7 @@ fn compile_loaded_dag_module_ir<'a>(
             project,
             &ctx.imported_type_system_names,
             &ctx.extra_registry_builders,
-            evaluated_files,
+            module_artifacts,
             file_src,
         )
     };
@@ -465,7 +545,7 @@ fn compile_loaded_dag_module_ir<'a>(
         &loaded_dag.dag_id,
         &loaded_dag.parent_dag_id,
         &ctx.deferred_dag_includes,
-        evaluated_files,
+        module_artifacts,
         file_src,
         dag_ast.as_ref(),
         &mut builder,
@@ -536,7 +616,7 @@ fn process_dag_body_import_declarations<'a>(
     project: &crate::loader::LoadedProject,
     loaded_dag: &crate::loader::LoadedDag,
     file_src: &NamedSource<Arc<String>>,
-    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in &loaded_dag.body {
@@ -552,15 +632,14 @@ fn process_dag_body_import_declarations<'a>(
         if import_dag_id == &loaded_dag.parent_dag_id {
             continue;
         }
-        imports::process_non_instantiated_import(
+        imports::process_pure_import(
             project,
             import_dag_id,
             &import_decl.path,
             &import_decl.kind,
             file_src,
-            evaluated_files,
+            module_artifacts,
             ctx,
-            true,
         )?;
     }
     Ok(())
@@ -570,7 +649,7 @@ fn process_dag_body_include_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     loaded_dag: &crate::loader::LoadedDag,
     file_src: &NamedSource<Arc<String>>,
-    evaluated_files: &'a HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in &loaded_dag.body {
@@ -584,28 +663,15 @@ fn process_dag_body_include_declarations<'a>(
             continue;
         };
         if project.files.contains_key(target_dag_id) {
-            if include_decl.param_bindings.is_empty() {
-                imports::process_non_instantiated_import(
-                    project,
-                    target_dag_id,
-                    &include_decl.path,
-                    &include_decl.kind,
-                    file_src,
-                    evaluated_files,
-                    ctx,
-                    false,
-                )?;
-            } else {
-                imports::process_instantiated_include(
-                    project,
-                    target_dag_id,
-                    include_decl,
-                    decl,
-                    file_src,
-                    evaluated_files,
-                    ctx,
-                )?;
-            }
+            imports::process_file_include(
+                project,
+                target_dag_id,
+                include_decl,
+                decl,
+                file_src,
+                module_artifacts,
+                ctx,
+            )?;
             continue;
         }
 
@@ -681,7 +747,7 @@ fn find_inline_dag_decl_in_declarations<'a>(
 fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TirBuilder,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     for (alias, binding) in module_map {
@@ -692,7 +758,7 @@ fn merge_dep_dag_tirs(
         }
     }
 
-    for (dep_dag_id, dep_eval) in evaluated_files {
+    for (dep_dag_id, dep_eval) in module_artifacts {
         // Extern signatures travel with the dep's dag bodies: a qualified
         // inline call into a dep dag that uses extern functions resolves its
         // signature from the importer's merged TIR at eval time. First
@@ -809,7 +875,7 @@ fn check_semantic_override_reconciliation(
 /// 6. For selective includes, add `local_name = @prefix::orig_name` aliases.
 #[expect(
     clippy::too_many_arguments,
-    reason = "pipeline function threading project, importer, evaluated-deps, and IR-builder context"
+    reason = "pipeline function threads project, importer, module artifacts, and IR builders"
 )]
 #[expect(
     clippy::too_many_lines,
@@ -820,7 +886,7 @@ fn process_deferred_dag_includes(
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     importer_file_dag_id: &graphcal_compiler::dag_id::DagId,
     deferred_dag_includes: &[DeferredDagInclude],
-    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     importer_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
     builder: &mut RegistryBuilder,
@@ -833,6 +899,7 @@ fn process_deferred_dag_includes(
         crate::loader::ModulePathKey,
         crate::loader::InlineBodyImportResolution,
     > = HashMap::new();
+    let mut source_order_blocks = Vec::new();
 
     for deferred in deferred_dag_includes {
         cancellation.checkpoint()?;
@@ -858,13 +925,11 @@ fn process_deferred_dag_includes(
                     module_map: HashMap::new(),
                     extra_registry_builders: Vec::new(),
                     deferred_dag_includes: Vec::new(),
-                    included_debug_values: Vec::new(),
-                    included_plot_specs: Vec::new(),
                 };
                 imports::process_file_body_declarations(
                     project,
                     dep_dag_id,
-                    evaluated_files,
+                    module_artifacts,
                     &mut body_ctx,
                     cancellation,
                 )?;
@@ -880,7 +945,7 @@ fn process_deferred_dag_includes(
                         project,
                         &body_ctx.imported_type_system_names,
                         &body_ctx.extra_registry_builders,
-                        evaluated_files,
+                        module_artifacts,
                         dep_src,
                     )
                 };
@@ -899,7 +964,7 @@ fn process_deferred_dag_includes(
                     &instance_dag_id,
                     importer_file_dag_id,
                     &body_ctx.deferred_dag_includes,
-                    evaluated_files,
+                    module_artifacts,
                     dep_src,
                     rewritten_body.as_ref(),
                     &mut dep_builder,
@@ -916,7 +981,7 @@ fn process_deferred_dag_includes(
                     dep_dag_id.clone(),
                     &dep_loaded.ast,
                     dep_loaded.ast.declarations.as_slice(),
-                    evaluated_files
+                    module_artifacts
                         .get(dep_dag_id)
                         .map(|artifact| &artifact.override_dependencies),
                 )
@@ -953,22 +1018,20 @@ fn process_deferred_dag_includes(
                     module_map: HashMap::new(),
                     extra_registry_builders: Vec::new(),
                     deferred_dag_includes: Vec::new(),
-                    included_debug_values: Vec::new(),
-                    included_plot_specs: Vec::new(),
                 };
                 if let Some(loaded_inline) = loaded_inline {
                     process_dag_body_import_declarations(
                         project,
                         loaded_inline,
                         importer_src,
-                        evaluated_files,
+                        module_artifacts,
                         &mut body_ctx,
                     )?;
                     process_dag_body_include_declarations(
                         project,
                         loaded_inline,
                         importer_src,
-                        evaluated_files,
+                        module_artifacts,
                         &mut body_ctx,
                     )?;
                 }
@@ -984,7 +1047,7 @@ fn process_deferred_dag_includes(
                 // deferred canonical self-import bindings. Same-file includes
                 // resolve them from the importer at runtime.
                 if parent_dag_id != importer_file_dag_id
-                    && let Some(parent_eval) = evaluated_files.get(parent_dag_id)
+                    && let Some(parent_eval) = module_artifacts.get(parent_dag_id)
                 {
                     for binding in imported_bindings.values_mut() {
                         if binding.target().owner() != parent_dag_id {
@@ -1021,7 +1084,7 @@ fn process_deferred_dag_includes(
                         project,
                         &body_ctx.imported_type_system_names,
                         &body_ctx.extra_registry_builders,
-                        evaluated_files,
+                        module_artifacts,
                         importer_src,
                     )
                 };
@@ -1041,7 +1104,7 @@ fn process_deferred_dag_includes(
                     &dag_dag_id,
                     importer_file_dag_id,
                     &body_ctx.deferred_dag_includes,
-                    evaluated_files,
+                    module_artifacts,
                     importer_src,
                     stripped_body.as_ref(),
                     &mut dag_builder,
@@ -1058,7 +1121,7 @@ fn process_deferred_dag_includes(
                     dag_id.clone(),
                     dag_body,
                     dag_body.declarations.as_slice(),
-                    evaluated_files
+                    module_artifacts
                         .get(parent_dag_id)
                         .map(|artifact| &artifact.override_dependencies),
                 )
@@ -1141,6 +1204,7 @@ fn process_deferred_dag_includes(
         )?;
 
         // ---- 5. Merge dep IR into importer's IR ---------------------------
+        let source_order_start = unfrozen.source_order.len();
         unfrozen.merge_dependency(
             dep_unfrozen,
             &merge_prefix,
@@ -1149,6 +1213,7 @@ fn process_deferred_dag_includes(
             &deferred.index_bindings,
             &deferred.type_bindings,
             &deferred.dim_bindings,
+            &deferred.assertion_aliases,
             &deferred.import_item_attributes,
             &deferred.requested_plots,
             importer_dag_id,
@@ -1175,7 +1240,12 @@ fn process_deferred_dag_includes(
                 unfrozen,
             );
         }
+        source_order_blocks.push((
+            deferred.import_span,
+            unfrozen.source_order.split_off(source_order_start),
+        ));
     }
+    unfrozen.interleave_merged_source_order(source_order_blocks);
     Ok(())
 }
 
@@ -1507,6 +1577,7 @@ fn merge_registry_into_builder(
         dim_bindings,
         None,
         None,
+        DynamicUnitBoundary::ConcreteInstance,
     )
 }
 
@@ -1526,22 +1597,21 @@ fn seed_imported_type_system(
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     extra_registry_builders: &[ModuleRegistryImport<'_>],
-    evaluated_files: &HashMap<graphcal_compiler::dag_id::DagId, EvaluatedFile>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for (dep_dag_id, names) in imported_type_system_names {
         let dep_loaded = &project.files[dep_dag_id];
-        let source_registered_names = if evaluated_files.contains_key(dep_dag_id) {
+        let source_registered_names = if module_artifacts.contains_key(dep_dag_id) {
             names.without_resolved_dimensions_and_units()
         } else {
             names.clone()
         };
-        if let Some(dep_eval) = evaluated_files.get(dep_dag_id) {
+        if let Some(dep_eval) = module_artifacts.get(dep_dag_id) {
             register_selected_resolved_dimensions_and_units(
                 builder,
                 &dep_eval.registry,
                 names,
-                &dep_eval.resolved_dynamic_unit_scales,
                 &dep_loaded.named_source,
             )?;
         }
@@ -1576,10 +1646,6 @@ fn register_selected_resolved_dimensions_and_units(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
     selected: &graphcal_compiler::ir::lower::SelectedDeclarations,
-    resolved_unit_scales: &HashMap<
-        graphcal_compiler::syntax::dimension::UnitRef,
-        graphcal_compiler::registry::types::PositiveFiniteScale,
-    >,
     dep_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     fn register_base_dimension_metadata(
@@ -1620,7 +1686,6 @@ fn register_selected_resolved_dimensions_and_units(
     }
 
     for name in selected.units() {
-        use graphcal_compiler::registry::types::UnitScale;
         use graphcal_compiler::syntax::dimension::UnitRef;
 
         let unit_ref = UnitRef::local(name.clone());
@@ -1634,11 +1699,7 @@ fn register_selected_resolved_dimensions_and_units(
                 span: Span::new(0, 0).into(),
             })?;
         register_base_dimension_metadata(builder, dep_registry, &info.dimension);
-        let scale = match (&info.scale, resolved_unit_scales.get(&unit_ref)) {
-            (UnitScale::Dynamic { .. }, Some(resolved)) => UnitScale::Static(*resolved),
-            _ => info.scale,
-        };
-        builder.register_unit_with_scale(unit_ref, info.dimension, scale, info.constness);
+        builder.register_unit_with_scale(unit_ref, info.dimension, info.scale, info.constness);
     }
 
     Ok(())
@@ -1658,7 +1719,8 @@ fn merge_registry_into_builder_export_filtered(
         &HashMap::new(),
         &HashMap::new(),
         Some(import.external_surface),
-        Some((&import.unit_alias, import.resolved_dynamic_scales)),
+        Some(&import.unit_alias),
+        import.dynamic_unit_boundary,
     )
 }
 
@@ -1673,6 +1735,10 @@ pub(in crate::eval::project) struct UnitMergeConflict {
     pub name: graphcal_compiler::syntax::dimension::UnitRef,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "registry merge keeps typed binding and module-boundary policies explicit"
+)]
 fn merge_registry_into_builder_filtered(
     builder: &mut RegistryBuilder,
     dep_registry: &Registry,
@@ -1680,13 +1746,8 @@ fn merge_registry_into_builder_filtered(
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
     external_surface: Option<&ExternalDeclSurface>,
-    unit_alias: Option<(
-        &ModuleAliasName,
-        &HashMap<
-            graphcal_compiler::syntax::dimension::UnitRef,
-            graphcal_compiler::registry::types::PositiveFiniteScale,
-        >,
-    )>,
+    unit_alias: Option<&ModuleAliasName>,
+    dynamic_unit_boundary: DynamicUnitBoundary,
 ) -> Result<(), UnitMergeConflict> {
     // Import base-dimension metadata for display formatting and registry
     // invariants. This includes private transitive dependencies of exported
@@ -1736,7 +1797,10 @@ fn merge_registry_into_builder_filtered(
     // dep registry) is idempotent; a *different* definition under the same
     // reference is a conflict.
     for (name, dim, scale) in dep_registry.units.all_units() {
-        let target = if let Some((alias, _)) = unit_alias {
+        if scale.is_dynamic() && !dynamic_unit_boundary.includes_dynamic_units() {
+            continue;
+        }
+        let target = if let Some(alias) = unit_alias {
             if name.is_qualified() {
                 continue;
             }
@@ -1757,22 +1821,7 @@ fn merge_registry_into_builder_filtered(
             }
             name.clone()
         };
-        // A dynamic unit's scale expression references the dependency's own
-        // params and cannot be re-evaluated in the importer's context, so a
-        // module import carries the scale resolved by the dependency's
-        // evaluation instead. Without a resolved scale (the dependency is a
-        // library or runs under `check`), the dynamic form is kept and use
-        // surfaces the loud could-not-be-resolved error.
-        let merged_scale = match (scale, unit_alias) {
-            (
-                graphcal_compiler::registry::types::UnitScale::Dynamic { .. },
-                Some((_, resolved_scales)),
-            ) => resolved_scales.get(name).map_or_else(
-                || scale.clone(),
-                |resolved| graphcal_compiler::registry::types::UnitScale::Static(*resolved),
-            ),
-            _ => scale.clone(),
-        };
+        let merged_scale = scale.clone();
         let constness = dep_registry.units.get_unit(name).map_or(
             graphcal_compiler::syntax::ast::UnitConstness::Dynamic,
             |info| info.constness,

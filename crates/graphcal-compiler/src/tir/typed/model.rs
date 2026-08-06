@@ -1061,6 +1061,21 @@ pub struct DagSemanticBody {
 }
 
 impl DagSemanticBody {
+    /// Visit every source unit reference used by this DAG's semantic expressions.
+    pub fn visit_unit_references(&self, visitor: &mut impl FnMut(&hir::ResolvedUnitRef, Span)) {
+        self.visit_expressions(&mut |expr| match &expr.kind {
+            hir::ExprKind::UnitLiteral { unit, .. } => unit
+                .terms
+                .iter()
+                .for_each(|term| visitor(&term.name.value, term.name.span)),
+            hir::ExprKind::Convert { target, .. } => target
+                .terms
+                .iter()
+                .for_each(|term| visitor(&term.name.value, term.name.span)),
+            _ => {}
+        });
+    }
+
     /// Visit every semantic HIR expression node in this DAG.
     ///
     /// This root list is exhaustive: declaration and assertion bodies, value

@@ -175,11 +175,9 @@ impl HostFnValue {
 /// A host-native extern function implementation.
 pub type HostFn = Arc<dyn Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync>;
 
-/// One registered extern function: the callable closure plus, for
-/// plugin-backed entries, the signature the plugin's manifest declared.
+/// One registered callable extern implementation.
 struct HostFnEntry {
     function: HostFn,
-    provided_signature: Option<FunctionSignature>,
 }
 
 /// Why a plugin failed to register its functions.
@@ -205,18 +203,46 @@ pub enum PluginRegistrationError {
     },
 }
 
+/// Compile-time metadata for externally provided functions.
+///
+/// This contains identities, manifest signatures, and plugin-load failures,
+/// but deliberately carries no callable closure. Static checking can therefore
+/// verify every extern declaration without gaining the capability to execute
+/// runtime host code.
+#[derive(Debug, Clone, Default)]
+pub struct HostFunctionMetadata {
+    signatures: HashMap<ExternFnKey, Option<FunctionSignature>>,
+    failed_plugins: HashMap<PluginPath, PluginRegistrationError>,
+}
+
+impl HostFunctionMetadata {
+    /// Whether an implementation is expected to exist for `key` at runtime.
+    #[must_use]
+    pub(crate) fn contains(&self, key: &ExternFnKey) -> bool {
+        self.signatures.contains_key(key)
+    }
+
+    /// Manifest-provided signature for a plugin-backed implementation.
+    #[must_use]
+    pub(crate) fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
+        self.signatures.get(key).and_then(Option::as_ref)
+    }
+
+    /// Plugin registration failure captured by the embedding shell.
+    #[must_use]
+    pub(crate) fn plugin_failure(&self, plugin: &PluginPath) -> Option<&PluginRegistrationError> {
+        self.failed_plugins.get(plugin)
+    }
+}
+
 /// Registry mapping resolved extern function references to host closures.
 ///
-/// Injected by the embedder; evaluation looks functions up by
-/// [`ExternFnKey`]. A declared extern function with no registry entry is a
-/// load-time diagnostic (`MissingHostFunction`). Entries registered from a
-/// WASM plugin manifest carry their provided [`FunctionSignature`], which
-/// the pipeline verifies structurally against each declaration; host-native
-/// entries (like the demo plugin) carry none and trust the declaration.
+/// Runtime evaluation uses the callable entries, while compilation receives
+/// only [`HostFunctionMetadata`] through [`Self::metadata`].
 #[derive(Clone, Default)]
 pub struct HostFunctionRegistry {
     fns: HashMap<ExternFnKey, Arc<HostFnEntry>>,
-    failed_plugins: HashMap<PluginPath, PluginRegistrationError>,
+    metadata: HostFunctionMetadata,
 }
 
 impl std::fmt::Debug for HostFunctionRegistry {
@@ -225,7 +251,7 @@ impl std::fmt::Debug for HostFunctionRegistry {
             .field("functions", &self.fns.keys().collect::<Vec<_>>())
             .field(
                 "failed_plugins",
-                &self.failed_plugins.keys().collect::<Vec<_>>(),
+                &self.metadata.failed_plugins.keys().collect::<Vec<_>>(),
             )
             .finish()
     }
@@ -249,11 +275,12 @@ impl HostFunctionRegistry {
         name: FnName,
         function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
+        let key = ExternFnKey { plugin, name };
+        self.metadata.signatures.insert(key.clone(), None);
         self.fns.insert(
-            ExternFnKey { plugin, name },
+            key,
             Arc::new(HostFnEntry {
                 function: Arc::new(function),
-                provided_signature: None,
             }),
         );
     }
@@ -267,11 +294,14 @@ impl HostFunctionRegistry {
         signature: FunctionSignature,
         function: impl Fn(&[HostFnValue]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
+        let key = ExternFnKey { plugin, name };
+        self.metadata
+            .signatures
+            .insert(key.clone(), Some(signature));
         self.fns.insert(
-            ExternFnKey { plugin, name },
+            key,
             Arc::new(HostFnEntry {
                 function: Arc::new(function),
-                provided_signature: Some(signature),
             }),
         );
     }
@@ -282,34 +312,19 @@ impl HostFunctionRegistry {
     /// per-function "missing host function" diagnostic, so users see the
     /// root cause.
     pub fn record_plugin_failure(&mut self, plugin: PluginPath, error: PluginRegistrationError) {
-        self.failed_plugins.insert(plugin, error);
+        self.metadata.failed_plugins.insert(plugin, error);
     }
 
-    /// The recorded registration failure for `plugin`, if any.
+    /// Clone the non-callable metadata view used by static compilation.
     #[must_use]
-    pub(crate) fn plugin_failure(&self, plugin: &PluginPath) -> Option<&PluginRegistrationError> {
-        self.failed_plugins.get(plugin)
+    pub fn metadata(&self) -> HostFunctionMetadata {
+        self.metadata.clone()
     }
 
     /// Look up the host closure for an extern function.
     #[must_use]
     pub(crate) fn get(&self, key: &ExternFnKey) -> Option<&HostFn> {
         self.fns.get(key).map(|entry| &entry.function)
-    }
-
-    /// The manifest-provided signature for an extern function, when its
-    /// entry came from a WASM plugin.
-    #[must_use]
-    pub(crate) fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
-        self.fns
-            .get(key)
-            .and_then(|entry| entry.provided_signature.as_ref())
-    }
-
-    /// Returns whether the registry provides an implementation for `key`.
-    #[must_use]
-    pub(crate) fn contains(&self, key: &ExternFnKey) -> bool {
-        self.fns.contains_key(key)
     }
 }
 
@@ -447,7 +462,10 @@ mod tests {
             "matrix_transpose",
             "dv_range",
         ] {
-            assert!(registry.contains(&key(name)), "missing demo fn `{name}`");
+            assert!(
+                registry.metadata().contains(&key(name)),
+                "missing demo fn `{name}`"
+            );
         }
     }
 

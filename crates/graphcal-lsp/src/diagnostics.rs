@@ -1014,6 +1014,40 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn pure_import_diagnostics_reach_lsp_clients() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
+        std::fs::write(
+            dir.path().join("src/app/lib.gcl"),
+            "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\npub assert positive = @rate > 0.0;\n",
+        )
+        .unwrap();
+        let main_path = dir.path().join("src/app/main.gcl");
+
+        for (source, expected) in [
+            ("import app.lib.{ positive };\n", "graphcal::M024"),
+            (
+                "import app.lib as lib;\nnode price: lib.Money = 1.0 lib.EUR;\n",
+                "graphcal::M025",
+            ),
+        ] {
+            std::fs::write(&main_path, source).unwrap();
+            let diagnostics = produce_diagnostics_for_file(&main_path, source);
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(matches!(
+                diagnostics[0].code.as_ref(),
+                Some(NumberOrString::String(code)) if code == expected
+            ));
+            assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+        }
+    }
+
+    #[test]
     fn pub_param_produces_parse_diagnostic() {
         // `pub param` is rejected at parse time with a P001 unexpected-token
         // diagnostic — params are annotation-free per axioms §4.0.

@@ -35,7 +35,7 @@ use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_
 use super::pipeline::{
     apply_include_debug_names, output_decl_type, push_output_value, remap_include_debug_name,
 };
-use super::{CompiledFile, EvaluatedOutputValue, IncludeDebugNameMap};
+use super::{CompiledFile, IncludeDebugNameMap};
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -336,12 +336,9 @@ impl PreparedModel {
 
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
-    included_debug_values: Vec<EvaluatedOutputValue>,
     include_debug_names: IncludeDebugNameMap,
     imported_source_order: Vec<(ScopedName, graphcal_compiler::ir::resolve::DeclCategory)>,
     imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
-    included_plots: Vec<crate::eval::PlotSpec>,
-    dependency_assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
 
 /// A checked, value-independent Graphcal project ready for repeated evaluation.
@@ -378,7 +375,6 @@ impl PreparedProject {
         host_fns: crate::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,
         root_ast: &graphcal_compiler::desugar::desugared_ast::File,
-        dependency_assertions: Vec<(ScopedName, AssertResult, Span)>,
     ) -> Result<Self, CompileError> {
         let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
         let CompiledFile {
@@ -387,9 +383,7 @@ impl PreparedProject {
             imported_values,
             imported_source_order,
             output_surface,
-            included_debug_values,
             include_debug_names,
-            included_plots,
         } = compiled;
         let tir = tir.with_external_value_constructors();
 
@@ -415,12 +409,9 @@ impl PreparedProject {
             output_ports,
             output_assembly: ProjectOutputAssembly {
                 output_surface,
-                included_debug_values,
                 include_debug_names,
                 imported_source_order,
                 imported_values,
-                included_plots,
-                dependency_assertions,
             },
         })
     }
@@ -642,22 +633,6 @@ impl PreparedProject {
             }));
         }
 
-        if let Some((name, message)) =
-            self.output_assembly
-                .dependency_assertions
-                .iter()
-                .find_map(|(name, result, _)| match result {
-                    AssertResult::Pass => None,
-                    AssertResult::Fail { message } | AssertResult::Error { message } => {
-                        Some((name, message))
-                    }
-                })
-        {
-            return Ok(ModelRowOutcome::Failure(ModelRowFailure {
-                message: format!("assertion `{name}`: {message}"),
-            }));
-        }
-
         let empty_locals = HirLocalValueMap::root();
         let ctx = EvalContext {
             cancellation,
@@ -862,8 +837,7 @@ impl PreparedProject {
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<EvalResult, CompileError> {
         apply_include_debug_names(&mut eval_result, &self.output_assembly.include_debug_names);
-        let mut assertions = self.output_assembly.dependency_assertions.clone();
-        assertions.extend(eval_result.assertions);
+        let assertions = eval_result.assertions;
 
         let mut consts = Vec::new();
         let mut params = Vec::new();
@@ -871,18 +845,6 @@ impl PreparedProject {
         let mut all = Vec::new();
         let mut seen = HashSet::new();
 
-        for entry in &self.output_assembly.included_debug_values {
-            cancellation.checkpoint()?;
-            if seen.insert(entry.0.clone()) {
-                push_output_value(
-                    entry.clone(),
-                    &mut consts,
-                    &mut params,
-                    &mut nodes,
-                    &mut all,
-                );
-            }
-        }
         for (name, category) in &self.output_assembly.imported_source_order {
             cancellation.checkpoint()?;
             if !seen.insert(name.clone()) {
@@ -908,9 +870,6 @@ impl PreparedProject {
         params.extend(eval_result.params);
         nodes.extend(eval_result.nodes);
         all.extend(eval_result.all);
-        let mut plots = self.output_assembly.included_plots.clone();
-        plots.extend(eval_result.plots);
-
         Ok(EvalResult {
             consts,
             params,
@@ -918,7 +877,7 @@ impl PreparedProject {
             all,
             output_surface: self.output_assembly.output_surface.clone(),
             assertions,
-            plots,
+            plots: eval_result.plots,
             plot_errors: eval_result.plot_errors,
             figures: eval_result.figures,
             layers: eval_result.layers,
