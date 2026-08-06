@@ -1313,6 +1313,12 @@ impl TIR {
         &self.extern_functions
     }
 
+    /// Look up a dimension by its canonical defining-module identity.
+    #[must_use]
+    pub fn dimension(&self, name: &ResolvedDimName) -> Option<&Dimension> {
+        self.module_types.get_dimension(name)
+    }
+
     /// Look up a unit by its canonical defining-module identity.
     #[must_use]
     pub fn unit_info(&self, name: &ResolvedUnitName) -> Option<&UnitInfo> {

@@ -28,8 +28,8 @@ use crate::tir::typed::NatPolyForm;
 
 use super::super::builtins::infer_fn_dim_from_spans;
 use super::super::helpers::{
-    expect_quantity, format_inferred_type, resolved_type_matches_inferred,
-    struct_type_def_for_inferred,
+    expect_quantity, format_distinct_inferred_types, format_inferred_type,
+    resolved_type_matches_inferred, struct_type_def_for_inferred,
 };
 use super::super::{
     DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType,
@@ -429,9 +429,15 @@ fn infer_hir_type_inner(
         hir::ExprKind::GraphRef(target) => {
             infer_resolved_decl_ref_type(&target.value, target.span, declared_types, dag, src)?
         }
-        hir::ExprKind::ConstRef(target) => {
-            infer_hir_const_ref(target, owner_decl_name, declared_types, dag, registry, src)?
-        }
+        hir::ExprKind::ConstRef(target) => infer_hir_const_ref(
+            target,
+            owner_decl_name,
+            declared_types,
+            dag,
+            tir,
+            registry,
+            src,
+        )?,
         hir::ExprKind::LocalRef(local) => {
             local_types
                 .get(local.value)
@@ -782,6 +788,7 @@ fn infer_hir_const_ref(
     owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
@@ -831,6 +838,7 @@ fn infer_hir_const_ref(
                 &target_def.type_def,
                 &[],
                 dag,
+                tir,
                 registry,
                 src,
                 target.span,
@@ -3433,6 +3441,7 @@ fn infer_hir_field_access(
 fn infer_hir_generic_type_arg(
     type_expr: &hir::TypeExpr,
     dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     substitutions: Option<&ConcreteGenericSubstitutions>,
@@ -3447,14 +3456,12 @@ fn infer_hir_generic_type_arg(
             Ok(InferredType::Datetime(*scale))
         }
         hir::TypeExprKind::DimExpr(dim_expr) => {
-            infer_hir_dim_expr_arg(dim_expr, registry, src, substitutions)
-                .map(InferredType::Quantity)
+            infer_hir_dim_expr_arg(dim_expr, tir, src, substitutions).map(InferredType::Quantity)
         }
         hir::TypeExprKind::Complex(dimension) => match dimension {
             hir::DimArg::Dimensionless(_) => Ok(InferredType::Complex(Dimension::dimensionless())),
             hir::DimArg::Expr(dim_expr) => {
-                infer_hir_dim_expr_arg(dim_expr, registry, src, substitutions)
-                    .map(InferredType::Complex)
+                infer_hir_dim_expr_arg(dim_expr, tir, src, substitutions).map(InferredType::Complex)
             }
         },
         hir::TypeExprKind::Index(index) => Ok(InferredType::IndexArg(
@@ -3501,6 +3508,7 @@ fn infer_hir_generic_type_arg(
                     type_def,
                     generic_args,
                     dag,
+                    tir,
                     registry,
                     src,
                     name.span,
@@ -3509,7 +3517,8 @@ fn infer_hir_generic_type_arg(
             ))
         }
         hir::TypeExprKind::Indexed { base, indexes } => {
-            let mut result = infer_hir_generic_type_arg(base, dag, registry, src, substitutions)?;
+            let mut result =
+                infer_hir_generic_type_arg(base, dag, tir, registry, src, substitutions)?;
             for index in indexes.iter().rev() {
                 let inferred_index = inferred_index_from_type_arg(index, src, substitutions)?;
                 result = InferredType::Indexed {
@@ -3525,6 +3534,7 @@ fn infer_hir_generic_type_arg(
 fn infer_hir_sorted_generic_arg(
     arg: &hir::GenericArg,
     dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     substitutions: Option<&ConcreteGenericSubstitutions>,
@@ -3534,8 +3544,7 @@ fn infer_hir_sorted_generic_arg(
             Ok(InferredGenericArg::Dim(Dimension::dimensionless()))
         }
         hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
-            infer_hir_dim_expr_arg(dim_expr, registry, src, substitutions)
-                .map(InferredGenericArg::Dim)
+            infer_hir_dim_expr_arg(dim_expr, tir, src, substitutions).map(InferredGenericArg::Dim)
         }
         hir::GenericArg::Index(index) => {
             inferred_index_from_type_arg(index, src, substitutions).map(InferredGenericArg::Index)
@@ -3544,7 +3553,7 @@ fn infer_hir_sorted_generic_arg(
             resolve_hir_nat_form(nat, substitutions, src).map(InferredGenericArg::Nat)
         }
         hir::GenericArg::Type(type_expr) => {
-            infer_hir_generic_type_arg(type_expr, dag, registry, src, substitutions)
+            infer_hir_generic_type_arg(type_expr, dag, tir, registry, src, substitutions)
                 .map(InferredGenericArg::Type)
         }
     }
@@ -3579,7 +3588,7 @@ fn inferred_index_from_type_arg(
 
 fn infer_hir_dim_expr_arg(
     dim_expr: &hir::DimExpr,
-    registry: &Registry,
+    tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     substitutions: Option<&ConcreteGenericSubstitutions>,
 ) -> Result<Dimension, GraphcalError> {
@@ -3589,15 +3598,13 @@ fn infer_hir_dim_expr_arg(
         .try_fold(Dimension::dimensionless(), |acc, item| {
             let (dim, power, span) = match &item.term.target {
                 hir::DimTermTarget::Dimension(target) => {
-                    let dim = registry
-                        .dimensions
-                        .get_dimension(target.value.as_str())
-                        .cloned()
-                        .ok_or_else(|| GraphcalError::UnknownDimension {
+                    let dim = tir.dimension(&target.value).cloned().ok_or_else(|| {
+                        GraphcalError::UnknownDimension {
                             name: target.value.to_unowned_def_name(),
                             src: src.clone(),
                             span: target.span.into(),
-                        })?;
+                        }
+                    })?;
                     (
                         dim,
                         item.term.power.unwrap_or(Rational::ONE),
@@ -3700,6 +3707,7 @@ fn infer_hir_constructor_call(
         type_def,
         constructor_generic_args,
         dag,
+        tir,
         registry,
         src,
         callee.span,
@@ -3796,11 +3804,13 @@ fn infer_hir_constructor_call(
             field_init.name.span,
         )?;
         if value_type != expected {
+            let (expected, found) =
+                format_distinct_inferred_types(&expected, &value_type, registry);
             return Err(GraphcalError::FieldDimensionMismatch {
                 type_name: owning_type_name,
                 field_name: field_init.name.value.clone(),
-                expected: format_inferred_type(&expected, registry),
-                found: format_inferred_type(&value_type, registry),
+                expected,
+                found,
                 src: src.clone(),
                 span: field_init.name.span.into(),
             });
@@ -3818,6 +3828,7 @@ pub(in crate::tir::dim_check) fn resolve_concrete_generic_args(
     type_def: &TypeDef,
     applied_generic_args: &[hir::GenericArg],
     dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -3827,6 +3838,7 @@ pub(in crate::tir::dim_check) fn resolve_concrete_generic_args(
         type_def,
         applied_generic_args,
         dag,
+        tir,
         registry,
         src,
         span,
@@ -3844,6 +3856,7 @@ fn resolve_applied_generic_args(
     type_def: &TypeDef,
     applied_generic_args: &[hir::GenericArg],
     dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -3876,7 +3889,7 @@ fn resolve_applied_generic_args(
     }
     let mut args = Vec::with_capacity(total_params);
     for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
-        let inferred = infer_hir_sorted_generic_arg(arg, dag, registry, src, substitutions)?;
+        let inferred = infer_hir_sorted_generic_arg(arg, dag, tir, registry, src, substitutions)?;
         let matches_sort = matches!(
             (param.constraint, &inferred),
             (TypeGenericConstraint::Dim, InferredGenericArg::Dim(_))

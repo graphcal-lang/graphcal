@@ -1344,6 +1344,7 @@ pub fn concrete_constructor_generic_args(
         &target.type_def,
         applied_generic_args,
         dag,
+        tir,
         &tir.registry,
         src,
         span,
