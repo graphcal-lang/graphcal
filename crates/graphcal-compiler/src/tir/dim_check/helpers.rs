@@ -212,6 +212,7 @@ pub(super) fn struct_type_def_for_inferred<'a>(
 ) -> Option<&'a TypeDef> {
     dag.map(|dag| &dag.semantic.type_defs)
         .and_then(|defs| defs.struct_types.get(ty.resolved()))
+        .map(AsRef::as_ref)
 }
 
 /// Format an inferred type for display in diagnostics.

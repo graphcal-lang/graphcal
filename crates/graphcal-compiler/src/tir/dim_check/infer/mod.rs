@@ -30,6 +30,7 @@ fn index_def_for_inferred<'a>(
     let resolved = index.declared_resolved()?;
     dag.map(|dag| &dag.semantic.collection_refs)
         .and_then(|refs| refs.index_defs.get(resolved))
+        .map(AsRef::as_ref)
 }
 
 /// Return an inferred axis's cardinality only after it has become concrete.

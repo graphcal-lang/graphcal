@@ -1282,7 +1282,7 @@ mod tests {
     use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
     use graphcal_compiler::syntax::module_resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
-    use graphcal_compiler::tir::typed::{ModuleTypeRegistry, type_resolve_with_modules};
+    use graphcal_compiler::tir::typed::{ProjectTypeStore, type_resolve_with_modules};
 
     fn make_src(source: &str) -> NamedSource<Arc<String>> {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
@@ -1309,10 +1309,10 @@ mod tests {
         resolver
             .add_module(dag_id.clone(), &file.declarations)
             .unwrap();
-        let mut module_types = ModuleTypeRegistry::default();
-        module_types.insert_graphcal_prelude().unwrap();
-        module_types.insert_registry(&dag_id, &ir.registry, src.clone());
-        let tir = type_resolve_with_modules(ir, &dag_id, &src, &resolver, &module_types).unwrap();
+        let mut project_types = ProjectTypeStore::default();
+        project_types.insert_graphcal_prelude().unwrap();
+        project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
+        let tir = type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types).unwrap();
         (tir, src)
     }
 

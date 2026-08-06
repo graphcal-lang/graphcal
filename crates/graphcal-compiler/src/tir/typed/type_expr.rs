@@ -17,7 +17,7 @@ use crate::syntax::span::Span;
 use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName};
 
 use super::{
-    ModuleTypeContext, ModuleTypeRegistry, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,
+    ModuleTypeContext, ProjectTypeStore, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg,
     ResolvedIndex, ResolvedTypeExpr, nat_overflow_error,
 };
 
@@ -163,7 +163,7 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
 struct HirTypeResolutionContext<'a> {
     src: &'a NamedSource<Arc<String>>,
     resolver: &'a ModuleResolver,
-    module_types: &'a ModuleTypeRegistry,
+    project_types: &'a ProjectTypeStore,
     prelude: &'a hir::PreludeTypeScope,
 }
 
@@ -184,7 +184,7 @@ pub fn resolve_hir_type_expr(
     let ctx = HirTypeResolutionContext {
         src,
         resolver: module_ctx.resolver,
-        module_types: module_ctx.types,
+        project_types: module_ctx.types,
         prelude: &prelude,
     };
     resolve_hir_type_expr_inner(type_ann, ctx)
@@ -206,7 +206,7 @@ pub(super) fn resolve_ast_type_expr_via_hir(
     let resolve_ctx = HirTypeResolutionContext {
         src,
         resolver: module_ctx.resolver,
-        module_types: module_ctx.types,
+        project_types: module_ctx.types,
         prelude: &prelude,
     };
     resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
@@ -307,7 +307,7 @@ fn hir_dimension(
     span: Span,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<Dimension, GraphcalError> {
-    ctx.module_types
+    ctx.project_types
         .get_dimension(name)
         .cloned()
         .ok_or_else(|| GraphcalError::UnknownDimension {
@@ -322,7 +322,7 @@ fn hir_index_name(
     span: Span,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<IndexName, GraphcalError> {
-    if ctx.module_types.get_index(name).is_some() {
+    if ctx.project_types.get_index(name).is_some() {
         Ok(name.to_unowned_def_name())
     } else {
         Err(GraphcalError::UnknownIndex {
@@ -338,7 +338,7 @@ fn hir_struct_type_def<'a>(
     span: Span,
     ctx: HirTypeResolutionContext<'a>,
 ) -> Result<&'a TypeDef, GraphcalError> {
-    ctx.module_types
+    ctx.project_types
         .get_struct_type(name)
         .ok_or_else(|| GraphcalError::UnknownStructType {
             name: name.to_string(),
@@ -1003,7 +1003,7 @@ pub(super) fn resolve_generic_default_in_struct_scope(
     let resolve_ctx = HirTypeResolutionContext {
         src,
         resolver: ctx.resolver,
-        module_types: ctx.types,
+        project_types: ctx.types,
         prelude: &prelude,
     };
     let hir_arg = lower_generic_default(default, param, type_owner, type_def, resolve_ctx)?;
@@ -1023,7 +1023,7 @@ pub(super) fn resolve_type_expr_in_struct_scope(
     let resolve_ctx = HirTypeResolutionContext {
         src,
         resolver: ctx.resolver,
-        module_types: ctx.types,
+        project_types: ctx.types,
         prelude: &prelude,
     };
     let hir_type = lower_type_expr_in_generic_scope(type_expr, type_owner, type_def, resolve_ctx)?;

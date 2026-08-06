@@ -156,7 +156,7 @@ include app.fx(usd_per_eur: 1.20) as fx;
 param invoice: fx.Money = 100.0 fx.EUR;
 ```
 
-A module import can still make the file callable as a DAG. Dynamic units used internally by `@fx(...).output` are evaluated for that explicit call instance; they are simply not available as imported unit values in the caller.
+A module import can still make the file callable as a DAG. Dynamic units used internally by `@fx(...).output` are evaluated for that explicit call instance; they are simply not available as imported unit values in the caller. Repeated includes or calls of the same DAG keep separate dynamic scales, so two instances with different parameter bindings cannot overwrite or conflict with each other.
 
 ### Using Units
 

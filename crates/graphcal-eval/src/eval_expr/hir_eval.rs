@@ -1640,9 +1640,7 @@ fn index_def_for_ref<'a>(
     if let Some(finite_index) = index_ref.finite_index() {
         return ctx.registry.indexes.get_finite_index(finite_index);
     }
-    ctx.current_dag
-        .map(|dag| &dag.semantic().collection_refs)
-        .and_then(|refs| refs.index_defs.get(index_ref.declared_resolved()?))
+    ctx.tir.declared_index_def(index_ref.declared_resolved()?)
 }
 
 fn ensure_index_ref_matches_resolved(
@@ -1707,10 +1705,9 @@ fn map_entry_index_def<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a IndexDef> {
     match key {
-        hir::expr::MapEntryKey::IndexVariant(variant) => ctx
-            .current_dag
-            .map(|dag| &dag.semantic().collection_refs)
-            .and_then(|refs| refs.index_defs.get(variant.variant.index())),
+        hir::expr::MapEntryKey::IndexVariant(variant) => {
+            ctx.tir.declared_index_def(variant.variant.index())
+        }
         hir::expr::MapEntryKey::FinitePosition { .. } => index_def_for_ref(index_ref, ctx),
     }
 }

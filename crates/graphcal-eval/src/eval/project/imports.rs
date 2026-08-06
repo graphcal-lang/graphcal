@@ -267,7 +267,7 @@ fn reject_runtime_unit_import(
         name.clone(),
     ));
     if dep
-        .registry
+        .frontend_registry
         .units
         .get_unit(&unit_ref)
         .is_some_and(|unit| unit.scale.is_dynamic())
@@ -759,9 +759,9 @@ pub(in crate::eval::project) fn process_file_include<'a>(
             }
             // Import type-system declarations (pub items only).
             if let Some(artifact) = module_artifacts.get(import_dag_id) {
-                ctx.extra_registry_builders
-                    .push(super::ModuleRegistryImport {
-                        registry: &artifact.registry,
+                ctx.frontend_registry_imports
+                    .push(super::FrontendRegistryImport {
+                        registry: &artifact.frontend_registry,
                         external_surface: &artifact.external_surface,
                         unit_alias: prefix.clone(),
                         dynamic_unit_boundary: DynamicUnitBoundary::ConcreteInstance,
@@ -1256,9 +1256,9 @@ pub(in crate::eval::project) fn process_pure_import<'a>(
             )?;
             // Import all public type-system declarations from dep's registry.
             // The module alias keys the dep's pub units in this file's scope.
-            ctx.extra_registry_builders
-                .push(super::ModuleRegistryImport {
-                    registry: &dep.registry,
+            ctx.frontend_registry_imports
+                .push(super::FrontendRegistryImport {
+                    registry: &dep.frontend_registry,
                     external_surface: &dep.external_surface,
                     unit_alias: module_name.clone(),
                     dynamic_unit_boundary: DynamicUnitBoundary::PureImport,
@@ -1515,22 +1515,22 @@ mod tests {
         resolver
             .add_module(dag_id.clone(), &file.declarations)
             .unwrap();
-        let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
-        module_types.insert_graphcal_prelude().unwrap();
-        module_types.insert_registry(&dag_id, &ir.registry, src.clone());
+        let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
+        project_types.insert_graphcal_prelude().unwrap();
+        project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
         let tir = graphcal_compiler::tir::typed::type_resolve_with_modules(
             ir,
             &dag_id,
             &src,
             &resolver,
-            &module_types,
+            &project_types,
         )
         .unwrap();
 
         ModuleArtifact {
             const_values: HashMap::new(),
             declared_types: HashMap::new(),
-            registry: tir.registry().clone(),
+            frontend_registry: tir.registry().clone(),
             external_surface: ExternalDeclSurface::default(),
             override_dependencies: HashMap::new(),
             dag_tirs: tir.dag_registry().clone(),

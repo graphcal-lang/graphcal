@@ -46,9 +46,9 @@ pub(in crate::eval_expr) fn checked_unit_scaled_value(
 ///
 /// For static units, this is equivalent to `registry.units.resolve_unit_expr()`.
 /// For dynamic units, the unit's strictly validated HIR scale expression in
-/// the root DAG's semantic body is evaluated
-/// against the current `values`, then multiplied by the base unit's static
-/// scale. Dynamic scale expressions are standalone (graph/const references
+/// the current concrete DAG instance is evaluated against the current `values`,
+/// then multiplied by the base unit's static scale. Dynamic scale expressions
+/// are standalone (graph/const references
 /// only), so no local environment is involved.
 ///
 /// # Errors

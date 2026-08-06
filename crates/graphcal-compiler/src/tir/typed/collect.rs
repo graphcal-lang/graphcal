@@ -323,7 +323,7 @@ fn record_resolved_collection_index(
     if refs.index_defs.contains_key(index) {
         return Ok(());
     }
-    let def = ctx.types.get_index(index).cloned().ok_or_else(|| {
+    let def = ctx.types.get_index_handle(index).cloned().ok_or_else(|| {
         internal_error(
             format!("semantic collection metadata references unknown index `{index}`"),
             src,

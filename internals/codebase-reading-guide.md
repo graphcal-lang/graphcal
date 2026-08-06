@@ -307,17 +307,20 @@ literal rules) run over HIR during type resolution.
 `tir/dim_check/` infers and checks dimensions and concrete value types.
 
 In the module-aware project path, TIR resolution receives both a
-`ModuleResolver` and a `ModuleTypeRegistry`. Declaration bodies arrive already
-lowered to HIR; syntax type annotations (signature-level) are lowered to HIR
-here, then resolved against owner-qualified definitions. Checked DAG
-body construction uses `type_resolve_with_modules()` for file roots and
-`type_resolve_single_with_modules()` for inline DAG bodies.
+`ModuleResolver` and the project-wide `ProjectTypeStore`. The resolver maps
+source aliases to canonical identities; the store is the authoritative lookup
+for owner-qualified dimensions, units, indexes, nominal types, and
+constructors. Declaration bodies arrive already lowered to HIR; syntax type
+annotations (signature-level) are lowered to HIR here, then resolved against
+that store. Checked DAG body construction uses `type_resolve_with_modules()`
+for file roots and `type_resolve_single_with_modules()` for inline DAG bodies.
 
 The TIR is not flat:
 
 ```text
 TIR
-  registry
+  registry                 // root frontend/formatting artifact
+  project_type_store       // canonical owner-qualified definitions
   root_dag_id
   dags: HashMap<DagId, DagTIR>
   module_aliases
@@ -328,17 +331,19 @@ files are not merged at the AST stage; dependency DAG TIRs are merged into the
 same `DagRegistry` during project lowering/finalization using their canonical
 `DagId`s.
 
-`DagTIR` carries one semantic body:
+Each category-specific declaration record on `DagTIR` owns its HIR body exactly
+once (`ConstEntry.expr`, `ParamEntry.default_expr`, `NodeEntry.expr`,
+`AssertEntry.body`, and plot/figure/layer bodies). A private declaration index
+maps canonical IDs to those records; no semantic side map clones bodies.
+`DagSemanticBody` contains derived facts only:
 
-- `semantic.expressions`: HIR expressions for const/default/node bodies.
-- `semantic.dependencies`: owner-qualified declaration dependency maps and
-  source-span graph/const-reference targets.
-- `semantic.collection_refs`: canonical index and variant references for
+- `semantic.dependencies`: owner-qualified declaration dependency maps.
+- `semantic.collection_refs`: shared handles to canonical indexes used by
   map/table/index/match inference.
 - `semantic.constructor_refs`: canonical constructor-call and constructor-match
-  metadata.
-- `semantic.inline_dag_refs`: canonical inline-DAG call routing metadata.
-- `semantic.type_defs`: owner-qualified struct/type definitions used by eval.
+  metadata backed by shared project-store type handles.
+- `semantic.type_defs`: resolved field/default semantics plus shared handles to
+  canonical nominal definitions.
 - `semantic.decl_bindings`: visible `ScopedName` keys mapped to
   `ResolvedName<Decl>` identities at the source boundary.
 
@@ -354,20 +359,17 @@ body for canonical index/constructor/inline-DAG ownership.
 
 ### 1.7 Execution and Runtime Evaluation
 
-`exec_plan::compile()` performs two topological passes:
-
-1. Sort and evaluate `const node` declarations into `const_values`.
-2. Sort runtime `param` and `node` declarations into `topo_order`.
+Checking evaluates `const node` declarations and resolves top-level and
+struct-field domain constraints once, retaining those immutable stores on the
+checked project. Runtime preparation reuses the same stores and only builds the
+topological `param`/`node` schedule.
 
 Runtime execution is keyed by `RuntimeDeclKey`, which wraps canonical
 `ResolvedName<Decl>` identities so same-leaf declarations from different DAGs do
-not collide. Const and runtime declaration evaluation require
-`DagSemanticBody::expressions` and use `eval_expr/hir_eval.rs`; missing semantic
-expressions are internal consistency errors.
-
-The execution plan also resolves domain constraints from type annotations and
-from struct/union member fields. Domain checks run both when compile-time values
-are known and at runtime.
+not collide. Const and runtime declaration evaluation read the authoritative
+`DagTIR` declaration records through typed ID-to-record indexes and use
+`eval_expr/hir_eval.rs`. Assertions and visualization declarations are also
+read directly from `DagTIR`, not copied into `ExecPlan`.
 
 `eval/runtime.rs` evaluates declarations in topological order. A failed node is
 contained as a `NodeError`; independent nodes can still evaluate. Internal
@@ -728,10 +730,14 @@ Registry
 Associated registry modules define declared types, runtime values, built-ins,
 formatting, manifest parsing, and time scales.
 
-`tir/typed.rs` also defines `ModuleTypeRegistry`, an owner-qualified view over
-registries used during module-aware TIR resolution. It keys dimensions, indexes,
-struct types, and constructors by `ResolvedName`; project lowering inserts the
-synthetic Graphcal prelude owner alongside current/dependency registries.
+`tir/typed.rs` also defines `ProjectTypeStore`, the authoritative
+owner-qualified semantic store used during module-aware TIR resolution. It keys
+dimensions, units, indexes, nominal types, and constructors by `ResolvedName`.
+The project compiler creates it once, installs the synthetic Graphcal prelude,
+and adds only native definitions from each resolver module. Imported spellings
+remain resolver bindings; they are not copied into the store under importer
+owners. The leaf-keyed `Registry` remains confined to frontend declaration
+construction, finite-index support, time zones, and formatting metadata.
 
 ### 3.7 TIR and `DagTIR`
 
@@ -739,10 +745,11 @@ synthetic Graphcal prelude owner alongside current/dependency registries.
 
 ```text
 TIR
-  registry: Registry
+  registry: Registry                 // frontend/formatting boundary
+  project_type_store: ProjectTypeStore
   root_dag_id: DagId
   dags: HashMap<DagId, DagTIR>
-  module_aliases: HashMap<String, DagId>
+  module_aliases: HashMap<ModuleAliasName, DagId>
 
 DagTIR
   dag_id: DagId
@@ -768,22 +775,18 @@ it already carries canonical call routing.
 
 ```text
 ExecPlan
-  const_values: RuntimeValueMap
+  const_values: Arc<RuntimeValueMap>  // retained checked fact store
   imported_values: RuntimeValueMap
   topo_order: Vec<RuntimeDeclKey>
-  expressions: HashMap<RuntimeDeclKey, Expr>
-  assert_bodies
-  plot_bodies
-  figure_bodies
-  layer_bodies
   assumes_map
   expected_fail
-  domain_constraints: HashMap<RuntimeDeclKey, ResolvedDomainConstraint>
-  struct_field_constraints: HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>
+  domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>
+  struct_field_constraints: Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>
 ```
 
-It contains no parser or IR registry-building work; it is ready for evaluation.
-`ResolvedDomainConstraint` lives in `graphcal-eval/src/domain_check.rs` and has
+It contains no cloned HIR bodies and no parser or registry-building work;
+evaluation reads declaration/assertion/visualization records from the checked
+`TIR`. `ResolvedDomainConstraint` lives in `graphcal-eval/src/domain_check.rs` and has
 separate quantity (`f64`), integer (`i64`), and same-scale datetime instant
 representations, so constraint families cannot mix after resolution.
 `RuntimeDeclKey` lives in `graphcal-eval/src/decl_key.rs` and keeps runtime maps
@@ -840,12 +843,15 @@ constants such as `PI`, `E`, `TAU`, `SQRT2`, `LN2`, and `LN10` are bare names.
 
 ## 5. Import, Include, and Project Loading
 
-Graphcal has separate mechanisms for compile-time names and DAG/value reuse:
+Graphcal has separate mechanisms for compile-time names and runtime instances:
 
-- `import` brings compile-time declarations into scope: const nodes,
-  dimensions, units, types, indexes, DAG names, and evaluated asserts.
-- `include` instantiates DAG declarations or exposes runtime outputs, with
-  optional param/index bindings.
+- `import` is compile-time-only. It brings constants, static units, dimensions,
+  types, indexes, constructors, and callable DAG blueprints into scope. It
+  never creates a default runtime instance, evaluates assertions, or exports a
+  runtime-dependent unit scale.
+- `include` creates an explicit DAG instance, with optional value/index/type/
+  dimension bindings. Assertions and dynamic unit scales belong to that
+  concrete instance; repeated instances retain distinct canonical owners.
 
 Import/include paths are dot-separated module paths in source. Loader internals
 drop spans and store path segments in `ModulePathKey`; compiled DAG identity is
@@ -865,24 +871,27 @@ After project loading, the compiler performs several assembly steps. Do not read
 these as repeated merges of one giant project AST. They merge different products
 at the stage where each product first has the information it needs:
 
-| Step                          | Merged Product                                                   | Stage                                   | Why Here                                                                                                                       |
-| ----------------------------- | ---------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Import scope assembly         | imported names, pre-evaluated values, module aliases             | before current-file IR lowering         | The current file needs these names available while lowering declarations.                                                      |
-| Type-system assembly          | dependency dimensions, units, indexes, types, constructors       | IR builder / `ModuleTypeRegistry` setup | Type and dimension resolution needs dependency registries, not dependency AST copies.                                          |
-| Instantiated include assembly | included DAG declarations after bindings/substitutions           | unfrozen IR builder                     | Includes create declarations in the importer, so the importer dependency graph and registry must see them before IR is frozen. |
-| Dependency DAG attachment     | already-compiled dependency `DagTIR`s keyed by canonical `DagId` | TIR finalization                        | Cross-file inline DAG calls need callable checked DAGs, but those DAGs remain separate owners.                                 |
+| Step                          | Merged Product                                                   | Stage                             | Why Here                                                                                                                       |
+| ----------------------------- | ---------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Import scope assembly         | canonical constant bindings and module/source aliases            | before current-file IR lowering   | The current file needs source spellings resolved while lowering declarations; no runtime value map is imported.                |
+| Canonical type-store assembly | native owner-qualified dimensions, units, indexes, and types      | project session / TIR resolution  | Resolver aliases point to one canonical definition instead of copying definitions under importer keys.                         |
+| Frontend registry seeding     | leaf/alias views needed to build local declarations               | local IR registry builder         | This is a construction boundary only; copied frontend views are filtered out of the canonical store.                            |
+| Instantiated include assembly | included DAG declarations after bindings/substitutions           | unfrozen IR builder               | Includes create concrete declarations in the importer, so its dependency graph sees them before IR is frozen.                  |
+| Dependency DAG attachment     | already-compiled dependency `DagTIR`s keyed by canonical `DagId` | TIR finalization                  | Cross-file DAG calls need callable checked templates, but those templates remain separate owners.                              |
 
-The invariant is that source `File<Desugared>` ASTs stay per file. `import` and
-module-style `include` assemble scope, values, and type-system facts around the
-current file; instantiated `include` is the only operation that copies
-declaration bodies into the importer's DAG, and it does so at the unfrozen
-IR-builder stage after binding validation — before the freeze boundary lowers
-all assembled bodies through the single resolution stage.
+The invariant is that source `File<Desugared>` ASTs stay per file. `import`
+assembles lexical bindings only. Instantiated `include` is the operation that
+specializes and merges declaration bodies into the importer at the unfrozen
+IR-builder stage after binding validation. Its synthetic resolver owner also
+scopes dynamic units, so repeated instances may use the same unit spelling with
+different scale environments.
 
-Project lowering then builds the `ModuleResolver` from the loaded graph, builds a
-`ModuleTypeRegistry` from the current file, prelude, and evaluated dependencies,
-lowers dependencies before dependents, performs those semantic merge steps, and
-evaluates the requested root.
+`ProjectCompiler` builds the `ModuleResolver` once, then grows one
+`ProjectTypeStore` in dependency order. Each module contributes only definitions
+native to resolver modules in its subtree; dependency aliases never become new
+importer-owned definitions. A successful `CheckedProject` retains the final TIR,
+constant pool, and resolved constraints, and runtime preparation continues from
+that checked result.
 
 Package locking is adjacent to, not part of, this compile/eval pipeline. The
 `graphcal deps lock` shell materializes Git dependencies and writes

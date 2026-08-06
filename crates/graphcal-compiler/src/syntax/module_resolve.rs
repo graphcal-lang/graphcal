@@ -482,13 +482,13 @@ impl ModuleSymbols {
 
     /// Dimension namespace symbols.
     #[must_use]
-    const fn dimensions(&self) -> &HashMap<DimName, ModuleSymbol<DimNameNamespace>> {
+    pub(crate) const fn dimensions(&self) -> &HashMap<DimName, ModuleSymbol<DimNameNamespace>> {
         &self.dimensions
     }
 
     /// Unit namespace symbols.
     #[must_use]
-    const fn units(&self) -> &HashMap<UnitName, ModuleSymbol<UnitNameNamespace>> {
+    pub(crate) const fn units(&self) -> &HashMap<UnitName, ModuleSymbol<UnitNameNamespace>> {
         &self.units
     }
 

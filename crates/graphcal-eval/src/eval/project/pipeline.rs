@@ -39,6 +39,7 @@ fn compile_single_file_in_project(
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    project_types: &mut graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
@@ -51,7 +52,7 @@ fn compile_single_file_in_project(
         imported_source_order: Vec::new(),
         imported_type_system_names: HashMap::new(),
         module_map: HashMap::new(),
-        extra_registry_builders: Vec::new(),
+        frontend_registry_imports: Vec::new(),
         include_instances: Vec::new(),
     };
 
@@ -76,6 +77,7 @@ fn compile_single_file_in_project(
         ProjectSemanticContext {
             project,
             module_resolver,
+            project_types,
         },
         file_dag_id,
         file_src,
@@ -87,9 +89,7 @@ fn compile_single_file_in_project(
 }
 
 fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
-    tir.registry()
-        .indexes
-        .declared_indexes()
+    tir.root_declared_indexes()
         .any(graphcal_compiler::registry::types::IndexDef::is_required)
         || tir
             .root()
@@ -97,14 +97,14 @@ fn tir_has_required_indexes(tir: &graphcal_compiler::tir::typed::TIR) -> bool {
             .collection_refs
             .index_defs
             .values()
-            .any(graphcal_compiler::registry::types::IndexDef::is_required)
+            .any(|definition| definition.is_required())
 }
 
 fn first_required_index_diagnostic(
     tir: &graphcal_compiler::tir::typed::TIR,
     ast: &graphcal_compiler::desugar::desugared_ast::File,
 ) -> Option<(String, miette::SourceSpan)> {
-    for idx_def in tir.registry().indexes.declared_indexes() {
+    for idx_def in tir.root_declared_indexes() {
         if idx_def.is_required() {
             let span = ast
                 .declarations
@@ -292,7 +292,7 @@ fn store_module_artifact(
         ModuleArtifact {
             const_values: top_level_consts,
             declared_types: compiled.declared_types,
-            registry: compiled.tir.registry().clone(),
+            frontend_registry: compiled.tir.registry().clone(),
             external_surface,
             override_dependencies,
             dag_tirs,
@@ -315,6 +315,15 @@ pub(in crate::eval::project) fn check_project_perfile(
     cancellation.checkpoint()?;
     let mut module_artifacts: HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact> =
         HashMap::new();
+    let root_source = &project.files[&project.root].named_source;
+    let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
+    project_types
+        .insert_graphcal_prelude()
+        .map_err(|error| GraphcalError::InternalError {
+            message: format!("failed to build prelude project type store: {error}"),
+            src: root_source.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
 
     for file_dag_id in &project.load_order {
         cancellation.checkpoint()?;
@@ -323,6 +332,7 @@ pub(in crate::eval::project) fn check_project_perfile(
             file_dag_id,
             &module_artifacts,
             &module_resolver,
+            &mut project_types,
             cancellation,
         )?;
         let loaded_file = &project.files[file_dag_id];

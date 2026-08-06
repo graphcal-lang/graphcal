@@ -1923,15 +1923,7 @@ fn index_def_for_ref<'tir>(
     tir: &'tir graphcal_compiler::tir::typed::TIR,
 ) -> Option<&'tir IndexDef> {
     index.finite_index().map_or_else(
-        || {
-            let resolved = index.declared_resolved()?;
-            tir.root()
-                .semantic()
-                .collection_refs
-                .index_defs
-                .get(resolved)
-                .or_else(|| tir.declared_index_def(resolved))
-        },
+        || tir.declared_index_def(index.declared_resolved()?),
         |finite| tir.registry().indexes.get_finite_index(finite),
     )
 }

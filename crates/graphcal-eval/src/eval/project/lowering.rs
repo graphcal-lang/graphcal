@@ -21,15 +21,13 @@ fn is_imported_dynamic_unit(
                     artifact
                         .external_surface
                         .is_explicit_export(&DeclName::from_atom(name.atom().clone()))
-                        && artifact
-                            .registry
-                            .units
-                            .all_units()
-                            .any(|(candidate, _, scale)| {
+                        && artifact.frontend_registry.units.all_units().any(
+                            |(candidate, _, scale)| {
                                 !candidate.is_qualified()
                                     && candidate.name() == name
                                     && scale.is_dynamic()
-                            })
+                            },
+                        )
                 })
     })
 }
@@ -123,6 +121,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
     let ProjectSemanticContext {
         project,
         module_resolver,
+        project_types,
     } = semantic_context;
     let include_debug_names = include_debug_name_map(&ctx);
     // Snapshot the source-facing output values before IR lowering consumes the
@@ -149,7 +148,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
             builder,
             project,
             &ctx.imported_type_system_names,
-            &ctx.extra_registry_builders,
+            &ctx.frontend_registry_imports,
             module_artifacts,
             file_src,
         )
@@ -219,28 +218,15 @@ pub(in crate::eval::project) fn lower_and_finalize(
     )?;
 
     cancellation.checkpoint()?;
+    // Register only definitions native to this module and its concrete include
+    // scopes. Imported aliases remain resolver bindings to definitions already
+    // present in the project-wide canonical store.
+    project_types.insert_resolver_subtree(file_dag_id, &ir.registry, file_src, module_resolver);
+
     // Type-resolve top-level decls; then compile each inline dag body
     // explicitly (loader supplies the per-file self-import set and the
     // canonical parent `DagId`). Cross-file dep dag TIRs are merged in
     // afterward by `merge_dep_dag_tirs`.
-    let mut module_types = graphcal_compiler::tir::typed::ModuleTypeRegistry::default();
-    module_types
-        .insert_graphcal_prelude()
-        .map_err(|err| GraphcalError::InternalError {
-            message: format!("failed to build prelude type registry: {err}"),
-            src: file_src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
-    module_types.insert_registry(file_dag_id, &ir.registry, file_src.clone());
-    for (dep_dag_id, artifact) in module_artifacts {
-        cancellation.checkpoint()?;
-        let dep_src = &project.files[dep_dag_id].named_source;
-        module_types.insert_registry(dep_dag_id, &artifact.registry, dep_src.clone());
-    }
-    // The aggregate root registry may expose dependency static units under
-    // aliases or selective-import spellings. Overlay those entries last while
-    // retaining their canonical HIR identity.
-    module_types.overlay_visible_units(file_dag_id, &ir.registry, module_resolver);
 
     let parent_external_surface = ir.external_surface.clone();
     let mut tir =
@@ -249,7 +235,7 @@ pub(in crate::eval::project) fn lower_and_finalize(
             file_dag_id,
             file_src,
             module_resolver,
-            &module_types,
+            project_types,
             cancellation,
         )?;
     if let Some((name, span)) =
@@ -275,9 +261,10 @@ pub(in crate::eval::project) fn lower_and_finalize(
         &parent_external_surface,
         module_artifacts,
         module_resolver,
-        &module_types,
+        project_types,
         cancellation,
     )?;
+    tir.replace_project_type_store(project_types.clone());
     cancellation.checkpoint()?;
     merge_dep_dag_tirs(&mut tir, &ctx.module_map, module_artifacts, file_src)?;
     let tir = tir.finish();
@@ -368,7 +355,7 @@ fn compile_inline_dag_modules<'a>(
     parent_external_surface: &ExternalDeclSurface,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    module_types: &graphcal_compiler::tir::typed::ModuleTypeRegistry,
+    project_types: &mut graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     let loaded_file = &project.files[file_dag_id];
@@ -390,21 +377,13 @@ fn compile_inline_dag_modules<'a>(
             module_resolver,
             cancellation,
         )?;
-        // The shared module registry contains file/dependency registries, but
-        // an inline DAG owns type-system declarations in its body (including
-        // required `pub(bind)` dimensions, types, and indexes). Add that local
-        // registry under the child DAG identity before resolving its annotations.
-        let mut dag_module_types = module_types.clone();
-        dag_module_types.insert_registry(&loaded_dag.dag_id, &dag_ir.registry, file_src.clone());
-        dag_module_types.overlay_visible_units(
+        // Inline DAG definitions join the same canonical project store. The
+        // body registry remains a local frontend artifact and may contain
+        // inherited/imported names that the resolver filters out here.
+        project_types.insert_resolver_subtree(
             &loaded_dag.dag_id,
             &dag_ir.registry,
-            module_resolver,
-        );
-        tir.insert_module_registry(
-            &loaded_dag.dag_id,
-            &dag_ir.registry,
-            file_src.clone(),
+            file_src,
             module_resolver,
         );
         let mut compiled_dag =
@@ -413,7 +392,7 @@ fn compile_inline_dag_modules<'a>(
                 &loaded_dag.dag_id,
                 file_src,
                 module_resolver,
-                &dag_module_types,
+                project_types,
                 cancellation,
             )?;
         compiled_dag.populate_projectable_outputs(&loaded_dag.body);
@@ -460,7 +439,7 @@ fn compile_loaded_dag_module_ir<'a>(
         imported_source_order: Vec::new(),
         imported_type_system_names: HashMap::new(),
         module_map: HashMap::new(),
-        extra_registry_builders: Vec::new(),
+        frontend_registry_imports: Vec::new(),
         include_instances: Vec::new(),
     };
 
@@ -500,7 +479,7 @@ fn compile_loaded_dag_module_ir<'a>(
             builder,
             project,
             &ctx.imported_type_system_names,
-            &ctx.extra_registry_builders,
+            &ctx.frontend_registry_imports,
             module_artifacts,
             file_src,
         )
@@ -900,7 +879,7 @@ fn elaborate_include_instances(
                     imported_source_order: Vec::new(),
                     imported_type_system_names: HashMap::new(),
                     module_map: HashMap::new(),
-                    extra_registry_builders: Vec::new(),
+                    frontend_registry_imports: Vec::new(),
                     include_instances: Vec::new(),
                 };
                 imports::process_file_body_declarations(
@@ -921,7 +900,7 @@ fn elaborate_include_instances(
                         builder,
                         project,
                         &body_ctx.imported_type_system_names,
-                        &body_ctx.extra_registry_builders,
+                        &body_ctx.frontend_registry_imports,
                         module_artifacts,
                         dep_src,
                     )
@@ -931,7 +910,7 @@ fn elaborate_include_instances(
                         dep_src,
                         &body_ctx.imported_names,
                         body_ctx.imported_bindings,
-                        &instance_dag_id,
+                        dep_dag_id,
                         Some(&mut registry_seed),
                         cancellation,
                     )?;
@@ -993,7 +972,7 @@ fn elaborate_include_instances(
                     imported_source_order: Vec::new(),
                     imported_type_system_names: HashMap::new(),
                     module_map: HashMap::new(),
-                    extra_registry_builders: Vec::new(),
+                    frontend_registry_imports: Vec::new(),
                     include_instances: Vec::new(),
                 };
                 if let Some(loaded_inline) = loaded_inline {
@@ -1060,7 +1039,7 @@ fn elaborate_include_instances(
                         builder,
                         project,
                         &body_ctx.imported_type_system_names,
-                        &body_ctx.extra_registry_builders,
+                        &body_ctx.frontend_registry_imports,
                         module_artifacts,
                         importer_src,
                     )
@@ -1071,7 +1050,7 @@ fn elaborate_include_instances(
                         &body_ctx.imported_names,
                         imported_bindings,
                         importer_src,
-                        &dag_dag_id,
+                        dag_id,
                         Some(&mut registry_seed),
                         cancellation,
                     )?;
@@ -1193,6 +1172,7 @@ fn elaborate_include_instances(
             &instance.assertion_aliases,
             &instance.import_item_attributes,
             &instance.requested_plots,
+            &dep_resolution_owner,
             importer_dag_id,
             importer_src,
             &dep_src,
@@ -1573,7 +1553,7 @@ fn seed_imported_type_system(
         graphcal_compiler::dag_id::DagId,
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
-    extra_registry_builders: &[ModuleRegistryImport<'_>],
+    frontend_registry_imports: &[FrontendRegistryImport<'_>],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
@@ -1587,7 +1567,7 @@ fn seed_imported_type_system(
         if let Some(dep_eval) = module_artifacts.get(dep_dag_id) {
             register_selected_resolved_dimensions_and_units(
                 builder,
-                &dep_eval.registry,
+                &dep_eval.frontend_registry,
                 names,
                 &dep_loaded.named_source,
             )?;
@@ -1600,7 +1580,7 @@ fn seed_imported_type_system(
             dep_dag_id,
         )?;
     }
-    for import in extra_registry_builders {
+    for import in frontend_registry_imports {
         merge_registry_into_builder_export_filtered(builder, import).map_err(|conflict| {
             GraphcalError::ConflictingImportedUnit {
                 name: conflict.name,
@@ -1687,7 +1667,7 @@ fn register_selected_resolved_dimensions_and_units(
 /// intentionally irrelevant here because they are not type-system exports.
 fn merge_registry_into_builder_export_filtered(
     builder: &mut RegistryBuilder,
-    import: &ModuleRegistryImport<'_>,
+    import: &FrontendRegistryImport<'_>,
 ) -> Result<(), UnitMergeConflict> {
     merge_registry_into_builder_filtered(
         builder,
@@ -1814,7 +1794,7 @@ fn merge_registry_into_builder_filtered(
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).
     // Module imports use explicit-export filtering and keep required indexes in the
-    // dependency's module registry only; pulling an unbound `pub(bind)` index
+    // dependency's frontend module scope only; pulling an unbound `pub(bind)` index
     // into the importer would incorrectly make the importer a library even if
     // it only needs a qualified type from the dependency.
     for idx_def in dep_registry.indexes.declared_indexes() {

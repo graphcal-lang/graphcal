@@ -596,6 +596,7 @@ impl LoadedProject {
                 &loaded.dag_id,
                 &loaded.ast.declarations,
                 &loaded.resolved_imports,
+                &self.files,
             )?;
             for inline in &loaded.inline_dags {
                 link_include_instance_indexes(
@@ -603,6 +604,7 @@ impl LoadedProject {
                     &inline.dag_id,
                     &inline.body,
                     &inline.resolved_imports,
+                    &self.files,
                 )?;
             }
         }
@@ -641,9 +643,7 @@ fn add_include_instance_modules(
         let DeclKind::Include(include) = &decl.kind else {
             continue;
         };
-        let Some(instance_scope) = include_instance_scope(include) else {
-            continue;
-        };
+        let instance_scope = include_instance_scope(include);
         let prefix = instance_scope.merge_scope_name();
         let Some(file_target) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
@@ -654,7 +654,9 @@ fn add_include_instance_modules(
         let Some(target_decls) = module_declarations(&target, files) else {
             continue;
         };
-        resolver.add_module(owner.child(prefix.as_str()), target_decls)?;
+        let instance = owner.child(prefix.as_str());
+        resolver.add_module(instance.clone(), target_decls)?;
+        add_nested_include_instance_modules(resolver, &target, &instance, files)?;
     }
     Ok(())
 }
@@ -676,9 +678,7 @@ fn inherit_include_instance_scopes(
         let DeclKind::Include(include) = &declaration.kind else {
             continue;
         };
-        let Some(instance_scope) = include_instance_scope(include) else {
-            continue;
-        };
+        let instance_scope = include_instance_scope(include);
         let Some(file_target) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
@@ -687,6 +687,7 @@ fn inherit_include_instance_scopes(
         let source = module_resolver_target_for_path(&include.path, file_target, files);
         let instance = owner.child(instance_scope.merge_scope_name().as_str());
         resolver.inherit_module_scope(&source, &instance)?;
+        inherit_nested_include_instance_scopes(resolver, &source, &instance, files)?;
     }
     Ok(())
 }
@@ -705,21 +706,19 @@ fn link_include_instance_indexes(
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &impl ResolvedModuleLookup,
+    files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for decl in declarations {
         let DeclKind::Include(include) = &decl.kind else {
             continue;
         };
-        let Some(instance_scope) = include_instance_scope(include) else {
+        let instance_scope = include_instance_scope(include);
+        let prefix = instance_scope.merge_scope_name();
+        let Some(file_target) =
+            resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
+        else {
             continue;
         };
-        let prefix = instance_scope.merge_scope_name();
-        if resolved_imports
-            .resolved_target(&ModulePathKey::from_path(&include.path))
-            .is_none()
-        {
-            continue;
-        }
         let synthetic = owner.child(prefix.as_str());
         if resolver.modules().get(&synthetic).is_none() {
             // The synthetic module is only present when the include target
@@ -727,18 +726,128 @@ fn link_include_instance_indexes(
             // target is already reported elsewhere).
             continue;
         }
-        let bound: HashSet<IndexName> = include
-            .param_bindings
-            .iter()
-            .map(|binding| IndexName::from_atom(binding.name.name.clone()))
-            .collect();
-        resolver.inline_instantiated_include_indexes(owner, &synthetic, &bound)?;
+        if let Some(bound_indexes) = include_index_bindings(include) {
+            resolver.inline_instantiated_include_indexes(owner, &synthetic, &bound_indexes)?;
+        }
+        let source = module_resolver_target_for_path(&include.path, file_target, files);
+        link_nested_include_instance_indexes(resolver, &source, &synthetic, files)?;
     }
     Ok(())
 }
 
-fn include_instance_scope<P: Phase>(include: &IncludeDecl<P>) -> Option<IncludeInstanceScope> {
-    (!include.param_bindings.is_empty()).then(|| include.instance_scope())
+struct NestedIncludeInstance {
+    source: DagId,
+    instance: DagId,
+    index_bindings: Option<HashSet<IndexName>>,
+}
+
+fn nested_include_instances(
+    source: &DagId,
+    instance: &DagId,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Vec<NestedIncludeInstance> {
+    module_declarations(source, files).map_or_else(Vec::new, |declarations| {
+        declarations
+            .iter()
+            .filter_map(|declaration| {
+                let DeclKind::Include(include) = &declaration.kind else {
+                    return None;
+                };
+                let instance_scope = include_instance_scope(include);
+                let source = resolved_module_target_from(source, &include.path, files)?;
+                Some(NestedIncludeInstance {
+                    source,
+                    instance: instance.child(instance_scope.merge_scope_name().as_str()),
+                    index_bindings: include_index_bindings(include),
+                })
+            })
+            .collect()
+    })
+}
+
+fn add_nested_include_instance_modules(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    source: &DagId,
+    instance: &DagId,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for child in nested_include_instances(source, instance, files) {
+        let Some(child_declarations) = module_declarations(&child.source, files) else {
+            continue;
+        };
+        resolver.add_module(child.instance.clone(), child_declarations)?;
+        add_nested_include_instance_modules(resolver, &child.source, &child.instance, files)?;
+    }
+    Ok(())
+}
+
+fn inherit_nested_include_instance_scopes(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    source: &DagId,
+    instance: &DagId,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for child in nested_include_instances(source, instance, files) {
+        resolver.inherit_module_scope(&child.source, &child.instance)?;
+        inherit_nested_include_instance_scopes(resolver, &child.source, &child.instance, files)?;
+    }
+    Ok(())
+}
+
+fn link_nested_include_instance_indexes(
+    resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    source: &DagId,
+    instance: &DagId,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
+    for child in nested_include_instances(source, instance, files) {
+        if let Some(bound_indexes) = &child.index_bindings {
+            resolver.inline_instantiated_include_indexes(
+                instance,
+                &child.instance,
+                bound_indexes,
+            )?;
+        }
+        link_nested_include_instance_indexes(resolver, &child.source, &child.instance, files)?;
+    }
+    Ok(())
+}
+
+fn resolved_module_target_from(
+    source: &DagId,
+    path: &ModulePath,
+    files: &HashMap<DagId, LoadedFile>,
+) -> Option<DagId> {
+    let key = ModulePathKey::from_path(path);
+    let file_target = files.get(source).map_or_else(
+        || {
+            files.values().find_map(|file| {
+                file.inline_dags
+                    .iter()
+                    .find(|inline| inline.dag_id == *source)
+                    .and_then(|inline| match inline.resolved_imports.get(&key) {
+                        Some(InlineBodyImportResolution::Resolved(target)) => Some(target.clone()),
+                        Some(InlineBodyImportResolution::Unresolved) | None => None,
+                    })
+            })
+        },
+        |file| file.resolved_imports.get(&key).cloned(),
+    )?;
+    Some(module_resolver_target_for_path(path, &file_target, files))
+}
+
+fn include_instance_scope<P: Phase>(include: &IncludeDecl<P>) -> IncludeInstanceScope {
+    include.instance_scope()
+}
+
+fn include_index_bindings<P: Phase>(include: &IncludeDecl<P>) -> Option<HashSet<IndexName>> {
+    (!include.param_bindings.is_empty()).then(|| {
+        include
+            .param_bindings
+            .iter()
+            .map(|binding| IndexName::from_atom(binding.name.name.clone()))
+            .collect()
+    })
 }
 
 fn module_declarations<'a>(
@@ -777,19 +886,15 @@ fn register_module_imports(
                     )?;
                 }
             }
-            DeclKind::Include(include) => {
-                if let Some(target) =
-                    resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
-                {
-                    let synthetic_owner = include_instance_scope(include).map(|scope| {
-                        let prefix = scope.merge_scope_name();
-                        owner.child(prefix.as_str())
-                    });
-                    let target = synthetic_owner.unwrap_or_else(|| {
-                        module_resolver_target_for_path(&include.path, target, files)
-                    });
-                    resolver.register_include(owner, &include.path, &include.kind, &target)?;
-                }
+            DeclKind::Include(include)
+                if resolved_imports
+                    .resolved_target(&ModulePathKey::from_path(&include.path))
+                    .is_some() =>
+            {
+                let instance_scope = include_instance_scope(include);
+                let prefix = instance_scope.merge_scope_name();
+                let target = owner.child(prefix.as_str());
+                resolver.register_include(owner, &include.path, &include.kind, &target)?;
             }
             _ => {}
         }

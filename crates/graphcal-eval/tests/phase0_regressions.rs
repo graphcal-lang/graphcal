@@ -408,6 +408,74 @@ fn included_dynamic_unit_scale_uses_the_bound_instance_param() {
 }
 
 #[test]
+fn repeated_includes_keep_dynamic_unit_scales_instance_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/dynamic_instances");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"dynamic_instances\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("lib.gcl"),
+        "pub base dim Money;\npub base unit USD: Money;\nparam factor: Dimensionless;\npub unit EUR: Money = (@factor) USD;\npub node out: Money = 3.0 EUR;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include dynamic_instances.lib(factor: 2.0) as cheap;\ninclude dynamic_instances.lib(factor: 4.0) as expensive;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|err| panic!("repeated dynamic-unit instances must compile: {err:?}"));
+    let cheap = value_for(&result, "cheap.out").si_value().unwrap();
+    let expensive = value_for(&result, "expensive.out").si_value().unwrap();
+    assert!((cheap - 6.0).abs() < 1e-9, "expected 6 USD, got {cheap}");
+    assert!(
+        (expensive - 12.0).abs() < 1e-9,
+        "expected 12 USD, got {expensive}"
+    );
+}
+
+#[test]
+fn repeated_nested_includes_keep_each_dynamic_unit_instance_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src/nested_dynamic_instances");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"nested_dynamic_instances\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("lib.gcl"),
+        "pub base dim Money;\npub base unit USD: Money;\nparam factor: Dimensionless;\npub unit EUR: Money = (@factor) USD;\npub node out: Money = 3.0 EUR;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("wrapper.gcl"),
+        "import nested_dynamic_instances.lib as units;\nparam first_factor: Dimensionless;\nparam second_factor: Dimensionless;\ninclude nested_dynamic_instances.lib(factor: @first_factor) as first;\ninclude nested_dynamic_instances.lib(factor: @second_factor) as second;\npub node out: units.Money = @first.out + @second.out;\n",
+    )
+    .unwrap();
+    let root = package_dir.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include nested_dynamic_instances.wrapper(first_factor: 2.0, second_factor: 3.0) as low;\ninclude nested_dynamic_instances.wrapper(first_factor: 4.0, second_factor: 5.0) as high;\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|err| panic!("nested dynamic-unit instances must compile: {err:?}"));
+    let low = value_for(&result, "low.out").si_value().unwrap();
+    let high = value_for(&result, "high.out").si_value().unwrap();
+    assert!((low - 15.0).abs() < 1e-9, "expected 15 USD, got {low}");
+    assert!((high - 27.0).abs() < 1e-9, "expected 27 USD, got {high}");
+}
+
+#[test]
 fn included_dynamic_unit_error_uses_producer_source() {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/dynamic_source");

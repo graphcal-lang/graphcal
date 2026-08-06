@@ -33,7 +33,7 @@ use crate::registry::types::{
     self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
 };
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitRef};
+use crate::syntax::dimension::{DimName, ResolvedUnitName, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
 use crate::syntax::names::{NameAtom, NamePath};
@@ -1625,6 +1625,7 @@ impl UnfrozenIR {
         assertion_aliases: &HashMap<DeclName, DeclName>,
         import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::desugared_ast::Attribute>>,
         requested_plots: &HashMap<DeclName, RequestedPlot>,
+        dependency_owner: &crate::dag_id::DagId,
         importer_owner: &crate::dag_id::DagId,
         importer_src: &NamedSource<Arc<String>>,
         dep_src: &NamedSource<Arc<String>>,
@@ -1651,12 +1652,30 @@ impl UnfrozenIR {
             }
         }
 
+        fn rebase_instance_owner(
+            owner: crate::dag_id::DagId,
+            dependency_owner: &crate::dag_id::DagId,
+            instance_owner: &crate::dag_id::DagId,
+        ) -> crate::dag_id::DagId {
+            if &owner != dependency_owner && !owner.is_descendant_of(dependency_owner) {
+                return owner;
+            }
+            owner
+                .segments()
+                .iter()
+                .skip(dependency_owner.segments().len())
+                .fold(instance_owner.clone(), |rebased, segment| {
+                    rebased.child(Arc::clone(segment))
+                })
+        }
+
         // Include-time type-system bindings rewrite selected producer names
         // to importer-side identifiers. Keep those rewritten bodies/signatures
         // in the importer scope; otherwise preserve producer scope so an
         // include consumer need not import constructors/types it never names.
         let type_system_bindings_present =
             !index_bindings.is_empty() || !type_bindings.is_empty() || !dim_bindings.is_empty();
+        let instance_owner = importer_owner.child(prefix.as_str());
         let merge_resolution_owner = |producer_owner: crate::dag_id::DagId| {
             if type_system_bindings_present {
                 importer_owner.clone()
@@ -1664,6 +1683,19 @@ impl UnfrozenIR {
                 producer_owner
             }
         };
+        let dynamic_unit_names = dep
+            .dynamic_unit_scales
+            .iter()
+            .map(|entry| entry.spelling.name().clone())
+            .collect::<HashSet<_>>();
+        let merge_body_resolution_owner =
+            |producer_owner: crate::dag_id::DagId, uses_dynamic_unit: bool| {
+                if uses_dynamic_unit {
+                    rebase_instance_owner(producer_owner, dependency_owner, &instance_owner)
+                } else {
+                    merge_resolution_owner(producer_owner)
+                }
+            };
 
         // Source-order entries are declarations owned by the dependency,
         // including declarations already nested by an inner include. Imported
@@ -1708,20 +1740,25 @@ impl UnfrozenIR {
             })
             .collect::<Vec<_>>();
 
-        // Dynamic units share the include's value-instance scope. Their unit
-        // name remains in the file-level unit namespace, while graph references
-        // in the scale expression receive the instance prefix.
+        // Dynamic units belong to the concrete include instance. Repeated
+        // instances may use the same source spelling with different value
+        // bindings; canonical ownership, not that spelling, distinguishes the
+        // scale definitions.
         for mut entry in dep.dynamic_unit_scales {
             substitute_indexes(&mut entry.expr, index_bindings);
             substitute_type_names_in_expr(&mut entry.expr, type_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names, dep_scoped_names);
-            entry.body_resolution_owner = merge_resolution_owner(entry.body_resolution_owner);
+            entry.unit_owner =
+                rebase_instance_owner(entry.unit_owner, dependency_owner, &instance_owner);
+            entry.body_resolution_owner = rebase_instance_owner(
+                entry.body_resolution_owner,
+                dependency_owner,
+                &instance_owner,
+            );
             entry.src = entry.src.or_dependency(dep_src);
-            if self
-                .dynamic_unit_scales
-                .iter()
-                .any(|existing| existing.spelling == entry.spelling)
-            {
+            if self.dynamic_unit_scales.iter().any(|existing| {
+                existing.unit_owner == entry.unit_owner && existing.spelling == entry.spelling
+            }) {
                 return Err(GraphcalError::ConflictingImportedUnit {
                     name: entry.spelling,
                     src: importer_src.clone(),
@@ -1740,12 +1777,16 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.within_scope(prefix);
+            let uses_dynamic_unit = expr_uses_local_units(&entry.expr, &dynamic_unit_names);
             self.consts.push(UnfrozenConstEntry {
                 name: prefixed,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
-                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
+                body_resolution_owner: merge_body_resolution_owner(
+                    entry.body_resolution_owner,
+                    uses_dynamic_unit,
+                ),
                 span: entry.span,
                 type_src: entry.type_src.or_dependency(dep_src),
                 body_src: entry.body_src.or_dependency(dep_src),
@@ -1776,7 +1817,10 @@ impl UnfrozenIR {
                 entry.default_src = entry
                     .default_src
                     .map(|source| source.or_dependency(dep_src));
-                merge_resolution_owner(entry.default_resolution_owner)
+                merge_body_resolution_owner(
+                    entry.default_resolution_owner,
+                    expr_uses_local_units(expr, &dynamic_unit_names),
+                )
             } else {
                 // Required param without binding — stays None, caught later in exec_plan.
                 entry.default_src = None;
@@ -1807,12 +1851,16 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.within_scope(prefix);
+            let uses_dynamic_unit = expr_uses_local_units(&entry.expr, &dynamic_unit_names);
             self.nodes.push(UnfrozenNodeEntry {
                 name: prefixed,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
-                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
+                body_resolution_owner: merge_body_resolution_owner(
+                    entry.body_resolution_owner,
+                    uses_dynamic_unit,
+                ),
                 span: entry.span,
                 type_src: entry.type_src.or_dependency(dep_src),
                 body_src: entry.body_src.or_dependency(dep_src),
@@ -1844,11 +1892,15 @@ impl UnfrozenIR {
                     prefix_expr_refs(tolerance, prefix, dep_names, dep_scoped_names);
                 }
             }
+            let uses_dynamic_unit = assert_body_uses_local_units(&entry.body, &dynamic_unit_names);
             let merged_name = merged_assert_name(&entry.name);
             self.asserts.push(UnfrozenAssertEntry {
                 name: merged_name.clone(),
                 body: entry.body,
-                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
+                body_resolution_owner: merge_body_resolution_owner(
+                    entry.body_resolution_owner,
+                    uses_dynamic_unit,
+                ),
                 span: entry.span,
                 body_src: entry.body_src.or_dependency(dep_src),
             });
@@ -1879,11 +1931,15 @@ impl UnfrozenIR {
                 substitute_type_names_in_expr(&mut prop.value, type_bindings);
                 prefix_expr_refs(&mut prop.value, prefix, dep_names, dep_scoped_names);
             }
+            let uses_dynamic_unit = plot_uses_local_units(&entry.decl, &dynamic_unit_names);
             let local = ScopedName::local(requested.alias.clone());
             self.plots.push(UnfrozenPlotEntry {
                 name: local,
                 decl: entry.decl,
-                body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
+                body_resolution_owner: merge_body_resolution_owner(
+                    entry.body_resolution_owner,
+                    uses_dynamic_unit,
+                ),
                 span: entry.span,
                 body_src: entry.body_src.or_dependency(dep_src),
                 displayed: !requested.hidden,
@@ -3440,6 +3496,65 @@ fn register_unit_decl(
     }
     registry.register_unit_with_scale(u.name.value.clone(), dim, scale, u.constness);
     Ok(dynamic_unit_scale)
+}
+
+fn expr_uses_local_units(expr: &Expr, unit_names: &HashSet<UnitName>) -> bool {
+    struct LocalUnitUseVisitor<'a> {
+        unit_names: &'a HashSet<UnitName>,
+        found: bool,
+    }
+
+    impl ExprVisitor<crate::syntax::phase::Desugared> for LocalUnitUseVisitor<'_> {
+        type Error = std::convert::Infallible;
+
+        fn visit_expr(&mut self, expr: &Expr) -> Result<(), Self::Error> {
+            if self.found {
+                return Ok(());
+            }
+            let unit = match &expr.kind {
+                ExprKind::UnitLiteral { unit, .. } => Some(unit),
+                ExprKind::Convert { target, .. } => Some(target),
+                _ => None,
+            };
+            self.found = unit.is_some_and(|unit| {
+                unit.terms.iter().any(|term| {
+                    !term.name.value.is_qualified()
+                        && self.unit_names.contains(term.name.value.name())
+                })
+            });
+            self.dispatch(expr)
+        }
+    }
+
+    let mut visitor = LocalUnitUseVisitor {
+        unit_names,
+        found: false,
+    };
+    let Ok(()) = visitor.visit_expr(expr);
+    visitor.found
+}
+
+fn assert_body_uses_local_units(body: &AssertBody, unit_names: &HashSet<UnitName>) -> bool {
+    match body {
+        AssertBody::Expr(expr) => expr_uses_local_units(expr, unit_names),
+        AssertBody::Tolerance {
+            actual,
+            expected,
+            tolerance,
+            ..
+        } => [actual, expected, tolerance]
+            .into_iter()
+            .any(|expr| expr_uses_local_units(expr, unit_names)),
+    }
+}
+
+fn plot_uses_local_units(decl: &PlotDecl, unit_names: &HashSet<UnitName>) -> bool {
+    decl.encodings
+        .iter()
+        .map(|encoding| &encoding.value)
+        .chain(decl.mark.properties.iter().map(|property| &property.value))
+        .chain(decl.properties.iter().map(|property| &property.value))
+        .any(|expr| expr_uses_local_units(expr, unit_names))
 }
 
 fn first_graph_ref(expr: &Expr) -> Option<Spanned<ScopedName>> {
@@ -5460,6 +5575,7 @@ mod tests {
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::dag_id::DagId::root_in_package("test", "dep"),
                 &crate::dag_id::DagId::root_in_package("test", "main"),
                 &importer_src,
                 &dep_src,
