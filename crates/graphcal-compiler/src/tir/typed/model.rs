@@ -1404,6 +1404,7 @@ pub struct DagTIR {
     pub(crate) expected_fail: HashMap<ScopedName, ExpectedFail>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
+    pub(crate) instances: Vec<crate::ir::instance::InstanceRecord>,
     pub(crate) projectable_outputs: std::collections::HashSet<DeclName>,
 }
 
@@ -1451,6 +1452,12 @@ impl DagTIR {
     #[must_use]
     pub const fn semantic(&self) -> &DagSemanticBody {
         &self.semantic
+    }
+
+    /// Explicit template-instance edges owned by this DAG.
+    #[must_use]
+    pub fn instances(&self) -> &[crate::ir::instance::InstanceRecord] {
+        &self.instances
     }
 
     /// Build identity-to-record indexes after all declaration vectors are installed.

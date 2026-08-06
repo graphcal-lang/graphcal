@@ -35,6 +35,14 @@ pub struct ParentValueDecls {
 }
 
 impl ParentValueDecls {
+    /// Borrow the canonical declared type of one importable parent constant.
+    #[must_use]
+    pub(crate) fn const_declared_type(&self, name: &DeclName) -> Option<&DeclaredType> {
+        self.consts.get(name)
+    }
+}
+
+impl ParentValueDecls {
     fn external_const_type(&self, name: &str) -> Option<&DeclaredType> {
         self.consts.get(name)
     }

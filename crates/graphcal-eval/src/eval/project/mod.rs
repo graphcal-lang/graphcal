@@ -368,6 +368,7 @@ struct ProjectSemanticContext<'project> {
     project: &'project crate::loader::LoadedProject,
     module_resolver: &'project graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &'project mut graphcal_compiler::tir::typed::ProjectTypeStore,
+    module_templates: &'project mut ModuleTemplateStore,
 }
 
 /// Typed request for one concrete DAG instance (file-level or inline).
@@ -380,9 +381,8 @@ struct ProjectSemanticContext<'project> {
 /// `include lib.dag(args)`) is a DAG inside some file. After the flat
 /// TIR registry, both are uniformly addressed by canonical [`DagId`].
 struct IncludeInstanceRequest {
-    /// Identifies the source kind and any kind-specific data (file's AST
-    /// vs inline dag's body + parent context).
-    source: IncludeTemplateSource,
+    /// Canonical shared module template instantiated by this request.
+    template: ModuleTemplateRef,
     /// Private merge namespace for this instance. Only the named
     /// variant is source-visible; selective includes use an opaque identity.
     instance_scope: IncludeInstanceScope,
@@ -422,32 +422,66 @@ struct IncludeInstanceRequest {
     pub_reexport_items: HashSet<DeclName>,
 }
 
-/// Template referenced by an include instance request.
-enum IncludeTemplateSource {
-    /// File include — body is the dependency's full AST. Its own import and
-    /// include declarations are processed recursively for each instance.
-    File {
-        /// Canonical [`DagId`](graphcal_compiler::dag_id::DagId)
-        /// of the dep file (equal to the file's root id).
-        dep_dag_id: graphcal_compiler::dag_id::DagId,
-    },
-    /// Inline DAG include — body is the dag block's declarations, with
-    /// `import <self>.{...}` items resolved against `parent_dag_id`
-    /// (Concept 9: the file that *defined* the DAG, not the file
-    /// performing the include).
-    InlineDag {
-        /// Virtual File AST constructed from the DAG body declarations.
-        dag_body: graphcal_compiler::desugar::desugared_ast::File,
-        /// Imported names collected from `import ..` inside the DAG body.
-        dag_imported_names: ImportedValueNames,
-        /// Canonical identity of the included DAG module.
+/// Stable reference to one reusable file-root or inline-DAG module template.
+///
+/// `source_file` owns source provenance and self-import scope; `dag_id`
+/// identifies the exact template within that file. Keeping both fields avoids
+/// recovering containment from path-string conventions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ModuleTemplateRef {
+    source_file: graphcal_compiler::dag_id::DagId,
+    dag_id: graphcal_compiler::dag_id::DagId,
+}
+
+impl ModuleTemplateRef {
+    fn file(dag_id: graphcal_compiler::dag_id::DagId) -> Self {
+        Self {
+            source_file: dag_id.clone(),
+            dag_id,
+        }
+    }
+
+    fn is_file_root(&self) -> bool {
+        self.source_file == self.dag_id
+    }
+}
+
+/// Reusable elaborated pre-HIR template shared by every concrete instance.
+///
+/// Bodies remain pre-HIR so instance bindings and nominal substitutions can be
+/// applied without reparsing or re-running module import/include elaboration.
+#[derive(Debug)]
+struct ElaboratedModuleTemplate {
+    unfrozen: graphcal_compiler::ir::lower::UnfrozenIR,
+    frontend_registry: Registry,
+}
+
+/// Project-session cache containing exactly one elaborated template per DAG.
+#[derive(Default)]
+struct ModuleTemplateStore {
+    templates: HashMap<graphcal_compiler::dag_id::DagId, Arc<ElaboratedModuleTemplate>>,
+}
+
+impl ModuleTemplateStore {
+    fn get(
+        &self,
+        dag_id: &graphcal_compiler::dag_id::DagId,
+    ) -> Option<Arc<ElaboratedModuleTemplate>> {
+        self.templates.get(dag_id).map(Arc::clone)
+    }
+
+    fn insert(
+        &mut self,
         dag_id: graphcal_compiler::dag_id::DagId,
-        /// [`DagId`](graphcal_compiler::dag_id::DagId) of the file
-        /// where this DAG was *defined*. For same-file includes this is
-        /// the importer; for cross-file qualified includes it's the target
-        /// file.
-        parent_dag_id: graphcal_compiler::dag_id::DagId,
-    },
+        template: ElaboratedModuleTemplate,
+    ) -> Arc<ElaboratedModuleTemplate> {
+        match self.templates.entry(dag_id) {
+            std::collections::hash_map::Entry::Occupied(entry) => Arc::clone(entry.get()),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                Arc::clone(entry.insert(Arc::new(template)))
+            }
+        }
+    }
 }
 
 /// Canonical routing metadata for one module alias in the project pipeline.

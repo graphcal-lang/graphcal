@@ -253,6 +253,105 @@ fn repeated_dag_calls_keep_dynamic_unit_scales_instance_scoped() {
 }
 
 #[test]
+fn checked_tir_records_typed_template_instance_bindings() {
+    use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+    use graphcal_compiler::syntax::module_name::ModuleAliasName;
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param factor: Dimensionless;\npub node output: Dimensionless = @factor * 2.0;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib(factor: 2.0) as low;\ninclude pipeline.lib(factor: 5.0) as high;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let template = loaded_file_dag_id(&project, "lib.gcl");
+    let template_param =
+        ResolvedDeclName::from_def(template.clone(), DeclName::expect_valid("factor"));
+    let instances = tir
+        .root()
+        .instances()
+        .iter()
+        .filter(|record| record.id.template() == &template)
+        .collect::<Vec<_>>();
+    assert_eq!(instances.len(), 2);
+    assert_ne!(instances[0].id.owner(), instances[1].id.owner());
+
+    for instance in instances {
+        assert_eq!(instance.parent_owner, *tir.root_dag_id());
+        assert!(
+            instance
+                .bindings
+                .explicitly_bound_values
+                .contains(&template_param)
+        );
+        let concrete = &instance.bindings.value_ports[&template_param];
+        assert_eq!(concrete.owner(), instance.id.owner());
+        assert_eq!(concrete.as_str(), "factor");
+
+        let output_name = ScopedName::qualified(
+            ModuleAliasName::expect_valid(instance.id.owner().name()),
+            DeclName::expect_valid("output"),
+        );
+        let output = &tir.root().semantic().decl_bindings[&output_name];
+        assert_eq!(output.owner(), instance.id.owner());
+    }
+}
+
+#[test]
+fn nested_instances_retain_template_and_concrete_parent_identity() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "leaf.gcl",
+                "param input: Dimensionless;\npub node output: Dimensionless = @input;\n",
+            ),
+            (
+                "middle.gcl",
+                "param input: Dimensionless;\ninclude pipeline.leaf(input: @input) as leaf;\npub node output: Dimensionless = @leaf.output;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.middle(input: 2.0) as first;\ninclude pipeline.middle(input: 5.0) as second;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+
+    let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
+    let middle_template = loaded_file_dag_id(&project, "middle.gcl");
+    let leaf_template = loaded_file_dag_id(&project, "leaf.gcl");
+    let outer_owners = tir
+        .root()
+        .instances()
+        .iter()
+        .filter(|record| record.id.template() == &middle_template)
+        .map(|record| record.id.owner().clone())
+        .collect::<HashSet<_>>();
+    let nested = tir
+        .root()
+        .instances()
+        .iter()
+        .filter(|record| record.id.template() == &leaf_template)
+        .collect::<Vec<_>>();
+
+    assert_eq!(outer_owners.len(), 2);
+    assert_eq!(nested.len(), 2);
+    assert!(nested.iter().all(|record| {
+        outer_owners.contains(&record.parent_owner)
+            && record.id.owner().parent().as_ref() == Some(&record.parent_owner)
+    }));
+    assert_ne!(nested[0].id.owner(), nested[1].id.owner());
+}
+
+#[test]
 fn project_type_store_keeps_imported_definitions_under_their_canonical_owner() {
     let (_directory, root) = write_pipeline_project(
         &[
@@ -5699,6 +5798,26 @@ node out: Length = @scaled(factor: 4.0).result;
     let result = compile_and_eval_named(source, "test.gcl").unwrap();
     let out = find_value(&result, "out");
     assert!((out - 12.0).abs() < 1e-10, "expected 12.0, got {out}");
+}
+
+#[test]
+fn cached_inline_template_refines_parent_const_types_for_repeated_instances() {
+    let source = "\
+pub const node radius: Length = 10.0 m;
+
+dag shifted {
+    import test.{radius};
+
+    param altitude: Length;
+    pub node result: Length = @radius + @altitude;
+}
+
+include shifted(altitude: 1.0 m).{ result as first };
+include shifted(altitude: 2.0 m).{ result as second };
+";
+    let result = compile_and_eval_named(source, "test.gcl").unwrap();
+    assert!((find_value(&result, "first") - 11.0).abs() < 1e-10);
+    assert!((find_value(&result, "second") - 12.0).abs() < 1e-10);
 }
 
 #[test]

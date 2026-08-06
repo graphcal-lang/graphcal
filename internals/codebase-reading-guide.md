@@ -863,7 +863,8 @@ Project loading:
    single-file mode.
 2. Parse and desugar each file.
 3. Resolve import/include paths to `DagId`s.
-4. Lift inline `dag` blocks into `LoadedDag`s.
+4. Index inline `dag` blocks as `LoadedDag`s. Each entry holds a validated
+   locator into its file AST; the AST remains the sole owner of the body.
 5. Build a dependency-first `load_order`.
 6. Detect circular imports during traversal.
 
@@ -876,15 +877,23 @@ at the stage where each product first has the information it needs:
 | Import scope assembly         | canonical constant bindings and module/source aliases            | before current-file IR lowering   | The current file needs source spellings resolved while lowering declarations; no runtime value map is imported.                |
 | Canonical type-store assembly | native owner-qualified dimensions, units, indexes, and types      | project session / TIR resolution  | Resolver aliases point to one canonical definition instead of copying definitions under importer keys.                         |
 | Frontend registry seeding     | leaf/alias views needed to build local declarations               | local IR registry builder         | This is a construction boundary only; copied frontend views are filtered out of the canonical store.                            |
-| Instantiated include assembly | included DAG declarations after bindings/substitutions           | unfrozen IR builder               | Includes create concrete declarations in the importer, so its dependency graph sees them before IR is frozen.                  |
+| Module-template elaboration   | one shared `UnfrozenIR`/frontend-registry template per canonical `DagId` | project-session template store | Repeated include/call sites reuse import processing and body lowering rather than recompiling the source template.              |
+| Instantiated include assembly | instance-specialized declarations plus a typed binding environment | unfrozen IR builder             | The current monomorphizing implementation exposes declarations to the importer graph while retaining the template/instance edge. |
 | Dependency DAG attachment     | already-compiled dependency `DagTIR`s keyed by canonical `DagId` | TIR finalization                  | Cross-file DAG calls need callable checked templates, but those templates remain separate owners.                              |
 
-The invariant is that source `File<Desugared>` ASTs stay per file. `import`
-assembles lexical bindings only. Instantiated `include` is the operation that
-specializes and merges declaration bodies into the importer at the unfrozen
-IR-builder stage after binding validation. Its synthetic resolver owner also
-scopes dynamic units, so repeated instances may use the same unit spelling with
-different scale environments.
+The invariant is that each source `File<Desugared>` AST owns its bodies once;
+`LoadedDag` indexes those bodies rather than cloning them. `import` assembles
+lexical bindings only. A canonical `ModuleTemplateStore` elaborates each file or
+inline-DAG template once per project session and shares it through `Arc`.
+Instantiated `include` or call sites clone that immutable template only at the
+specialization boundary and record an `InstanceRecord`: its `InstanceId` pairs
+the canonical template with a fresh concrete owner, while
+`InstanceBindingEnvironment` carries value, index, type, and dimension
+substitutions. The current evaluator still monomorphizes declarations into the
+importer, but semantic declaration records carry the explicit concrete owner;
+source-facing prefixes are lookup/presentation names, not the source of semantic
+identity. This owner also scopes dynamic units, so repeated instances may use
+the same unit spelling with different scale environments.
 
 `ProjectCompiler` builds the `ModuleResolver` once, then grows one
 `ProjectTypeStore` in dependency order. Each module contributes only definitions
