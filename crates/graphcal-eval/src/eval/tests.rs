@@ -3120,6 +3120,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
                 graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Pick"),
                 b_owner,
             ),
+            generic_args: Vec::new(),
             fields,
         },
     )]);
@@ -3135,6 +3136,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        generic_nat_bindings: None,
         host_fns: None,
     };
 
@@ -3178,6 +3180,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
                 graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
                 b_owner,
             ),
+            generic_args: Vec::new(),
             fields,
         },
     )]);
@@ -3193,6 +3196,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        generic_nat_bindings: None,
         host_fns: None,
     };
 
@@ -4051,6 +4055,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        generic_nat_bindings: None,
         host_fns: None,
     };
 
@@ -4111,6 +4116,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: None,
+        generic_nat_bindings: None,
         host_fns: None,
     };
 
@@ -4491,6 +4497,64 @@ fn setup_inline_semantics_project(
     }
     let root = dir.path().join(root_rel);
     (dir, root)
+}
+
+#[test]
+fn imported_generic_field_obligation_is_checked_in_the_consumer() {
+    let (_dir, root) = setup_inline_semantics_project(
+        &[
+            (
+                "src/sem/lib.gcl",
+                "pub type Box<D: Dim> { Box(x: D(min: 0.5 m)) }\n",
+            ),
+            (
+                "src/sem/main.gcl",
+                "import sem.lib as lib;\n\
+                 node bad: lib.Box<Time> = lib.Box<Time>(x: 1.0 s);\n",
+            ),
+        ],
+        "src/sem/main.gcl",
+    );
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::DomainDimensionMismatch { .. })
+    ));
+}
+
+#[test]
+fn generic_argument_constraint_in_default_is_rejected_end_to_end() {
+    let error = compile_and_eval(
+        r"
+type Wrapper<T: Type> { Wrapper(value: T) }
+type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> { Bad(value: T) }
+node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
+",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::GenericTypeArgDomainConstraint { .. })
+    ));
+}
+
+#[test]
+fn generic_argument_constraint_in_inline_dag_type_is_rejected_end_to_end() {
+    let error = compile_and_eval(
+        r"
+dag nested {
+    type Wrapper<T: Type> { Wrapper(value: T) }
+    type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> { Bad(value: T) }
+    node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
+}
+",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::GenericTypeArgDomainConstraint { .. })
+    ));
 }
 
 #[test]
@@ -6105,6 +6169,140 @@ node R: Result = Burn(dv: 50.0 km/s);
         message.contains("Burn.dv") && message.contains("above maximum"),
         "message = {message}"
     );
+}
+
+#[test]
+fn generic_field_dimension_mismatch_is_rejected_before_evaluation() {
+    let error = compile_and_eval(
+        r"
+type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+node bad: Box<Time> = Box<Time>(x: 1.0 s);
+",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::DomainDimensionMismatch { .. })
+    ));
+}
+
+#[test]
+fn temporary_generic_constructor_uses_its_concrete_field_constraint() {
+    let result = compile_and_eval(
+        r"
+type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+node bad: Length = Box<Length>(x: 0.1 m).x;
+",
+    )
+    .unwrap();
+    let (_, bad, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "bad")
+        .expect("bad not found");
+    let NodeError::EvalFailed { message } = bad.as_ref().unwrap_err() else {
+        panic!("expected EvalFailed, got {bad:?}");
+    };
+    assert!(message.contains("below minimum"), "message = {message}");
+}
+
+#[test]
+fn matching_generic_field_constraint_remains_evaluable() {
+    let result = compile_and_eval(
+        r"
+type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+node good: Box<Length> = Box<Length>(x: 1.0 m);
+",
+    )
+    .unwrap();
+    let (_, good, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "good")
+        .expect("good not found");
+    assert!(good.is_ok(), "good failed: {good:?}");
+}
+
+#[test]
+fn invalid_generic_static_fin_key_is_rejected_before_evaluation() {
+    let error = compile_and_eval(
+        r"
+type T<N: Nat> { T(x: Int(min: to_int(key(Fin(N), 0)))) }
+node bad: T<0> = T<0>(x: 0);
+",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::EvalError { .. })
+    ));
+}
+
+#[test]
+fn valid_generic_static_fin_key_constraint_remains_evaluable() {
+    let result = compile_and_eval(
+        r"
+type T<N: Nat> { T(x: Int(min: to_int(key(Fin(N), 1)))) }
+node good: T<2> = T<2>(x: 1);
+",
+    )
+    .unwrap();
+    let (_, good, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "good")
+        .expect("good not found");
+    assert!(good.is_ok(), "good failed: {good:?}");
+}
+
+#[test]
+fn generic_nat_field_constraints_are_keyed_by_concrete_application() {
+    let result = compile_and_eval(
+        r"
+type AtLeastCardinality<N: Nat> {
+    AtLeastCardinality(x: Int(min: count(for i: Fin(N) { i })))
+}
+node two: AtLeastCardinality<2> = AtLeastCardinality<2>(x: 2);
+node bad_three: AtLeastCardinality<3> = AtLeastCardinality<3>(x: 2);
+",
+    )
+    .unwrap();
+
+    let (_, two, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "two")
+        .expect("two not found");
+    assert!(two.is_ok(), "two failed: {two:?}");
+
+    let (_, bad_three, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "bad_three")
+        .expect("bad_three not found");
+    let NodeError::EvalFailed { message } = bad_three.as_ref().unwrap_err() else {
+        panic!("expected EvalFailed, got {bad_three:?}");
+    };
+    assert!(message.contains("below minimum"), "message = {message}");
+}
+
+#[test]
+fn valid_generic_constant_index_constraint_remains_evaluable() {
+    let result = compile_and_eval(
+        r"
+type T<N: Nat> {
+    T(x: Int(min: to_int((for i: Fin(N) { i })[1])))
+}
+node good: T<2> = T<2>(x: 1);
+",
+    )
+    .unwrap();
+    let (_, good, _) = result
+        .all
+        .iter()
+        .find(|(name, _, _)| name.to_string() == "good")
+        .expect("good not found");
+    assert!(good.is_ok(), "good failed: {good:?}");
 }
 
 #[test]

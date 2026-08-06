@@ -46,12 +46,11 @@ fn resolve_source_type(
     tir.root()
         .semantic
         .type_defs
-        .field_types
-        .iter()
+        .fields()
         .find(|(key, _)| {
             key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
         })
-        .map(|(_, resolved)| resolved.clone())
+        .map(|(_, field)| field.resolved_type().clone())
         .ok_or_else(|| GraphcalError::InternalError {
             message: "test type field was not resolved through HIR".to_string(),
             src: NamedSource::new("test.gcl", Arc::new(source)),
@@ -235,12 +234,11 @@ fn resolve_struct_takes_priority_over_dim_param() {
         .root()
         .semantic
         .type_defs
-        .field_types
-        .iter()
+        .fields()
         .find(|(key, _)| {
             key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
         })
-        .map(|(_, resolved)| resolved)
+        .map(|(_, field)| field.resolved_type())
         .expect("ResolutionSubject.value should resolve through HIR");
     assert!(matches!(resolved, ResolvedTypeExpr::Struct(..)));
 }
@@ -601,9 +599,8 @@ pub type Wrap<I: Index> {
         .root()
         .semantic
         .type_defs
-        .field_types
-        .iter()
-        .find_map(|(key, ty)| (key.field.as_str() == "boxed").then_some(ty))
+        .fields()
+        .find_map(|(key, field)| (key.field.as_str() == "boxed").then(|| field.resolved_type()))
         .expect("Wrap.boxed field type");
 
     let ResolvedTypeExpr::GenericStruct { generic_args, .. } = boxed_field else {

@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 
 use crate::complex_value::ComplexValue;
 use crate::dag_id::DagId;
-use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
+use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::type_name::{FieldName, StructTypeName};
 
@@ -98,6 +98,8 @@ pub enum RuntimeValue {
         /// module-aware evaluation stores the owning union's canonical `StructType` identity
         /// in the carrier's `resolved` field.
         type_name: StructTypeRef,
+        /// Concrete generic identity needed by field constraints and equality.
+        generic_args: Vec<DeclaredGenericArg>,
         fields: IndexMap<FieldName, Self>,
     },
     /// An indexed collection keyed by named labels or typed positions.
@@ -148,6 +150,7 @@ impl RuntimeValue {
     ) -> Self {
         Self::Struct {
             type_name: StructTypeRef::with_owner(owner, type_name),
+            generic_args: Vec::new(),
             fields,
         }
     }

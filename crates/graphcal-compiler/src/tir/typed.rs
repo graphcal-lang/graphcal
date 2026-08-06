@@ -1016,10 +1016,7 @@ fn record_resolved_struct_type_def(
                     definition_src,
                     defs,
                 )?;
-                if !bounds.is_empty() {
-                    defs.field_bounds.insert(key.clone(), bounds);
-                }
-                defs.field_types.insert(key, resolved);
+                defs.insert_field(key, ResolvedStructFieldSemantics::new(resolved, bounds));
             }
         }
     }
@@ -1379,8 +1376,8 @@ fn check_domain_bound_policies(
     for (key, bounds) in &semantic.domain_bounds {
         check_bounds(bounds, key.owner() == ctx.owner)?;
     }
-    for bounds in semantic.type_defs.field_bounds.values() {
-        check_bounds(bounds, false)?;
+    for (_, field) in semantic.type_defs.constrained_fields() {
+        check_bounds(field.domain_bounds(), false)?;
     }
     Ok(())
 }

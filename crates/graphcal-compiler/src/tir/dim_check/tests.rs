@@ -166,6 +166,7 @@ fn compile_inline_dag_bodies_test(
             parent_dag_id,
         )?;
         let dag_id = parent_dag_id.child(name.as_str());
+        module_types.insert_registry(&dag_id, &dag_body_ir.registry, src.clone());
         let mut compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
             dag_body_ir,
             &dag_id,
@@ -570,6 +571,70 @@ Maneuver.Insertion: 1.8 km / s,
     assert!(
         matches!(err, GraphcalError::ExtraVariants { .. }),
         "got: {err:?}"
+    );
+}
+
+#[test]
+fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
+    use std::fmt::Write as _;
+
+    const AXIS_COUNT: usize = 30;
+    let mut source = String::new();
+    for axis in 0..AXIS_COUNT {
+        writeln!(source, "pub index A{axis} = {{ X, Y }};").unwrap();
+    }
+    let axes = (0..AXIS_COUNT)
+        .map(|axis| format!("A{axis}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tuple = (0..AXIS_COUNT)
+        .map(|axis| format!("A{axis}.X"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        source,
+        "param values: Dimensionless[{axes}] = {{ ({tuple}): 1.0 }};"
+    )
+    .unwrap();
+
+    let error = check(&source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("missing 1073741823 entries")
+                && message.contains("first missing entry")
+                && message.contains("A29.Y")),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn map_key_space_cardinality_overflow_is_rejected() {
+    use std::fmt::Write as _;
+
+    let axis_count = usize::BITS as usize;
+    let mut source = String::new();
+    for axis in 0..axis_count {
+        writeln!(source, "pub index A{axis} = {{ X, Y }};").unwrap();
+    }
+    let axes = (0..axis_count)
+        .map(|axis| format!("A{axis}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let tuple = (0..axis_count)
+        .map(|axis| format!("A{axis}.X"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        source,
+        "param values: Dimensionless[{axes}] = {{ ({tuple}): 1.0 }};"
+    )
+    .unwrap();
+
+    let error = check(&source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("key-space cardinality exceeds supported size")),
+        "got: {error:?}"
     );
 }
 
@@ -2195,6 +2260,220 @@ fn const_domain_bound_well_formed_passes_dim_check() {
     // Well-formed const constraint passes dim_check (value-vs-bound check is
     // in exec_plan, not dim_check).
     let source = "const node MAX_M: Mass(min: 1.0 kg, max: 100.0 kg) = 50.0 kg;";
+    check(source).unwrap();
+}
+
+// -----------------------------------------------------------------------
+// Concrete obligations from generic field constraints
+// -----------------------------------------------------------------------
+
+#[test]
+fn generic_dimension_field_bound_is_checked_after_substitution() {
+    let source = r"
+type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+node bad: Box<Time> = Box<Time>(x: 1.0 s);
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn temporary_generic_constructor_obligation_is_checked() {
+    let source = r"
+type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+node bad: Time = Box<Time>(x: 1.0 s).x;
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn matching_generic_dimension_field_bound_passes() {
+    let source = r"
+type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+node good: Box<Length> = Box<Length>(x: 1.0 m);
+";
+    check(source).unwrap();
+}
+
+#[test]
+fn generic_dimension_expression_field_bound_is_checked_after_substitution() {
+    let source = r"
+type Squared<D: Dim> { Squared(x: D^2(min: 0.5 m^2)) }
+node bad: Squared<Time> = Squared<Time>(x: 1.0 s^2);
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn nested_generic_field_obligation_is_checked() {
+    let source = r"
+type Inner<D: Dim> { Inner(x: D(min: 0.5 m)) }
+type Outer<D: Dim> { Outer(inner: Inner<D>) }
+node bad: Outer<Time> = Outer<Time>(inner: Inner<Time>(x: 1.0 s));
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn defaulted_generic_field_obligation_is_checked() {
+    let source = r"
+type Box<D: Dim = Time> { Box(x: D(min: 0.5 m)) }
+node bad: Box = Box(x: 1.0 s);
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn model_schema_rejects_undischarged_generic_field_obligation() {
+    let source = r"
+pub type Box<D: Dim> { Box(x: D(min: 0.5 m)) }
+param port: Box<Time>;
+";
+    let (tir, src) = module_aware_tir(source);
+    let declared_types = tir.build_declared_types(&src).unwrap();
+    let DeclaredType::Struct(identity, generic_args) =
+        &declared_types[&ScopedName::parse("port").unwrap()]
+    else {
+        panic!("expected a concrete model struct port");
+    };
+
+    let error = concrete_model_constructors(&tir, identity, generic_args, &src).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::DomainDimensionMismatch { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn symbolic_static_fin_key_obligation_passes_below_cardinality() {
+    let source = r"
+type T<N: Nat> { T(x: Int(min: to_int(key(Fin(N), 1)))) }
+node good: T<2> = T<2>(x: 1);
+";
+    check(source).unwrap();
+}
+
+#[test]
+fn symbolic_static_fin_key_obligation_rejects_equal_cardinality() {
+    let source = r"
+type T<N: Nat> { T(x: Int(min: to_int(key(Fin(N), 1)))) }
+node bad: T<1> = T<1>(x: 1);
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("out of bounds for Fin(1)")),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn symbolic_static_fin_key_obligation_rejects_fin_zero() {
+    let source = r"
+type T<N: Nat> { T(x: Int(min: to_int(key(Fin(N), 0)))) }
+node bad: T<0> = T<0>(x: 0);
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("finite index size must be greater than zero")
+                || message.contains("Fin(0)")),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn symbolic_fin_constant_index_is_checked_after_substitution() {
+    let source = r"
+type T<N: Nat> {
+    T(x: Int(min: to_int((for i: Fin(N) { i })[1])))
+}
+node bad: T<1> = T<1>(x: 1);
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("index 1 out of bounds for Fin(1)")),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn negative_constant_index_is_rejected_before_symbolic_fin_deferral() {
+    let source = r"
+type T<N: Nat> {
+    T(x: Int(min: to_int((for i: Fin(N) { i })[-1])))
+}
+node value: T<2> = T<2>(x: 1);
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(&error, GraphcalError::EvalError { message, .. }
+            if message.contains("negative value: -1")),
+        "got: {error:?}"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Generic-argument domain constraints are rejected in every type definition
+// -----------------------------------------------------------------------
+
+#[test]
+fn generic_argument_constraint_in_type_default_is_rejected() {
+    let source = r"
+type Wrapper<T: Type> { Wrapper(value: T) }
+type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> { Bad(value: T) }
+node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
+";
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::GenericTypeArgDomainConstraint { .. }
+    ));
+}
+
+#[test]
+fn generic_argument_constraint_in_inline_dag_type_is_rejected() {
+    let source = r"
+dag nested {
+    type Wrapper<T: Type> { Wrapper(value: T) }
+    type Bad<T: Type = Wrapper<Length(min: 0.0 m)>> { Bad(value: T) }
+    node bad: Bad = Bad(value: Wrapper<Length>(value: -1.0 m));
+}
+";
+    let error = check(source).unwrap_err();
+    assert!(
+        matches!(error, GraphcalError::GenericTypeArgDomainConstraint { .. }),
+        "got: {error:?}"
+    );
+}
+
+#[test]
+fn ordinary_field_constraint_remains_legal() {
+    let source = r"
+type Wrapper<T: Type> { Wrapper(value: T) }
+type Good { Good(value: Length(min: 0.0 m)) }
+node good: Good = Good(value: 1.0 m);
+";
     check(source).unwrap();
 }
 

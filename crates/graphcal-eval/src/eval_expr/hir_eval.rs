@@ -133,9 +133,11 @@ fn eval_hir_expr_inner(
             let inner_val = eval_hir_expr(inner, values, local_values, ctx)?;
             eval_hir_field_access(inner_val, inner.span, field, ctx)
         }
-        hir::ExprKind::ConstructorCall { callee, fields, .. } => {
-            eval_hir_constructor_call(callee, fields, values, local_values, ctx)
-        }
+        hir::ExprKind::ConstructorCall {
+            callee,
+            generic_args,
+            fields,
+        } => eval_hir_constructor_call(callee, generic_args, fields, values, local_values, ctx),
         hir::ExprKind::MapLiteral { entries } => {
             eval_hir_map_literal(entries, values, local_values, ctx)
         }
@@ -209,11 +211,23 @@ fn eval_hir_nullary_constructor(
 ) -> Result<RuntimeValue, GraphcalError> {
     let target = constructor_target(ctx, constructor)
         .ok_or_else(|| ctx.eval_error(format!("unknown constructor `{constructor}`"), span))?;
+    let dag = ctx
+        .current_dag
+        .ok_or_else(|| ctx.internal_error("constructor evaluation has no semantic DAG", span))?;
+    let generic_args = graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
+        ctx.tir,
+        dag,
+        constructor,
+        &[],
+        ctx.src,
+        span,
+    )?;
     Ok(RuntimeValue::Struct {
         type_name: StructTypeRef::with_display_leaf(
             StructTypeName::from_atom(target.variant.name().atom().clone()),
             target.owning_type.clone(),
         ),
+        generic_args,
         fields: IndexMap::new(),
     })
 }
@@ -1439,6 +1453,7 @@ fn eval_hir_extern_fn(
                 .collect::<Result<indexmap::IndexMap<_, _>, GraphcalError>>()?;
             Ok(RuntimeValue::Struct {
                 type_name: StructTypeRef::from_resolved(result_struct.resolved.clone()),
+                generic_args: Vec::new(),
                 fields,
             })
         }
@@ -1511,7 +1526,9 @@ fn eval_hir_field_access(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     match inner_val {
-        RuntimeValue::Struct { type_name, fields } => {
+        RuntimeValue::Struct {
+            type_name, fields, ..
+        } => {
             if let Some(type_def) = runtime_struct_type_def(&type_name, ctx) {
                 let constructor_fields = constructor_fields_for_runtime_struct(
                     type_def, &type_name,
@@ -1557,6 +1574,7 @@ fn eval_hir_constructor_call(
     callee: &graphcal_compiler::syntax::span::Spanned<
         graphcal_compiler::syntax::type_name::ResolvedConstructorName,
     >,
+    applied_generic_args: &[hir::GenericArg],
     fields: &[hir::expr::FieldInit],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
@@ -1570,6 +1588,18 @@ fn eval_hir_constructor_call(
     })?;
     let constructor_name = target.variant.name().clone();
     let owning_type = StructTypeRef::from_resolved(target.owning_type.clone());
+    let dag = ctx.current_dag.ok_or_else(|| {
+        ctx.internal_error("constructor evaluation has no semantic DAG", callee.span)
+    })?;
+    let concrete_generic_args =
+        graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
+            ctx.tir,
+            dag,
+            &callee.value,
+            applied_generic_args,
+            ctx.src,
+            callee.span,
+        )?;
     let mut field_map = IndexMap::new();
     for field_init in fields {
         let val = eval_hir_expr(&field_init.value, values, local_values, ctx)?;
@@ -1577,6 +1607,7 @@ fn eval_hir_constructor_call(
             && let Some(constraint) = find_struct_field_constraint(
                 field_constraints,
                 Some(&owning_type),
+                &concrete_generic_args,
                 &constructor_name,
                 &field_init.name.value,
             )
@@ -1597,6 +1628,7 @@ fn eval_hir_constructor_call(
             StructTypeName::from_atom(target.variant.name().atom().clone()),
             target.owning_type.clone(),
         ),
+        generic_args: concrete_generic_args,
         fields: field_map,
     })
 }
@@ -1773,14 +1805,20 @@ fn eval_hir_map_literal(
 fn eval_hir_nat_expr(expr: &hir::NatExpr, ctx: &EvalContext<'_>) -> Result<u64, GraphcalError> {
     match expr {
         hir::NatExpr::Literal(n, _) => Ok(*n),
-        hir::NatExpr::Param(param) => Err(ctx.internal_error(
-            format!(
-                "unbound generic Nat parameter `{}` — Nat parameters must be \
-                 substituted before evaluation",
-                param.value.name
-            ),
-            param.span,
-        )),
+        hir::NatExpr::Param(param) => ctx
+            .generic_nat_bindings
+            .and_then(|bindings| bindings.get(&param.value.name))
+            .copied()
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!(
+                        "unbound generic Nat parameter `{}` — Nat parameters must be \
+                         substituted before evaluation",
+                        param.value.name
+                    ),
+                    param.span,
+                )
+            }),
         hir::NatExpr::Add(operands, span) => operands.iter().try_fold(0_u64, |sum, operand| {
             let value = eval_hir_nat_expr(operand, ctx)?;
             sum.checked_add(value).ok_or_else(|| {
@@ -2172,6 +2210,7 @@ fn eval_hir_match(
         RuntimeValue::Struct {
             type_name,
             fields: scrutinee_fields,
+            ..
         } => {
             let matched_arm = arms
                 .iter()
@@ -2261,6 +2300,7 @@ fn eval_hir_dag_call(
         current_dag: Some(dag_tir),
         root_values: ctx.root_values,
         struct_field_constraints: ctx.struct_field_constraints,
+        generic_nat_bindings: ctx.generic_nat_bindings,
         host_fns: ctx.host_fns,
     };
     let empty_hir_locals = HirLocalValueMap::root();

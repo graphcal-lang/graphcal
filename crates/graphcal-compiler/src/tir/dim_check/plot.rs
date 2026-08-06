@@ -243,7 +243,7 @@ fn infer_property_type(
             span: field.value.span.into(),
         });
     };
-    infer::hir::infer_hir_type_with_owner(
+    infer::hir::infer_hir_type_with_owner_and_cancellation(
         &field.value,
         None,
         ctx.declared_types,
@@ -252,5 +252,6 @@ fn infer_property_type(
         ctx.registry,
         ctx.builtin_fns,
         ctx.src,
+        ctx.cancellation,
     )
 }

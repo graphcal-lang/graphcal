@@ -636,11 +636,13 @@ impl<'a> ModuleTypeContext<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructFieldConstraintKey {
     pub owning_type: crate::registry::declared_type::StructTypeRef,
+    pub generic_args: Vec<crate::registry::declared_type::DeclaredGenericArg>,
     pub constructor: ConstructorName,
     pub field: FieldName,
 }
 
 impl StructFieldConstraintKey {
+    /// Construct a key for a non-generic nominal type.
     #[must_use]
     pub const fn new(
         owning_type: crate::registry::declared_type::StructTypeRef,
@@ -649,6 +651,23 @@ impl StructFieldConstraintKey {
     ) -> Self {
         Self {
             owning_type,
+            generic_args: Vec::new(),
+            constructor,
+            field,
+        }
+    }
+
+    /// Construct a key for one concrete generic nominal application.
+    #[must_use]
+    pub const fn for_application(
+        owning_type: crate::registry::declared_type::StructTypeRef,
+        generic_args: Vec<crate::registry::declared_type::DeclaredGenericArg>,
+        constructor: ConstructorName,
+        field: FieldName,
+    ) -> Self {
+        Self {
+            owning_type,
+            generic_args,
             constructor,
             field,
         }
@@ -865,25 +884,90 @@ pub(crate) struct ResolvedGenericDefault {
     pub(crate) resolved: ResolvedGenericArg,
 }
 
+/// Resolved semantic facts for one nominal field.
+///
+/// Keeping the target type and its bounds in one value prevents a constrained
+/// field from existing without the type needed to validate those bounds.
+#[derive(Debug, Clone)]
+pub struct ResolvedStructFieldSemantics {
+    resolved_type: ResolvedTypeExpr,
+    domain_bounds: Vec<ResolvedDomainBound>,
+}
+
+impl ResolvedStructFieldSemantics {
+    #[must_use]
+    pub const fn new(
+        resolved_type: ResolvedTypeExpr,
+        domain_bounds: Vec<ResolvedDomainBound>,
+    ) -> Self {
+        Self {
+            resolved_type,
+            domain_bounds,
+        }
+    }
+
+    /// Return the field annotation resolved in its owning generic scope.
+    #[must_use]
+    pub const fn resolved_type(&self) -> &ResolvedTypeExpr {
+        &self.resolved_type
+    }
+
+    /// Return domain bounds lowered in the same owning generic scope.
+    #[must_use]
+    pub fn domain_bounds(&self) -> &[ResolvedDomainBound] {
+        &self.domain_bounds
+    }
+}
+
 /// Canonical type definitions referenced by module-aware TIR.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Struct/tagged-union definitions keyed by canonical owner/name.
     pub struct_types: HashMap<ResolvedStructTypeName, TypeDef>,
-    /// Field type annotations resolved in the owning type's generic scope.
-    pub(crate) field_types: HashMap<ResolvedStructFieldTypeKey, ResolvedTypeExpr>,
-    /// Field domain bounds lowered to HIR in the owning type's generic scope.
-    pub field_bounds: HashMap<ResolvedStructFieldTypeKey, Vec<ResolvedDomainBound>>,
+    /// Atomic field semantics resolved in each owning type's generic scope.
+    fields: HashMap<ResolvedStructFieldTypeKey, ResolvedStructFieldSemantics>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
     pub(crate) generic_defaults:
         HashMap<(ResolvedStructTypeName, GenericParamName), ResolvedGenericDefault>,
 }
 
 impl ResolvedTypeDefs {
+    /// Insert one field's type and bounds as an atomic semantic fact.
+    pub(crate) fn insert_field(
+        &mut self,
+        key: ResolvedStructFieldTypeKey,
+        field: ResolvedStructFieldSemantics,
+    ) {
+        self.fields.insert(key, field);
+    }
+
+    /// Return one field's complete resolved semantics.
+    #[must_use]
+    pub fn field(&self, key: &ResolvedStructFieldTypeKey) -> Option<&ResolvedStructFieldSemantics> {
+        self.fields.get(key)
+    }
+
+    /// Visit every resolved field semantic record.
+    pub fn fields(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedStructFieldTypeKey, &ResolvedStructFieldSemantics)> {
+        self.fields.iter()
+    }
+
+    /// Visit only fields that carry domain bounds.
+    pub fn constrained_fields(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedStructFieldTypeKey, &ResolvedStructFieldSemantics)> {
+        self.fields
+            .iter()
+            .filter(|(_, field)| !field.domain_bounds.is_empty())
+    }
+
     /// Return a field annotation resolved in its owning type's generic scope.
     #[must_use]
     pub fn field_type(&self, key: &ResolvedStructFieldTypeKey) -> Option<&ResolvedTypeExpr> {
-        self.field_types.get(key)
+        self.field(key)
+            .map(ResolvedStructFieldSemantics::resolved_type)
     }
 }
 
@@ -993,9 +1077,8 @@ impl DagSemanticBody {
             )
             .chain(
                 self.type_defs
-                    .field_bounds
-                    .values()
-                    .flatten()
+                    .constrained_fields()
+                    .flat_map(|(_, field)| field.domain_bounds().iter())
                     .map(|bound| &bound.value),
             )
             .chain(self.plot_exprs.plots.values().flat_map(|body| {

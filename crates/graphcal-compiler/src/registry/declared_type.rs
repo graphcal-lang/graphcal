@@ -322,7 +322,7 @@ mod tests {
 }
 
 /// A concrete generic argument classified by its declared sort.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DeclaredGenericArg {
     Dim(Dimension),
     Index(IndexTypeRef),
@@ -344,7 +344,7 @@ impl DeclaredGenericArg {
 /// A concrete declared type: primitive, struct, or indexed value type.
 /// `IndexArg` is retained for index-only boundary values; generic struct
 /// metadata uses [`DeclaredGenericArg`] instead.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DeclaredType {
     Quantity(Dimension),
     /// A complex quantity whose real and imaginary components share one dimension.

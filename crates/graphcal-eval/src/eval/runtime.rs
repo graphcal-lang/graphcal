@@ -99,7 +99,9 @@ pub(super) fn runtime_to_value(
             index_name: index_name.clone(),
             variant: variant.clone(),
         },
-        RuntimeValue::Struct { type_name, fields } => {
+        RuntimeValue::Struct {
+            type_name, fields, ..
+        } => {
             let public_type_name = type_name.clone();
             let registry_type_name = declared_struct_type_ref(declared_type).unwrap_or(type_name);
             let type_def = registry.types.get_type(registry_type_name.as_str());
@@ -336,6 +338,7 @@ pub(super) fn run_eval_loop_with_bindings(
             current_dag: Some(tir.root()),
             root_values: Some(&values),
             struct_field_constraints: Some(&plan.struct_field_constraints),
+            generic_nat_bindings: None,
             host_fns: Some(host_fns),
         };
 
@@ -435,6 +438,7 @@ pub(super) fn export_dynamic_unit_scales(
         current_dag: Some(tir.root()),
         root_values: Some(values),
         struct_field_constraints: Some(&plan.struct_field_constraints),
+        generic_nat_bindings: None,
         // Dimension checking rejects extern calls in unit scale expressions.
         host_fns: None,
     };
@@ -529,6 +533,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         current_dag: Some(tir.root()),
         root_values: Some(&values),
         struct_field_constraints: Some(&plan.struct_field_constraints),
+        generic_nat_bindings: None,
         host_fns: Some(host_fns),
     };
 

@@ -1,6 +1,6 @@
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::index_name::ResolvedIndexName;
-use crate::syntax::type_name::ResolvedStructTypeName;
+use crate::syntax::type_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -386,7 +386,7 @@ impl DimCheckContext<'_> {
             src: self.src.clone(),
             span: expr.span.into(),
         })?;
-        infer::hir::infer_hir_type_with_owner(
+        infer::hir::infer_hir_type_with_owner_and_cancellation(
             expr,
             None,
             self.declared_types,
@@ -395,11 +395,12 @@ impl DimCheckContext<'_> {
             self.registry,
             self.builtin_fns,
             self.src,
+            self.cancellation,
         )
     }
 }
 
-fn validate_decl_finite_index_obligations(
+fn validate_decl_concrete_type_obligations(
     ctx: &DimCheckContext<'_>,
     name: &ScopedName,
     type_ann_span: Span,
@@ -417,13 +418,48 @@ fn validate_decl_finite_index_obligations(
         src: ctx.src.clone(),
         span: type_ann_span.into(),
     })?;
-    infer::hir::validate_finite_index_obligations(
+    infer::hir::validate_concrete_type_obligations(
         &InferredType::from(declared),
+        ctx.declared_types,
         dag,
+        ctx.tir,
         ctx.registry,
+        ctx.builtin_fns,
         ctx.src,
         type_ann_span,
+        ctx.cancellation,
     )
+}
+
+fn validate_hir_concrete_type_obligations(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
+        message: "semantic DAG missing while validating constructor applications".to_string(),
+        src: ctx.src.clone(),
+        span: Span::new(0, 0).into(),
+    })?;
+    for application in concrete_constructor_applications(ctx.tir, dag, ctx.src)? {
+        ctx.checkpoint()?;
+        let inferred = InferredType::Struct(
+            InferredStructType::from_ref(application.identity().clone()),
+            application
+                .generic_args()
+                .iter()
+                .map(InferredGenericArg::from)
+                .collect(),
+        );
+        infer::hir::validate_concrete_type_obligations(
+            &inferred,
+            ctx.declared_types,
+            dag,
+            ctx.tir,
+            ctx.registry,
+            ctx.builtin_fns,
+            ctx.src,
+            Span::new(0, 0),
+            ctx.cancellation,
+        )?;
+    }
+    Ok(())
 }
 
 /// Check that a declaration's expression type matches its declared type annotation.
@@ -456,7 +492,7 @@ fn check_decl_expr_type(
                 span: (*type_ann_span).into(),
             })?;
     let owner = dag.resolved_decl_key_for_local(name);
-    let inferred = infer::hir::infer_hir_type_with_owner(
+    let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
         hir_expr,
         Some(&owner),
         body_ctx.declared_types,
@@ -465,6 +501,7 @@ fn check_decl_expr_type(
         body_ctx.registry,
         body_ctx.builtin_fns,
         body_ctx.src,
+        body_ctx.cancellation,
     )?;
     let matches = body_ctx
         .dag
@@ -508,7 +545,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
             });
         }
         let entry_ctx = ctx.for_body(&entry.src);
-        let inferred = infer::hir::infer_hir_type_with_owner(
+        let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
             &entry.expr,
             None,
             entry_ctx.declared_types,
@@ -517,6 +554,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
             entry_ctx.registry,
             entry_ctx.builtin_fns,
             entry_ctx.src,
+            entry_ctx.cancellation,
         )?;
         if !matches!(
             &inferred,
@@ -1005,6 +1043,7 @@ pub fn check_dimensions_tir_with_cancellation(
         &tir.registry,
         builtin_fns,
         src,
+        cancellation,
     )?;
 
     Ok(())
@@ -1181,6 +1220,136 @@ pub fn collect_override_dependency_summary(
     Ok(summary)
 }
 
+/// One exact concrete nominal application observed in semantic HIR.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConcreteNominalTypeApplication {
+    identity: StructTypeRef,
+    generic_args: Vec<crate::registry::declared_type::DeclaredGenericArg>,
+}
+
+impl ConcreteNominalTypeApplication {
+    #[must_use]
+    pub const fn identity(&self) -> &StructTypeRef {
+        &self.identity
+    }
+
+    #[must_use]
+    pub fn generic_args(&self) -> &[crate::registry::declared_type::DeclaredGenericArg] {
+        &self.generic_args
+    }
+}
+
+/// Collect exact concrete nominal applications from every semantic expression
+/// in one DAG, including constructor calls inside field bounds.
+///
+/// # Errors
+///
+/// Returns a compiler diagnostic when a constructor application is not exact,
+/// sort-correct, and concrete.
+pub fn concrete_constructor_applications(
+    tir: &crate::tir::typed::TIR,
+    dag: &crate::tir::typed::DagTIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ConcreteNominalTypeApplication>, GraphcalError> {
+    let mut applications = HashSet::new();
+    let mut error = None;
+    dag.semantic.visit_expressions(&mut |expr| {
+        if error.is_some() {
+            return;
+        }
+        let resolved = match &expr.kind {
+            crate::hir::ExprKind::ConstructorCall {
+                callee,
+                generic_args,
+                ..
+            } => concrete_constructor_generic_args(
+                tir,
+                dag,
+                &callee.value,
+                generic_args,
+                src,
+                callee.span,
+            )
+            .map(|generic_args| (callee.value.clone(), generic_args)),
+            crate::hir::ExprKind::ConstRef(target) => match &target.value {
+                crate::hir::ConstRef::Constructor(constructor) => {
+                    concrete_constructor_generic_args(tir, dag, constructor, &[], src, target.span)
+                        .map(|generic_args| (constructor.clone(), generic_args))
+                }
+                crate::hir::ConstRef::Decl(_)
+                | crate::hir::ConstRef::Builtin(_)
+                | crate::hir::ConstRef::TimeScale(_)
+                | crate::hir::ConstRef::GenericNatParam(_) => return,
+            },
+            _ => return,
+        };
+        match resolved {
+            Ok((constructor, generic_args)) => {
+                let Some(target) = dag
+                    .semantic
+                    .constructor_refs
+                    .constructor_defs
+                    .get(&constructor)
+                else {
+                    error = Some(GraphcalError::InternalError {
+                        message: format!(
+                            "semantic constructor metadata missing for `{constructor}`"
+                        ),
+                        src: src.clone(),
+                        span: expr.span.into(),
+                    });
+                    return;
+                };
+                applications.insert(ConcreteNominalTypeApplication {
+                    identity: StructTypeRef::from_resolved(target.owning_type.clone()),
+                    generic_args,
+                });
+            }
+            Err(diagnostic) => error = Some(diagnostic),
+        }
+    });
+    error.map_or_else(|| Ok(applications.into_iter().collect()), Err)
+}
+
+/// Resolve one HIR constructor call's complete concrete generic identity.
+///
+/// Evaluation uses this checked compiler boundary rather than reimplementing
+/// generic sorting/default substitution. The returned arguments are exact,
+/// concrete, and in declaration order.
+///
+/// # Errors
+///
+/// Returns a compiler diagnostic when constructor metadata is missing or the
+/// application is not a concrete, valid application of its owning type.
+pub fn concrete_constructor_generic_args(
+    tir: &crate::tir::typed::TIR,
+    dag: &crate::tir::typed::DagTIR,
+    constructor: &ResolvedConstructorName,
+    applied_generic_args: &[crate::hir::GenericArg],
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Vec<crate::registry::declared_type::DeclaredGenericArg>, GraphcalError> {
+    let target = dag
+        .semantic
+        .constructor_refs
+        .constructor_defs
+        .get(constructor)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("semantic constructor metadata missing for `{constructor}`"),
+            src: src.clone(),
+            span: span.into(),
+        })?;
+    infer::hir::resolve_concrete_generic_args(
+        &target.owning_type,
+        &target.type_def,
+        applied_generic_args,
+        dag,
+        &tir.registry,
+        src,
+        span,
+    )
+}
+
 /// Check one already-lowered external value expression against a concrete
 /// declared type in this TIR's root module.
 ///
@@ -1215,12 +1384,16 @@ pub fn check_external_value_expr_type(
         builtin_fns,
         src,
     )?;
-    infer::hir::validate_finite_index_obligations(
+    infer::hir::validate_concrete_type_obligations(
         &inferred,
+        declared_types,
         tir.root(),
+        tir,
         &tir.registry,
+        builtin_fns,
         src,
         expr.span,
+        &crate::cancellation::CancellationToken::unbounded(),
     )?;
     if types_match(expected, &inferred) {
         Ok(())
@@ -1262,7 +1435,7 @@ fn check_dimensions_dag(
         ctx.checkpoint()?;
         let annotation_src = entry.type_src.resolve(src);
         let annotation_ctx = ctx.for_body(annotation_src);
-        validate_decl_finite_index_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
         let body_ctx = ctx.for_body(entry.body_src.resolve(src));
         check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
@@ -1270,7 +1443,7 @@ fn check_dimensions_dag(
         ctx.checkpoint()?;
         let annotation_src = entry.type_src.resolve(src);
         let annotation_ctx = ctx.for_body(annotation_src);
-        validate_decl_finite_index_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
         let body_ctx = ctx.for_body(entry.body_src.resolve(src));
         check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
@@ -1278,7 +1451,7 @@ fn check_dimensions_dag(
         ctx.checkpoint()?;
         let annotation_src = entry.type_src.resolve(src);
         let annotation_ctx = ctx.for_body(annotation_src);
-        validate_decl_finite_index_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
+        validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
         let Some(_value_expr) = entry.default_expr.as_ref() else {
             continue;
         };
@@ -1292,6 +1465,9 @@ fn check_dimensions_dag(
         let body_ctx = ctx.for_body(default_src.resolve(src));
         check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
+
+    ctx.checkpoint()?;
+    validate_hir_concrete_type_obligations(&ctx)?;
 
     ctx.checkpoint()?;
     check_dynamic_unit_scale_types(&ctx)?;
@@ -1330,7 +1506,15 @@ fn check_dimensions_dag(
     ctx.checkpoint()?;
     check_domain_constraint_targets_dag(dag, src)?;
     ctx.checkpoint()?;
-    check_domain_constraint_dimensions_dag(dag, &declared_types, tir, registry, builtin_fns, src)?;
+    check_domain_constraint_dimensions_dag(
+        dag,
+        &declared_types,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+        cancellation,
+    )?;
 
     Ok(())
 }
@@ -1364,6 +1548,7 @@ fn check_domain_constraint_dimensions_dag(
     registry: &Registry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     // A merged dependency declaration's domain bounds keep the dependency
     // file's spans, so they are checked against that body's source (#868).
@@ -1399,7 +1584,7 @@ fn check_domain_constraint_dimensions_dag(
         };
 
         for bound in bounds {
-            let inferred = infer::hir::infer_hir_type_with_owner(
+            let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
                 &bound.value,
                 None,
                 declared_types,
@@ -1408,6 +1593,7 @@ fn check_domain_constraint_dimensions_dag(
                 registry,
                 builtin_fns,
                 body_src,
+                cancellation,
             )?;
             check_one_bound(name, bound, &inferred, &expected, registry, body_src)?;
         }
@@ -1515,16 +1701,15 @@ fn check_field_domain_constraint_targets(
 ) -> Result<(), GraphcalError> {
     let mut seen = std::collections::HashSet::new();
     for (_, dag) in tir.local_dags() {
-        for (key, bounds) in &dag.semantic.type_defs.field_bounds {
+        for (key, field_semantics) in dag.semantic.type_defs.constrained_fields() {
             if !seen.insert(key) {
                 continue;
             }
-            let Some(resolved) = dag.semantic.type_defs.field_type(key) else {
+            let Some(type_kind) = invalid_domain_target_kind(field_semantics.resolved_type())
+            else {
                 continue;
             };
-            let Some(type_kind) = invalid_domain_target_kind(resolved) else {
-                continue;
-            };
+            let bounds = field_semantics.domain_bounds();
             let span = field_type_annotation(dag, key).map_or_else(
                 || {
                     bounds
@@ -1572,37 +1757,67 @@ fn check_field_domain_constraint_dimensions(
     declared_types: &HashMap<ScopedName, DeclaredType>,
     registry: &Registry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
-    _src: &NamedSource<Arc<String>>,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     let mut seen: std::collections::HashSet<&crate::tir::typed::ResolvedStructFieldTypeKey> =
         std::collections::HashSet::new();
     for (_, dag) in tir.local_dags() {
-        for (key, bounds) in &dag.semantic.type_defs.field_bounds {
+        for (key, field_semantics) in dag.semantic.type_defs.constrained_fields() {
             if !seen.insert(key) {
                 continue;
             }
-            let Some(type_def) = dag.semantic.type_defs.struct_types.get(&key.owning_type) else {
-                continue;
-            };
-            let Some((variant, field)) = type_def.union_members().and_then(|members| {
-                members
-                    .iter()
-                    .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
-                    .find(|(member, field)| {
-                        member.name() == &key.constructor && field.name() == &key.field
-                    })
-            }) else {
-                continue;
-            };
-            let Some(expected) = dag
+            let diagnostic_bound = field_semantics.domain_bounds().first();
+            let diagnostic_src = diagnostic_bound.map_or(src, |bound| &bound.src);
+            let diagnostic_span = diagnostic_bound.map_or(Span::new(0, 0), |bound| bound.span);
+            let type_def = dag
                 .semantic
                 .type_defs
-                .field_type(key)
-                .map(strip_indexed)
-                .and_then(expected_bound_from_resolved)
-            else {
-                continue;
-            };
+                .struct_types
+                .get(&key.owning_type)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "semantic type metadata missing constrained type `{}`",
+                        key.owning_type
+                    ),
+                    src: diagnostic_src.clone(),
+                    span: diagnostic_span.into(),
+                })?;
+            let (variant, field) = type_def
+                .union_members()
+                .and_then(|members| {
+                    members
+                        .iter()
+                        .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
+                        .find(|(member, field)| {
+                            member.name() == &key.constructor && field.name() == &key.field
+                        })
+                })
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "semantic type metadata missing constrained field `{}.{}`",
+                        key.constructor, key.field
+                    ),
+                    src: diagnostic_src.clone(),
+                    span: diagnostic_span.into(),
+                })?;
+            let resolved_target = strip_indexed(field_semantics.resolved_type());
+            let expected = expected_bound_from_resolved(resolved_target);
+            let deferred_generic_quantity = matches!(
+                resolved_target,
+                crate::tir::typed::ResolvedTypeExpr::GenericDimParam(_, _)
+                    | crate::tir::typed::ResolvedTypeExpr::GenericDimExpr { .. }
+            );
+            if expected.is_none() && !deferred_generic_quantity {
+                return Err(GraphcalError::InternalError {
+                    message: format!(
+                        "constrained field target `{}` was not classified",
+                        resolved_target.format(registry)
+                    ),
+                    src: diagnostic_src.clone(),
+                    span: diagnostic_span.into(),
+                });
+            }
             // For a single-variant collision (record-shape) the display
             // name is `Type.field`; for a true multi-variant union it's
             // `Type.Variant.field` so diagnostics disambiguate which
@@ -1612,8 +1827,8 @@ fn check_field_domain_constraint_dimensions(
             } else {
                 format!("{}.{}.{}", type_def.name(), variant.name(), field.name())
             };
-            for bound in bounds {
-                let inferred = infer::hir::infer_hir_type_with_owner(
+            for bound in field_semantics.domain_bounds() {
+                let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
                     &bound.value,
                     None,
                     declared_types,
@@ -1622,15 +1837,25 @@ fn check_field_domain_constraint_dimensions(
                     registry,
                     builtin_fns,
                     &bound.src,
+                    cancellation,
                 )?;
-                check_one_bound_with_display_name(
-                    &display_name,
-                    bound,
-                    &inferred,
-                    &expected,
-                    registry,
-                    &bound.src,
-                )?;
+                match &expected {
+                    Some(expected) => check_one_bound_with_display_name(
+                        &display_name,
+                        bound,
+                        &inferred,
+                        expected,
+                        registry,
+                        &bound.src,
+                    )?,
+                    None => check_deferred_generic_quantity_bound(
+                        &display_name,
+                        resolved_target,
+                        bound,
+                        &inferred,
+                        registry,
+                    )?,
+                }
             }
         }
     }
@@ -1653,6 +1878,43 @@ fn expected_bound_from_resolved(
         }
         _ => None,
     }
+}
+
+fn expected_bound_from_inferred(inferred: &InferredType) -> Option<ExpectedBound> {
+    match inferred {
+        InferredType::Indexed { element, .. } => expected_bound_from_inferred(element),
+        InferredType::Quantity(dimension) => Some(ExpectedBound::Quantity(dimension.clone())),
+        InferredType::Int => Some(ExpectedBound::Int),
+        InferredType::Datetime(scale) => Some(ExpectedBound::Datetime(*scale)),
+        InferredType::Complex(_)
+        | InferredType::CoordinateIndexLabel { .. }
+        | InferredType::Bool
+        | InferredType::Fin(_)
+        | InferredType::NamedIndexCase(_)
+        | InferredType::Key(_)
+        | InferredType::IndexArg(_)
+        | InferredType::Struct(..) => None,
+    }
+}
+
+fn check_deferred_generic_quantity_bound(
+    display_name: &str,
+    resolved_target: &crate::tir::typed::ResolvedTypeExpr,
+    bound: &crate::tir::typed::ResolvedDomainBound,
+    inferred: &InferredType,
+    registry: &Registry,
+) -> Result<(), GraphcalError> {
+    if inferred.quantity_dimension().is_some() || matches!(inferred, InferredType::Int) {
+        return Ok(());
+    }
+    Err(GraphcalError::DomainDimensionMismatch {
+        name: display_name.to_string(),
+        type_dim: resolved_target.format(registry),
+        bound_name: bound.kind.to_string(),
+        bound_dim: format_inferred_type(inferred, registry),
+        src: bound.src.clone(),
+        span: bound.span.into(),
+    })
 }
 
 /// Variant of [`check_one_bound`] that takes a pre-formatted display name
@@ -1745,13 +2007,30 @@ fn check_no_constraints_on_generic_type_args(
             walk(&entry.type_ann)?;
         }
     }
-    for type_def in tir.registry.types.all_types() {
-        if let Some(members) = type_def.union_members() {
-            for field in members
+    // Type definitions are module-owned semantic facts. Walking the root
+    // registry here misses definitions declared by inline DAGs, while walking
+    // every reachable definition would diagnose imported source against the
+    // wrong file. Each local DAG records all of its own type symbols, so visit
+    // exactly those definitions at their owning semantic boundary.
+    for (dag_id, dag) in tir.local_dags() {
+        for (identity, type_def) in &dag.semantic.type_defs.struct_types {
+            if identity.owner() != dag_id {
+                continue;
+            }
+            for default in type_def
+                .generic_params()
                 .iter()
-                .flat_map(crate::registry::types::UnionMemberDef::fields)
+                .filter_map(|param| param.default.as_ref())
             {
-                walk(field.type_ann())?;
+                check_generic_args_for_domain_constraints(std::iter::once(default), src)?;
+            }
+            if let Some(members) = type_def.union_members() {
+                for field in members
+                    .iter()
+                    .flat_map(crate::registry::types::UnionMemberDef::fields)
+                {
+                    walk(field.type_ann())?;
+                }
             }
         }
     }
