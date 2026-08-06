@@ -135,6 +135,115 @@ plot p = {
     assert!(result.is_ok(), "plot DAG call failed: {result:?}");
 }
 
+fn write_owner_dimension_project() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/owner_dims");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"owner_dims\"\n",
+    )
+    .unwrap();
+    let library = r"
+pub base dim Foo;
+pub base unit foo: Foo;
+pub index Axis = { A, B };
+pub type Box<D: Dim> { Box(x: D) }
+";
+    std::fs::write(package.join("a.gcl"), library).unwrap();
+    std::fs::write(package.join("b.gcl"), library).unwrap();
+    (directory, package.join("main.gcl"))
+}
+
+#[test]
+fn generic_dimension_arguments_keep_canonical_module_owners() {
+    let (_directory, root) = write_owner_dimension_project();
+    for imports in [
+        "import owner_dims.a as a;\nimport owner_dims.b as b;",
+        "import owner_dims.b as b;\nimport owner_dims.a as a;",
+    ] {
+        std::fs::write(
+            &root,
+            format!(
+                r"
+{imports}
+base dim Foo;
+base unit foo: Foo;
+node local: Foo = 1.0 foo;
+node from_a: a.Box<a.Foo> = a.Box<a.Foo>(x: 1.0 a.foo);
+node from_b: b.Box<b.Foo> = b.Box<b.Foo>(x: 1.0 b.foo);
+node compound: a.Box<a.Foo * b.Foo> =
+    a.Box<a.Foo * b.Foo>(x: (1.0 a.foo) * (1.0 b.foo));
+"
+            ),
+        )
+        .unwrap();
+
+        let result =
+            compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
+        assert!(
+            result.is_ok(),
+            "canonical dimension lookup depended on import order: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn same_leaf_plot_axes_from_distinct_owners_are_incompatible() {
+    let (_directory, root) = write_owner_dimension_project();
+    std::fs::write(
+        &root,
+        r"
+import owner_dims.a as a;
+import owner_dims.b as b;
+plot p = {
+    mark: point,
+    encode: {
+        x: for item: a.Axis { item },
+        y: for item: b.Axis { item },
+    },
+};
+",
+    )
+    .unwrap();
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::PlotEncodingAxisMismatch { ref channels, .. })
+            if channels.contains("owner_dims.a.Axis")
+                && channels.contains("owner_dims.b.Axis")
+    ));
+}
+
+#[test]
+fn same_leaf_dimension_mismatch_diagnostic_qualifies_owners() {
+    let (_directory, root) = write_owner_dimension_project();
+    std::fs::write(
+        &root,
+        r"
+import owner_dims.a as a;
+import owner_dims.b as b;
+node bad: a.Box<a.Foo> = a.Box<a.Foo>(x: 1.0 b.foo);
+",
+    )
+    .unwrap();
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    match error {
+        CompileError::Eval(GraphcalError::FieldDimensionMismatch {
+            expected, found, ..
+        }) => {
+            assert_ne!(expected, found);
+            assert!(expected.contains("owner_dims.a.Foo"), "{expected}");
+            assert!(found.contains("owner_dims.b.Foo"), "{found}");
+        }
+        other => panic!("expected owner-qualified field mismatch, got {other:?}"),
+    }
+}
+
 #[test]
 fn source_nested_dag_calls_are_runtime_includes_in_compile_time_contexts() {
     for source in [

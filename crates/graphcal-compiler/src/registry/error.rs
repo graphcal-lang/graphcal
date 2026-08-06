@@ -137,6 +137,36 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("encoding channel `{channel}` cannot plot values of type {found}")]
+    #[diagnostic(
+        code(graphcal::D033),
+        help(
+            "plot quantities, Int, Bool, Datetime, index keys, or a contextual string literal; project algebraic or Complex values to a plottable field first"
+        )
+    )]
+    PlotEncodingTypeMismatch {
+        channel: crate::syntax::ast::EncodingChannel,
+        found: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a plottable value")]
+        span: SourceSpan,
+    },
+
+    #[error("plot encoding channels range over incompatible index axes")]
+    #[diagnostic(
+        code(graphcal::D034),
+        help("{channels}; every channel must range over a subset of one channel's axes")
+    )]
+    PlotEncodingAxisMismatch {
+        /// Preformatted channel/axis list at the diagnostic boundary.
+        channels: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this channel cannot align with the shared plot rows")]
+        span: SourceSpan,
+    },
+
     #[error("cannot `import` plot `{name}`")]
     #[diagnostic(
         code(graphcal::M021),
@@ -2021,6 +2051,8 @@ impl GraphcalError {
             | Self::InvalidPlotProperty { src, .. }
             | Self::PlotPropertyTypeMismatch { src, .. }
             | Self::PlotPropertyDimensioned { src, .. }
+            | Self::PlotEncodingTypeMismatch { src, .. }
+            | Self::PlotEncodingAxisMismatch { src, .. }
             | Self::UnknownPlotReference { src, .. }
             | Self::CompositionReferencesNonPlot { src, .. }
             | Self::DuplicatePlotReference { src, .. }

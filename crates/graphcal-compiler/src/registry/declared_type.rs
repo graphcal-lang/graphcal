@@ -330,13 +330,46 @@ pub enum DeclaredGenericArg {
     Type(DeclaredType),
 }
 
-impl DeclaredGenericArg {
-    fn format(&self, dims: &DimensionRegistry) -> String {
+#[derive(Clone, Copy)]
+enum DiagnosticNameQualification {
+    Leaf,
+    OwnerQualified,
+}
+
+impl DiagnosticNameQualification {
+    fn dimension(self, dimension: &Dimension, dims: &DimensionRegistry) -> String {
         match self {
-            Self::Dim(dimension) => dims.format_dimension(dimension),
-            Self::Index(index) => index.to_string(),
+            Self::Leaf => dims.format_dimension(dimension),
+            Self::OwnerQualified => dims.format_dimension_owner_qualified(dimension),
+        }
+    }
+
+    fn index(self, index: &IndexTypeRef) -> String {
+        match (self, index.declared_resolved()) {
+            (Self::OwnerQualified, Some(resolved)) => resolved.to_string(),
+            (Self::Leaf | Self::OwnerQualified, None) | (Self::Leaf, Some(_)) => index.to_string(),
+        }
+    }
+
+    fn struct_type(self, name: &StructTypeRef) -> String {
+        match self {
+            Self::Leaf => name.to_string(),
+            Self::OwnerQualified => name.resolved().to_string(),
+        }
+    }
+}
+
+impl DeclaredGenericArg {
+    fn format(
+        &self,
+        dims: &DimensionRegistry,
+        qualification: DiagnosticNameQualification,
+    ) -> String {
+        match self {
+            Self::Dim(dimension) => qualification.dimension(dimension, dims),
+            Self::Index(index) => qualification.index(index),
             Self::Nat(value) => value.format(),
-            Self::Type(type_expr) => type_expr.format(dims),
+            Self::Type(type_expr) => type_expr.format_with(dims, qualification),
         }
     }
 }
@@ -372,9 +405,26 @@ impl DeclaredType {
     /// Format as a human-readable string for diagnostics (e.g. `"Length / Time"`, `"Bool"`).
     #[must_use]
     pub fn format(&self, dims: &DimensionRegistry) -> String {
+        self.format_with(dims, DiagnosticNameQualification::Leaf)
+    }
+
+    /// Format every nominal identity with its canonical owner.
+    ///
+    /// Used only when two unequal semantic types would otherwise render with
+    /// the same leaf-only diagnostic spelling.
+    #[must_use]
+    pub(crate) fn format_owner_qualified(&self, dims: &DimensionRegistry) -> String {
+        self.format_with(dims, DiagnosticNameQualification::OwnerQualified)
+    }
+
+    fn format_with(
+        &self,
+        dims: &DimensionRegistry,
+        qualification: DiagnosticNameQualification,
+    ) -> String {
         match self {
-            Self::Quantity(d) => dims.format_dimension(d),
-            Self::Complex(d) => format!("Complex<{}>", dims.format_dimension(d)),
+            Self::Quantity(d) => qualification.dimension(d, dims),
+            Self::Complex(d) => format!("Complex<{}>", qualification.dimension(d, dims)),
             Self::Bool => "Bool".to_string(),
             Self::Int => "Int".to_string(),
             Self::Datetime(scale) => {
@@ -384,13 +434,17 @@ impl DeclaredType {
                     format!("Datetime<{scale}>")
                 }
             }
-            Self::IndexArg(index) => format!("index {index}"),
-            Self::Key(index) => format!("Key<{index}>"),
+            Self::IndexArg(index) => format!("index {}", qualification.index(index)),
+            Self::Key(index) => format!("Key<{}>", qualification.index(index)),
             Self::Struct(name, args) => {
+                let name = qualification.struct_type(name);
                 if args.is_empty() {
-                    name.to_string()
+                    name
                 } else {
-                    let args_str: Vec<String> = args.iter().map(|arg| arg.format(dims)).collect();
+                    let args_str: Vec<String> = args
+                        .iter()
+                        .map(|arg| arg.format(dims, qualification))
+                        .collect();
                     format!("{name}<{}>", args_str.join(", "))
                 }
             }
@@ -402,10 +456,14 @@ impl DeclaredType {
                 let mut indexes = Vec::new();
                 let mut base = self;
                 while let Self::Indexed { element, index } = base {
-                    indexes.push(index.to_string());
+                    indexes.push(qualification.index(index));
                     base = element;
                 }
-                format!("{}[{}]", base.format(dims), indexes.join(", "))
+                format!(
+                    "{}[{}]",
+                    base.format_with(dims, qualification),
+                    indexes.join(", ")
+                )
             }
         }
     }

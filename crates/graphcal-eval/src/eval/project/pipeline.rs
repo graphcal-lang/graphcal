@@ -306,9 +306,10 @@ fn store_compiled_file_artifact(
     )?;
     let top_level_consts = top_level_const_values(&compiled.tir, &const_values);
     let override_dependencies =
-        graphcal_compiler::tir::dim_check::collect_override_dependency_summary(
+        graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
             &compiled.tir,
             file_src,
+            cancellation,
         )?;
     let dag_tirs = compiled.tir.dag_registry().clone();
     let extern_functions = compiled.tir.extern_functions().clone();
@@ -374,9 +375,10 @@ fn evaluate_and_store_file(
     // Capture dag TIRs so cross-file qualified inline calls can merge them
     // into the importer's TIR::dags under module-prefixed keys.
     let override_dependencies =
-        graphcal_compiler::tir::dim_check::collect_override_dependency_summary(
+        graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
             &compiled.tir,
             file_src,
+            cancellation,
         )?;
     let dag_tirs = compiled.tir.dag_registry().clone();
     let extern_functions = compiled.tir.extern_functions().clone();

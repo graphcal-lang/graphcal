@@ -191,6 +191,35 @@ impl DimensionRegistry {
         )
     }
 
+    /// Format user-defined base dimensions with their canonical owner.
+    ///
+    /// This diagnostic-only form disambiguates distinct imported dimensions
+    /// that intentionally share one leaf spelling.
+    #[must_use]
+    #[expect(
+        clippy::unreachable,
+        reason = "RegistryBuilder validates complete base-dimension metadata before construction"
+    )]
+    pub(crate) fn format_dimension_owner_qualified(&self, dim: &Dimension) -> String {
+        let names = self
+            .base_dim_names
+            .iter()
+            .map(|(id, name)| {
+                let display = match id {
+                    BaseDimId::Prelude(_) => name.clone(),
+                    BaseDimId::UserDefined(resolved) => resolved.to_string(),
+                };
+                (id.clone(), display)
+            })
+            .collect();
+        match dim.try_format_with(&names) {
+            Ok(formatted) => formatted,
+            Err(err) => unreachable!(
+                "validated registry lost owner-qualified base dimension metadata: {err}"
+            ),
+        }
+    }
+
     /// Resolve a `DimExpr` AST node to a concrete `Dimension`.
     #[cfg(test)]
     pub(crate) fn resolve_dim_expr(

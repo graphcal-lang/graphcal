@@ -7,7 +7,7 @@
 
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::type_name::ResolvedStructTypeName;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::dimension::Dimension;
@@ -467,6 +467,7 @@ fn type_resolve_dag(
         registry,
         src,
     )?;
+    let bindable_nominals = collect_bindable_nominals(module_ctx, src)?;
 
     let semantic = DagSemanticBody {
         expressions,
@@ -477,6 +478,7 @@ fn type_resolve_dag(
         collection_refs,
         constructor_refs,
         override_reconciliations,
+        bindable_nominals,
         type_defs,
         decl_bindings: HashMap::new(),
     };
@@ -557,6 +559,34 @@ fn resolve_override_target(
             })
         }
     }
+}
+
+fn collect_bindable_nominals(
+    ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashSet<BindableNominalIdentity>, GraphcalError> {
+    let symbols =
+        ctx.resolver
+            .modules()
+            .get(ctx.owner)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("module symbol table missing for DAG `{}`", ctx.owner),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+    Ok(symbols
+        .indexes()
+        .values()
+        .filter(|symbol| symbol.visibility().is_bindable())
+        .map(|symbol| BindableNominalIdentity::Index(symbol.resolved().clone()))
+        .chain(
+            symbols
+                .struct_types()
+                .values()
+                .filter(|symbol| symbol.visibility().is_bindable())
+                .map(|symbol| BindableNominalIdentity::Type(symbol.resolved().clone())),
+        )
+        .collect())
 }
 
 fn resolve_override_reconciliations(

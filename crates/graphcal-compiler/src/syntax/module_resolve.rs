@@ -334,6 +334,10 @@ impl ModuleTypeSymbol {
     pub(crate) const fn resolved(&self) -> &ResolvedStructTypeName {
         self.symbol.resolved()
     }
+
+    pub(crate) const fn visibility(&self) -> SymbolVisibility {
+        self.symbol.visibility()
+    }
 }
 
 impl ModuleSymbolLookup<StructTypeNameNamespace> for ModuleTypeSymbol {
@@ -387,7 +391,7 @@ pub struct ModuleIndexSymbol {
 impl ModuleIndexSymbol {
     /// Canonical resolved identity for the index type.
     #[must_use]
-    const fn resolved(&self) -> &ResolvedIndexName {
+    pub(crate) const fn resolved(&self) -> &ResolvedIndexName {
         self.symbol.resolved()
     }
 

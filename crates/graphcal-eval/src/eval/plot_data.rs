@@ -19,6 +19,7 @@
 //!   numbers and labels in one channel) is an error — variant names are
 //!   never substituted for data.
 
+use graphcal_compiler::plot_shape::align_plot_channel_axes;
 use graphcal_compiler::registry::declared_type::IndexTypeRef;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::ast::EncodingChannel;
@@ -76,7 +77,12 @@ impl ChannelData {
         }
         self.axes
             .iter()
-            .map(|a| a.index.display_name().to_string())
+            .map(|axis| {
+                axis.index.declared_resolved().map_or_else(
+                    || axis.index.display_name().to_string(),
+                    ToString::to_string,
+                )
+            })
             .collect::<Vec<_>>()
             .join(" × ")
     }
@@ -207,42 +213,51 @@ pub(super) fn flatten_to_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue
 pub(super) fn align_encoding_channels(
     channels: &[(EncodingChannel, ChannelData)],
 ) -> Result<Vec<(EncodingChannel, PlotFieldValue)>, String> {
-    // The row axes come from the channel with the widest axis set; every
-    // other channel must range over a subset of those axes.
-    let Some((_, widest)) = channels.iter().max_by_key(|(_, data)| data.axes.len()) else {
+    let channel_axis_refs = channels
+        .iter()
+        .map(|(_, data)| {
+            data.axes
+                .iter()
+                .map(|axis| axis.index.clone())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let channel_axis_slices = channel_axis_refs
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let alignment = align_plot_channel_axes(&channel_axis_slices)
+        .map_err(|_| incompatible_axes_message(channels))?;
+    let Some(row_channel) = alignment.row_channel() else {
         return Ok(Vec::new());
     };
-    let row_axes = &widest.axes;
+    let row_axes = &channels[row_channel].1.axes;
 
-    // Map each channel's axes onto distinct row-axis positions.
-    let mut mapped: Vec<(EncodingChannel, &ChannelData, Vec<usize>)> = Vec::new();
-    for (channel, data) in channels {
-        let mut used = vec![false; row_axes.len()];
-        let mut positions = Vec::with_capacity(data.axes.len());
-        for axis in &data.axes {
-            let Some(pos) = row_axes
+    // Static alignment matches canonical identities. Retain entry-key equality
+    // as malformed-runtime-value defense in depth.
+    let mapped = channels
+        .iter()
+        .zip(alignment.channel_positions())
+        .map(|((channel, data), positions)| {
+            let keys_match = data
+                .axes
                 .iter()
-                .enumerate()
-                .position(|(i, row_axis)| !used[i] && row_axis.matches(axis))
-            else {
-                let described: Vec<String> = channels
-                    .iter()
-                    .map(|(ch, d)| format!("`{ch}` ranges over {}", d.describe_axes()))
-                    .collect();
-                return Err(format!(
-                    "encoding channels range over incompatible index axes: {}; every channel \
-                     must range over (a subset of) one channel's axes",
-                    described.join(", ")
-                ));
-            };
-            used[pos] = true;
-            positions.push(pos);
-        }
-        mapped.push((*channel, data, positions));
-    }
+                .zip(positions)
+                .all(|(axis, position)| axis.entry_keys == row_axes[*position].entry_keys);
+            if keys_match {
+                Ok((*channel, data, positions))
+            } else {
+                Err(incompatible_axes_message(channels))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Cross product of the row axes, row-major (last axis fastest).
-    let row_count: usize = row_axes.iter().map(|a| a.entry_keys.len()).product();
+    let row_count = row_axes.iter().try_fold(1usize, |count, axis| {
+        count
+            .checked_mul(axis.entry_keys.len())
+            .ok_or_else(|| "plot row count overflowed usize".to_string())
+    })?;
     let mut result = Vec::with_capacity(mapped.len());
     for (channel, data, positions) in mapped {
         let mut values = Vec::with_capacity(row_count);
@@ -261,19 +276,36 @@ pub(super) fn align_encoding_channels(
             }
             // Project the row onto this channel's own axes.
             let mut idx = 0usize;
-            for (axis, pos) in data.axes.iter().zip(&positions) {
+            for (axis, pos) in data.axes.iter().zip(positions) {
                 idx = idx
                     .checked_mul(axis.entry_keys.len())
                     .and_then(|base| base.checked_add(digits[*pos]))
                     .ok_or_else(|| "plot row index overflowed usize".to_string())?;
             }
-            values.push(data.values[idx].clone());
+            values.push(
+                data.values
+                    .get(idx)
+                    .ok_or_else(|| "plot channel shape does not match its values".to_string())?
+                    .clone(),
+            );
         }
         let field_value = plot_field_value_from_data(&values)
             .map_err(|e| format!("encoding channel `{channel}`: {e}"))?;
         result.push((channel, field_value));
     }
     Ok(result)
+}
+
+fn incompatible_axes_message(channels: &[(EncodingChannel, ChannelData)]) -> String {
+    let described = channels
+        .iter()
+        .map(|(channel, data)| format!("`{channel}` ranges over {}", data.describe_axes()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "encoding channels range over incompatible index axes: {described}; every channel must \
+         range over (a subset of) one channel's axes"
+    )
 }
 
 #[cfg(test)]

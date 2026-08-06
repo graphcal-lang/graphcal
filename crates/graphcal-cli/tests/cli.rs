@@ -3907,8 +3907,8 @@ fn eval_plot_heatmap_json() {
 
 #[test]
 fn eval_plot_mismatched_channel_axes_is_an_error() {
-    // Channels over unrelated indexes have no meaningful row pairing; they
-    // must fail loudly instead of zipping to the longest channel (#841).
+    // Channels over unrelated indexes have no meaningful row pairing; static
+    // checking must reject them before evaluation can zip or render rows.
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("mismatch.gcl");
     std::fs::write(
@@ -3938,14 +3938,17 @@ fn eval_plot_mismatched_channel_axes_is_an_error() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("plot `mismatch` not rendered")
-            && stderr.contains("incompatible index axes"),
-        "expected an axes mismatch report: {stderr}"
+        stderr.contains("graphcal::D034")
+            && stderr.contains("incompatible index axes")
+            && stderr.contains("mismatch.Step")
+            && stderr.contains("mismatch.Pair"),
+        "expected a static axes mismatch report: {stderr}"
     );
-    // Stdout keeps the JSON contract: an empty array, no misaligned rows.
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let json = parse_plot_json_stdout(&stdout);
-    assert_eq!(json.as_array().map(Vec::len), Some(0));
+    assert!(
+        output.stdout.is_empty(),
+        "compile failure must not emit plot rows: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 #[test]

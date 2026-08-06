@@ -445,6 +445,51 @@ mod tests {
     }
 
     #[test]
+    fn plot_encoding_type_and_axis_errors_retain_codes_and_ranges() {
+        let cases = [
+            (
+                r"
+type Pair { Pair(x: Dimensionless) }
+node pair: Pair = Pair(x: 1.0);
+plot p = { mark: point, encode: { x: @pair } };
+",
+                "graphcal::D033",
+                3,
+            ),
+            (
+                r"
+index Step = { A, B };
+index Pair = { Left, Right };
+plot p = {
+    mark: point,
+    encode: {
+        x: for step: Step { step },
+        y: for pair: Pair { pair },
+    },
+};
+",
+                "graphcal::D034",
+                7,
+            ),
+        ];
+
+        for (source, expected_code, expected_line) in cases {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| {
+                    matches!(
+                        &diagnostic.code,
+                        Some(NumberOrString::String(code)) if code == expected_code
+                    )
+                })
+                .unwrap_or_else(|| panic!("missing {expected_code}: {diagnostics:?}"));
+            assert_eq!(diagnostic.range.start.line, expected_line);
+            assert_ne!(diagnostic.range, Range::default());
+        }
+    }
+
+    #[test]
     fn epoch_static_time_scale_argument_produces_no_diagnostics() {
         let source = "node t: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");";
         let diagnostics = produce_diagnostics(source, "test.gcl");

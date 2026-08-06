@@ -1061,92 +1061,13 @@ pub enum NominalOverrideIdentity {
 /// uses them.
 pub type OverrideDependencySummary = HashMap<ResolvedDeclName, HashSet<NominalOverrideIdentity>>;
 
-fn probe_param_default_nominal_dependency(
-    probe: &mut crate::tir::typed::TIR,
-    dag_id: &crate::dag_id::DagId,
-    param_name: &ScopedName,
-    identity: &NominalOverrideIdentity,
-    src: &NamedSource<Arc<String>>,
-) -> Result<bool, GraphcalError> {
-    let Some(dag) = probe.dags.get(dag_id) else {
-        return Ok(false);
-    };
-    let Some(param) = dag.params.iter().find(|entry| &entry.name == param_name) else {
-        return Ok(false);
-    };
-    let Some(default_expr) = param.default_expr.clone() else {
-        return Ok(false);
-    };
-    let owner = dag.resolved_decl_key_for_local(param_name);
-    let target = match identity {
-        NominalOverrideIdentity::Index(index) => crate::tir::typed::ResolvedOverrideTarget::Index {
-            overridden: index.to_unowned_def_name(),
-            source: index.clone(),
-            replacement: IndexTypeRef::from_resolved(index.clone()),
-        },
-        NominalOverrideIdentity::Type(struct_type) => {
-            crate::tir::typed::ResolvedOverrideTarget::Type {
-                overridden: struct_type.to_unowned_def_name(),
-                source: struct_type.clone(),
-                replacement: struct_type.clone(),
-            }
-        }
-    };
-    let reconciliation = crate::tir::typed::OverrideReconciliation {
-        orphan_decl: param_name.member().clone(),
-        targets: vec![target],
-        src: src.clone(),
-        include_span: Span::new(0, 0),
-    };
-    let Some(dag) = probe.dags.get_mut(dag_id) else {
-        return Ok(false);
-    };
-    let previous = dag
-        .semantic
-        .override_reconciliations
-        .insert(owner.clone(), vec![reconciliation]);
-
-    let result = (|| {
-        let dag = &probe.dags[dag_id];
-        let declared_types = dag.build_declared_types(src)?;
-        let builtin_fns = builtin_functions();
-        infer::hir::infer_hir_type_with_owner(
-            &default_expr,
-            Some(&owner),
-            &declared_types,
-            dag,
-            probe,
-            &probe.registry,
-            builtin_fns,
-            src,
-        )
-    })();
-    if let Some(dag) = probe.dags.get_mut(dag_id) {
-        match previous {
-            Some(previous) => {
-                dag.semantic
-                    .override_reconciliations
-                    .insert(owner, previous);
-            }
-            None => {
-                dag.semantic.override_reconciliations.remove(&owner);
-            }
-        }
-    }
-
-    match result {
-        Ok(_) => Ok(false),
-        Err(GraphcalError::IncludeMustReconcileOverride { .. }) => Ok(true),
-        Err(error) => Err(error),
-    }
-}
-
 /// Collect canonical nominal dependencies for every checked parameter default
 /// in every DAG module in `tir`.
 ///
-/// Ordinary HIR inference is probed before include substitution, so field and
-/// match ownership comes from canonical semantic facts rather than source
-/// spelling. The resulting summary is reusable at every include site.
+/// Each default is inferred exactly once before include substitution. Canonical
+/// field, constructor, match, index, and type-argument events are collected by
+/// that inference and filtered to the module's typed `pub(bind)` interface.
+/// The resulting summary is reusable at every include site.
 ///
 /// # Errors
 ///
@@ -1156,68 +1077,82 @@ pub fn collect_override_dependency_summary(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<OverrideDependencySummary, GraphcalError> {
-    let mut probe = tir.clone();
-    let dag_ids = probe
-        .dags
-        .keys()
-        .filter(|dag_id| {
-            *dag_id == probe.root_dag_id() || dag_id.is_descendant_of(probe.root_dag_id())
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    collect_override_dependency_summary_with_cancellation(
+        tir,
+        src,
+        &crate::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Collect override dependencies while observing cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a compiler diagnostic for inconsistent TIR or cancellation.
+pub fn collect_override_dependency_summary_with_cancellation(
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<OverrideDependencySummary, GraphcalError> {
+    let builtin_fns = builtin_functions();
     let mut summary = OverrideDependencySummary::new();
 
-    for dag_id in dag_ids {
-        let dag = &probe.dags[&dag_id];
-        let params = dag
-            .params
-            .iter()
-            .filter(|entry| entry.default_expr.is_some())
-            .map(|entry| entry.name.clone())
-            .collect::<Vec<_>>();
-        let mut indexes = dag
-            .semantic
-            .collection_refs
-            .index_defs
-            .keys()
-            .filter(|identity| identity.owner() == &dag_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        indexes.sort();
-        let mut types = dag
-            .semantic
-            .type_defs
-            .struct_types
-            .keys()
-            .filter(|identity| identity.owner() == &dag_id)
-            .cloned()
-            .collect::<Vec<_>>();
-        types.sort();
-        let identities = indexes
-            .into_iter()
-            .map(NominalOverrideIdentity::Index)
-            .chain(types.into_iter().map(NominalOverrideIdentity::Type))
-            .collect::<Vec<_>>();
-
-        for param_name in params {
-            let owner = probe.dags[&dag_id].resolved_decl_key_for_local(&param_name);
-            for identity in &identities {
-                if probe_param_default_nominal_dependency(
-                    &mut probe,
-                    &dag_id,
-                    &param_name,
-                    identity,
-                    src,
-                )? {
-                    summary
-                        .entry(owner.clone())
-                        .or_default()
-                        .insert(identity.clone());
-                }
+    for (_, dag) in tir.local_dags() {
+        cancellation.checkpoint()?;
+        let declared_types = dag.build_declared_types(src)?;
+        for param in &dag.params {
+            let Some(default_expr) = &param.default_expr else {
+                continue;
+            };
+            cancellation.checkpoint()?;
+            let default_src =
+                param
+                    .default_src
+                    .as_ref()
+                    .ok_or_else(|| GraphcalError::InternalError {
+                        message: format!(
+                            "parameter `{}` is missing default provenance",
+                            param.name
+                        ),
+                        src: src.clone(),
+                        span: param.span.into(),
+                    })?;
+            let body_src = default_src.resolve(src);
+            let owner = dag.resolved_decl_key_for_local(&param.name);
+            let (_, mut dependencies) =
+                infer::hir::infer_hir_type_with_nominal_dependencies_and_cancellation(
+                    default_expr,
+                    &owner,
+                    &declared_types,
+                    dag,
+                    tir,
+                    &tir.registry,
+                    builtin_fns,
+                    body_src,
+                    cancellation,
+                )?;
+            dependencies.retain(|identity| is_bindable_nominal(dag, identity));
+            if !dependencies.is_empty() {
+                summary.insert(owner, dependencies);
             }
         }
     }
     Ok(summary)
+}
+
+fn is_bindable_nominal(
+    dag: &crate::tir::typed::DagTIR,
+    identity: &NominalOverrideIdentity,
+) -> bool {
+    let bindable = match identity {
+        NominalOverrideIdentity::Index(index) => {
+            crate::tir::typed::BindableNominalIdentity::Index(index.clone())
+        }
+        NominalOverrideIdentity::Type(struct_type) => {
+            crate::tir::typed::BindableNominalIdentity::Type(struct_type.clone())
+        }
+    };
+    dag.semantic.bindable_nominals.contains(&bindable)
 }
 
 /// One exact concrete nominal application observed in semantic HIR.
@@ -1344,6 +1279,7 @@ pub fn concrete_constructor_generic_args(
         &target.type_def,
         applied_generic_args,
         dag,
+        tir,
         &tir.registry,
         src,
         span,
@@ -1501,7 +1437,7 @@ fn check_dimensions_dag(
     }
 
     ctx.checkpoint()?;
-    plot::check_plot_properties_dag(&ctx)?;
+    plot::check_plot_properties_dag(&ctx, dag)?;
 
     ctx.checkpoint()?;
     check_domain_constraint_targets_dag(dag, src)?;

@@ -146,6 +146,7 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
 - [ ] `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
 - [ ] `crates/graphcal-compiler/src/plot_props.rs`
+- [ ] `crates/graphcal-compiler/src/plot_shape.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
 

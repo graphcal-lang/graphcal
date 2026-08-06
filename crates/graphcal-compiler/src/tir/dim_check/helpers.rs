@@ -224,6 +224,26 @@ pub fn format_inferred_type(it: &InferredType, registry: &Registry) -> String {
     DeclaredType::from(it).format(&registry.dimensions)
 }
 
+/// Format unequal inferred types without emitting a self-contradictory
+/// leaf-only diagnostic such as `expected Foo, found Foo`.
+pub(super) fn format_distinct_inferred_types(
+    expected: &InferredType,
+    found: &InferredType,
+    registry: &Registry,
+) -> (String, String) {
+    let expected_type = DeclaredType::from(expected);
+    let found_type = DeclaredType::from(found);
+    let expected_display = expected_type.format(&registry.dimensions);
+    let found_display = found_type.format(&registry.dimensions);
+    if expected_display != found_display {
+        return (expected_display, found_display);
+    }
+    (
+        expected_type.format_owner_qualified(&registry.dimensions),
+        found_type.format_owner_qualified(&registry.dimensions),
+    )
+}
+
 impl From<&InferredType> for DeclaredType {
     fn from(it: &InferredType) -> Self {
         match it {

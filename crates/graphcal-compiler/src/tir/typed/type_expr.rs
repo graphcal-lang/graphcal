@@ -164,7 +164,6 @@ struct HirTypeResolutionContext<'a> {
     src: &'a NamedSource<Arc<String>>,
     resolver: &'a ModuleResolver,
     module_types: &'a ModuleTypeRegistry,
-    registry: Option<&'a Registry>,
     prelude: &'a hir::PreludeTypeScope,
 }
 
@@ -186,7 +185,6 @@ pub fn resolve_hir_type_expr(
         src,
         resolver: module_ctx.resolver,
         module_types: module_ctx.types,
-        registry: None,
         prelude: &prelude,
     };
     resolve_hir_type_expr_inner(type_ann, ctx)
@@ -194,7 +192,7 @@ pub fn resolve_hir_type_expr(
 
 pub(super) fn resolve_ast_type_expr_via_hir(
     type_ann: &TypeExpr,
-    registry: &Registry,
+    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
@@ -209,7 +207,6 @@ pub(super) fn resolve_ast_type_expr_via_hir(
         src,
         resolver: module_ctx.resolver,
         module_types: module_ctx.types,
-        registry: Some(registry),
         prelude: &prelude,
     };
     resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
@@ -313,14 +310,6 @@ fn hir_dimension(
     ctx.module_types
         .get_dimension(name)
         .cloned()
-        .or_else(|| {
-            ctx.registry.and_then(|registry| {
-                registry
-                    .dimensions
-                    .get_dimension(name.to_unowned_def_name().as_str())
-                    .cloned()
-            })
-        })
         .ok_or_else(|| GraphcalError::UnknownDimension {
             name: name.to_unowned_def_name(),
             src: ctx.src.clone(),
@@ -1007,7 +996,7 @@ pub(super) fn resolve_generic_default_in_struct_scope(
     type_owner: &ResolvedStructTypeName,
     type_def: &TypeDef,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
+    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(hir::GenericArg, ResolvedGenericArg), GraphcalError> {
     let prelude = hir::PreludeTypeScope::graphcal();
@@ -1015,7 +1004,6 @@ pub(super) fn resolve_generic_default_in_struct_scope(
         src,
         resolver: ctx.resolver,
         module_types: ctx.types,
-        registry: Some(registry),
         prelude: &prelude,
     };
     let hir_arg = lower_generic_default(default, param, type_owner, type_def, resolve_ctx)?;
@@ -1028,7 +1016,7 @@ pub(super) fn resolve_type_expr_in_struct_scope(
     type_owner: &ResolvedStructTypeName,
     type_def: &TypeDef,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
+    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
     let prelude = hir::PreludeTypeScope::graphcal();
@@ -1036,7 +1024,6 @@ pub(super) fn resolve_type_expr_in_struct_scope(
         src,
         resolver: ctx.resolver,
         module_types: ctx.types,
-        registry: Some(registry),
         prelude: &prelude,
     };
     let hir_type = lower_type_expr_in_generic_scope(type_expr, type_owner, type_def, resolve_ctx)?;
