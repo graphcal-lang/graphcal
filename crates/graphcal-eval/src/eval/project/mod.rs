@@ -203,6 +203,7 @@ struct ModuleArtifact {
 /// checking or root runtime preparation.
 struct CompiledFile {
     tir: graphcal_compiler::tir::typed::TIR,
+    checked_execution_facts: crate::exec_plan::CheckedExecutionFacts,
     declared_types: HashMap<ScopedName, DeclaredType>,
     /// Imported values for this file (cloned before being consumed by IR).
     /// Used by the root file to enrich output with imported value names.
@@ -329,12 +330,6 @@ impl CheckedProject {
     #[must_use]
     pub fn is_library(&self) -> bool {
         self.compiled.tir.is_library()
-    }
-
-    /// Consume the checked project and return its typed program.
-    #[must_use]
-    pub fn into_tir(self) -> graphcal_compiler::tir::typed::TIR {
-        self.compiled.tir
     }
 
     /// Continue to runtime preparation with callable host functions.
@@ -841,74 +836,12 @@ pub fn check_project_with_host_metadata_and_cancellation(
     ProjectCompiler::with_cancellation(project, host_metadata, cancellation)?.check()
 }
 
-/// Compile a [`LoadedProject`](crate::loader::LoadedProject) to TIR without evaluating.
-///
-/// Resolves project imports and includes, lowers to IR,
-/// type-resolves, and runs all checks (recursion, dimensions). The project may
-/// have been loaded from disk, constructed from in-memory source, or a mix of
-/// both (via [`graphcal_io::OverlayFileSystem`] + [`crate::loader::load_project`]).
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] if lowering, resolution, or checking fails.
+/// Test-only projection of a fully checked project into its TIR.
+#[cfg(test)]
 pub fn compile_to_tir_from_project(
     project: &crate::loader::LoadedProject,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    compile_to_tir_from_project_with_cancellation(
-        project,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-/// Compile a loaded project to TIR with cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] for invalid source or cancellation.
-pub fn compile_to_tir_from_project_with_cancellation(
-    project: &crate::loader::LoadedProject,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    // The demo registry supplies static extern signatures; checking never
-    // invokes its host closures.
-    compile_to_tir_from_project_with_host_fns_and_cancellation(
-        project,
-        &crate::host_fns::demo_registry(),
-        cancellation,
-    )
-}
-
-/// Like [`compile_to_tir_from_project`], using the non-callable metadata from
-/// an embedder-supplied host registry to validate extern declarations.
-///
-/// Static checking never invokes host functions.
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] if lowering, resolution, or checking fails.
-pub fn compile_to_tir_from_project_with_host_fns(
-    project: &crate::loader::LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    compile_to_tir_from_project_with_host_fns_and_cancellation(
-        project,
-        host_fns,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-/// Compile with embedder host functions and cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] for invalid source or cancellation.
-pub fn compile_to_tir_from_project_with_host_fns_and_cancellation(
-    project: &crate::loader::LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    check_project_with_host_fns_and_cancellation(project, host_fns, cancellation)
-        .map(CheckedProject::into_tir)
+    check_project(project).map(|checked| checked.compiled.tir)
 }
 
 /// Prepare a loaded project once for repeated typed evaluation.
@@ -1074,16 +1007,8 @@ pub fn compile_and_eval_project<F: graphcal_io::FileSystemReader>(
     compile_and_eval_from_project(&project, overrides)
 }
 
-/// Compile source to TIR without evaluating.
-///
-/// Runs the pipeline up through type resolution, function recursion check, and
-/// dimension check, but does not build an execution plan or evaluate. This is
-/// useful for tooling (e.g., LSP) that needs type information without execution.
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] if parsing, lowering, or checking fails, or if
-/// `name` is not a valid `.gcl` source path.
+/// Test-only convenience projection from source through [`CheckedProject`].
+#[cfg(test)]
 pub fn compile_to_tir(
     source: &str,
     name: &str,
@@ -1092,16 +1017,8 @@ pub fn compile_to_tir(
     compile_to_tir_from_project(&project)
 }
 
-/// Compile a multi-file project to TIR without evaluating.
-///
-/// Loads all files referenced by `use` declarations starting from `root_path`,
-/// resolves imports, and runs the pipeline up through dimension checking.
-///
-/// All filesystem access goes through the provided [`graphcal_io::FileSystemReader`].
-///
-/// # Errors
-///
-/// Returns a [`CompileError`] if loading, parsing, resolution, or checking fails.
+/// Test-only convenience projection for a loaded multi-file project.
+#[cfg(test)]
 pub fn compile_to_tir_project<F: graphcal_io::FileSystemReader>(
     root_path: &Path,
     project_root: Option<&Path>,

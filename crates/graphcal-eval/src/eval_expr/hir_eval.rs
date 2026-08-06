@@ -2257,12 +2257,7 @@ fn eval_hir_match(
 
 fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Option<&'a hir::Expr> {
     let key = dag_tir.resolved_decl_key_for_local(name);
-    dag_tir
-        .semantic()
-        .expressions
-        .consts
-        .get(&key)
-        .or_else(|| dag_tir.semantic().expressions.runtime_expr(&key))
+    dag_tir.value_expr(&key)
 }
 
 fn eval_hir_dag_call(
@@ -2346,7 +2341,7 @@ fn eval_hir_dag_call(
             dag_values.insert(local_key, value);
         } else {
             return Err(ctx.internal_error(
-                format!("semantic TIR missing HIR expression for DAG body declaration `{name}`"),
+                format!("DAG schedule references missing value declaration `{name}`"),
                 output.span,
             ));
         }
@@ -2423,17 +2418,12 @@ fn check_inline_dag_asserts(
             continue;
         }
         let key = dag_tir.resolved_decl_key_for_local(name);
-        let body = dag_tir
-            .semantic()
-            .expressions
-            .asserts
-            .get(&key)
-            .ok_or_else(|| {
-                ctx.internal_error(
-                    format!("semantic TIR missing HIR body for DAG assertion `{name}`"),
-                    call_span,
-                )
-            })?;
+        let body = dag_tir.assert_body(&key).ok_or_else(|| {
+            ctx.internal_error(
+                format!("TIR assertion entry missing for DAG assertion `{name}`"),
+                call_span,
+            )
+        })?;
         let ef = dag_tir.expected_fail().get(name);
         let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
             body,

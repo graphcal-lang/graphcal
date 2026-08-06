@@ -15,19 +15,20 @@ use crate::syntax::span::Span;
 use crate::syntax::type_name::ResolvedConstructorName;
 
 use super::{
-    DagSemanticBody, ModuleTypeContext, ResolvedCollectionRefs, ResolvedConstructorRefs,
-    ResolvedConstructorTarget, ResolvedDagDependencies, ResolvedDomainBound, ResolvedExpressions,
-    ResolvedIndex, ResolvedTypeExpr, internal_error, module_resolve_error,
+    DagTIR, ModuleTypeContext, ResolvedCollectionRefs, ResolvedConstructorRefs,
+    ResolvedConstructorTarget, ResolvedDagDependencies, ResolvedDomainBound, ResolvedIndex,
+    ResolvedTypeExpr, internal_error, module_resolve_error,
 };
 
-pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticBody) {
-    if semantic.dynamic_unit_scales.is_empty() {
+pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
+    if dag.semantic.dynamic_unit_scales.is_empty() {
         return;
     }
     let scale_deps: HashMap<
         crate::syntax::dimension::ResolvedUnitName,
         BTreeSet<ResolvedDeclName>,
-    > = semantic
+    > = dag
+        .semantic
         .dynamic_unit_scales
         .iter()
         .map(|(name, entry)| {
@@ -37,15 +38,26 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticB
             )
         })
         .collect();
+    let runtime_units = dag
+        .params
+        .iter()
+        .filter_map(|entry| {
+            entry.default_expr.as_ref().map(|expr| {
+                (
+                    dag.resolved_decl_key_for_local(&entry.name),
+                    collect_unit_names(expr),
+                )
+            })
+        })
+        .chain(dag.nodes.iter().map(|entry| {
+            (
+                dag.resolved_decl_key_for_local(&entry.name),
+                collect_unit_names(&entry.expr),
+            )
+        }))
+        .collect::<Vec<_>>();
 
-    let DagSemanticBody {
-        expressions,
-        dependencies,
-        ..
-    } = semantic;
-    for (key, expr) in expressions.param_defaults.iter().chain(&expressions.nodes) {
-        let mut unit_names = std::collections::HashSet::new();
-        collect_unit_names_from_hir(expr, &mut unit_names);
+    for (key, unit_names) in runtime_units {
         let extra: BTreeSet<ResolvedDeclName> = unit_names
             .iter()
             .filter_map(|unit| scale_deps.get(unit))
@@ -53,13 +65,22 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(semantic: &mut DagSemanticB
             .cloned()
             .collect();
         if !extra.is_empty() {
-            dependencies
+            dag.semantic
+                .dependencies
                 .runtime_deps
-                .entry(key.clone())
+                .entry(key)
                 .or_default()
                 .extend(extra);
         }
     }
+}
+
+fn collect_unit_names(
+    expr: &hir::Expr,
+) -> std::collections::HashSet<crate::syntax::dimension::ResolvedUnitName> {
+    let mut names = std::collections::HashSet::new();
+    collect_unit_names_from_hir(expr, &mut names);
+    names
 }
 
 /// Collect every unit name mentioned by `UnitLiteral` / `Convert` nodes.
@@ -171,7 +192,6 @@ pub(super) fn collect_resolved_dag_dependencies(
     consts: &[crate::ir::lower::ConstEntry],
     params: &[crate::ir::lower::ParamEntry],
     nodes: &[crate::ir::lower::NodeEntry],
-    exprs: &ResolvedExpressions,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedDagDependencies, GraphcalError> {
@@ -180,17 +200,7 @@ pub(super) fn collect_resolved_dag_dependencies(
     for entry in consts {
         let body_src = entry.body_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
-        let hir_expr = exprs.consts.get(&key).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "missing HIR expression for const declaration `{}`",
-                    entry.name
-                ),
-                body_src,
-                entry.span,
-            )
-        })?;
-        let mut deps = hir::collect_expr_dependencies(hir_expr);
+        let mut deps = hir::collect_expr_dependencies(&entry.expr);
         for graph_ref in &deps.graph_refs {
             // `@const_name` in a const body is a const dependency. Non-const
             // `@` targets are rejected with a spanned diagnostic by
@@ -208,7 +218,7 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in params {
         let key = resolved_decl_key(ctx.owner, &entry.name);
-        let deps = exprs.param_defaults.get(&key).map_or_else(
+        let deps = entry.default_expr.as_ref().map_or_else(
             hir::ExprDependencies::default,
             hir::collect_expr_dependencies,
         );
@@ -216,27 +226,23 @@ pub(super) fn collect_resolved_dag_dependencies(
     }
 
     for entry in nodes {
-        let body_src = entry.body_src.resolve(src);
         let key = resolved_decl_key(ctx.owner, &entry.name);
-        let hir_expr = exprs.nodes.get(&key).ok_or_else(|| {
-            internal_error(
-                format!(
-                    "missing HIR expression for node declaration `{}`",
-                    entry.name
-                ),
-                body_src,
-                entry.span,
-            )
-        })?;
-        let deps = hir::collect_expr_dependencies(hir_expr);
+        let deps = hir::collect_expr_dependencies(&entry.expr);
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
     Ok(resolved)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "whole-DAG reference collection visits every authoritative body category and its resolution context"
+)]
 pub(super) fn collect_resolved_collection_refs(
-    exprs: &ResolvedExpressions,
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    asserts: &[crate::ir::lower::AssertEntry],
     domain_bounds: &HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     resolved_decl_types: &HashMap<ScopedName, ResolvedTypeExpr>,
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
@@ -257,17 +263,51 @@ pub(super) fn collect_resolved_collection_refs(
         )?;
     }
 
-    for hir_expr in exprs
-        .consts
-        .values()
-        .chain(exprs.param_defaults.values())
-        .chain(exprs.nodes.values())
-        .chain(domain_bounds.values().flatten().map(|bound| &bound.value))
-    {
-        collect_resolved_collection_refs_from_expr(hir_expr, ctx, src, &mut refs)?;
+    for entry in consts {
+        collect_resolved_collection_refs_from_expr(
+            &entry.expr,
+            ctx,
+            entry.body_src.resolve(src),
+            &mut refs,
+        )?;
     }
-    for body in exprs.asserts.values() {
-        collect_resolved_collection_refs_from_assert_body(body, ctx, src, &mut refs)?;
+    for entry in params {
+        if let Some(expr) = &entry.default_expr {
+            let default_src = entry.default_src.as_ref().ok_or_else(|| {
+                internal_error(
+                    format!("parameter `{}` is missing default provenance", entry.name),
+                    src,
+                    entry.span,
+                )
+            })?;
+            collect_resolved_collection_refs_from_expr(
+                expr,
+                ctx,
+                default_src.resolve(src),
+                &mut refs,
+            )?;
+        }
+    }
+    for entry in nodes {
+        collect_resolved_collection_refs_from_expr(
+            &entry.expr,
+            ctx,
+            entry.body_src.resolve(src),
+            &mut refs,
+        )?;
+    }
+    for bounds in domain_bounds.values() {
+        for bound in bounds {
+            collect_resolved_collection_refs_from_expr(&bound.value, ctx, &bound.src, &mut refs)?;
+        }
+    }
+    for entry in asserts {
+        collect_resolved_collection_refs_from_assert_body(
+            &entry.body,
+            ctx,
+            entry.body_src.resolve(src),
+            &mut refs,
+        )?;
     }
 
     Ok(refs)
@@ -604,24 +644,61 @@ fn collect_resolved_collection_refs_from_assert_body(
 }
 
 pub(super) fn collect_resolved_constructor_refs(
-    exprs: &ResolvedExpressions,
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    asserts: &[crate::ir::lower::AssertEntry],
     domain_bounds: &HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedConstructorRefs, GraphcalError> {
     let mut refs = ResolvedConstructorRefs::default();
 
-    for hir_expr in exprs
-        .consts
-        .values()
-        .chain(exprs.param_defaults.values())
-        .chain(exprs.nodes.values())
-        .chain(domain_bounds.values().flatten().map(|bound| &bound.value))
-    {
-        collect_resolved_constructor_refs_from_expr(hir_expr, ctx, src, &mut refs)?;
+    for entry in consts {
+        collect_resolved_constructor_refs_from_expr(
+            &entry.expr,
+            ctx,
+            entry.body_src.resolve(src),
+            &mut refs,
+        )?;
     }
-    for body in exprs.asserts.values() {
-        collect_resolved_constructor_refs_from_assert_body(body, ctx, src, &mut refs)?;
+    for entry in params {
+        if let Some(expr) = &entry.default_expr {
+            let default_src = entry.default_src.as_ref().ok_or_else(|| {
+                internal_error(
+                    format!("parameter `{}` is missing default provenance", entry.name),
+                    src,
+                    entry.span,
+                )
+            })?;
+            collect_resolved_constructor_refs_from_expr(
+                expr,
+                ctx,
+                default_src.resolve(src),
+                &mut refs,
+            )?;
+        }
+    }
+    for entry in nodes {
+        collect_resolved_constructor_refs_from_expr(
+            &entry.expr,
+            ctx,
+            entry.body_src.resolve(src),
+            &mut refs,
+        )?;
+    }
+    for bounds in domain_bounds.values() {
+        for bound in bounds {
+            collect_resolved_constructor_refs_from_expr(&bound.value, ctx, &bound.src, &mut refs)?;
+        }
+    }
+    for entry in asserts {
+        collect_resolved_constructor_refs_from_assert_body(
+            &entry.body,
+            ctx,
+            entry.body_src.resolve(src),
+            &mut refs,
+        )?;
     }
 
     Ok(refs)

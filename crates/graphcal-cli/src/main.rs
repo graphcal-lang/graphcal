@@ -26,8 +26,8 @@ use std::process;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
-    CompileError, EvalOutputView, EvalResult, compile_to_tir_from_project_with_host_fns,
-    format_number, prepare_from_project_with_host_fns,
+    CompileError, EvalOutputView, EvalResult, check_project_with_host_fns, format_number,
+    prepare_from_project_with_host_fns,
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
@@ -688,10 +688,8 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     let mut error_count = 0;
     for file in &targets {
         let fs = build_rooted_filesystem(file, project_root);
-        let outcome =
-            load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
-                compile_to_tir_from_project_with_host_fns(&project, &host_fns)
-            });
+        let outcome = load_project_with_plugins(file, project_root, &fs)
+            .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns));
         match outcome {
             Ok(_) => {
                 println!("ok: {}", file.display());
@@ -718,13 +716,11 @@ fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
     );
     let fs = build_rooted_filesystem(file, project_root);
-    let outcome =
-        load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
-            compile_to_tir_from_project_with_host_fns(&project, &host_fns)
-        });
+    let outcome = load_project_with_plugins(file, project_root, &fs)
+        .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns));
     match outcome {
-        Ok(tir) => {
-            let ir = graphcal_eval::graph_ir::project_tir(&tir);
+        Ok(checked) => {
+            let ir = graphcal_eval::graph_ir::project_tir(checked.tir());
             match format {
                 GraphFormat::Dot => print!("{}", graphcal_eval::graph_ir::dot::render(&ir)),
             }

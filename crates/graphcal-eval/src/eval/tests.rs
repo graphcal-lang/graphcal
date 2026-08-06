@@ -217,7 +217,7 @@ fn pure_module_import_can_call_an_instance_with_dynamic_units() {
         &[
             (
                 "lib.gcl",
-                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\nparam amount: Money = 100.0 USD;\npub node converted: Money = @amount -> EUR;\n",
+                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\nparam amount: Money = 100.0 EUR;\npub node converted: Money = @amount -> USD;\n",
             ),
             (
                 "main.gcl",
@@ -228,7 +228,7 @@ fn pure_module_import_can_call_an_instance_with_dynamic_units() {
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
-    assert_quantity_value(&result, "result", 100.0);
+    assert_quantity_value(&result, "result", 200.0);
 }
 
 #[test]
@@ -3348,7 +3348,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let expr_key = tir
         .root()
         .resolved_decl_key_for_local(&scoped_name("distance"));
-    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
+    let expr = tir.root().value_expr(&expr_key).unwrap();
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Command"),
@@ -3408,7 +3408,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let expr_key = tir
         .root()
         .resolved_decl_key_for_local(&scoped_name("distance"));
-    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
+    let expr = tir.root().value_expr(&expr_key).unwrap();
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
@@ -4261,7 +4261,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir.root().resolved_decl_key_for_local(&scoped_name("burn"));
-    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
+    let expr = tir.root().value_expr(&expr_key).unwrap();
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
         graphcal_compiler::syntax::index_name::IndexName::expect_valid("Phase"),
@@ -4328,7 +4328,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir.root().resolved_decl_key_for_local(&scoped_name("code"));
-    let expr = &tir.root().semantic().expressions.nodes[&expr_key];
+    let expr = tir.root().value_expr(&expr_key).unwrap();
     let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = &expr.kind else {
         panic!("expected `code` to be a for-comprehension, got {expr:?}");
     };

@@ -310,39 +310,36 @@ fn cycle_detection_uses_semantic_dependencies() {
 }
 
 #[test]
-fn hir_dim_check_uses_lowered_builtin_function_not_mutated_syntax_callee() {
+fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
-    assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string());
+        crate::hir::ExprKind::StringLiteral("not dimensionless".to_string());
 
-    check_dimensions_tir(&tir, &src).unwrap();
+    assert!(check_dimensions_tir(&tir, &src).is_err());
 }
 
 #[test]
-fn hir_dim_check_uses_lexical_local_ids_not_mutated_syntax_names() {
+fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir(
         "index Phase = { Burn };\n\
          node y: Dimensionless[Phase] = for p: Phase { match p { Phase.Burn => 1.0 } };",
     );
-    assert!(!tir.root().semantic.expressions.nodes.is_empty());
     tir.root_mut().nodes[0].expr.kind =
-        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string());
+        crate::hir::ExprKind::StringLiteral("not indexed".to_string());
 
-    check_dimensions_tir(&tir, &src).unwrap();
+    assert!(check_dimensions_tir(&tir, &src).is_err());
 }
 
 #[test]
-fn hir_dim_check_uses_lowered_assert_body_not_mutated_syntax_body() {
+fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
-    assert!(!tir.root().semantic.expressions.asserts.is_empty());
     let span = tir.root().asserts[0].span;
     tir.root_mut().asserts[0].body = crate::hir::AssertBody::Expr(crate::hir::Expr::new(
-        crate::hir::ExprKind::StringLiteral("not the semantic HIR".to_string()),
+        crate::hir::ExprKind::StringLiteral("not bool".to_string()),
         span,
     ));
 
-    check_dimensions_tir(&tir, &src).unwrap();
+    assert!(check_dimensions_tir(&tir, &src).is_err());
 }
 
 #[test]
@@ -1168,14 +1165,7 @@ node bad: Dimensionless = @x ^ @n;";
 #[test]
 fn hir_preserves_exact_power_metadata() {
     let (tir, _) = module_aware_tir("param x: Length = 4.0 m;\nnode y: Length^(3/2) = @x ^ (3/2);");
-    let expression = tir
-        .root()
-        .semantic
-        .expressions
-        .nodes
-        .values()
-        .next()
-        .unwrap();
+    let expression = &tir.root().nodes().first().unwrap().expr;
     assert!(matches!(
         expression.kind,
         crate::hir::ExprKind::BinOp {

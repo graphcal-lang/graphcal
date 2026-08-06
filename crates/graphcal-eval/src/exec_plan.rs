@@ -8,10 +8,9 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::hir::AssertBody;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, DeclaredType, StructTypeRef};
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::span::{Span, Spanned};
+use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
@@ -30,38 +29,17 @@ use graphcal_compiler::tir::typed::{
     DagTIR, ResolvedDagDependencies, StructFieldConstraintKey, TIR,
 };
 
-/// An assert body entry for execution.
+/// Compile-time execution facts retained by a fully checked project.
+///
+/// These analyses are needed both by dependency interface construction and by
+/// runtime planning. Keeping their immutable stores shared avoids evaluating
+/// constants and resolving domain constraints a second time during `prepare`.
 #[derive(Debug, Clone)]
-pub struct AssertBodyEntry {
-    pub(crate) name: ScopedName,
-    pub(crate) body: AssertBody,
-    pub(crate) span: Span,
-}
-
-/// A plot body entry for execution.
-#[derive(Debug, Clone)]
-pub struct PlotBodyEntry {
-    pub(crate) name: ScopedName,
-    /// Mark shape rendered for this plot.
-    pub(crate) mark_type: graphcal_compiler::syntax::ast::MarkType,
-    /// Whether this plot renders standalone (no `#[hidden]`; #847).
-    pub(crate) displayed: bool,
-}
-
-/// A figure body entry for execution.
-#[derive(Debug, Clone)]
-pub struct FigureBodyEntry {
-    pub(crate) name: ScopedName,
-    /// Plots composed by this figure, in source order.
-    pub(crate) plot_names: Vec<Spanned<ScopedName>>,
-}
-
-/// A layer body entry for execution.
-#[derive(Debug, Clone)]
-pub struct LayerBodyEntry {
-    pub(crate) name: ScopedName,
-    /// Plots composed by this layer, in source order.
-    pub(crate) plot_names: Vec<Spanned<ScopedName>>,
+pub struct CheckedExecutionFacts {
+    pub(crate) const_values: Arc<RuntimeValueMap>,
+    pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
+    pub(crate) struct_field_constraints:
+        Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
 }
 
 /// A compiled execution plan ready for runtime evaluation.
@@ -69,21 +47,13 @@ pub struct LayerBodyEntry {
 pub struct ExecPlan {
     /// Evaluated const values (in base SI units).
     /// Key-lookup only, order irrelevant.
-    pub(crate) const_values: RuntimeValueMap,
+    pub(crate) const_values: Arc<RuntimeValueMap>,
     /// Compile-time constants imported from dependency module artifacts.
     /// These are injected directly into the evaluation environment.
     /// Iterated once during env setup; feeds into `HashMap` (key-lookup only).
     pub(crate) imported_values: RuntimeValueMap,
     /// Topologically sorted names for runtime evaluation (params + nodes).
     pub(crate) topo_order: Vec<RuntimeDeclKey>,
-    /// Assert bodies in source order.
-    pub(crate) assert_bodies: Vec<AssertBodyEntry>,
-    /// Plot declarations in source order.
-    pub(crate) plot_bodies: Vec<PlotBodyEntry>,
-    /// Figure declarations in source order.
-    pub(crate) figure_bodies: Vec<FigureBodyEntry>,
-    /// Layer declarations in source order.
-    pub(crate) layer_bodies: Vec<LayerBodyEntry>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Key-lookup only, order irrelevant.
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
@@ -92,12 +62,12 @@ pub struct ExecPlan {
     pub(crate) expected_fail: HashMap<ScopedName, graphcal_compiler::ir::resolve::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
-    pub(crate) domain_constraints: HashMap<RuntimeDeclKey, ResolvedDomainConstraint>,
+    pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
     /// Resolved domain constraints for struct/union member fields, keyed by
     /// owner-qualified struct/constructor/field identity. Looked up at every
     /// `ExprKind::ConstructorCall` evaluation to validate field values.
     pub(crate) struct_field_constraints:
-        HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+        Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
 }
 
 /// Compile a TIR into an execution plan.
@@ -124,86 +94,30 @@ pub fn compile(tir: &TIR, src: &NamedSource<Arc<String>>) -> Result<ExecPlan, Gr
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] for an invalid plan or cancellation.
+#[cfg(test)]
 pub fn compile_with_cancellation(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
+    let facts = check_execution_facts_with_cancellation(tir, src, cancellation)?;
+    compile_checked_with_cancellation(tir, &facts, src, cancellation)
+}
+
+/// Evaluate and validate compile-time facts needed by later execution planning.
+pub fn check_execution_facts_with_cancellation(
+    tir: &TIR,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CheckedExecutionFacts, GraphcalError> {
     cancellation.checkpoint()?;
     let const_values = eval_consts_from_tir_with_cancellation(tir, src, cancellation)?;
     cancellation.checkpoint()?;
-    let topo_order = build_runtime_dag(tir, src, cancellation)?;
-
-    let root = tir.root();
-    let assert_bodies: Vec<AssertBodyEntry> = root
-        .asserts()
-        .iter()
-        .map(|entry| {
-            let key = root.resolved_decl_key_for_local(&entry.name);
-            let body = root
-                .semantic()
-                .expressions
-                .asserts
-                .get(&key)
-                .cloned()
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!("semantic HIR body missing for assertion `{}`", entry.name),
-                    src: src.clone(),
-                    span: entry.span.into(),
-                })?;
-            Ok(AssertBodyEntry {
-                name: entry.name.clone(),
-                body,
-                span: entry.span,
-            })
-        })
-        .collect::<Result<Vec<_>, GraphcalError>>()?;
-
-    let plot_bodies: Vec<PlotBodyEntry> = tir
-        .root()
-        .plots()
-        .iter()
-        .map(|entry| PlotBodyEntry {
-            name: entry.name.clone(),
-            mark_type: entry.mark_type,
-            displayed: entry.displayed,
-        })
-        .collect();
-
-    let figure_bodies: Vec<FigureBodyEntry> = tir
-        .root()
-        .figures()
-        .iter()
-        .map(|entry| FigureBodyEntry {
-            name: entry.name.clone(),
-            plot_names: entry.plot_names.clone(),
-        })
-        .collect();
-
-    let layer_bodies: Vec<LayerBodyEntry> = tir
-        .root()
-        .layers()
-        .iter()
-        .map(|entry| LayerBodyEntry {
-            name: entry.name.clone(),
-            plot_names: entry.plot_names.clone(),
-        })
-        .collect();
-
-    // Resolve domain constraints from type annotations.
-    cancellation.checkpoint()?;
     let domain_constraints =
         resolve_domain_constraints_with_cancellation(tir, &const_values, src, cancellation)?;
-    // Resolve domain constraints declared on struct/union member fields.
     cancellation.checkpoint()?;
     let struct_field_constraints =
         resolve_struct_field_constraints_with_cancellation(tir, &const_values, src, cancellation)?;
-
-    // Validate struct field constraints against const struct values. Const
-    // evaluation runs before field constraints are resolved (the constraint
-    // bound exprs themselves need const values), so the violation check is
-    // deferred to here. Top-level struct-typed consts that violate any field
-    // constraint produce a compile-time `DomainViolation`.
     cancellation.checkpoint()?;
     check_const_struct_field_constraints_at_compile_time(
         tir,
@@ -212,8 +126,25 @@ pub fn compile_with_cancellation(
         src,
     )?;
 
+    Ok(CheckedExecutionFacts {
+        const_values: Arc::new(const_values),
+        domain_constraints: Arc::new(domain_constraints),
+        struct_field_constraints: Arc::new(struct_field_constraints),
+    })
+}
+
+/// Build a runtime schedule from facts retained by the checked project.
+pub fn compile_checked_with_cancellation(
+    tir: &TIR,
+    facts: &CheckedExecutionFacts,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<ExecPlan, GraphcalError> {
+    cancellation.checkpoint()?;
+    let topo_order = build_runtime_dag(tir, src, cancellation)?;
+
     Ok(ExecPlan {
-        const_values,
+        const_values: Arc::clone(&facts.const_values),
         imported_values: tir
             .root()
             .imported_bindings()
@@ -228,14 +159,10 @@ pub fn compile_with_cancellation(
             })
             .collect(),
         topo_order,
-        assert_bodies,
-        plot_bodies,
-        figure_bodies,
-        layer_bodies,
         assumes_map: tir.root().assumes_map().clone(),
         expected_fail: tir.root().expected_fail().clone(),
-        domain_constraints,
-        struct_field_constraints,
+        domain_constraints: Arc::clone(&facts.domain_constraints),
+        struct_field_constraints: Arc::clone(&facts.struct_field_constraints),
     })
 }
 
@@ -297,16 +224,13 @@ pub fn eval_consts_from_tir_with_cancellation(
             generic_nat_bindings: None,
             host_fns: None,
         };
-        let hir_expr = dag
-            .semantic()
-            .expressions
-            .consts
-            .get(key.as_resolved())
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("semantic TIR missing HIR const expression for `{name}`"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let hir_expr =
+            dag.const_expr(key.as_resolved())
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!("constant schedule references missing declaration `{name}"),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                })?;
         // Defense in depth for TIR values constructed or mutated outside the
         // compiler pipeline. Valid TIR rejects runtime DAG instantiation in a
         // const body during policy checking.
@@ -1427,6 +1351,27 @@ mod tests {
         )
         .unwrap();
         assert!((quantity(&plan.const_values[&resolved_key("two_g0")]) - 19.6133).abs() < 1e-10);
+    }
+
+    #[test]
+    fn checked_fact_stores_are_reused_by_runtime_planning() {
+        let (tir, src) = tir_from_source(
+            "const node lower: Dimensionless = 1.0;\n\
+             param x: Dimensionless(min: @lower, max: 3.0) = 2.0;",
+        );
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let facts = check_execution_facts_with_cancellation(&tir, &src, &cancellation).unwrap();
+        let plan = compile_checked_with_cancellation(&tir, &facts, &src, &cancellation).unwrap();
+
+        assert!(Arc::ptr_eq(&facts.const_values, &plan.const_values));
+        assert!(Arc::ptr_eq(
+            &facts.domain_constraints,
+            &plan.domain_constraints
+        ));
+        assert!(Arc::ptr_eq(
+            &facts.struct_field_constraints,
+            &plan.struct_field_constraints
+        ));
     }
 
     #[test]

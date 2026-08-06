@@ -137,14 +137,13 @@ fn resolve_defining_expr<'a>(
     if depth == 0 {
         return Ok(None);
     }
-    let exprs = &ctx.tir.root().semantic().expressions;
-    let decl_expr = |name: &graphcal_compiler::syntax::decl_name::ResolvedDeclName| {
-        exprs.runtime_expr(name).or_else(|| exprs.consts.get(name))
-    };
+    let dag = ctx.current_dag.unwrap_or_else(|| ctx.tir.root());
+    let decl_expr =
+        |name: &graphcal_compiler::syntax::decl_name::ResolvedDeclName| dag.value_expr(name);
     let resolved = match &expr.kind {
         ExprKind::GraphRef(target) => decl_expr(&target.value),
         ExprKind::ConstRef(target) => match &target.value {
-            ConstRef::Decl(name) => exprs.consts.get(name),
+            ConstRef::Decl(name) => dag.value_expr(name),
             _ => None,
         },
         ExprKind::DagCall { output, .. } => decl_expr(&output.value),
