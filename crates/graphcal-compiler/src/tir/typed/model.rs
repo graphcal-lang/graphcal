@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -748,14 +748,6 @@ impl DagRegistry {
         }
     }
 
-    pub(crate) fn get_mut(&mut self, dag_id: &crate::dag_id::DagId) -> Option<&mut DagTIR> {
-        if dag_id == self.root.dag_id() {
-            Some(&mut self.root)
-        } else {
-            self.other_dags.get_mut(dag_id)
-        }
-    }
-
     /// Iterate over canonical identities and DAG bodies.
     pub fn iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
         std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
@@ -1021,6 +1013,17 @@ pub(crate) struct OverrideReconciliation {
     pub(crate) include_span: Span,
 }
 
+/// A module-owned nominal declaration that may be replaced at an include site.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "crate-only prevents the public model glob re-export from exposing checker internals"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum BindableNominalIdentity {
+    Index(ResolvedIndexName),
+    Type(ResolvedStructTypeName),
+}
+
 /// Authoritative semantic body facts for a checked DAG.
 ///
 /// The source-shaped declaration entries on [`DagTIR`] retain spans,
@@ -1048,6 +1051,9 @@ pub struct DagSemanticBody {
     /// Include override obligations keyed by the canonical param whose default
     /// must remain independent of the replaced nominal declarations.
     pub(crate) override_reconciliations: HashMap<ResolvedDeclName, Vec<OverrideReconciliation>>,
+    /// Module-owned `pub(bind)` index and type identities. Only these can
+    /// participate in include-time nominal override reconciliation.
+    pub(crate) bindable_nominals: HashSet<BindableNominalIdentity>,
     /// Canonical type definitions referenced by this DAG.
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.

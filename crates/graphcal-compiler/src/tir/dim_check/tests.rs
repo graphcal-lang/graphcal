@@ -186,6 +186,85 @@ fn compile_inline_dag_bodies_test(
 }
 
 #[test]
+fn override_dependency_summary_collects_each_default_nominal_use_once() {
+    let source = r"
+pub(bind) type Record { Record(x: Dimensionless) }
+pub type Fixed { Fixed(x: Dimensionless) }
+pub(bind) index Axis = { A, B };
+pub index FixedAxis = { A, B };
+pub type Wrapper<T: Type, I: Index> { Wrapper(value: T, values: Dimensionless[I]) }
+
+param record: Record = Record(x: 1.0);
+param fixed: Fixed = Fixed(x: 2.0);
+param values: Dimensionless[Axis] = { Axis.A: 3.0, Axis.B: 4.0 };
+param fixed_values: Dimensionless[FixedAxis] = {
+    FixedAxis.A: 5.0,
+    FixedAxis.B: 6.0,
+};
+param dependent: Dimensionless = @record.x + @fixed.x + match Axis.A {
+    Axis.A => 1.0,
+    Axis.B => 2.0,
+};
+param wrapped: Wrapper<Record, Axis> =
+    Wrapper<Record, Axis>(value: @record, values: @values);
+param fixed_wrapped: Wrapper<Fixed, FixedAxis> =
+    Wrapper<Fixed, FixedAxis>(value: @fixed, values: @fixed_values);
+";
+    let (tir, src) = module_aware_tir(source);
+    check_dimensions_tir(&tir, &src).unwrap();
+
+    let summary = collect_override_dependency_summary(&tir, &src).unwrap();
+    let owner = test_dag_id();
+    let record = NominalOverrideIdentity::Type(ResolvedStructTypeName::from_def(
+        owner.clone(),
+        crate::syntax::type_name::StructTypeName::expect_valid("Record"),
+    ));
+    let axis = NominalOverrideIdentity::Index(ResolvedIndexName::from_def(
+        owner.clone(),
+        crate::syntax::index_name::IndexName::expect_valid("Axis"),
+    ));
+    let dependencies = |param: &str| {
+        summary.get(&ResolvedDeclName::from_def(
+            owner.clone(),
+            DeclName::expect_valid(param),
+        ))
+    };
+
+    assert_eq!(
+        dependencies("record"),
+        Some(&HashSet::from([record.clone()]))
+    );
+    assert_eq!(dependencies("values"), Some(&HashSet::from([axis.clone()])));
+    assert_eq!(
+        dependencies("dependent"),
+        Some(&HashSet::from([record.clone(), axis.clone()]))
+    );
+    assert_eq!(
+        dependencies("wrapped"),
+        Some(&HashSet::from([record, axis]))
+    );
+    assert_eq!(dependencies("fixed"), None);
+    assert_eq!(dependencies("fixed_values"), None);
+    assert_eq!(dependencies("fixed_wrapped"), None);
+}
+
+#[test]
+fn override_dependency_summary_observes_cancellation() {
+    let source = r"
+pub(bind) type Record { Record(x: Dimensionless) }
+param record: Record = Record(x: 1.0);
+";
+    let (tir, src) = module_aware_tir(source);
+    let cancellation = crate::cancellation::CancellationSource::new();
+    cancellation.cancel();
+
+    assert!(matches!(
+        collect_override_dependency_summary_with_cancellation(&tir, &src, &cancellation.token(),),
+        Err(GraphcalError::Cancelled(_))
+    ));
+}
+
+#[test]
 fn cycle_detection_uses_semantic_dependencies() {
     use std::collections::BTreeSet;
 
