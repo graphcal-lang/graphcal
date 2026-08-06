@@ -115,7 +115,7 @@ Unit scale factors must be **positive and finite**. Static unit definitions such
 
 ### Unit Scoping
 
-Units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported units (`import app.units.{ unit mile };`). A module imported with an alias exposes its `pub` units under that alias — `import app.units as u;` makes the unit available as `u.mile`, and only as `u.mile`:
+Static units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported static units (`import app.units.{ unit mile };`). A module imported with an alias exposes its `pub const unit` declarations under that alias — `import app.units as u;` makes the static unit available as `u.mile`, and only as `u.mile`:
 
 ```
 import app.units as u;            // defines `pub const unit mile: Length = 1609.344 m;`
@@ -148,7 +148,15 @@ Dynamic unit definitions are fully checked even when the unit is never used. The
 
 Only the scale's concrete value is deferred until evaluation, after its referenced params and nodes have been computed. That value must be positive and finite; otherwise any declaration using the unit fails instead of receiving a fallback scale.
 
-A `pub` dynamic unit is also usable across a module-import boundary (`fx.EUR` after `import app.fx as fx;`, or `EUR` after `import app.fx.{ unit EUR };`). The defining module's evaluation resolves the scale — the expression references that module's own params — and the importer carries the resolved value as a fixed scale. If the defining module cannot be evaluated standalone (e.g., it has required params), using its dynamic unit in an importer fails at evaluation time with a scale-resolution error.
+A dynamic unit belongs to a concrete runtime instance because its scale can depend on that instance's parameter bindings. A pure `import` does not create a hidden default instance, so directly importing or referencing a dependency's dynamic unit is rejected (`M025`). Use an explicit include when the consumer needs the unit:
+
+```
+include app.fx(usd_per_eur: 1.20) as fx;
+
+param invoice: fx.Money = 100.0 fx.EUR;
+```
+
+A module import can still make the file callable as a DAG. Dynamic units used internally by `@fx(...).output` are evaluated for that explicit call instance; they are simply not available as imported unit values in the caller.
 
 ### Using Units
 

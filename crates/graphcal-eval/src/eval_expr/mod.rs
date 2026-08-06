@@ -29,8 +29,8 @@ use crate::domain_check::ResolvedDomainConstraint;
 
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 pub use hir_eval::{HirLocalValueMap, eval_hir_expr};
+pub use unit_scale::resolve_unit_scale;
 pub(in crate::eval_expr) use unit_scale::{checked_finite_quantity, checked_unit_scaled_value};
-pub use unit_scale::{resolve_exportable_dynamic_unit_scales, resolve_unit_scale};
 pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.

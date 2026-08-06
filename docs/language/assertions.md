@@ -312,42 +312,32 @@ evaluation (computed only when requested, not eagerly during graph evaluation).
 
 ## Assertions in Multi-File Projects
 
-When a file is imported (either selectively or as a module), **all assertions
-in that file are automatically evaluated**. You do not need to explicitly
-import assertions for them to be checked -- they run as part of the imported
-file's evaluation.
+An `import` loads a module blueprint for compile-time name resolution; it does
+not create or evaluate a runtime instance. Consequently, importing a file does
+not run its assertions, and assertions cannot be imported as values (`M024`).
+
+Assertions run for each explicit `include` instance. This keeps their outcomes
+attached to the same parameter bindings and runtime values that they validate:
 
 ```
 // checks.gcl
 param limit: Dimensionless = 100.0;
-assert limit_positive = @limit > 0.0;
+pub assert limit_positive = @limit > 0.0;
 ```
 
 ```
 // main.gcl
-import checks.{limit};
-// limit_positive is automatically evaluated and reported,
-// even though it was not listed in the import braces.
-```
-
-This applies transitively: if `a.gcl` imports `b.gcl`, which imports `c.gcl`,
-then assertions in all three files are evaluated and reported.
-
-In diamond imports (where two files import the same dependency), the shared
-dependency is evaluated once and its assertions are reported once.
-
-### Using `#[assumes]` with imported assertions
-
-To reference an imported assertion in `#[assumes(...)]`, you must explicitly
-import it by name:
-
-```
-// main.gcl
-import checks.{limit, limit_positive};
+include checks(limit: 50.0).{ limit, limit_positive };
 
 #[assumes(limit_positive)]
 node ratio: Dimensionless = @limit / 2.0;
 ```
+
+Selecting an assertion in the include braces exposes its instance-local name
+for `#[assumes(...)]`; the assertion is not referenced with `@`. Assertions
+inside nested includes also run as part of each outer concrete instance. Two
+separate includes therefore produce separate outcomes, even when their
+bindings happen to be equal.
 
 ## Error Codes
 

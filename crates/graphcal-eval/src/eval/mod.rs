@@ -20,6 +20,7 @@ pub use project::{
     ParameterPosition, ParameterValue, PreparedModel, PreparedProject, ProjectCompiler,
     TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome, check_project,
     check_project_with_host_fns, check_project_with_host_fns_and_cancellation,
+    check_project_with_host_metadata, check_project_with_host_metadata_and_cancellation,
     compile_and_eval_from_project, compile_and_eval_from_project_with_cancellation,
     compile_and_eval_from_project_with_host_fns,
     compile_and_eval_from_project_with_host_fns_and_cancellation, compile_and_eval_project,

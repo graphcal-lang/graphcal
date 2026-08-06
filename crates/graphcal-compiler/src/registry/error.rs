@@ -182,6 +182,36 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cannot `import` assertion `{name}` from a module blueprint")]
+    #[diagnostic(
+        code(graphcal::M024),
+        help(
+            "assertions run in concrete DAG instances; use `include path(...).{{ {name} }}` or evaluate the library as an entry DAG"
+        )
+    )]
+    ImportAssertionItem {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("an imported module has no assertion outcome")]
+        span: SourceSpan,
+    },
+
+    #[error("cannot `import` runtime-dependent unit `{name}`")]
+    #[diagnostic(
+        code(graphcal::M025),
+        help(
+            "declare the unit with `const unit`, or keep it inside an explicitly instantiated DAG"
+        )
+    )]
+    ImportRuntimeUnit {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this unit scale depends on a runtime instance")]
+        span: SourceSpan,
+    },
+
     #[error("attribute `hidden` does not apply to include item `{name}`")]
     #[diagnostic(
         code(graphcal::A018),
@@ -2057,6 +2087,8 @@ impl GraphcalError {
             | Self::CompositionReferencesNonPlot { src, .. }
             | Self::DuplicatePlotReference { src, .. }
             | Self::ImportPlotItem { src, .. }
+            | Self::ImportAssertionItem { src, .. }
+            | Self::ImportRuntimeUnit { src, .. }
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownFunction { src, .. }

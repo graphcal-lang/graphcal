@@ -1520,6 +1520,76 @@ impl UnfrozenIR {
         Ok(())
     }
 
+    /// Interleave declaration blocks merged after local lowering at their
+    /// include sites, while preserving each block's producer source order.
+    pub fn interleave_merged_source_order(
+        &mut self,
+        mut blocks: Vec<(Span, Vec<(ScopedName, DeclCategory)>)>,
+    ) {
+        fn entry_span(ir: &UnfrozenIR, name: &ScopedName, category: DeclCategory) -> Option<Span> {
+            match category {
+                DeclCategory::Const => ir
+                    .consts
+                    .iter()
+                    .find(|entry| &entry.name == name)
+                    .map(|entry| entry.span),
+                DeclCategory::Param => ir
+                    .params
+                    .iter()
+                    .find(|entry| &entry.name == name)
+                    .map(|entry| entry.span),
+                DeclCategory::Node => ir
+                    .nodes
+                    .iter()
+                    .find(|entry| &entry.name == name)
+                    .map(|entry| entry.span),
+                DeclCategory::Assert => ir
+                    .asserts
+                    .iter()
+                    .find(|entry| &entry.name == name)
+                    .map(|entry| entry.span),
+                DeclCategory::Plot => ir
+                    .plots
+                    .iter()
+                    .find(|entry| &entry.name == name)
+                    .map(|entry| entry.span),
+                DeclCategory::Figure => ir
+                    .figures
+                    .iter()
+                    .find(|entry| &entry.name == name)
+                    .map(|entry| entry.decl.name.span),
+                DeclCategory::Layer => ir
+                    .layers
+                    .iter()
+                    .find(|entry| &entry.name == name)
+                    .map(|entry| entry.decl.name.span),
+            }
+        }
+
+        blocks.sort_by_key(|(span, _)| span.offset());
+        let merged_count = blocks
+            .iter()
+            .map(|(_, entries)| entries.len())
+            .sum::<usize>();
+        let local_order = std::mem::take(&mut self.source_order);
+        let mut interleaved = Vec::with_capacity(local_order.len() + merged_count);
+        let mut blocks = blocks.into_iter().peekable();
+        for entry in local_order {
+            let offset = entry_span(self, &entry.0, entry.1).map_or(usize::MAX, Span::offset);
+            while blocks
+                .peek()
+                .is_some_and(|(span, _)| span.offset() < offset)
+            {
+                if let Some((_, entries)) = blocks.next() {
+                    interleaved.extend(entries);
+                }
+            }
+            interleaved.push(entry);
+        }
+        interleaved.extend(blocks.flat_map(|(_, entries)| entries));
+        self.source_order = interleaved;
+    }
+
     /// Merge an instantiated dependency's IR into this IR.
     ///
     /// All declarations from the dependency are prefixed with `prefix.` and
@@ -1552,6 +1622,7 @@ impl UnfrozenIR {
         index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
         type_bindings: &HashMap<StructTypeName, StructTypeName>,
         dim_bindings: &HashMap<DimName, DimName>,
+        assertion_aliases: &HashMap<DeclName, DeclName>,
         import_item_attributes: &HashMap<DeclName, Vec<crate::desugar::desugared_ast::Attribute>>,
         requested_plots: &HashMap<DeclName, RequestedPlot>,
         importer_owner: &crate::dag_id::DagId,
@@ -1609,6 +1680,33 @@ impl UnfrozenIR {
         let mut all_dep_names = dep_names.clone();
         all_dep_names.extend(dep_scoped_names.iter().map(|name| name.member().clone()));
         let dep_names = &all_dep_names;
+        let merged_assert_name = |name: &ScopedName| {
+            if name.is_qualified() {
+                name.within_scope(prefix)
+            } else {
+                assertion_aliases.get(name.member()).map_or_else(
+                    || name.within_scope(prefix),
+                    |alias| ScopedName::local(alias.clone()),
+                )
+            }
+        };
+        let merged_source_order = dep
+            .source_order
+            .iter()
+            .filter_map(|(name, category)| match category {
+                DeclCategory::Const | DeclCategory::Param | DeclCategory::Node => {
+                    Some((name.within_scope(prefix), *category))
+                }
+                DeclCategory::Assert => Some((merged_assert_name(name), *category)),
+                DeclCategory::Plot => requested_plots.get(name.member()).map(|requested| {
+                    (
+                        ScopedName::local(requested.alias.clone()),
+                        DeclCategory::Plot,
+                    )
+                }),
+                DeclCategory::Figure | DeclCategory::Layer => None,
+            })
+            .collect::<Vec<_>>();
 
         // Dynamic units share the include's value-instance scope. Their unit
         // name remains in the file-level unit namespace, while graph references
@@ -1643,7 +1741,7 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.within_scope(prefix);
             self.consts.push(UnfrozenConstEntry {
-                name: prefixed.clone(),
+                name: prefixed,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
@@ -1652,7 +1750,6 @@ impl UnfrozenIR {
                 type_src: entry.type_src.or_dependency(dep_src),
                 body_src: entry.body_src.or_dependency(dep_src),
             });
-            self.source_order.push((prefixed, DeclCategory::Const));
         }
 
         // Merge params — replace defaults with bindings where provided.
@@ -1689,7 +1786,7 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             self.params.push(UnfrozenParamEntry {
-                name: prefixed.clone(),
+                name: prefixed,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 default_expr: entry.default_expr,
@@ -1699,7 +1796,6 @@ impl UnfrozenIR {
                 default_src: entry.default_src,
                 override_reconciliations: entry.override_reconciliations,
             });
-            self.source_order.push((prefixed, DeclCategory::Param));
         }
 
         // Merge nodes
@@ -1712,7 +1808,7 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             let prefixed = entry.name.within_scope(prefix);
             self.nodes.push(UnfrozenNodeEntry {
-                name: prefixed.clone(),
+                name: prefixed,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
@@ -1721,7 +1817,6 @@ impl UnfrozenIR {
                 type_src: entry.type_src.or_dependency(dep_src),
                 body_src: entry.body_src.or_dependency(dep_src),
             });
-            self.source_order.push((prefixed, DeclCategory::Node));
         }
 
         // Merge asserts
@@ -1749,16 +1844,15 @@ impl UnfrozenIR {
                     prefix_expr_refs(tolerance, prefix, dep_names, dep_scoped_names);
                 }
             }
-            let prefixed = entry.name.within_scope(prefix);
+            let merged_name = merged_assert_name(&entry.name);
             self.asserts.push(UnfrozenAssertEntry {
-                name: prefixed.clone(),
+                name: merged_name.clone(),
                 body: entry.body,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
                 body_src: entry.body_src.or_dependency(dep_src),
             });
-            self.assert_names.insert(prefixed.clone());
-            self.source_order.push((prefixed, DeclCategory::Assert));
+            self.assert_names.insert(merged_name);
         }
 
         // Merge only the plots requested by the include's brace list (#847):
@@ -1787,14 +1881,13 @@ impl UnfrozenIR {
             }
             let local = ScopedName::local(requested.alias.clone());
             self.plots.push(UnfrozenPlotEntry {
-                name: local.clone(),
+                name: local,
                 decl: entry.decl,
                 body_resolution_owner: merge_resolution_owner(entry.body_resolution_owner),
                 span: entry.span,
                 body_src: entry.body_src.or_dependency(dep_src),
                 displayed: !requested.hidden,
             });
-            self.source_order.push((local, DeclCategory::Plot));
         }
 
         // Dep figures and layers do not merge: they cannot be requested by a
@@ -1802,7 +1895,7 @@ impl UnfrozenIR {
 
         // Merge assumes_map and expected_fail
         for (assert_name, assumers) in dep.assumes_map {
-            let prefixed_assert = assert_name.within_scope(prefix);
+            let prefixed_assert = merged_assert_name(&assert_name);
             let prefixed_assumers: Vec<ScopedName> = assumers
                 .iter()
                 .map(|assumer| assumer.within_scope(prefix))
@@ -1813,7 +1906,7 @@ impl UnfrozenIR {
                 .extend(prefixed_assumers);
         }
         for (assert_name, ef) in dep.expected_fail {
-            let prefixed = assert_name.within_scope(prefix);
+            let prefixed = merged_assert_name(&assert_name);
 
             // If the expected_fail references overridden indexes, filter or drop.
             if index_bindings.is_empty() {
@@ -1860,7 +1953,7 @@ impl UnfrozenIR {
                     .parse::<crate::syntax::attribute::AttributeName>()
                     == Ok(crate::syntax::attribute::AttributeName::ExpectedFail)
                 {
-                    let prefixed_assert = ScopedName::local(orig_name.clone()).with_prefix(prefix);
+                    let prefixed_assert = merged_assert_name(&ScopedName::local(orig_name.clone()));
                     let ef = crate::ir::resolve::names::parse_expected_fail_args(
                         &attr.args,
                         importer_src,
@@ -1873,6 +1966,8 @@ impl UnfrozenIR {
         // Hidden imports used by dependency expressions receive the same
         // lexical instance prefix as those expressions. Their canonical target,
         // declared type, and optional value remain one unchanged record.
+        self.source_order.extend(merged_source_order);
+
         for (name, binding) in dep.imported_bindings {
             let lexical = prefix_dep(&name, prefix, dep_names, dep_scoped_names);
             if self
@@ -5359,6 +5454,7 @@ mod tests {
                 &instance,
                 &HashMap::new(),
                 &dep_names,
+                &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),
                 &HashMap::new(),

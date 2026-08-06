@@ -1202,17 +1202,25 @@ include project.lib.budget(
 node project_cost: Dimensionless = @total;
 ```
 
-## Assertions in Imported Files
+## Assertions and Module Boundaries
 
-When a file is imported (or its declarations included), **all of its
-assertions are automatically evaluated and reported**, regardless of
-whether they are explicitly listed. This ensures that safety checks in
-library files are never silently skipped.
+`import` is compile-time only and never creates a hidden default instance, so
+it does not evaluate or propagate assertions. Attempting to import an assertion
+is rejected (`M024`).
 
-To use an imported assertion in `#[assumes(...)]`, you must import it
-by name. See
-[Assertions](assertions.md#assertions-in-multi-file-projects) for
-details.
+Every explicit `include` creates a concrete runtime instance and evaluates the
+assertions in that instance, including nested included assertions. Select an
+assertion in the include braces when an importer declaration needs to name that
+instance-local outcome in `#[assumes(...)]`:
+
+```graphcal
+include project.checks(limit: 50.0).{ limit, limit_positive };
+
+#[assumes(limit_positive)]
+node ratio: Dimensionless = @limit / 2.0;
+```
+
+See [Assertions](assertions.md#assertions-in-multi-file-projects) for details.
 
 ## Evaluation Entry Point
 

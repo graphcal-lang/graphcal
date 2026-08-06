@@ -12,7 +12,6 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitRef};
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
-use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::span::Spanned;
@@ -29,11 +28,9 @@ use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{
-    IndexBindingTarget, PositiveFiniteScale, Registry, RegistryBuilder,
-};
+use graphcal_compiler::registry::types::{IndexBindingTarget, Registry, RegistryBuilder};
 
-use super::types::{AssertResult, CompileError, DeclType, EvalResult, NodeError, Value};
+use super::types::{CompileError, DeclType, EvalResult, NodeError, Value};
 
 mod imports;
 mod lowering;
@@ -63,9 +60,8 @@ type DepToImporter<T> = HashMap<T, T>;
 /// Dependency index port to a resolved importer-side declared or structural axis.
 type IndexBindings = HashMap<IndexName, IndexBindingTarget>;
 
-/// One evaluated value retained for output assembly across project-file
-/// boundaries.
-type EvaluatedOutputValue = (ScopedName, Result<Value, NodeError>, DeclType);
+/// One typed value in normal result assembly.
+type OutputValue = (ScopedName, Result<Value, NodeError>, DeclType);
 
 /// Presentation aliases for private selective-include scopes.
 ///
@@ -163,45 +159,24 @@ fn rewrite_alias_field_access(expr: &mut Expr, qualified_pairs: &HashSet<Qualifi
 }
 
 // ---------------------------------------------------------------------------
-// Per-file evaluation types and pipeline
+// Per-file compilation types and pipeline
 // ---------------------------------------------------------------------------
 
-/// The compiled dependency artifact for a single file in the per-file pipeline.
+/// Pure compile-time artifact for one dependency module.
 ///
-/// Files with required params or indexes cannot be evaluated standalone, but
-/// downstream compile-time imports still need their registry, public names,
-/// declared types, const values, and DAG metadata. For those files,
-/// `runtime_available` is `false` and `values` / `assertions` are empty.
-struct EvaluatedFile {
-    /// Whether runtime values and assertion results were evaluated.
-    runtime_available: bool,
-    /// Evaluated runtime values (params + nodes): name → `RuntimeValue`.
-    values: HashMap<DeclName, RuntimeValue>,
-    /// Evaluated const values: name → `RuntimeValue`.
+/// It contains interfaces, canonical definitions, checked DAG templates,
+/// constants, and extern signatures. Runtime node values, assertion outcomes,
+/// resolved dynamic scales, rendered plots, and presentation data are absent.
+struct ModuleArtifact {
+    /// Compile-time constants keyed by dependency-local name.
     const_values: HashMap<DeclName, RuntimeValue>,
-    /// Complete evaluated values in source order, retained so an empty-argument
-    /// file include can expose its instance internals in the all-values view
-    /// without changing the include's pre-evaluated execution path.
-    evaluated_values: Vec<EvaluatedOutputValue>,
-    /// Declared types for all consts/params/nodes in this file.
+    /// Declared types for compile-time constants and DAG interfaces.
     declared_types: HashMap<ScopedName, DeclaredType>,
-    /// Assertion results from this file: name → (result, span).
-    /// Names keep alias qualification for include-instantiated asserts (#813).
-    assertions: HashMap<ScopedName, (AssertResult, Span)>,
-    /// Evaluated plot specs of this file, keyed by their local (leaf) name.
-    /// Consumers request them through include brace lists (#847).
-    plots: HashMap<DeclName, super::types::PlotSpec>,
-    /// The file's frozen registry (for type-system import by downstream files).
+    /// The file's frozen frontend registry.
     registry: Registry,
     /// Explicit exports and annotation-free `param` input ports, classified
     /// separately for import/include boundary checks.
     external_surface: ExternalDeclSurface,
-    /// Concrete scale factors for this file's own dynamic units, resolved
-    /// against the file's evaluated runtime values. Module importers convert
-    /// the dynamic units to static scales at registry-merge time — the scale
-    /// expression references this file's params and cannot be re-evaluated in
-    /// the importer's context. Empty when `runtime_available` is `false`.
-    resolved_dynamic_unit_scales: HashMap<UnitRef, PositiveFiniteScale>,
     /// Canonical nominal dependencies of producer parameter defaults, reusable
     /// at configured include boundaries before body substitution.
     override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,
@@ -222,19 +197,10 @@ struct EvaluatedFile {
     >,
 }
 
-impl EvaluatedFile {
-    /// Check whether this file has an evaluated top-level assertion with the
-    /// given (bare local) name.
-    fn has_assert(&self, name: &NameAtom) -> bool {
-        self.assertions
-            .contains_key(&ScopedName::from(name.clone()))
-    }
-}
-
 /// The result of compiling a single file within a project context.
 ///
-/// Produced by [`compile_single_file_in_project`] and consumed by the
-/// per-file evaluation and TIR compilation pipelines.
+/// Produced by [`compile_single_file_in_project`] and consumed by project
+/// checking or root runtime preparation.
 struct CompiledFile {
     tir: graphcal_compiler::tir::typed::TIR,
     declared_types: HashMap<ScopedName, DeclaredType>,
@@ -248,14 +214,8 @@ struct CompiledFile {
     /// The set contains the file's own declarations, imported names, selected
     /// include aliases, and projectable outputs of whole-instance includes.
     output_surface: HashSet<ScopedName>,
-    /// Complete values from pre-evaluated empty-argument file includes. These
-    /// are hidden from the surface view but retained for `EvalOutputView::All`.
-    included_debug_values: Vec<EvaluatedOutputValue>,
     /// Human-readable aliases for unambiguous private include scopes.
     include_debug_names: IncludeDebugNameMap,
-    /// Plot specs requested from standalone-evaluated dependencies via
-    /// include brace lists, renamed to their local aliases (#847).
-    included_plots: Vec<super::types::PlotSpec>,
 }
 
 /// One whole-project compilation session.
@@ -266,7 +226,7 @@ struct CompiledFile {
 /// project again.
 pub struct ProjectCompiler<'project> {
     project: &'project crate::loader::LoadedProject,
-    host_fns: crate::host_fns::HostFunctionRegistry,
+    host_metadata: crate::host_fns::HostFunctionMetadata,
     cancellation: graphcal_compiler::cancellation::CancellationToken,
     module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
 }
@@ -280,11 +240,11 @@ impl<'project> ProjectCompiler<'project> {
     /// form one canonical project scope.
     pub fn new(
         project: &'project crate::loader::LoadedProject,
-        host_fns: &crate::host_fns::HostFunctionRegistry,
+        host_metadata: &crate::host_fns::HostFunctionMetadata,
     ) -> Result<Self, CompileError> {
         Self::with_cancellation(
             project,
-            host_fns,
+            host_metadata,
             &graphcal_compiler::cancellation::CancellationToken::unbounded(),
         )
     }
@@ -296,7 +256,7 @@ impl<'project> ProjectCompiler<'project> {
     /// Returns a module-resolution diagnostic or cancellation.
     pub fn with_cancellation(
         project: &'project crate::loader::LoadedProject,
-        host_fns: &crate::host_fns::HostFunctionRegistry,
+        host_metadata: &crate::host_fns::HostFunctionMetadata,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, CompileError> {
         cancellation.checkpoint()?;
@@ -307,7 +267,7 @@ impl<'project> ProjectCompiler<'project> {
             .map_err(|error| lowering::module_resolve_compile_error(error, root_source))?;
         Ok(Self {
             project,
-            host_fns: host_fns.clone(),
+            host_metadata: host_metadata.clone(),
             cancellation: cancellation.clone(),
             module_resolver,
         })
@@ -321,7 +281,7 @@ impl<'project> ProjectCompiler<'project> {
     pub fn check(self) -> Result<CheckedProject, CompileError> {
         pipeline::check_project_perfile(
             self.project,
-            &self.host_fns,
+            &self.host_metadata,
             self.module_resolver,
             &self.cancellation,
         )
@@ -338,7 +298,6 @@ pub struct CheckedProject {
     source: NamedSource<Arc<String>>,
     root_ast: graphcal_compiler::desugar::desugared_ast::File,
     module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    dependency_assertions: Vec<(ScopedName, AssertResult, Span)>,
 }
 
 impl std::fmt::Debug for CheckedProject {
@@ -444,6 +403,9 @@ struct DeferredDagInclude {
     /// For selective includes: the selected names and their local aliases.
     /// `None` for module-form includes (all names accessible via `prefix::`).
     selective_names: Option<Vec<ImportAlias>>,
+    /// Selected assertions exposed in this concrete instance, keyed from the
+    /// producer leaf to the importer-local assertion name.
+    assertion_aliases: HashMap<DeclName, DeclName>,
     /// Values this include intentionally exposes on the importer's output
     /// surface. Merged implementation values not listed here remain available
     /// to the all-values debug view.
@@ -526,12 +488,20 @@ struct ImportContext<'a> {
     /// importer's registry builder before its own declarations register.
     extra_registry_builders: Vec<ModuleRegistryImport<'a>>,
     deferred_dag_includes: Vec<DeferredDagInclude>,
-    /// Complete values from empty-argument file includes, qualified by their
-    /// logical instance prefix for the all-values output view.
-    included_debug_values: Vec<EvaluatedOutputValue>,
-    /// Plot specs requested from standalone-evaluated dependencies via
-    /// include brace lists, renamed to their local aliases (#847).
-    included_plot_specs: Vec<super::types::PlotSpec>,
+}
+
+/// Whether a registry merge crosses a pure import boundary or belongs to one
+/// concrete include instance.
+#[derive(Debug, Clone, Copy)]
+enum DynamicUnitBoundary {
+    PureImport,
+    ConcreteInstance,
+}
+
+impl DynamicUnitBoundary {
+    const fn includes_dynamic_units(self) -> bool {
+        matches!(self, Self::ConcreteInstance)
+    }
 }
 
 /// A module-imported dependency's registry surface, queued for merging into
@@ -545,25 +515,18 @@ struct ModuleRegistryImport<'a> {
     /// The import alias that keys the dependency's `pub` units in the
     /// importer's unit scope (`alias.unit`).
     unit_alias: ModuleAliasName,
-    /// Concrete scales for the dependency's dynamic units, resolved against
-    /// its evaluated runtime values. Dynamic units merge as static scales —
-    /// their scale expressions reference the dependency's own params and
-    /// cannot be re-evaluated in the importer's context.
-    resolved_dynamic_scales: &'a HashMap<UnitRef, PositiveFiniteScale>,
+    /// Runtime-dependent units cross only concrete instance boundaries.
+    dynamic_unit_boundary: DynamicUnitBoundary,
     /// The import-statement span, localizing merge-conflict diagnostics.
     import_span: Span,
 }
 
-/// Result of looking up a single selective import item in an `EvaluatedFile`.
+/// Result of looking up one selective import item in a [`ModuleArtifact`].
 #[derive(Debug)]
 pub(in crate::eval::project) enum SelectiveImportResult {
-    /// A const value was found and registered.
+    /// A compile-time constant was found and registered.
     Const,
-    /// A runtime value (param/node) was found and registered.
-    Runtime,
-    /// An assert was found (caller must handle assert-specific registration).
-    Assert,
-    /// The name was not found in the evaluated file's values.
+    /// The name was not a compile-time constant.
     NotFound,
 }
 
@@ -833,9 +796,21 @@ pub fn check_project_with_host_fns(
     project: &crate::loader::LoadedProject,
     host_fns: &crate::host_fns::HostFunctionRegistry,
 ) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_fns_and_cancellation(
+    check_project_with_host_metadata(project, &host_fns.metadata())
+}
+
+/// Check a project using non-callable extern signature metadata.
+///
+/// # Errors
+///
+/// Returns a compile or plugin-signature diagnostic.
+pub fn check_project_with_host_metadata(
+    project: &crate::loader::LoadedProject,
+    host_metadata: &crate::host_fns::HostFunctionMetadata,
+) -> Result<CheckedProject, CompileError> {
+    check_project_with_host_metadata_and_cancellation(
         project,
-        host_fns,
+        host_metadata,
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
 }
@@ -850,12 +825,25 @@ pub fn check_project_with_host_fns_and_cancellation(
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CheckedProject, CompileError> {
-    ProjectCompiler::with_cancellation(project, host_fns, cancellation)?.check()
+    check_project_with_host_metadata_and_cancellation(project, &host_fns.metadata(), cancellation)
+}
+
+/// Check a project with non-callable metadata and cooperative cancellation.
+///
+/// # Errors
+///
+/// Returns a compile, plugin-signature, or cancellation diagnostic.
+pub fn check_project_with_host_metadata_and_cancellation(
+    project: &crate::loader::LoadedProject,
+    host_metadata: &crate::host_fns::HostFunctionMetadata,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CheckedProject, CompileError> {
+    ProjectCompiler::with_cancellation(project, host_metadata, cancellation)?.check()
 }
 
 /// Compile a [`LoadedProject`](crate::loader::LoadedProject) to TIR without evaluating.
 ///
-/// Resolves imports from `use` declarations in the root file, lowers to IR,
+/// Resolves project imports and includes, lowers to IR,
 /// type-resolves, and runs all checks (recursion, dimensions). The project may
 /// have been loaded from disk, constructed from in-memory source, or a mix of
 /// both (via [`graphcal_io::OverlayFileSystem`] + [`crate::loader::load_project`]).
@@ -881,8 +869,8 @@ pub fn compile_to_tir_from_project_with_cancellation(
     project: &crate::loader::LoadedProject,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::tir::typed::TIR, CompileError> {
-    // Phase A default: dependency-file extern calls evaluate through the
-    // built-in demo registry (see `crate::host_fns`).
+    // The demo registry supplies static extern signatures; checking never
+    // invokes its host closures.
     compile_to_tir_from_project_with_host_fns_and_cancellation(
         project,
         &crate::host_fns::demo_registry(),
@@ -890,13 +878,10 @@ pub fn compile_to_tir_from_project_with_cancellation(
     )
 }
 
-/// Like [`compile_to_tir_from_project`], with an embedder-supplied host
-/// function registry backing extern (plugin) calls in dependency files.
+/// Like [`compile_to_tir_from_project`], using the non-callable metadata from
+/// an embedder-supplied host registry to validate extern declarations.
 ///
-/// Compile-only consumers still evaluate standalone dependency files so
-/// importers can bind their values; a dependency node calling an extern
-/// function needs the same registry evaluation uses, or its value (and
-/// everything importing it) degrades to a per-node failure.
+/// Static checking never invokes host functions.
 ///
 /// # Errors
 ///
@@ -962,11 +947,9 @@ pub fn prepare_from_project_with_host_fns_and_cancellation(
 
 /// Compile and evaluate a [`LoadedProject`](crate::loader::LoadedProject).
 ///
-/// Uses per-file evaluation: each file is compiled in topological order, and
-/// files that can run standalone are evaluated independently. Library files
-/// with required runtime inputs keep compile-time artifacts only. Import
-/// declarations bind evaluated dependency values when available. All evaluated
-/// assertions are aggregated.
+/// Compiles every module to a pure artifact in topological order, prepares the
+/// checked root once, and evaluates only the root's explicit runtime instances.
+/// Imports never create hidden default instances.
 ///
 /// # Errors
 ///
@@ -1001,8 +984,8 @@ pub fn compile_and_eval_from_project_with_cancellation(
     overrides: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<EvalResult, CompileError> {
-    // Phase A default: no real plugins exist yet, so the built-in demo
-    // registry is the standard embedder injection (see `crate::host_fns`).
+    // The built-in demo registry is the standard embedder injection for
+    // runtime host calls (see `crate::host_fns`).
     compile_and_eval_from_project_with_host_fns_and_cancellation(
         project,
         overrides,
@@ -1069,8 +1052,8 @@ pub fn compile_and_eval_from_project_with_host_fns_and_cancellation(
 
 /// Full pipeline for multi-file projects with parameter overrides.
 ///
-/// Loads all files referenced by `use` declarations starting from `root_path`,
-/// collects imported declarations, and evaluates the root file with imports merged.
+/// Loads every module reachable from `root_path`, checks imports and includes,
+/// and evaluates the root's explicit runtime graph.
 ///
 /// All filesystem access goes through the provided [`graphcal_io::FileSystemReader`].
 ///

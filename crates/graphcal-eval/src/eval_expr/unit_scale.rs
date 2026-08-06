@@ -1,59 +1,12 @@
-use std::collections::HashMap;
-
 use graphcal_compiler::hir::ResolvedUnitExpr;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::registry::types::{PositiveFiniteScale, UnitScale};
+use graphcal_compiler::registry::types::UnitScale;
 use graphcal_compiler::syntax::ast::MulDivOp;
-use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::span::Span;
 
 use super::numeric;
 use super::{EvalContext, HirLocalValueMap, RuntimeValueMap, hir_eval::eval_hir_expr};
-
-/// Resolve the concrete scale factor of each of the file's own dynamic units
-/// against the file's final runtime values.
-///
-/// The resulting map is exported through the project pipeline so that
-/// module-importing files can use the dynamic units as static scales — the
-/// scale expression references this file's params and cannot be re-evaluated
-/// in the importer's context.
-///
-/// Compiler-invalid scale bodies never reach this path: strict lowering,
-/// policy checking, and scalar-Dimensionless type checking happen before
-/// evaluation. A data-dependent non-positive or non-finite runtime scale is
-/// omitted from the export map and remains a loud error if an importer uses
-/// that unit. Qualified imported units are skipped because their owning module
-/// exports its own resolved scales.
-pub fn resolve_exportable_dynamic_unit_scales(
-    values: &RuntimeValueMap,
-    ctx: &EvalContext<'_>,
-) -> HashMap<UnitRef, PositiveFiniteScale> {
-    let empty_locals = HirLocalValueMap::root();
-    ctx.tir
-        .root()
-        .semantic()
-        .dynamic_unit_scales
-        .values()
-        .filter(|entry| !entry.spelling.is_qualified())
-        .filter_map(|entry| {
-            let info = ctx.tir.unit_info(&entry.unit)?;
-            let UnitScale::Dynamic {
-                base_unit_scale, ..
-            } = &info.scale
-            else {
-                return None;
-            };
-            let entry_ctx = ctx.with_src(&entry.src);
-            let scale_val = eval_hir_expr(&entry.expr, values, &empty_locals, &entry_ctx).ok()?;
-            let RuntimeValue::Quantity(scale_f64) = scale_val else {
-                return None;
-            };
-            let combined = PositiveFiniteScale::new(scale_f64 * base_unit_scale.get()).ok()?;
-            Some((entry.spelling.clone(), combined))
-        })
-        .collect()
-}
 
 /// Build a quantity runtime value after validating that it is finite.
 pub(in crate::eval_expr) fn checked_finite_quantity(

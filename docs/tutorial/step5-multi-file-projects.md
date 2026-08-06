@@ -195,14 +195,14 @@ import <pkg>.b.{x};
 import <pkg>.a.{y};   // ERROR: circular import
 ```
 
-## Assertions Are Always Checked
+## Assertions Belong to Explicit Instances
 
-When you import a file, **all of its assertions are automatically
-evaluated**, even if you don't import them by name. This ensures
-that safety invariants in library files are never silently skipped.
-See
-[Assertions](../language/assertions.md#assertions-in-multi-file-projects)
-for details.
+An `import` loads compile-time names without evaluating the module, so it does
+not run assertions. Every explicit `include` instance runs its own assertions
+with that instance's bindings. Select an assertion in the include braces when
+you need its name in `#[assumes(...)]`. See
+[Assertions](../language/assertions.md#assertions-in-multi-file-projects) for
+details.
 
 ## What You Learned
 
@@ -214,7 +214,8 @@ for details.
   exactly the names you write into scope.
 - `import` is for compile-time names; runtime values cross file
   boundaries via `include`.
-- Circular imports and assertion checks are handled automatically.
+- Circular imports are detected automatically; assertions run for explicit
+  include instances.
 
 ## Next Step
 

@@ -553,7 +553,7 @@ pub type Bar { Bar(inner: lib.Foo) }
 }
 
 #[test]
-fn runtime_include_from_library_with_required_runtime_inputs_is_user_error() {
+fn explicit_include_reports_its_missing_required_index() {
     let (_dir, root) = write_required_runtime_input_type_project(
         r"
 include pkg.lib().{ cost };
@@ -561,12 +561,13 @@ include pkg.lib().{ cost };
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default());
-    let message = format!("{result:?}");
     assert!(
-        result.is_err()
-            && message.contains("cannot include runtime item `cost`")
-            && !message.contains("internal"),
-        "BUG: runtime import from unevaluated library should be a user-facing diagnostic: {message}",
+        matches!(
+            &result,
+            Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound { name, .. }))
+                if name == "Phase"
+        ),
+        "explicit instance should report its unsatisfied index: {result:?}",
     );
 }
 
