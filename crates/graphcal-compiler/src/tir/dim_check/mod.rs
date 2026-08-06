@@ -1502,7 +1502,7 @@ fn check_dimensions_dag(
     }
 
     ctx.checkpoint()?;
-    plot::check_plot_properties_dag(&ctx)?;
+    plot::check_plot_properties_dag(&ctx, dag)?;
 
     ctx.checkpoint()?;
     check_domain_constraint_targets_dag(dag, src)?;

@@ -2820,7 +2820,116 @@ fn negating_a_bool_is_rejected() {
     );
 }
 
-// --- Plot/mark/figure/layer property validation (#845) ---
+// --- Plot encoding and plot-family property validation ---
+
+#[test]
+fn check_infers_every_plot_encoding_channel() {
+    for channel in [
+        "x", "y", "color", "size", "shape", "opacity", "detail", "text", "tooltip",
+    ] {
+        let source = format!("plot p = {{ mark: line, encode: {{ {channel}: true + 1.0 }} }};");
+        assert!(
+            matches!(check(&source), Err(GraphcalError::DimensionMismatch { .. })),
+            "encoding channel `{channel}` escaped inference"
+        );
+    }
+}
+
+#[test]
+fn check_rejects_non_plottable_encoding_leaves() {
+    for (source, expected) in [
+        (
+            "type Pair { Pair(x: Dimensionless) }\n\
+             node pair: Pair = Pair(x: 1.0);\n\
+             plot p = { mark: point, encode: { x: @pair } };",
+            "Pair",
+        ),
+        (
+            "node value: Complex<Dimensionless> = complex(1.0, 2.0);\n\
+             plot p = { mark: point, encode: { x: @value } };",
+            "Complex<Dimensionless>",
+        ),
+    ] {
+        assert!(
+            matches!(
+                check(source),
+                Err(GraphcalError::PlotEncodingTypeMismatch {
+                    channel: crate::syntax::ast::EncodingChannel::X,
+                    ref found,
+                    ..
+                }) if found == expected
+            ),
+            "non-plottable leaf `{expected}` was accepted"
+        );
+    }
+}
+
+#[test]
+fn check_rejects_incompatible_plot_channel_axes() {
+    let source = r"
+index Step = { A, B };
+index Pair = { Left, Right };
+plot p = {
+    mark: point,
+    encode: {
+        x: for step: Step { step },
+        y: for pair: Pair { pair },
+    },
+};
+";
+    let error = check(source).unwrap_err();
+    assert!(matches!(
+        error,
+        GraphcalError::PlotEncodingAxisMismatch { ref channels, .. }
+            if channels.contains("test.Step") && channels.contains("test.Pair")
+    ));
+}
+
+#[test]
+fn check_accepts_plot_axis_subsets_and_multiaxis_broadcasting() {
+    let source = r"
+index Phase = { A, B };
+index Step = { Start, End };
+plot p = {
+    mark: rect,
+    encode: {
+        x: for phase: Phase { phase },
+        y: 1.0,
+        color: for phase: Phase, step: Step { 1 },
+    },
+};
+";
+    check(source).unwrap();
+}
+
+#[test]
+fn check_accepts_every_plottable_leaf_kind() {
+    let source = r#"
+index Phase = { A, B };
+node instant: Datetime = datetime("2026-01-01T00:00:00Z");
+plot p = {
+    mark: point,
+    encode: {
+        x: "label",
+        y: 1.0 m,
+        color: true,
+        size: 1,
+        detail: @instant,
+        text: Phase.A,
+    },
+};
+"#;
+    check(source).unwrap();
+}
+
+#[test]
+fn check_rejects_ineffective_conversion_inside_plot_encoding() {
+    let source = "plot p = { mark: point, encode: { x: (1.0 m -> cm) + 1.0 m } };";
+    assert!(matches!(
+        check(source),
+        Err(GraphcalError::IneffectiveConversion { .. })
+    ));
+}
 
 #[test]
 fn check_unknown_plot_property_is_rejected() {

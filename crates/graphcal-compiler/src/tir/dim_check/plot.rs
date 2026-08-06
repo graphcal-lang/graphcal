@@ -1,28 +1,32 @@
-//! Static validation of plot, mark, and figure/layer properties (#845).
+//! Static validation of plot encodings and plot-family properties.
 //!
-//! Property names are checked against the typed registry in
-//! [`crate::plot_props`], and property values are type-checked
-//! (string literal vs. dimensionless number vs. boolean). A typo'd or
-//! wrongly-typed property is a check-time error, never a silently dropped
-//! field; a dimensioned value is rejected instead of having its unit
-//! silently stripped.
+//! Every encoding expression is inferred, reduced to a plottable leaf plus
+//! canonical index axes, and checked against the same subset/broadcast shape
+//! contract retained by runtime alignment. Property names are checked against
+//! the typed registry in [`crate::plot_props`], and property values are
+//! type-checked (string literal vs. dimensionless number vs. boolean).
 
 use crate::hir::ExprKind;
 use crate::ir::lower::LoweredPlotField;
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
+use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
 use crate::registry::error::GraphcalError;
 
-use super::{DimCheckContext, InferredType, helpers::format_inferred_type, infer};
+use super::{
+    DimCheckContext, InferredType, check_ineffective_conversions, helpers::format_inferred_type,
+    infer,
+};
 
 /// Check every plot/figure/layer declaration of one DAG.
-pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    let Some(dag) = ctx.dag else {
-        return Ok(());
-    };
+pub(super) fn check_plot_properties_dag(
+    ctx: &DimCheckContext<'_>,
+    dag: &crate::tir::typed::DagTIR,
+) -> Result<(), GraphcalError> {
     check_plot_references(ctx, dag)?;
     for entry in &dag.plots {
         let body = &entry.body;
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
+        check_plot_encodings(&entry_ctx, dag, body)?;
         for field in &body.mark_properties {
             let Some(prop) = MarkProperty::from_name(field.name.as_str()) else {
                 return Err(invalid_property(
@@ -32,7 +36,7 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
                     &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
         }
         for field in &body.properties {
             let Some(prop) = PlotProperty::from_name(field.name.as_str()) else {
@@ -43,7 +47,7 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
                     &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
         }
     }
     for entry in &dag.figures {
@@ -68,7 +72,7 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
                     ),
                 ));
             };
-            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
         }
     }
     for entry in &dag.layers {
@@ -82,7 +86,7 @@ pub(super) fn check_plot_properties_dag(ctx: &DimCheckContext<'_>) -> Result<(),
                     &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(&entry_ctx, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
         }
     }
     Ok(())
@@ -148,6 +152,104 @@ fn check_plot_references(
     Ok(())
 }
 
+fn check_plot_encodings(
+    ctx: &DimCheckContext<'_>,
+    dag: &crate::tir::typed::DagTIR,
+    body: &crate::ir::lower::LoweredPlotBody,
+) -> Result<(), GraphcalError> {
+    let shapes = body
+        .encodings
+        .iter()
+        .map(|(channel, expr)| {
+            ctx.checkpoint()?;
+            check_ineffective_conversions(expr, true, ctx.src)?;
+            if matches!(&expr.kind, ExprKind::StringLiteral(_)) {
+                return Ok(PlotChannelShape::new(
+                    Vec::new(),
+                    PlotLeafKind::ContextualString,
+                ));
+            }
+            let inferred = infer_expression_type(ctx, dag, expr)?;
+            plot_channel_shape(&inferred).ok_or_else(|| GraphcalError::PlotEncodingTypeMismatch {
+                channel: *channel,
+                found: format_inferred_type(&inferred, ctx.registry),
+                src: ctx.src.clone(),
+                span: expr.span.into(),
+            })
+        })
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    let axes = shapes
+        .iter()
+        .map(PlotChannelShape::axes)
+        .collect::<Vec<_>>();
+    if let Err(error) = align_plot_channel_axes(&axes) {
+        let (_, expr) = &body.encodings[error.channel()];
+        return Err(GraphcalError::PlotEncodingAxisMismatch {
+            channels: describe_channel_axes(body, &shapes),
+            src: ctx.src.clone(),
+            span: expr.span.into(),
+        });
+    }
+    Ok(())
+}
+
+fn plot_channel_shape(inferred: &InferredType) -> Option<PlotChannelShape> {
+    let mut axes = Vec::new();
+    let leaf = plot_leaf_kind(inferred, &mut axes)?;
+    Some(PlotChannelShape::new(axes, leaf))
+}
+
+fn plot_leaf_kind(
+    inferred: &InferredType,
+    axes: &mut Vec<crate::registry::declared_type::IndexTypeRef>,
+) -> Option<PlotLeafKind> {
+    match inferred {
+        InferredType::Indexed { element, index } => {
+            axes.push(index.type_ref().clone());
+            crate::stack::with_stack_growth(|| plot_leaf_kind(element, axes))
+        }
+        InferredType::Quantity(dimension)
+        | InferredType::CoordinateIndexLabel { dimension, .. } => {
+            Some(PlotLeafKind::Quantity(dimension.clone()))
+        }
+        InferredType::Bool => Some(PlotLeafKind::Bool),
+        InferredType::Int | InferredType::Fin(_) => Some(PlotLeafKind::Int),
+        InferredType::Datetime(scale) => Some(PlotLeafKind::Datetime(*scale)),
+        InferredType::NamedIndexCase(index) | InferredType::Key(index) => {
+            Some(PlotLeafKind::Key(index.type_ref().clone()))
+        }
+        InferredType::Complex(_) | InferredType::IndexArg(_) | InferredType::Struct(_, _) => None,
+    }
+}
+
+fn describe_channel_axes(
+    body: &crate::ir::lower::LoweredPlotBody,
+    shapes: &[PlotChannelShape],
+) -> String {
+    body.encodings
+        .iter()
+        .zip(shapes)
+        .map(|((channel, _), shape)| {
+            let axes = if shape.axes().is_empty() {
+                "no index".to_string()
+            } else {
+                shape
+                    .axes()
+                    .iter()
+                    .map(|index| {
+                        index
+                            .declared_resolved()
+                            .map_or_else(|| index.display_name().to_string(), ToString::to_string)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" × ")
+            };
+            format!("`{channel}` ranges over {axes}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn valid_names<'a>(names: impl Iterator<Item = &'a str>) -> String {
     format!(
         "valid properties are: {}",
@@ -173,6 +275,7 @@ fn invalid_property(
 /// Check one property value against its expected type.
 fn check_property_value(
     ctx: &DimCheckContext<'_>,
+    dag: &crate::tir::typed::DagTIR,
     property: &'static str,
     expected: PlotPropertyType,
     field: &LoweredPlotField,
@@ -200,7 +303,7 @@ fn check_property_value(
             if is_string_literal {
                 return Err(mismatch("a string literal".to_string()));
             }
-            match infer_property_type(ctx, field)? {
+            match infer_expression_type(ctx, dag, &field.value)? {
                 InferredType::Int => Ok(()),
                 InferredType::Quantity(d)
                 | InferredType::CoordinateIndexLabel { dimension: d, .. }
@@ -224,7 +327,7 @@ fn check_property_value(
             if is_string_literal {
                 return Err(mismatch("a string literal".to_string()));
             }
-            match infer_property_type(ctx, field)? {
+            match infer_expression_type(ctx, dag, &field.value)? {
                 InferredType::Bool => Ok(()),
                 other => Err(mismatch(format_inferred_type(&other, ctx.registry))),
             }
@@ -232,19 +335,13 @@ fn check_property_value(
     }
 }
 
-fn infer_property_type(
+fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
-    field: &LoweredPlotField,
+    dag: &crate::tir::typed::DagTIR,
+    expr: &crate::hir::Expr,
 ) -> Result<InferredType, GraphcalError> {
-    let Some(dag) = ctx.dag else {
-        return Err(GraphcalError::InternalError {
-            message: "plot property inference requires DAG context".to_string(),
-            src: ctx.src.clone(),
-            span: field.value.span.into(),
-        });
-    };
     infer::hir::infer_hir_type_with_owner_and_cancellation(
-        &field.value,
+        expr,
         None,
         ctx.declared_types,
         dag,

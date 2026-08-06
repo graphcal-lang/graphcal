@@ -147,6 +147,7 @@ fn write_owner_dimension_project() -> (tempfile::TempDir, std::path::PathBuf) {
     let library = r"
 pub base dim Foo;
 pub base unit foo: Foo;
+pub index Axis = { A, B };
 pub type Box<D: Dim> { Box(x: D) }
 ";
     std::fs::write(package.join("a.gcl"), library).unwrap();
@@ -185,6 +186,35 @@ node compound: a.Box<a.Foo * b.Foo> =
             "canonical dimension lookup depended on import order: {result:?}"
         );
     }
+}
+
+#[test]
+fn same_leaf_plot_axes_from_distinct_owners_are_incompatible() {
+    let (_directory, root) = write_owner_dimension_project();
+    std::fs::write(
+        &root,
+        r"
+import owner_dims.a as a;
+import owner_dims.b as b;
+plot p = {
+    mark: point,
+    encode: {
+        x: for item: a.Axis { item },
+        y: for item: b.Axis { item },
+    },
+};
+",
+    )
+    .unwrap();
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::PlotEncodingAxisMismatch { ref channels, .. })
+            if channels.contains("owner_dims.a.Axis")
+                && channels.contains("owner_dims.b.Axis")
+    ));
 }
 
 #[test]

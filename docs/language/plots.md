@@ -106,6 +106,12 @@ encode: {
 
 ### Channel Alignment
 
+`graphcal check` infers every encoding expression before evaluation. It rejects
+invalid operators or calls, non-plottable leaves such as algebraic and `Complex`
+values, ineffective nested display conversions, and incompatible channel axes.
+Runtime alignment retains the same checks as defense in depth for malformed
+values.
+
 All channels of one plot are flattened onto a single shared row set:
 
 - The row set is the cross product of the index axes of the channel with the
