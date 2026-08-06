@@ -250,6 +250,42 @@ pub(super) struct EvalLoopResult {
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
 }
 
+/// One completed runtime evaluation before project-level public output assembly.
+///
+/// Keeping values, contained node errors, and the display-aware root result in
+/// one artifact makes the evaluator's direct output available to debugging
+/// consumers without running the evaluator a second time.
+pub struct RuntimeEvaluation {
+    pub(super) result: EvalResult,
+    pub(super) values: RuntimeValueMap,
+    pub(super) errors: HashMap<RuntimeDeclKey, NodeError>,
+}
+
+impl std::fmt::Debug for RuntimeEvaluation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeEvaluation")
+            .field("result", &self.result)
+            .field("values", &self.values)
+            .field("errors", &self.errors)
+            .finish()
+    }
+}
+
+impl RuntimeEvaluation {
+    /// Whether evaluation produced a node, assertion, or plot failure.
+    #[must_use]
+    pub fn has_errors(&self) -> bool {
+        !self.errors.is_empty() || self.result.has_errors()
+    }
+
+    /// Display-aware result for the directly evaluated root DAG.
+    #[must_use]
+    pub const fn result(&self) -> &EvalResult {
+        &self.result
+    }
+}
+
 /// Core evaluation loop shared by project and prepared-model evaluation.
 ///
 /// Inserts imported and const values, then iterates in topological order.
@@ -427,7 +463,7 @@ pub(super) fn evaluate_plan_with_bindings_and_cancellation(
         host_fns,
         cancellation,
     )
-    .map(|(result, _)| result)
+    .map(|outcome| outcome.result)
 }
 
 #[expect(
@@ -442,7 +478,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     src: &NamedSource<Arc<String>>,
     host_fns: &crate::host_fns::HostFunctionRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(EvalResult, RuntimeValueMap), GraphcalError> {
+) -> Result<RuntimeEvaluation, GraphcalError> {
     cancellation.checkpoint()?;
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
@@ -700,7 +736,11 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         base_dim_symbols: tir.registry().dimensions.base_dim_symbols().clone(),
         domain_constraints,
     };
-    Ok((result, values))
+    Ok(RuntimeEvaluation {
+        result,
+        values,
+        errors,
+    })
 }
 
 /// If any declaration referenced by an assertion body failed to evaluate,

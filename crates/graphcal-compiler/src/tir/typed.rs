@@ -1,9 +1,9 @@
 //! Typed Intermediate Representation (TIR) — type annotations resolved to semantic types.
 //!
-//! The TIR layer resolves ambiguous syntax-level type paths (`NamePath` in
-//! `DimTerm::name`, type applications, and `TypeExprKind::Indexed::indexes`) into
-//! concrete dimensions, struct types, generic dimension parameters, or generic
-//! index parameters.
+//! For value declarations, the TIR layer consumes canonical HIR type references
+//! and resolves them into concrete dimensions, struct types, generic dimension
+//! parameters, or generic index parameters. It does not reinterpret source
+//! paths from declaration signatures.
 
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::type_name::ResolvedStructTypeName;
@@ -117,23 +117,15 @@ impl DagTIR {
     /// Explicitly exported nodes and annotation-free param input ports are both
     /// readable outputs. Projecting a param returns its effective value after
     /// applying the call binding or default.
-    pub fn populate_projectable_outputs(
-        &mut self,
-        body: &[crate::desugar::desugared_ast::Declaration],
-    ) {
-        use crate::desugar::desugared_ast::DeclKind;
-
-        for decl in body {
-            match &decl.kind {
-                DeclKind::Param(param) => {
-                    self.projectable_outputs.insert(param.name.value.clone());
-                }
-                DeclKind::Node(node) if node.visibility.is_public() => {
-                    self.projectable_outputs.insert(node.name.value.clone());
-                }
-                _ => {}
-            }
-        }
+    fn populate_projectable_outputs(&mut self, surface: &ExternalDeclSurface) {
+        self.projectable_outputs.extend(
+            self.params
+                .iter()
+                .map(|entry| entry.name.member())
+                .chain(self.nodes.iter().map(|entry| entry.name.member()))
+                .filter(|name| surface.can_select_output(name))
+                .cloned(),
+        );
     }
 
     /// Return the canonical identity recorded for a declaration visible from
@@ -154,15 +146,12 @@ impl DagTIR {
     }
 }
 
-/// Resolve all type annotations in an `IR` using module-aware type-system
-/// resolution for syntactic paths.
+/// Resolve all canonical HIR type annotations in an `IR` against the
+/// authoritative project type store.
 ///
-/// Qualified source paths such as `lib.Length`, `lib.Vec3<...>`, and
-/// `lib.Phase` are first lowered into HIR canonical references using
-/// `module_resolver`; TIR then consumes those HIR references and reads the
-/// corresponding definition from `project_types`. Runtime-facing values still
-/// keep display leaves for diagnostics, but semantic lookup no longer depends on
-/// source alias strings.
+/// Syntax paths were eliminated while freezing HIR. This conversion therefore
+/// reads owner-qualified references directly and never performs source-path
+/// lookup or AST-to-HIR lowering.
 pub fn type_resolve_with_modules(
     ir: IR,
     root_dag_id: &crate::dag_id::DagId,
@@ -217,20 +206,111 @@ pub fn type_resolve_builder_with_modules_and_cancellation(
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
+    type_resolve_builder_with_imported_bindings_and_cancellation(
+        ir,
+        HashMap::new(),
+        root_dag_id,
+        src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )
+}
+
+/// Resolve a root HIR module after attaching checked imported interfaces.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when an imported lexical target is missing or
+/// does not match the canonical target recorded by HIR, or when type
+/// resolution otherwise fails.
+pub fn type_resolve_builder_with_imported_bindings_and_cancellation<S>(
+    ir: IR,
+    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+    root_dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    project_types: &ProjectTypeStore,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<TirBuilder, GraphcalError>
+where
+    S: std::hash::BuildHasher,
+{
     cancellation.checkpoint()?;
+    validate_checked_imported_bindings(&ir, &imported_bindings, src)?;
+    let imported_bindings = imported_bindings.into_iter().collect();
     let ctx = ModuleTypeContext::new(root_dag_id, module_resolver, project_types);
-    type_resolve_impl(ir, root_dag_id, src, ctx, cancellation)
+    type_resolve_impl(ir, imported_bindings, root_dag_id, src, ctx, cancellation)
+}
+
+fn validate_checked_imported_bindings<S>(
+    ir: &IR,
+    checked: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError>
+where
+    S: std::hash::BuildHasher,
+{
+    if ir.imported_bindings().len() != checked.len() {
+        return Err(GraphcalError::InternalError {
+            message: format!(
+                "HIR declares {} imported bindings but checking supplied {}",
+                ir.imported_bindings().len(),
+                checked.len()
+            ),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        });
+    }
+    for (lexical, hir_binding) in ir.imported_bindings() {
+        let Some(checked_binding) = checked.get(lexical) else {
+            return Err(GraphcalError::InternalError {
+                message: format!("checked interface for imported binding `{lexical}` is missing"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            });
+        };
+        if checked_binding.target() != hir_binding.target() {
+            return Err(GraphcalError::InternalError {
+                message: format!(
+                    "checked interface for `{lexical}` targets `{}` instead of HIR target `{}`",
+                    checked_binding.target(),
+                    hir_binding.target()
+                ),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn finalize_hir_dag(
+    dag: &mut DagTIR,
+    surface: &ExternalDeclSurface,
+    module_ctx: ModuleTypeContext<'_>,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<(), GraphcalError> {
+    cancellation.checkpoint()?;
+    augment_runtime_deps_for_dynamic_units(dag);
+    dag.populate_projectable_outputs(surface);
+    cancellation.checkpoint()?;
+    validate_public_generic_defaults(dag, surface, module_ctx, src)?;
+    cancellation.checkpoint()?;
+    check_hir_body_policies(dag, surface, module_ctx, src)
 }
 
 fn type_resolve_impl(
     ir: IR,
+    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
     cancellation.checkpoint()?;
-    let imported_bindings_for_hir = ir.imported_bindings.clone();
+    let imported_bindings_for_hir = imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut root_dag = type_resolve_dag(
         ir.consts,
@@ -254,17 +334,18 @@ fn type_resolve_impl(
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
-        ir.imported_bindings,
+        imported_bindings,
         ir.instances,
         module_ctx,
         src,
     )?;
-    cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(&mut root_dag);
-    cancellation.checkpoint()?;
-    validate_public_generic_defaults(&root_dag, &ir.external_surface, module_ctx, src)?;
-    cancellation.checkpoint()?;
-    check_hir_body_policies(&root_dag, &ir.external_surface, module_ctx, src)?;
+    finalize_hir_dag(
+        &mut root_dag,
+        &ir.external_surface,
+        module_ctx,
+        src,
+        cancellation,
+    )?;
     Ok(TirBuilder::new(
         ir.registry,
         module_ctx.types.clone(),
@@ -305,20 +386,52 @@ pub fn type_resolve_single_with_modules_and_cancellation(
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
+    type_resolve_single_with_imported_bindings_and_cancellation(
+        ir,
+        HashMap::new(),
+        dag_id,
+        src,
+        module_resolver,
+        project_types,
+        cancellation,
+    )
+}
+
+/// Resolve one HIR DAG after attaching checked imported interfaces.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when an imported lexical target is missing or
+/// mismatched, or when type resolution otherwise fails.
+pub fn type_resolve_single_with_imported_bindings_and_cancellation<S>(
+    ir: IR,
+    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
+    dag_id: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    project_types: &ProjectTypeStore,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<DagTIR, GraphcalError>
+where
+    S: std::hash::BuildHasher,
+{
     cancellation.checkpoint()?;
+    validate_checked_imported_bindings(&ir, &imported_bindings, src)?;
+    let imported_bindings = imported_bindings.into_iter().collect();
     let ctx = ModuleTypeContext::new(dag_id, module_resolver, project_types);
-    type_resolve_single_impl(ir, dag_id, src, ctx, cancellation)
+    type_resolve_single_impl(ir, imported_bindings, dag_id, src, ctx, cancellation)
 }
 
 fn type_resolve_single_impl(
     ir: IR,
+    imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
     cancellation.checkpoint()?;
-    let imported_bindings_for_hir = ir.imported_bindings.clone();
+    let imported_bindings_for_hir = imported_bindings.clone();
     let asserts_for_hir = ir.asserts.clone();
     let mut dag = type_resolve_dag(
         ir.consts,
@@ -342,18 +455,74 @@ fn type_resolve_single_impl(
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
-        ir.imported_bindings,
+        imported_bindings,
         ir.instances,
         module_ctx,
         src,
     )?;
-    cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(&mut dag);
-    cancellation.checkpoint()?;
-    validate_public_generic_defaults(&dag, &ir.external_surface, module_ctx, src)?;
-    cancellation.checkpoint()?;
-    check_hir_body_policies(&dag, &ir.external_surface, module_ctx, src)?;
+    finalize_hir_dag(
+        &mut dag,
+        &ir.external_surface,
+        module_ctx,
+        src,
+        cancellation,
+    )?;
     Ok(dag)
+}
+
+/// Resolve the declared value interface of one HIR module without checking its bodies.
+///
+/// This is used while checking a whole project so same-file inline DAG imports
+/// can receive real declared types without placeholders or a partially built
+/// TIR.
+///
+/// # Errors
+///
+/// Returns a [`GraphcalError`] when a declaration annotation cannot be
+/// resolved to a concrete declared type.
+pub fn resolve_hir_declared_types_with_modules_and_cancellation(
+    ir: &IR,
+    owner: &crate::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+    module_resolver: &ModuleResolver,
+    project_types: &ProjectTypeStore,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError> {
+    let ctx = ModuleTypeContext::new(owner, module_resolver, project_types);
+    resolve_declared_type_exprs(&ir.consts, &ir.params, &ir.nodes, src, ctx, cancellation)?
+        .into_iter()
+        .map(|(name, resolved)| resolved_to_declared_type(&resolved, src).map(|ty| (name, ty)))
+        .collect()
+}
+
+fn resolve_declared_type_exprs(
+    consts: &[crate::ir::lower::ConstEntry],
+    params: &[crate::ir::lower::ParamEntry],
+    nodes: &[crate::ir::lower::NodeEntry],
+    src: &NamedSource<Arc<String>>,
+    module_ctx: ModuleTypeContext<'_>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<HashMap<ScopedName, ResolvedTypeExpr>, GraphcalError> {
+    let mut resolved = HashMap::new();
+    for (name, type_ann, type_src) in consts
+        .iter()
+        .map(|entry| (&entry.name, &entry.type_ann, &entry.type_src))
+        .chain(
+            params
+                .iter()
+                .map(|entry| (&entry.name, &entry.type_ann, &entry.type_src)),
+        )
+        .chain(
+            nodes
+                .iter()
+                .map(|entry| (&entry.name, &entry.type_ann, &entry.type_src)),
+        )
+    {
+        cancellation.checkpoint()?;
+        let ty = resolve_hir_type_expr(&type_ann.type_expr, type_src.resolve(src), module_ctx)?;
+        resolved.insert(name.clone(), ty);
+    }
+    Ok(resolved)
 }
 
 /// Internal helper: resolve type annotations for the const/param/node
@@ -363,9 +532,9 @@ fn type_resolve_single_impl(
     reason = "orchestrates per-DAG type resolution across IR declarations and semantic body data"
 )]
 fn type_resolve_dag(
-    consts: Vec<crate::ir::lower::ConstEntry>,
-    params: Vec<crate::ir::lower::ParamEntry>,
-    nodes: Vec<crate::ir::lower::NodeEntry>,
+    mut consts: Vec<crate::ir::lower::ConstEntry>,
+    mut params: Vec<crate::ir::lower::ParamEntry>,
+    mut nodes: Vec<crate::ir::lower::NodeEntry>,
     asserts: &[crate::ir::lower::AssertEntry],
     registry: &Registry,
     src: &NamedSource<Arc<String>>,
@@ -375,55 +544,11 @@ fn type_resolve_dag(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIRSeed, GraphcalError> {
     cancellation.checkpoint()?;
-    let mut resolved_decl_types = HashMap::new();
-
-    // A merged dependency declaration's type annotation keeps the dependency
-    // file's offsets, so resolution errors must render against its own source
-    // rather than the importer's `src` (#868).
-    for entry in &consts {
-        cancellation.checkpoint()?;
-        let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_ast_type_expr_via_hir(
-            &entry.type_ann,
-            registry,
-            entry.type_src.resolve(src),
-            entry_ctx,
-        )?;
-        resolved_decl_types.insert(entry.name.clone(), resolved);
-    }
-    for entry in &params {
-        cancellation.checkpoint()?;
-        let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_ast_type_expr_via_hir(
-            &entry.type_ann,
-            registry,
-            entry.type_src.resolve(src),
-            entry_ctx,
-        )?;
-        resolved_decl_types.insert(entry.name.clone(), resolved);
-    }
-    for entry in &nodes {
-        cancellation.checkpoint()?;
-        let entry_ctx = module_ctx.with_owner(&entry.type_resolution_owner);
-        let resolved = resolve_ast_type_expr_via_hir(
-            &entry.type_ann,
-            registry,
-            entry.type_src.resolve(src),
-            entry_ctx,
-        )?;
-        resolved_decl_types.insert(entry.name.clone(), resolved);
-    }
+    let resolved_decl_types =
+        resolve_declared_type_exprs(&consts, &params, &nodes, src, module_ctx, cancellation)?;
 
     cancellation.checkpoint()?;
-    let domain_bounds = lower_declaration_domain_bounds(
-        &consts,
-        &params,
-        &nodes,
-        module_ctx,
-        imported_bindings,
-        registry,
-        src,
-    )?;
+    let domain_bounds = take_declaration_domain_bounds(&mut consts, &mut params, &mut nodes, src);
     cancellation.checkpoint()?;
     let dependencies =
         collect_resolved_dag_dependencies(&consts, &params, &nodes, module_ctx, src)?;
@@ -599,6 +724,7 @@ fn resolve_override_reconciliations(
                         })
                         .collect::<Result<Vec<_>, GraphcalError>>()?;
                     Ok(OverrideReconciliation {
+                        source_decl: pending.source_decl.clone(),
                         orphan_decl: pending.orphan_decl.clone(),
                         targets,
                         src: pending.src.clone(),
@@ -1035,7 +1161,8 @@ fn record_resolved_struct_type_def(
                     registry,
                     definition_src,
                 )?;
-                let bounds = lower_domain_bounds(field.type_ann(), bound_expr_ctx, definition_src)?;
+                let bounds =
+                    lower_field_domain_bounds(field.type_ann(), bound_expr_ctx, definition_src)?;
                 collect_struct_type_defs_from_resolved_type(
                     &resolved,
                     ctx,
@@ -1082,80 +1209,57 @@ fn generic_scope_for_type_def(
     Ok(scope)
 }
 
-/// Lower only the domain-bound expressions embedded in declaration signatures.
-///
-/// Value and assertion bodies already have one authoritative HIR owner on their
-/// declaration records; this pass must not clone them into semantic side maps.
-fn lower_declaration_domain_bounds(
-    consts: &[crate::ir::lower::ConstEntry],
-    params: &[crate::ir::lower::ParamEntry],
-    nodes: &[crate::ir::lower::NodeEntry],
-    ctx: ModuleTypeContext<'_>,
-    imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    registry: &Registry,
+/// Move domain bounds lowered at the HIR boundary into checked semantic storage.
+fn take_declaration_domain_bounds(
+    consts: &mut [crate::ir::lower::ConstEntry],
+    params: &mut [crate::ir::lower::ParamEntry],
+    nodes: &mut [crate::ir::lower::NodeEntry],
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>>, GraphcalError> {
-    let generic_scope = hir::GenericScope::new();
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let decl_bindings = collect_hir_decl_bindings(consts, params, nodes, imported_bindings);
-    let lower_bounds_in = |type_ann: &crate::desugar::desugared_ast::TypeExpr,
-                           resolution_owner: &crate::dag_id::DagId,
-                           body_src: &NamedSource<Arc<String>>| {
-        let expr_ctx = hir::ExprLoweringContext::new(
-            resolution_owner,
-            ctx.resolver,
-            &generic_scope,
-            &registry.time_zones,
-        )
-        .with_prelude(&prelude)
-        .with_unit_registry(&registry.units)
-        .with_decl_bindings(&decl_bindings);
-        lower_domain_bounds(type_ann, expr_ctx, body_src)
-    };
-    let mut domain_bounds = HashMap::new();
-
-    // Domain-bound and key errors for a merged dependency body must render
-    // against the dependency's own source, not the importer's `src` (#868).
-    for (name, declaration_owner, type_ann, resolution_owner, signature_src) in consts
-        .iter()
+) -> HashMap<ResolvedDeclName, Vec<ResolvedDomainBound>> {
+    consts
+        .iter_mut()
         .map(|entry| {
             (
                 &entry.name,
                 &entry.declaration_owner,
-                &entry.type_ann,
-                &entry.type_resolution_owner,
+                &mut entry.type_ann,
                 entry.type_src.resolve(src),
             )
         })
-        .chain(params.iter().map(|entry| {
+        .chain(params.iter_mut().map(|entry| {
             (
                 &entry.name,
                 &entry.declaration_owner,
-                &entry.type_ann,
-                &entry.type_resolution_owner,
+                &mut entry.type_ann,
                 entry.type_src.resolve(src),
             )
         }))
-        .chain(nodes.iter().map(|entry| {
+        .chain(nodes.iter_mut().map(|entry| {
             (
                 &entry.name,
                 &entry.declaration_owner,
-                &entry.type_ann,
-                &entry.type_resolution_owner,
+                &mut entry.type_ann,
                 entry.type_src.resolve(src),
             )
         }))
-    {
-        let bounds = lower_bounds_in(type_ann, resolution_owner, signature_src)?;
-        if !bounds.is_empty() {
-            domain_bounds.insert(
-                ResolvedDeclName::from_def(declaration_owner.clone(), name.member().clone()),
-                bounds,
-            );
-        }
-    }
-
-    Ok(domain_bounds)
+        .filter_map(|(name, owner, annotation, signature_src)| {
+            let bounds = std::mem::take(&mut annotation.domain_bounds);
+            (!bounds.is_empty()).then(|| {
+                (
+                    ResolvedDeclName::from_def(owner.clone(), name.member().clone()),
+                    bounds
+                        .into_iter()
+                        .map(|bound| ResolvedDomainBound {
+                            kind: bound.kind,
+                            value: bound.value,
+                            span: bound.span,
+                            src: signature_src.clone(),
+                        })
+                        .collect(),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Collect semantic index/constructor definitions reached only from dynamic
@@ -1241,8 +1345,11 @@ fn collect_plot_refs(
     Ok(())
 }
 
-/// Lower a declaration type annotation's domain bounds to HIR.
-fn lower_domain_bounds(
+/// Lower a registry-backed struct field's domain bounds to HIR.
+///
+/// Value declaration bounds have already crossed the HIR boundary and never
+/// reach this syntax compatibility path.
+fn lower_field_domain_bounds(
     type_ann: &crate::desugar::desugared_ast::TypeExpr,
     expr_ctx: hir::ExprLoweringContext<'_>,
     src: &NamedSource<Arc<String>>,
@@ -1712,10 +1819,10 @@ impl HirPolicyChecker<'_> {
 /// literal or conversion), the `@`-references in that unit's scale
 mod collect;
 use collect::{
-    augment_runtime_deps_for_dynamic_units, collect_hir_decl_bindings,
-    collect_resolved_collection_refs, collect_resolved_collection_refs_from_expr,
-    collect_resolved_constructor_refs, collect_resolved_constructor_refs_from_expr,
-    collect_resolved_dag_dependencies, collect_resolved_decl_bindings, resolve_expected_fail_keys,
+    augment_runtime_deps_for_dynamic_units, collect_resolved_collection_refs,
+    collect_resolved_collection_refs_from_expr, collect_resolved_constructor_refs,
+    collect_resolved_constructor_refs_from_expr, collect_resolved_dag_dependencies,
+    collect_resolved_decl_bindings, resolve_expected_fail_keys,
 };
 
 /// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized
@@ -1833,8 +1940,8 @@ use ops::{unify_nat_poly_form, unify_resolved_type};
 mod type_expr;
 pub use type_expr::resolve_hir_type_expr;
 use type_expr::{
-    internal_error, module_resolve_error, resolve_ast_type_expr_via_hir,
-    resolve_generic_default_in_struct_scope, resolve_type_expr_in_struct_scope,
+    internal_error, module_resolve_error, resolve_generic_default_in_struct_scope,
+    resolve_type_expr_in_struct_scope,
 };
 
 #[cfg(test)]

@@ -467,9 +467,8 @@ fn compile_inline_dag_bodies_test(
             parent_dag_id,
         )?;
         let dag_id = parent_dag_id.child(name.as_str());
-        let mut compiled_dag =
+        let compiled_dag =
             type_resolve_single_with_modules(dag_body_ir, &dag_id, src, &resolver, &project_types)?;
-        compiled_dag.populate_projectable_outputs(&body);
         tir.insert_dag(compiled_dag)
             .map_err(|error| internal_error(error.to_string(), src, Span::new(0, 0)))?;
     }

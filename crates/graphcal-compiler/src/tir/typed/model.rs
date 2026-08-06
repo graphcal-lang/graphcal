@@ -667,21 +667,6 @@ impl<'a> ModuleTypeContext<'a> {
     pub const fn owner(self) -> &'a crate::dag_id::DagId {
         self.owner
     }
-
-    #[must_use]
-    pub(in crate::tir::typed) const fn with_owner<'b>(
-        self,
-        owner: &'b crate::dag_id::DagId,
-    ) -> ModuleTypeContext<'b>
-    where
-        'a: 'b,
-    {
-        ModuleTypeContext {
-            owner,
-            resolver: self.resolver,
-            types: self.types,
-        }
-    }
 }
 
 /// Owner-qualified key for a domain constraint declared on a struct/union field.
@@ -999,10 +984,9 @@ impl ResolvedTypeDefs {
 
 /// A `min:`/`max:` domain bound with its expression lowered to HIR.
 ///
-/// Domain bounds are full expressions, but the source-shaped declaration
-/// entries keep them as resolved syntax AST. Lowering them here at
-/// type-resolution time (the only stage that holds a `ModuleResolver`) lets
-/// dimension checking and evaluation run on HIR like every other expression.
+/// Declaration bounds cross into HIR with their owning type annotation. TIR
+/// moves them into this checked semantic record so dimension checking and
+/// evaluation consume the same canonical expression tree.
 #[derive(Debug, Clone)]
 pub struct ResolvedDomainBound {
     /// Whether this is a `min:` or `max:` bound.
@@ -1041,6 +1025,7 @@ pub(crate) enum ResolvedOverrideTarget {
 )]
 #[derive(Debug, Clone)]
 pub(crate) struct OverrideReconciliation {
+    pub(crate) source_decl: ResolvedDeclName,
     pub(crate) orphan_decl: DeclName,
     pub(crate) targets: Vec<ResolvedOverrideTarget>,
     pub(crate) src: NamedSource<Arc<String>>,

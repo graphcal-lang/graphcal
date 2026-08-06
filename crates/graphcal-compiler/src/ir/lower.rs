@@ -18,7 +18,7 @@ use crate::desugar::desugared_ast::{
     PlotDecl, TypeExpr,
 };
 use crate::dimension::{Dimension, Rational};
-use crate::ir::imported_binding::ImportedBinding;
+use crate::ir::imported_binding::HirImportedBinding;
 use crate::ir::instance::{InstanceBindingEnvironment, InstanceIndexBindingTarget, InstanceRecord};
 use crate::ir::resolve::{
     CollectedFile, DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail,
@@ -129,11 +129,7 @@ pub struct ConstEntry {
     pub name: ScopedName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub type_ann: TypeExpr,
-    /// Module scope used to resolve this declaration's type annotation and
-    /// domain-bound expressions. Merged include outputs keep the producer's
-    /// scope so consumers do not need imports for names they never wrote.
-    pub(crate) type_resolution_owner: crate::dag_id::DagId,
+    pub type_ann: crate::hir::TypeAnnotation,
     pub(crate) expr: crate::hir::Expr,
     pub span: Span,
     /// Source of the type annotation and declaration span.
@@ -148,10 +144,7 @@ pub struct ParamEntry {
     pub name: ScopedName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub type_ann: TypeExpr,
-    /// Module scope used to resolve this parameter's type annotation and
-    /// domain-bound expressions.
-    pub(crate) type_resolution_owner: crate::dag_id::DagId,
+    pub type_ann: crate::hir::TypeAnnotation,
     pub default_expr: Option<crate::hir::Expr>,
     pub span: Span,
     /// Source of the type annotation and declaration span.
@@ -171,10 +164,7 @@ pub struct NodeEntry {
     pub name: ScopedName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub type_ann: TypeExpr,
-    /// Module scope used to resolve this node's type annotation and
-    /// domain-bound expressions.
-    pub(crate) type_resolution_owner: crate::dag_id::DagId,
+    pub type_ann: crate::hir::TypeAnnotation,
     pub expr: crate::hir::Expr,
     pub span: Span,
     /// Source of the type annotation and declaration span.
@@ -432,12 +422,11 @@ pub struct IR {
     pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
     /// Strictly lowered, source-qualified dynamic unit scale definitions.
     pub(crate) dynamic_unit_scales: Vec<DynamicUnitScaleEntry>,
-    /// Imported values keyed by their source-visible lexical binding.
+    /// Imported declarations keyed by their source-visible lexical binding.
     ///
-    /// Each record atomically retains the canonical declaration target, its
-    /// declared type, and an optional pre-evaluated value. Include merges may
-    /// prefix the lexical key, but never rewrite the canonical target.
-    pub(crate) imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    /// HIR retains only canonical targets. Checked types and optional values
+    /// are attached atomically when this IR becomes TIR.
+    pub(crate) imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     /// Resolved extern function signatures declared by `import plugin`
     /// blocks, keyed by canonical plugin identity plus function name.
     pub(crate) extern_functions: HashMap<crate::syntax::plugin::ExternFnKey, ExternFunctionEntry>,
@@ -446,6 +435,14 @@ pub struct IR {
     pub external_surface: ExternalDeclSurface,
     /// Explicit typed template-instance graph assembled by include elaboration.
     pub(crate) instances: Vec<InstanceRecord>,
+}
+
+impl IR {
+    /// Borrow canonical lexical import targets resolved during HIR lowering.
+    #[must_use]
+    pub const fn imported_bindings(&self) -> &HashMap<ScopedName, HirImportedBinding> {
+        &self.imported_bindings
+    }
 }
 
 /// Lower an AST into an [`IR`].
@@ -588,8 +585,8 @@ pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<()
 /// that can be further mutated before freezing.
 ///
 /// Unlike `lower_to_builder`, this uses `resolve_with_imported_values`, which
-/// adds only imported lexical names to the scope. Canonical targets, declared
-/// types, and optional pre-evaluated values stay atomic in `imported_bindings`.
+/// adds only imported lexical names to the scope. Canonical targets remain
+/// attached to those lexical names in `imported_bindings`.
 ///
 /// # Errors
 ///
@@ -602,7 +599,7 @@ pub fn lower_to_builder_with_imported_bindings(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
 ) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
@@ -630,7 +627,7 @@ pub fn lower_to_builder_with_imported_bindings_and_cancellation(
     ast: &File,
     src: &NamedSource<Arc<String>>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -665,8 +662,8 @@ pub fn lower_to_builder_with_imported_bindings_and_cancellation(
 ///
 /// The dag body is a virtual [`File`] whose registry is seeded with the
 /// enclosing file's frozen registry. Cross-scope values must be passed through
-/// params or explicit imports; every imported lexical name carries one atomic
-/// [`ImportedBinding`] with its canonical target and declared type.
+/// params or explicit imports; every imported lexical name carries one
+/// [`HirImportedBinding`] with its canonical target.
 ///
 /// # Errors
 ///
@@ -680,7 +677,7 @@ pub fn lower_dag_module_to_builder_with_imported_bindings(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -714,7 +711,7 @@ pub fn lower_dag_module_to_builder_with_imported_bindings_and_cancellation(
     dag_body: &File,
     parent_registry: Option<&Registry>,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -748,7 +745,7 @@ pub(crate) fn lower_dag_body_to_ir(
     parent_registry: &Registry,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
     imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
 ) -> Result<IR, GraphcalError> {
@@ -775,7 +772,7 @@ pub(crate) fn lower_dag_body_to_ir(
 /// bindings, and the body with self-import declarations stripped.
 pub struct DagBodySelfImports {
     pub names: ImportedValueNames,
-    pub bindings: HashMap<ScopedName, ImportedBinding>,
+    pub bindings: HashMap<ScopedName, HirImportedBinding>,
     pub stripped_body: Vec<crate::desugar::desugared_ast::Declaration>,
 }
 
@@ -815,7 +812,7 @@ fn build_ir_from_resolved(
     src: &NamedSource<Arc<String>>,
     resolved: CollectedFile,
     mut type_anns: HashMap<DeclName, TypeExpr>,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     dag_id: &crate::dag_id::DagId,
     parent_registry: Option<&Registry>,
     registry_seed: Option<RegistrySeed<'_>>,
@@ -1026,8 +1023,8 @@ pub struct UnfrozenIR {
     expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
     // Dynamic unit scales declared by this body or merged includes.
     dynamic_unit_scales: Vec<UnfrozenDynamicUnitScaleEntry>,
-    // Lexical binding lookup only; each value atomically carries canonical metadata.
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
+    // Lexical binding lookup only; each value carries one canonical target.
+    imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     // Explicit exports and named `param` input ports used by downstream
     // import/include boundary checks.
     external_surface: ExternalDeclSurface,
@@ -1146,6 +1143,43 @@ impl UnfrozenIR {
                 crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
             })
         };
+        let lower_type_annotation_in =
+            |type_ann: &TypeExpr,
+             resolution_owner: &crate::dag_id::DagId,
+             annotation_src: &NamedSource<Arc<String>>|
+             -> Result<crate::hir::TypeAnnotation, GraphcalError> {
+                crate::hir::diagnostics::validate_type_annotation(type_ann, annotation_src)?;
+                let type_ctx = crate::hir::TypeLoweringContext::new(
+                    resolution_owner,
+                    resolver,
+                    &generic_scope,
+                )
+                .with_prelude(&prelude);
+                let type_expr =
+                    crate::hir::lower_type_expr(type_ann, type_ctx).map_err(|error| {
+                        crate::hir::diagnostics::type_lower_error_to_graphcal(
+                            &error,
+                            type_ann,
+                            annotation_src,
+                        )
+                    })?;
+                let domain_bounds = type_ann
+                    .domain_bounds()
+                    .iter()
+                    .map(|bound| {
+                        Ok(crate::hir::DomainBound {
+                            kind: bound.kind,
+                            value: lower_in(&bound.value, resolution_owner, annotation_src)?,
+                            span: bound.span,
+                        })
+                    })
+                    .collect::<Result<_, GraphcalError>>()?;
+                Ok(crate::hir::TypeAnnotation {
+                    type_expr,
+                    domain_bounds,
+                    span: type_ann.span,
+                })
+            };
 
         let dynamic_unit_scales = self
             .dynamic_unit_scales
@@ -1183,8 +1217,11 @@ impl UnfrozenIR {
                 Ok(ConstEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: entry.type_ann.clone(),
-                    type_resolution_owner: entry.type_resolution_owner.clone(),
+                    type_ann: lower_type_annotation_in(
+                        &entry.type_ann,
+                        &entry.type_resolution_owner,
+                        entry.type_src.resolve(src),
+                    )?,
                     expr: lower_in(
                         &entry.expr,
                         &entry.body_resolution_owner,
@@ -1223,8 +1260,11 @@ impl UnfrozenIR {
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: entry.type_ann.clone(),
-                    type_resolution_owner: entry.type_resolution_owner.clone(),
+                    type_ann: lower_type_annotation_in(
+                        &entry.type_ann,
+                        &entry.type_resolution_owner,
+                        entry.type_src.resolve(src),
+                    )?,
                     default_expr,
                     span: entry.span,
                     type_src: entry.type_src.clone(),
@@ -1242,8 +1282,11 @@ impl UnfrozenIR {
                 Ok(NodeEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
-                    type_ann: entry.type_ann.clone(),
-                    type_resolution_owner: entry.type_resolution_owner.clone(),
+                    type_ann: lower_type_annotation_in(
+                        &entry.type_ann,
+                        &entry.type_resolution_owner,
+                        entry.type_src.resolve(src),
+                    )?,
                     expr: lower_in(
                         &entry.expr,
                         &entry.body_resolution_owner,
@@ -1451,55 +1494,6 @@ impl UnfrozenIR {
         for entry in &mut self.layers {
             entry.body_resolution_owner = owner.clone();
         }
-    }
-
-    /// Replace provisional type metadata on deferred imported bindings.
-    ///
-    /// Same-file inline DAGs can be elaborated before their parent is fully
-    /// typed. The canonical template remains reusable; freezing that template
-    /// later refines only bindings owned by the parent interface.
-    pub fn refine_imported_binding_types(
-        &mut self,
-        owner: &crate::dag_id::DagId,
-        mut resolve: impl FnMut(&DeclName) -> Option<crate::registry::declared_type::DeclaredType>,
-    ) {
-        self.imported_bindings
-            .values_mut()
-            .filter(|binding| binding.target().owner() == owner)
-            .for_each(|binding| {
-                let source_name = binding.target().to_unowned_def_name();
-                if let Some(declared_type) = resolve(&source_name) {
-                    binding.replace_declared_type(declared_type);
-                }
-            });
-    }
-
-    /// Supply canonical compile-time values to deferred imported bindings.
-    ///
-    /// The template remains context-free in the project cache. Each concrete
-    /// instantiation enriches only bindings owned by `owner`, preserving the
-    /// canonical target identity and replacing provisional type metadata
-    /// atomically with the value.
-    pub fn supply_imported_bindings(
-        &mut self,
-        owner: &crate::dag_id::DagId,
-        mut resolve: impl FnMut(
-            &DeclName,
-        ) -> Option<(
-            crate::registry::runtime_value::RuntimeValue,
-            crate::registry::declared_type::DeclaredType,
-        )>,
-    ) {
-        self.imported_bindings
-            .values_mut()
-            .filter(|binding| binding.target().owner() == owner)
-            .for_each(|binding| {
-                let source_name = binding.target().to_unowned_def_name();
-                if let Some((value, declared_type)) = resolve(&source_name) {
-                    binding.supply_value(value);
-                    binding.replace_declared_type(declared_type);
-                }
-            });
     }
 
     /// Add a const alias: a synthetic const declaration that references another const.
@@ -5545,7 +5539,6 @@ fn resolve_extern_dim_monomial(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::declared_type::DeclaredType;
     use crate::syntax::decl_name::ResolvedDeclName;
     use crate::syntax::parser::Parser;
 
@@ -5780,11 +5773,7 @@ mod tests {
         );
         dep_unfrozen.imported_bindings.insert(
             qualified.clone(),
-            ImportedBinding::with_value(
-                canonical.clone(),
-                DeclaredType::Quantity(crate::dimension::Dimension::dimensionless()),
-                crate::registry::runtime_value::RuntimeValue::Quantity(7.0),
-            ),
+            HirImportedBinding::new(canonical.clone()),
         );
 
         let importer_source = "node anchor: Dimensionless = 1.0;";
@@ -5832,15 +5821,6 @@ mod tests {
         let lexical = qualified.within_scope(&instance);
         let binding = &unfrozen.imported_bindings[&lexical];
         assert_eq!(binding.target(), &canonical);
-        assert!(matches!(
-            binding.declared_type(),
-            DeclaredType::Quantity(dimension) if dimension.is_dimensionless()
-        ));
-        assert!(matches!(
-            binding.value(),
-            Some(crate::registry::runtime_value::RuntimeValue::Quantity(value))
-                if (*value - 7.0).abs() < f64::EPSILON
-        ));
         assert!(!unfrozen.imported_bindings.contains_key(&qualified));
     }
 }

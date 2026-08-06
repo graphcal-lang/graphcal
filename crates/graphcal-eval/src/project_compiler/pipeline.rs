@@ -30,20 +30,15 @@ pub(in crate::project_compiler) fn validate_project_dag_recursion(
     })
 }
 
-/// Compile a single file within a project, using dependency artifacts for imports.
-///
-/// Builds import bindings, lowers to IR, applies any compile-time include
-/// bindings, and type-resolves to TIR. The project compilation session calls
-/// this exactly once for each file in topological order.
-fn compile_single_file_in_project(
+/// Lower one physical file after every dependency HIR interface is available.
+fn lower_single_file_to_hir(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
-    project_types: &mut graphcal_compiler::tir::typed::ProjectTypeStore,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CompiledFile, CompileError> {
+) -> Result<HirFile, CompileError> {
     cancellation.checkpoint()?;
     let loaded_file = &project.files[file_dag_id];
     let file_src = &loaded_file.named_source;
@@ -74,12 +69,10 @@ fn compile_single_file_in_project(
         &mut ctx.include_instances,
     );
 
-    // Lower to IR and finalize compilation.
-    lowering::lower_and_finalize(
+    lowering::lower_file_to_hir(
         ProjectSemanticContext {
             project,
             module_resolver,
-            project_types,
             module_templates,
         },
         file_dag_id,
@@ -115,7 +108,6 @@ fn store_module_artifact(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    external_surface: ExternalDeclSurface,
     module_artifacts: &mut HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
@@ -124,6 +116,15 @@ fn store_module_artifact(
         &compiled.tir,
         compiled.checked_execution_facts.const_values.as_ref(),
     );
+    let declared_types_by_dag = compiled
+        .tir
+        .local_dags()
+        .map(|(dag_id, dag)| {
+            cancellation.checkpoint()?;
+            dag.build_declared_types(file_src)
+                .map(|types| (dag_id.clone(), types))
+        })
+        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
     let override_dependencies =
         graphcal_compiler::tir::dim_check::collect_override_dependency_summary_with_cancellation(
             &compiled.tir,
@@ -138,8 +139,7 @@ fn store_module_artifact(
         ModuleArtifact {
             const_values: top_level_consts,
             declared_types: compiled.declared_types,
-            frontend_registry: compiled.tir.registry().clone(),
-            external_surface,
+            declared_types_by_dag,
             override_dependencies,
             dag_tirs,
             extern_functions,
@@ -148,22 +148,62 @@ fn store_module_artifact(
     Ok(())
 }
 
-/// Compile a complete project into one reusable checked continuation.
+/// Lower the complete loaded project into one authoritative HIR value.
 ///
-/// Dependencies produce compile-time artifacts only. No runtime schedule,
-/// assertion, dynamic scale, plot, or host call is executed by this loop.
-pub(in crate::project_compiler) fn check_project_perfile(
-    project: &crate::loader::LoadedProject,
-    host_metadata: &crate::host_fns::HostFunctionMetadata,
+/// Dependencies contribute HIR interfaces only. No TIR construction, static
+/// body checking, constant evaluation, or host verification occurs here.
+pub(in crate::project_compiler) fn lower_project_perfile<'project>(
+    project: &'project crate::loader::LoadedProject,
     module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProject, CompileError> {
+) -> Result<HirProject<'project>, CompileError> {
     cancellation.checkpoint()?;
-    let mut module_artifacts: HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact> =
-        HashMap::new();
-    let root_source = &project.files[&project.root].named_source;
-    let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
+    let mut files = HashMap::new();
+    let mut module_interfaces = HashMap::new();
     let mut module_templates = ModuleTemplateStore::default();
+
+    for file_dag_id in &project.load_order {
+        cancellation.checkpoint()?;
+        let hir = lower_single_file_to_hir(
+            project,
+            file_dag_id,
+            &module_interfaces,
+            &module_resolver,
+            &mut module_templates,
+            cancellation,
+        )?;
+        module_interfaces.insert(
+            file_dag_id.clone(),
+            HirModuleArtifact {
+                frontend_registry: hir.root.registry.clone(),
+                external_surface: hir.root.external_surface.clone(),
+            },
+        );
+        files.insert(file_dag_id.clone(), hir);
+    }
+
+    if !files.contains_key(&project.root) {
+        return Err(CompileError::Eval(GraphcalError::InternalError {
+            message: "root file not found in project load order".to_string(),
+            src: NamedSource::new("internal", Arc::new(String::new())),
+            span: Span::new(0, 0).into(),
+        }));
+    }
+
+    Ok(HirProject {
+        loaded: project,
+        files,
+        module_interfaces,
+        module_resolver,
+        cancellation: cancellation.clone(),
+    })
+}
+
+fn build_project_type_store(
+    hir: &HirProject<'_>,
+) -> Result<graphcal_compiler::tir::typed::ProjectTypeStore, CompileError> {
+    let root_source = &hir.files[&hir.loaded.root].source;
+    let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
     project_types
         .insert_graphcal_prelude()
         .map_err(|error| GraphcalError::InternalError {
@@ -171,51 +211,96 @@ pub(in crate::project_compiler) fn check_project_perfile(
             src: root_source.clone(),
             span: Span::new(0, 0).into(),
         })?;
+    for file_dag_id in &hir.loaded.load_order {
+        let file = hir.files.get(file_dag_id).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: format!("HIR module `{file_dag_id}` is unavailable"),
+                src: root_source.clone(),
+                span: Span::new(0, 0).into(),
+            })
+        })?;
+        let source = &file.source;
+        project_types.insert_resolver_subtree(
+            file_dag_id,
+            &file.root.registry,
+            source,
+            &hir.module_resolver,
+        );
+        for (dag_id, ir) in &file.inline_dags {
+            project_types.insert_resolver_subtree(
+                dag_id,
+                &ir.registry,
+                source,
+                &hir.module_resolver,
+            );
+        }
+    }
+    Ok(project_types)
+}
+
+/// Consume a complete HIR project and perform all mandatory static checks.
+pub(in crate::project_compiler) fn check_hir_project(
+    hir: HirProject<'_>,
+    host_metadata: &crate::host_fns::HostFunctionMetadata,
+) -> Result<CheckedProject, CompileError> {
+    hir.cancellation.checkpoint()?;
+    let project_types = build_project_type_store(&hir)?;
+    let HirProject {
+        loaded: project,
+        mut files,
+        module_interfaces,
+        module_resolver,
+        cancellation,
+    } = hir;
+    let mut module_artifacts = HashMap::new();
 
     for file_dag_id in &project.load_order {
         cancellation.checkpoint()?;
-        let compiled = compile_single_file_in_project(
-            project,
-            file_dag_id,
+        let hir_file = files.remove(file_dag_id).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: format!("HIR module `{file_dag_id}` was already consumed or is missing"),
+                src: project.files[&project.root].named_source.clone(),
+                span: Span::new(0, 0).into(),
+            })
+        })?;
+        let file_src = hir_file.source.clone();
+        let compiled = checking::check_hir_file(
+            hir_file,
             &module_artifacts,
+            &module_interfaces,
             &module_resolver,
-            &mut project_types,
-            &mut module_templates,
-            cancellation,
+            &project_types,
+            &cancellation,
         )?;
-        let loaded_file = &project.files[file_dag_id];
-        let file_src = &loaded_file.named_source;
         verify_host_functions(
             project,
             file_dag_id,
             &compiled.tir,
-            file_src,
+            &file_src,
             host_metadata,
-            cancellation,
+            &cancellation,
         )?;
 
         if *file_dag_id == project.root {
             return Ok(CheckedProject {
                 compiled,
-                source: file_src.clone(),
-                root_ast: loaded_file.ast.clone(),
+                source: file_src,
+                root_ast: project.files[file_dag_id].ast.clone(),
                 module_resolver,
             });
         }
 
-        let external_surface = extract_external_decl_surface(&loaded_file.ast);
         store_module_artifact(
             compiled,
             file_dag_id,
-            file_src,
-            external_surface,
+            &file_src,
             &mut module_artifacts,
-            cancellation,
+            &cancellation,
         )?;
     }
 
     Err(CompileError::Eval(GraphcalError::InternalError {
-        message: "root file not found in project load order".to_string(),
+        message: "root HIR module was not checked".to_string(),
         src: NamedSource::new("internal", Arc::new(String::new())),
         span: Span::new(0, 0).into(),
     }))

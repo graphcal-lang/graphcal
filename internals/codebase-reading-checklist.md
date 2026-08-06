@@ -222,12 +222,14 @@ pass model; `eval/project/prepare.rs` is the only transition that consumes
 - [ ] `crates/graphcal-eval/src/inline_dag.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/template.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/model.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/hir_project.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/recursion.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/imports.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/lowering.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/checking.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/pipeline.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/session.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/mod.rs`
@@ -292,6 +294,7 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 - [ ] `crates/graphcal-cli/src/overrides.rs`
 - [ ] `crates/graphcal-cli/src/model.rs`
 - [ ] `crates/graphcal-cli/src/main.rs`
+- [ ] `crates/graphcal-cli/src/dump.rs`
 - [ ] `crates/graphcal-cli/src/deps.rs`
 - [ ] `crates/graphcal-cli/src/lib.rs`
 
@@ -329,5 +332,6 @@ Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually 
 - [ ] `crates/graphcal-cli/tests/cli.rs`
 - [ ] `crates/graphcal-cli/tests/plugin_cmd.rs`
 - [ ] `crates/graphcal-cli/tests/plugin_e2e.rs`
+- [ ] `crates/graphcal-cli/tests/dump.rs`
 - [ ] `crates/graphcal-wasm/tests/tutorial_examples.rs`
 - [ ] `crates/graphcal-wasm/tests/wasm_runtime.rs`

@@ -83,7 +83,7 @@ pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
 pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
@@ -260,7 +260,7 @@ fn ensure_include_item_selectable(
 }
 
 fn reject_runtime_unit_import(
-    dep: &ModuleArtifact,
+    dep: &HirModuleArtifact,
     name: &NameAtom,
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -613,7 +613,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files[import_dag_id];
@@ -759,17 +759,25 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     }
                 }
             }
-            // Import type-system declarations (pub items only).
-            if let Some(artifact) = module_artifacts.get(import_dag_id) {
-                ctx.frontend_registry_imports
-                    .push(super::FrontendRegistryImport {
-                        registry: &artifact.frontend_registry,
-                        external_surface: &artifact.external_surface,
-                        unit_alias: prefix.clone(),
-                        dynamic_unit_boundary: DynamicUnitBoundary::ConcreteInstance,
-                        import_span: include_decl.path.span(),
-                    });
-            }
+            // Import type-system declarations (pub items only). Dependency
+            // interfaces are complete before any dependent HIR is lowered.
+            let artifact = module_artifacts.get(import_dag_id).ok_or_else(|| {
+                CompileError::Eval(GraphcalError::InternalError {
+                    message: format!(
+                        "HIR interface for included module `{import_dag_id}` is unavailable"
+                    ),
+                    src: file_src.clone(),
+                    span: include_decl.path.span().into(),
+                })
+            })?;
+            ctx.frontend_registry_imports
+                .push(super::FrontendRegistryImport {
+                    registry: &artifact.frontend_registry,
+                    external_surface: &artifact.external_surface,
+                    unit_alias: prefix.clone(),
+                    dynamic_unit_boundary: DynamicUnitBoundary::ConcreteInstance,
+                    import_span: include_decl.path.span(),
+                });
             None
         }
     };
@@ -1082,7 +1090,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
     import_path: &graphcal_compiler::desugar::desugared_ast::ModulePath,
     import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let resolved_module = project
@@ -1180,39 +1188,34 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     }));
                 }
 
-                match import_selective_item(
-                    dep,
-                    source_file,
+                if dep_index.is_const(orig_name) {
+                    import_selective_item(
+                        source_file,
+                        orig_name,
+                        &local_name,
+                        import_item.name.span,
+                        file_src,
+                        &mut ctx.imported_names,
+                        &mut ctx.imported_bindings,
+                        Some(&mut ctx.imported_source_order),
+                    )?;
+                } else if file_has_import_item(
+                    &dep_loaded.ast,
                     orig_name,
-                    &local_name,
-                    import_item.name.span,
-                    file_src,
-                    &mut ctx.imported_names,
-                    &mut ctx.imported_bindings,
-                    Some(&mut ctx.imported_source_order),
-                )? {
-                    SelectiveImportResult::Const => {}
-                    SelectiveImportResult::NotFound => {
-                        // Check if it's a type-system declaration in the dep's file.
-                        if file_has_import_item(
-                            &dep_loaded.ast,
-                            orig_name,
-                            graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
-                        ) {
-                            // A bare non-value term, such as a DAG or constructor.
-                            ctx.imported_type_system_names
-                                .entry(source_file.clone())
-                                .or_default()
-                                .insert(import_item.namespace, orig_name.clone());
-                        } else {
-                            return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                                name: orig_name.to_string(),
-                                file_path: import_path.display_path(),
-                                src: file_src.clone(),
-                                span: import_item.name.span.into(),
-                            }));
-                        }
-                    }
+                    graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
+                ) {
+                    // A bare non-value term, such as a DAG or constructor.
+                    ctx.imported_type_system_names
+                        .entry(source_file.clone())
+                        .or_default()
+                        .insert(import_item.namespace, orig_name.clone());
+                } else {
+                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
+                        name: orig_name.to_string(),
+                        file_path: import_path.display_path(),
+                        src: file_src.clone(),
+                        span: import_item.name.span.into(),
+                    }));
                 }
             }
         }
@@ -1242,7 +1245,8 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
             let import_span = import_path.span();
             // Import compile-time constants under the module prefix.
             import_module_values(
-                dep,
+                &dep_loaded.ast.declarations,
+                &dep.external_surface,
                 source_file,
                 &module_name,
                 import_span,
@@ -1268,10 +1272,10 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
 }
 
 fn insert_imported_binding(
-    imported_bindings: &mut HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: &mut HashMap<ScopedName, HirImportedBinding>,
     imported_names: &ImportedValueNames,
     lexical_name: ScopedName,
-    binding: ImportedBinding,
+    binding: HirImportedBinding,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
@@ -1294,100 +1298,70 @@ fn insert_imported_binding(
     Ok(())
 }
 
-/// Look up and register a single selectively imported compile-time constant.
+/// Register a selectively imported constant at the HIR boundary.
 #[expect(
     clippy::too_many_arguments,
-    reason = "helper mutates imported name/value/source-order collections together"
+    reason = "helper mutates imported name/binding/source-order collections together"
 )]
 pub(in crate::project_compiler) fn import_selective_item(
-    dep: &ModuleArtifact,
     source_owner: &graphcal_compiler::dag_id::DagId,
     orig_name: &NameAtom,
     local_name: &DeclName,
     span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: &mut HashMap<ScopedName, HirImportedBinding>,
     imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
-) -> Result<SelectiveImportResult, CompileError> {
-    // The dep's `declared_types` is keyed by typed `ScopedName`. Its top-level
-    // declarations are always bare locals, so wrap the bare member name.
+) -> Result<(), CompileError> {
     let orig_decl = DeclName::from_atom(orig_name.clone());
-    if let Some(rv) = dep.const_values.get(&orig_decl) {
-        let dt = imported_declared_type(dep, &orig_decl, src, span)?;
-        let scoped = ScopedName::local(local_name.clone());
-        imported_names.const_names.push((scoped.clone(), span));
-        if let Some(source_order) = imported_source_order {
-            source_order.push((scoped.clone(), DeclCategory::Const));
-        }
-        insert_imported_binding(
-            imported_bindings,
-            imported_names,
-            scoped,
-            ImportedBinding::with_value(
-                graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
-                    source_owner.clone(),
-                    orig_decl,
-                ),
-                dt,
-                rv.clone(),
-            ),
-            src,
-            span,
-        )?;
-        Ok(SelectiveImportResult::Const)
-    } else {
-        Ok(SelectiveImportResult::NotFound)
+    let scoped = ScopedName::local(local_name.clone());
+    imported_names.const_names.push((scoped.clone(), span));
+    if let Some(source_order) = imported_source_order {
+        source_order.push((scoped.clone(), DeclCategory::Const));
     }
-}
-
-fn imported_declared_type(
-    dep: &ModuleArtifact,
-    name: &DeclName,
-    src: &NamedSource<Arc<String>>,
-    span: Span,
-) -> Result<DeclaredType, CompileError> {
-    dep.declared_types
-        .get(&ScopedName::from(name))
-        .cloned()
-        .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::EvalError {
-                message: format!("internal: imported value `{name}` is missing its declared type"),
-                src: src.clone(),
-                span: span.into(),
-            })
-        })
+    insert_imported_binding(
+        imported_bindings,
+        imported_names,
+        scoped,
+        HirImportedBinding::new(
+            graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                source_owner.clone(),
+                orig_decl,
+            ),
+        ),
+        src,
+        span,
+    )
 }
 
 /// Import all exported constants under a module prefix.
 #[expect(
     clippy::too_many_arguments,
-    reason = "helper mutates imported name/value/source-order collections together"
+    reason = "helper mutates imported name/binding/source-order collections together"
 )]
 pub(in crate::project_compiler) fn import_module_values(
-    dep: &ModuleArtifact,
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    external_surface: &ExternalDeclSurface,
     source_owner: &graphcal_compiler::dag_id::DagId,
     module_name: &ModuleAliasName,
     import_span: Span,
     src: &NamedSource<Arc<String>>,
     imported_names: &mut ImportedValueNames,
-    imported_bindings: &mut HashMap<ScopedName, ImportedBinding>,
+    imported_bindings: &mut HashMap<ScopedName, HirImportedBinding>,
     mut imported_source_order: Option<&mut Vec<(ScopedName, DeclCategory)>>,
 ) -> Result<(), CompileError> {
-    // Sort keys for deterministic ordering — HashMap iteration is arbitrary.
-    let mut const_keys: Vec<&DeclName> = dep.const_values.keys().collect();
-    const_keys.sort();
-    for name in const_keys {
-        // Consts cross the boundary only as explicit exports.
-        if !dep.external_surface.is_explicit_export(name) {
+    for declaration in declarations {
+        let DeclKind::ConstNode(constant) = &declaration.kind else {
+            continue;
+        };
+        let name = &constant.name.value;
+        if !external_surface.is_explicit_export(name) {
             continue;
         }
-        let rv = &dep.const_values[name];
         let scoped = ScopedName::qualified(module_name.clone(), name.clone());
         imported_names
             .const_names
             .push((scoped.clone(), import_span));
-        let dt = imported_declared_type(dep, name, src, import_span)?;
         if let Some(ref mut source_order) = imported_source_order {
             source_order.push((scoped.clone(), DeclCategory::Const));
         }
@@ -1395,13 +1369,11 @@ pub(in crate::project_compiler) fn import_module_values(
             imported_bindings,
             imported_names,
             scoped,
-            ImportedBinding::with_value(
+            HirImportedBinding::new(
                 graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
                     source_owner.clone(),
                     name.clone(),
                 ),
-                dt,
-                rv.clone(),
             ),
             src,
             import_span,
@@ -1415,76 +1387,32 @@ pub(in crate::project_compiler) fn import_module_values(
 mod tests {
     use super::*;
 
-    fn empty_module_artifact() -> ModuleArtifact {
-        let source = "";
-        let src = NamedSource::new("empty.gcl", Arc::new(source.to_string()));
-        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(
-            graphcal_compiler::syntax::parser::Parser::new(source)
-                .parse_file()
-                .unwrap(),
-        );
-        let dag_id = graphcal_compiler::dag_id::DagId::root_in_package("test", "empty");
-        let ir = graphcal_compiler::ir::lower::lower(&file, &src).unwrap();
-        let mut resolver = graphcal_compiler::syntax::module_resolve::ModuleResolver::default();
-        resolver
-            .add_module(dag_id.clone(), &file.declarations)
-            .unwrap();
-        let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
-        project_types.insert_graphcal_prelude().unwrap();
-        project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
-        let tir = graphcal_compiler::tir::typed::type_resolve_with_modules(
-            ir,
-            &dag_id,
-            &src,
-            &resolver,
-            &project_types,
-        )
-        .unwrap();
-
-        ModuleArtifact {
-            const_values: HashMap::new(),
-            declared_types: HashMap::new(),
-            frontend_registry: tir.registry().clone(),
-            external_surface: ExternalDeclSurface::default(),
-            override_dependencies: HashMap::new(),
-            dag_tirs: tir.dag_registry().clone(),
-            extern_functions: HashMap::new(),
-        }
-    }
-
     #[test]
-    fn import_selective_item_errors_when_declared_type_is_missing() {
-        let mut dep = empty_module_artifact();
-        dep.const_values.insert(
-            DeclName::expect_valid("g0"),
-            RuntimeValue::Quantity(9.80665),
-        );
-        dep.external_surface
-            .insert_explicit_export(DeclName::expect_valid("g0"));
-
+    fn selective_import_records_only_the_canonical_hir_target() {
         let src = NamedSource::new("test.gcl", Arc::new(String::new()));
         let mut imported_names = ImportedValueNames::default();
         let mut imported_bindings = HashMap::new();
+        let owner = graphcal_compiler::dag_id::DagId::root_in_package("test", "dep");
 
-        let err = import_selective_item(
-            &dep,
-            &graphcal_compiler::dag_id::DagId::root_in_package("test", "dep"),
+        import_selective_item(
+            &owner,
             &NameAtom::parse("g0").unwrap(),
-            &DeclName::expect_valid("g0"),
+            &DeclName::expect_valid("local_g0"),
             Span::new(0, 2),
             &src,
             &mut imported_names,
             &mut imported_bindings,
             None,
         )
-        .expect_err("missing declared type must be an internal compile error");
+        .unwrap();
 
-        let message = format!("{err:?}");
-        assert!(
-            message.contains("missing its declared type"),
-            "unexpected error: {message}"
+        let lexical = ScopedName::local(DeclName::expect_valid("local_g0"));
+        assert_eq!(
+            imported_bindings[&lexical].target(),
+            &graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                owner,
+                DeclName::expect_valid("g0"),
+            )
         );
-        assert!(imported_names.const_names.is_empty());
-        assert!(imported_bindings.is_empty());
     }
 }

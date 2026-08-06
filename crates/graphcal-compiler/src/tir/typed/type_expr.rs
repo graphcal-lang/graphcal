@@ -3,14 +3,14 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{MulDivOp, TypeExpr, TypeExprKind};
+use crate::desugar::desugared_ast::{MulDivOp, TypeExpr};
 use crate::dimension::{Dimension, Rational};
 use crate::hir;
 use crate::hir::diagnostics::hir_lower_error_to_graphcal;
 use crate::nat::NatPolyForm;
 use crate::registry::error::GraphcalError;
 use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint};
-use crate::syntax::dimension::{DimName, ResolvedDimName};
+use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use crate::syntax::span::Span;
@@ -49,116 +49,6 @@ pub(super) fn internal_error(
     }
 }
 
-fn type_lower_error_to_graphcal(
-    err: &hir::HirLowerError,
-    type_ann: &TypeExpr,
-    src: &NamedSource<Arc<String>>,
-) -> GraphcalError {
-    if let hir::HirLowerError::UnknownTypePath { path, span } = err {
-        if type_expr_has_index_name_at_span(type_ann, *span)
-            && let Ok(name) = IndexName::try_new(path.clone())
-        {
-            return GraphcalError::UnknownIndex {
-                name,
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-        if type_expr_has_dim_term_at_span(type_ann, *span)
-            && let Ok(name) = DimName::try_new(path.clone())
-        {
-            return GraphcalError::UnknownDimension {
-                name,
-                src: src.clone(),
-                span: (*span).into(),
-            };
-        }
-    }
-    hir_lower_error_to_graphcal(err, src)
-}
-
-fn generic_args_have_index_name_at_span<'a>(
-    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
-    span: Span,
-) -> bool {
-    generic_args.into_iter().any(|arg| {
-        matches!(
-            arg,
-            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
-                if type_expr_has_index_name_at_span(type_expr, span)
-        )
-    })
-}
-
-fn generic_args_have_dim_term_at_span<'a>(
-    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
-    span: Span,
-) -> bool {
-    generic_args.into_iter().any(|arg| {
-        matches!(
-            arg,
-            crate::desugar::desugared_ast::GenericArg::Type(type_expr)
-                if type_expr_has_dim_term_at_span(type_expr, span)
-        ) || matches!(
-            arg,
-            crate::desugar::desugared_ast::GenericArg::Ambiguous(ambiguous)
-                if ambiguous.span() == span
-        )
-    })
-}
-
-fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
-    match &type_ann.kind {
-        TypeExprKind::Indexed { base, indexes } => {
-            type_expr_has_index_name_at_span(base, span)
-                || indexes.iter().any(|index| match index {
-                    crate::desugar::desugared_ast::IndexExpr::Name(name) => name.span == span,
-                    crate::desugar::desugared_ast::IndexExpr::Finite { .. }
-                    | crate::desugar::desugared_ast::IndexExpr::BareNat(_) => false,
-                })
-        }
-        TypeExprKind::TypeApplication { generic_args, .. } => {
-            generic_args_have_index_name_at_span(generic_args, span)
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            generic_args_have_index_name_at_span(generic_args, span)
-        }
-        TypeExprKind::DatetimeApplication { type_args } => type_args
-            .iter()
-            .any(|arg| type_expr_has_index_name_at_span(arg, span)),
-        TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime
-        | TypeExprKind::DimExpr(_) => false,
-    }
-}
-
-fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
-    match &type_ann.kind {
-        TypeExprKind::DimExpr(dim_expr) => dim_expr
-            .terms
-            .iter()
-            .any(|item| item.term.name.span == span),
-        TypeExprKind::Indexed { base, .. } => type_expr_has_dim_term_at_span(base, span),
-        TypeExprKind::TypeApplication { generic_args, .. } => {
-            generic_args_have_dim_term_at_span(generic_args, span)
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            generic_args_have_dim_term_at_span(generic_args, span)
-        }
-        TypeExprKind::DatetimeApplication { type_args } => type_args
-            .iter()
-            .any(|arg| type_expr_has_dim_term_at_span(arg, span)),
-        TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime => false,
-    }
-}
-
 #[derive(Clone, Copy)]
 struct HirTypeResolutionContext<'a> {
     src: &'a NamedSource<Arc<String>>,
@@ -176,7 +66,6 @@ struct HirTypeResolutionContext<'a> {
 /// source-path lookup itself.
 pub fn resolve_hir_type_expr(
     type_ann: &hir::TypeExpr,
-    _registry: &Registry,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
@@ -188,28 +77,6 @@ pub fn resolve_hir_type_expr(
         prelude: &prelude,
     };
     resolve_hir_type_expr_inner(type_ann, ctx)
-}
-
-pub(super) fn resolve_ast_type_expr_via_hir(
-    type_ann: &TypeExpr,
-    _registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-    module_ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let generic_scope = hir::GenericScope::new();
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let lower_ctx =
-        hir::TypeLoweringContext::new(module_ctx.owner, module_ctx.resolver, &generic_scope)
-            .with_prelude(&prelude);
-    let hir_type = hir::lower_type_expr(type_ann, lower_ctx)
-        .map_err(|err| type_lower_error_to_graphcal(&err, type_ann, src))?;
-    let resolve_ctx = HirTypeResolutionContext {
-        src,
-        resolver: module_ctx.resolver,
-        project_types: module_ctx.types,
-        prelude: &prelude,
-    };
-    resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
 }
 
 fn resolve_hir_type_expr_inner(

@@ -24,6 +24,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`eval`](#graphcal-eval) | Evaluate a `.gcl` file |
 | [`format`](#graphcal-format) | Format `.gcl` files |
 | [`check`](#graphcal-check) | Check `.gcl` files for errors without evaluation |
+| [`dump`](#graphcal-dump) | Debug-print compiler/evaluator pipeline artifacts (experimental) |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
 | [`model serve`](#graphcal-model-serve) | Serve a prepared model over Tenax stdio Arrow IPC |
 | [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
@@ -60,7 +61,7 @@ pins each referenced `.wasm` file's SHA-256 as a `[[plugin]]` entry. Loading
 enforces the pins: an unpinned or hash-mismatched plugin is a hard error, so
 plugin binaries can only change together with a reviewable lockfile diff.
 
-Dependency-consuming commands (`check`, `eval`, `graph`, `model serve`, and the LSP) are
+Dependency-consuming commands (`check`, `eval`, `dump`, `graph`, `model serve`, and the LSP) are
 read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
@@ -628,6 +629,69 @@ graphcal check my_project/
 |------|---------|
 | `0` | No errors found |
 | `1` | Errors detected |
+
+---
+
+## `graphcal dump`
+
+!!! warning "Experimental debugging output"
+    `graphcal dump` pretty-prints internal Rust data structures with `Debug`.
+    The command defines no stable schema, and output may change after any
+    implementation refactor. It may include complete source text, absolute
+    paths, and runtime values; inspect it before sharing or attaching it to a
+    public issue. Raw loaded-plugin byte buffers are always redacted.
+
+Debug-print one compiler or evaluator artifact:
+
+```bash
+graphcal dump <STAGE> <FILE> [OPTIONS]
+```
+
+| Stage | Artifact and stopping point |
+|-------|-----------------------------|
+| `source` | Physical source path and complete text after a bounded read |
+| `tokens` | Parser-facing tokens, formatter trivia, and the first lexical-error span |
+| `ast` | Parser-produced `File<Raw>` (`raw-ast` is an alias) |
+| `desugared` | `File<Desugared>` after parser sugar removal (`desugared-ast` is an alias) |
+| `modules` | Raw `LoadedProject` together with its canonical `ModuleResolver` |
+| `hir` | Complete `HirProject` after elaboration and canonical reference resolution, before static checking |
+| `tir` | Fully checked raw `TIR` |
+| `plan` | Raw `ExecPlan` produced by runtime preparation |
+| `runtime` | One raw `RuntimeEvaluation`, including SI values and contained errors |
+| `result` | One normal public `EvalResult` |
+
+There is intentionally no `all` stage, JSON format, filtering language, record
+envelope, or compatibility guarantee. Run the specific stage needed for a
+debugging session. `HirProject` is an actual compiler continuation rather than
+a dump-only projection: it owns every file-root and inline-DAG HIR module, and
+static checking consumes it to produce `CheckedProject`.
+
+`source`, `tokens`, `ast`, and `desugared` never follow imports. `modules` stops
+before HIR lowering. `hir` resolves the complete project but does not construct
+TIR, check expression types/dimensions, evaluate constants, or verify host
+signatures. Consequently, `hir` remains available when a later static check
+fails. `tir` and `plan` do not evaluate ordinary runtime parameters, nodes,
+assertions, dynamic unit scales, or callable host functions. Only `runtime` and
+`result` perform ordinary runtime evaluation.
+
+Examples:
+
+```bash
+graphcal dump tokens model.gcl
+graphcal dump ast model.gcl
+graphcal dump modules src/mission/main.gcl --root .
+graphcal dump hir model.gcl
+graphcal dump tir model.gcl
+graphcal dump plan model.gcl
+graphcal dump runtime model.gcl --set 'mass=1200 kg'
+graphcal dump result model.gcl --input params.json
+```
+
+Every stage accepts `--root`. `runtime` and `result` additionally reuse the
+bounded `--set`, `--input`, and `--input-max-bytes` parser from `graphcal eval`.
+A failed stage prints the normal diagnostic and exits with code `2`. A completed
+runtime/result dump containing node, assertion, or plot failures is still
+printed and exits with code `1`.
 
 ---
 

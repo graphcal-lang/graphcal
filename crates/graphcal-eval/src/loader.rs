@@ -346,12 +346,22 @@ fn read_plugin_file<F: FileSystemReader>(
 }
 
 /// A successfully read wasm plugin file, ready for the plugin host.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoadedPlugin {
     /// The raw module bytes.
     pub bytes: Arc<[u8]>,
     /// Lowercase-hex SHA-256 of the bytes — the form `graphcal.lock` pins.
     sha256_hex: String,
+}
+
+impl std::fmt::Debug for LoadedPlugin {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LoadedPlugin")
+            .field("byte_len", &self.bytes.len())
+            .field("sha256_hex", &self.sha256_hex)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Why a wasm plugin file could not be provided to the plugin host.
@@ -2673,6 +2683,20 @@ mod tests {
 
     fn fs() -> RealFileSystem {
         RealFileSystem::default()
+    }
+
+    #[test]
+    fn loaded_plugin_debug_never_exposes_module_bytes() {
+        let plugin = LoadedPlugin {
+            bytes: Arc::from(b"private-wasm-payload".as_slice()),
+            sha256_hex: "digest".to_string(),
+        };
+
+        let rendered = format!("{plugin:#?}");
+        assert!(rendered.contains("byte_len: 20"));
+        assert!(rendered.contains("sha256_hex: \"digest\""));
+        assert!(!rendered.contains("private-wasm-payload"));
+        assert!(!rendered.contains("112, 114, 105, 118, 97, 116, 101"));
     }
 
     struct MutatingManifestFileSystem {

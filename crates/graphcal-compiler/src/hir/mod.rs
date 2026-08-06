@@ -39,6 +39,6 @@ pub(crate) use expr::{find_extern_call, lower_assert_body, lower_expr, visit_exp
 pub use lower::{GenericParamBinding, GenericScope, HirLowerError, PreludeTypeScope};
 pub(crate) use lower::{TypeLoweringContext, lower_type_expr};
 pub use types::{
-    BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, GenericArg,
-    GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeExpr, TypeExprKind,
+    BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, DomainBound, GenericArg,
+    GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeAnnotation, TypeExpr, TypeExprKind,
 };
