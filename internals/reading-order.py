@@ -5,8 +5,9 @@
 # ///
 """Compute a library-consumer reading order for all Rust files in the workspace.
 
-Used to (re)generate ``codebase-reading-checklist.md``. The order guarantees
-that every file a given file imports appears earlier in the list, so a reader
+Used to (re)generate the ``codebase-reading-guide.md`` "Suggested Reading
+Order" section. The order guarantees that every file a given file imports
+appears earlier in the list, so a reader
 working top-to-bottom always has the full picture of the imported contents.
 
 Method:
@@ -17,14 +18,14 @@ Method:
     the file that defines the item. ``mod child;`` declarations create no
     edge — they don't import content.
  3. Condense strongly connected components (genuinely mutually dependent
-    files) and topologically sort, using the current checklist order as a
+    files) and topologically sort, using the current reading order as a
     tie-break so re-runs stay stable. Within a cycle, files with fewer
     intra-cycle dependencies come first; ``tests.rs`` and ``mod.rs``-style
     entry files come last.
  4. Verify: no forward edges outside acknowledged cycles.
 
 Output: the ordered file list, then the cycle groups (to annotate in the
-checklist) and any forward edges. Stage headings in the checklist are curated
+reading guide) and any forward edges. Stage headings in the guide are curated
 by hand; keep each stage a contiguous slice of this order.
 """
 
@@ -36,7 +37,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CHECKLIST = Path(__file__).resolve().parent / "codebase-reading-checklist.md"
+READING_GUIDE = Path(__file__).resolve().parent / "codebase-reading-guide.md"
 CRATE_ORDER = [
     "graphcal-compiler",
     "graphcal-io",
@@ -57,11 +58,14 @@ CRATE_NAMES = {c.replace("-", "_"): c for c in CRATE_ORDER}
 # binary target rooted at `main.rs`, so binary/tests can import `graphcal::...`.
 CRATE_NAMES["graphcal"] = "graphcal-cli"
 
-# Current checklist order, used as a tie-break so the output stays close to
-# the curated pedagogy wherever the dependency graph allows it.
+# Current staged reading order, used as a tie-break so the output stays close
+# to the curated pedagogy wherever the dependency graph allows it.
 EXISTING_POS: dict[str, int] = {}
-if CHECKLIST.exists():
-    for i, m in enumerate(re.finditer(r"`(crates/[^`]+\.rs)`", CHECKLIST.read_text())):
+if READING_GUIDE.exists():
+    reading_order = READING_GUIDE.read_text().partition(
+        "## 9. Suggested Reading Order"
+    )[2]
+    for i, m in enumerate(re.finditer(r"`(crates/[^`]+\.rs)`", reading_order)):
         EXISTING_POS.setdefault(m.group(1), i)
 
 
