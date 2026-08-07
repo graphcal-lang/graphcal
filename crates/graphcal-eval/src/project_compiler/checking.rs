@@ -36,12 +36,12 @@ fn value_for_target(
 }
 
 fn resolve_imported_bindings(
-    ir: &graphcal_compiler::ir::lower::IR,
+    hir: &graphcal_compiler::ir::lower::HirDag,
     local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, ImportedBinding>, CompileError> {
-    ir.imported_bindings()
+    hir.imported_bindings()
         .iter()
         .map(|(lexical, hir_binding)| {
             let target = hir_binding.target();
@@ -67,7 +67,6 @@ fn resolve_imported_bindings(
 
 fn local_declared_interfaces(
     hir: &HirFile,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
@@ -76,18 +75,17 @@ fn local_declared_interfaces(
     HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     CompileError,
 > {
-    std::iter::once((file_dag_id, &hir.root))
-        .chain(hir.inline_dags.iter().map(|(dag_id, ir)| (dag_id, ir)))
-        .map(|(dag_id, ir)| {
+    std::iter::once(&hir.root)
+        .chain(&hir.inline_dags)
+        .map(|dag| {
             graphcal_compiler::tir::typed::resolve_hir_declared_types_with_modules_and_cancellation(
-                ir,
-                dag_id,
+                dag,
                 file_src,
                 module_resolver,
                 project_types,
                 cancellation,
             )
-            .map(|types| (dag_id.clone(), types))
+            .map(|types| (dag.dag_id().clone(), types))
             .map_err(CompileError::from)
         })
         .collect()
@@ -103,22 +101,14 @@ pub(super) fn check_hir_file(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
-    let file_dag_id = &hir.dag_id;
     let file_src = &hir.source;
-    let local_interfaces = local_declared_interfaces(
-        &hir,
-        file_dag_id,
-        file_src,
-        module_resolver,
-        project_types,
-        cancellation,
-    )?;
+    let local_interfaces =
+        local_declared_interfaces(&hir, file_src, module_resolver, project_types, cancellation)?;
     let root_bindings =
         resolve_imported_bindings(&hir.root, &local_interfaces, module_artifacts, file_src)?;
     let mut tir = graphcal_compiler::tir::typed::type_resolve_builder_with_imported_bindings_and_cancellation(
         hir.root,
         root_bindings,
-        file_dag_id,
         file_src,
         module_resolver,
         project_types,
@@ -135,14 +125,13 @@ pub(super) fn check_hir_file(
         .into());
     }
 
-    for (dag_id, ir) in hir.inline_dags {
+    for dag in hir.inline_dags {
         cancellation.checkpoint()?;
         let imported_bindings =
-            resolve_imported_bindings(&ir, &local_interfaces, module_artifacts, file_src)?;
+            resolve_imported_bindings(&dag, &local_interfaces, module_artifacts, file_src)?;
         let checked = graphcal_compiler::tir::typed::type_resolve_single_with_imported_bindings_and_cancellation(
-            ir,
+            dag,
             imported_bindings,
-            &dag_id,
             file_src,
             module_resolver,
             project_types,

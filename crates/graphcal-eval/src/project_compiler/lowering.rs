@@ -209,7 +209,6 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     )?;
 
     Ok(HirFile {
-        dag_id: file_dag_id.clone(),
         source: file_src.clone(),
         root,
         inline_dags,
@@ -283,13 +282,7 @@ fn lower_inline_dag_modules<'a>(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<
-    Vec<(
-        graphcal_compiler::dag_id::DagId,
-        graphcal_compiler::ir::lower::IR,
-    )>,
-    CompileError,
-> {
+) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
     let loaded_file = &project.files[file_dag_id];
     let parent_values = crate::inline_dag::classify_value_decls_in_ast(&loaded_file.ast);
 
@@ -311,7 +304,6 @@ fn lower_inline_dag_modules<'a>(
                 module_templates,
                 cancellation,
             )
-            .map(|ir| (loaded_dag.dag_id.clone(), ir))
         })
         .collect()
 }
@@ -332,7 +324,7 @@ fn compile_loaded_dag_module_ir<'a>(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     cancellation.checkpoint()?;
     if let Some(template) = module_templates.get(&loaded_dag.dag_id) {
         return freeze_inline_module_template(
@@ -452,7 +444,7 @@ fn freeze_inline_module_template(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     Ok(template.unfrozen.clone().freeze_with_cancellation(
         template.frontend_registry.clone(),
         dag_id,
@@ -470,7 +462,7 @@ fn store_and_freeze_module_template(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     module_templates.insert(
         dag_id.clone(),
         ElaboratedModuleTemplate {
@@ -719,20 +711,20 @@ pub(super) fn merge_dep_dag_tirs(
 ///    `import <self>.{...}` against the dag's parent file (Concept 9: a
 ///    DAG's `<self>` is its file of definition, regardless of where the
 ///    include sits).
-/// 2. Compile the body to IR with canonical imported targets set up.
+/// 2. Assemble the body with canonical imported targets set up.
 /// 3. Capture importer-owned index binding candidates, merge the body's registry,
 ///    then validate every candidate against the body's effective typed contract.
 /// 4. Preserve canonical A8/V005 reconciliation facts and run
 ///    `check_generics_leakage` (A9/V006).
-/// 5. Merge the body's IR into the importer's IR with prefix/bindings.
+/// 5. Merge the dependency assembly into the importer with prefix/bindings.
 /// 6. For selective includes, add `local_name = @prefix::orig_name` aliases.
 #[expect(
     clippy::too_many_arguments,
-    reason = "pipeline function threads project, importer, module artifacts, and IR builders"
+    reason = "pipeline function threads project, importer, module artifacts, and HIR builders"
 )]
 #[expect(
     clippy::too_many_lines,
-    reason = "single cohesive include pipeline: source resolution, registry merge, validation, IR merge"
+    reason = "single cohesive include pipeline: source resolution, registry merge, validation, HIR merge"
 )]
 fn elaborate_include_instances(
     project: &crate::loader::LoadedProject,
@@ -753,7 +745,7 @@ fn elaborate_include_instances(
     for instance in include_instances {
         cancellation.checkpoint()?;
         let merge_prefix = instance.instance_scope.merge_scope_name();
-        // ---- 1. Resolve source body + lower to IR ------------------------
+        // ---- 1. Resolve and assemble source body -----------------------------
         let (mut dep_unfrozen, dep_registry, dep_src, dep_resolution_owner, body_decls_for_aliases) =
             if let Some(template) = module_templates.get(&instance.template.dag_id) {
                 let source_file = &project.files[&instance.template.source_file];
@@ -1045,7 +1037,7 @@ fn elaborate_include_instances(
             instance.include_span,
         )?;
 
-        // ---- 5. Merge dep IR into importer's IR ---------------------------
+        // ---- 5. Merge dependency assembly into importer ---------------------
         let source_order_start = unfrozen.source_order.len();
         unfrozen.merge_dependency(
             dep_unfrozen,
@@ -1292,7 +1284,7 @@ fn effective_index_binding_contract(
 }
 
 /// Bindings that an alias's type annotation must be rewritten through before
-/// it is registered in the importer's IR. Shared by both inline-DAG and
+/// it is registered in the importer's HIR assembly. Shared by both inline-DAG and
 /// file-include alias paths so their type-substitution stays in lock-step.
 struct AliasSubstitutions<'a> {
     pub index: &'a IndexBindings,
@@ -1333,7 +1325,7 @@ fn add_selective_aliases_inner(
         let local_name = &alias.local;
         // The alias points at the dep's prefixed declaration: a typed
         // qualified `ScopedName`. No flat `prefix::orig_name` strings are
-        // built — the qualification stays structural through the IR.
+        // built — the qualification stays structural through HIR.
         let target = ScopedName::qualified(prefix.clone(), orig_name.clone());
 
         let type_ann = decls.iter().find_map(|d| match &d.kind {

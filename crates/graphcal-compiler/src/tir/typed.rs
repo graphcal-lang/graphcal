@@ -22,7 +22,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
 
-use crate::ir::lower::IR;
+use crate::ir::lower::HirDag;
 use crate::ir::resolve::{DeclCategory, ParsedExpectedFail};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
@@ -146,22 +146,20 @@ impl DagTIR {
     }
 }
 
-/// Resolve all canonical HIR type annotations in an `IR` against the
+/// Resolve all canonical HIR type annotations in an `HirDag` against the
 /// authoritative project type store.
 ///
 /// Syntax paths were eliminated while freezing HIR. This conversion therefore
 /// reads owner-qualified references directly and never performs source-path
 /// lookup or AST-to-HIR lowering.
 pub fn type_resolve_with_modules(
-    ir: IR,
-    root_dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_with_modules_and_cancellation(
-        ir,
-        root_dag_id,
+        hir,
         src,
         module_resolver,
         project_types,
@@ -169,22 +167,20 @@ pub fn type_resolve_with_modules(
     )
 }
 
-/// Resolve an IR to TIR while observing cooperative cancellation.
+/// Resolve a HIR DAG to TIR while observing cooperative cancellation.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] for invalid types or cancellation.
 pub fn type_resolve_with_modules_and_cancellation(
-    ir: IR,
-    root_dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_builder_with_modules_and_cancellation(
-        ir,
-        root_dag_id,
+        hir,
         src,
         module_resolver,
         project_types,
@@ -199,17 +195,15 @@ pub fn type_resolve_with_modules_and_cancellation(
 /// [`TirBuilder::insert_dag`] and consume the builder with
 /// [`TirBuilder::finish`] before checking or evaluation.
 pub fn type_resolve_builder_with_modules_and_cancellation(
-    ir: IR,
-    root_dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
     type_resolve_builder_with_imported_bindings_and_cancellation(
-        ir,
+        hir,
         HashMap::new(),
-        root_dag_id,
         src,
         module_resolver,
         project_types,
@@ -225,9 +219,8 @@ pub fn type_resolve_builder_with_modules_and_cancellation(
 /// does not match the canonical target recorded by HIR, or when type
 /// resolution otherwise fails.
 pub fn type_resolve_builder_with_imported_bindings_and_cancellation<S>(
-    ir: IR,
+    hir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
@@ -237,14 +230,15 @@ where
     S: std::hash::BuildHasher,
 {
     cancellation.checkpoint()?;
-    validate_checked_imported_bindings(&ir, &imported_bindings, src)?;
+    validate_checked_imported_bindings(&hir, &imported_bindings, src)?;
     let imported_bindings = imported_bindings.into_iter().collect();
-    let ctx = ModuleTypeContext::new(root_dag_id, module_resolver, project_types);
-    type_resolve_impl(ir, imported_bindings, root_dag_id, src, ctx, cancellation)
+    let dag_id = hir.dag_id().clone();
+    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
+    type_resolve_impl(hir, imported_bindings, src, ctx, cancellation)
 }
 
 fn validate_checked_imported_bindings<S>(
-    ir: &IR,
+    ir: &HirDag,
     checked: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError>
@@ -302,9 +296,8 @@ fn finalize_hir_dag(
 }
 
 fn type_resolve_impl(
-    ir: IR,
+    ir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -319,7 +312,7 @@ fn type_resolve_impl(
         &asserts_for_hir,
         &ir.registry,
         src,
-        root_dag_id,
+        module_ctx.owner,
         module_ctx,
         &imported_bindings_for_hir,
         cancellation,
@@ -357,15 +350,13 @@ fn type_resolve_impl(
 /// Resolve type annotations for one DAG body with module-aware type-system
 /// path lookup.
 pub fn type_resolve_single_with_modules(
-    ir: IR,
-    dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
 ) -> Result<DagTIR, GraphcalError> {
     type_resolve_single_with_modules_and_cancellation(
-        ir,
-        dag_id,
+        hir,
         src,
         module_resolver,
         project_types,
@@ -373,23 +364,21 @@ pub fn type_resolve_single_with_modules(
     )
 }
 
-/// Resolve one DAG IR while observing cooperative cancellation.
+/// Resolve one HIR DAG while observing cooperative cancellation.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] for invalid types or cancellation.
 pub fn type_resolve_single_with_modules_and_cancellation(
-    ir: IR,
-    dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
     type_resolve_single_with_imported_bindings_and_cancellation(
-        ir,
+        hir,
         HashMap::new(),
-        dag_id,
         src,
         module_resolver,
         project_types,
@@ -404,9 +393,8 @@ pub fn type_resolve_single_with_modules_and_cancellation(
 /// Returns a [`GraphcalError`] when an imported lexical target is missing or
 /// mismatched, or when type resolution otherwise fails.
 pub fn type_resolve_single_with_imported_bindings_and_cancellation<S>(
-    ir: IR,
+    hir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
@@ -416,16 +404,16 @@ where
     S: std::hash::BuildHasher,
 {
     cancellation.checkpoint()?;
-    validate_checked_imported_bindings(&ir, &imported_bindings, src)?;
+    validate_checked_imported_bindings(&hir, &imported_bindings, src)?;
     let imported_bindings = imported_bindings.into_iter().collect();
-    let ctx = ModuleTypeContext::new(dag_id, module_resolver, project_types);
-    type_resolve_single_impl(ir, imported_bindings, dag_id, src, ctx, cancellation)
+    let dag_id = hir.dag_id().clone();
+    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
+    type_resolve_single_impl(hir, imported_bindings, src, ctx, cancellation)
 }
 
 fn type_resolve_single_impl(
-    ir: IR,
+    ir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -440,7 +428,7 @@ fn type_resolve_single_impl(
         &asserts_for_hir,
         &ir.registry,
         src,
-        dag_id,
+        module_ctx.owner,
         module_ctx,
         &imported_bindings_for_hir,
         cancellation,
@@ -481,15 +469,14 @@ fn type_resolve_single_impl(
 /// Returns a [`GraphcalError`] when a declaration annotation cannot be
 /// resolved to a concrete declared type.
 pub fn resolve_hir_declared_types_with_modules_and_cancellation(
-    ir: &IR,
-    owner: &crate::dag_id::DagId,
+    hir: &HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError> {
-    let ctx = ModuleTypeContext::new(owner, module_resolver, project_types);
-    resolve_declared_type_exprs(&ir.consts, &ir.params, &ir.nodes, src, ctx, cancellation)?
+    let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
+    resolve_declared_type_exprs(&hir.consts, &hir.params, &hir.nodes, src, ctx, cancellation)?
         .into_iter()
         .map(|(name, resolved)| resolved_to_declared_type(&resolved, src).map(|ty| (name, ty)))
         .collect()
@@ -529,7 +516,7 @@ fn resolve_declared_type_exprs(
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
 #[expect(
     clippy::too_many_arguments,
-    reason = "orchestrates per-DAG type resolution across IR declarations and semantic body data"
+    reason = "orchestrates per-DAG type resolution across HIR declarations and semantic body data"
 )]
 fn type_resolve_dag(
     mut consts: Vec<crate::ir::lower::ConstEntry>,
@@ -1840,7 +1827,7 @@ struct DagTIRSeed {
 impl DagTIRSeed {
     #[expect(
         clippy::too_many_arguments,
-        reason = "single conversion that absorbs every IR field beyond the resolved decls"
+        reason = "single conversion that absorbs every HIR DAG field beyond the resolved decls"
     )]
     fn with_body(
         self,

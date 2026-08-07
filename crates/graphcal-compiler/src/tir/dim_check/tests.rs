@@ -62,7 +62,6 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     project_types.insert_local_registry(&parent_dag_id, &ir.registry, src.clone());
     let mut builder = crate::tir::typed::type_resolve_builder_with_modules_and_cancellation(
         ir,
-        &parent_dag_id,
         &src,
         &resolver,
         &project_types,
@@ -90,8 +89,7 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
     let tir =
-        crate::tir::typed::type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types)
-            .unwrap();
+        crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
     (tir, src)
 }
 
@@ -187,7 +185,6 @@ fn compile_inline_dag_bodies_test(
         project_types.insert_local_registry(&dag_id, &dag_body_ir.registry, src.clone());
         let compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
             dag_body_ir,
-            &dag_id,
             src,
             &resolver,
             &project_types,

@@ -48,13 +48,11 @@ pub(super) struct HirModuleArtifact {
 /// One fully resolved physical file before static checking.
 #[derive(Debug)]
 pub(super) struct HirFile {
-    pub(super) dag_id: graphcal_compiler::dag_id::DagId,
     pub(super) source: NamedSource<Arc<String>>,
-    pub(super) root: graphcal_compiler::ir::lower::IR,
-    pub(super) inline_dags: Vec<(
-        graphcal_compiler::dag_id::DagId,
-        graphcal_compiler::ir::lower::IR,
-    )>,
+    pub(super) root: graphcal_compiler::ir::lower::HirDag,
+    /// Inline DAG bodies carry their own canonical keys; no parallel tuple key
+    /// can disagree with the body identity.
+    pub(super) inline_dags: Vec<graphcal_compiler::ir::lower::HirDag>,
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(super) output_surface: HashSet<ScopedName>,
     pub(super) include_debug_names: IncludeDebugNameMap,

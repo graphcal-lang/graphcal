@@ -1,10 +1,10 @@
-//! Intermediate Representation (IR) — the result of lowering an AST.
+//! Per-DAG HIR construction from a desugared syntax tree.
 //!
 //! `lower()` combines declaration collection (`resolve`), registry
 //! construction (dimensions, units, indexes, structs), and function
-//! registration into a single `IR` value. Reference resolution happens at
+//! registration into one [`HirDag`]. Reference resolution happens at
 //! [`UnfrozenIR::freeze`], which lowers every assembled declaration body to
-//! HIR — the frozen `IR` carries no syntax-AST expression.
+//! HIR — a frozen DAG carries no syntax-AST expression.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -395,7 +395,10 @@ pub struct UnfrozenLayerEntry {
 /// - Dependency graphs for const and runtime evaluation ordering
 /// - Source-order tracking for deterministic output
 #[derive(Debug)]
-pub struct IR {
+pub struct HirDag {
+    /// Canonical identity carried by the body itself, so storage and consumers
+    /// cannot pair this HIR with a different DAG key.
+    dag_id: crate::dag_id::DagId,
     /// The type/unit/dimension/index/struct/function registry.
     pub registry: Registry,
     /// Const declarations in source order.
@@ -437,7 +440,13 @@ pub struct IR {
     pub(crate) instances: Vec<InstanceRecord>,
 }
 
-impl IR {
+impl HirDag {
+    /// Canonical identity of this HIR body.
+    #[must_use]
+    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
+        &self.dag_id
+    }
+
     /// Borrow canonical lexical import targets resolved during HIR lowering.
     #[must_use]
     pub const fn imported_bindings(&self) -> &HashMap<ScopedName, HirImportedBinding> {
@@ -445,7 +454,7 @@ impl IR {
     }
 }
 
-/// Lower an AST into an [`IR`].
+/// Lower an AST into a [`HirDag`].
 ///
 /// This combines:
 /// 1. Name resolution (`resolve`) — checks duplicates, extracts deps
@@ -456,7 +465,7 @@ impl IR {
 ///
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
-pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
+pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, GraphcalError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
         .map_err(|e| GraphcalError::EvalError {
             message: format!("invalid source name `{}`: {e}", src.name()),
@@ -466,7 +475,7 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalE
     lower_with_imports(ast, src, &ImportedNames::default(), &dag_id)
 }
 
-/// Lower an AST with imported declarations into an [`IR`].
+/// Lower an AST with imported declarations into a [`HirDag`].
 ///
 /// Same as [`lower`] but accepts imported names from other files.
 /// The registry is frozen (via `try_build()`) before returning.
@@ -479,7 +488,7 @@ fn lower_with_imports(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
     dag_id: &crate::dag_id::DagId,
-) -> Result<IR, GraphcalError> {
+) -> Result<HirDag, GraphcalError> {
     let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
     let resolver = single_module_resolver(ast, dag_id, src)?;
     let registry = builder
@@ -533,7 +542,7 @@ fn single_module_resolver(
 /// that can be further mutated (e.g., to register imported type-system
 /// declarations) before freezing.
 ///
-/// Call [`UnfrozenIR::freeze`] with the final [`Registry`] to produce an [`IR`].
+/// Call [`UnfrozenIR::freeze`] with the final [`Registry`] to produce a [`HirDag`].
 ///
 /// # Errors
 ///
@@ -748,7 +757,7 @@ pub(crate) fn lower_dag_body_to_ir(
     imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
-) -> Result<IR, GraphcalError> {
+) -> Result<HirDag, GraphcalError> {
     let virtual_file = File {
         declarations: stripped_body.to_vec(),
     };
@@ -1036,12 +1045,12 @@ pub struct UnfrozenIR {
 }
 
 impl UnfrozenIR {
-    /// Freeze into a complete [`IR`] by providing a built [`Registry`] and
+    /// Freeze into a complete [`HirDag`] by providing a built [`Registry`] and
     /// the resolution context.
     ///
     /// This is the lowering boundary of the pipeline: every declaration body
     /// assembled so far (including merged include instances and applied
-    /// overrides) is lowered to HIR here, so the frozen [`IR`] carries no
+    /// overrides) is lowered to HIR here, so the frozen [`HirDag`] carries no
     /// syntax-AST expression.
     ///
     /// # Errors
@@ -1054,7 +1063,7 @@ impl UnfrozenIR {
         owner: &crate::dag_id::DagId,
         resolver: &crate::syntax::module_resolve::ModuleResolver,
         src: &NamedSource<Arc<String>>,
-    ) -> Result<IR, GraphcalError> {
+    ) -> Result<HirDag, GraphcalError> {
         self.freeze_with_cancellation(
             registry,
             owner,
@@ -1080,7 +1089,7 @@ impl UnfrozenIR {
         resolver: &crate::syntax::module_resolve::ModuleResolver,
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<IR, GraphcalError> {
+    ) -> Result<HirDag, GraphcalError> {
         cancellation.checkpoint()?;
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
@@ -1432,7 +1441,8 @@ impl UnfrozenIR {
         let extern_functions =
             resolve_plugin_imports(&self.plugin_imports, &registry, owner, resolver, src)?;
 
-        Ok(IR {
+        Ok(HirDag {
+            dag_id: owner.clone(),
             extern_functions,
             registry,
             consts,
@@ -5546,7 +5556,7 @@ mod tests {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
     }
 
-    fn parse_and_lower(source: &str) -> Result<IR, GraphcalError> {
+    fn parse_and_lower(source: &str) -> Result<HirDag, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = desugared;

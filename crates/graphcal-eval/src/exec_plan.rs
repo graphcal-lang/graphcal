@@ -1312,7 +1312,7 @@ mod tests {
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
-        let tir = type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types).unwrap();
+        let tir = type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
         (tir, src)
     }
 

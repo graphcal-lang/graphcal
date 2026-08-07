@@ -15,19 +15,18 @@ and how many semantic invariants they carry:
   source syntax after parsing. An AST is still source-oriented: it preserves
   spans, syntactic forms, and source paths so tools can point back to what the
   user wrote.
-- **IR** means **Intermediate Representation**. In general compiler terminology,
-  an IR is any representation between syntax and execution. In Graphcal,
-  `IR` specifically means the resolved declaration-level representation for one
-  DAG body: declaration shells with HIR bodies, visibility/import metadata, and
-  a registry built from declarations. It is not yet statically checked TIR.
-- **HIR** means **High-level Intermediate Representation**. It is still close to
-  source expression/type structure, but reference positions are semantic rather
-  than syntactic. HIR replaces source paths with canonical owner-qualified names,
-  lexical IDs, and typed built-in variants.
+- **IR** means **Intermediate Representation**. It is the general compiler term
+  for any representation between syntax and execution; Graphcal does not use a
+  bare `IR` phase type.
+- **HIR** means **High-level Intermediate Representation**. `HirDag` is one
+  canonically identified DAG body, and `HirProject` is the complete pre-check
+  project. HIR remains close to source expression/type structure, but replaces
+  source paths with canonical owner-qualified names, lexical IDs, and typed
+  built-in variants.
 - **TIR** means **Typed Intermediate Representation**. It is the type- and
-  dimension-checked representation used by the evaluator. TIR combines IR's
-  declaration/DAG structure with HIR-derived resolved references, resolved type
-  expressions, dimension facts, and per-DAG compilation state.
+  dimension-checked representation used by the evaluator. TIR combines HIR's
+  declaration/DAG structure with resolved type expressions, dimension facts,
+  and per-DAG compilation state.
 
 These names are relative, not universal. Another compiler may use "HIR" or
 "TIR" differently; in this codebase, read them as the boundaries above.
@@ -81,9 +80,10 @@ Read the pipeline as a sequence of practical questions:
    constructors, locals, generic params, and built-ins. After this boundary,
    code should not need to ask whether the string `"sum"`, `"PI"`, or
    `"helpers.physics.mass"` has a special meaning; it should pattern-match on
-   typed values instead. The frozen `IR` carries no syntax-AST expression.
+   typed values instead. The frozen `HirDag` carries its canonical `DagId` and
+   no syntax-AST expression.
 6. **TIR: is the program type- and dimension-correct?**
-   TIR combines the declaration structure from IR with its HIR bodies, resolved
+   TIR combines the declaration structure from HIR with its bodies, resolved
    type expressions, dimension facts, domain constraints, inline DAG bodies, and
    dependency DAGs. The dependency graph is derived from the HIR bodies. This
    is the checked program representation used to prepare execution.
@@ -94,11 +94,10 @@ Read the pipeline as a sequence of practical questions:
 
 Some names in this pipeline can sound misleading if read too literally:
 
-- IR is not another copy of the AST; it is the declaration and registry view of
-  one DAG body, with HIR bodies after the freeze boundary.
+- `UnfrozenIR` is syntactic declaration assembly, not another copy of the AST.
 - HIR is "high-level" because it keeps expression/type tree shapes. Each
-  frozen `IR` owns one DAG module's HIR, while `HirProject` is the complete
-  project-level phase value that owns those modules before checking.
+  `HirDag` owns one canonically identified DAG module, while `HirProject` is the
+  complete project-level phase value that owns those modules before checking.
 - TIR is not just HIR with types; it is the checked, per-DAG program model.
 
 `DagTIR` keeps source-facing declarations for diagnostics and presentation, but
@@ -133,11 +132,11 @@ UnfrozenIR + ModuleResolver
   |  UnfrozenIR::freeze — the single resolution stage
   |  crates/graphcal-compiler/src/hir/
   v
-IR  (one DAG module's HIR bodies and canonical references)
+HirDag  (one canonically identified DAG module)
   |
   |  crates/graphcal-eval/src/project_compiler/pipeline.rs
   v
-HirProject  (every file-root and inline-DAG IR; no checked/runtime facts)
+HirProject  (every file-root and inline `HirDag`; no checked/runtime facts)
   |
   |  crates/graphcal-eval/src/project_compiler/checking.rs
   |  crates/graphcal-compiler/src/tir/
@@ -283,7 +282,7 @@ annotations and domain-bound expressions are already HIR.
 ### 1.5 IR Assembly and the Freeze Boundary
 
 `ir/lower.rs` and `ir/resolve/` assemble a desugared AST into an `UnfrozenIR`,
-and `UnfrozenIR::freeze` lowers it into the frozen `IR`.
+and `UnfrozenIR::freeze` lowers it into a `HirDag`.
 
 The assembly stage (syntactic, pre-resolution):
 
@@ -303,12 +302,12 @@ The freeze boundary (`UnfrozenIR::freeze(registry, owner, resolver, src)`):
 - Lowers every const/param/node type annotation, declaration domain bound, and
   const/param/node/assert body to HIR (strict — an unresolvable reference fails
   the compile with a spanned diagnostic).
-- Lowers plot/figure/layer bodies best-effort (an incomplete plot body is
-  skipped by the runtime instead of failing the compile).
+- Strictly lowers every plot/figure/layer expression; tolerant lowering is
+  reserved for editor-facing incomplete buffers.
 
-One `IR` represents one DAG body: either a file root or an inline `dag` block.
-`HirProject` owns exactly one such frozen module for every loaded file root and
-inline DAG. Entry names stay source-shaped `ScopedName`s for presentation, but
+One `HirDag` represents one DAG body and stores its own canonical identity:
+either a file root or an inline `dag` block. `HirProject` owns exactly one such
+frozen module for every loaded file root and inline DAG. Entry names stay source-shaped `ScopedName`s for presentation, but
 value-declaration signatures and bodies are HIR; owner-qualified declaration
 dependencies are collected from those HIR bodies during TIR construction. Scope policies that need resolved
 references (no runtime `@` in `const node` bodies, no `@assert` references, A10

@@ -277,8 +277,8 @@ fn field_constraint_resolution_error_uses_definition_source() {
     // Emulate an importer whose ambient source is unrelated to the imported
     // type definition. The diagnostic must still use `schema_src`.
     let consumer_src = NamedSource::new("consumer.gcl", Arc::new("param p: Price;".to_string()));
-    let error = type_resolve_with_modules(ir, &schema_id, &consumer_src, &resolver, &project_types)
-        .unwrap_err();
+    let error =
+        type_resolve_with_modules(ir, &consumer_src, &resolver, &project_types).unwrap_err();
 
     match error {
         GraphcalError::UnknownUnit { name, src, span } => {
@@ -399,7 +399,6 @@ fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
     project_types.insert_local_registry(&parent_dag_id, &ir.registry, src.clone());
     let mut builder = type_resolve_builder_with_modules_and_cancellation(
         ir,
-        &parent_dag_id,
         &src,
         &resolver,
         &project_types,
@@ -466,9 +465,8 @@ fn compile_inline_dag_bodies_test(
             src,
             parent_dag_id,
         )?;
-        let dag_id = parent_dag_id.child(name.as_str());
         let compiled_dag =
-            type_resolve_single_with_modules(dag_body_ir, &dag_id, src, &resolver, &project_types)?;
+            type_resolve_single_with_modules(dag_body_ir, src, &resolver, &project_types)?;
         tir.insert_dag(compiled_dag)
             .map_err(|error| internal_error(error.to_string(), src, Span::new(0, 0)))?;
     }
@@ -493,7 +491,6 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
     project_types.insert_local_registry(&root_id, &ir.registry, src.clone());
     let mut builder = type_resolve_builder_with_modules_and_cancellation(
         ir,
-        &root_id,
         &src,
         &resolver,
         &project_types,
@@ -557,7 +554,7 @@ fn module_aware_type_resolve_records_semantic_deps() {
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
 
-    let tir = type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types).unwrap();
+    let tir = type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
     let deps = &tir.root().semantic.dependencies;
     let c = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("C"));
     let d = ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid("D"));

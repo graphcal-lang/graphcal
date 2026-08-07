@@ -226,10 +226,10 @@ fn build_project_type_store(
             source,
             &hir.module_resolver,
         );
-        for (dag_id, ir) in &file.inline_dags {
+        for dag in &file.inline_dags {
             project_types.insert_resolver_subtree(
-                dag_id,
-                &ir.registry,
+                dag.dag_id(),
+                &dag.registry,
                 source,
                 &hir.module_resolver,
             );
