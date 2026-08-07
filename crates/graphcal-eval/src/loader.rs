@@ -701,7 +701,7 @@ fn add_include_instance_modules(
         let Some(target_decls) = module_declarations(&target, files) else {
             continue;
         };
-        let instance = owner.child(prefix.as_str());
+        let instance = owner.instance_child(prefix.as_str());
         resolver.add_module(instance.clone(), target_decls)?;
         add_nested_include_instance_modules(resolver, &target, &instance, files)?;
     }
@@ -732,7 +732,7 @@ fn inherit_include_instance_scopes(
             continue;
         };
         let source = module_resolver_target_for_path(&include.path, file_target, files);
-        let instance = owner.child(instance_scope.merge_scope_name().as_str());
+        let instance = owner.instance_child(instance_scope.merge_scope_name().as_str());
         resolver.inherit_module_scope(&source, &instance)?;
         inherit_nested_include_instance_scopes(resolver, &source, &instance, files)?;
     }
@@ -766,7 +766,7 @@ fn link_include_instance_indexes(
         else {
             continue;
         };
-        let synthetic = owner.child(prefix.as_str());
+        let synthetic = owner.instance_child(prefix.as_str());
         if resolver.modules().get(&synthetic).is_none() {
             // The synthetic module is only present when the include target
             // resolved to declarations; skip silently otherwise (a missing
@@ -804,7 +804,7 @@ fn nested_include_instances(
                 let source = resolved_module_target_from(source, &include.path, files)?;
                 Some(NestedIncludeInstance {
                     source,
-                    instance: instance.child(instance_scope.merge_scope_name().as_str()),
+                    instance: instance.instance_child(instance_scope.merge_scope_name().as_str()),
                     index_bindings: include_index_bindings(include),
                 })
             })
@@ -940,7 +940,7 @@ fn register_module_imports(
             {
                 let instance_scope = include_instance_scope(include);
                 let prefix = instance_scope.merge_scope_name();
-                let target = owner.child(prefix.as_str());
+                let target = owner.instance_child(prefix.as_str());
                 resolver.register_include(owner, &include.path, &include.kind, &target)?;
             }
             _ => {}

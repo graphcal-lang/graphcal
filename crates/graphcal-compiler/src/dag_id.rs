@@ -1,10 +1,12 @@
 //! [`DagId`]: an abstract, filesystem-independent identifier for a DAG (module).
 //!
-//! Every file and every `dag` block gets a unique package-qualified `DagId`.
-//! File-based DAGs derive their segments from the loader-provided module path
-//! (e.g., `helpers/math.gcl` → `["helpers", "math"]`), while inline `dag`
-//! blocks append their name as an additional segment (e.g.,
-//! `["helpers", "math", "double_speed"]`).
+//! Every file, inline `dag` block, and concrete include instance gets a unique
+//! package-qualified `DagId`. File-based DAGs derive their segments from the
+//! loader-provided module path (e.g., `helpers/math.gcl` →
+//! `["helpers", "math"]`), while inline `dag` blocks append their name as a
+//! source-module edge (e.g., `["helpers", "math", "double_speed"]`). Include
+//! instances append an instance edge instead, so a source module and an instance
+//! with the same displayed path remain structurally distinct.
 //!
 //! Package identity is intentionally opaque in the compiler core. Loaders erase
 //! whether a package came from a lockfile, manifest-backed project, virtual
@@ -68,11 +70,25 @@ impl fmt::Display for DagPackageId {
     }
 }
 
+/// Kind of relationship between two adjacent [`DagId`] path segments.
+///
+/// Source-module and concrete-instance edges may have the same source-visible
+/// spelling, but they are different semantic identities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum DagHierarchyEdge {
+    SourceModule,
+    ConcreteInstance,
+}
+
 /// An abstract identifier for a DAG in the compiler pipeline.
 ///
-/// Segments form a hierarchical name: for example, a file at `helpers/math.gcl`
-/// has segments `["helpers", "math"]`, and an inline `dag double_speed` within
-/// it has segments `["helpers", "math", "double_speed"]`.
+/// Segments form a hierarchical display name: for example, a file at
+/// `helpers/math.gcl` has segments `["helpers", "math"]`, and an inline
+/// `dag double_speed` within it has segments
+/// `["helpers", "math", "double_speed"]`. The private edge kinds preserve
+/// whether each child is a source module or a concrete instance; display text
+/// alone is not identity. Lexical visibility is maintained separately by the
+/// module resolver.
 ///
 /// Non-emptiness is encoded structurally with [`NonEmpty`], so [`DagId::name`]
 /// (the leaf segment) is total — there is no value of this type that has zero
@@ -83,8 +99,12 @@ impl fmt::Display for DagPackageId {
 pub struct DagId {
     /// Opaque package that owns this DAG. Every DAG belongs to exactly one package.
     package: DagPackageId,
-    /// Hierarchical module/DAG segments. Always non-empty.
+    /// Hierarchical module/DAG display segments. Always non-empty.
     segments: NonEmpty<Arc<str>>,
+    /// Structural relationship for each segment after the root.
+    ///
+    /// Construction is private and maintains `edges.len() + 1 == segments.len()`.
+    edges: Arc<[DagHierarchyEdge]>,
 }
 
 /// Typed identity of one concrete include or DAG-call instance.
@@ -162,9 +182,12 @@ impl DagId {
     /// Create a `DagId` from an explicit package and non-empty hierarchical
     /// segments.
     pub fn new(package: impl Into<DagPackageId>, segments: impl Into<NonEmpty<Arc<str>>>) -> Self {
+        let segments = segments.into();
+        let edges = vec![DagHierarchyEdge::SourceModule; segments.len().saturating_sub(1)].into();
         Self {
             package: package.into(),
-            segments: segments.into(),
+            segments,
+            edges,
         }
     }
 
@@ -173,6 +196,7 @@ impl DagId {
         Self {
             package: package.into(),
             segments: NonEmpty::singleton(name.into()),
+            edges: Arc::from([]),
         }
     }
 
@@ -183,6 +207,7 @@ impl DagId {
         Self {
             package: package.into(),
             segments: module.segments,
+            edges: module.edges,
         }
     }
 
@@ -192,15 +217,33 @@ impl DagId {
         &self.package
     }
 
-    /// Create a child `DagId` by appending a segment (e.g., for a nested `dag` block).
-    #[must_use]
-    pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
+    fn child_with_edge(&self, name: impl Into<Arc<str>>, edge: DagHierarchyEdge) -> Self {
         let mut segments = self.segments.clone();
         segments.push(name.into());
+        let mut edges = self.edges.to_vec();
+        edges.push(edge);
         Self {
             package: self.package.clone(),
             segments,
+            edges: edges.into(),
         }
+    }
+
+    /// Create a source-module child by appending a segment (e.g., for a nested
+    /// `dag` block).
+    #[must_use]
+    pub fn child(&self, name: impl Into<Arc<str>>) -> Self {
+        self.child_with_edge(name, DagHierarchyEdge::SourceModule)
+    }
+
+    /// Create a concrete include-instance child by appending its owner-local
+    /// merge-scope name.
+    ///
+    /// This is structurally distinct from [`Self::child`] even when both names
+    /// render identically.
+    #[must_use]
+    pub fn instance_child(&self, name: impl Into<Arc<str>>) -> Self {
+        self.child_with_edge(name, DagHierarchyEdge::ConcreteInstance)
     }
 
     /// Return the parent `DagId` (all segments except the last), or `None` if
@@ -217,6 +260,7 @@ impl DagId {
                 Arc::clone(&parent_segments[0]),
                 parent_segments[1..].to_vec(),
             ),
+            edges: self.edges[..self.edges.len() - 1].into(),
         })
     }
 
@@ -246,6 +290,31 @@ impl DagId {
             .iter()
             .zip(ancestor.segments().iter())
             .all(|(a, b)| a == b)
+            && self.edges.starts_with(&ancestor.edges)
+    }
+
+    /// Rebase this identity from one ancestor onto another while preserving
+    /// every source-module/concrete-instance edge in the descendant suffix.
+    ///
+    /// Returns `None` when `self` is neither `ancestor` nor its descendant.
+    #[must_use]
+    pub fn rebase_descendant(&self, ancestor: &Self, replacement: &Self) -> Option<Self> {
+        if self == ancestor {
+            return Some(replacement.clone());
+        }
+        if !self.is_descendant_of(ancestor) {
+            return None;
+        }
+
+        let suffix_segments = self.segments.iter().skip(ancestor.segments.len());
+        let suffix_edges = self.edges.iter().skip(ancestor.edges.len());
+        Some(
+            suffix_segments
+                .zip(suffix_edges)
+                .fold(replacement.clone(), |rebased, (segment, edge)| {
+                    rebased.child_with_edge(Arc::clone(segment), *edge)
+                }),
+        )
     }
 
     /// Create a package-qualified `DagId` from a relative file path, stripping
@@ -262,7 +331,12 @@ impl DagId {
         let segments = NonEmpty::try_from_vec(relative_path_segments(path)?)
             .map_err(|_| DagIdPathError::Empty)?;
         let package = DagPackageId::new(Arc::clone(segments.last()));
-        Ok(Self { package, segments })
+        let edges = vec![DagHierarchyEdge::SourceModule; segments.len().saturating_sub(1)].into();
+        Ok(Self {
+            package,
+            segments,
+            edges,
+        })
     }
 
     /// Create a package-qualified `DagId` from a relative file path, stripping
@@ -280,9 +354,12 @@ impl DagId {
         path: &std::path::Path,
     ) -> Result<Self, DagIdPathError> {
         let segments = relative_path_segments(path)?;
+        let segments = NonEmpty::try_from_vec(segments).map_err(|_| DagIdPathError::Empty)?;
+        let edges = vec![DagHierarchyEdge::SourceModule; segments.len().saturating_sub(1)].into();
         Ok(Self {
             package: package.into(),
-            segments: NonEmpty::try_from_vec(segments).map_err(|_| DagIdPathError::Empty)?,
+            segments,
+            edges,
         })
     }
 }
@@ -402,6 +479,30 @@ mod tests {
         let parent = DagId::new("test", NonEmpty::new("helpers", vec!["math"]));
         let child = parent.child("double_speed");
         assert_eq!(child.to_string(), "helpers.math.double_speed");
+    }
+
+    #[test]
+    fn concrete_instance_is_distinct_from_same_named_source_module() {
+        let parent = DagId::root_in_package("test", "model");
+        let source = DagId::new("test", NonEmpty::new("model", vec!["defaults"]));
+        let instance = parent.instance_child("defaults");
+
+        assert_eq!(source.to_string(), instance.to_string());
+        assert_ne!(source, instance);
+        assert_eq!(source.parent(), Some(parent.clone()));
+        assert_eq!(instance.parent(), Some(parent));
+    }
+
+    #[test]
+    fn rebase_descendant_preserves_instance_edges() {
+        let template = DagId::root_in_package("test", "template");
+        let nested = template.instance_child("inner").child("helper");
+        let configured = DagId::root_in_package("test", "main").instance_child("configured");
+
+        let rebased = nested.rebase_descendant(&template, &configured).unwrap();
+        let expected = configured.instance_child("inner").child("helper");
+        assert_eq!(rebased, expected);
+        assert_eq!(rebased.to_string(), "main.configured.inner.helper");
     }
 
     #[test]
