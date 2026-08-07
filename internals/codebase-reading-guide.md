@@ -276,8 +276,9 @@ batch pipeline never observes one.
 
 TIR stores HIR expressions and HIR-derived semantic metadata in
 `DagSemanticBody`. Frozen declaration shells retain source-facing names, spans,
-and provenance for diagnostics and editor presentation, while their value type
-annotations and domain-bound expressions are already HIR.
+and provenance for diagnostics and editor presentation. Value annotations,
+declaration bounds, nominal generic defaults, and nominal field signatures are
+all already HIR.
 
 ### 1.5 IR Assembly and the Freeze Boundary
 
@@ -299,17 +300,20 @@ The assembly stage (syntactic, pre-resolution):
 
 The freeze boundary (`UnfrozenIR::freeze(registry, owner, resolver, src)`):
 
-- Lowers every const/param/node type annotation, declaration domain bound, and
+- Lowers every nominal generic default, nominal field annotation/bound,
+  const/param/node type annotation, declaration bound, and
   const/param/node/assert body to HIR (strict — an unresolvable reference fails
-  the compile with a spanned diagnostic).
+  the compile with a spanned definition-source diagnostic).
 - Strictly lowers every plot/figure/layer expression; tolerant lowering is
   reserved for editor-facing incomplete buffers.
 
 One `HirDag` represents one DAG body and stores its own canonical identity:
 either a file root or an inline `dag` block. `HirProject` owns exactly one such
 frozen module for every loaded file root and inline DAG. Entry names stay source-shaped `ScopedName`s for presentation, but
-value-declaration signatures and bodies are HIR; owner-qualified declaration
-dependencies are collected from those HIR bodies during TIR construction. Scope policies that need resolved
+value-declaration signatures, nominal definitions, and bodies are HIR;
+owner-qualified declaration dependencies are collected from those HIR bodies
+during TIR construction. TIR resolves and validates HIR nominal signatures; it
+never lowers their syntax AST. Scope policies that need resolved
 references (no runtime `@` in `const node` bodies, no `@assert` references, A10
 variant literal rules) run when `HirProject` is consumed by checking.
 
@@ -893,8 +897,9 @@ Graphcal has separate mechanisms for compile-time names and runtime instances:
   never creates a default runtime instance, evaluates assertions, or exports a
   runtime-dependent unit scale.
 - `include` creates an explicit DAG instance, with optional value/index/type/
-  dimension bindings. Assertions and dynamic unit scales belong to that
-  concrete instance; repeated instances retain distinct canonical owners.
+  dimension bindings. Assertions belong to that concrete instance. A module
+  that declares a runtime-dependent unit cannot be included (`M026`): dynamic
+  units stay encapsulated inside an entry or explicitly called DAG.
 
 Import/include paths are dot-separated module paths in source. Loader internals
 drop spans and store path segments in `ModulePathKey`; compiled DAG identity is
@@ -935,8 +940,8 @@ the canonical template with a fresh concrete owner, while
 substitutions. The current evaluator still monomorphizes declarations into the
 importer, but semantic declaration records carry the explicit concrete owner;
 source-facing prefixes are lookup/presentation names, not the source of semantic
-identity. This owner also scopes dynamic units, so repeated instances may use
-the same unit spelling with different scale environments.
+identity. Runtime-dependent units are deliberately excluded from this include
+composition model rather than fabricating instance-qualified unit definitions.
 
 `ProjectCompiler` builds the `ModuleResolver` once and lowers every loaded
 module into `HirProject` using HIR-only dependency interfaces. HIR import

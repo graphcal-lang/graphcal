@@ -13,7 +13,7 @@ use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexBindingTarget, Registry};
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::DimName;
+use graphcal_compiler::syntax::dimension::{DimName, UnitName};
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
 use graphcal_compiler::syntax::span::Span;
@@ -37,12 +37,52 @@ pub(super) struct ImportAlias {
     pub(super) local: DeclName,
 }
 
-/// HIR-only module interface available while lowering downstream modules.
+/// Frontend interface available only while lowering downstream modules.
 ///
-/// It contains no checked type, value, runtime, or presentation facts.
-pub(super) struct HirModuleArtifact {
-    pub(super) frontend_registry: Registry,
-    pub(super) external_surface: ExternalDeclSurface,
+/// The derived dynamic-unit set is constructed atomically with the registry
+/// and export surface, so consumers cannot disagree about which exported units
+/// are runtime-dependent. It contains no checked type, value, or runtime fact.
+pub(super) struct LoweringModuleInterface {
+    frontend_registry: Registry,
+    external_surface: ExternalDeclSurface,
+    exported_dynamic_units: HashSet<UnitName>,
+}
+
+impl LoweringModuleInterface {
+    pub(super) fn new(frontend_registry: Registry, external_surface: ExternalDeclSurface) -> Self {
+        let exported_dynamic_units = frontend_registry
+            .units
+            .all_units()
+            .filter(|(unit, _, scale)| {
+                !unit.is_qualified()
+                    && scale.is_dynamic()
+                    && external_surface
+                        .is_explicit_export(&DeclName::from_atom(unit.name().atom().clone()))
+            })
+            .map(|(unit, _, _)| unit.name().clone())
+            .collect();
+        Self {
+            frontend_registry,
+            external_surface,
+            exported_dynamic_units,
+        }
+    }
+
+    pub(super) const fn frontend_registry(&self) -> &Registry {
+        &self.frontend_registry
+    }
+
+    pub(super) const fn external_surface(&self) -> &ExternalDeclSurface {
+        &self.external_surface
+    }
+
+    pub(super) fn is_exported_dynamic_unit(&self, name: &UnitName) -> bool {
+        self.exported_dynamic_units.contains(name)
+    }
+
+    pub(super) const fn exported_dynamic_units(&self) -> &HashSet<UnitName> {
+        &self.exported_dynamic_units
+    }
 }
 
 /// One fully resolved physical file before static checking.

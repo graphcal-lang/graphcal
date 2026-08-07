@@ -19,13 +19,10 @@ use crate::eval_expr::{
 };
 use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
-use graphcal_compiler::registry::declared_type::{
-    DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
-};
+use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::{IndexDef, Registry};
 
-use super::declared_type::resolve_field_declared_type;
 use super::display::{
     attach_display_units, extract_flat_display_unit, format_coordinate, format_coordinate_exact,
 };
@@ -44,13 +41,6 @@ fn index_def_for_value_ref<'a>(
     )
 }
 
-const fn declared_struct_type_ref(declared_type: Option<&DeclaredType>) -> Option<&StructTypeRef> {
-    match declared_type {
-        Some(DeclaredType::Struct(type_name, _)) => Some(type_name),
-        _ => None,
-    }
-}
-
 #[expect(
     clippy::too_many_lines,
     reason = "runtime value conversion mirrors all value variants"
@@ -59,6 +49,7 @@ pub(super) fn runtime_to_value(
     rv: &RuntimeValue,
     declared_type: Option<&DeclaredType>,
     tir: &graphcal_compiler::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
 ) -> Value {
     let registry = tir.registry();
     match rv {
@@ -97,48 +88,38 @@ pub(super) fn runtime_to_value(
             type_name, fields, ..
         } => {
             let public_type_name = type_name.clone();
-            let registry_type_name = declared_struct_type_ref(declared_type).unwrap_or(type_name);
-            let type_def = tir.struct_type_def(registry_type_name.resolved());
-
-            // Build a substitution map from generic param names to concrete DeclaredTypes
-            // when we have concrete type args from the declared type.
-            let generic_sub: HashMap<&str, DeclaredType> =
-                if let (Some(td), Some(DeclaredType::Struct(_, generic_args))) =
-                    (type_def, declared_type)
-                {
-                    td.generic_params()
-                        .iter()
-                        .zip(generic_args)
-                        .filter_map(|(param, arg)| {
-                            let type_expr = match arg {
-                                DeclaredGenericArg::Dim(dimension) => {
-                                    DeclaredType::Quantity(dimension.clone())
-                                }
-                                DeclaredGenericArg::Type(type_expr) => type_expr.clone(),
-                                DeclaredGenericArg::Index(_) | DeclaredGenericArg::Nat(_) => {
-                                    return None;
-                                }
-                            };
-                            Some((param.name.as_str(), type_expr))
+            let concrete_fields = match declared_type {
+                Some(DeclaredType::Struct(identity, generic_args)) => {
+                    graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
+                        tir,
+                        identity,
+                        generic_args,
+                        src,
+                    )
+                    .ok()
+                    .and_then(|model| model.constructors(src).ok())
+                    .and_then(|constructors| {
+                        constructors.into_iter().find(|constructor| {
+                            constructor.name().as_str() == public_type_name.as_str()
                         })
-                        .collect()
-                } else {
-                    HashMap::new()
-                };
+                    })
+                    .map(|constructor| {
+                        constructor
+                            .fields()
+                            .iter()
+                            .map(|field| (field.name().clone(), field.declared_type().clone()))
+                            .collect::<HashMap<_, _>>()
+                    })
+                    .unwrap_or_default()
+                }
+                _ => HashMap::new(),
+            };
 
             let converted_fields = fields
                 .iter()
                 .map(|(field_name, field_rv)| {
-                    let field_declared = type_def.and_then(|td| {
-                        td.union_members()?
-                            .iter()
-                            .find(|member| member.name().as_str() == public_type_name.as_str())?
-                            .fields()
-                            .iter()
-                            .find(|field| field.name() == field_name)
-                            .and_then(|f| resolve_field_declared_type(f, &generic_sub, registry))
-                    });
-                    let val = runtime_to_value(field_rv, field_declared.as_ref(), tir);
+                    let field_declared = concrete_fields.get(field_name);
+                    let val = runtime_to_value(field_rv, field_declared, tir, src);
                     (field_name.clone(), val)
                 })
                 .collect();
@@ -194,7 +175,7 @@ pub(super) fn runtime_to_value(
             let converted_entries = entries
                 .iter()
                 .map(|(variant, entry_rv)| {
-                    let val = runtime_to_value(entry_rv, element_declared, tir);
+                    let val = runtime_to_value(entry_rv, element_declared, tir, src);
                     (variant.clone(), val)
                 })
                 .collect();
@@ -533,7 +514,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let local_key = |name: &ScopedName| RuntimeDeclKey::for_local_decl(tir.root(), name);
 
     let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Result<Value, NodeError> {
-        let mut value = runtime_to_value(rv, declared_types.get(name), tir);
+        let mut value = runtime_to_value(rv, declared_types.get(name), tir, src);
         if let Some(expr) = expr_map.get(name) {
             // A display unit that fails to resolve (e.g. a dynamic conversion
             // target whose scale became non-positive) is a per-node error, not

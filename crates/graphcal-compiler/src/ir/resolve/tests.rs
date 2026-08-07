@@ -21,16 +21,14 @@ fn parse_and_resolve(source: &str) -> Result<CollectedFile, GraphcalError> {
 fn compile_to_tir(source: &str) -> Result<crate::tir::typed::TIR, GraphcalError> {
     let file = parse_and_desugar(source);
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-    let dag_id =
-        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let ir = crate::ir::lower::lower(&file, &src)?;
     let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
     resolver
-        .add_module(dag_id.clone(), &file.declarations)
+        .add_module(ir.dag_id().clone(), &file.declarations)
         .unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
-    project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
+    project_types.insert_local_hir(&ir).unwrap();
     crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, &project_types)
 }
 

@@ -59,7 +59,13 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
             src: src.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    project_types.insert_local_registry(&parent_dag_id, &ir.registry, src.clone());
+    project_types
+        .insert_local_hir(&ir)
+        .map_err(|error| GraphcalError::InternalError {
+            message: format!("test HIR type store failed: {error}"),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
     let mut builder = crate::tir::typed::type_resolve_builder_with_modules_and_cancellation(
         ir,
         &src,
@@ -78,16 +84,14 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TIR, NamedSource<Arc<St
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let dag_id =
-        crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let ir = crate::ir::lower::lower(&file, &src).unwrap();
     let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
     resolver
-        .add_module(dag_id.clone(), &file.declarations)
+        .add_module(ir.dag_id().clone(), &file.declarations)
         .unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
-    project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
+    project_types.insert_local_hir(&ir).unwrap();
     let tir =
         crate::tir::typed::type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
     (tir, src)
@@ -160,15 +164,7 @@ fn compile_inline_dag_bodies_test(
             }
         }
     }
-    let mut project_types = crate::tir::typed::ProjectTypeStore::default();
-    project_types
-        .insert_graphcal_prelude()
-        .map_err(|err| GraphcalError::InternalError {
-            message: format!("test module type prelude failed: {err}"),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
-    project_types.insert_local_registry(parent_dag_id, tir.registry(), src.clone());
+    let mut project_types = tir.project_type_store().clone();
 
     for (name, body) in dag_bodies {
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
@@ -181,8 +177,13 @@ fn compile_inline_dag_bodies_test(
             src,
             parent_dag_id,
         )?;
-        let dag_id = parent_dag_id.child(name.as_str());
-        project_types.insert_local_registry(&dag_id, &dag_body_ir.registry, src.clone());
+        project_types
+            .insert_local_hir(&dag_body_ir)
+            .map_err(|error| GraphcalError::InternalError {
+                message: format!("test inline HIR type store failed: {error}"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
         let compiled_dag = crate::tir::typed::type_resolve_single_with_modules(
             dag_body_ir,
             src,

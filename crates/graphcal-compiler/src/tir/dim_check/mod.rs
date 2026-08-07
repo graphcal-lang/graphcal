@@ -982,13 +982,10 @@ pub fn check_dimensions_tir_with_cancellation(
         check_dimensions_dag(dag, tir, &tir.registry, builtin_fns, src, cancellation)?;
     }
 
-    // Validate domain constraints on struct/union member fields. The check
-    // walks the registry's `TypeDef`s once per file. Types reachable through
-    // dep imports were already validated in their defining file's pipeline,
-    // so the redundant pass is idempotent. (#450 Position 1+2.)
+    // Validate domain constraints on HIR nominal fields. Types reachable
+    // through dep imports were already validated in their defining file's
+    // pipeline, so the redundant pass is idempotent. (#450 Position 1+2.)
     let declared_types = tir.build_declared_types(src)?;
-    cancellation.checkpoint()?;
-    check_no_constraints_on_generic_type_args(tir, src)?;
     cancellation.checkpoint()?;
     check_field_domain_constraint_targets(tir, src)?;
     cancellation.checkpoint()?;
@@ -1631,7 +1628,7 @@ fn check_field_domain_constraint_targets(
                         .first()
                         .map_or_else(|| Span::new(0, 0), |bound| bound.span)
                 },
-                |field| field.type_ann().span,
+                |field| field.type_annotation().span,
             );
             let diagnostic_src = bounds.first().map_or(src, |bound| &bound.src);
             return Err(GraphcalError::InvalidDomainTarget {
@@ -1647,14 +1644,14 @@ fn check_field_domain_constraint_targets(
 fn field_type_annotation<'a>(
     dag: &'a crate::tir::typed::DagTIR,
     key: &crate::tir::typed::ResolvedStructFieldTypeKey,
-) -> Option<&'a crate::registry::types::StructField> {
+) -> Option<&'a crate::hir::NominalField> {
     dag.semantic
         .type_defs
         .struct_types
         .get(&key.owning_type)?
         .union_members()?
         .iter()
-        .find(|member| member.name() == &key.constructor)?
+        .find(|member| member.name() == key.constructor)?
         .fields()
         .iter()
         .find(|field| field.name() == &key.field)
@@ -1664,8 +1661,8 @@ fn field_type_annotation<'a>(
 /// correct type. Mirrors [`check_domain_constraint_dimensions_dag`] for
 /// top-level decls.
 ///
-/// Field bounds live in each DAG's semantic type defs (lowered to HIR at
-/// type-resolution time); the same owner-qualified field can be referenced
+/// Field bounds cross into HIR with their nominal definition; the same
+/// owner-qualified field can be referenced
 /// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
@@ -1705,7 +1702,7 @@ fn check_field_domain_constraint_dimensions(
                         .iter()
                         .flat_map(|member| member.fields().iter().map(move |field| (member, field)))
                         .find(|(member, field)| {
-                            member.name() == &key.constructor && field.name() == &key.field
+                            member.name() == key.constructor && field.name() == &key.field
                         })
                 })
                 .ok_or_else(|| GraphcalError::InternalError {
@@ -1889,114 +1886,6 @@ fn check_one_bound_with_display_name(
             })
         }
     }
-}
-
-/// Reject domain constraints on generic type-application arguments.
-///
-/// Generic args are erased at runtime, so a constraint on `D` in
-/// `Vec3<Length(min: 0.0 m)>` has no enforcement site and unclear
-/// semantics. Issue #450 Position 4: surface a clear compile-time error
-/// directing the user to put the constraint on the field instead.
-///
-/// Declaration annotations are validated while crossing the HIR boundary, so
-/// only syntax-backed type definitions remain to be checked here. Type
-/// arguments can contain nested applications, so this walk still recurses.
-fn check_no_constraints_on_generic_type_args(
-    tir: &crate::tir::typed::TIR,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    let walk = |type_expr: &crate::desugar::desugared_ast::TypeExpr| -> Result<(), GraphcalError> {
-        check_type_expr_for_generic_arg_constraints(type_expr, src)
-    };
-    // Type definitions are module-owned semantic facts. Walking the root
-    // registry here misses definitions declared by inline DAGs, while walking
-    // every reachable definition would diagnose imported source against the
-    // wrong file. Each local DAG records all of its own type symbols, so visit
-    // exactly those definitions at their owning semantic boundary.
-    for (dag_id, dag) in tir.local_dags() {
-        for (identity, type_def) in &dag.semantic.type_defs.struct_types {
-            if identity.owner() != dag_id {
-                continue;
-            }
-            for default in type_def
-                .generic_params()
-                .iter()
-                .filter_map(|param| param.default.as_ref())
-            {
-                check_generic_args_for_domain_constraints(std::iter::once(default), src)?;
-            }
-            if let Some(members) = type_def.union_members() {
-                for field in members
-                    .iter()
-                    .flat_map(crate::registry::types::UnionMemberDef::fields)
-                {
-                    walk(field.type_ann())?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Recurse through a `TypeExpr` and reject any `DomainBound` found on a
-/// `TypeApplication` argument. The outermost `TypeExpr` may itself carry
-/// constraints (the legitimate placement); only constraints under a
-/// `TypeApplication.type_args` slot are rejected.
-fn check_type_expr_for_generic_arg_constraints(
-    type_expr: &crate::desugar::desugared_ast::TypeExpr,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    use crate::desugar::desugared_ast::TypeExprKind;
-    match &type_expr.kind {
-        TypeExprKind::Indexed { base, .. } => {
-            check_type_expr_for_generic_arg_constraints(base, src)
-        }
-        TypeExprKind::TypeApplication { generic_args, .. } => {
-            check_generic_args_for_domain_constraints(generic_args, src)
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            check_generic_args_for_domain_constraints(generic_args, src)
-        }
-        TypeExprKind::DatetimeApplication { type_args } => {
-            for arg in type_args {
-                if let Some(bound) = arg.constraints.first() {
-                    return Err(GraphcalError::GenericTypeArgDomainConstraint {
-                        src: src.clone(),
-                        span: bound.span.into(),
-                    });
-                }
-                check_type_expr_for_generic_arg_constraints(arg, src)?;
-            }
-            Ok(())
-        }
-        TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime
-        | TypeExprKind::DimExpr(_) => Ok(()),
-    }
-}
-
-fn check_generic_args_for_domain_constraints<'a>(
-    generic_args: impl IntoIterator<Item = &'a crate::desugar::desugared_ast::GenericArg>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(), GraphcalError> {
-    generic_args.into_iter().try_for_each(|arg| match arg {
-        crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
-            if let Some(bound) = type_expr.constraints.first() {
-                return Err(GraphcalError::GenericTypeArgDomainConstraint {
-                    src: src.clone(),
-                    span: bound.span.into(),
-                });
-            }
-            // Recurse so nested generics are checked too.
-            check_type_expr_for_generic_arg_constraints(type_expr, src)
-        }
-        crate::desugar::desugared_ast::GenericArg::Index(_)
-        | crate::desugar::desugared_ast::GenericArg::Nat(_)
-        | crate::desugar::desugared_ast::GenericArg::Ambiguous(_) => Ok(()),
-    })
 }
 
 /// Strip `Indexed` wrappers to get the base resolved type.

@@ -114,7 +114,8 @@ Note: `hir/types.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mut
 - [ ] `crates/graphcal-compiler/src/hir/types.rs`
 - [ ] `crates/graphcal-compiler/src/registry/builtins.rs`
 - [ ] `crates/graphcal-compiler/src/hir/lower.rs`
-- [ ] `crates/graphcal-compiler/src/hir/expr.rs`
+- [ ] `crates/graphcal-compiler/src/hir/nominal.rs`
+- [ ] `crates/graphcal-compiler/src/hir/expr.rs`},{
 - [ ] `crates/graphcal-compiler/src/hir/mod.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
 - [ ] `crates/graphcal-compiler/src/hir/diagnostics.rs`
@@ -233,7 +234,6 @@ pass model; `eval/project/prepare.rs` is the only transition that consumes
 - [ ] `crates/graphcal-eval/src/project_compiler/pipeline.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/session.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/mod.rs`
-- [ ] `crates/graphcal-eval/src/eval/declared_type.rs`
 - [ ] `crates/graphcal-eval/src/eval/plot_data.rs`
 - [ ] `crates/graphcal-eval/src/eval/runtime.rs`
 - [ ] `crates/graphcal-eval/src/eval/project/output.rs`

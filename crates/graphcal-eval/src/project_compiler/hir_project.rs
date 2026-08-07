@@ -1,10 +1,10 @@
 //! Authoritative whole-project HIR boundary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::{dag_id::DagId, syntax::dimension::UnitName};
 
-use super::{HirFile, HirModuleArtifact};
+use super::HirFile;
 
 /// A complete canonically resolved project before static checking.
 ///
@@ -17,7 +17,9 @@ use super::{HirFile, HirModuleArtifact};
 pub struct HirProject<'project> {
     pub(super) loaded: &'project crate::loader::LoadedProject,
     pub(super) files: HashMap<DagId, HirFile>,
-    pub(super) module_interfaces: HashMap<DagId, HirModuleArtifact>,
+    /// Minimal semantic fact needed to reject runtime units at a pure import
+    /// boundary. Full frontend registries are discarded after HIR lowering.
+    pub(super) exported_dynamic_units: HashMap<DagId, HashSet<UnitName>>,
     pub(super) module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
     pub(super) cancellation: graphcal_compiler::cancellation::CancellationToken,
 }

@@ -34,7 +34,7 @@ pub(in crate::project_compiler) fn validate_project_dag_recursion(
 fn lower_single_file_to_hir(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -174,10 +174,10 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         )?;
         module_interfaces.insert(
             file_dag_id.clone(),
-            HirModuleArtifact {
-                frontend_registry: hir.root.registry.clone(),
-                external_surface: hir.root.external_surface.clone(),
-            },
+            LoweringModuleInterface::new(
+                hir.root.registry.clone(),
+                hir.root.external_surface.clone(),
+            ),
         );
         files.insert(file_dag_id.clone(), hir);
     }
@@ -190,10 +190,15 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         }));
     }
 
+    let exported_dynamic_units = module_interfaces
+        .iter()
+        .map(|(owner, interface)| (owner.clone(), interface.exported_dynamic_units().clone()))
+        .collect();
+
     Ok(HirProject {
         loaded: project,
         files,
-        module_interfaces,
+        exported_dynamic_units,
         module_resolver,
         cancellation: cancellation.clone(),
     })
@@ -220,20 +225,17 @@ fn build_project_type_store(
             })
         })?;
         let source = &file.source;
-        project_types.insert_resolver_subtree(
-            file_dag_id,
-            &file.root.registry,
-            source,
-            &hir.module_resolver,
-        );
-        for dag in &file.inline_dags {
-            project_types.insert_resolver_subtree(
-                dag.dag_id(),
-                &dag.registry,
-                source,
-                &hir.module_resolver,
-            );
-        }
+        std::iter::once(&file.root)
+            .chain(&file.inline_dags)
+            .try_for_each(|dag| {
+                project_types
+                    .insert_resolver_module(dag, &hir.module_resolver)
+                    .map_err(|error| GraphcalError::InternalError {
+                        message: format!("cannot build project type store: {error}"),
+                        src: source.clone(),
+                        span: Span::new(0, 0).into(),
+                    })
+            })?;
     }
     Ok(project_types)
 }
@@ -248,7 +250,7 @@ pub(in crate::project_compiler) fn check_hir_project(
     let HirProject {
         loaded: project,
         mut files,
-        module_interfaces,
+        exported_dynamic_units,
         module_resolver,
         cancellation,
     } = hir;
@@ -267,7 +269,7 @@ pub(in crate::project_compiler) fn check_hir_project(
         let compiled = checking::check_hir_file(
             hir_file,
             &module_artifacts,
-            &module_interfaces,
+            &exported_dynamic_units,
             &module_resolver,
             &project_types,
             &cancellation,

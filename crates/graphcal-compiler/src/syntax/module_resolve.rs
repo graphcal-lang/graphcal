@@ -338,6 +338,10 @@ impl ModuleTypeSymbol {
     pub(crate) const fn visibility(&self) -> SymbolVisibility {
         self.symbol.visibility()
     }
+
+    pub(crate) const fn span(&self) -> Span {
+        self.symbol.span()
+    }
 }
 
 impl ModuleSymbolLookup<StructTypeNameNamespace> for ModuleTypeSymbol {

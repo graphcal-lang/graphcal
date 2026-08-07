@@ -12,40 +12,63 @@ use graphcal_compiler::syntax::span::Spanned;
 use super::generic_leakage::{check_generics_leakage, collect_local_type_names};
 use super::registry_merge::{merge_registry_into_builder, seed_imported_type_system};
 
-fn is_imported_dynamic_unit(
+fn reject_runtime_units_at_include_boundary(
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), CompileError> {
+    registry
+        .units
+        .all_units()
+        .filter(|(_, _, scale)| scale.is_dynamic())
+        .map(|(unit, _, _)| unit)
+        .min()
+        .map_or(Ok(()), |unit| {
+            Err(CompileError::Eval(GraphcalError::IncludeRuntimeUnit {
+                name: unit.clone(),
+                src: src.clone(),
+                span: span.into(),
+            }))
+        })
+}
+
+fn imported_module_target<'map>(
+    alias: &ModuleAliasName,
+    module_map: &'map HashMap<ModuleAliasName, ProjectModuleBinding>,
+) -> Option<&'map graphcal_compiler::dag_id::DagId> {
+    module_map.get(alias).and_then(|binding| {
+        (binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag)
+            .then_some(&binding.target)
+    })
+}
+
+fn is_imported_dynamic_unit_during_lowering(
     alias: &ModuleAliasName,
     name: &graphcal_compiler::syntax::dimension::UnitName,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
 ) -> bool {
-    module_map.get(alias).is_some_and(|binding| {
-        binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag
-            && module_artifacts
-                .get(&binding.target)
-                .is_some_and(|artifact| {
-                    artifact
-                        .external_surface
-                        .is_explicit_export(&DeclName::from_atom(name.atom().clone()))
-                        && artifact.frontend_registry.units.all_units().any(
-                            |(candidate, _, scale)| {
-                                !candidate.is_qualified()
-                                    && candidate.name() == name
-                                    && scale.is_dynamic()
-                            },
-                        )
-                })
+    imported_module_target(alias, module_map).is_some_and(|target| {
+        module_interfaces
+            .get(target)
+            .is_some_and(|interface| interface.is_exported_dynamic_unit(name))
     })
 }
 
 fn remap_imported_dynamic_unit_error(
     error: GraphcalError,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
 ) -> GraphcalError {
     match error {
         GraphcalError::UnknownUnit { name, src, span }
             if name.qualifier().is_some_and(|alias| {
-                is_imported_dynamic_unit(alias, name.name(), module_map, module_artifacts)
+                is_imported_dynamic_unit_during_lowering(
+                    alias,
+                    name.name(),
+                    module_map,
+                    module_interfaces,
+                )
             }) =>
         {
             GraphcalError::ImportRuntimeUnit {
@@ -61,18 +84,20 @@ fn remap_imported_dynamic_unit_error(
 pub(super) fn imported_runtime_unit_reference(
     dag: &graphcal_compiler::tir::typed::DagTIR,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    exported_dynamic_units: &HashMap<
+        graphcal_compiler::dag_id::DagId,
+        HashSet<graphcal_compiler::syntax::dimension::UnitName>,
+    >,
 ) -> Option<(String, Span)> {
     let mut invalid = None;
     dag.visit_unit_references(&mut |unit, span| {
         if invalid.is_none()
             && unit.spelling().qualifier().is_some_and(|alias| {
-                is_imported_dynamic_unit(
-                    alias,
-                    unit.spelling().name(),
-                    module_map,
-                    module_artifacts,
-                )
+                imported_module_target(alias, module_map).is_some_and(|target| {
+                    exported_dynamic_units
+                        .get(target)
+                        .is_some_and(|names| names.contains(unit.spelling().name()))
+                })
             })
         {
             invalid = Some((unit.to_string(), span));
@@ -118,7 +143,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     file_src: &NamedSource<Arc<String>>,
     file_ast: &graphcal_compiler::desugar::desugared_ast::File,
     ctx: ImportContext<'_>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirFile, CompileError> {
     cancellation.checkpoint()?;
@@ -278,7 +303,7 @@ fn lower_inline_dag_modules<'a>(
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     parent_registry: &Registry,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -320,7 +345,7 @@ fn compile_loaded_dag_module_ir<'a>(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     parent_values: &crate::inline_dag::ParentValueDecls,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -524,7 +549,7 @@ fn process_dag_body_import_declarations<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -558,7 +583,7 @@ fn process_dag_body_include_declarations<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -730,7 +755,7 @@ fn elaborate_include_instances(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_templates: &mut ModuleTemplateStore,
     importer_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
@@ -969,6 +994,12 @@ fn elaborate_include_instances(
                     inline_body,
                 )
             };
+
+        reject_runtime_units_at_include_boundary(
+            &dep_registry,
+            importer_src,
+            instance.include_span,
+        )?;
 
         // Capture importer-owned candidates before the dependency registry is
         // merged, so a dependency declaration with the same leaf name cannot

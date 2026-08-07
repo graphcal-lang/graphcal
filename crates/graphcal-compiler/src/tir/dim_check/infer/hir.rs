@@ -16,11 +16,11 @@ use miette::NamedSource;
 
 use crate::builtin::{AggregationFn, BuiltinFnName};
 use crate::dimension::{Dimension, Rational};
-use crate::hir::{self, ConstRef, FunctionRef};
+use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint, UnionMemberDef};
+use crate::registry::types::{Registry, TypeGenericConstraint};
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
@@ -2942,18 +2942,18 @@ fn infer_hir_display_timezone(
 
 fn resolved_type_field_key(
     owning_type: &ResolvedStructTypeName,
-    constructor: &UnionMemberDef,
+    constructor: &NominalConstructor,
     field: &FieldName,
 ) -> crate::tir::typed::ResolvedStructFieldTypeKey {
     crate::tir::typed::ResolvedStructFieldTypeKey {
         owning_type: owning_type.clone(),
-        constructor: constructor.name().clone(),
+        constructor: constructor.name(),
         field: field.clone(),
     }
 }
 
 fn generic_substitution_prefix(
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     type_args: &[InferredGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -2973,21 +2973,21 @@ fn generic_substitution_prefix(
 
     let mut subs = GenericSubstitutions::default();
     for (param, arg) in type_def.generic_params().iter().zip(type_args) {
-        match param.constraint {
+        match param.constraint() {
             TypeGenericConstraint::Dim => match arg {
                 InferredGenericArg::Dim(dim) => {
-                    subs.dims.insert(param.name.clone(), dim.clone());
+                    subs.dims.insert(param.name().clone(), dim.clone());
                 }
                 _ => return Err(generic_arg_internal_sort_error(param, src, span)),
             },
             TypeGenericConstraint::Index => match arg {
                 InferredGenericArg::Index(index) if inferred_index_is_concrete(index) => {
                     subs.indexes
-                        .insert(param.name.clone(), index.type_ref().clone());
+                        .insert(param.name().clone(), index.type_ref().clone());
                 }
                 InferredGenericArg::Index(index) => {
                     return Err(non_concrete_generic_argument(
-                        &param.name,
+                        param.name(),
                         &index.to_string(),
                         src,
                         span,
@@ -2997,11 +2997,11 @@ fn generic_substitution_prefix(
             },
             TypeGenericConstraint::Nat => match arg {
                 InferredGenericArg::Nat(form) if form.is_constant() => {
-                    subs.nats.insert(param.name.clone(), form.constant());
+                    subs.nats.insert(param.name().clone(), form.constant());
                 }
                 InferredGenericArg::Nat(form) => {
                     return Err(non_concrete_generic_argument(
-                        &param.name,
+                        param.name(),
                         &form.format(),
                         src,
                         span,
@@ -3011,11 +3011,11 @@ fn generic_substitution_prefix(
             },
             TypeGenericConstraint::Type => match arg {
                 InferredGenericArg::Type(type_expr) if inferred_type_is_concrete(type_expr) => {
-                    subs.types.insert(param.name.clone(), type_expr.clone());
+                    subs.types.insert(param.name().clone(), type_expr.clone());
                 }
                 InferredGenericArg::Type(type_expr) => {
                     return Err(non_concrete_generic_argument(
-                        &param.name,
+                        param.name(),
                         &format!("{type_expr:?}"),
                         src,
                         span,
@@ -3029,7 +3029,7 @@ fn generic_substitution_prefix(
 }
 
 fn concrete_generic_substitutions(
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     type_args: &[InferredGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -3091,14 +3091,14 @@ fn non_concrete_generic_argument(
 }
 
 fn generic_arg_internal_sort_error(
-    param: &crate::registry::types::TypeGenericParam,
+    param: &crate::hir::NominalGenericParam,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
     GraphcalError::InternalError {
         message: format!(
             "generic argument for `{}` does not match its registered sort",
-            param.name
+            param.name()
         ),
         src: src.clone(),
         span: span.into(),
@@ -3159,9 +3159,9 @@ fn substitute_resolved_generic_arg_with_type_params(
 
 pub(in crate::tir::dim_check) fn resolved_field_type(
     owning_type: &ResolvedStructTypeName,
-    constructor: &UnionMemberDef,
+    constructor: &NominalConstructor,
     field: &FieldName,
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
     _registry: &Registry,
@@ -3194,7 +3194,7 @@ struct ConcreteStructApplicationKey {
 
 struct ConcreteStructApplication<'a> {
     key: ConcreteStructApplicationKey,
-    type_def: &'a TypeDef,
+    type_def: &'a NominalTypeDef,
     substitutions: ConcreteGenericSubstitutions,
 }
 
@@ -3202,7 +3202,7 @@ impl<'a> ConcreteStructApplication<'a> {
     fn new(
         type_name: &InferredStructType,
         type_args: &[InferredGenericArg],
-        type_def: &'a TypeDef,
+        type_def: &'a NominalTypeDef,
         src: &NamedSource<Arc<String>>,
         span: Span,
     ) -> Result<Self, GraphcalError> {
@@ -3388,8 +3388,8 @@ fn validate_concrete_field_obligations(
 
 fn validate_instantiated_field_bounds(
     application: &ConcreteStructApplication<'_>,
-    member: &UnionMemberDef,
-    field: &crate::registry::types::StructField,
+    member: &NominalConstructor,
+    field: &crate::hir::NominalField,
     bounds: &[crate::tir::typed::ResolvedDomainBound],
     field_type: &InferredType,
     ctx: &ConcreteObligationContext<'_>,
@@ -3440,7 +3440,7 @@ fn validate_instantiated_field_bounds(
     Ok(())
 }
 
-fn record_member(type_def: &TypeDef) -> Option<&UnionMemberDef> {
+fn record_member(type_def: &NominalTypeDef) -> Option<&NominalConstructor> {
     let members = type_def.union_members()?;
     let [only] = members else {
         return None;
@@ -3797,7 +3797,7 @@ fn infer_hir_constructor_call(
     let type_def = &target.type_def;
     let variant = &target.variant;
     let owning_type_identity = InferredStructType::from_resolved(target.owning_type.clone());
-    let owning_type_name = type_def.name().clone();
+    let owning_type_name = type_def.name();
 
     let resolved_type_args = resolve_applied_generic_args(
         &target.owning_type,
@@ -3922,7 +3922,7 @@ fn infer_hir_constructor_call(
 
 pub(in crate::tir::dim_check) fn resolve_concrete_generic_args(
     owning_type: &ResolvedStructTypeName,
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     applied_generic_args: &[hir::GenericArg],
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
@@ -3950,7 +3950,7 @@ pub(in crate::tir::dim_check) fn resolve_concrete_generic_args(
 
 fn resolve_applied_generic_args(
     owning_type: &ResolvedStructTypeName,
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     applied_generic_args: &[hir::GenericArg],
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
@@ -3966,7 +3966,7 @@ fn resolve_applied_generic_args(
     let required_count = type_def
         .generic_params()
         .iter()
-        .rposition(|param| param.default.is_none())
+        .rposition(|param| param.default().is_none())
         .map_or(0, |index| index.saturating_add(1));
     if applied_generic_args.len() < required_count || applied_generic_args.len() > total_params {
         let hint = if required_count == total_params {
@@ -3988,7 +3988,7 @@ fn resolve_applied_generic_args(
     for (param, arg) in type_def.generic_params().iter().zip(applied_generic_args) {
         let inferred = infer_hir_sorted_generic_arg(arg, dag, tir, registry, src, substitutions)?;
         let matches_sort = matches!(
-            (param.constraint, &inferred),
+            (param.constraint(), &inferred),
             (TypeGenericConstraint::Dim, InferredGenericArg::Dim(_))
                 | (TypeGenericConstraint::Index, InferredGenericArg::Index(_))
                 | (TypeGenericConstraint::Nat, InferredGenericArg::Nat(_))
@@ -4008,11 +4008,11 @@ fn resolve_applied_generic_args(
             .semantic
             .type_defs
             .generic_defaults
-            .get(&(owning_type.clone(), param.name.clone()))
+            .get(&(owning_type.clone(), param.name().clone()))
             .ok_or_else(|| GraphcalError::EvalError {
                 message: format!(
                     "internal: generic parameter `{}` has no default",
-                    param.name
+                    param.name()
                 ),
                 src: src.clone(),
                 span: span.into(),
@@ -4589,9 +4589,9 @@ fn infer_hir_unfold(
 
 fn constructor_field_type(
     field: &crate::syntax::span::Spanned<FieldName>,
-    variant: &UnionMemberDef,
+    variant: &NominalConstructor,
     owning_type: &ResolvedStructTypeName,
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     scrutinee_type_args: &[InferredGenericArg],
     dag: &crate::tir::typed::DagTIR,
     registry: &Registry,
@@ -4603,7 +4603,7 @@ fn constructor_field_type(
         .any(|field_def| field_def.name() == &field.value)
     {
         return Err(GraphcalError::UnknownField {
-            type_name: type_def.name().clone(),
+            type_name: type_def.name(),
             field_name: field.value.clone(),
             src: src.clone(),
             span: field.span.into(),
@@ -4853,7 +4853,7 @@ fn infer_hir_match(
             }
             if let Some(members) = type_def.union_members() {
                 for member in members {
-                    if !covered.contains(member.name()) {
+                    if !covered.contains(&member.name()) {
                         return Err(GraphcalError::EvalError {
                             message: format!(
                                 "non-exhaustive match: member `{}` not covered",

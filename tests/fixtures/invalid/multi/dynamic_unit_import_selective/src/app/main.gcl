@@ -1,0 +1,3 @@
+// Even a selective include copies the dependency body into the importer, so
+// an instance-local dynamic unit cannot cross this boundary.
+include app.fx().{ p };

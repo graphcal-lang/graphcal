@@ -95,7 +95,10 @@ fn local_declared_interfaces(
 pub(super) fn check_hir_file(
     hir: HirFile,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
-    hir_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    exported_dynamic_units: &HashMap<
+        graphcal_compiler::dag_id::DagId,
+        HashSet<graphcal_compiler::syntax::dimension::UnitName>,
+    >,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
@@ -114,9 +117,11 @@ pub(super) fn check_hir_file(
         project_types,
         cancellation,
     )?;
-    if let Some((name, span)) =
-        lowering::imported_runtime_unit_reference(tir.root(), &hir.module_map, hir_interfaces)
-    {
+    if let Some((name, span)) = lowering::imported_runtime_unit_reference(
+        tir.root(),
+        &hir.module_map,
+        exported_dynamic_units,
+    ) {
         return Err(GraphcalError::ImportRuntimeUnit {
             name,
             src: file_src.clone(),

@@ -4401,55 +4401,33 @@ fn eval_unit_def_from_selective_import() {
     );
 }
 
-// --- Dynamic units across a module-import boundary (#823) ---
+// --- Dynamic units stay encapsulated across module boundaries (#823) ---
 
 #[test]
-fn eval_dynamic_unit_via_module_import() {
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("valid/multi/dynamic_unit_import/src/app/main.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
+fn include_rejects_a_dynamic_unit_namespace() {
+    for fixture_path in [
+        "invalid/multi/dynamic_unit_import/src/app/main.gcl",
+        "invalid/multi/dynamic_unit_import_selective/src/app/main.gcl",
+    ] {
+        let output = graphcal_bin()
+            .args(["check", &fixture(fixture_path)])
+            .output()
+            .expect("failed to run graphcal");
 
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    // 1 EUR = 1.08 USD, so 100 USD converts to ~92.59 fx.EUR.
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains('p') && l.contains("92.59") && l.contains("fx.EUR")),
-        "expected `p = 92.59... fx.EUR` in output: {stdout}"
-    );
-}
-
-#[test]
-fn eval_dynamic_unit_via_selective_import() {
-    let output = graphcal_bin()
-        .args([
-            "eval",
-            &fixture("valid/multi/dynamic_unit_import_selective/src/app/main.gcl"),
-        ])
-        .output()
-        .expect("failed to run graphcal");
-
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout
-            .lines()
-            .any(|l| l.contains('p') && l.contains("92.59") && l.contains("EUR")),
-        "expected `p = 92.59... EUR` in output: {stdout}"
-    );
+        assert!(
+            !output.status.success(),
+            "fixture unexpectedly passed: {fixture_path}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("graphcal::M026"),
+            "{fixture_path}: {stderr}"
+        );
+        assert!(
+            stderr.contains("cannot `include` runtime-dependent unit"),
+            "{fixture_path}: {stderr}"
+        );
+    }
 }
 
 // --- Dynamic units ---

@@ -762,7 +762,7 @@ fn collect_concrete_nominal_applications(
 }
 
 fn generic_nat_bindings(
-    type_def: &graphcal_compiler::registry::types::TypeDef,
+    type_def: &graphcal_compiler::hir::NominalTypeDef,
     generic_args: &[DeclaredGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -791,12 +791,12 @@ fn generic_nat_bindings(
         })
         .map(|(param, form)| {
             form.constant_value()
-                .map(|value| (param.name.clone(), value))
+                .map(|value| (param.name().clone(), value))
                 .ok_or_else(|| GraphcalError::InternalError {
                     message: format!(
                         "concrete Nat argument `{}` for `{}` remained symbolic",
                         form.format(),
-                        param.name
+                        param.name()
                     ),
                     src: src.clone(),
                     span: span.into(),
@@ -1301,17 +1301,13 @@ mod tests {
         let file = desugared;
         let src = make_src(source);
         let ir = lower(&file, &src).unwrap();
-        let dag_id = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
-            std::path::Path::new("test.gcl"),
-        )
-        .unwrap();
         let mut resolver = ModuleResolver::default();
         resolver
-            .add_module(dag_id.clone(), &file.declarations)
+            .add_module(ir.dag_id().clone(), &file.declarations)
             .unwrap();
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
-        project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
+        project_types.insert_local_hir(&ir).unwrap();
         let tir = type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap();
         (tir, src)
     }

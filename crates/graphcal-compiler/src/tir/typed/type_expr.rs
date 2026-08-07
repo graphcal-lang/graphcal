@@ -3,16 +3,16 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use crate::desugar::desugared_ast::{MulDivOp, TypeExpr};
+use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational};
 use crate::hir;
-use crate::hir::diagnostics::hir_lower_error_to_graphcal;
+use crate::hir::{NominalGenericParam, NominalTypeDef};
 use crate::nat::NatPolyForm;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint};
+use crate::registry::types::TypeGenericConstraint;
 use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
-use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
+use crate::syntax::module_resolve::ModuleResolveError;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName};
 
@@ -52,9 +52,7 @@ pub(super) fn internal_error(
 #[derive(Clone, Copy)]
 struct HirTypeResolutionContext<'a> {
     src: &'a NamedSource<Arc<String>>,
-    resolver: &'a ModuleResolver,
     project_types: &'a ProjectTypeStore,
-    prelude: &'a hir::PreludeTypeScope,
 }
 
 /// Resolve an already-lowered HIR type expression into the TIR type
@@ -69,12 +67,9 @@ pub fn resolve_hir_type_expr(
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
 ) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let prelude = hir::PreludeTypeScope::graphcal();
     let ctx = HirTypeResolutionContext {
         src,
-        resolver: module_ctx.resolver,
         project_types: module_ctx.types,
-        prelude: &prelude,
     };
     resolve_hir_type_expr_inner(type_ann, ctx)
 }
@@ -204,7 +199,7 @@ fn hir_struct_type_def<'a>(
     name: &ResolvedStructTypeName,
     span: Span,
     ctx: HirTypeResolutionContext<'a>,
-) -> Result<&'a TypeDef, GraphcalError> {
+) -> Result<&'a NominalTypeDef, GraphcalError> {
     ctx.project_types
         .get_struct_type(name)
         .ok_or_else(|| GraphcalError::UnknownStructType {
@@ -341,26 +336,31 @@ struct ResolvedGenericSubstitutions {
 }
 
 impl ResolvedGenericSubstitutions {
-    fn from_resolved_prefix(type_def: &TypeDef, resolved_args: &[ResolvedGenericArg]) -> Self {
+    fn from_resolved_prefix(
+        type_def: &NominalTypeDef,
+        resolved_args: &[ResolvedGenericArg],
+    ) -> Self {
         type_def.generic_params().iter().zip(resolved_args).fold(
             Self::default(),
             |mut substitutions, (param, arg)| {
                 match arg {
                     ResolvedGenericArg::Dim(dim) => {
-                        substitutions.dims.insert(param.name.clone(), dim.clone());
+                        substitutions.dims.insert(param.name().clone(), dim.clone());
                     }
                     ResolvedGenericArg::Index(index) => {
                         substitutions
                             .indexes
-                            .insert(param.name.clone(), index.clone());
+                            .insert(param.name().clone(), index.clone());
                     }
                     ResolvedGenericArg::Nat(form, _) => {
-                        substitutions.nats.insert(param.name.clone(), form.clone());
+                        substitutions
+                            .nats
+                            .insert(param.name().clone(), form.clone());
                     }
                     ResolvedGenericArg::Type(type_expr) => {
                         substitutions
                             .types
-                            .insert(param.name.clone(), type_expr.clone());
+                            .insert(param.name().clone(), type_expr.clone());
                     }
                 }
                 substitutions
@@ -389,7 +389,7 @@ impl From<crate::dimension::RationalError> for GenericDefaultSubstitutionError {
 
 fn instantiate_params_in_default(
     default: &mut ResolvedGenericArg,
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     resolved_args: &[ResolvedGenericArg],
     src: &NamedSource<Arc<String>>,
     span: Span,
@@ -643,7 +643,7 @@ fn substitute_params_in_resolved_type(
 /// Shared by the HIR and syntax type-application resolvers.
 fn check_type_application_arity(
     type_name: &str,
-    type_def: &TypeDef,
+    type_def: &NominalTypeDef,
     arg_count: usize,
     span: Span,
     src: &NamedSource<Arc<String>>,
@@ -652,7 +652,7 @@ fn check_type_application_arity(
     let required_count = type_def
         .generic_params()
         .iter()
-        .rposition(|param| param.default.is_none())
+        .rposition(|param| param.default().is_none())
         .map_or(0, |index| index.saturating_add(1));
     if arg_count < required_count || arg_count > total_params {
         let hint = if required_count == total_params {
@@ -692,25 +692,21 @@ fn resolve_hir_type_application(
     }
 
     for param in type_def.generic_params().iter().skip(generic_args.len()) {
-        let default = param
-            .default
-            .as_ref()
-            .ok_or_else(|| GraphcalError::EvalError {
-                message: format!(
-                    "internal: generic parameter `{}` has no default",
-                    param.name
-                ),
-                src: ctx.src.clone(),
-                span: type_ann.span.into(),
-            })?;
-        let default_hir = lower_generic_default(default, param, &name.value, type_def, ctx)?;
-        let mut resolved = resolve_hir_generic_arg_for_param(param, &default_hir, ctx)?;
+        let default = param.default().ok_or_else(|| GraphcalError::EvalError {
+            message: format!(
+                "internal: generic parameter `{}` has no default",
+                param.name()
+            ),
+            src: ctx.src.clone(),
+            span: type_ann.span.into(),
+        })?;
+        let mut resolved = resolve_hir_generic_arg_for_param(param, default, ctx)?;
         instantiate_params_in_default(
             &mut resolved,
             type_def,
             &resolved_args,
             ctx.src,
-            default_hir.span(),
+            default.span(),
         )?;
         resolved_args.push(resolved);
     }
@@ -722,12 +718,28 @@ fn resolve_hir_type_application(
     })
 }
 
+pub(super) fn resolve_hir_generic_arg(
+    param: &NominalGenericParam,
+    arg: &hir::GenericArg,
+    src: &NamedSource<Arc<String>>,
+    module_ctx: ModuleTypeContext<'_>,
+) -> Result<ResolvedGenericArg, GraphcalError> {
+    resolve_hir_generic_arg_for_param(
+        param,
+        arg,
+        HirTypeResolutionContext {
+            src,
+            project_types: module_ctx.types,
+        },
+    )
+}
+
 fn resolve_hir_generic_arg_for_param(
-    param: &crate::registry::types::TypeGenericParam,
+    param: &NominalGenericParam,
     arg: &hir::GenericArg,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedGenericArg, GraphcalError> {
-    match (param.constraint, arg) {
+    match (param.constraint(), arg) {
         (TypeGenericConstraint::Dim, hir::GenericArg::Dim(dim)) => {
             resolve_hir_dim_arg(dim, ctx).map(ResolvedGenericArg::Dim)
         }
@@ -745,7 +757,7 @@ fn resolve_hir_generic_arg_for_param(
         _ => Err(internal_error(
             format!(
                 "HIR generic argument for `{}` does not match its registered sort",
-                param.name
+                param.name()
             ),
             ctx.src,
             arg.span(),
@@ -775,124 +787,4 @@ fn resolve_hir_dim_arg(
             )),
         },
     }
-}
-
-fn generic_scope_for_type(
-    type_owner: &ResolvedStructTypeName,
-    type_def: &TypeDef,
-    span: Span,
-    ctx: HirTypeResolutionContext<'_>,
-) -> Result<hir::GenericScope, GraphcalError> {
-    let mut scope = hir::GenericScope::new();
-    for param in type_def.generic_params() {
-        let constraint = generic_constraint(param.constraint);
-        let id = hir::GenericParamId::new(
-            hir::GenericParamOwner::Type(type_owner.clone()),
-            param.name.clone(),
-        );
-        scope
-            .insert_binding(hir::GenericParamBinding::new(id, constraint, span))
-            .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))?;
-    }
-    Ok(scope)
-}
-
-const fn generic_constraint(
-    constraint: TypeGenericConstraint,
-) -> crate::syntax::ast::GenericConstraint {
-    match constraint {
-        TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
-        TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
-        TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
-        TypeGenericConstraint::Type => crate::syntax::ast::GenericConstraint::Type,
-    }
-}
-
-fn lower_type_expr_in_generic_scope(
-    type_expr: &TypeExpr,
-    type_owner: &ResolvedStructTypeName,
-    type_def: &TypeDef,
-    ctx: HirTypeResolutionContext<'_>,
-) -> Result<hir::TypeExpr, GraphcalError> {
-    let scope = generic_scope_for_type(type_owner, type_def, type_expr.span, ctx)?;
-    let lower_ctx = hir::TypeLoweringContext::new(type_owner.owner(), ctx.resolver, &scope)
-        .with_prelude(ctx.prelude);
-    hir::lower_type_expr(type_expr, lower_ctx)
-        .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
-}
-
-fn lower_generic_default(
-    default: &crate::desugar::desugared_ast::GenericArg,
-    param: &crate::registry::types::TypeGenericParam,
-    type_owner: &ResolvedStructTypeName,
-    type_def: &TypeDef,
-    ctx: HirTypeResolutionContext<'_>,
-) -> Result<hir::GenericArg, GraphcalError> {
-    let mut scope = hir::GenericScope::new();
-    for earlier in type_def
-        .generic_params()
-        .iter()
-        .take_while(|earlier| earlier.name != param.name)
-    {
-        let id = hir::GenericParamId::new(
-            hir::GenericParamOwner::Type(type_owner.clone()),
-            earlier.name.clone(),
-        );
-        scope
-            .insert_binding(hir::GenericParamBinding::new(
-                id,
-                generic_constraint(earlier.constraint),
-                default.span(),
-            ))
-            .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))?;
-    }
-    let lower_ctx = hir::TypeLoweringContext::new(type_owner.owner(), ctx.resolver, &scope)
-        .with_prelude(ctx.prelude);
-    hir::lower::lower_generic_arg_for_constraint(
-        default,
-        generic_constraint(param.constraint),
-        &param.name,
-        lower_ctx,
-    )
-    .map_err(|err| hir_lower_error_to_graphcal(&err, ctx.src))
-}
-
-pub(super) fn resolve_generic_default_in_struct_scope(
-    default: &crate::desugar::desugared_ast::GenericArg,
-    param: &crate::registry::types::TypeGenericParam,
-    type_owner: &ResolvedStructTypeName,
-    type_def: &TypeDef,
-    ctx: ModuleTypeContext<'_>,
-    _registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<(hir::GenericArg, ResolvedGenericArg), GraphcalError> {
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let resolve_ctx = HirTypeResolutionContext {
-        src,
-        resolver: ctx.resolver,
-        project_types: ctx.types,
-        prelude: &prelude,
-    };
-    let hir_arg = lower_generic_default(default, param, type_owner, type_def, resolve_ctx)?;
-    let resolved = resolve_hir_generic_arg_for_param(param, &hir_arg, resolve_ctx)?;
-    Ok((hir_arg, resolved))
-}
-
-pub(super) fn resolve_type_expr_in_struct_scope(
-    type_expr: &TypeExpr,
-    type_owner: &ResolvedStructTypeName,
-    type_def: &TypeDef,
-    ctx: ModuleTypeContext<'_>,
-    _registry: &Registry,
-    src: &NamedSource<Arc<String>>,
-) -> Result<ResolvedTypeExpr, GraphcalError> {
-    let prelude = hir::PreludeTypeScope::graphcal();
-    let resolve_ctx = HirTypeResolutionContext {
-        src,
-        resolver: ctx.resolver,
-        project_types: ctx.types,
-        prelude: &prelude,
-    };
-    let hir_type = lower_type_expr_in_generic_scope(type_expr, type_owner, type_def, resolve_ctx)?;
-    resolve_hir_type_expr_inner(&hir_type, resolve_ctx)
 }

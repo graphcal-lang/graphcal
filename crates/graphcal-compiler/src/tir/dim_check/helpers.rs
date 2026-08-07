@@ -3,8 +3,9 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::dimension::Dimension;
+use crate::hir::NominalTypeDef;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{Registry, TypeDef};
+use crate::registry::types::Registry;
 
 use super::{DeclaredType, InferredGenericArg, InferredIndex, InferredStructType, InferredType};
 use crate::registry::declared_type::DeclaredGenericArg;
@@ -209,7 +210,7 @@ pub(super) fn struct_type_def_for_inferred<'a>(
     ty: &InferredStructType,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     _registry: &'a Registry,
-) -> Option<&'a TypeDef> {
+) -> Option<&'a NominalTypeDef> {
     dag.map(|dag| &dag.semantic.type_defs)
         .and_then(|defs| defs.struct_types.get(ty.resolved()))
         .map(AsRef::as_ref)

@@ -18,7 +18,7 @@ use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{IndexBindingTarget, Registry, RegistryBuilder};
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::{DimName, UnitRef};
+use graphcal_compiler::syntax::dimension::DimName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::{IncludeInstanceScope, ModuleAliasName};
 use graphcal_compiler::syntax::span::Span;
@@ -46,8 +46,8 @@ mod template;
 pub use hir_project::HirProject;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
-    DepToImporter, DynamicUnitBoundary, FrontendRegistryImport, HirFile, HirModuleArtifact,
-    ImportAlias, ImportContext, IncludeInstanceRequest, IndexBindings, ModuleArtifact,
+    DepToImporter, DynamicUnitBoundary, FrontendRegistryImport, HirFile, ImportAlias,
+    ImportContext, IncludeInstanceRequest, IndexBindings, LoweringModuleInterface, ModuleArtifact,
     ProjectModuleBinding, ProjectSemanticContext,
 };
 use qualified_refs::rewrite_qualified_refs_in_compilation_body;

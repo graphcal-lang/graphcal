@@ -7,14 +7,13 @@ use thiserror::Error;
 use crate::desugar::desugared_ast::MulDivOp;
 use crate::dimension::{Dimension, Rational, RationalError};
 use crate::hir;
+use crate::hir::{NominalConstructor, NominalTypeDef};
 use crate::ir::resolve::{DeclCategory, ExpectedFail};
 use crate::nat::NatPolyForm;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{
-    IndexDef, Registry, RegistryBuildError, RegistryBuilder, TypeDef, UnionMemberDef, UnitInfo,
-};
+use crate::registry::types::{IndexDef, Registry, RegistryBuildError, RegistryBuilder, UnitInfo};
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
@@ -405,8 +404,8 @@ impl ResolvedIndex {
 #[derive(Debug, Clone)]
 pub struct ProjectConstructorDef {
     pub(crate) owning_type: ResolvedStructTypeName,
-    pub(crate) type_def: Arc<TypeDef>,
-    pub(crate) variant: UnionMemberDef,
+    pub(crate) type_def: Arc<NominalTypeDef>,
+    pub(crate) variant: NominalConstructor,
 }
 
 /// Authoritative project type-system definitions keyed by
@@ -421,9 +420,8 @@ pub struct ProjectTypeStore {
     dimensions: HashMap<ResolvedDimName, Dimension>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, Arc<IndexDef>>,
-    struct_types: HashMap<ResolvedStructTypeName, Arc<TypeDef>>,
+    struct_types: HashMap<ResolvedStructTypeName, Arc<NominalTypeDef>>,
     constructors: HashMap<ResolvedConstructorName, ProjectConstructorDef>,
-    sources: HashMap<crate::dag_id::DagId, NamedSource<Arc<String>>>,
 }
 
 /// Error from constructing the project type store's prelude entries.
@@ -435,6 +433,31 @@ pub enum PreludeProjectTypeStoreError {
     /// The prelude registry violated a registry construction invariant.
     #[error(transparent)]
     RegistryBuild(#[from] RegistryBuildError),
+}
+
+/// Failure to transfer one complete HIR module into the semantic project type store.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ProjectTypeStoreInsertError {
+    #[error("module resolver is missing HIR DAG `{owner}`")]
+    MissingModule { owner: crate::dag_id::DagId },
+    #[error("HIR nominal type `{identity}` is stored on DAG `{actual_owner}`")]
+    NominalOwnerMismatch {
+        identity: ResolvedStructTypeName,
+        actual_owner: crate::dag_id::DagId,
+    },
+    #[error("project type store already contains a different definition for `{identity}`")]
+    CompetingNominalDefinition { identity: ResolvedStructTypeName },
+    #[error("project type store already assigns constructor `{constructor}` to `{first_owner}`")]
+    CompetingConstructorOwner {
+        constructor: ResolvedConstructorName,
+        first_owner: ResolvedStructTypeName,
+    },
+    #[error("frontend registry is missing dimension `{identity}`")]
+    MissingDimension { identity: ResolvedDimName },
+    #[error("frontend registry is missing unit `{identity}`")]
+    MissingUnit { identity: ResolvedUnitName },
+    #[error("frontend registry is missing index `{identity}`")]
+    MissingIndex { identity: ResolvedIndexName },
 }
 
 impl ProjectTypeStore {
@@ -471,28 +494,28 @@ impl ProjectTypeStore {
         Ok(())
     }
 
-    /// Insert every definition from a registry known to contain one module's
-    /// local frontend declarations.
+    /// Insert a standalone HIR DAG whose frontend registry contains only its
+    /// local declarations. The DAG identity is derived from the body itself.
     ///
-    /// Multi-module project compilation should use
-    /// [`Self::insert_resolver_subtree`] so copied import aliases cannot become
-    /// canonical definitions owned by the importer.
-    pub fn insert_local_registry(
+    /// # Errors
+    ///
+    /// Returns an invariant error if another HIR body already claims the same
+    /// canonical nominal identity.
+    pub fn insert_local_hir(
         &mut self,
-        owner: &crate::dag_id::DagId,
-        registry: &Registry,
-        source: NamedSource<Arc<String>>,
-    ) {
-        for (name, dim) in registry.dimensions.all_dimensions() {
+        hir: &crate::ir::lower::HirDag,
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        let owner = hir.dag_id();
+        for (name, dim) in hir.registry.dimensions.all_dimensions() {
             self.dimensions
                 .entry(ResolvedDimName::from_def(owner.clone(), name.clone()))
                 .or_insert_with(|| dim.clone());
         }
-        for (reference, _, _) in registry.units.all_units() {
+        for (reference, _, _) in hir.registry.units.all_units() {
             if reference.is_qualified() {
                 continue;
             }
-            if let Some(info) = registry.units.get_unit(reference) {
+            if let Some(info) = hir.registry.units.get_unit(reference) {
                 self.units
                     .entry(ResolvedUnitName::from_def(
                         owner.clone(),
@@ -501,7 +524,7 @@ impl ProjectTypeStore {
                     .or_insert_with(|| info.clone());
             }
         }
-        for index in registry.indexes.declared_indexes() {
+        for index in hir.registry.indexes.declared_indexes() {
             self.indexes
                 .entry(ResolvedIndexName::from_def(
                     owner.clone(),
@@ -509,93 +532,126 @@ impl ProjectTypeStore {
                 ))
                 .or_insert_with(|| Arc::new(index.clone()));
         }
-        for type_def in registry.types.all_types() {
-            self.insert_struct_type(owner, type_def);
-        }
-        self.sources.entry(owner.clone()).or_insert(source);
+        self.insert_nominal_types(hir)?;
+        Ok(())
     }
 
-    /// Insert only definitions declared by resolver modules rooted at `owner`.
+    /// Insert exactly one resolver-owned HIR module.
     ///
-    /// The frontend registry may also contain copied selective imports and
-    /// alias-qualified units. Resolver module tables distinguish those scope
-    /// bindings from native definitions, so this operation keeps the canonical
-    /// store free of importer-owned copies. Existing entries are retained so
-    /// every derived per-DAG index keeps sharing the first canonical `Arc`.
-    pub fn insert_resolver_subtree(
+    /// Unlike the former subtree scan, this operation cannot accidentally copy
+    /// a nested DAG or selected import under the caller's owner. Every nominal
+    /// definition comes from the HIR DAG's invariant-preserving registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invariant error for missing frontend facts, owner mismatch,
+    /// or a competing canonical nominal definition.
+    pub fn insert_resolver_module(
         &mut self,
-        owner: &crate::dag_id::DagId,
-        registry: &Registry,
-        source: &NamedSource<Arc<String>>,
+        hir: &crate::ir::lower::HirDag,
         resolver: &ModuleResolver,
-    ) {
-        resolver
-            .modules()
-            .iter()
-            .filter(|(module_id, _)| *module_id == owner || module_id.is_descendant_of(owner))
-            .for_each(|(module_id, symbols)| {
-                for name in symbols.dimensions().keys() {
-                    if let Some(dimension) = registry.dimensions.get_dimension(name.as_str()) {
-                        self.dimensions
-                            .entry(ResolvedDimName::from_def(module_id.clone(), name.clone()))
-                            .or_insert_with(|| dimension.clone());
-                    }
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        let owner = hir.dag_id();
+        let symbols = resolver.modules().get(owner).ok_or_else(|| {
+            ProjectTypeStoreInsertError::MissingModule {
+                owner: owner.clone(),
+            }
+        })?;
+
+        for name in symbols.dimensions().keys() {
+            let identity = ResolvedDimName::from_def(owner.clone(), name.clone());
+            let dimension = hir
+                .registry
+                .dimensions
+                .get_dimension(name.as_str())
+                .ok_or_else(|| ProjectTypeStoreInsertError::MissingDimension {
+                    identity: identity.clone(),
+                })?;
+            self.dimensions
+                .entry(identity)
+                .or_insert_with(|| dimension.clone());
+        }
+        for name in symbols.units().keys() {
+            let identity = ResolvedUnitName::from_def(owner.clone(), name.clone());
+            let reference = crate::syntax::dimension::UnitRef::local(name.clone());
+            let info = hir.registry.units.get_unit(&reference).ok_or_else(|| {
+                ProjectTypeStoreInsertError::MissingUnit {
+                    identity: identity.clone(),
                 }
-                for name in symbols.units().keys() {
-                    let reference = crate::syntax::dimension::UnitRef::local(name.clone());
-                    if let Some(info) = registry.units.get_unit(&reference) {
-                        self.units
-                            .entry(ResolvedUnitName::from_def(module_id.clone(), name.clone()))
-                            .or_insert_with(|| info.clone());
-                    }
-                }
-                for name in symbols.indexes().keys() {
-                    if let Some(index) = registry.indexes.get_index(name.as_str()) {
-                        self.indexes
-                            .entry(ResolvedIndexName::from_def(module_id.clone(), name.clone()))
-                            .or_insert_with(|| Arc::new(index.clone()));
-                    }
-                }
-                for name in symbols.struct_types().keys() {
-                    if let Some(type_def) = registry.types.get_type(name.as_str()) {
-                        self.insert_struct_type(module_id, type_def);
-                    }
-                }
-                self.sources
-                    .entry(module_id.clone())
-                    .or_insert_with(|| source.clone());
-            });
+            })?;
+            self.units.entry(identity).or_insert_with(|| info.clone());
+        }
+        for name in symbols.indexes().keys() {
+            let identity = ResolvedIndexName::from_def(owner.clone(), name.clone());
+            let index = hir
+                .registry
+                .indexes
+                .get_index(name.as_str())
+                .ok_or_else(|| ProjectTypeStoreInsertError::MissingIndex {
+                    identity: identity.clone(),
+                })?;
+            self.indexes
+                .entry(identity)
+                .or_insert_with(|| Arc::new(index.clone()));
+        }
+        self.insert_nominal_types(hir)?;
+        Ok(())
     }
 
-    fn insert_struct_type(&mut self, owner: &crate::dag_id::DagId, type_def: &TypeDef) {
-        let type_name = ResolvedStructTypeName::from_def(owner.clone(), type_def.name().clone());
-        let type_def = Arc::clone(
-            self.struct_types
-                .entry(type_name.clone())
-                .or_insert_with(|| Arc::new(type_def.clone())),
-        );
-        if let Some(members) = type_def.union_members() {
-            for member in members {
-                self.constructors
-                    .entry(ResolvedConstructorName::from_def(
-                        owner.clone(),
-                        member.name().clone(),
-                    ))
-                    .or_insert_with(|| ProjectConstructorDef {
-                        owning_type: type_name.clone(),
-                        type_def: Arc::clone(&type_def),
-                        variant: member.clone(),
-                    });
+    fn insert_nominal_types(
+        &mut self,
+        hir: &crate::ir::lower::HirDag,
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        let owner = hir.dag_id();
+        for definition in hir.nominal_types().values() {
+            if definition.identity().owner() != owner {
+                return Err(ProjectTypeStoreInsertError::NominalOwnerMismatch {
+                    identity: definition.identity().clone(),
+                    actual_owner: owner.clone(),
+                });
+            }
+            if let Some(existing) = self.struct_types.get(definition.identity())
+                && !Arc::ptr_eq(existing, definition)
+            {
+                return Err(ProjectTypeStoreInsertError::CompetingNominalDefinition {
+                    identity: definition.identity().clone(),
+                });
+            }
+            if let Some(members) = definition.union_members() {
+                for member in members {
+                    if let Some(existing) = self.constructors.get(member.identity())
+                        && (existing.owning_type != *definition.identity()
+                            || !Arc::ptr_eq(&existing.type_def, definition))
+                    {
+                        return Err(ProjectTypeStoreInsertError::CompetingConstructorOwner {
+                            constructor: member.identity().clone(),
+                            first_owner: existing.owning_type.clone(),
+                        });
+                    }
+                }
             }
         }
-    }
 
-    #[must_use]
-    pub(crate) fn source_for_owner(
-        &self,
-        owner: &crate::dag_id::DagId,
-    ) -> Option<&NamedSource<Arc<String>>> {
-        self.sources.get(owner)
+        for definition in hir.nominal_types().values() {
+            let identity = definition.identity().clone();
+            let handle = Arc::clone(
+                self.struct_types
+                    .entry(identity.clone())
+                    .or_insert_with(|| Arc::clone(definition)),
+            );
+            if let Some(members) = definition.union_members() {
+                for member in members {
+                    self.constructors
+                        .entry(member.identity().clone())
+                        .or_insert_with(|| ProjectConstructorDef {
+                            owning_type: identity.clone(),
+                            type_def: Arc::clone(&handle),
+                            variant: member.clone(),
+                        });
+                }
+            }
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -619,7 +675,7 @@ impl ProjectTypeStore {
     }
 
     #[must_use]
-    pub(crate) fn get_struct_type(&self, name: &ResolvedStructTypeName) -> Option<&TypeDef> {
+    pub(crate) fn get_struct_type(&self, name: &ResolvedStructTypeName) -> Option<&NominalTypeDef> {
         self.struct_types.get(name).map(AsRef::as_ref)
     }
 
@@ -627,7 +683,7 @@ impl ProjectTypeStore {
     pub(crate) fn get_struct_type_handle(
         &self,
         name: &ResolvedStructTypeName,
-    ) -> Option<&Arc<TypeDef>> {
+    ) -> Option<&Arc<NominalTypeDef>> {
         self.struct_types.get(name)
     }
 
@@ -878,20 +934,16 @@ pub struct ResolvedStructFieldTypeKey {
     pub field: FieldName,
 }
 
-/// One generic-parameter default after canonical HIR lowering and semantic
-/// resolution.
+/// Semantic resolution of one HIR generic-parameter default.
 ///
-/// The HIR form preserves the canonical declarations named by dimension,
-/// index, and nominal-type defaults. The resolved form is used for generic
-/// substitution. Keeping both in one record prevents visibility checks from
-/// trying to recover erased alias identity from a concrete dimension value.
+/// The canonical HIR form remains authoritative on [`NominalGenericParam`];
+/// this sidecar stores only the later semantic fact used for substitution.
 #[expect(
     clippy::redundant_pub_crate,
     reason = "crate-only prevents the public model glob re-export from exposing resolution internals"
 )]
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedGenericDefault {
-    pub(crate) hir: hir::GenericArg,
     pub(crate) resolved: ResolvedGenericArg,
 }
 
@@ -934,7 +986,7 @@ impl ResolvedStructFieldSemantics {
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Shared handles to project-store nominal definitions keyed by canonical identity.
-    pub struct_types: HashMap<ResolvedStructTypeName, Arc<TypeDef>>,
+    pub struct_types: HashMap<ResolvedStructTypeName, Arc<NominalTypeDef>>,
     /// Atomic field semantics resolved in each owning type's generic scope.
     fields: HashMap<ResolvedStructFieldTypeKey, ResolvedStructFieldSemantics>,
     /// Generic parameter defaults resolved in the owning type's generic scope.
@@ -1078,8 +1130,8 @@ pub struct DagSemanticBody {
 #[derive(Debug, Clone)]
 pub struct ResolvedConstructorTarget {
     pub owning_type: ResolvedStructTypeName,
-    pub(crate) type_def: Arc<TypeDef>,
-    pub variant: UnionMemberDef,
+    pub(crate) type_def: Arc<NominalTypeDef>,
+    pub variant: NominalConstructor,
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,6 +1188,12 @@ impl TirBuilder {
     #[must_use]
     pub const fn registry(&self) -> &Registry {
         &self.registry
+    }
+
+    /// Borrow the owner-qualified type store accumulated for this project.
+    #[must_use]
+    pub const fn project_type_store(&self) -> &ProjectTypeStore {
+        &self.project_types
     }
 
     /// Add a compiled DAG under its own canonical identity.
@@ -1273,7 +1331,7 @@ impl TIR {
 
     /// Look up a nominal type by its canonical defining-module identity.
     #[must_use]
-    pub fn struct_type_def(&self, name: &ResolvedStructTypeName) -> Option<&TypeDef> {
+    pub fn struct_type_def(&self, name: &ResolvedStructTypeName) -> Option<&NominalTypeDef> {
         self.project_types.get_struct_type(name)
     }
 

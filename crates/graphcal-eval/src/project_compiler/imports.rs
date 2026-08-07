@@ -83,7 +83,7 @@ pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
 pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     project: &'a crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
@@ -260,20 +260,13 @@ fn ensure_include_item_selectable(
 }
 
 fn reject_runtime_unit_import(
-    dep: &HirModuleArtifact,
+    dep: &LoweringModuleInterface,
     name: &NameAtom,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
-    let unit_ref = UnitRef::local(graphcal_compiler::syntax::dimension::UnitName::from_atom(
-        name.clone(),
-    ));
-    if dep
-        .frontend_registry
-        .units
-        .get_unit(&unit_ref)
-        .is_some_and(|unit| unit.scale.is_dynamic())
-    {
+    let unit_name = graphcal_compiler::syntax::dimension::UnitName::from_atom(name.clone());
+    if dep.is_exported_dynamic_unit(&unit_name) {
         return Err(CompileError::Eval(GraphcalError::ImportRuntimeUnit {
             name: name.to_string(),
             src: src.clone(),
@@ -613,7 +606,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files[import_dag_id];
@@ -772,8 +765,8 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             })?;
             ctx.frontend_registry_imports
                 .push(super::FrontendRegistryImport {
-                    registry: &artifact.frontend_registry,
-                    external_surface: &artifact.external_surface,
+                    registry: artifact.frontend_registry(),
+                    external_surface: artifact.external_surface(),
                     unit_alias: prefix.clone(),
                     dynamic_unit_boundary: DynamicUnitBoundary::ConcreteInstance,
                     import_span: include_decl.path.span(),
@@ -1090,7 +1083,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
     import_path: &graphcal_compiler::desugar::desugared_ast::ModulePath,
     import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let resolved_module = project
@@ -1246,7 +1239,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
             // Import compile-time constants under the module prefix.
             import_module_values(
                 &dep_loaded.ast.declarations,
-                &dep.external_surface,
+                dep.external_surface(),
                 source_file,
                 &module_name,
                 import_span,
@@ -1259,8 +1252,8 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
             // The module alias keys the dep's pub units in this file's scope.
             ctx.frontend_registry_imports
                 .push(super::FrontendRegistryImport {
-                    registry: &dep.frontend_registry,
-                    external_surface: &dep.external_surface,
+                    registry: dep.frontend_registry(),
+                    external_surface: dep.external_surface(),
                     unit_alias: module_name.clone(),
                     dynamic_unit_boundary: DynamicUnitBoundary::PureImport,
                     import_span,

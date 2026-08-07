@@ -726,6 +726,7 @@ impl PreparedProject {
                             value,
                             Some(&output.declared_type),
                             &self.tir,
+                            &self.source,
                         )
                     })
                     .ok_or_else(|| {
@@ -901,8 +902,12 @@ impl PreparedProject {
                 continue;
             };
             if let Some((runtime, declared_type)) = self.output_assembly.imported_values.get(name) {
-                let value =
-                    crate::eval::runtime::runtime_to_value(runtime, Some(declared_type), &self.tir);
+                let value = crate::eval::runtime::runtime_to_value(
+                    runtime,
+                    Some(declared_type),
+                    &self.tir,
+                    &self.source,
+                );
                 push_output_value(
                     (name.clone(), Ok(value), decl_type),
                     &mut consts,

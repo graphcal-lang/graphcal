@@ -147,6 +147,8 @@ pub struct TypeGenericParam {
     /// Optional unresolved generic argument, e.g. `F: Type = Unframed` or
     /// `N: Nat = 3`. It is sorted against `constraint` at the HIR boundary.
     pub(crate) default: Option<crate::desugar::desugared_ast::GenericArg>,
+    /// Definition-site span of the parameter name.
+    pub(crate) span: crate::syntax::span::Span,
 }
 
 /// Failure to construct a semantically valid nominal type definition.
@@ -247,12 +249,6 @@ impl TypeDef {
     #[must_use]
     pub(crate) const fn is_union(&self) -> bool {
         matches!(self.kind, TypeDefKind::Union { .. })
-    }
-
-    /// Returns `true` if this is a required type stub awaiting binding.
-    #[must_use]
-    pub(crate) const fn is_required(&self) -> bool {
-        matches!(self.kind, TypeDefKind::Required)
     }
 
     /// If this is a single-variant union whose sole constructor's name

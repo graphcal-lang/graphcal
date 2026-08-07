@@ -148,15 +148,9 @@ Dynamic unit definitions are fully checked even when the unit is never used. The
 
 Only the scale's concrete value is deferred until evaluation, after its referenced params and nodes have been computed. That value must be positive and finite; otherwise any declaration using the unit fails instead of receiving a fallback scale.
 
-A dynamic unit belongs to a concrete runtime instance because its scale can depend on that instance's parameter bindings. A pure `import` does not create a hidden default instance, so directly importing or referencing a dependency's dynamic unit is rejected (`M025`). Use an explicit include when the consumer needs the unit:
+A dynamic unit belongs to the runtime DAG whose params and nodes determine its scale. It cannot cross a namespace-composition boundary: directly importing or qualifying it is rejected (`M025`), and including a module that declares one is rejected (`M026`). An include copies declarations and unit scope into another DAG; allowing that operation to manufacture instance-qualified type-system definitions would make unit identity depend on elaboration rather than one canonical definition.
 
-```
-include app.fx(usd_per_eur: 1.20) as fx;
-
-param invoice: fx.Money = 100.0 fx.EUR;
-```
-
-A module import can still make the file callable as a DAG. Dynamic units used internally by `@fx(...).output` are evaluated for that explicit call instance; they are simply not available as imported unit values in the caller. Repeated includes or calls of the same DAG keep separate dynamic scales, so two instances with different parameter bindings cannot overwrite or conflict with each other.
+Keep a dynamic unit private inside the entry DAG or inside a DAG invoked explicitly with `@module(...).output`. An explicit call evaluates the unit against that call's bindings without exposing the unit itself to the caller. If callers need to share the unit name, declare a `const unit`; if they need a variable conversion rate, model the conversion as an explicit value calculation.
 
 ### Using Units
 

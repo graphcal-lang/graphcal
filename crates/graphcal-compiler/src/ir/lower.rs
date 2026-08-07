@@ -399,8 +399,11 @@ pub struct HirDag {
     /// Canonical identity carried by the body itself, so storage and consumers
     /// cannot pair this HIR with a different DAG key.
     dag_id: crate::dag_id::DagId,
-    /// The type/unit/dimension/index/struct/function registry.
+    /// Frontend registry retained for units, dimensions, indexes, functions,
+    /// formatting, and source-boundary compatibility.
     pub registry: Registry,
+    /// Local nominal definitions with all signatures lowered to canonical HIR.
+    nominal_types: crate::hir::NominalTypeRegistry,
     /// Const declarations in source order.
     pub(crate) consts: Vec<ConstEntry>,
     /// Param declarations in source order.
@@ -445,6 +448,12 @@ impl HirDag {
     #[must_use]
     pub const fn dag_id(&self) -> &crate::dag_id::DagId {
         &self.dag_id
+    }
+
+    /// Nominal definitions canonically owned by this DAG.
+    #[must_use]
+    pub const fn nominal_types(&self) -> &crate::hir::NominalTypeRegistry {
+        &self.nominal_types
     }
 
     /// Borrow canonical lexical import targets resolved during HIR lowering.
@@ -1190,6 +1199,14 @@ impl UnfrozenIR {
                 })
             };
 
+        let nominal_types = crate::hir::nominal::lower_nominal_type_registry(
+            owner,
+            &registry,
+            resolver,
+            src,
+            cancellation,
+        )?;
+
         let dynamic_unit_scales = self
             .dynamic_unit_scales
             .iter()
@@ -1445,6 +1462,7 @@ impl UnfrozenIR {
             dag_id: owner.clone(),
             extern_functions,
             registry,
+            nominal_types,
             consts,
             params,
             nodes,
@@ -4145,6 +4163,7 @@ fn register_type_decl(
             name: g.name.value.clone(),
             constraint: g.constraint.into(),
             default: g.default.clone(),
+            span: g.name.span,
         })
         .collect();
 
@@ -5595,6 +5614,46 @@ mod tests {
         let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
         let ir = parse_and_lower(source).unwrap();
         assert!(ir.registry.indexes.get_index("Maneuver").is_some());
+    }
+
+    #[test]
+    fn nominal_signatures_are_canonical_hir() {
+        let hir = parse_and_lower(
+            "type Marker { Marker }\n\
+             type Box<T: Type = Marker> { Box(value: T) }\n",
+        )
+        .unwrap();
+        let identity = crate::syntax::type_name::ResolvedStructTypeName::from_def(
+            hir.dag_id().clone(),
+            crate::syntax::type_name::StructTypeName::expect_valid("Box"),
+        );
+        let marker = crate::syntax::type_name::ResolvedStructTypeName::from_def(
+            hir.dag_id().clone(),
+            crate::syntax::type_name::StructTypeName::expect_valid("Marker"),
+        );
+        let definition = hir.nominal_types().get(&identity).unwrap();
+        let [parameter] = definition.generic_params() else {
+            panic!("Box should retain exactly one generic parameter");
+        };
+        let Some(crate::hir::GenericArg::Type(default)) = parameter.default() else {
+            panic!("Box.T should have a HIR type default");
+        };
+        assert!(matches!(
+            &default.kind,
+            crate::hir::TypeExprKind::Struct(name) if name.value == marker
+        ));
+        let [constructor] = definition.union_members().unwrap() else {
+            panic!("Box should retain exactly one constructor");
+        };
+        let [field] = constructor.fields() else {
+            panic!("Box should retain exactly one field");
+        };
+        assert!(matches!(
+            &field.type_annotation().type_expr.kind,
+            crate::hir::TypeExprKind::GenericTypeParam(field_param)
+                if &field_param.value == parameter.id()
+        ));
+        assert_eq!(definition.source().name(), "test.gcl");
     }
 
     #[test]

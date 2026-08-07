@@ -18,10 +18,11 @@ use miette::NamedSource;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
+use graphcal_compiler::hir::{NominalField, NominalTypeDef};
 use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::{Registry, TypeDef};
+use graphcal_compiler::registry::types::Registry;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, StructFieldConstraintKey};
 
 use crate::decl_key::RuntimeDeclKey;
@@ -85,14 +86,14 @@ pub fn index_ref_matches_resolved(
 fn runtime_struct_type_def<'a>(
     type_name: &StructTypeRef,
     ctx: &'a EvalContext<'_>,
-) -> Option<&'a TypeDef> {
+) -> Option<&'a NominalTypeDef> {
     ctx.tir.struct_type_def(type_name.resolved())
 }
 
 fn constructor_fields_for_runtime_struct<'a>(
-    type_def: &'a TypeDef,
+    type_def: &'a NominalTypeDef,
     type_name: &StructTypeRef,
-) -> Option<&'a [graphcal_compiler::registry::types::StructField]> {
+) -> Option<&'a [NominalField]> {
     type_def.union_members()?.iter().find_map(|member| {
         (member.name().as_str() == type_name.as_str()).then_some(member.fields())
     })

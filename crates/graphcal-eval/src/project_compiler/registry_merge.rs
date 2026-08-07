@@ -42,7 +42,7 @@ pub(super) fn seed_imported_type_system(
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     frontend_registry_imports: &[FrontendRegistryImport<'_>],
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for (dep_dag_id, names) in imported_type_system_names {
@@ -59,7 +59,7 @@ pub(super) fn seed_imported_type_system(
                 })?;
         register_selected_resolved_dimensions_and_units(
             builder,
-            &artifact.frontend_registry,
+            artifact.frontend_registry(),
             names,
             &dep_loaded.named_source,
         )?;
