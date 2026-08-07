@@ -4,7 +4,8 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::hir;
-use crate::ir::resolve::{ExpectedFail, ParsedExpectedFail};
+use crate::ir::lower::ParsedExpectedFailMetadata;
+use crate::ir::resolve::ExpectedFail;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::syntax::decl_name::ResolvedDeclName;
@@ -15,8 +16,9 @@ use crate::syntax::type_name::ResolvedConstructorName;
 
 use super::{
     DagTIR, ModuleTypeContext, ResolvedCollectionRefs, ResolvedConstructorRefs,
-    ResolvedConstructorTarget, ResolvedDagDependencies, ResolvedDomainBound, ResolvedIndex,
-    ResolvedTypeExpr, internal_error, module_resolve_error,
+    ResolvedConstructorTarget, ResolvedDagDependencies, ResolvedDomainBound,
+    ResolvedExpectedFailMetadata, ResolvedIndex, ResolvedTypeExpr, internal_error,
+    module_resolve_error,
 };
 
 pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
@@ -948,13 +950,20 @@ pub(super) fn collect_resolved_decl_bindings(
 }
 
 pub(super) fn resolve_expected_fail_keys(
-    expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+    expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
-) -> Result<HashMap<ScopedName, ExpectedFail>, GraphcalError> {
+) -> Result<HashMap<ScopedName, ResolvedExpectedFailMetadata>, GraphcalError> {
     expected_fail
         .into_iter()
-        .map(|(assert_name, expected)| {
+        .map(|(assert_name, metadata)| {
+            let ParsedExpectedFailMetadata {
+                expected,
+                resolution_owner,
+                src: metadata_src,
+                attribute_span,
+            } = metadata;
+            let metadata_src = metadata_src.resolve(src).clone();
             let resolved = match expected {
                 ExpectedFail::All => ExpectedFail::All,
                 ExpectedFail::Variants(keys) => {
@@ -970,8 +979,14 @@ pub(super) fn resolve_expected_fail_keys(
                                     } => {
                                         let resolved = ctx
                                             .resolver
-                                            .resolve_index_variant_parts(ctx.owner, &index, &variant)
-                                            .map_err(|err| module_resolve_error(&err, src, span))?;
+                                            .resolve_index_variant_parts(
+                                                &resolution_owner,
+                                                &index,
+                                                &variant,
+                                            )
+                                            .map_err(|err| {
+                                                module_resolve_error(&err, &metadata_src, span)
+                                            })?;
                                         Ok(crate::registry::resolve_types::ExpectedFailKeyPart::resolved(
                                             resolved, span,
                                         ))
@@ -992,7 +1007,14 @@ pub(super) fn resolve_expected_fail_keys(
                     ExpectedFail::Variants(resolved_keys)
                 }
             };
-            Ok((assert_name, resolved))
+            Ok((
+                assert_name,
+                ResolvedExpectedFailMetadata {
+                    expected: resolved,
+                    src: metadata_src,
+                    attribute_span,
+                },
+            ))
         })
         .collect()
 }

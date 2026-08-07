@@ -22,7 +22,7 @@ use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
 
 use crate::ir::lower::HirDag;
-use crate::ir::resolve::{DeclCategory, ParsedExpectedFail};
+use crate::ir::resolve::DeclCategory;
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::syntax::module_name::ScopedName;
@@ -1729,7 +1729,7 @@ impl DagTIRSeed {
         source_order: Vec<(ScopedName, DeclCategory)>,
         child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-        expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+        expected_fail: HashMap<ScopedName, crate::ir::lower::ParsedExpectedFailMetadata>,
         dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
         imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
         instances: Vec<crate::ir::instance::InstanceRecord>,

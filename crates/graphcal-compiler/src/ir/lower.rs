@@ -124,6 +124,18 @@ impl BodySource {
     }
 }
 
+/// Unresolved expected-fail metadata with the scope and source that authored it.
+///
+/// Include assembly may rename the assertion key, but the attribute's index
+/// paths and spans remain owned by the file where the attribute was written.
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedExpectedFailMetadata {
+    pub(crate) expected: ParsedExpectedFail,
+    pub(crate) resolution_owner: crate::dag_id::DagId,
+    pub(crate) src: BodySource,
+    pub(crate) attribute_span: Span,
+}
+
 /// A const declaration with type annotation and lowered body.
 #[derive(Debug, Clone)]
 pub struct ConstEntry {
@@ -430,8 +442,8 @@ pub struct HirDag {
     pub(crate) child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-    /// Mapping from assert name to its expected-fail configuration.
-    pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+    /// Expected-fail metadata keyed by assertion name, retaining its authored scope and source.
+    pub(crate) expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
     /// Strictly lowered, source-qualified dynamic unit scale definitions.
     pub(crate) dynamic_unit_scales: Vec<DynamicUnitScaleEntry>,
     /// Imported declarations keyed by their source-visible lexical binding.
@@ -1064,7 +1076,17 @@ fn build_ir_from_resolved(
         expected_fail: resolved
             .expected_fail
             .into_iter()
-            .map(|(k, v)| (ScopedName::from(k), v))
+            .map(|(name, collected)| {
+                (
+                    ScopedName::from(name),
+                    ParsedExpectedFailMetadata {
+                        expected: collected.expected,
+                        resolution_owner: dag_id.clone(),
+                        src: BodySource::own(),
+                        attribute_span: collected.attribute_span,
+                    },
+                )
+            })
             .collect(),
         dynamic_unit_scales,
         imported_bindings,
@@ -1105,8 +1127,8 @@ pub struct UnfrozenIR {
     assert_names: HashSet<ScopedName>,
     // Key-lookup only, order irrelevant.
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-    // Key-lookup only, order irrelevant.
-    expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
+    // Key-lookup only, order irrelevant. Each value retains authored scope/source.
+    expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
     // Dynamic unit scales declared by this body or merged includes.
     dynamic_unit_scales: Vec<UnfrozenDynamicUnitScaleEntry>,
     // Lexical binding lookup only; each value carries one canonical target.
@@ -1587,6 +1609,9 @@ impl UnfrozenIR {
         for entry in &mut self.asserts {
             entry.declaration_owner = owner.clone();
             entry.body_resolution_owner = owner.clone();
+        }
+        for metadata in self.expected_fail.values_mut() {
+            metadata.resolution_owner = owner.clone();
         }
         for entry in &mut self.plots {
             entry.body_resolution_owner = owner.clone();
@@ -2305,36 +2330,33 @@ impl UnfrozenIR {
                 .or_default()
                 .extend(prefixed_assumers);
         }
-        for (assert_name, ef) in dep.expected_fail {
+        for (assert_name, mut metadata) in dep.expected_fail {
             let prefixed = merged_assert_name(&assert_name);
+            metadata.src = metadata.src.or_dependency(dep_src);
 
             // If the expected_fail references overridden indexes, filter or drop.
             if index_bindings.is_empty() {
-                self.expected_fail.insert(prefixed, ef);
+                self.expected_fail.insert(prefixed, metadata);
             } else {
-                match ef {
+                match &mut metadata.expected {
                     ExpectedFail::All => {
-                        self.expected_fail.insert(prefixed, ExpectedFail::All);
+                        self.expected_fail.insert(prefixed, metadata);
                     }
                     ExpectedFail::Variants(keys) => {
-                        let filtered: Vec<_> = keys
-                            .into_iter()
-                            .filter(|key| {
-                                // Drop keys that reference any overridden index.
-                                // `#N` finite-position segments never name an
-                                // index, so they cannot reference an overridden one.
-                                !key.iter().any(|part| {
-                                    part.index_path().is_some_and(|index_path| {
-                                        index_bindings.contains_key(&IndexName::from_atom(
-                                            index_path.leaf().clone(),
-                                        ))
-                                    })
+                        keys.retain(|key| {
+                            // Drop keys that reference any overridden index.
+                            // `#N` finite-position segments never name an
+                            // index, so they cannot reference an overridden one.
+                            !key.iter().any(|part| {
+                                part.index_path().is_some_and(|index_path| {
+                                    index_bindings.contains_key(&IndexName::from_atom(
+                                        index_path.leaf().clone(),
+                                    ))
                                 })
                             })
-                            .collect();
-                        if !filtered.is_empty() {
-                            self.expected_fail
-                                .insert(prefixed, ExpectedFail::Variants(filtered));
+                        });
+                        if !keys.is_empty() {
+                            self.expected_fail.insert(prefixed, metadata);
                         }
                         // If all keys were dropped, don't insert any expected_fail.
                     }
@@ -2354,11 +2376,19 @@ impl UnfrozenIR {
                     == Ok(crate::syntax::attribute::AttributeName::ExpectedFail)
                 {
                     let prefixed_assert = merged_assert_name(&ScopedName::local(orig_name.clone()));
-                    let ef = crate::ir::resolve::names::parse_expected_fail_args(
+                    let expected = crate::ir::resolve::names::parse_expected_fail_args(
                         &attr.args,
                         importer_src,
                     )?;
-                    self.expected_fail.insert(prefixed_assert, ef);
+                    self.expected_fail.insert(
+                        prefixed_assert,
+                        ParsedExpectedFailMetadata {
+                            expected,
+                            resolution_owner: importer_owner.clone(),
+                            src: BodySource::own(),
+                            attribute_span: attr.span,
+                        },
+                    );
                 }
             }
         }

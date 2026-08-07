@@ -270,6 +270,17 @@ pub type ExpectedFailKey<I = IndexTypeRef> = Vec<ExpectedFailKeyPart<I>>;
 pub(crate) type ParsedExpectedFailKeyPart = ExpectedFailKeyPart<NamePath>;
 pub(crate) type ParsedExpectedFailKey = ExpectedFailKey<NamePath>;
 pub type ParsedExpectedFail = ExpectedFail<NamePath>;
+
+/// Source-level expected-fail configuration retained by declaration collection.
+///
+/// The attribute span is kept separately from key-part spans because the
+/// blanket form has no keys but may still need a diagnostic at a later phase.
+#[derive(Debug, Clone)]
+pub(crate) struct CollectedExpectedFail {
+    pub(crate) expected: ParsedExpectedFail,
+    pub(crate) attribute_span: Span,
+}
+
 pub type ResolvedExpectedFailKeyPart = ExpectedFailKeyPart<IndexTypeRef>;
 pub type ResolvedExpectedFailKey = ExpectedFailKey<IndexTypeRef>;
 pub type ResolvedExpectedFail = ExpectedFail<IndexTypeRef>;
@@ -384,7 +395,7 @@ pub(crate) struct CollectedFile {
     pub(crate) assumes_map: HashMap<DeclName, Vec<DeclName>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Built from `#[expected_fail]` / `#[expected_fail(...)]` attributes.
-    pub(crate) expected_fail: HashMap<DeclName, ParsedExpectedFail>,
+    pub(crate) expected_fail: HashMap<DeclName, CollectedExpectedFail>,
     /// Plot names carrying `#[hidden]`: evaluated and referenceable from
     /// figures/layers, but excluded from standalone output (#847).
     pub(crate) hidden_plots: HashSet<DeclName>,

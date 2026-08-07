@@ -160,7 +160,11 @@ pub fn compile_checked_with_cancellation(
             .collect(),
         topo_order,
         assumes_map: tir.root().assumes_map().clone(),
-        expected_fail: tir.root().expected_fail().clone(),
+        expected_fail: tir
+            .root()
+            .expected_fail_entries()
+            .map(|(name, expected)| (name.clone(), expected.clone()))
+            .collect(),
         domain_constraints: Arc::clone(&facts.domain_constraints),
         struct_field_constraints: Arc::clone(&facts.struct_field_constraints),
     })

@@ -756,7 +756,8 @@ IR = UnfrozenIR::freeze(registry, owner, resolver, src)
   source_order: Vec<(ScopedName, DeclCategory)>
   assert_names
   assumes_map
-  expected_fail
+  expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>
+    parsed keys + authored resolution owner + source provenance
   imported_bindings: HashMap<ScopedName, ImportedBinding>
     canonical target + declared type + optional pre-evaluated value
   external_surface: ExternalDeclSurface
@@ -812,7 +813,9 @@ DagTIR
   consts, params, nodes, asserts, plots, figures, layers
   semantic: DagSemanticBody
   source_order
-  assert_names, assumes_map, expected_fail
+  assert_names, assumes_map
+  expected_fail: HashMap<ScopedName, ResolvedExpectedFailMetadata>
+    canonical keys + authored diagnostic source
   resolved_decl_types
   semantic.domain_bounds  // checked, unevaluated HIR bound expressions
   imported_bindings: HashMap<ScopedName, ImportedBinding>

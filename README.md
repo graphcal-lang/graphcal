@@ -43,7 +43,7 @@ delta_v    = 3778.220768 m/s
 - **Unit-safe.** Physical dimensions—including generic field constraints, unit definitions, and runtime unit-scale expressions—are checked at compile time, and conversions are explicit.
 - **Reactive.** Change a parameter and every dependent value is recomputed automatically.
 - **Git-friendly.** Plain-text `.gcl` files diff and merge cleanly, with no hidden spreadsheet state.
-- **Built for engineering.** Typed axes, dimension-aware linear algebra, assertions, statically checked display-unit-aware plotting, and reusable computation graphs are built in.
+- **Built for engineering.** Typed axes, dimension-aware linear algebra, assertions with per-index expected-failure tracking, statically checked display-unit-aware plotting, and reusable computation graphs are built in.
 - **Live in your editor.** The language server provides diagnostics, navigation, and inline computed values.
 
 ## Installation
