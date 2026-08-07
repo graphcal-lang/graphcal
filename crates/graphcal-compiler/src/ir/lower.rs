@@ -1873,16 +1873,9 @@ impl UnfrozenIR {
             dependency_owner: &crate::dag_id::DagId,
             instance_owner: &crate::dag_id::DagId,
         ) -> crate::dag_id::DagId {
-            if &owner != dependency_owner && !owner.is_descendant_of(dependency_owner) {
-                return owner;
-            }
             owner
-                .segments()
-                .iter()
-                .skip(dependency_owner.segments().len())
-                .fold(instance_owner.clone(), |rebased, segment| {
-                    rebased.child(Arc::clone(segment))
-                })
+                .rebase_descendant(dependency_owner, instance_owner)
+                .unwrap_or(owner)
         }
 
         fn rebase_resolved_name<Ns: NameNamespace>(
@@ -1901,7 +1894,7 @@ impl UnfrozenIR {
         // include consumer need not import constructors/types it never names.
         let type_system_bindings_present =
             !index_bindings.is_empty() || !type_bindings.is_empty() || !dim_bindings.is_empty();
-        let instance_owner = importer_owner.child(prefix.as_str());
+        let instance_owner = importer_owner.instance_child(prefix.as_str());
         let merge_resolution_owner = |producer_owner: crate::dag_id::DagId| {
             if type_system_bindings_present {
                 importer_owner.clone()

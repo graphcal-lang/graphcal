@@ -2761,6 +2761,53 @@ fn nested_instantiated_file_include_evaluates_immediate_scope_binding() {
     assert!((find_value(&result, "result") - 6.0).abs() < f64::EPSILON);
 }
 
+fn write_package_root_child_include_project(
+    main_source: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("app");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"app\"\nsource_dir = \".\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package_dir.join("defaults.gcl"),
+        "pub node output: Dimensionless = 2.0;\n",
+    )
+    .unwrap();
+    let root = dir.path().join("app.gcl");
+    std::fs::write(&root, main_source).unwrap();
+    (dir, root)
+}
+
+#[test]
+fn include_instance_can_share_its_display_path_with_a_source_module() {
+    let (_dir, root) = write_package_root_child_include_project(
+        "include app.defaults() as defaults;\n\
+         pub node result: Dimensionless = @defaults.output;\n",
+    );
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!((find_value(&result, "result") - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn aliased_include_does_not_bind_the_source_module_name() {
+    let (_dir, root) = write_package_root_child_include_project(
+        "include app.defaults() as configured;\n\
+         pub node leaked: Dimensionless = @defaults().output;\n",
+    );
+
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::EvalError { message, .. })
+            if message == "unknown module `app.defaults`"
+    ));
+}
+
 #[test]
 fn nested_instantiated_file_include_keeps_multiple_instances_isolated() {
     let (_dir, root) = write_nested_file_include_project(

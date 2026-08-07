@@ -1918,24 +1918,24 @@ impl ModuleResolver {
         path: &ModulePath,
     ) -> Result<DagId, ModuleResolveError> {
         let head = &path.segments.first().name;
-        let local_target = {
-            let child = owner.child(head.as_str());
-            if self.modules.contains_key(&child) {
-                Some(child)
-            } else {
-                // Only inline DAGs have a semantic parent module in the
-                // resolver. A file root's `DagId` also has filesystem-like
-                // parent segments, but sibling files never enter scope without
-                // an explicit import.
-                owner
-                    .parent()
-                    .filter(|parent| self.modules.contains_key(parent))
-                    .and_then(|parent| {
-                        let sibling = parent.child(head.as_str());
-                        self.modules.contains_key(&sibling).then_some(sibling)
-                    })
-            }
+        // Project-wide module registration is not lexical visibility. Only an
+        // actual `dag` declaration in the current/parent source module creates
+        // an implicit local callable; loaded files remain unavailable unless an
+        // import binds them. In particular, `include module() as alias` binds
+        // only `alias`, never the source module's leaf name.
+        let declared_dag_child = |parent: &DagId| {
+            self.modules
+                .get(parent)
+                .and_then(|symbols| symbols.decls.get(head.as_str()))
+                .filter(|symbol| symbol.kind() == DeclSymbolKind::Dag)
+                .map(|_| parent.child(head.as_str()))
+                .filter(|child| self.modules.contains_key(child))
         };
+        let local_target = declared_dag_child(owner).or_else(|| {
+            owner
+                .parent()
+                .and_then(|parent| declared_dag_child(&parent))
+        });
 
         let scope = self.module_scope(owner)?;
         let alias = ModuleAliasName::from_atom(head.clone());
@@ -4423,6 +4423,41 @@ mod tests {
             resolver.resolve_module_path(&main_id, &module_path(&["instance"])),
             Err(ModuleResolveError::IncludedInstanceNotCallable { alias, .. })
                 if alias.as_str() == "instance"
+        ));
+    }
+
+    #[test]
+    fn aliased_include_does_not_expose_same_named_file_module() {
+        let main_id = DagId::root_in_package("test", "app");
+        let defaults_id =
+            DagId::from_relative_path("test", std::path::Path::new("app/defaults.gcl")).unwrap();
+        let instance_id = main_id.instance_child("configured");
+        let defaults = desugared_source("pub node result: Dimensionless = 1.0;");
+        let main = desugared_source("include app.defaults() as configured;");
+        let (include_path, include_kind) = first_include(&main);
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(defaults_id, &defaults.declarations)
+            .unwrap();
+        resolver
+            .add_module(instance_id.clone(), &defaults.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_include(&main_id, include_path, include_kind, &instance_id)
+            .unwrap();
+
+        assert!(matches!(
+            resolver.resolve_module_path(&main_id, &module_path(&["defaults"])),
+            Err(ModuleResolveError::UnknownModule { .. })
+        ));
+        assert!(matches!(
+            resolver.resolve_module_path(&main_id, &module_path(&["configured"])),
+            Err(ModuleResolveError::IncludedInstanceNotCallable { alias, .. })
+                if alias.as_str() == "configured"
         ));
     }
 
