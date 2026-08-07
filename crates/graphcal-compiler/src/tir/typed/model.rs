@@ -1435,6 +1435,18 @@ pub(super) struct DuplicateDeclarationRecord {
     pub(crate) span: Span,
 }
 
+/// Resolved expected-fail configuration with its authored diagnostic source.
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "crate-only prevents the public model glob re-export from exposing diagnostic provenance"
+)]
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedExpectedFailMetadata {
+    pub(crate) expected: ExpectedFail,
+    pub(crate) src: NamedSource<Arc<String>>,
+    pub(crate) attribute_span: Span,
+}
+
 /// The per-DAG compiled body — every field that's specific to one DAG (the
 /// file's own top-level body or an inline `dag X { ... }` child).
 ///
@@ -1458,7 +1470,7 @@ pub struct DagTIR {
     /// Canonical child-DAG identities and their HIR-retained name spans.
     pub(crate) child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
-    pub(crate) expected_fail: HashMap<ScopedName, ExpectedFail>,
+    pub(crate) expected_fail: HashMap<ScopedName, ResolvedExpectedFailMetadata>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,
     pub(crate) imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     pub(crate) instances: Vec<crate::ir::instance::InstanceRecord>,
@@ -1677,9 +1689,19 @@ impl DagTIR {
         &self.assumes_map
     }
 
+    /// Return one assertion's resolved expected-fail configuration.
     #[must_use]
-    pub const fn expected_fail(&self) -> &HashMap<ScopedName, ExpectedFail> {
-        &self.expected_fail
+    pub fn expected_fail(&self, name: &ScopedName) -> Option<&ExpectedFail> {
+        self.expected_fail
+            .get(name)
+            .map(|metadata| &metadata.expected)
+    }
+
+    /// Iterate over expected-fail configurations without exposing diagnostic provenance.
+    pub fn expected_fail_entries(&self) -> impl Iterator<Item = (&ScopedName, &ExpectedFail)> {
+        self.expected_fail
+            .iter()
+            .map(|(name, metadata)| (name, &metadata.expected))
     }
 
     #[must_use]

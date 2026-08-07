@@ -318,7 +318,11 @@ not create or evaluate a runtime instance. Consequently, importing a file does
 not run its assertions, and assertions cannot be imported as values (`M024`).
 
 Assertions run for each explicit `include` instance. This keeps their outcomes
-attached to the same parameter bindings and runtime values that they validate:
+attached to the same parameter bindings and runtime values that they validate.
+An `#[expected_fail(Index.Variant)]` written on the included assertion resolves
+`Index` in that assertion's defining module, and diagnostics point to that
+module's source. An `#[expected_fail(...)]` written on an include brace item
+instead resolves in the including module.
 
 ```
 // checks.gcl

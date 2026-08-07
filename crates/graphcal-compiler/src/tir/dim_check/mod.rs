@@ -901,12 +901,12 @@ fn validate_expected_fail(
     expected_fail: &ExpectedFail,
     shape: &AssertionIndexShape,
     src: &NamedSource<Arc<String>>,
-    assert_span: crate::syntax::span::Span,
+    attribute_span: crate::syntax::span::Span,
 ) -> Result<(), GraphcalError> {
     match expected_fail {
         ExpectedFail::All if shape.is_indexed() => Err(GraphcalError::ExpectedFailAllOnIndexed {
             src: src.clone(),
-            span: assert_span.into(),
+            span: attribute_span.into(),
         }),
         ExpectedFail::All => Ok(()),
         ExpectedFail::Variants(keys) if !shape.is_indexed() => {
@@ -914,7 +914,7 @@ fn validate_expected_fail(
                 src: src.clone(),
                 span: keys
                     .first()
-                    .map_or(assert_span, expected_fail_key_span)
+                    .map_or(attribute_span, expected_fail_key_span)
                     .into(),
             })
         }
@@ -1405,8 +1405,13 @@ fn check_dimensions_dag(
         let entry_ctx = ctx.for_body(body_src);
         let body = entry_ctx.hir_assert_body(&entry.name, entry.span)?;
         let shape = check_hir_assert_body(&entry_ctx, body, entry.span)?;
-        if let Some(expected_fail) = dag.expected_fail.get(&entry.name) {
-            validate_expected_fail(expected_fail, &shape, body_src, entry.span)?;
+        if let Some(metadata) = dag.expected_fail.get(&entry.name) {
+            validate_expected_fail(
+                &metadata.expected,
+                &shape,
+                &metadata.src,
+                metadata.attribute_span,
+            )?;
         }
         // Assertion results are never displayed with units, so no position
         // inside an assert body is display-effective.

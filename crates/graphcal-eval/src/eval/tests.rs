@@ -4463,6 +4463,21 @@ fn project_expected_fail_keys_accept_resolved_index_owner_with_same_leaf_indexes
 }
 
 #[test]
+fn included_expected_fail_resolves_index_in_its_defining_module() {
+    // Regression for #1200: include assembly renames the assertion, but its
+    // expected-fail index key remains scoped to and sourced from lib.gcl.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/valid/multi/include_expected_fail_scope/src/repro/main.gcl");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    let (_, assertion, _) = result
+        .assertions
+        .iter()
+        .find(|(name, _, _)| name.to_string().contains("check"))
+        .expect("included assertion not found");
+    assert_eq!(*assertion, AssertResult::Pass);
+}
+
+#[test]
 fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
         "import collide.a as a;\n\

@@ -18,8 +18,9 @@ use crate::registry::prelude::{
     PRELUDE_BUILTIN_TYPE_NAMES, PRELUDE_DIMENSION_NAMES, PRELUDE_UNIT_NAMES,
 };
 use crate::registry::resolve_types::{
-    CollectedAssertEntry, CollectedConstEntry, CollectedFigureEntry, CollectedLayerEntry,
-    CollectedNodeEntry, CollectedParamEntry, CollectedPlotEntry, ExternalDeclSurface,
+    CollectedAssertEntry, CollectedConstEntry, CollectedExpectedFail, CollectedFigureEntry,
+    CollectedLayerEntry, CollectedNodeEntry, CollectedParamEntry, CollectedPlotEntry,
+    ExternalDeclSurface,
 };
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -532,7 +533,7 @@ fn collect_local_declarations(
 /// Result of attribute validation.
 struct ValidatedAttributes {
     assumes_map: HashMap<DeclName, Vec<DeclName>>,
-    expected_fail_map: HashMap<DeclName, ParsedExpectedFail>,
+    expected_fail_map: HashMap<DeclName, CollectedExpectedFail>,
     /// Plot names carrying `#[hidden]`: evaluated and referenceable from
     /// figures/layers, but excluded from standalone output (#847).
     hidden_plots: HashSet<DeclName>,
@@ -546,7 +547,7 @@ fn validate_attributes(
     assert_names: &HashSet<DeclName>,
 ) -> Result<ValidatedAttributes, GraphcalError> {
     let mut assumes_map: HashMap<DeclName, Vec<DeclName>> = HashMap::new();
-    let mut expected_fail_map: HashMap<DeclName, ParsedExpectedFail> = HashMap::new();
+    let mut expected_fail_map: HashMap<DeclName, CollectedExpectedFail> = HashMap::new();
     let mut hidden_plots: HashSet<DeclName> = HashSet::new();
 
     for decl in &file.declarations {
@@ -650,7 +651,13 @@ fn validate_attributes(
                                 }
                             }
                             if let Some(ref dname) = decl_name {
-                                expected_fail_map.insert(dname.clone(), ef);
+                                expected_fail_map.insert(
+                                    dname.clone(),
+                                    CollectedExpectedFail {
+                                        expected: ef,
+                                        attribute_span: attr.span,
+                                    },
+                                );
                             }
                             continue;
                         }

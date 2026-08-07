@@ -2421,7 +2421,7 @@ fn check_inline_dag_asserts(
                 call_span,
             )
         })?;
-        let ef = dag_tir.expected_fail().get(name);
+        let ef = dag_tir.expected_fail(name);
         let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
             body,
             ef,
