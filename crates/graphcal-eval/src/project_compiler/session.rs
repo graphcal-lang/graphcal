@@ -101,7 +101,6 @@ impl super::HirProject<'_> {
 pub struct CheckedProject {
     pub(super) compiled: CompiledFile,
     pub(super) source: NamedSource<Arc<String>>,
-    pub(super) root_ast: graphcal_compiler::desugar::desugared_ast::File,
     pub(super) module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
 }
 
@@ -141,7 +140,6 @@ impl CheckedProject {
         CheckedProjectRuntimeParts {
             compiled: self.compiled,
             source: self.source,
-            root_ast: self.root_ast,
             module_resolver: self.module_resolver,
         }
     }
@@ -151,7 +149,6 @@ impl CheckedProject {
 pub struct CheckedProjectRuntimeParts {
     pub(crate) compiled: CompiledFile,
     pub(crate) source: NamedSource<Arc<String>>,
-    pub(crate) root_ast: graphcal_compiler::desugar::desugared_ast::File,
     pub(crate) module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
 }
 

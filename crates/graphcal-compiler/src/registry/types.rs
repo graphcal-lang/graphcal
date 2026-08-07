@@ -52,6 +52,34 @@ pub struct Registry {
     pub(crate) dags: DagRegistry,
 }
 
+impl Registry {
+    /// Consume the frontend registry after HIR lowering has replaced nominal
+    /// syntax definitions with [`crate::hir::NominalTypeRegistry`].
+    #[must_use]
+    pub fn into_semantic(self) -> SemanticRegistry {
+        SemanticRegistry {
+            dimensions: self.dimensions,
+            units: self.units,
+            indexes: self.indexes,
+            time_zones: self.time_zones,
+        }
+    }
+}
+
+/// Registry capabilities valid from HIR onward.
+///
+/// Nominal definitions are intentionally absent: canonical HIR nominal types
+/// are stored separately, so later phases cannot consult syntax-backed type
+/// definitions as a competing authority.
+#[derive(Debug, Clone)]
+pub struct SemanticRegistry {
+    pub dimensions: DimensionRegistry,
+    pub units: UnitRegistry,
+    pub indexes: IndexRegistry,
+    /// Reproducible IANA timezone lookup backed by the bundled, pinned tzdb.
+    pub time_zones: TimeZoneRegistry,
+}
+
 // ---------------------------------------------------------------------------
 // Mutable builder
 // ---------------------------------------------------------------------------

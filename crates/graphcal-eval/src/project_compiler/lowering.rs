@@ -12,40 +12,63 @@ use graphcal_compiler::syntax::span::Spanned;
 use super::generic_leakage::{check_generics_leakage, collect_local_type_names};
 use super::registry_merge::{merge_registry_into_builder, seed_imported_type_system};
 
-fn is_imported_dynamic_unit(
+fn reject_runtime_units_at_include_boundary(
+    registry: &Registry,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), CompileError> {
+    registry
+        .units
+        .all_units()
+        .filter(|(_, _, scale)| scale.is_dynamic())
+        .map(|(unit, _, _)| unit)
+        .min()
+        .map_or(Ok(()), |unit| {
+            Err(CompileError::Eval(GraphcalError::IncludeRuntimeUnit {
+                name: unit.clone(),
+                src: src.clone(),
+                span: span.into(),
+            }))
+        })
+}
+
+fn imported_module_target<'map>(
+    alias: &ModuleAliasName,
+    module_map: &'map HashMap<ModuleAliasName, ProjectModuleBinding>,
+) -> Option<&'map graphcal_compiler::dag_id::DagId> {
+    module_map.get(alias).and_then(|binding| {
+        (binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag)
+            .then_some(&binding.target)
+    })
+}
+
+fn is_imported_dynamic_unit_during_lowering(
     alias: &ModuleAliasName,
     name: &graphcal_compiler::syntax::dimension::UnitName,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
 ) -> bool {
-    module_map.get(alias).is_some_and(|binding| {
-        binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag
-            && module_artifacts
-                .get(&binding.target)
-                .is_some_and(|artifact| {
-                    artifact
-                        .external_surface
-                        .is_explicit_export(&DeclName::from_atom(name.atom().clone()))
-                        && artifact.frontend_registry.units.all_units().any(
-                            |(candidate, _, scale)| {
-                                !candidate.is_qualified()
-                                    && candidate.name() == name
-                                    && scale.is_dynamic()
-                            },
-                        )
-                })
+    imported_module_target(alias, module_map).is_some_and(|target| {
+        module_interfaces
+            .get(target)
+            .is_some_and(|interface| interface.is_exported_dynamic_unit(name))
     })
 }
 
 fn remap_imported_dynamic_unit_error(
     error: GraphcalError,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
 ) -> GraphcalError {
     match error {
         GraphcalError::UnknownUnit { name, src, span }
             if name.qualifier().is_some_and(|alias| {
-                is_imported_dynamic_unit(alias, name.name(), module_map, module_artifacts)
+                is_imported_dynamic_unit_during_lowering(
+                    alias,
+                    name.name(),
+                    module_map,
+                    module_interfaces,
+                )
             }) =>
         {
             GraphcalError::ImportRuntimeUnit {
@@ -61,18 +84,20 @@ fn remap_imported_dynamic_unit_error(
 pub(super) fn imported_runtime_unit_reference(
     dag: &graphcal_compiler::tir::typed::DagTIR,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    exported_dynamic_units: &HashMap<
+        graphcal_compiler::dag_id::DagId,
+        HashSet<graphcal_compiler::syntax::dimension::UnitName>,
+    >,
 ) -> Option<(String, Span)> {
     let mut invalid = None;
     dag.visit_unit_references(&mut |unit, span| {
         if invalid.is_none()
             && unit.spelling().qualifier().is_some_and(|alias| {
-                is_imported_dynamic_unit(
-                    alias,
-                    unit.spelling().name(),
-                    module_map,
-                    module_artifacts,
-                )
+                imported_module_target(alias, module_map).is_some_and(|target| {
+                    exported_dynamic_units
+                        .get(target)
+                        .is_some_and(|names| names.contains(unit.spelling().name()))
+                })
             })
         {
             invalid = Some((unit.to_string(), span));
@@ -118,9 +143,9 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     file_src: &NamedSource<Arc<String>>,
     file_ast: &graphcal_compiler::desugar::desugared_ast::File,
     ctx: ImportContext<'_>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, CompileError> {
+) -> Result<(HirFile, LoweringModuleInterface), CompileError> {
     cancellation.checkpoint()?;
     let ProjectSemanticContext {
         project,
@@ -188,6 +213,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     let registry = builder
         .try_build()
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
+    let frontend_registry = registry.clone();
     let root = store_and_freeze_module_template(
         module_templates,
         file_dag_id,
@@ -201,23 +227,27 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         project,
         file_dag_id,
         file_src,
-        &root.registry,
+        &frontend_registry,
         module_artifacts,
         module_resolver,
         module_templates,
         cancellation,
     )?;
 
-    Ok(HirFile {
-        dag_id: file_dag_id.clone(),
-        source: file_src.clone(),
-        root,
-        inline_dags,
-        imported_source_order: ctx.imported_source_order,
-        output_surface,
-        include_debug_names,
-        module_map: ctx.module_map,
-    })
+    let lowering_interface =
+        LoweringModuleInterface::new(frontend_registry, root.external_surface.clone());
+    Ok((
+        HirFile {
+            source: file_src.clone(),
+            root,
+            inline_dags,
+            imported_source_order: ctx.imported_source_order,
+            output_surface,
+            include_debug_names,
+            module_map: ctx.module_map,
+        },
+        lowering_interface,
+    ))
 }
 
 pub(super) fn module_resolve_compile_error(
@@ -279,17 +309,11 @@ fn lower_inline_dag_modules<'a>(
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     parent_registry: &Registry,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<
-    Vec<(
-        graphcal_compiler::dag_id::DagId,
-        graphcal_compiler::ir::lower::IR,
-    )>,
-    CompileError,
-> {
+) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
     let loaded_file = &project.files[file_dag_id];
     let parent_values = crate::inline_dag::classify_value_decls_in_ast(&loaded_file.ast);
 
@@ -311,7 +335,6 @@ fn lower_inline_dag_modules<'a>(
                 module_templates,
                 cancellation,
             )
-            .map(|ir| (loaded_dag.dag_id.clone(), ir))
         })
         .collect()
 }
@@ -328,11 +351,11 @@ fn compile_loaded_dag_module_ir<'a>(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     parent_values: &crate::inline_dag::ParentValueDecls,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     cancellation.checkpoint()?;
     if let Some(template) = module_templates.get(&loaded_dag.dag_id) {
         return freeze_inline_module_template(
@@ -452,7 +475,7 @@ fn freeze_inline_module_template(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     Ok(template.unfrozen.clone().freeze_with_cancellation(
         template.frontend_registry.clone(),
         dag_id,
@@ -470,7 +493,7 @@ fn store_and_freeze_module_template(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::lower::IR, CompileError> {
+) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     module_templates.insert(
         dag_id.clone(),
         ElaboratedModuleTemplate {
@@ -532,7 +555,7 @@ fn process_dag_body_import_declarations<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -566,7 +589,7 @@ fn process_dag_body_include_declarations<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -719,26 +742,26 @@ pub(super) fn merge_dep_dag_tirs(
 ///    `import <self>.{...}` against the dag's parent file (Concept 9: a
 ///    DAG's `<self>` is its file of definition, regardless of where the
 ///    include sits).
-/// 2. Compile the body to IR with canonical imported targets set up.
+/// 2. Assemble the body with canonical imported targets set up.
 /// 3. Capture importer-owned index binding candidates, merge the body's registry,
 ///    then validate every candidate against the body's effective typed contract.
 /// 4. Preserve canonical A8/V005 reconciliation facts and run
 ///    `check_generics_leakage` (A9/V006).
-/// 5. Merge the body's IR into the importer's IR with prefix/bindings.
+/// 5. Merge the dependency assembly into the importer with prefix/bindings.
 /// 6. For selective includes, add `local_name = @prefix::orig_name` aliases.
 #[expect(
     clippy::too_many_arguments,
-    reason = "pipeline function threads project, importer, module artifacts, and IR builders"
+    reason = "pipeline function threads project, importer, module artifacts, and HIR builders"
 )]
 #[expect(
     clippy::too_many_lines,
-    reason = "single cohesive include pipeline: source resolution, registry merge, validation, IR merge"
+    reason = "single cohesive include pipeline: source resolution, registry merge, validation, HIR merge"
 )]
 fn elaborate_include_instances(
     project: &crate::loader::LoadedProject,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_templates: &mut ModuleTemplateStore,
     importer_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
@@ -753,7 +776,7 @@ fn elaborate_include_instances(
     for instance in include_instances {
         cancellation.checkpoint()?;
         let merge_prefix = instance.instance_scope.merge_scope_name();
-        // ---- 1. Resolve source body + lower to IR ------------------------
+        // ---- 1. Resolve and assemble source body -----------------------------
         let (mut dep_unfrozen, dep_registry, dep_src, dep_resolution_owner, body_decls_for_aliases) =
             if let Some(template) = module_templates.get(&instance.template.dag_id) {
                 let source_file = &project.files[&instance.template.source_file];
@@ -978,6 +1001,12 @@ fn elaborate_include_instances(
                 )
             };
 
+        reject_runtime_units_at_include_boundary(
+            &dep_registry,
+            importer_src,
+            instance.include_span,
+        )?;
+
         // Capture importer-owned candidates before the dependency registry is
         // merged, so a dependency declaration with the same leaf name cannot
         // accidentally satisfy its own binding.
@@ -1045,7 +1074,7 @@ fn elaborate_include_instances(
             instance.include_span,
         )?;
 
-        // ---- 5. Merge dep IR into importer's IR ---------------------------
+        // ---- 5. Merge dependency assembly into importer ---------------------
         let source_order_start = unfrozen.source_order.len();
         unfrozen.merge_dependency(
             dep_unfrozen,
@@ -1292,7 +1321,7 @@ fn effective_index_binding_contract(
 }
 
 /// Bindings that an alias's type annotation must be rewritten through before
-/// it is registered in the importer's IR. Shared by both inline-DAG and
+/// it is registered in the importer's HIR assembly. Shared by both inline-DAG and
 /// file-include alias paths so their type-substitution stays in lock-step.
 struct AliasSubstitutions<'a> {
     pub index: &'a IndexBindings,
@@ -1333,7 +1362,7 @@ fn add_selective_aliases_inner(
         let local_name = &alias.local;
         // The alias points at the dep's prefixed declaration: a typed
         // qualified `ScopedName`. No flat `prefix::orig_name` strings are
-        // built — the qualification stays structural through the IR.
+        // built — the qualification stays structural through HIR.
         let target = ScopedName::qualified(prefix.clone(), orig_name.clone());
 
         let type_ann = decls.iter().find_map(|d| match &d.kind {

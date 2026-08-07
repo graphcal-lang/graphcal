@@ -34,11 +34,11 @@ pub(in crate::project_compiler) fn validate_project_dag_recursion(
 fn lower_single_file_to_hir(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, CompileError> {
+) -> Result<(HirFile, LoweringModuleInterface), CompileError> {
     cancellation.checkpoint()?;
     let loaded_file = &project.files[file_dag_id];
     let file_src = &loaded_file.named_source;
@@ -164,7 +164,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
 
     for file_dag_id in &project.load_order {
         cancellation.checkpoint()?;
-        let hir = lower_single_file_to_hir(
+        let (hir, lowering_interface) = lower_single_file_to_hir(
             project,
             file_dag_id,
             &module_interfaces,
@@ -172,13 +172,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
             &mut module_templates,
             cancellation,
         )?;
-        module_interfaces.insert(
-            file_dag_id.clone(),
-            HirModuleArtifact {
-                frontend_registry: hir.root.registry.clone(),
-                external_surface: hir.root.external_surface.clone(),
-            },
-        );
+        module_interfaces.insert(file_dag_id.clone(), lowering_interface);
         files.insert(file_dag_id.clone(), hir);
     }
 
@@ -190,10 +184,17 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         }));
     }
 
+    let exported_dynamic_units = module_interfaces
+        .iter()
+        .map(|(owner, interface)| (owner.clone(), interface.exported_dynamic_units().clone()))
+        .collect();
+
     Ok(HirProject {
-        loaded: project,
+        root: project.root.clone(),
+        load_order: project.load_order.clone(),
         files,
-        module_interfaces,
+        plugins: &project.plugins,
+        exported_dynamic_units,
         module_resolver,
         cancellation: cancellation.clone(),
     })
@@ -202,7 +203,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
 fn build_project_type_store(
     hir: &HirProject<'_>,
 ) -> Result<graphcal_compiler::tir::typed::ProjectTypeStore, CompileError> {
-    let root_source = &hir.files[&hir.loaded.root].source;
+    let root_source = &hir.files[&hir.root].source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
     project_types
         .insert_graphcal_prelude()
@@ -211,7 +212,7 @@ fn build_project_type_store(
             src: root_source.clone(),
             span: Span::new(0, 0).into(),
         })?;
-    for file_dag_id in &hir.loaded.load_order {
+    for file_dag_id in &hir.load_order {
         let file = hir.files.get(file_dag_id).ok_or_else(|| {
             CompileError::Eval(GraphcalError::InternalError {
                 message: format!("HIR module `{file_dag_id}` is unavailable"),
@@ -220,20 +221,17 @@ fn build_project_type_store(
             })
         })?;
         let source = &file.source;
-        project_types.insert_resolver_subtree(
-            file_dag_id,
-            &file.root.registry,
-            source,
-            &hir.module_resolver,
-        );
-        for (dag_id, ir) in &file.inline_dags {
-            project_types.insert_resolver_subtree(
-                dag_id,
-                &ir.registry,
-                source,
-                &hir.module_resolver,
-            );
-        }
+        std::iter::once(&file.root)
+            .chain(&file.inline_dags)
+            .try_for_each(|dag| {
+                project_types
+                    .insert_resolver_module(dag, &hir.module_resolver)
+                    .map_err(|error| GraphcalError::InternalError {
+                        message: format!("cannot build project type store: {error}"),
+                        src: source.clone(),
+                        span: Span::new(0, 0).into(),
+                    })
+            })?;
     }
     Ok(project_types)
 }
@@ -246,20 +244,32 @@ pub(in crate::project_compiler) fn check_hir_project(
     hir.cancellation.checkpoint()?;
     let project_types = build_project_type_store(&hir)?;
     let HirProject {
-        loaded: project,
+        root,
+        load_order,
         mut files,
-        module_interfaces,
+        plugins,
+        exported_dynamic_units,
         module_resolver,
         cancellation,
     } = hir;
+    let root_source = files
+        .get(&root)
+        .map(|file| file.source.clone())
+        .ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: "root HIR module is unavailable before checking".to_string(),
+                src: NamedSource::new("internal", Arc::new(String::new())),
+                span: Span::new(0, 0).into(),
+            })
+        })?;
     let mut module_artifacts = HashMap::new();
 
-    for file_dag_id in &project.load_order {
+    for file_dag_id in &load_order {
         cancellation.checkpoint()?;
         let hir_file = files.remove(file_dag_id).ok_or_else(|| {
             CompileError::Eval(GraphcalError::InternalError {
                 message: format!("HIR module `{file_dag_id}` was already consumed or is missing"),
-                src: project.files[&project.root].named_source.clone(),
+                src: root_source.clone(),
                 span: Span::new(0, 0).into(),
             })
         })?;
@@ -267,13 +277,14 @@ pub(in crate::project_compiler) fn check_hir_project(
         let compiled = checking::check_hir_file(
             hir_file,
             &module_artifacts,
-            &module_interfaces,
+            &exported_dynamic_units,
             &module_resolver,
             &project_types,
             &cancellation,
         )?;
         verify_host_functions(
-            project,
+            root.package(),
+            plugins,
             file_dag_id,
             &compiled.tir,
             &file_src,
@@ -281,11 +292,10 @@ pub(in crate::project_compiler) fn check_hir_project(
             &cancellation,
         )?;
 
-        if *file_dag_id == project.root {
+        if *file_dag_id == root {
             return Ok(CheckedProject {
                 compiled,
                 source: file_src,
-                root_ast: project.files[file_dag_id].ast.clone(),
                 module_resolver,
             });
         }
@@ -301,7 +311,7 @@ pub(in crate::project_compiler) fn check_hir_project(
 
     Err(CompileError::Eval(GraphcalError::InternalError {
         message: "root HIR module was not checked".to_string(),
-        src: NamedSource::new("internal", Arc::new(String::new())),
+        src: root_source,
         span: Span::new(0, 0).into(),
     }))
 }
@@ -320,7 +330,11 @@ pub(in crate::project_compiler) fn check_hir_project(
 ///    this is the "declaration verified against the embedded manifest"
 ///    guarantee of the plugin design (#25).
 fn verify_host_functions(
-    project: &crate::loader::LoadedProject,
+    root_package: &graphcal_compiler::dag_id::DagPackageId,
+    plugins: &HashMap<
+        graphcal_compiler::syntax::plugin::PluginPath,
+        crate::loader::PluginFileEntry,
+    >,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -336,7 +350,14 @@ fn verify_host_functions(
     for (key, function) in declared {
         cancellation.checkpoint()?;
         if key.plugin.source_kind() == PluginSourceKind::WasmModule {
-            verify_wasm_plugin(project, file_dag_id, function, src, host_metadata)?;
+            verify_wasm_plugin(
+                root_package,
+                plugins,
+                file_dag_id,
+                function,
+                src,
+                host_metadata,
+            )?;
         }
         if !host_metadata.contains(key) {
             return Err(CompileError::Eval(GraphcalError::MissingHostFunction {
@@ -369,13 +390,17 @@ fn verify_host_functions(
 /// failures recorded by the loader and module-level failures recorded by
 /// the embedder's plugin host, reported at the import path's span.
 fn verify_wasm_plugin(
-    project: &crate::loader::LoadedProject,
+    root_package: &graphcal_compiler::dag_id::DagPackageId,
+    plugins: &HashMap<
+        graphcal_compiler::syntax::plugin::PluginPath,
+        crate::loader::PluginFileEntry,
+    >,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     function: &graphcal_compiler::ir::lower::ExternFunctionEntry,
     src: &NamedSource<Arc<String>>,
     host_metadata: &crate::host_fns::HostFunctionMetadata,
 ) -> Result<(), CompileError> {
-    if file_dag_id.package() != project.root.package() {
+    if file_dag_id.package() != root_package {
         return Err(CompileError::Eval(
             GraphcalError::PluginInDependencyPackage {
                 plugin: function.plugin.clone(),
@@ -385,7 +410,7 @@ fn verify_wasm_plugin(
         ));
     }
 
-    match project.plugins.get(&function.plugin) {
+    match plugins.get(&function.plugin) {
         Some(Err(crate::loader::PluginFileError::NotPinned)) => {
             return Err(CompileError::Eval(GraphcalError::PluginNotPinned {
                 plugin: function.plugin.clone(),

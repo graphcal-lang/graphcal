@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use graphcal_compiler::syntax::decl_name::DeclName;
 
 mod bindings;
-mod declared_type;
 mod display;
 mod plot_data;
 mod project;

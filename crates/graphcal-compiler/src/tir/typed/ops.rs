@@ -15,7 +15,7 @@ use crate::nat::NatPolyForm;
 use crate::registry::declared_type::{DeclaredGenericArg, IndexTypeRef};
 use crate::registry::error::GraphcalError;
 #[cfg(test)]
-use crate::registry::types::Registry;
+use crate::registry::types::SemanticRegistry;
 #[cfg(test)]
 use crate::syntax::index_name::IndexName;
 use crate::syntax::span::Span;
@@ -586,7 +586,7 @@ pub(in crate::tir::typed) fn unify_resolved_type(
     dim_sub: &mut HashMap<GenericParamName, Dimension>,
     index_sub: &mut HashMap<GenericParamName, IndexTypeRef>,
     nat_sub: &mut HashMap<GenericParamName, u64>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {
@@ -1050,7 +1050,7 @@ fn unify_resolved_generic_arg(
     dim_sub: &mut HashMap<GenericParamName, Dimension>,
     index_sub: &mut HashMap<GenericParamName, IndexTypeRef>,
     nat_sub: &mut HashMap<GenericParamName, u64>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), GraphcalError> {

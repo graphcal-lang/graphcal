@@ -1,6 +1,0 @@
-// A dynamic unit belongs to a concrete include instance. Importing the module
-// blueprint would not provide the runtime `rate` needed by this scale.
-include app.fx() as fx;
-
-param mine: fx.Money = 100.0 fx.USD;
-node p: fx.Money = @mine -> fx.EUR;

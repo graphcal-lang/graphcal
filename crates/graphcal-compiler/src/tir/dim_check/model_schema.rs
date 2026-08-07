@@ -6,11 +6,12 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use super::InferredGenericArg;
+use crate::hir::{NominalConstructor, NominalTypeDef, NominalTypeKind};
 use crate::registry::declared_type::{
     DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::type_def::{TypeDef, TypeDefKind, TypeGenericConstraint, UnionMemberDef};
+use crate::registry::type_def::TypeGenericConstraint;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
@@ -82,8 +83,8 @@ impl ConcreteModelTypeError {
 
 #[derive(Debug)]
 struct ModelTypeDefinition<'tir> {
-    type_def: &'tir TypeDef,
-    constructors: &'tir [UnionMemberDef],
+    type_def: &'tir NominalTypeDef,
+    constructors: &'tir [NominalConstructor],
 }
 
 /// A complete, sort-checked algebraic application tied to its validating TIR.
@@ -176,7 +177,7 @@ impl<'tir> ValidatedModelType<'tir> {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(ConcreteModelConstructor {
-                    name: constructor.name().clone(),
+                    name: constructor.name(),
                     fields,
                 })
             })
@@ -270,7 +271,7 @@ fn validate_model_type_definition<'tir>(
     generic_args: &[DeclaredGenericArg],
 ) -> Result<ModelTypeDefinition<'tir>, ConcreteModelTypeError> {
     let type_def = validate_nominal_signature(tir, identity, generic_args)?;
-    let TypeDefKind::Union { members } = type_def.kind() else {
+    let NominalTypeKind::Union { members } = type_def.kind() else {
         return Err(ConcreteModelTypeError::RequiredType {
             identity: identity.clone(),
         });
@@ -285,7 +286,7 @@ fn validate_nominal_signature<'tir>(
     tir: &'tir crate::tir::typed::TIR,
     identity: &StructTypeRef,
     generic_args: &[DeclaredGenericArg],
-) -> Result<&'tir TypeDef, ConcreteModelTypeError> {
+) -> Result<&'tir NominalTypeDef, ConcreteModelTypeError> {
     let type_def = tir
         .root()
         .semantic
@@ -304,15 +305,15 @@ fn validate_nominal_signature<'tir>(
     }
     for (parameter, argument) in type_def.generic_params().iter().zip(generic_args) {
         let actual = generic_argument_sort(argument);
-        if parameter.constraint != actual {
+        if parameter.constraint() != actual {
             return Err(ConcreteModelTypeError::GenericSortMismatch {
                 identity: identity.clone(),
-                parameter: parameter.name.clone(),
-                expected: parameter.constraint,
+                parameter: parameter.name().clone(),
+                expected: parameter.constraint(),
                 actual,
             });
         }
-        validate_generic_argument_shape(tir, identity, &parameter.name, argument)?;
+        validate_generic_argument_shape(tir, identity, parameter.name(), argument)?;
     }
     Ok(type_def)
 }
@@ -384,7 +385,7 @@ fn validate_bound_generic_arguments(
         .iter()
         .zip(generic_args)
         .try_for_each(|(parameter, argument)| {
-            validate_bound_generic_argument(tir, identity, &parameter.name, argument)
+            validate_bound_generic_argument(tir, identity, parameter.name(), argument)
         })
 }
 
@@ -412,7 +413,7 @@ fn validate_bound_type_argument(
     match declared_type {
         DeclaredType::Struct(nested_identity, nested_args) => {
             let type_def = validate_nominal_signature(tir, nested_identity, nested_args)?;
-            if matches!(type_def.kind(), TypeDefKind::Required) {
+            if matches!(type_def.kind(), NominalTypeKind::Required) {
                 return Err(ConcreteModelTypeError::RequiredType {
                     identity: nested_identity.clone(),
                 });

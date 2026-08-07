@@ -1,10 +1,10 @@
 //! Authoritative whole-project HIR boundary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::{dag_id::DagId, syntax::dimension::UnitName};
 
-use super::{HirFile, HirModuleArtifact};
+use super::HirFile;
 
 /// A complete canonically resolved project before static checking.
 ///
@@ -15,9 +15,18 @@ use super::{HirFile, HirModuleArtifact};
 /// required by a dependent module was available during lowering.
 /// It carries no checked TIR, runtime values, execution plan, or host metadata.
 pub struct HirProject<'project> {
-    pub(super) loaded: &'project crate::loader::LoadedProject,
+    pub(super) root: DagId,
+    pub(super) load_order: Vec<DagId>,
     pub(super) files: HashMap<DagId, HirFile>,
-    pub(super) module_interfaces: HashMap<DagId, HirModuleArtifact>,
+    /// Loader-owned plugin verification inputs are borrowed narrowly; source
+    /// ASTs and the rest of `LoadedProject` do not cross the HIR boundary.
+    pub(super) plugins: &'project HashMap<
+        graphcal_compiler::syntax::plugin::PluginPath,
+        crate::loader::PluginFileEntry,
+    >,
+    /// Minimal semantic fact needed to reject runtime units at a pure import
+    /// boundary. Full frontend registries are discarded after HIR lowering.
+    pub(super) exported_dynamic_units: HashMap<DagId, HashSet<UnitName>>,
     pub(super) module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
     pub(super) cancellation: graphcal_compiler::cancellation::CancellationToken,
 }
@@ -28,7 +37,7 @@ impl std::fmt::Debug for HirProject<'_> {
         modules.sort_by_key(|(dag_id, _)| *dag_id);
         formatter
             .debug_struct("HirProject")
-            .field("root", &self.loaded.root)
+            .field("root", &self.root)
             .field("modules", &modules)
             .finish()
     }
@@ -38,7 +47,7 @@ impl HirProject<'_> {
     /// Canonical identity of the entry DAG.
     #[must_use]
     pub const fn root(&self) -> &DagId {
-        &self.loaded.root
+        &self.root
     }
 
     /// Number of physical modules represented by this HIR project.

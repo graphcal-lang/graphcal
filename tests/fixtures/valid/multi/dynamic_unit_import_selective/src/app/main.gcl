@@ -1,3 +1,0 @@
-// Select an output from one explicit default-bound instance whose evaluation
-// uses an instance-local dynamic unit.
-include app.fx().{ p };

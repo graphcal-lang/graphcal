@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use crate::dimension::Dimension;
 use crate::hir;
-use crate::hir::diagnostics::expr_lower_error_to_graphcal;
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
 pub use crate::nat::NatPolyForm;
 use crate::syntax::decl_name::DeclName;
@@ -22,11 +21,10 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
 use miette::NamedSource;
 
-use crate::ir::lower::IR;
+use crate::ir::lower::HirDag;
 use crate::ir::resolve::{DeclCategory, ParsedExpectedFail};
 use crate::registry::error::GraphcalError;
 use crate::registry::resolve_types::ExternalDeclSurface;
-use crate::registry::types::{Registry, TypeDef, TypeGenericConstraint};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::ModuleResolver;
 use crate::syntax::names::NamePath;
@@ -51,15 +49,12 @@ impl TIR {
             .struct_types
             .iter()
             .flat_map(|(owning_type, type_def)| {
-                let members = match &type_def.kind() {
-                    crate::registry::type_def::TypeDefKind::Required => &[][..],
-                    crate::registry::type_def::TypeDefKind::Union { members } => members.as_slice(),
+                let members = match type_def.kind() {
+                    hir::NominalTypeKind::Required => &[][..],
+                    hir::NominalTypeKind::Union { members } => members.as_slice(),
                 };
                 members.iter().map(|variant| {
-                    let constructor = crate::syntax::type_name::ResolvedConstructorName::new(
-                        owning_type.owner().clone(),
-                        variant.name().atom().clone(),
-                    );
+                    let constructor = variant.identity().clone();
                     let target = ResolvedConstructorTarget {
                         owning_type: owning_type.clone(),
                         type_def: type_def.clone(),
@@ -146,22 +141,20 @@ impl DagTIR {
     }
 }
 
-/// Resolve all canonical HIR type annotations in an `IR` against the
+/// Resolve all canonical HIR type annotations in an `HirDag` against the
 /// authoritative project type store.
 ///
 /// Syntax paths were eliminated while freezing HIR. This conversion therefore
 /// reads owner-qualified references directly and never performs source-path
 /// lookup or AST-to-HIR lowering.
 pub fn type_resolve_with_modules(
-    ir: IR,
-    root_dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_with_modules_and_cancellation(
-        ir,
-        root_dag_id,
+        hir,
         src,
         module_resolver,
         project_types,
@@ -169,22 +162,20 @@ pub fn type_resolve_with_modules(
     )
 }
 
-/// Resolve an IR to TIR while observing cooperative cancellation.
+/// Resolve a HIR DAG to TIR while observing cooperative cancellation.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] for invalid types or cancellation.
 pub fn type_resolve_with_modules_and_cancellation(
-    ir: IR,
-    root_dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TIR, GraphcalError> {
     type_resolve_builder_with_modules_and_cancellation(
-        ir,
-        root_dag_id,
+        hir,
         src,
         module_resolver,
         project_types,
@@ -199,17 +190,15 @@ pub fn type_resolve_with_modules_and_cancellation(
 /// [`TirBuilder::insert_dag`] and consume the builder with
 /// [`TirBuilder::finish`] before checking or evaluation.
 pub fn type_resolve_builder_with_modules_and_cancellation(
-    ir: IR,
-    root_dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<TirBuilder, GraphcalError> {
     type_resolve_builder_with_imported_bindings_and_cancellation(
-        ir,
+        hir,
         HashMap::new(),
-        root_dag_id,
         src,
         module_resolver,
         project_types,
@@ -225,9 +214,8 @@ pub fn type_resolve_builder_with_modules_and_cancellation(
 /// does not match the canonical target recorded by HIR, or when type
 /// resolution otherwise fails.
 pub fn type_resolve_builder_with_imported_bindings_and_cancellation<S>(
-    ir: IR,
+    hir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
@@ -237,14 +225,15 @@ where
     S: std::hash::BuildHasher,
 {
     cancellation.checkpoint()?;
-    validate_checked_imported_bindings(&ir, &imported_bindings, src)?;
+    validate_checked_imported_bindings(&hir, &imported_bindings, src)?;
     let imported_bindings = imported_bindings.into_iter().collect();
-    let ctx = ModuleTypeContext::new(root_dag_id, module_resolver, project_types);
-    type_resolve_impl(ir, imported_bindings, root_dag_id, src, ctx, cancellation)
+    let dag_id = hir.dag_id().clone();
+    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
+    type_resolve_impl(hir, imported_bindings, src, ctx, cancellation)
 }
 
 fn validate_checked_imported_bindings<S>(
-    ir: &IR,
+    ir: &HirDag,
     checked: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError>
@@ -302,9 +291,8 @@ fn finalize_hir_dag(
 }
 
 fn type_resolve_impl(
-    ir: IR,
+    ir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    root_dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -317,9 +305,8 @@ fn type_resolve_impl(
         ir.params,
         ir.nodes,
         &asserts_for_hir,
-        &ir.registry,
         src,
-        root_dag_id,
+        module_ctx.owner,
         module_ctx,
         &imported_bindings_for_hir,
         cancellation,
@@ -331,6 +318,7 @@ fn type_resolve_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
+        ir.child_dag_spans,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
@@ -357,15 +345,13 @@ fn type_resolve_impl(
 /// Resolve type annotations for one DAG body with module-aware type-system
 /// path lookup.
 pub fn type_resolve_single_with_modules(
-    ir: IR,
-    dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
 ) -> Result<DagTIR, GraphcalError> {
     type_resolve_single_with_modules_and_cancellation(
-        ir,
-        dag_id,
+        hir,
         src,
         module_resolver,
         project_types,
@@ -373,23 +359,21 @@ pub fn type_resolve_single_with_modules(
     )
 }
 
-/// Resolve one DAG IR while observing cooperative cancellation.
+/// Resolve one HIR DAG while observing cooperative cancellation.
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] for invalid types or cancellation.
 pub fn type_resolve_single_with_modules_and_cancellation(
-    ir: IR,
-    dag_id: &crate::dag_id::DagId,
+    hir: HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<DagTIR, GraphcalError> {
     type_resolve_single_with_imported_bindings_and_cancellation(
-        ir,
+        hir,
         HashMap::new(),
-        dag_id,
         src,
         module_resolver,
         project_types,
@@ -404,9 +388,8 @@ pub fn type_resolve_single_with_modules_and_cancellation(
 /// Returns a [`GraphcalError`] when an imported lexical target is missing or
 /// mismatched, or when type resolution otherwise fails.
 pub fn type_resolve_single_with_imported_bindings_and_cancellation<S>(
-    ir: IR,
+    hir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding, S>,
-    dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
@@ -416,16 +399,16 @@ where
     S: std::hash::BuildHasher,
 {
     cancellation.checkpoint()?;
-    validate_checked_imported_bindings(&ir, &imported_bindings, src)?;
+    validate_checked_imported_bindings(&hir, &imported_bindings, src)?;
     let imported_bindings = imported_bindings.into_iter().collect();
-    let ctx = ModuleTypeContext::new(dag_id, module_resolver, project_types);
-    type_resolve_single_impl(ir, imported_bindings, dag_id, src, ctx, cancellation)
+    let dag_id = hir.dag_id().clone();
+    let ctx = ModuleTypeContext::new(&dag_id, module_resolver, project_types);
+    type_resolve_single_impl(hir, imported_bindings, src, ctx, cancellation)
 }
 
 fn type_resolve_single_impl(
-    ir: IR,
+    ir: HirDag,
     imported_bindings: HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
-    dag_id: &crate::dag_id::DagId,
     src: &NamedSource<Arc<String>>,
     module_ctx: ModuleTypeContext<'_>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -438,9 +421,8 @@ fn type_resolve_single_impl(
         ir.params,
         ir.nodes,
         &asserts_for_hir,
-        &ir.registry,
         src,
-        dag_id,
+        module_ctx.owner,
         module_ctx,
         &imported_bindings_for_hir,
         cancellation,
@@ -452,6 +434,7 @@ fn type_resolve_single_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
+        ir.child_dag_spans,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
@@ -481,15 +464,14 @@ fn type_resolve_single_impl(
 /// Returns a [`GraphcalError`] when a declaration annotation cannot be
 /// resolved to a concrete declared type.
 pub fn resolve_hir_declared_types_with_modules_and_cancellation(
-    ir: &IR,
-    owner: &crate::dag_id::DagId,
+    hir: &HirDag,
     src: &NamedSource<Arc<String>>,
     module_resolver: &ModuleResolver,
     project_types: &ProjectTypeStore,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<ScopedName, crate::registry::declared_type::DeclaredType>, GraphcalError> {
-    let ctx = ModuleTypeContext::new(owner, module_resolver, project_types);
-    resolve_declared_type_exprs(&ir.consts, &ir.params, &ir.nodes, src, ctx, cancellation)?
+    let ctx = ModuleTypeContext::new(hir.dag_id(), module_resolver, project_types);
+    resolve_declared_type_exprs(&hir.consts, &hir.params, &hir.nodes, src, ctx, cancellation)?
         .into_iter()
         .map(|(name, resolved)| resolved_to_declared_type(&resolved, src).map(|ty| (name, ty)))
         .collect()
@@ -529,14 +511,13 @@ fn resolve_declared_type_exprs(
 /// declarations of a single DAG, returning a partially-built [`DagTIR`].
 #[expect(
     clippy::too_many_arguments,
-    reason = "orchestrates per-DAG type resolution across IR declarations and semantic body data"
+    reason = "orchestrates per-DAG type resolution across HIR declarations and semantic body data"
 )]
 fn type_resolve_dag(
     mut consts: Vec<crate::ir::lower::ConstEntry>,
     mut params: Vec<crate::ir::lower::ParamEntry>,
     mut nodes: Vec<crate::ir::lower::NodeEntry>,
     asserts: &[crate::ir::lower::AssertEntry],
-    registry: &Registry,
     src: &NamedSource<Arc<String>>,
     dag_id: &crate::dag_id::DagId,
     module_ctx: ModuleTypeContext<'_>,
@@ -581,8 +562,6 @@ fn type_resolve_dag(
         &constructor_refs,
         imported_bindings,
         module_ctx,
-        registry,
-        src,
     )?;
     let bindable_nominals = collect_bindable_nominals(module_ctx, src)?;
 
@@ -748,29 +727,21 @@ fn collect_resolved_type_defs(
     constructor_refs: &ResolvedConstructorRefs,
     imported_bindings: &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding>,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
 ) -> Result<ResolvedTypeDefs, GraphcalError> {
     let mut defs = ResolvedTypeDefs::default();
     if let Some(symbols) = ctx.resolver.modules().get(ctx.owner) {
         for symbol in symbols.struct_types().values() {
-            record_resolved_struct_type_def(symbol.resolved(), ctx, registry, src, &mut defs)?;
+            record_resolved_struct_type_def(symbol.resolved(), ctx, &mut defs)?;
         }
     }
     for resolved in resolved_decl_types.values() {
-        collect_struct_type_defs_from_resolved_type(resolved, ctx, registry, src, &mut defs)?;
+        collect_struct_type_defs_from_resolved_type(resolved, ctx, &mut defs)?;
     }
     for binding in imported_bindings.values() {
-        collect_struct_type_defs_from_declared_type(
-            binding.declared_type(),
-            ctx,
-            registry,
-            src,
-            &mut defs,
-        )?;
+        collect_struct_type_defs_from_declared_type(binding.declared_type(), ctx, &mut defs)?;
     }
     for target in constructor_refs.constructor_defs.values() {
-        record_resolved_struct_type_def(&target.owning_type, ctx, registry, src, &mut defs)?;
+        record_resolved_struct_type_def(&target.owning_type, ctx, &mut defs)?;
     }
     Ok(defs)
 }
@@ -917,13 +888,13 @@ fn collect_public_signature_type_dependencies(
             }
             if let Some(type_def) = defs.struct_types.get(&name.value) {
                 for param in type_def.generic_params().iter().skip(generic_args.len()) {
-                    let key = (name.value.clone(), param.name.clone());
-                    if !visited_defaults.insert(key.clone()) {
+                    let key = (name.value.clone(), param.name().clone());
+                    if !visited_defaults.insert(key) {
                         continue;
                     }
-                    if let Some(default) = defs.generic_defaults.get(&key) {
+                    if let Some(default) = param.default() {
                         collect_public_signature_generic_arg_dependencies(
-                            &default.hir,
+                            default,
                             defs,
                             visited_defaults,
                             dependencies,
@@ -965,14 +936,14 @@ fn validate_public_generic_defaults(
             .struct_type_span(type_name)
             .unwrap_or(Span::new(0, 0));
         for param in type_def.generic_params() {
-            let key = (type_name.clone(), param.name.clone());
-            let Some(default) = dag.semantic.type_defs.generic_defaults.get(&key) else {
+            let Some(default) = param.default() else {
                 continue;
             };
+            let key = (type_name.clone(), param.name().clone());
             let mut dependencies = Vec::new();
             let mut visited_defaults = std::collections::HashSet::from([key]);
             collect_public_signature_generic_arg_dependencies(
-                &default.hir,
+                default,
                 &dag.semantic.type_defs,
                 &mut visited_defaults,
                 &mut dependencies,
@@ -1015,23 +986,19 @@ fn validate_public_generic_defaults(
 fn collect_struct_type_defs_from_declared_type(
     declared: &crate::registry::declared_type::DeclaredType,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
     defs: &mut ResolvedTypeDefs,
 ) -> Result<(), GraphcalError> {
     match declared {
         crate::registry::declared_type::DeclaredType::Struct(name, generic_args) => {
-            record_resolved_struct_type_def(name.resolved(), ctx, registry, src, defs)?;
+            record_resolved_struct_type_def(name.resolved(), ctx, defs)?;
             for arg in generic_args {
                 if let crate::registry::declared_type::DeclaredGenericArg::Type(type_expr) = arg {
-                    collect_struct_type_defs_from_declared_type(
-                        type_expr, ctx, registry, src, defs,
-                    )?;
+                    collect_struct_type_defs_from_declared_type(type_expr, ctx, defs)?;
                 }
             }
         }
         crate::registry::declared_type::DeclaredType::Indexed { element, .. } => {
-            collect_struct_type_defs_from_declared_type(element, ctx, registry, src, defs)?;
+            collect_struct_type_defs_from_declared_type(element, ctx, defs)?;
         }
         crate::registry::declared_type::DeclaredType::Quantity(_)
         | crate::registry::declared_type::DeclaredType::Complex(_)
@@ -1047,28 +1014,24 @@ fn collect_struct_type_defs_from_declared_type(
 fn collect_struct_type_defs_from_resolved_type(
     resolved: &ResolvedTypeExpr,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
     defs: &mut ResolvedTypeDefs,
 ) -> Result<(), GraphcalError> {
     match resolved {
         ResolvedTypeExpr::Struct(name, _) => {
-            record_resolved_struct_type_def(name, ctx, registry, src, defs)?;
+            record_resolved_struct_type_def(name, ctx, defs)?;
         }
         ResolvedTypeExpr::GenericStruct {
             name, generic_args, ..
         } => {
-            record_resolved_struct_type_def(name, ctx, registry, src, defs)?;
+            record_resolved_struct_type_def(name, ctx, defs)?;
             for arg in generic_args {
                 if let crate::tir::typed::ResolvedGenericArg::Type(type_expr) = arg {
-                    collect_struct_type_defs_from_resolved_type(
-                        type_expr, ctx, registry, src, defs,
-                    )?;
+                    collect_struct_type_defs_from_resolved_type(type_expr, ctx, defs)?;
                 }
             }
         }
         ResolvedTypeExpr::Indexed { base, indexes: _ } => {
-            collect_struct_type_defs_from_resolved_type(base, ctx, registry, src, defs)?;
+            collect_struct_type_defs_from_resolved_type(base, ctx, defs)?;
         }
         ResolvedTypeExpr::Dimensionless
         | ResolvedTypeExpr::Complex { .. }
@@ -1088,8 +1051,6 @@ fn collect_struct_type_defs_from_resolved_type(
 fn record_resolved_struct_type_def(
     name: &ResolvedStructTypeName,
     ctx: ModuleTypeContext<'_>,
-    registry: &Registry,
-    src: &NamedSource<Arc<String>>,
     defs: &mut ResolvedTypeDefs,
 ) -> Result<(), GraphcalError> {
     if defs.struct_types.contains_key(name) {
@@ -1098,7 +1059,7 @@ fn record_resolved_struct_type_def(
     let Some(type_def) = ctx.types.get_struct_type_handle(name).cloned() else {
         return Ok(());
     };
-    let definition_src = ctx.types.source_for_owner(name.owner()).unwrap_or(src);
+    let definition_src = type_def.source();
 
     // Record the owner before walking defaults and fields so recursive nominal
     // types terminate naturally. Model-schema expansion needs this closure,
@@ -1109,104 +1070,45 @@ fn record_resolved_struct_type_def(
         .insert(name.clone(), Arc::clone(&type_def));
 
     for param in type_def.generic_params() {
-        if let Some(default) = &param.default {
-            let (hir, resolved) = resolve_generic_default_in_struct_scope(
-                default,
-                param,
-                name,
-                type_def.as_ref(),
-                ctx,
-                registry,
-                definition_src,
-            )?;
+        if let Some(default) = param.default() {
+            let resolved = resolve_hir_generic_arg(param, default, definition_src, ctx)?;
             if let ResolvedGenericArg::Type(type_expr) = &resolved {
-                collect_struct_type_defs_from_resolved_type(
-                    type_expr,
-                    ctx,
-                    registry,
-                    definition_src,
-                    defs,
-                )?;
+                collect_struct_type_defs_from_resolved_type(type_expr, ctx, defs)?;
             }
             defs.generic_defaults.insert(
-                (name.clone(), param.name.clone()),
-                ResolvedGenericDefault { hir, resolved },
+                (name.clone(), param.name().clone()),
+                ResolvedGenericDefault { resolved },
             );
         }
     }
 
     if let Some(members) = type_def.union_members() {
-        let generic_scope = generic_scope_for_type_def(name, type_def.as_ref(), definition_src)?;
-        let prelude = hir::PreludeTypeScope::graphcal();
-        let bound_expr_ctx = hir::ExprLoweringContext::new(
-            name.owner(),
-            ctx.resolver,
-            &generic_scope,
-            &registry.time_zones,
-        )
-        .with_prelude(&prelude)
-        .with_unit_registry(&registry.units);
         for member in members {
             for field in member.fields() {
                 let key = ResolvedStructFieldTypeKey {
                     owning_type: name.clone(),
-                    constructor: member.name().clone(),
+                    constructor: member.name(),
                     field: field.name().clone(),
                 };
-                let resolved = resolve_type_expr_in_struct_scope(
-                    field.type_ann(),
-                    name,
-                    type_def.as_ref(),
-                    ctx,
-                    registry,
-                    definition_src,
-                )?;
-                let bounds =
-                    lower_field_domain_bounds(field.type_ann(), bound_expr_ctx, definition_src)?;
-                collect_struct_type_defs_from_resolved_type(
-                    &resolved,
-                    ctx,
-                    registry,
-                    definition_src,
-                    defs,
-                )?;
+                let annotation = field.type_annotation();
+                let resolved = resolve_hir_type_expr(&annotation.type_expr, definition_src, ctx)?;
+                let bounds = annotation
+                    .domain_bounds
+                    .iter()
+                    .map(|bound| ResolvedDomainBound {
+                        kind: bound.kind,
+                        value: bound.value.clone(),
+                        span: bound.span,
+                        src: definition_src.clone(),
+                    })
+                    .collect();
+                collect_struct_type_defs_from_resolved_type(&resolved, ctx, defs)?;
                 defs.insert_field(key, ResolvedStructFieldSemantics::new(resolved, bounds));
             }
         }
     }
 
     Ok(())
-}
-
-/// Build the lexical generic scope of a type definition so field-bound
-/// expressions can lower references to the type's generic parameters.
-fn generic_scope_for_type_def(
-    name: &ResolvedStructTypeName,
-    type_def: &TypeDef,
-    src: &NamedSource<Arc<String>>,
-) -> Result<hir::GenericScope, GraphcalError> {
-    let owner = hir::GenericParamOwner::Type(name.clone());
-    let mut scope = hir::GenericScope::new();
-    for param in type_def.generic_params() {
-        let constraint = match param.constraint {
-            TypeGenericConstraint::Dim => crate::syntax::ast::GenericConstraint::Dim,
-            TypeGenericConstraint::Index => crate::syntax::ast::GenericConstraint::Index,
-            TypeGenericConstraint::Nat => crate::syntax::ast::GenericConstraint::Nat,
-            TypeGenericConstraint::Type => crate::syntax::ast::GenericConstraint::Type,
-        };
-        scope
-            .insert_binding(hir::GenericParamBinding::new(
-                hir::GenericParamId::new(owner.clone(), param.name.clone()),
-                constraint,
-                Span::new(0, 0),
-            ))
-            .map_err(|err| GraphcalError::InternalError {
-                message: format!("duplicate generic param while scoping `{name}`: {err}"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
-    }
-    Ok(scope)
 }
 
 /// Move domain bounds lowered at the HIR boundary into checked semantic storage.
@@ -1343,31 +1245,6 @@ fn collect_plot_refs(
     }
 
     Ok(())
-}
-
-/// Lower a registry-backed struct field's domain bounds to HIR.
-///
-/// Value declaration bounds have already crossed the HIR boundary and never
-/// reach this syntax compatibility path.
-fn lower_field_domain_bounds(
-    type_ann: &crate::desugar::desugared_ast::TypeExpr,
-    expr_ctx: hir::ExprLoweringContext<'_>,
-    src: &NamedSource<Arc<String>>,
-) -> Result<Vec<ResolvedDomainBound>, GraphcalError> {
-    type_ann
-        .domain_bounds()
-        .iter()
-        .map(|bound| {
-            let value = hir::lower_expr(&bound.value, expr_ctx)
-                .map_err(|err| expr_lower_error_to_graphcal(&err, src))?;
-            Ok(ResolvedDomainBound {
-                kind: bound.kind,
-                value,
-                span: bound.span,
-                src: src.clone(),
-            })
-        })
-        .collect()
 }
 
 /// HIR-level body policies that replaced the retired syntax-AST scope checks.
@@ -1840,7 +1717,7 @@ struct DagTIRSeed {
 impl DagTIRSeed {
     #[expect(
         clippy::too_many_arguments,
-        reason = "single conversion that absorbs every IR field beyond the resolved decls"
+        reason = "single conversion that absorbs every HIR DAG field beyond the resolved decls"
     )]
     fn with_body(
         self,
@@ -1850,6 +1727,7 @@ impl DagTIRSeed {
         layers: Vec<crate::ir::lower::LayerEntry>,
         included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
         source_order: Vec<(ScopedName, DeclCategory)>,
+        child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
         expected_fail: HashMap<ScopedName, ParsedExpectedFail>,
         dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
@@ -1907,6 +1785,7 @@ impl DagTIRSeed {
             declaration_index: DagDeclarationIndex::default(),
             semantic,
             source_order,
+            child_dag_spans,
             assumes_map,
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,
@@ -1939,10 +1818,7 @@ use ops::{unify_nat_poly_form, unify_resolved_type};
 // ---------------------------------------------------------------------------
 mod type_expr;
 pub use type_expr::resolve_hir_type_expr;
-use type_expr::{
-    internal_error, module_resolve_error, resolve_generic_default_in_struct_scope,
-    resolve_type_expr_in_struct_scope,
-};
+use type_expr::{internal_error, module_resolve_error, resolve_hir_generic_arg};
 
 #[cfg(test)]
 mod tests;

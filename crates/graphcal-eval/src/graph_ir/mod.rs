@@ -190,18 +190,14 @@ mod tests {
         let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
         let ir = lower(&file, &src).unwrap();
-        let dag_id = graphcal_compiler::dag_id::DagId::from_virtual_relative_path(
-            std::path::Path::new("test.gcl"),
-        )
-        .unwrap();
         let mut resolver = ModuleResolver::default();
         resolver
-            .add_module(dag_id.clone(), &file.declarations)
+            .add_module(ir.dag_id().clone(), &file.declarations)
             .unwrap();
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
-        project_types.insert_local_registry(&dag_id, &ir.registry, src.clone());
-        type_resolve_with_modules(ir, &dag_id, &src, &resolver, &project_types).unwrap()
+        project_types.insert_local_hir(&ir).unwrap();
+        type_resolve_with_modules(ir, &src, &resolver, &project_types).unwrap()
     }
 
     /// Compile through the full project pipeline (loader + inline-DAG body

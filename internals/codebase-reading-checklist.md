@@ -111,13 +111,15 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `reg
 
 Note: `hir/types.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mutually dependent group. `registry/builtins.rs` is upstream of HIR and provides evaluation/dimension signatures for the built-in domain model.
 
-- [ ] `crates/graphcal-compiler/src/hir/types.rs`
+- [ ] `crates/graphcal-compiler/src/hir/source_interface.rs`
 - [ ] `crates/graphcal-compiler/src/registry/builtins.rs`
+- [ ] `crates/graphcal-compiler/src/hir/types.rs`
+- [ ] `crates/graphcal-compiler/src/hir/diagnostics.rs`
 - [ ] `crates/graphcal-compiler/src/hir/lower.rs`
 - [ ] `crates/graphcal-compiler/src/hir/expr.rs`
+- [ ] `crates/graphcal-compiler/src/hir/nominal.rs`
 - [ ] `crates/graphcal-compiler/src/hir/mod.rs`
 - [ ] `crates/graphcal-compiler/src/tir/dim_check/builtins.rs`
-- [ ] `crates/graphcal-compiler/src/hir/diagnostics.rs`
 
 ## Stage 8 - IR lowering, TIR, dimension checking, and late surface helpers
 
@@ -212,15 +214,18 @@ Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_exp
 ## Stage 14 - Project loading, checking, and runtime orchestration
 
 Note: loader I/O, pure project checking, and runtime preparation are now
-separate module families. `project_compiler/model.rs` supplies the internal
-pass model; `eval/project/prepare.rs` is the only transition that consumes
-`CheckedProject` into an execution plan.
+separate module families. `project_compiler/entry_interface.rs` attaches
+checked semantic facts to the direct HIR source interface;
+`project_compiler/model.rs` supplies the remaining internal pass model;
+`eval/project/prepare.rs` is the only transition that consumes `CheckedProject`
+into an execution plan.
 
 - [ ] `crates/graphcal-eval/src/eval/types.rs`
 - [ ] `crates/graphcal-eval/src/eval/display.rs`
 - [ ] `crates/graphcal-eval/src/loader.rs`
 - [ ] `crates/graphcal-eval/src/inline_dag.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/template.rs`
+- [ ] `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/model.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/hir_project.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
@@ -233,7 +238,6 @@ pass model; `eval/project/prepare.rs` is the only transition that consumes
 - [ ] `crates/graphcal-eval/src/project_compiler/pipeline.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/session.rs`
 - [ ] `crates/graphcal-eval/src/project_compiler/mod.rs`
-- [ ] `crates/graphcal-eval/src/eval/declared_type.rs`
 - [ ] `crates/graphcal-eval/src/eval/plot_data.rs`
 - [ ] `crates/graphcal-eval/src/eval/runtime.rs`
 - [ ] `crates/graphcal-eval/src/eval/project/output.rs`

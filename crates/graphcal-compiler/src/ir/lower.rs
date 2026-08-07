@@ -1,10 +1,10 @@
-//! Intermediate Representation (IR) — the result of lowering an AST.
+//! Per-DAG HIR construction from a desugared syntax tree.
 //!
 //! `lower()` combines declaration collection (`resolve`), registry
 //! construction (dimensions, units, indexes, structs), and function
-//! registration into a single `IR` value. Reference resolution happens at
+//! registration into one [`HirDag`]. Reference resolution happens at
 //! [`UnfrozenIR::freeze`], which lowers every assembled declaration body to
-//! HIR — the frozen `IR` carries no syntax-AST expression.
+//! HIR — a frozen DAG carries no syntax-AST expression.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -31,7 +31,8 @@ use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::types::{
-    self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
+    self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder,
+    SemanticRegistry, UnitScale,
 };
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName, UnitRef};
@@ -395,9 +396,15 @@ pub struct UnfrozenLayerEntry {
 /// - Dependency graphs for const and runtime evaluation ordering
 /// - Source-order tracking for deterministic output
 #[derive(Debug)]
-pub struct IR {
-    /// The type/unit/dimension/index/struct/function registry.
-    pub registry: Registry,
+pub struct HirDag {
+    /// Canonical identity carried by the body itself, so storage and consumers
+    /// cannot pair this HIR with a different DAG key.
+    dag_id: crate::dag_id::DagId,
+    /// Registry capabilities valid from HIR onward. Syntax-backed nominal
+    /// definitions are unrepresentable; `nominal_types` is the sole authority.
+    pub registry: SemanticRegistry,
+    /// Local nominal definitions with all signatures lowered to canonical HIR.
+    nominal_types: crate::hir::NominalTypeRegistry,
     /// Const declarations in source order.
     pub(crate) consts: Vec<ConstEntry>,
     /// Param declarations in source order.
@@ -416,6 +423,11 @@ pub struct IR {
     pub(crate) included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
+    /// Runtime-interface-relevant declarations authored directly in this DAG,
+    /// excluding declarations merged from includes.
+    source_declarations: Vec<crate::hir::SourceDeclaration>,
+    /// Canonical child-DAG identities and their authored name spans.
+    pub(crate) child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
@@ -437,15 +449,34 @@ pub struct IR {
     pub(crate) instances: Vec<InstanceRecord>,
 }
 
-impl IR {
+impl HirDag {
+    /// Canonical identity of this HIR body.
+    #[must_use]
+    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
+        &self.dag_id
+    }
+
+    /// Nominal definitions canonically owned by this DAG.
+    #[must_use]
+    pub const fn nominal_types(&self) -> &crate::hir::NominalTypeRegistry {
+        &self.nominal_types
+    }
+
     /// Borrow canonical lexical import targets resolved during HIR lowering.
     #[must_use]
     pub const fn imported_bindings(&self) -> &HashMap<ScopedName, HirImportedBinding> {
         &self.imported_bindings
     }
+
+    /// Declarations authored directly in this DAG that define its runtime
+    /// parameter, output, and required-index interface.
+    #[must_use]
+    pub fn source_declarations(&self) -> &[crate::hir::SourceDeclaration] {
+        &self.source_declarations
+    }
 }
 
-/// Lower an AST into an [`IR`].
+/// Lower an AST into a [`HirDag`].
 ///
 /// This combines:
 /// 1. Name resolution (`resolve`) — checks duplicates, extracts deps
@@ -456,7 +487,7 @@ impl IR {
 ///
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
-pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalError> {
+pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, GraphcalError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
         .map_err(|e| GraphcalError::EvalError {
             message: format!("invalid source name `{}`: {e}", src.name()),
@@ -466,7 +497,27 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<IR, GraphcalE
     lower_with_imports(ast, src, &ImportedNames::default(), &dag_id)
 }
 
-/// Lower an AST with imported declarations into an [`IR`].
+#[cfg(test)]
+pub(crate) fn lower_with_frontend_registry_for_test(
+    ast: &File,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(HirDag, Registry), GraphcalError> {
+    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
+        .map_err(|error| GraphcalError::EvalError {
+            message: format!("invalid source name `{}`: {error}", src.name()),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    let (builder, unresolved) = lower_to_builder(ast, src, &ImportedNames::default(), &dag_id)?;
+    let resolver = single_module_resolver(ast, &dag_id, src)?;
+    let registry = builder
+        .try_build()
+        .map_err(|error| registry_build_error(&error, src))?;
+    let hir = unresolved.freeze(registry.clone(), &dag_id, &resolver, src)?;
+    Ok((hir, registry))
+}
+
+/// Lower an AST with imported declarations into a [`HirDag`].
 ///
 /// Same as [`lower`] but accepts imported names from other files.
 /// The registry is frozen (via `try_build()`) before returning.
@@ -479,7 +530,7 @@ fn lower_with_imports(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedNames,
     dag_id: &crate::dag_id::DagId,
-) -> Result<IR, GraphcalError> {
+) -> Result<HirDag, GraphcalError> {
     let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
     let resolver = single_module_resolver(ast, dag_id, src)?;
     let registry = builder
@@ -533,11 +584,32 @@ fn single_module_resolver(
 /// that can be further mutated (e.g., to register imported type-system
 /// declarations) before freezing.
 ///
-/// Call [`UnfrozenIR::freeze`] with the final [`Registry`] to produce an [`IR`].
+/// Call [`UnfrozenIR::freeze`] with the final [`Registry`] to produce a [`HirDag`].
 ///
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
+fn collect_source_declarations(ast: &File) -> Vec<crate::hir::SourceDeclaration> {
+    ast.declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            DeclKind::Param(param) => Some(crate::hir::SourceDeclaration::Parameter {
+                name: param.name.value.clone(),
+                span: declaration.span,
+            }),
+            DeclKind::Node(node) => Some(crate::hir::SourceDeclaration::Node {
+                name: node.name.value.clone(),
+                span: declaration.span,
+            }),
+            DeclKind::Index(index) => Some(crate::hir::SourceDeclaration::Index {
+                name: index.name.value.clone(),
+                span: declaration.span,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -748,7 +820,7 @@ pub(crate) fn lower_dag_body_to_ir(
     imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
-) -> Result<IR, GraphcalError> {
+) -> Result<HirDag, GraphcalError> {
     let virtual_file = File {
         declarations: stripped_body.to_vec(),
     };
@@ -965,6 +1037,15 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(name, cat)| (ScopedName::from(name), cat))
             .collect(),
+        source_declarations: collect_source_declarations(ast),
+        child_dag_spans: ast
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                DeclKind::Dag(dag) => Some((dag_id.child(dag.name.value.as_str()), dag.name.span)),
+                _ => None,
+            })
+            .collect(),
         assert_names: resolved
             .assert_names
             .into_iter()
@@ -1016,6 +1097,11 @@ pub struct UnfrozenIR {
     included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
+    /// Direct source declarations are immutable provenance. Include merging
+    /// extends `source_order` but never this entry-interface subset.
+    source_declarations: Vec<crate::hir::SourceDeclaration>,
+    /// Canonical child-DAG identities and their authored name spans.
+    child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     assert_names: HashSet<ScopedName>,
     // Key-lookup only, order irrelevant.
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
@@ -1036,12 +1122,12 @@ pub struct UnfrozenIR {
 }
 
 impl UnfrozenIR {
-    /// Freeze into a complete [`IR`] by providing a built [`Registry`] and
+    /// Freeze into a complete [`HirDag`] by providing a built [`Registry`] and
     /// the resolution context.
     ///
     /// This is the lowering boundary of the pipeline: every declaration body
     /// assembled so far (including merged include instances and applied
-    /// overrides) is lowered to HIR here, so the frozen [`IR`] carries no
+    /// overrides) is lowered to HIR here, so the frozen [`HirDag`] carries no
     /// syntax-AST expression.
     ///
     /// # Errors
@@ -1054,7 +1140,7 @@ impl UnfrozenIR {
         owner: &crate::dag_id::DagId,
         resolver: &crate::syntax::module_resolve::ModuleResolver,
         src: &NamedSource<Arc<String>>,
-    ) -> Result<IR, GraphcalError> {
+    ) -> Result<HirDag, GraphcalError> {
         self.freeze_with_cancellation(
             registry,
             owner,
@@ -1080,7 +1166,7 @@ impl UnfrozenIR {
         resolver: &crate::syntax::module_resolve::ModuleResolver,
         src: &NamedSource<Arc<String>>,
         cancellation: &crate::cancellation::CancellationToken,
-    ) -> Result<IR, GraphcalError> {
+    ) -> Result<HirDag, GraphcalError> {
         cancellation.checkpoint()?;
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
@@ -1180,6 +1266,14 @@ impl UnfrozenIR {
                     span: type_ann.span,
                 })
             };
+
+        let nominal_types = crate::hir::nominal::lower_nominal_type_registry(
+            owner,
+            &registry,
+            resolver,
+            src,
+            cancellation,
+        )?;
 
         let dynamic_unit_scales = self
             .dynamic_unit_scales
@@ -1432,9 +1526,16 @@ impl UnfrozenIR {
         let extern_functions =
             resolve_plugin_imports(&self.plugin_imports, &registry, owner, resolver, src)?;
 
-        Ok(IR {
+        // Syntax-backed nominal definitions are a lowering capability, not a
+        // HIR semantic authority. The phase-specific registry makes retaining
+        // them after `nominal_types` is complete impossible.
+        let registry = registry.into_semantic();
+
+        Ok(HirDag {
+            dag_id: owner.clone(),
             extern_functions,
             registry,
+            nominal_types,
             consts,
             params,
             nodes,
@@ -1444,6 +1545,8 @@ impl UnfrozenIR {
             layers,
             included_plots: self.included_plots,
             source_order: self.source_order,
+            source_declarations: self.source_declarations,
+            child_dag_spans: self.child_dag_spans,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
             dynamic_unit_scales,
@@ -4135,6 +4238,7 @@ fn register_type_decl(
             name: g.name.value.clone(),
             constraint: g.constraint.into(),
             default: g.default.clone(),
+            span: g.name.span,
         })
         .collect();
 
@@ -5546,7 +5650,7 @@ mod tests {
         NamedSource::new("test.gcl", Arc::new(source.to_string()))
     }
 
-    fn parse_and_lower(source: &str) -> Result<IR, GraphcalError> {
+    fn parse_and_lower(source: &str) -> Result<HirDag, GraphcalError> {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let file = desugared;
@@ -5585,6 +5689,75 @@ mod tests {
         let source = include_str!("../../../../tests/fixtures/valid/indexed.gcl");
         let ir = parse_and_lower(source).unwrap();
         assert!(ir.registry.indexes.get_index("Maneuver").is_some());
+    }
+
+    #[test]
+    fn hir_retains_the_direct_runtime_interface_in_source_order() {
+        let hir = parse_and_lower(
+            "const node ignored: Dimensionless = 1.0;\n\
+             pub(bind) index Phase;\n\
+             param input: Dimensionless = 1.0;\n\
+             node private: Dimensionless = @input;\n\
+             pub node output: Dimensionless = @private;\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            hir.source_declarations(),
+            [
+                crate::hir::SourceDeclaration::Index { name, .. },
+                crate::hir::SourceDeclaration::Parameter { name: input, .. },
+                crate::hir::SourceDeclaration::Node { name: private, .. },
+                crate::hir::SourceDeclaration::Node { name: output, .. },
+            ] if name.as_str() == "Phase"
+                && input.as_str() == "input"
+                && private.as_str() == "private"
+                && output.as_str() == "output"
+        ));
+    }
+
+    #[test]
+    fn nominal_signatures_are_canonical_hir() {
+        let hir = parse_and_lower(
+            "type Marker { Marker }\n\
+             type Box<T: Type = Marker> { Box(value: T) }\n",
+        )
+        .unwrap();
+        let identity = crate::syntax::type_name::ResolvedStructTypeName::from_def(
+            hir.dag_id().clone(),
+            crate::syntax::type_name::StructTypeName::expect_valid("Box"),
+        );
+        let marker = crate::syntax::type_name::ResolvedStructTypeName::from_def(
+            hir.dag_id().clone(),
+            crate::syntax::type_name::StructTypeName::expect_valid("Marker"),
+        );
+        assert!(
+            hir.nominal_types().get(&identity).is_some(),
+            "canonical nominal definitions must cross into HIR"
+        );
+        let definition = hir.nominal_types().get(&identity).unwrap();
+        let [parameter] = definition.generic_params() else {
+            panic!("Box should retain exactly one generic parameter");
+        };
+        let Some(crate::hir::GenericArg::Type(default)) = parameter.default() else {
+            panic!("Box.T should have a HIR type default");
+        };
+        assert!(matches!(
+            &default.kind,
+            crate::hir::TypeExprKind::Struct(name) if name.value == marker
+        ));
+        let [constructor] = definition.union_members().unwrap() else {
+            panic!("Box should retain exactly one constructor");
+        };
+        let [field] = constructor.fields() else {
+            panic!("Box should retain exactly one field");
+        };
+        assert!(matches!(
+            &field.type_annotation().type_expr.kind,
+            crate::hir::TypeExprKind::GenericTypeParam(field_param)
+                if &field_param.value == parameter.id()
+        ));
+        assert_eq!(definition.source().name(), "test.gcl");
     }
 
     #[test]

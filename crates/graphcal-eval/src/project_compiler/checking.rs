@@ -36,12 +36,12 @@ fn value_for_target(
 }
 
 fn resolve_imported_bindings(
-    ir: &graphcal_compiler::ir::lower::IR,
+    hir: &graphcal_compiler::ir::lower::HirDag,
     local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, ImportedBinding>, CompileError> {
-    ir.imported_bindings()
+    hir.imported_bindings()
         .iter()
         .map(|(lexical, hir_binding)| {
             let target = hir_binding.target();
@@ -65,9 +65,25 @@ fn resolve_imported_bindings(
         .collect()
 }
 
+fn checked_imported_values(
+    tir: &graphcal_compiler::tir::typed::TIR,
+) -> HashMap<ScopedName, (RuntimeValue, DeclaredType)> {
+    tir.root()
+        .imported_bindings()
+        .iter()
+        .filter_map(|(name, binding)| {
+            binding.value().map(|value| {
+                (
+                    name.clone(),
+                    (value.clone(), binding.declared_type().clone()),
+                )
+            })
+        })
+        .collect()
+}
+
 fn local_declared_interfaces(
     hir: &HirFile,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
@@ -76,18 +92,17 @@ fn local_declared_interfaces(
     HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     CompileError,
 > {
-    std::iter::once((file_dag_id, &hir.root))
-        .chain(hir.inline_dags.iter().map(|(dag_id, ir)| (dag_id, ir)))
-        .map(|(dag_id, ir)| {
+    std::iter::once(&hir.root)
+        .chain(&hir.inline_dags)
+        .map(|dag| {
             graphcal_compiler::tir::typed::resolve_hir_declared_types_with_modules_and_cancellation(
-                ir,
-                dag_id,
+                dag,
                 file_src,
                 module_resolver,
                 project_types,
                 cancellation,
             )
-            .map(|types| (dag_id.clone(), types))
+            .map(|types| (dag.dag_id().clone(), types))
             .map_err(CompileError::from)
         })
         .collect()
@@ -97,36 +112,35 @@ fn local_declared_interfaces(
 pub(super) fn check_hir_file(
     hir: HirFile,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
-    hir_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HirModuleArtifact>,
+    exported_dynamic_units: &HashMap<
+        graphcal_compiler::dag_id::DagId,
+        HashSet<graphcal_compiler::syntax::dimension::UnitName>,
+    >,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
-    let file_dag_id = &hir.dag_id;
     let file_src = &hir.source;
-    let local_interfaces = local_declared_interfaces(
-        &hir,
-        file_dag_id,
-        file_src,
-        module_resolver,
-        project_types,
-        cancellation,
-    )?;
+    let source_declarations = hir.root.source_declarations().to_vec();
+    let entry_external_surface = hir.root.external_surface.clone();
+    let local_interfaces =
+        local_declared_interfaces(&hir, file_src, module_resolver, project_types, cancellation)?;
     let root_bindings =
         resolve_imported_bindings(&hir.root, &local_interfaces, module_artifacts, file_src)?;
     let mut tir = graphcal_compiler::tir::typed::type_resolve_builder_with_imported_bindings_and_cancellation(
         hir.root,
         root_bindings,
-        file_dag_id,
         file_src,
         module_resolver,
         project_types,
         cancellation,
     )?;
-    if let Some((name, span)) =
-        lowering::imported_runtime_unit_reference(tir.root(), &hir.module_map, hir_interfaces)
-    {
+    if let Some((name, span)) = lowering::imported_runtime_unit_reference(
+        tir.root(),
+        &hir.module_map,
+        exported_dynamic_units,
+    ) {
         return Err(GraphcalError::ImportRuntimeUnit {
             name,
             src: file_src.clone(),
@@ -135,14 +149,13 @@ pub(super) fn check_hir_file(
         .into());
     }
 
-    for (dag_id, ir) in hir.inline_dags {
+    for dag in hir.inline_dags {
         cancellation.checkpoint()?;
         let imported_bindings =
-            resolve_imported_bindings(&ir, &local_interfaces, module_artifacts, file_src)?;
+            resolve_imported_bindings(&dag, &local_interfaces, module_artifacts, file_src)?;
         let checked = graphcal_compiler::tir::typed::type_resolve_single_with_imported_bindings_and_cancellation(
-            ir,
+            dag,
             imported_bindings,
-            &dag_id,
             file_src,
             module_resolver,
             project_types,
@@ -182,23 +195,19 @@ pub(super) fn check_hir_file(
     let checked_execution_facts =
         crate::exec_plan::check_execution_facts_with_cancellation(&tir, file_src, cancellation)?;
     let declared_types = tir.build_declared_types(file_src)?;
-    let imported_values = tir
-        .root()
-        .imported_bindings()
-        .iter()
-        .filter_map(|(name, binding)| {
-            binding.value().map(|value| {
-                (
-                    name.clone(),
-                    (value.clone(), binding.declared_type().clone()),
-                )
-            })
-        })
-        .collect();
+    let entry_interface = entry_interface::build_checked_entry_interface(
+        &source_declarations,
+        &tir,
+        &declared_types,
+        &entry_external_surface,
+        file_src,
+    )?;
+    let imported_values = checked_imported_values(&tir);
 
     Ok(CompiledFile {
         tir,
         checked_execution_facts,
+        entry_interface,
         declared_types,
         imported_values,
         imported_source_order: hir.imported_source_order,

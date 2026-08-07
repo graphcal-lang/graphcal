@@ -335,8 +335,8 @@ canonical declaration regardless of include order or nesting. Include-binding
 expressions belong to the importer, while declaration signatures and producer
 bodies belong to the included file; diagnostics report the file that owns the
 failing expression instead of applying one file's spans to another's text.
-Dynamic unit scale bodies follow the same rule and are checked before the
-included graph runs.
+Dynamic units do not cross an include boundary (`M026`); keep their runtime
+scales private inside an entry or explicitly called DAG.
 
 ### `include` does not require `import` of the DAG
 

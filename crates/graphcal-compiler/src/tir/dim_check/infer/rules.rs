@@ -15,7 +15,7 @@ use crate::desugar::desugared_ast::{BinOp, UnaryOp};
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
 use crate::exact_rational::ExactRational;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
+use crate::registry::types::SemanticRegistry;
 use crate::syntax::ast::PowerExponent;
 use crate::syntax::span::Span;
 
@@ -34,7 +34,7 @@ pub(super) struct Operand {
 /// must use an explicit `for` comprehension and compare one element at a time.
 fn comparison_operand_type<'a>(
     operand: &'a Operand,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<&'a InferredType, GraphcalError> {
     match &operand.ty {
@@ -63,7 +63,7 @@ fn fin_key_additive_rule(
     key_index: &super::super::InferredIndex,
     rhs: &Operand,
     rhs_const_int: Option<i64>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let reject = |help: &str| {
@@ -131,7 +131,7 @@ pub(super) fn binop_rule(
     lhs: &Operand,
     rhs: &Operand,
     rhs_const_int: Option<i64>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let lhs_type = &lhs.ty;
@@ -566,7 +566,7 @@ pub(super) fn binop_rule(
 pub(super) fn unary_rule(
     op: UnaryOp,
     operand: &Operand,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     match op {
@@ -602,7 +602,7 @@ pub(super) fn if_rule(
     cond: &Operand,
     then_branch: &Operand,
     else_branch: &Operand,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     if cond.ty != InferredType::Bool {
@@ -668,7 +668,7 @@ pub(in crate::tir::dim_check) fn match_arms_rule(
     arm_types: &[InferredType],
     arm_body_span: impl Fn(usize) -> Span,
     expr_span: Span,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
     let Some(first) = arm_types.first() else {

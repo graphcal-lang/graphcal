@@ -380,7 +380,7 @@ unit Bad: Length = (demo.factor(@trigger)) m;
 }
 
 #[test]
-fn included_dynamic_unit_scale_uses_the_bound_instance_param() {
+fn include_rejects_runtime_dependent_unit_namespace() {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/dynamic_include");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -401,14 +401,17 @@ fn included_dynamic_unit_scale_uses_the_bound_instance_param() {
     )
     .unwrap();
 
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
-        .unwrap_or_else(|err| panic!("valid included dynamic unit must compile: {err:?}"));
-    let out = value_for(&result, "priced.out").si_value().unwrap();
-    assert!((out - 6.0).abs() < 1e-9, "expected 6 USD, got {out}");
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::IncludeRuntimeUnit { ref name, .. })
+            if name.name().as_str() == "EUR"
+    ));
 }
 
 #[test]
-fn repeated_includes_keep_dynamic_unit_scales_instance_scoped() {
+fn repeated_includes_reject_runtime_dependent_unit_namespace() {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/dynamic_instances");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -429,19 +432,17 @@ fn repeated_includes_keep_dynamic_unit_scales_instance_scoped() {
     )
     .unwrap();
 
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
-        .unwrap_or_else(|err| panic!("repeated dynamic-unit instances must compile: {err:?}"));
-    let cheap = value_for(&result, "cheap.out").si_value().unwrap();
-    let expensive = value_for(&result, "expensive.out").si_value().unwrap();
-    assert!((cheap - 6.0).abs() < 1e-9, "expected 6 USD, got {cheap}");
-    assert!(
-        (expensive - 12.0).abs() < 1e-9,
-        "expected 12 USD, got {expensive}"
-    );
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::IncludeRuntimeUnit { ref name, .. })
+            if name.name().as_str() == "EUR"
+    ));
 }
 
 #[test]
-fn repeated_nested_includes_keep_each_dynamic_unit_instance_scoped() {
+fn nested_include_rejects_runtime_dependent_unit_namespace() {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/nested_dynamic_instances");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -467,12 +468,13 @@ fn repeated_nested_includes_keep_each_dynamic_unit_instance_scoped() {
     )
     .unwrap();
 
-    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
-        .unwrap_or_else(|err| panic!("nested dynamic-unit instances must compile: {err:?}"));
-    let low = value_for(&result, "low.out").si_value().unwrap();
-    let high = value_for(&result, "high.out").si_value().unwrap();
-    assert!((low - 15.0).abs() < 1e-9, "expected 15 USD, got {low}");
-    assert!((high - 27.0).abs() < 1e-9, "expected 27 USD, got {high}");
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    let CompileError::Eval(GraphcalError::IncludeRuntimeUnit { name, src, .. }) = error else {
+        panic!("expected M026 include-boundary error, got {error:?}");
+    };
+    assert_eq!(name.name().as_str(), "EUR");
+    assert!(src.name().ends_with("wrapper.gcl"), "wrong source: {src:?}");
 }
 
 #[test]

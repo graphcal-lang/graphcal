@@ -1586,7 +1586,7 @@ fn eval_hir_constructor_call(
             callee.span,
         )
     })?;
-    let constructor_name = target.variant.name().clone();
+    let constructor_name = target.variant.name();
     let owning_type = StructTypeRef::from_resolved(target.owning_type.clone());
     let dag = ctx.current_dag.ok_or_else(|| {
         ctx.internal_error("constructor evaluation has no semantic DAG", callee.span)

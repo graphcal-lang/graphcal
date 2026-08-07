@@ -1014,7 +1014,7 @@ param event: Datetime<TT>(
     }
 
     #[test]
-    fn pure_import_diagnostics_reach_lsp_clients() {
+    fn runtime_module_boundary_diagnostics_reach_lsp_clients() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("graphcal.toml"),
@@ -1035,6 +1035,7 @@ param event: Datetime<TT>(
                 "import app.lib as lib;\nnode price: lib.Money = 1.0 lib.EUR;\n",
                 "graphcal::M025",
             ),
+            ("include app.lib() as lib;\n", "graphcal::M026"),
         ] {
             std::fs::write(&main_path, source).unwrap();
             let diagnostics = produce_diagnostics_for_file(&main_path, source);

@@ -15,19 +15,18 @@ and how many semantic invariants they carry:
   source syntax after parsing. An AST is still source-oriented: it preserves
   spans, syntactic forms, and source paths so tools can point back to what the
   user wrote.
-- **IR** means **Intermediate Representation**. In general compiler terminology,
-  an IR is any representation between syntax and execution. In Graphcal,
-  `IR` specifically means the resolved declaration-level representation for one
-  DAG body: declaration shells with HIR bodies, visibility/import metadata, and
-  a registry built from declarations. It is not yet statically checked TIR.
-- **HIR** means **High-level Intermediate Representation**. It is still close to
-  source expression/type structure, but reference positions are semantic rather
-  than syntactic. HIR replaces source paths with canonical owner-qualified names,
-  lexical IDs, and typed built-in variants.
+- **IR** means **Intermediate Representation**. It is the general compiler term
+  for any representation between syntax and execution; Graphcal does not use a
+  bare `IR` phase type.
+- **HIR** means **High-level Intermediate Representation**. `HirDag` is one
+  canonically identified DAG body, and `HirProject` is the complete pre-check
+  project. HIR remains close to source expression/type structure, but replaces
+  source paths with canonical owner-qualified names, lexical IDs, and typed
+  built-in variants.
 - **TIR** means **Typed Intermediate Representation**. It is the type- and
-  dimension-checked representation used by the evaluator. TIR combines IR's
-  declaration/DAG structure with HIR-derived resolved references, resolved type
-  expressions, dimension facts, and per-DAG compilation state.
+  dimension-checked representation used by the evaluator. TIR combines HIR's
+  declaration/DAG structure with resolved type expressions, dimension facts,
+  and per-DAG compilation state.
 
 These names are relative, not universal. Another compiler may use "HIR" or
 "TIR" differently; in this codebase, read them as the boundaries above.
@@ -81,9 +80,10 @@ Read the pipeline as a sequence of practical questions:
    constructors, locals, generic params, and built-ins. After this boundary,
    code should not need to ask whether the string `"sum"`, `"PI"`, or
    `"helpers.physics.mass"` has a special meaning; it should pattern-match on
-   typed values instead. The frozen `IR` carries no syntax-AST expression.
+   typed values instead. The frozen `HirDag` carries its canonical `DagId` and
+   no syntax-AST expression.
 6. **TIR: is the program type- and dimension-correct?**
-   TIR combines the declaration structure from IR with its HIR bodies, resolved
+   TIR combines the declaration structure from HIR with its bodies, resolved
    type expressions, dimension facts, domain constraints, inline DAG bodies, and
    dependency DAGs. The dependency graph is derived from the HIR bodies. This
    is the checked program representation used to prepare execution.
@@ -94,11 +94,10 @@ Read the pipeline as a sequence of practical questions:
 
 Some names in this pipeline can sound misleading if read too literally:
 
-- IR is not another copy of the AST; it is the declaration and registry view of
-  one DAG body, with HIR bodies after the freeze boundary.
+- `UnfrozenIR` is syntactic declaration assembly, not another copy of the AST.
 - HIR is "high-level" because it keeps expression/type tree shapes. Each
-  frozen `IR` owns one DAG module's HIR, while `HirProject` is the complete
-  project-level phase value that owns those modules before checking.
+  `HirDag` owns one canonically identified DAG module, while `HirProject` is the
+  complete project-level phase value that owns those modules before checking.
 - TIR is not just HIR with types; it is the checked, per-DAG program model.
 
 `DagTIR` keeps source-facing declarations for diagnostics and presentation, but
@@ -133,11 +132,11 @@ UnfrozenIR + ModuleResolver
   |  UnfrozenIR::freeze — the single resolution stage
   |  crates/graphcal-compiler/src/hir/
   v
-IR  (one DAG module's HIR bodies and canonical references)
+HirDag  (one canonically identified DAG module)
   |
   |  crates/graphcal-eval/src/project_compiler/pipeline.rs
   v
-HirProject  (every file-root and inline-DAG IR; no checked/runtime facts)
+HirProject  (every file-root and inline `HirDag`; no checked/runtime facts)
   |
   |  crates/graphcal-eval/src/project_compiler/checking.rs
   |  crates/graphcal-compiler/src/tir/
@@ -277,13 +276,14 @@ batch pipeline never observes one.
 
 TIR stores HIR expressions and HIR-derived semantic metadata in
 `DagSemanticBody`. Frozen declaration shells retain source-facing names, spans,
-and provenance for diagnostics and editor presentation, while their value type
-annotations and domain-bound expressions are already HIR.
+and provenance for diagnostics and editor presentation. Value annotations,
+declaration bounds, nominal generic defaults, and nominal field signatures are
+all already HIR.
 
 ### 1.5 IR Assembly and the Freeze Boundary
 
 `ir/lower.rs` and `ir/resolve/` assemble a desugared AST into an `UnfrozenIR`,
-and `UnfrozenIR::freeze` lowers it into the frozen `IR`.
+and `UnfrozenIR::freeze` lowers it into a `HirDag`.
 
 The assembly stage (syntactic, pre-resolution):
 
@@ -300,17 +300,27 @@ The assembly stage (syntactic, pre-resolution):
 
 The freeze boundary (`UnfrozenIR::freeze(registry, owner, resolver, src)`):
 
-- Lowers every const/param/node type annotation, declaration domain bound, and
+- Lowers every nominal generic default, nominal field annotation/bound,
+  const/param/node type annotation, declaration bound, and
   const/param/node/assert body to HIR (strict — an unresolvable reference fails
-  the compile with a spanned diagnostic).
-- Lowers plot/figure/layer bodies best-effort (an incomplete plot body is
-  skipped by the runtime instead of failing the compile).
+  the compile with a spanned definition-source diagnostic).
+- Strictly lowers every plot/figure/layer expression; tolerant lowering is
+  reserved for editor-facing incomplete buffers.
+- Converts the frontend `Registry` into `SemanticRegistry`, whose Rust type
+  omits syntax-backed nominal definitions and inline-DAG AST bodies. Canonical
+  `NominalTypeRegistry` and typed child-DAG identities are the only authorities
+  available after this point.
 
-One `IR` represents one DAG body: either a file root or an inline `dag` block.
-`HirProject` owns exactly one such frozen module for every loaded file root and
-inline DAG. Entry names stay source-shaped `ScopedName`s for presentation, but
-value-declaration signatures and bodies are HIR; owner-qualified declaration
-dependencies are collected from those HIR bodies during TIR construction. Scope policies that need resolved
+One `HirDag` represents one DAG body and stores its own canonical identity:
+either a file root or an inline `dag` block. `HirProject` owns exactly one such
+frozen module for every loaded file root and inline DAG. It retains typed root
+and load-order identities plus a narrow borrow of loader-owned plugin
+verification inputs; the loaded source AST arena does not cross this boundary.
+Entry names stay source-shaped `ScopedName`s for presentation, but
+value-declaration signatures, nominal definitions, and bodies are HIR;
+owner-qualified declaration dependencies are collected from those HIR bodies
+during TIR construction. TIR resolves and validates HIR nominal signatures; it
+never lowers their syntax AST. Scope policies that need resolved
 references (no runtime `@` in `const node` bodies, no `@assert` references, A10
 variant literal rules) run when `HirProject` is consumed by checking.
 
@@ -459,6 +469,7 @@ The compiler crate owns the functional core through TIR.
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
 | `desugar/`                    | Phase walker and the `Desugared` AST alias module             |
 | `hir/`                        | Canonical semantic type/value expressions and lowering boundary |
+| `hir/source_interface.rs`     | Direct parameter/node/index provenance retained through HIR     |
 | `ir/instance.rs`              | Typed template-instance edges and binding environments         |
 | `ir/lower.rs`                 | IR assembly, body-source provenance, strict HIR freeze boundary |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
@@ -481,6 +492,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `project_compiler/recursion.rs`   | Inline-DAG instance cycle detection                             |
 | `project_compiler/generic_leakage.rs` | Include-boundary generic visibility checks                  |
 | `project_compiler/template.rs`    | Canonical shared pre-HIR template store                         |
+| `project_compiler/entry_interface.rs` | Checked syntax-independent entry-DAG runtime interface      |
 | `project_compiler/model.rs`       | Internal typed pass artifacts and instance requests             |
 | `project_compiler/hir_project.rs` | Complete resolved-project phase value                            |
 | `project_compiler/lowering.rs`    | Pure per-file and inline-DAG HIR elaboration                     |
@@ -894,8 +906,9 @@ Graphcal has separate mechanisms for compile-time names and runtime instances:
   never creates a default runtime instance, evaluates assertions, or exports a
   runtime-dependent unit scale.
 - `include` creates an explicit DAG instance, with optional value/index/type/
-  dimension bindings. Assertions and dynamic unit scales belong to that
-  concrete instance; repeated instances retain distinct canonical owners.
+  dimension bindings. Assertions belong to that concrete instance. A module
+  that declares a runtime-dependent unit cannot be included (`M026`): dynamic
+  units stay encapsulated inside an entry or explicitly called DAG.
 
 Import/include paths are dot-separated module paths in source. Loader internals
 drop spans and store path segments in `ModulePathKey`; compiled DAG identity is
@@ -936,8 +949,8 @@ the canonical template with a fresh concrete owner, while
 substitutions. The current evaluator still monomorphizes declarations into the
 importer, but semantic declaration records carry the explicit concrete owner;
 source-facing prefixes are lookup/presentation names, not the source of semantic
-identity. This owner also scopes dynamic units, so repeated instances may use
-the same unit spelling with different scale environments.
+identity. Runtime-dependent units are deliberately excluded from this include
+composition model rather than fabricating instance-qualified unit definitions.
 
 `ProjectCompiler` builds the `ModuleResolver` once and lowers every loaded
 module into `HirProject` using HIR-only dependency interfaces. HIR import
@@ -945,8 +958,13 @@ bindings contain canonical targets but cannot express checked types or values.
 Checking then builds one `ProjectTypeStore` from the complete HIR project,
 attaches checked imported interfaces, consumes each HIR body into TIR, and runs
 all mandatory checks. Dependency aliases never become importer-owned semantic
-definitions. A successful `CheckedProject` retains the final TIR, constant pool,
-and resolved constraints, and runtime preparation continues from that result.
+definitions. Each `HirDag` also retains an ordered typed record of parameter,
+node, and index declarations authored directly in that DAG, excluding merged
+include declarations. Checking attaches declared types, runtime keys, defaults,
+visibility, and required-index facts to that record. A successful
+`CheckedProject` therefore retains the final TIR, constant pool, resolved
+constraints, and complete checked entry interface; runtime preparation never
+consults the desugared root AST.
 
 Package locking is adjacent to, not part of, this compile/eval pipeline. The
 `graphcal deps lock` shell materializes Git dependencies and writes

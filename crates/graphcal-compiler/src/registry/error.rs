@@ -201,7 +201,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M025),
         help(
-            "declare the unit with `const unit`, or keep it inside an explicitly instantiated DAG"
+            "keep the unit private inside an entry or explicitly called DAG; otherwise declare a `const unit` or model the conversion explicitly"
         )
     )]
     ImportRuntimeUnit {
@@ -209,6 +209,21 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("this unit scale depends on a runtime instance")]
+        span: SourceSpan,
+    },
+
+    #[error("cannot `include` runtime-dependent unit `{name}`")]
+    #[diagnostic(
+        code(graphcal::M026),
+        help(
+            "keep the unit private inside an entry or explicitly called DAG; otherwise declare a `const unit` or model the conversion explicitly"
+        )
+    )]
+    IncludeRuntimeUnit {
+        name: crate::syntax::dimension::UnitRef,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this include would give a unit a hidden runtime instance")]
         span: SourceSpan,
     },
 
@@ -2089,6 +2104,7 @@ impl GraphcalError {
             | Self::ImportPlotItem { src, .. }
             | Self::ImportAssertionItem { src, .. }
             | Self::ImportRuntimeUnit { src, .. }
+            | Self::IncludeRuntimeUnit { src, .. }
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::UnknownFunction { src, .. }
@@ -2284,6 +2300,7 @@ mod tests {
             ("InvalidEpochTimeScaleArgument", "D029"),
             ("UnsupportedEpochTimeScale", "D030"),
             ("ImportRuntimeItem", "M020"),
+            ("IncludeRuntimeUnit", "M026"),
         ] {
             assert_eq!(catalog.get(variant).map(String::as_str), Some(expected));
         }

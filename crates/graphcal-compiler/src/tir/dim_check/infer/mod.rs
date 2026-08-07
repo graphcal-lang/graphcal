@@ -13,7 +13,7 @@ mod linear_algebra;
 mod rules;
 
 use super::InferredIndex;
-use crate::registry::types::Registry;
+use crate::registry::types::SemanticRegistry;
 
 /// Look up the canonical index definition for an inferred index identity.
 ///
@@ -22,7 +22,7 @@ use crate::registry::types::Registry;
 fn index_def_for_inferred<'a>(
     index: &InferredIndex,
     dag: Option<&'a crate::tir::typed::DagTIR>,
-    registry: &'a Registry,
+    registry: &'a SemanticRegistry,
 ) -> Option<&'a crate::registry::types::IndexDef> {
     if let Some(finite_index) = index.concrete_finite_index() {
         return registry.indexes.get_finite_index(finite_index);
@@ -37,7 +37,7 @@ fn index_def_for_inferred<'a>(
 fn concrete_cardinality_for_inferred(
     index: &InferredIndex,
     dag: Option<&crate::tir::typed::DagTIR>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
 ) -> Option<usize> {
     index_def_for_inferred(index, dag, registry)
         .and_then(crate::registry::types::IndexDef::concrete_cardinality)
