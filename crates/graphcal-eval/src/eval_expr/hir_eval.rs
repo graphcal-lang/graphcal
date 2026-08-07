@@ -88,15 +88,10 @@ fn eval_hir_expr_inner(
             let scale = resolve_unit_scale(unit, values, ctx)?;
             checked_unit_scaled_value(*value, scale, expr.span, ctx)
         }
-        hir::ExprKind::GraphRef(target) => values
-            .get(&RuntimeDeclKey::resolved(target.value.clone()))
-            .cloned()
-            .ok_or_else(|| {
-                ctx.eval_error(
-                    format!("undefined graph reference `@{}`", target.value),
-                    target.span,
-                )
-            }),
+        hir::ExprKind::GraphRef(target) => {
+            let value = resolve_hir_graph_ref(&target.value, target.span, values, ctx)?;
+            Ok(clone_hir_graph_ref_value(value))
+        }
         hir::ExprKind::ConstRef(target) => eval_hir_const_ref(target, values, local_values, ctx),
         hir::ExprKind::LocalRef(local) => local_values
             .get(local.value)
@@ -174,6 +169,77 @@ fn eval_hir_expr_inner(
             output,
         } => eval_hir_dag_call(target, args, output, values, local_values, ctx),
     }
+}
+
+fn resolve_hir_graph_ref<'a>(
+    target: &ResolvedDeclKey,
+    target_span: Span,
+    values: &'a RuntimeValueMap,
+    ctx: &EvalContext<'_>,
+) -> Result<&'a RuntimeValue, GraphcalError> {
+    values
+        .get(&RuntimeDeclKey::resolved(target.clone()))
+        .ok_or_else(|| {
+            ctx.eval_error(
+                format!("undefined graph reference `@{target}`"),
+                target_span,
+            )
+        })
+}
+
+fn clone_hir_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {
+    #[cfg(test)]
+    record_hir_cloned_runtime_nodes(value);
+    value.clone()
+}
+
+fn clone_hir_index_access_result(value: &RuntimeValue) -> RuntimeValue {
+    #[cfg(test)]
+    record_hir_cloned_runtime_nodes(value);
+    value.clone()
+}
+
+#[cfg(test)]
+fn record_hir_cloned_runtime_nodes(value: &RuntimeValue) {
+    HIR_CLONED_RUNTIME_NODES.with(|count| {
+        count.set(
+            count
+                .get()
+                .saturating_add(runtime_value_tree_node_count(value)),
+        );
+    });
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static HIR_CLONED_RUNTIME_NODES: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn runtime_value_tree_node_count(value: &RuntimeValue) -> usize {
+    match value {
+        RuntimeValue::Struct { fields, .. } => fields
+            .values()
+            .map(runtime_value_tree_node_count)
+            .fold(1, usize::saturating_add),
+        RuntimeValue::Indexed { entries, .. } => entries
+            .values()
+            .map(runtime_value_tree_node_count)
+            .fold(1, usize::saturating_add),
+        _ => 1,
+    }
+}
+
+#[cfg(test)]
+fn reset_hir_cloned_runtime_node_count() {
+    HIR_CLONED_RUNTIME_NODES.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+fn take_hir_cloned_runtime_node_count() -> usize {
+    HIR_CLONED_RUNTIME_NODES.with(|count| count.replace(0))
 }
 
 fn eval_hir_const_ref(
@@ -1941,7 +2007,22 @@ fn eval_hir_index_access(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    let mut current = eval_hir_expr(inner, values, local_values, ctx)?;
+    let base_value = match &inner.kind {
+        hir::ExprKind::GraphRef(target) => {
+            // This replaces the checkpoint normally performed by
+            // `eval_hir_expr(inner, ...)` while retaining a reference to the
+            // stored value instead of deep-cloning it before traversal.
+            ctx.cancellation.checkpoint()?;
+            std::borrow::Cow::Borrowed(resolve_hir_graph_ref(
+                &target.value,
+                target.span,
+                values,
+                ctx,
+            )?)
+        }
+        _ => std::borrow::Cow::Owned(eval_hir_expr(inner, values, local_values, ctx)?),
+    };
+    let mut current = base_value.as_ref();
     for arg in args {
         let RuntimeValue::Indexed {
             index_name,
@@ -1953,7 +2034,7 @@ fn eval_hir_index_access(
         let entry_key = match arg {
             hir::expr::IndexArg::Variant(variant) => {
                 ensure_index_ref_matches_resolved(
-                    &index_name,
+                    index_name,
                     variant.variant.index(),
                     variant.path_span(),
                     ctx,
@@ -2052,10 +2133,9 @@ fn eval_hir_index_access(
         };
         current = entries
             .get(&entry_key)
-            .cloned()
             .ok_or_else(|| ctx.eval_error(format!("index entry `{entry_key}` not found"), span))?;
     }
-    Ok(current)
+    Ok(clone_hir_index_access_result(current))
 }
 
 #[expect(
@@ -2459,6 +2539,39 @@ mod tests {
     use miette::Diagnostic;
 
     use super::*;
+    use crate::eval::compile_and_eval;
+
+    #[test]
+    fn indexed_graph_ref_borrows_collection_before_selecting_entry() {
+        reset_hir_cloned_runtime_node_count();
+        let direct_copy = r"
+node source: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
+    to_int(row) * 4 + to_int(column)
+};
+node copied: Int[Fin(4), Fin(4)] = @source;
+";
+        compile_and_eval(direct_copy).unwrap();
+        assert_eq!(
+            take_hir_cloned_runtime_node_count(),
+            21,
+            "the clone observer must count the root, four rows, and 16 leaves"
+        );
+
+        let elementwise_copy = r"
+node source: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
+    to_int(row) * 4 + to_int(column)
+};
+node copied: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
+    @source[row, column]
+};
+";
+        compile_and_eval(elementwise_copy).unwrap();
+        assert_eq!(
+            take_hir_cloned_runtime_node_count(),
+            16,
+            "index traversal must clone only the 16 selected leaves"
+        );
+    }
 
     #[test]
     fn empty_aggregation_is_reported_as_x001() {
