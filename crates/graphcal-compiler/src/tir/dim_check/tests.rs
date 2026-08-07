@@ -27,7 +27,8 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let ir = crate::ir::lower::lower(&file, &src)?;
+    let (ir, parent_registry) =
+        crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
     let parent_dag_id = test_dag_id();
     let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
     resolver
@@ -73,7 +74,13 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
         &project_types,
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
-    compile_inline_dag_bodies_test(&mut builder, &src, &parent_dag_id, &file.declarations)?;
+    compile_inline_dag_bodies_test(
+        &mut builder,
+        &src,
+        &parent_dag_id,
+        &file.declarations,
+        &parent_registry,
+    )?;
     let tir = builder.finish();
     check_dimensions_tir(&tir, &src)?;
     tir.build_declared_types(&src)
@@ -123,12 +130,16 @@ fn compile_inline_dag_bodies_test(
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
     parent_declarations: &[crate::desugar::desugared_ast::Declaration],
+    parent_registry: &crate::registry::types::Registry,
 ) -> Result<(), GraphcalError> {
-    let dag_bodies = tir
-        .registry()
-        .dags
-        .all_dags()
-        .map(|(name, dag)| (name.clone(), dag.body.clone()))
+    let dag_bodies = parent_declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            crate::desugar::desugared_ast::DeclKind::Dag(dag) => {
+                Some((dag.name.value.clone(), dag.body.clone()))
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
 
     let mut resolver = crate::syntax::module_resolve::ModuleResolver::default();
@@ -170,7 +181,7 @@ fn compile_inline_dag_bodies_test(
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
             name.as_str(),
             &body,
-            tir.registry(),
+            parent_registry,
             &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),

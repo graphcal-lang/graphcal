@@ -306,10 +306,17 @@ The freeze boundary (`UnfrozenIR::freeze(registry, owner, resolver, src)`):
   the compile with a spanned definition-source diagnostic).
 - Strictly lowers every plot/figure/layer expression; tolerant lowering is
   reserved for editor-facing incomplete buffers.
+- Converts the frontend `Registry` into `SemanticRegistry`, whose Rust type
+  omits syntax-backed nominal definitions and inline-DAG AST bodies. Canonical
+  `NominalTypeRegistry` and typed child-DAG identities are the only authorities
+  available after this point.
 
 One `HirDag` represents one DAG body and stores its own canonical identity:
 either a file root or an inline `dag` block. `HirProject` owns exactly one such
-frozen module for every loaded file root and inline DAG. Entry names stay source-shaped `ScopedName`s for presentation, but
+frozen module for every loaded file root and inline DAG. It retains typed root
+and load-order identities plus a narrow borrow of loader-owned plugin
+verification inputs; the loaded source AST arena does not cross this boundary.
+Entry names stay source-shaped `ScopedName`s for presentation, but
 value-declaration signatures, nominal definitions, and bodies are HIR;
 owner-qualified declaration dependencies are collected from those HIR bodies
 during TIR construction. TIR resolves and validates HIR nominal signatures; it
@@ -462,6 +469,7 @@ The compiler crate owns the functional core through TIR.
 | `syntax/module_resolve.rs`    | Owner-qualified module symbol tables and path resolution      |
 | `desugar/`                    | Phase walker and the `Desugared` AST alias module             |
 | `hir/`                        | Canonical semantic type/value expressions and lowering boundary |
+| `hir/source_interface.rs`     | Direct parameter/node/index provenance retained through HIR     |
 | `ir/instance.rs`              | Typed template-instance edges and binding environments         |
 | `ir/lower.rs`                 | IR assembly, body-source provenance, strict HIR freeze boundary |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
@@ -484,6 +492,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `project_compiler/recursion.rs`   | Inline-DAG instance cycle detection                             |
 | `project_compiler/generic_leakage.rs` | Include-boundary generic visibility checks                  |
 | `project_compiler/template.rs`    | Canonical shared pre-HIR template store                         |
+| `project_compiler/entry_interface.rs` | Checked syntax-independent entry-DAG runtime interface      |
 | `project_compiler/model.rs`       | Internal typed pass artifacts and instance requests             |
 | `project_compiler/hir_project.rs` | Complete resolved-project phase value                            |
 | `project_compiler/lowering.rs`    | Pure per-file and inline-DAG HIR elaboration                     |
@@ -949,8 +958,13 @@ bindings contain canonical targets but cannot express checked types or values.
 Checking then builds one `ProjectTypeStore` from the complete HIR project,
 attaches checked imported interfaces, consumes each HIR body into TIR, and runs
 all mandatory checks. Dependency aliases never become importer-owned semantic
-definitions. A successful `CheckedProject` retains the final TIR, constant pool,
-and resolved constraints, and runtime preparation continues from that result.
+definitions. Each `HirDag` also retains an ordered typed record of parameter,
+node, and index declarations authored directly in that DAG, excluding merged
+include declarations. Checking attaches declared types, runtime keys, defaults,
+visibility, and required-index facts to that record. A successful
+`CheckedProject` therefore retains the final TIR, constant pool, resolved
+constraints, and complete checked entry interface; runtime preparation never
+consults the desugared root AST.
 
 Package locking is adjacent to, not part of, this compile/eval pipeline. The
 `graphcal deps lock` shell materializes Git dependencies and writes

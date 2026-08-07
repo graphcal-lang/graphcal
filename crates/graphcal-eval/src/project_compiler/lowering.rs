@@ -145,7 +145,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     ctx: ImportContext<'_>,
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, CompileError> {
+) -> Result<(HirFile, LoweringModuleInterface), CompileError> {
     cancellation.checkpoint()?;
     let ProjectSemanticContext {
         project,
@@ -213,6 +213,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
     let registry = builder
         .try_build()
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
+    let frontend_registry = registry.clone();
     let root = store_and_freeze_module_template(
         module_templates,
         file_dag_id,
@@ -226,22 +227,27 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         project,
         file_dag_id,
         file_src,
-        &root.registry,
+        &frontend_registry,
         module_artifacts,
         module_resolver,
         module_templates,
         cancellation,
     )?;
 
-    Ok(HirFile {
-        source: file_src.clone(),
-        root,
-        inline_dags,
-        imported_source_order: ctx.imported_source_order,
-        output_surface,
-        include_debug_names,
-        module_map: ctx.module_map,
-    })
+    let lowering_interface =
+        LoweringModuleInterface::new(frontend_registry, root.external_surface.clone());
+    Ok((
+        HirFile {
+            source: file_src.clone(),
+            root,
+            inline_dags,
+            imported_source_order: ctx.imported_source_order,
+            output_surface,
+            include_debug_names,
+            module_map: ctx.module_map,
+        },
+        lowering_interface,
+    ))
 }
 
 pub(super) fn module_resolve_compile_error(

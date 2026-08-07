@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use graphcal_compiler::builtin::BuiltinFnName;
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Expr, ExprKind as AstExprKind};
+use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
 use graphcal_compiler::hir::{
     ConstRef, ExprKind as HirExprKind, ExprLoweringContext, FunctionRef, GenericScope,
     PreludeTypeScope,
@@ -32,7 +32,7 @@ use crate::eval::runtime::{EvalLoopResult, run_eval_loop_with_bindings};
 use crate::eval::types::{AssertResult, CompileError, EvalResult, NodeError, Value};
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
 
-use crate::project_compiler::{CompiledFile, IncludeDebugNameMap};
+use crate::project_compiler::{CheckedEntryInterface, CompiledFile, IncludeDebugNameMap};
 
 use super::output::{
     apply_include_debug_names, output_decl_type, push_output_value, remap_include_debug_name,
@@ -375,12 +375,12 @@ impl PreparedProject {
         source: NamedSource<Arc<String>>,
         host_fns: crate::host_fns::HostFunctionRegistry,
         module_resolver: ModuleResolver,
-        root_ast: &graphcal_compiler::desugar::desugared_ast::File,
     ) -> Result<Self, CompileError> {
         let plan_id = NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed);
         let CompiledFile {
             tir,
             checked_execution_facts: _,
+            entry_interface,
             declared_types,
             imported_values,
             imported_source_order,
@@ -390,13 +390,13 @@ impl PreparedProject {
         let tir = tir.with_external_value_constructors();
 
         let parameter_ports =
-            build_parameter_ports(plan_id, root_ast, &tir, &plan, &declared_types, &source)?;
+            build_parameter_ports(plan_id, &entry_interface, &tir, &plan, &source)?;
         let parameter_lookup = parameter_ports
             .iter()
             .enumerate()
             .map(|(index, port)| (port.name.clone(), index))
             .collect();
-        let output_ports = build_output_ports(root_ast, &tir, &declared_types, &source)?;
+        let output_ports = build_output_ports(&entry_interface, &tir, &source)?;
 
         Ok(Self {
             plan_id,
@@ -1701,84 +1701,54 @@ impl PreparedProject {
 
 fn build_parameter_ports(
     plan_id: u64,
-    root_ast: &graphcal_compiler::desugar::desugared_ast::File,
+    entry_interface: &CheckedEntryInterface,
     tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
     source: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ParameterPort>, CompileError> {
-    root_ast
-        .declarations
+    entry_interface
+        .parameters()
         .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            DeclKind::Param(param) => Some((declaration.span, param)),
-            _ => None,
-        })
         .enumerate()
-        .map(|(index, (span, param))| {
-            let scoped = ScopedName::from(&param.name.value);
-            let declared_type = declared_types.get(&scoped).cloned().ok_or_else(|| {
-                CompileError::Eval(GraphcalError::InternalError {
-                    message: format!("declared type missing for entry parameter `{scoped}`"),
-                    src: source.clone(),
-                    span: span.into(),
-                })
-            })?;
+        .map(|(index, parameter)| {
+            let declared_type = parameter.declared_type().clone();
             let value_schema = model_value_schema(&declared_type, tir, source)?;
-            let runtime_key = RuntimeDeclKey::for_local_decl(tir.root(), &scoped);
-            let has_default = tir
-                .root()
-                .params()
-                .iter()
-                .find(|entry| entry.name == scoped)
-                .is_some_and(|entry| entry.default_expr.is_some());
+            let runtime_key = parameter.runtime_key().clone();
             let domain = plan
                 .domain_constraints
                 .get(&runtime_key)
                 .map(parameter_domain);
             Ok(ParameterPort {
-                name: param.name.value.clone(),
+                name: parameter.name().clone(),
                 position: ParameterPosition { plan_id, index },
                 declared_type,
                 value_schema,
                 domain,
-                has_default,
+                has_default: parameter.has_default(),
                 runtime_key,
-                span,
+                span: parameter.span(),
             })
         })
         .collect()
 }
 
 fn build_output_ports(
-    root_ast: &graphcal_compiler::desugar::desugared_ast::File,
+    entry_interface: &CheckedEntryInterface,
     tir: &graphcal_compiler::tir::typed::TIR,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
     source: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ModelOutputPort>, CompileError> {
-    root_ast
-        .declarations
+    entry_interface
+        .outputs()
         .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            DeclKind::Node(node) => Some((declaration.span, node)),
-            _ => None,
-        })
-        .map(|(span, node)| {
-            let scoped = ScopedName::from(&node.name.value);
-            let declared_type = declared_types.get(&scoped).cloned().ok_or_else(|| {
-                CompileError::Eval(GraphcalError::InternalError {
-                    message: format!("declared type missing for output node `{scoped}`"),
-                    src: source.clone(),
-                    span: span.into(),
-                })
-            })?;
+        .map(|output| {
+            let declared_type = output.declared_type().clone();
             let value_schema = model_value_schema(&declared_type, tir, source)?;
             Ok(ModelOutputPort {
-                name: node.name.value.clone(),
+                name: output.name().clone(),
                 declared_type,
                 value_schema,
-                is_public: node.visibility.is_public(),
-                runtime_key: RuntimeDeclKey::for_local_decl(tir.root(), &scoped),
+                is_public: output.visibility().is_public(),
+                runtime_key: output.runtime_key().clone(),
             })
         })
         .collect()

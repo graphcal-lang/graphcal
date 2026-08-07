@@ -65,6 +65,23 @@ fn resolve_imported_bindings(
         .collect()
 }
 
+fn checked_imported_values(
+    tir: &graphcal_compiler::tir::typed::TIR,
+) -> HashMap<ScopedName, (RuntimeValue, DeclaredType)> {
+    tir.root()
+        .imported_bindings()
+        .iter()
+        .filter_map(|(name, binding)| {
+            binding.value().map(|value| {
+                (
+                    name.clone(),
+                    (value.clone(), binding.declared_type().clone()),
+                )
+            })
+        })
+        .collect()
+}
+
 fn local_declared_interfaces(
     hir: &HirFile,
     file_src: &NamedSource<Arc<String>>,
@@ -105,6 +122,8 @@ pub(super) fn check_hir_file(
 ) -> Result<CompiledFile, CompileError> {
     cancellation.checkpoint()?;
     let file_src = &hir.source;
+    let source_declarations = hir.root.source_declarations().to_vec();
+    let entry_external_surface = hir.root.external_surface.clone();
     let local_interfaces =
         local_declared_interfaces(&hir, file_src, module_resolver, project_types, cancellation)?;
     let root_bindings =
@@ -176,23 +195,19 @@ pub(super) fn check_hir_file(
     let checked_execution_facts =
         crate::exec_plan::check_execution_facts_with_cancellation(&tir, file_src, cancellation)?;
     let declared_types = tir.build_declared_types(file_src)?;
-    let imported_values = tir
-        .root()
-        .imported_bindings()
-        .iter()
-        .filter_map(|(name, binding)| {
-            binding.value().map(|value| {
-                (
-                    name.clone(),
-                    (value.clone(), binding.declared_type().clone()),
-                )
-            })
-        })
-        .collect();
+    let entry_interface = entry_interface::build_checked_entry_interface(
+        &source_declarations,
+        &tir,
+        &declared_types,
+        &entry_external_surface,
+        file_src,
+    )?;
+    let imported_values = checked_imported_values(&tir);
 
     Ok(CompiledFile {
         tir,
         checked_execution_facts,
+        entry_interface,
         declared_types,
         imported_values,
         imported_source_order: hir.imported_source_order,

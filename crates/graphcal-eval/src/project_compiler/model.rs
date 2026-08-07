@@ -117,6 +117,7 @@ pub(super) struct ModuleArtifact {
 pub struct CompiledFile {
     pub(crate) tir: graphcal_compiler::tir::typed::TIR,
     pub(crate) checked_execution_facts: crate::exec_plan::CheckedExecutionFacts,
+    pub(crate) entry_interface: super::CheckedEntryInterface,
     pub(crate) declared_types: HashMap<ScopedName, DeclaredType>,
     pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,
     pub(crate) imported_source_order: Vec<(ScopedName, DeclCategory)>,

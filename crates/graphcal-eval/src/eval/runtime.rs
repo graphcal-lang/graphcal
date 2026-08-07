@@ -21,7 +21,7 @@ use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey
 use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::{IndexDef, Registry};
+use graphcal_compiler::registry::types::{IndexDef, SemanticRegistry};
 
 use super::display::{
     attach_display_units, extract_flat_display_unit, format_coordinate, format_coordinate_exact,
@@ -1484,7 +1484,7 @@ fn extract_encoding_axis_meta(
 fn extract_dimension_from_expr(
     expr: &graphcal_compiler::hir::Expr,
     declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     dag: &graphcal_compiler::tir::typed::DagTIR,
 ) -> Option<String> {
     use graphcal_compiler::hir::ExprKind;
@@ -1525,7 +1525,7 @@ fn extract_dimension_from_expr(
 /// Returns `None` for dimensionless, bool, int, etc.
 fn dimension_label_from_declared_type(
     dt: &graphcal_compiler::registry::declared_type::DeclaredType,
-    registry: &Registry,
+    registry: &SemanticRegistry,
 ) -> Option<String> {
     match dt {
         graphcal_compiler::registry::declared_type::DeclaredType::Quantity(dim) => {

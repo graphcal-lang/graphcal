@@ -26,7 +26,7 @@ use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::format::format_unit_terms_with_config;
 use graphcal_compiler::registry::time_zone::TimeZoneRegistry;
-use graphcal_compiler::registry::types::{IndexKind, Registry, UnitScale};
+use graphcal_compiler::registry::types::{IndexKind, SemanticRegistry, UnitScale};
 use graphcal_compiler::tir::typed::{ResolvedDomainBound, ResolvedIndex, ResolvedTypeExpr, TIR};
 use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
@@ -2140,7 +2140,7 @@ fn format_constraints(constraints: &[ResolvedDomainBound]) -> String {
 fn format_type_with_constraints(
     resolved: &ResolvedTypeExpr,
     constraints: &[ResolvedDomainBound],
-    registry: &Registry,
+    registry: &SemanticRegistry,
 ) -> String {
     let constraint_str = format_constraints(constraints);
     if let ResolvedTypeExpr::Indexed { base, indexes } = resolved {
@@ -2324,7 +2324,10 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
     // keys so that pattern bindings (`@s match { Variant(field: v) => …}`)
     // resolve to the field of the right struct/variant, even when two structs
     // share a field name.
-    for type_def in registry.types.all_types() {
+    for (_, type_def) in tir
+        .nominal_type_defs()
+        .filter(|(identity, _)| identity.owner() == dag_id)
+    {
         let Some(members) = type_def.union_members() else {
             continue;
         };

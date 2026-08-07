@@ -28,6 +28,7 @@ pub(crate) mod diagnostics;
 pub mod expr;
 pub mod lower;
 pub mod nominal;
+pub mod source_interface;
 pub mod types;
 
 pub use diagnostics::expr_lower_error_to_graphcal;
@@ -43,6 +44,7 @@ pub use nominal::{
     NominalConstructor, NominalField, NominalGenericParam, NominalTypeDef, NominalTypeError,
     NominalTypeKind, NominalTypeRegistry,
 };
+pub use source_interface::SourceDeclaration;
 pub use types::{
     BuiltinType, DimArg, DimExpr, DimExprItem, DimTermRef, DimTermTarget, DomainBound, GenericArg,
     GenericParamId, GenericParamOwner, IndexRef, NatExpr, TypeAnnotation, TypeExpr, TypeExprKind,

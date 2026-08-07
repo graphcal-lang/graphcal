@@ -62,6 +62,46 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn prepared_interface_contains_only_direct_hir_source_declarations() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param nested_input: Dimensionless = 2.0;\n\
+                 pub node nested_output: Dimensionless = @nested_input;\n",
+            ),
+            (
+                "main.gcl",
+                "include pipeline.lib() as nested;\n\
+                 param direct_input: Dimensionless = 3.0;\n\
+                 node private_output: Dimensionless = @direct_input;\n\
+                 pub node public_output: Dimensionless = @private_output;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+
+    let [parameter] = prepared.parameter_ports() else {
+        panic!("expected exactly one direct entry parameter");
+    };
+    assert_eq!(parameter.name().as_str(), "direct_input");
+    assert!(parameter.has_default());
+
+    let outputs = prepared.output_ports();
+    assert_eq!(
+        outputs
+            .iter()
+            .map(|output| output.name().as_str())
+            .collect::<Vec<_>>(),
+        ["private_output", "public_output"]
+    );
+    assert!(!outputs[0].is_public());
+    assert!(outputs[1].is_public());
+}
+
+#[test]
 fn empty_and_default_equivalent_includes_share_instance_semantics() {
     let (_directory, root) = write_pipeline_project(
         &[

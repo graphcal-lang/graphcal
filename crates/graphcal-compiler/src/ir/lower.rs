@@ -31,7 +31,8 @@ use crate::registry::format::format_unit_expr_with_config;
 use crate::registry::prelude::load_prelude;
 use crate::registry::resolve_types::ExternalDeclSurface;
 use crate::registry::types::{
-    self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder, UnitScale,
+    self, PositiveFiniteScale, PositiveFiniteScaleError, Registry, RegistryBuilder,
+    SemanticRegistry, UnitScale,
 };
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName, UnitRef};
@@ -399,9 +400,9 @@ pub struct HirDag {
     /// Canonical identity carried by the body itself, so storage and consumers
     /// cannot pair this HIR with a different DAG key.
     dag_id: crate::dag_id::DagId,
-    /// Frontend registry retained for units, dimensions, indexes, functions,
-    /// formatting, and source-boundary compatibility.
-    pub registry: Registry,
+    /// Registry capabilities valid from HIR onward. Syntax-backed nominal
+    /// definitions are unrepresentable; `nominal_types` is the sole authority.
+    pub registry: SemanticRegistry,
     /// Local nominal definitions with all signatures lowered to canonical HIR.
     nominal_types: crate::hir::NominalTypeRegistry,
     /// Const declarations in source order.
@@ -422,6 +423,11 @@ pub struct HirDag {
     pub(crate) included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
+    /// Runtime-interface-relevant declarations authored directly in this DAG,
+    /// excluding declarations merged from includes.
+    source_declarations: Vec<crate::hir::SourceDeclaration>,
+    /// Canonical child-DAG identities and their authored name spans.
+    pub(crate) child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Mapping from assert name to its expected-fail configuration.
@@ -461,6 +467,13 @@ impl HirDag {
     pub const fn imported_bindings(&self) -> &HashMap<ScopedName, HirImportedBinding> {
         &self.imported_bindings
     }
+
+    /// Declarations authored directly in this DAG that define its runtime
+    /// parameter, output, and required-index interface.
+    #[must_use]
+    pub fn source_declarations(&self) -> &[crate::hir::SourceDeclaration] {
+        &self.source_declarations
+    }
 }
 
 /// Lower an AST into a [`HirDag`].
@@ -482,6 +495,26 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, Graph
             span: crate::syntax::span::Span::new(0, 0).into(),
         })?;
     lower_with_imports(ast, src, &ImportedNames::default(), &dag_id)
+}
+
+#[cfg(test)]
+pub(crate) fn lower_with_frontend_registry_for_test(
+    ast: &File,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(HirDag, Registry), GraphcalError> {
+    let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
+        .map_err(|error| GraphcalError::EvalError {
+            message: format!("invalid source name `{}`: {error}", src.name()),
+            src: src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    let (builder, unresolved) = lower_to_builder(ast, src, &ImportedNames::default(), &dag_id)?;
+    let resolver = single_module_resolver(ast, &dag_id, src)?;
+    let registry = builder
+        .try_build()
+        .map_err(|error| registry_build_error(&error, src))?;
+    let hir = unresolved.freeze(registry.clone(), &dag_id, &resolver, src)?;
+    Ok((hir, registry))
 }
 
 /// Lower an AST with imported declarations into a [`HirDag`].
@@ -556,6 +589,27 @@ fn single_module_resolver(
 /// # Errors
 ///
 /// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
+fn collect_source_declarations(ast: &File) -> Vec<crate::hir::SourceDeclaration> {
+    ast.declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            DeclKind::Param(param) => Some(crate::hir::SourceDeclaration::Parameter {
+                name: param.name.value.clone(),
+                span: declaration.span,
+            }),
+            DeclKind::Node(node) => Some(crate::hir::SourceDeclaration::Node {
+                name: node.name.value.clone(),
+                span: declaration.span,
+            }),
+            DeclKind::Index(index) => Some(crate::hir::SourceDeclaration::Index {
+                name: index.name.value.clone(),
+                span: declaration.span,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 fn lower_to_builder(
     ast: &File,
     src: &NamedSource<Arc<String>>,
@@ -983,6 +1037,15 @@ fn build_ir_from_resolved(
             .into_iter()
             .map(|(name, cat)| (ScopedName::from(name), cat))
             .collect(),
+        source_declarations: collect_source_declarations(ast),
+        child_dag_spans: ast
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                DeclKind::Dag(dag) => Some((dag_id.child(dag.name.value.as_str()), dag.name.span)),
+                _ => None,
+            })
+            .collect(),
         assert_names: resolved
             .assert_names
             .into_iter()
@@ -1034,6 +1097,11 @@ pub struct UnfrozenIR {
     included_plots: Vec<IncludedPlotEntry>,
     /// All declaration names in source order with their category.
     pub source_order: Vec<(ScopedName, DeclCategory)>,
+    /// Direct source declarations are immutable provenance. Include merging
+    /// extends `source_order` but never this entry-interface subset.
+    source_declarations: Vec<crate::hir::SourceDeclaration>,
+    /// Canonical child-DAG identities and their authored name spans.
+    child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     assert_names: HashSet<ScopedName>,
     // Key-lookup only, order irrelevant.
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
@@ -1458,6 +1526,11 @@ impl UnfrozenIR {
         let extern_functions =
             resolve_plugin_imports(&self.plugin_imports, &registry, owner, resolver, src)?;
 
+        // Syntax-backed nominal definitions are a lowering capability, not a
+        // HIR semantic authority. The phase-specific registry makes retaining
+        // them after `nominal_types` is complete impossible.
+        let registry = registry.into_semantic();
+
         Ok(HirDag {
             dag_id: owner.clone(),
             extern_functions,
@@ -1472,6 +1545,8 @@ impl UnfrozenIR {
             layers,
             included_plots: self.included_plots,
             source_order: self.source_order,
+            source_declarations: self.source_declarations,
+            child_dag_spans: self.child_dag_spans,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
             dynamic_unit_scales,
@@ -5617,6 +5692,31 @@ mod tests {
     }
 
     #[test]
+    fn hir_retains_the_direct_runtime_interface_in_source_order() {
+        let hir = parse_and_lower(
+            "const node ignored: Dimensionless = 1.0;\n\
+             pub(bind) index Phase;\n\
+             param input: Dimensionless = 1.0;\n\
+             node private: Dimensionless = @input;\n\
+             pub node output: Dimensionless = @private;\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            hir.source_declarations(),
+            [
+                crate::hir::SourceDeclaration::Index { name, .. },
+                crate::hir::SourceDeclaration::Parameter { name: input, .. },
+                crate::hir::SourceDeclaration::Node { name: private, .. },
+                crate::hir::SourceDeclaration::Node { name: output, .. },
+            ] if name.as_str() == "Phase"
+                && input.as_str() == "input"
+                && private.as_str() == "private"
+                && output.as_str() == "output"
+        ));
+    }
+
+    #[test]
     fn nominal_signatures_are_canonical_hir() {
         let hir = parse_and_lower(
             "type Marker { Marker }\n\
@@ -5630,6 +5730,10 @@ mod tests {
         let marker = crate::syntax::type_name::ResolvedStructTypeName::from_def(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Marker"),
+        );
+        assert!(
+            hir.nominal_types().get(&identity).is_some(),
+            "canonical nominal definitions must cross into HIR"
         );
         let definition = hir.nominal_types().get(&identity).unwrap();
         let [parameter] = definition.generic_params() else {

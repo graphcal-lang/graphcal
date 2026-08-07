@@ -2,15 +2,15 @@ use super::*;
 use crate::dimension::{BaseDimId, Rational};
 use crate::registry::prelude::load_prelude;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{Registry, RegistryBuilder};
+use crate::registry::types::{RegistryBuilder, SemanticRegistry};
 use crate::syntax::index_name::ResolvedIndexName;
 use crate::syntax::parser::Parser;
 use crate::syntax::type_name::{ResolvedStructTypeName, StructTypeName};
 
-fn make_registry() -> Registry {
+fn make_registry() -> SemanticRegistry {
     let mut b = RegistryBuilder::new();
     load_prelude(&mut b).unwrap();
-    b.try_build().unwrap()
+    b.try_build().unwrap().into_semantic()
 }
 
 fn make_src() -> NamedSource<Arc<String>> {
@@ -371,7 +371,8 @@ fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let file = desugared;
     let src = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-    let ir = crate::ir::lower::lower(&file, &src)?;
+    let (ir, parent_registry) =
+        crate::ir::lower::lower_with_frontend_registry_for_test(&file, &src)?;
     let parent_dag_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
     let mut resolver = ModuleResolver::default();
@@ -418,7 +419,13 @@ fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         &project_types,
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
-    compile_inline_dag_bodies_test(&mut builder, &src, &parent_dag_id, &file.declarations)?;
+    compile_inline_dag_bodies_test(
+        &mut builder,
+        &src,
+        &parent_dag_id,
+        &file.declarations,
+        &parent_registry,
+    )?;
     Ok(builder.finish())
 }
 
@@ -430,12 +437,16 @@ fn compile_inline_dag_bodies_test(
     src: &NamedSource<Arc<String>>,
     parent_dag_id: &crate::dag_id::DagId,
     parent_declarations: &[crate::desugar::desugared_ast::Declaration],
+    parent_registry: &crate::registry::types::Registry,
 ) -> Result<(), GraphcalError> {
-    let dag_bodies = tir
-        .registry()
-        .dags
-        .all_dags()
-        .map(|(name, dag)| (name.clone(), dag.body.clone()))
+    let dag_bodies = parent_declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            crate::desugar::desugared_ast::DeclKind::Dag(dag) => {
+                Some((dag.name.value.clone(), dag.body.clone()))
+            }
+            _ => None,
+        })
         .collect::<Vec<_>>();
     let mut resolver = ModuleResolver::default();
     resolver
@@ -464,7 +475,7 @@ fn compile_inline_dag_bodies_test(
         let dag_body_ir = crate::ir::lower::lower_dag_body_to_ir(
             name.as_str(),
             &body,
-            tir.registry(),
+            parent_registry,
             &resolver,
             &crate::ir::resolve::ImportedValueNames::default(),
             HashMap::new(),

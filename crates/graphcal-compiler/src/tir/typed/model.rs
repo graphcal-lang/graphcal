@@ -13,7 +13,9 @@ use crate::nat::NatPolyForm;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::{IndexDef, Registry, RegistryBuildError, RegistryBuilder, UnitInfo};
+use crate::registry::types::{
+    IndexDef, RegistryBuildError, RegistryBuilder, SemanticRegistry, UnitInfo,
+};
 use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
@@ -42,7 +44,7 @@ pub enum ResolvedDimArg {
 
 impl ResolvedDimArg {
     #[must_use]
-    pub(crate) fn format(&self, registry: &Registry) -> String {
+    pub(crate) fn format(&self, registry: &SemanticRegistry) -> String {
         match self {
             Self::Dimensionless => "Dimensionless".to_string(),
             Self::Concrete(dim) => {
@@ -74,7 +76,7 @@ pub enum ResolvedGenericArg {
 
 impl ResolvedGenericArg {
     #[must_use]
-    pub(crate) fn format(&self, registry: &Registry) -> String {
+    pub(crate) fn format(&self, registry: &SemanticRegistry) -> String {
         match self {
             Self::Dim(dim) => dim.format(registry),
             Self::Index(index) => format_resolved_index(index),
@@ -140,7 +142,7 @@ pub enum ResolvedTypeExpr {
 impl ResolvedTypeExpr {
     /// Format as a human-readable string, e.g. `"Length / Time^2"`, `"Bool"`, `"Vec3<Length, ECI>"`.
     #[must_use]
-    pub fn format(&self, registry: &Registry) -> String {
+    pub fn format(&self, registry: &SemanticRegistry) -> String {
         match self {
             Self::Dimensionless => "Dimensionless".to_string(),
             Self::Bool => "Bool".to_string(),
@@ -228,7 +230,7 @@ impl ResolvedDimTerm {
 
     /// Format this term as a human-readable string, e.g. `"Length"`, `"/ Time^2"`, `"D^2"`.
     #[must_use]
-    fn format(&self, registry: &Registry) -> String {
+    fn format(&self, registry: &SemanticRegistry) -> String {
         let (name, power, op) = match self {
             Self::Concrete { dim, power, op } => {
                 (registry.dimensions.format_dimension(dim), *power, *op)
@@ -411,10 +413,10 @@ pub struct ProjectConstructorDef {
 /// Authoritative project type-system definitions keyed by
 /// [`ResolvedName`](crate::syntax::names::ResolvedName) identities.
 ///
-/// [`Registry`] is a frontend construction and formatting artifact. Semantic
-/// resolution maps source spellings through [`ModuleResolver`] and reads the
-/// resulting owner-qualified identity from this store; imported aliases are
-/// never installed as additional canonical definitions.
+/// [`SemanticRegistry`] carries non-nominal HIR services and formatting data.
+/// Nominal resolution maps source spellings through [`ModuleResolver`] and
+/// reads the resulting owner-qualified identity from this store; imported
+/// aliases are never installed as additional canonical definitions.
 #[derive(Debug, Default, Clone)]
 pub struct ProjectTypeStore {
     dimensions: HashMap<ResolvedDimName, Dimension>,
@@ -452,11 +454,11 @@ pub enum ProjectTypeStoreInsertError {
         constructor: ResolvedConstructorName,
         first_owner: ResolvedStructTypeName,
     },
-    #[error("frontend registry is missing dimension `{identity}`")]
+    #[error("HIR semantic registry is missing dimension `{identity}`")]
     MissingDimension { identity: ResolvedDimName },
-    #[error("frontend registry is missing unit `{identity}`")]
+    #[error("HIR semantic registry is missing unit `{identity}`")]
     MissingUnit { identity: ResolvedUnitName },
-    #[error("frontend registry is missing index `{identity}`")]
+    #[error("HIR semantic registry is missing index `{identity}`")]
     MissingIndex { identity: ResolvedIndexName },
 }
 
@@ -494,8 +496,8 @@ impl ProjectTypeStore {
         Ok(())
     }
 
-    /// Insert a standalone HIR DAG whose frontend registry contains only its
-    /// local declarations. The DAG identity is derived from the body itself.
+    /// Insert a standalone HIR DAG whose semantic registry contains only its
+    /// local non-nominal definitions. The DAG identity comes from the body.
     ///
     /// # Errors
     ///
@@ -1146,7 +1148,7 @@ pub struct ResolvedConstructorTarget {
 /// mutable shell and exposes an immutable [`TIR`].
 #[derive(Debug)]
 pub struct TirBuilder {
-    registry: Registry,
+    registry: SemanticRegistry,
     project_types: ProjectTypeStore,
     dags: DagRegistry,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
@@ -1156,7 +1158,7 @@ pub struct TirBuilder {
 
 impl TirBuilder {
     pub(in crate::tir::typed) fn new(
-        registry: Registry,
+        registry: SemanticRegistry,
         project_types: ProjectTypeStore,
         root: DagTIR,
         extern_functions: HashMap<
@@ -1184,9 +1186,9 @@ impl TirBuilder {
         self.dags.root_mut()
     }
 
-    /// Borrow the root file's registry while compiling child DAG modules.
+    /// Borrow the root file's phase-safe semantic registry.
     #[must_use]
-    pub const fn registry(&self) -> &Registry {
+    pub const fn registry(&self) -> &SemanticRegistry {
         &self.registry
     }
 
@@ -1250,7 +1252,7 @@ impl TirBuilder {
 /// re-key finalized DAG bodies.
 #[derive(Debug, Clone)]
 pub struct TIR {
-    pub(crate) registry: Registry,
+    pub(crate) registry: SemanticRegistry,
     pub(in crate::tir::typed) project_types: ProjectTypeStore,
     pub(crate) dags: DagRegistry,
     module_aliases: HashMap<ModuleAliasName, crate::dag_id::DagId>,
@@ -1275,9 +1277,9 @@ impl TIR {
         self.dags.root_id()
     }
 
-    /// Borrow the root file's immutable frontend/formatting registry.
+    /// Borrow the root file's immutable semantic/formatting registry.
     #[must_use]
-    pub const fn registry(&self) -> &Registry {
+    pub const fn registry(&self) -> &SemanticRegistry {
         &self.registry
     }
 
@@ -1333,6 +1335,16 @@ impl TIR {
     #[must_use]
     pub fn struct_type_def(&self, name: &ResolvedStructTypeName) -> Option<&NominalTypeDef> {
         self.project_types.get_struct_type(name)
+    }
+
+    /// Iterate every canonical nominal definition in the project type store.
+    pub fn nominal_type_defs(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedStructTypeName, &NominalTypeDef)> {
+        self.project_types
+            .struct_types
+            .iter()
+            .map(|(identity, definition)| (identity, definition.as_ref()))
     }
 
     /// Iterate canonical index definitions owned by the root module.
@@ -1443,6 +1455,8 @@ pub struct DagTIR {
     pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
     pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
+    /// Canonical child-DAG identities and their HIR-retained name spans.
+    pub(crate) child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     pub(crate) expected_fail: HashMap<ScopedName, ExpectedFail>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,

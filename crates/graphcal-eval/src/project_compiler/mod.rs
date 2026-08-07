@@ -31,6 +31,7 @@ pub(in crate::project_compiler) use crate::import_surface::{
 };
 
 mod checking;
+mod entry_interface;
 mod generic_leakage;
 mod hir_project;
 mod imports;
@@ -43,6 +44,7 @@ mod registry_merge;
 mod session;
 mod template;
 
+pub(crate) use entry_interface::CheckedEntryInterface;
 pub use hir_project::HirProject;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{

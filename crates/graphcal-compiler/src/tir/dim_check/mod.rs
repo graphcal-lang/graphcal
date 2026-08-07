@@ -17,7 +17,7 @@ use crate::syntax::type_name::StructTypeName;
 use crate::registry::builtins::builtin_functions;
 use crate::registry::error::GraphcalError;
 use crate::registry::time_scale::TimeScale;
-use crate::registry::types::Registry;
+use crate::registry::types::SemanticRegistry;
 use crate::tir::typed::{FiniteIndexIdentity, NatPolyForm};
 
 pub(crate) use helpers::{expect_quantity, format_inferred_type};
@@ -280,7 +280,7 @@ struct DimCheckContext<'a> {
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
-    registry: &'a Registry,
+    registry: &'a SemanticRegistry,
     builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
     src: &'a NamedSource<Arc<String>>,
 }
@@ -790,7 +790,7 @@ fn broadcast_operand_element<'a>(
     actual_type: &InferredType,
     operand_type: &'a InferredType,
     operand_span: crate::syntax::span::Span,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<&'a InferredType, GraphcalError> {
     let (operand_axes, operand_elem) = peel_index_axes(operand_type);
@@ -1339,7 +1339,7 @@ pub fn check_external_value_expr_type(
 fn check_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
-    registry: &crate::registry::types::Registry,
+    registry: &crate::registry::types::SemanticRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1472,7 +1472,7 @@ fn check_domain_constraint_dimensions_dag(
     dag: &crate::tir::typed::DagTIR,
     declared_types: &HashMap<ScopedName, DeclaredType>,
     tir: &crate::tir::typed::TIR,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1534,7 +1534,7 @@ fn check_one_bound(
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     check_one_bound_with_display_name(&name.to_string(), bound, inferred, expected, registry, src)
@@ -1667,7 +1667,7 @@ fn field_type_annotation<'a>(
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
     declared_types: &HashMap<ScopedName, DeclaredType>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
@@ -1811,7 +1811,7 @@ fn check_deferred_generic_quantity_bound(
     resolved_target: &crate::tir::typed::ResolvedTypeExpr,
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
-    registry: &Registry,
+    registry: &SemanticRegistry,
 ) -> Result<(), GraphcalError> {
     if inferred.quantity_dimension().is_some() || matches!(inferred, InferredType::Int) {
         return Ok(());
@@ -1834,7 +1834,7 @@ fn check_one_bound_with_display_name(
     bound: &crate::tir::typed::ResolvedDomainBound,
     inferred: &InferredType,
     expected: &ExpectedBound,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     match expected {
@@ -2029,18 +2029,14 @@ fn detect_cross_dag_cycles(
         let mut targets = BTreeSet::new();
         collect_dag_call_targets_from_dag(dag_tir, &mut targets);
         edges.insert(key.clone(), targets);
-        // Best-effort span: for inline children of this file the parent's
-        // registry entry has the AST span; cross-file merged dags fall
-        // back to a zero span (no AST in the importer).
-        let parent = key.parent();
-        let span = if parent.as_ref() == Some(tir.root_dag_id()) {
-            tir.registry
-                .dags
-                .get(key.name())
-                .map_or_else(|| crate::syntax::span::Span::new(0, 0), |d| d.name.span)
-        } else {
-            crate::syntax::span::Span::new(0, 0)
-        };
+        // HIR retains child declaration spans under canonical identities, so
+        // cycle diagnostics never need to recover them from a syntax registry.
+        let span = key
+            .parent()
+            .and_then(|parent| tir.dags.get(&parent))
+            .and_then(|parent| parent.child_dag_spans.get(key))
+            .copied()
+            .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
         spans.insert(key.clone(), span);
     }
 

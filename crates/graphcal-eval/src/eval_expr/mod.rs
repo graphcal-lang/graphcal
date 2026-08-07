@@ -22,7 +22,7 @@ use graphcal_compiler::hir::{NominalField, NominalTypeDef};
 use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::Registry;
+use graphcal_compiler::registry::types::SemanticRegistry;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, StructFieldConstraintKey};
 
 use crate::decl_key::RuntimeDeclKey;
@@ -43,7 +43,7 @@ pub struct EvalContext<'a> {
     /// Cooperative cancellation for recursive expression evaluation.
     pub cancellation: graphcal_compiler::cancellation::CancellationToken,
     pub builtin_fns: &'a BuiltinFunctions,
-    pub registry: &'a Registry,
+    pub registry: &'a SemanticRegistry,
     pub src: &'a NamedSource<Arc<String>>,
     /// The enclosing file's full TIR.
     ///

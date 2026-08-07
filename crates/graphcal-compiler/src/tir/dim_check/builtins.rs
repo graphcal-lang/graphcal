@@ -13,7 +13,7 @@ use miette::NamedSource;
 use crate::dimension::Dimension;
 use crate::function_signature::{DimMonomial, DimMonomialEvalError, FunctionSignature, ValueKind};
 use crate::registry::error::GraphcalError;
-use crate::registry::types::Registry;
+use crate::registry::types::SemanticRegistry;
 use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnName;
 use crate::syntax::span::Span;
@@ -30,7 +30,7 @@ pub(super) fn infer_fn_dim_from_spans(
     sig: &FunctionSignature,
     arg_dims: &[Dimension],
     arg_spans: &[Span],
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
     if arg_dims.len() != sig.arity() {
@@ -118,7 +118,7 @@ pub(super) fn check_quantity_param(
     monomial: &DimMonomial,
     arg_dim: &Dimension,
     bindings: &mut HashMap<DimVarName, Dimension>,
-    registry: &Registry,
+    registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
     arg_span: Span,
 ) -> Result<(), GraphcalError> {
