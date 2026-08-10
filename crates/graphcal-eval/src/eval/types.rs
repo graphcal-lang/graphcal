@@ -25,13 +25,89 @@ pub enum DeclType {
     Node,
 }
 
-/// Display unit metadata: the unit name(s) and scale factor for pretty-printing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct PositiveFiniteDisplayScale(f64);
+
+impl PositiveFiniteDisplayScale {
+    fn try_new(value: f64) -> Result<Self, DisplayProjectionError> {
+        if !value.is_finite() || value <= 0.0 {
+            Err(DisplayProjectionError::InvalidScale { scale: value })
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+/// Display unit metadata: the unit name(s) and validated scale factor for pretty-printing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayUnit {
     /// Human-readable unit string (e.g., "km", "m/s^2", "km/h")
     pub label: String,
-    /// Scale factor from SI to this display unit: `display_value = si_value / scale`
-    pub scale: f64,
+    scale: PositiveFiniteDisplayScale,
+}
+
+impl DisplayUnit {
+    /// Construct display metadata with a positive finite scale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DisplayProjectionError::InvalidScale`] for zero, negative, or
+    /// non-finite scales.
+    pub fn try_new(label: impl Into<String>, scale: f64) -> Result<Self, DisplayProjectionError> {
+        Ok(Self {
+            label: label.into(),
+            scale: PositiveFiniteDisplayScale::try_new(scale)?,
+        })
+    }
+
+    /// Scale factor from SI to this display unit.
+    #[must_use]
+    pub const fn scale(&self) -> f64 {
+        self.scale.get()
+    }
+}
+
+/// Failure to project a finite SI quantity into a requested display unit.
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum DisplayProjectionError {
+    /// Display scales must be finite and strictly positive.
+    #[error("display-unit scale must be positive and finite, got {scale}")]
+    InvalidScale { scale: f64 },
+    /// Public quantity values must remain finite.
+    #[error("display input must be finite, got {value}")]
+    NonFiniteInput { value: f64 },
+    /// Dividing by a tiny valid scale overflowed binary64.
+    #[error("display conversion to `{unit}` produced a non-finite value")]
+    NonFiniteResult { unit: String },
+    /// A nonzero SI value became zero in the requested unit.
+    #[error("display conversion to `{unit}` underflowed to zero")]
+    Underflow { unit: String },
+}
+
+/// Error returned by a display accessor or projection.
+#[derive(Debug, Error)]
+pub enum DisplayValueError {
+    /// The accessor was called on the wrong public value variant.
+    #[error(transparent)]
+    Value(#[from] ValueError),
+    /// Numeric projection could not preserve display invariants.
+    #[error(transparent)]
+    Projection(#[from] DisplayProjectionError),
+}
+
+/// Failure to project an exact hifitime epoch into jiff's timestamp range.
+#[derive(Debug, Error)]
+pub enum EpochProjectionError {
+    /// Whole Unix seconds exceeded jiff's signed-second input representation.
+    #[error("datetime Unix seconds are outside the i64 range")]
+    SecondsOutOfRange,
+    /// Jiff rejected an otherwise exact seconds/nanoseconds pair.
+    #[error(transparent)]
+    Jiff(#[from] jiff::Error),
 }
 
 /// A user-facing evaluated runtime value.
@@ -339,17 +415,18 @@ impl Value {
     ///
     /// Returns [`ValueError`] if this is not a `Quantity`.
     #[cfg(test)]
-    pub(crate) fn display_value(&self) -> Result<f64, ValueError> {
+    pub(crate) fn display_value(&self) -> Result<f64, DisplayValueError> {
         match self {
             Self::Quantity {
                 si_value,
                 display_unit,
                 ..
-            } => Ok(quantity_display_value(*si_value, display_unit.as_ref())),
+            } => quantity_display_value(*si_value, display_unit.as_ref()).map_err(Into::into),
             other => Err(ValueError {
                 expected: "Quantity",
                 actual: other.variant_description(),
-            }),
+            }
+            .into()),
         }
     }
 
@@ -390,9 +467,11 @@ impl Value {
     ///
     /// Composite values (`Struct`, `Indexed`) are shown as their variant name or
     /// a placeholder string, not recursively expanded.
-    #[must_use]
-    pub fn format_display(&self, symbols: Option<&BTreeMap<BaseDimId, String>>) -> String {
-        match self {
+    pub fn format_display(
+        &self,
+        symbols: Option<&BTreeMap<BaseDimId, String>>,
+    ) -> Result<String, DisplayProjectionError> {
+        Ok(match self {
             Self::Bool(b) => b.to_string(),
             Self::Int(i) => i.to_string(),
             Self::Label {
@@ -412,7 +491,7 @@ impl Value {
                 ..
             } => {
                 let formatted = graphcal_compiler::registry::format::format_number(
-                    quantity_display_value(*si_value, display_unit.as_ref()),
+                    quantity_display_value(*si_value, display_unit.as_ref())?,
                 );
                 match symbols.and_then(|s| self.display_label(s)) {
                     Some(label) => format!("{formatted} [{label}]"),
@@ -425,9 +504,9 @@ impl Value {
                 ..
             } => {
                 let re = graphcal_compiler::registry::format::format_number(
-                    quantity_display_value(si_value.re(), display_unit.as_ref()),
+                    quantity_display_value(si_value.re(), display_unit.as_ref())?,
                 );
-                let displayed_im = quantity_display_value(si_value.im(), display_unit.as_ref());
+                let displayed_im = quantity_display_value(si_value.im(), display_unit.as_ref())?;
                 let sign = if displayed_im.is_sign_negative() {
                     "-"
                 } else {
@@ -441,7 +520,7 @@ impl Value {
                 }
             }
             Self::Indexed { .. } => "[...]".to_string(),
-        }
+        })
     }
 
     /// Format a `Datetime` value for display.
@@ -470,9 +549,56 @@ impl Value {
 ///
 /// Returns `si_value` directly when no display unit is set; otherwise scales it
 /// by the unit's conversion factor (`display_value = si_value / scale`).
-#[must_use]
-pub fn quantity_display_value(si_value: f64, display_unit: Option<&DisplayUnit>) -> f64 {
-    display_unit.map_or(si_value, |du| si_value / du.scale)
+///
+/// # Errors
+///
+/// Rejects a non-finite input, an overflowing conversion, or a nonzero value
+/// that underflows to zero in the requested unit.
+pub fn quantity_display_value(
+    si_value: f64,
+    display_unit: Option<&DisplayUnit>,
+) -> Result<f64, DisplayProjectionError> {
+    if !si_value.is_finite() {
+        return Err(DisplayProjectionError::NonFiniteInput { value: si_value });
+    }
+    let Some(display_unit) = display_unit else {
+        return Ok(si_value);
+    };
+    let displayed = si_value / display_unit.scale();
+    if !displayed.is_finite() {
+        return Err(DisplayProjectionError::NonFiniteResult {
+            unit: display_unit.label.clone(),
+        });
+    }
+    if si_value != 0.0 && displayed == 0.0 {
+        return Err(DisplayProjectionError::Underflow {
+            unit: display_unit.label.clone(),
+        });
+    }
+    Ok(displayed)
+}
+
+pub(super) fn validate_display_projection(value: &Value) -> Result<(), DisplayProjectionError> {
+    match value {
+        Value::Quantity {
+            si_value,
+            display_unit,
+            ..
+        } => quantity_display_value(*si_value, display_unit.as_ref()).map(|_| ()),
+        Value::Complex {
+            si_value,
+            display_unit,
+            ..
+        } => {
+            quantity_display_value(si_value.re(), display_unit.as_ref())?;
+            quantity_display_value(si_value.im(), display_unit.as_ref()).map(|_| ())
+        }
+        Value::Struct { fields, .. } => fields.values().try_for_each(validate_display_projection),
+        Value::Indexed { entries, .. } => {
+            entries.values().try_for_each(validate_display_projection)
+        }
+        Value::Bool(_) | Value::Int(_) | Value::Label { .. } | Value::Datetime { .. } => Ok(()),
+    }
 }
 
 /// Format a quantity's default unit label from its dimension and registered base-unit symbols.
@@ -572,23 +698,26 @@ fn format_epoch_in_timezone(
 /// (e.g. `"2026-01-01T00:00:00Z"`), for machine consumers such as
 /// Vega-Lite temporal data.
 ///
-/// Falls back to the hifitime `Display` form for epochs outside jiff's
-/// representable range (beyond year ±9999).
-#[must_use]
-pub fn epoch_to_rfc3339(epoch: &hifitime::Epoch) -> String {
-    epoch_to_jiff_timestamp(epoch).map_or_else(|_| format!("{epoch}"), |ts| ts.to_string())
+/// # Errors
+///
+/// Returns an error for epochs outside jiff's representable timestamp range.
+pub fn epoch_to_rfc3339(epoch: &hifitime::Epoch) -> Result<String, EpochProjectionError> {
+    epoch_to_jiff_timestamp(epoch).map(|timestamp| timestamp.to_string())
 }
 
-/// Convert a `hifitime::Epoch` to a `jiff::Timestamp`.
-fn epoch_to_jiff_timestamp(epoch: &hifitime::Epoch) -> Result<jiff::Timestamp, jiff::Error> {
-    let unix_secs = epoch.to_unix_seconds();
-    let secs = unix_secs.floor();
-    let nanos = (unix_secs - secs) * 1e9;
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "unix seconds fit in i64 for any reasonable date; nanos < 1e9 fits in i32"
-    )]
-    jiff::Timestamp::new(secs as i64, nanos as i32)
+/// Convert a `hifitime::Epoch` to a `jiff::Timestamp` without a floating-point
+/// intermediate, preserving every nanosecond.
+fn epoch_to_jiff_timestamp(
+    epoch: &hifitime::Epoch,
+) -> Result<jiff::Timestamp, EpochProjectionError> {
+    const NANOS_PER_SECOND: i128 = 1_000_000_000;
+    let unix_nanos = epoch.to_unix_duration().total_nanoseconds();
+    let seconds = unix_nanos.div_euclid(NANOS_PER_SECOND);
+    let nanoseconds = unix_nanos.rem_euclid(NANOS_PER_SECOND);
+    let seconds = i64::try_from(seconds).map_err(|_| EpochProjectionError::SecondsOutOfRange)?;
+    let nanoseconds =
+        i32::try_from(nanoseconds).map_err(|_| EpochProjectionError::SecondsOutOfRange)?;
+    jiff::Timestamp::new(seconds, nanoseconds).map_err(Into::into)
 }
 
 /// A runtime error associated with a specific node or param evaluation.
@@ -969,6 +1098,29 @@ mod tests {
     }
 
     #[test]
+    fn display_projection_rejects_invalid_scales_overflow_and_underflow() {
+        assert!(DisplayUnit::try_new("bad", 0.0).is_err());
+        assert!(DisplayUnit::try_new("bad", f64::INFINITY).is_err());
+
+        let tiny = DisplayUnit::try_new("tiny", 1.0e-300).unwrap();
+        assert!(quantity_display_value(1.0e300, Some(&tiny)).is_err());
+        let huge = DisplayUnit::try_new("huge", 1.0e300).unwrap();
+        assert!(quantity_display_value(1.0e-300, Some(&huge)).is_err());
+        assert!(quantity_display_value(0.0, Some(&huge)).unwrap().abs() < f64::MIN_POSITIVE);
+    }
+
+    #[test]
+    fn epoch_projection_preserves_nanoseconds_without_binary64() {
+        let epoch = hifitime::Epoch::from_unix_duration(
+            hifitime::Duration::from_total_nanoseconds(1_767_225_600_000_000_001_i128),
+        );
+        assert_eq!(
+            epoch_to_rfc3339(&epoch).unwrap(),
+            "2026-01-01T00:00:00.000000001Z"
+        );
+    }
+
+    #[test]
     fn has_errors_counts_plot_errors() {
         let mut result = empty_eval_result();
         result.plot_errors.push(PlotError {
@@ -994,10 +1146,7 @@ mod tests {
             (Dimension::base(dim_id("Length")) / Dimension::base(dim_id("Time"))).unwrap();
         let value = quantity(
             velocity,
-            Some(DisplayUnit {
-                label: "km/h".to_string(),
-                scale: 1000.0 / 3600.0,
-            }),
+            Some(DisplayUnit::try_new("km/h", 1000.0 / 3600.0).unwrap()),
         );
 
         assert_eq!(value.display_label(&symbols()), Some("km/h".to_string()));

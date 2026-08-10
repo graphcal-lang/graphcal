@@ -286,18 +286,22 @@ node repeated: Key<Hour>[Fin(2)] = for i: Fin(2) { @peak };
     };
     assert_eq!(si_value.to_bits(), 7200.0_f64.to_bits());
     assert_eq!(display_unit.label, "h");
-    assert_eq!(display_unit.scale.to_bits(), 3600.0_f64.to_bits());
-    assert_eq!(peak.format_display(Some(&result.base_dim_symbols)), "2 [h]");
+    assert_eq!(display_unit.scale().to_bits(), 3600.0_f64.to_bits());
+    assert_eq!(
+        peak.format_display(Some(&result.base_dim_symbols)).unwrap(),
+        "2 [h]"
+    );
 
     let Value::Indexed { entries, .. } = find_entry(&result, "repeated") else {
         panic!("expected indexed coordinate keys")
     };
     assert_eq!(entries.len(), 2);
-    assert!(
-        entries
-            .values()
-            .all(|entry| { entry.format_display(Some(&result.base_dim_symbols)) == "2 [h]" })
-    );
+    assert!(entries.values().all(|entry| {
+        entry
+            .format_display(Some(&result.base_dim_symbols))
+            .as_deref()
+            == Ok("2 [h]")
+    }));
 }
 
 #[test]
@@ -587,11 +591,11 @@ node y: Length = @x -> m;
         } => {
             assert!(si_value.is_finite(), "SI value should be finite");
             if let Some(du) = display_unit {
-                let display = si_value / du.scale;
+                let display = si_value / du.scale();
                 assert!(
                     display.is_finite(),
                     "display value should be finite: {si_value} / {} = {display}",
-                    du.scale
+                    du.scale()
                 );
             }
         }

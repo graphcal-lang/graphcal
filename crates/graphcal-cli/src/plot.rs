@@ -471,6 +471,27 @@ mod tests {
     }
 
     #[test]
+    fn vega_data_preserves_exact_int_boundary_and_datetime_nanoseconds() {
+        let result = graphcal_eval::eval::compile_and_eval(
+            r#"
+node instant: Datetime = datetime("2026-01-01T00:00:00.000000001Z");
+plot p = {
+    mark: point,
+    encode: {
+        x: 9007199254740992,
+        y: @instant,
+    },
+};
+"#,
+        )
+        .unwrap();
+        let figures = build_figures(&result.plots, &result.figures, &result.layers);
+        let row = &figures[0].spec["data"]["values"][0];
+        assert_eq!(row["x"], json!(9_007_199_254_740_992.0));
+        assert_eq!(row["y"], json!("2026-01-01T00:00:00.000000001Z"));
+    }
+
+    #[test]
     fn html_escape_handles_critical_characters() {
         assert_eq!(
             html_escape("<img src=x onerror=alert(1)>"),

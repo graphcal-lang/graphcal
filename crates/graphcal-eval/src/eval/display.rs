@@ -282,7 +282,11 @@ fn resolve_unit_to_display(
         src: ctx.src.clone(),
         span: unit.span.into(),
     })?;
-    Ok(DisplayUnit { label, scale })
+    DisplayUnit::try_new(label, scale).map_err(|error| GraphcalError::InternalError {
+        message: format!("validated display-unit scale violated its invariant: {error}"),
+        src: ctx.src.clone(),
+        span: unit.span.into(),
+    })
 }
 
 /// Extract a single display unit from a quantity-producing expression.

@@ -1560,23 +1560,11 @@ fn exact_domain_int_bound(
     src: &NamedSource<Arc<String>>,
     span: graphcal_compiler::syntax::span::Span,
 ) -> Result<f64, GraphcalError> {
-    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
-    if value.unsigned_abs() > MAX_EXACT_F64_INT {
-        return Err(GraphcalError::EvalError {
-            message: format!(
-                "domain bound integer {value} is too large for exact quantity comparison"
-            ),
-            src: src.clone(),
-            span: span.into(),
-        });
-    }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "integer magnitude is checked to be exactly representable before casting"
-    )]
-    {
-        Ok(value as f64)
-    }
+    crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| GraphcalError::EvalError {
+        message: format!("domain bound integer {value} is too large for exact quantity comparison"),
+        src: src.clone(),
+        span: span.into(),
+    })
 }
 
 fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: f64) -> String {

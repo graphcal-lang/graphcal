@@ -1306,7 +1306,9 @@ fn format_value_inline_with_budget(
         | Value::Bool(_)
         | Value::Int(_)
         | Value::Label { .. }
-        | Value::Datetime { .. } => value.format_display(Some(symbols)),
+        | Value::Datetime { .. } => value
+            .format_display(Some(symbols))
+            .unwrap_or_else(|error| format!("ERROR: {error}")),
         Value::Struct {
             type_name, fields, ..
         } => {

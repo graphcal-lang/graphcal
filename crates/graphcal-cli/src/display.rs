@@ -233,10 +233,11 @@ pub fn format_table_grid(value: &Value) -> String {
         let mut row = vec![value.indexed_entry_display_name(row_variant)];
         if let Value::Indexed { entries: cells, .. } = row_val {
             for (col_variant, _) in &columns {
-                let cell_val = cells
-                    .get(col_variant)
-                    .map(|v| v.format_display(None))
-                    .unwrap_or_default();
+                let cell_val = cells.get(col_variant).map_or_else(String::new, |value| {
+                    value
+                        .format_display(None)
+                        .unwrap_or_else(|error| format!("ERROR: {error}"))
+                });
                 row.push(cell_val);
             }
         }

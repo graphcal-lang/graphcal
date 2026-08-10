@@ -15,6 +15,149 @@ pub(super) enum EpochConstructionError {
     Hifitime(#[from] hifitime::HifitimeError),
 }
 
+/// A numeric datetime conversion or arithmetic operation exceeded hifitime's
+/// representable duration range.
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
+pub(super) enum DatetimeRangeError {
+    #[error("{context} must be finite, got {value}")]
+    NonFinite { context: &'static str, value: f64 },
+    #[error("{context} is outside the representable datetime range")]
+    OutOfRange { context: &'static str },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NumericEpochKind {
+    JulianDate,
+    ModifiedJulianDate,
+    UnixSeconds,
+}
+
+fn checked_duration_from_seconds(
+    seconds: f64,
+    context: &'static str,
+) -> Result<hifitime::Duration, DatetimeRangeError> {
+    if !seconds.is_finite() {
+        return Err(DatetimeRangeError::NonFinite {
+            context,
+            value: seconds,
+        });
+    }
+    let min_seconds = hifitime::Duration::MIN.to_seconds();
+    let max_seconds = hifitime::Duration::MAX.to_seconds();
+    if seconds < min_seconds || seconds > max_seconds {
+        return Err(DatetimeRangeError::OutOfRange { context });
+    }
+    Ok(hifitime::Duration::from_seconds(seconds))
+}
+
+fn checked_duration_from_days(
+    days: f64,
+    context: &'static str,
+) -> Result<hifitime::Duration, DatetimeRangeError> {
+    if !days.is_finite() {
+        return Err(DatetimeRangeError::NonFinite {
+            context,
+            value: days,
+        });
+    }
+    checked_duration_from_seconds(days * 86_400.0, context)
+}
+
+fn checked_epoch_with_delta(
+    epoch: hifitime::Epoch,
+    delta: hifitime::Duration,
+    subtract: bool,
+    context: &'static str,
+) -> Result<hifitime::Epoch, DatetimeRangeError> {
+    let epoch_ns = epoch.duration.total_nanoseconds();
+    let delta_ns = delta.total_nanoseconds();
+    let total_ns = if subtract {
+        epoch_ns.checked_sub(delta_ns)
+    } else {
+        epoch_ns.checked_add(delta_ns)
+    }
+    .ok_or(DatetimeRangeError::OutOfRange { context })?;
+    let min_ns = hifitime::Duration::MIN.total_nanoseconds();
+    let max_ns = hifitime::Duration::MAX.total_nanoseconds();
+    if total_ns < min_ns || total_ns > max_ns {
+        return Err(DatetimeRangeError::OutOfRange { context });
+    }
+    Ok(hifitime::Epoch::from_duration(
+        hifitime::Duration::from_total_nanoseconds(total_ns),
+        epoch.time_scale,
+    ))
+}
+
+pub(super) fn checked_epoch_add_seconds(
+    epoch: hifitime::Epoch,
+    seconds: f64,
+) -> Result<hifitime::Epoch, DatetimeRangeError> {
+    checked_epoch_with_delta(
+        epoch,
+        checked_duration_from_seconds(seconds, "datetime duration")?,
+        false,
+        "datetime addition",
+    )
+}
+
+pub(super) fn checked_epoch_subtract_seconds(
+    epoch: hifitime::Epoch,
+    seconds: f64,
+) -> Result<hifitime::Epoch, DatetimeRangeError> {
+    checked_epoch_with_delta(
+        epoch,
+        checked_duration_from_seconds(seconds, "datetime duration")?,
+        true,
+        "datetime subtraction",
+    )
+}
+
+pub(super) fn checked_epoch_difference_seconds(
+    lhs: hifitime::Epoch,
+    rhs: hifitime::Epoch,
+) -> Result<f64, DatetimeRangeError> {
+    let rhs = rhs.to_time_scale(lhs.time_scale);
+    let difference_ns = lhs
+        .duration
+        .total_nanoseconds()
+        .checked_sub(rhs.duration.total_nanoseconds())
+        .ok_or(DatetimeRangeError::OutOfRange {
+            context: "datetime difference",
+        })?;
+    let min_ns = hifitime::Duration::MIN.total_nanoseconds();
+    let max_ns = hifitime::Duration::MAX.total_nanoseconds();
+    if difference_ns < min_ns || difference_ns > max_ns {
+        return Err(DatetimeRangeError::OutOfRange {
+            context: "datetime difference",
+        });
+    }
+    Ok(hifitime::Duration::from_total_nanoseconds(difference_ns).to_seconds())
+}
+
+pub(super) fn checked_epoch_from_numeric(
+    value: f64,
+    kind: NumericEpochKind,
+) -> Result<hifitime::Epoch, DatetimeRangeError> {
+    let (base, delta, context) = match kind {
+        NumericEpochKind::JulianDate => (
+            hifitime::Epoch::from_jde_utc(0.0),
+            checked_duration_from_days(value, "Julian date")?,
+            "Julian date conversion",
+        ),
+        NumericEpochKind::ModifiedJulianDate => (
+            hifitime::Epoch::from_mjd_utc(0.0),
+            checked_duration_from_days(value, "modified Julian date")?,
+            "modified Julian date conversion",
+        ),
+        NumericEpochKind::UnixSeconds => (
+            hifitime::Epoch::from_unix_seconds(0.0),
+            checked_duration_from_seconds(value, "Unix timestamp")?,
+            "Unix timestamp conversion",
+        ),
+    };
+    checked_epoch_with_delta(base, delta, false, context)
+}
+
 /// Invalid Gregorian components returned by the datetime backend.
 #[derive(Debug, Error)]
 pub(super) enum GregorianFieldsError {
@@ -276,7 +419,11 @@ fn epoch_from_civil(
 mod tests {
     use graphcal_compiler::registry::time_scale::TimeScale;
 
-    use crate::eval_expr::datetime::GregorianFields;
+    use crate::eval_expr::datetime::{
+        GregorianFields, NumericEpochKind, checked_epoch_add_seconds,
+        checked_epoch_difference_seconds, checked_epoch_from_numeric,
+        checked_epoch_subtract_seconds,
+    };
 
     #[test]
     fn every_supported_scale_extracts_its_own_calendar_coordinate() {
@@ -294,6 +441,64 @@ mod tests {
             assert_eq!(fields.iso_weekday(), 1, "{scale}");
             assert_eq!(fields.day_of_year(), 1, "{scale}");
         }
+    }
+
+    #[test]
+    fn datetime_arithmetic_accepts_boundaries_and_rejects_saturation() {
+        let one_second_ns = 1_000_000_000_i128;
+        let near_max = hifitime::Epoch::from_duration(
+            hifitime::Duration::from_total_nanoseconds(
+                hifitime::Duration::MAX
+                    .total_nanoseconds()
+                    .checked_sub(one_second_ns)
+                    .unwrap(),
+            ),
+            hifitime::TimeScale::UTC,
+        );
+        let near_min = hifitime::Epoch::from_duration(
+            hifitime::Duration::from_total_nanoseconds(
+                hifitime::Duration::MIN
+                    .total_nanoseconds()
+                    .checked_add(one_second_ns)
+                    .unwrap(),
+            ),
+            hifitime::TimeScale::UTC,
+        );
+
+        assert_eq!(
+            checked_epoch_add_seconds(near_max, 1.0).unwrap().duration,
+            hifitime::Duration::MAX
+        );
+        assert!(checked_epoch_add_seconds(near_max, 2.0).is_err());
+        assert_eq!(
+            checked_epoch_subtract_seconds(near_min, 1.0)
+                .unwrap()
+                .duration,
+            hifitime::Duration::MIN
+        );
+        assert!(checked_epoch_subtract_seconds(near_min, 2.0).is_err());
+        assert!(
+            checked_epoch_difference_seconds(
+                hifitime::Epoch::from_duration(hifitime::Duration::MAX, hifitime::TimeScale::UTC,),
+                hifitime::Epoch::from_duration(hifitime::Duration::MIN, hifitime::TimeScale::UTC,),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn numeric_epoch_constructors_reject_saturating_inputs() {
+        for kind in [
+            NumericEpochKind::JulianDate,
+            NumericEpochKind::ModifiedJulianDate,
+            NumericEpochKind::UnixSeconds,
+        ] {
+            assert!(checked_epoch_from_numeric(1.0e300, kind).is_err());
+            assert!(checked_epoch_from_numeric(-1.0e300, kind).is_err());
+        }
+        assert!(checked_epoch_from_numeric(0.0, NumericEpochKind::UnixSeconds).is_ok());
+        assert!(checked_epoch_from_numeric(2_460_000.0, NumericEpochKind::JulianDate).is_ok());
+        assert!(checked_epoch_from_numeric(60_000.0, NumericEpochKind::ModifiedJulianDate).is_ok());
     }
 
     #[test]

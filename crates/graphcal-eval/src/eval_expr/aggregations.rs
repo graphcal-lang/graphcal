@@ -175,18 +175,11 @@ fn aggregate_maximum(
 fn aggregate_mean(
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,
 ) -> Result<f64, AggregationError> {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "indexed collection length fits in f64"
-    )]
-    let n = entries.len() as f64;
-    let total =
-        entries
-            .values()
-            .try_fold(0.0_f64, |acc, value| -> Result<f64, AggregationError> {
-                Ok(acc + quantity_entry(value, "mean element")?)
-            })?;
-    numeric::computed_finite_quantity(total / n, "mean()").map_err(AggregationError::from)
+    let values = entries
+        .values()
+        .map(|value| quantity_entry(value, "mean element"))
+        .collect::<Result<Vec<_>, _>>()?;
+    numeric::scaled_mean(&values, "mean()").map_err(AggregationError::from)
 }
 
 fn aggregate_count(
@@ -278,6 +271,20 @@ mod tests {
                 numeric::QuantityValidationError::InfiniteResult { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn mean_avoids_overflow_in_a_representable_result() {
+        let entries = IndexMap::from([
+            (IndexEntryKey::position(0), RuntimeValue::Quantity(1.0e308)),
+            (IndexEntryKey::position(1), RuntimeValue::Quantity(1.0e308)),
+        ]);
+        let RuntimeValue::Quantity(mean) =
+            aggregate_indexed_values(AggregationFn::Mean, &entries).unwrap()
+        else {
+            panic!("mean must return a quantity");
+        };
+        assert!((mean / 1.0e308 - 1.0).abs() < f64::EPSILON);
     }
 
     #[test]
