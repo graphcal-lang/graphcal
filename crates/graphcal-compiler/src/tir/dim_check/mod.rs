@@ -277,6 +277,7 @@ impl InferredType {
 #[derive(Clone, Copy)]
 struct DimCheckContext<'a> {
     cancellation: &'a crate::cancellation::CancellationToken,
+    materialized_shapes: &'a infer::hir::MaterializedShapeCollector,
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
     dag: Option<&'a crate::tir::typed::DagTIR>,
     tir: &'a crate::tir::typed::TIR,
@@ -335,15 +336,19 @@ impl DimCheckContext<'_> {
     }
 
     /// Infer the type of a module-aware HIR expression using this context's bindings.
-    fn infer_hir(&self, expr: &crate::hir::Expr) -> Result<InferredType, GraphcalError> {
+    fn infer_hir(
+        &self,
+        expr: &crate::hir::Expr,
+        owner: &ResolvedDeclName,
+    ) -> Result<InferredType, GraphcalError> {
         let dag = self.dag.ok_or_else(|| GraphcalError::InternalError {
             message: "HIR assertion inference requires semantic DAG context".to_string(),
             src: self.src.clone(),
             span: expr.span.into(),
         })?;
-        infer::hir::infer_hir_type_with_owner_and_cancellation(
+        infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
             expr,
-            None,
+            Some(owner),
             self.declared_types,
             dag,
             self.tir,
@@ -351,6 +356,7 @@ impl DimCheckContext<'_> {
             self.builtin_fns,
             self.src,
             self.cancellation,
+            self.materialized_shapes.clone(),
         )
     }
 }
@@ -373,8 +379,9 @@ fn validate_decl_concrete_type_obligations(
         src: ctx.src.clone(),
         span: type_ann_span.into(),
     })?;
+    let inferred = InferredType::from(declared);
     infer::hir::validate_concrete_type_obligations(
-        &InferredType::from(declared),
+        &inferred,
         dag,
         ctx.tir,
         ctx.registry,
@@ -445,7 +452,7 @@ fn check_decl_expr_type(
                 span: (*type_ann_span).into(),
             })?;
     let owner = dag.resolved_decl_key_for_local(name);
-    let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
+    let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
         hir_expr,
         Some(&owner),
         body_ctx.declared_types,
@@ -455,6 +462,7 @@ fn check_decl_expr_type(
         body_ctx.builtin_fns,
         body_ctx.src,
         body_ctx.cancellation,
+        body_ctx.materialized_shapes.clone(),
     )?;
     let matches = body_ctx
         .dag
@@ -498,7 +506,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
             });
         }
         let entry_ctx = ctx.for_body(&entry.src);
-        let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
+        let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
             &entry.expr,
             None,
             entry_ctx.declared_types,
@@ -508,6 +516,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
             entry_ctx.builtin_fns,
             entry_ctx.src,
             entry_ctx.cancellation,
+            entry_ctx.materialized_shapes.clone(),
         )?;
         if !matches!(
             &inferred,
@@ -678,6 +687,7 @@ impl AssertionIndexShape {
 /// Check dimensions for a lowered HIR assertion body.
 fn check_hir_assert_body(
     ctx: &DimCheckContext<'_>,
+    owner: &ResolvedDeclName,
     body: &crate::hir::AssertBody,
     span: crate::syntax::span::Span,
 ) -> Result<AssertionIndexShape, GraphcalError> {
@@ -685,7 +695,7 @@ fn check_hir_assert_body(
     let src = ctx.src;
     match body {
         crate::hir::AssertBody::Expr(body_expr) => {
-            let inferred = ctx.infer_hir(body_expr)?;
+            let inferred = ctx.infer_hir(body_expr, owner)?;
             if !is_bool_type(&inferred) {
                 return Err(GraphcalError::AssertBodyNotBool {
                     found: format_inferred_type(&inferred, registry),
@@ -700,9 +710,9 @@ fn check_hir_assert_body(
             expected,
             tolerance,
         } => {
-            let actual_type = ctx.infer_hir(actual)?;
-            let expected_type = ctx.infer_hir(expected)?;
-            let tolerance_type = ctx.infer_hir(tolerance)?;
+            let actual_type = ctx.infer_hir(actual, owner)?;
+            let expected_type = ctx.infer_hir(expected, owner)?;
+            let tolerance_type = ctx.infer_hir(tolerance, owner)?;
 
             // Element-wise broadcasting (#809): the assertion's index shape
             // comes from `actual`; `expected` and `tolerance` are each unindexed
@@ -945,7 +955,7 @@ fn validate_expected_fail(
 ///
 /// Returns a [`GraphcalError`] if dimensions are inconsistent.
 pub fn check_dimensions_tir(
-    tir: &crate::tir::typed::TIR,
+    tir: &mut crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     check_dimensions_tir_with_cancellation(
@@ -961,7 +971,7 @@ pub fn check_dimensions_tir(
 ///
 /// Returns a [`GraphcalError`] for invalid dimensions or cancellation.
 pub fn check_dimensions_tir_with_cancellation(
-    tir: &crate::tir::typed::TIR,
+    tir: &mut crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
@@ -975,9 +985,33 @@ pub fn check_dimensions_tir_with_cancellation(
     // were already dim-checked in their own file's pipeline, against
     // their own registry — re-checking them here against the importer's
     // registry would fail on types renamed by include bindings.
-    for (_, dag) in tir.local_dags() {
-        cancellation.checkpoint()?;
-        check_dimensions_dag(dag, tir, &tir.registry, builtin_fns, src, cancellation)?;
+    let materialized_shapes = tir
+        .local_dags()
+        .map(|(dag_id, dag)| {
+            cancellation.checkpoint()?;
+            let collector = infer::hir::MaterializedShapeCollector::default();
+            check_dimensions_dag(
+                dag,
+                tir,
+                &tir.registry,
+                builtin_fns,
+                src,
+                cancellation,
+                &collector,
+            )?;
+            Ok((dag_id.clone(), collector.snapshot()))
+        })
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    for (dag_id, shapes) in materialized_shapes {
+        let dag = tir
+            .dags
+            .get_mut(&dag_id)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("checked DAG `{dag_id}` disappeared while installing shape facts"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        dag.semantic.materialized_shapes = shapes;
     }
 
     // Validate domain constraints on HIR nominal fields. Types reachable
@@ -1332,11 +1366,13 @@ fn check_dimensions_dag(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
+    materialized_shapes: &infer::hir::MaterializedShapeCollector,
 ) -> Result<(), GraphcalError> {
     cancellation.checkpoint()?;
     let declared_types = dag.build_declared_types(src)?;
     let ctx = DimCheckContext {
         cancellation,
+        materialized_shapes,
         declared_types: &declared_types,
         dag: Some(dag),
         tir,
@@ -1393,7 +1429,8 @@ fn check_dimensions_dag(
         let body_src = entry.body_src.resolve(src);
         let entry_ctx = ctx.for_body(body_src);
         let body = entry_ctx.hir_assert_body(&entry.name, entry.span)?;
-        let shape = check_hir_assert_body(&entry_ctx, body, entry.span)?;
+        let owner = dag.resolved_decl_key_for_local(&entry.name);
+        let shape = check_hir_assert_body(&entry_ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&entry.name) {
             validate_expected_fail(
                 &metadata.expected,
@@ -1427,15 +1464,7 @@ fn check_dimensions_dag(
     ctx.checkpoint()?;
     check_domain_constraint_targets_dag(dag, src)?;
     ctx.checkpoint()?;
-    check_domain_constraint_dimensions_dag(
-        dag,
-        &declared_types,
-        tir,
-        registry,
-        builtin_fns,
-        src,
-        cancellation,
-    )?;
+    check_domain_constraint_dimensions_dag(&ctx)?;
 
     Ok(())
 }
@@ -1462,15 +1491,12 @@ enum ExpectedBound {
 ///
 /// Other targets (e.g., `Bool`) are rejected by
 /// [`check_domain_constraint_targets_dag`] before this bound check runs.
-fn check_domain_constraint_dimensions_dag(
-    dag: &crate::tir::typed::DagTIR,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
-    tir: &crate::tir::typed::TIR,
-    registry: &SemanticRegistry,
-    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
-    src: &NamedSource<Arc<String>>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<(), GraphcalError> {
+fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
+    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
+        message: "domain-bound checking requires semantic DAG context".to_string(),
+        src: ctx.src.clone(),
+        span: Span::new(0, 0).into(),
+    })?;
     // A merged dependency declaration's domain bounds keep the dependency
     // file's spans, so they are checked against that body's source (#868).
     let decl_iter = dag
@@ -1486,7 +1512,7 @@ fn check_domain_constraint_dimensions_dag(
         let Some(bounds) = bounds else {
             continue;
         };
-        let body_src = signature_provenance.resolve(src);
+        let body_src = signature_provenance.resolve(ctx.src);
 
         let resolved = dag.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
@@ -1505,18 +1531,19 @@ fn check_domain_constraint_dimensions_dag(
         };
 
         for bound in bounds {
-            let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
+            let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
                 &bound.value,
-                None,
-                declared_types,
+                Some(&key),
+                ctx.declared_types,
                 dag,
-                tir,
-                registry,
-                builtin_fns,
+                ctx.tir,
+                ctx.registry,
+                ctx.builtin_fns,
                 body_src,
-                cancellation,
+                ctx.cancellation,
+                ctx.materialized_shapes.clone(),
             )?;
-            check_one_bound(name, bound, &inferred, &expected, registry, body_src)?;
+            check_one_bound(name, bound, &inferred, &expected, ctx.registry, body_src)?;
         }
     }
 
@@ -1683,8 +1710,7 @@ fn check_field_domain_constraint_dimensions(
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
-    let mut seen: std::collections::HashSet<&crate::tir::typed::ResolvedStructFieldTypeKey> =
-        std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for (_, dag) in tir.local_dags() {
         for (key, field_semantics) in dag.semantic.type_defs.constrained_fields() {
             if !seen.insert(key) {
@@ -1754,17 +1780,19 @@ fn check_field_domain_constraint_dimensions(
                 field_constraint_definition_dag(tir, key, diagnostic_src, diagnostic_span)?;
             for bound in field_semantics.domain_bounds() {
                 let definition_types = definition_dag.build_declared_types(&bound.src)?;
-                let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
-                    &bound.value,
-                    None,
-                    &definition_types,
-                    definition_dag,
-                    tir,
-                    registry,
-                    builtin_fns,
-                    &bound.src,
-                    cancellation,
-                )?;
+                let inferred =
+                    infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
+                        &bound.value,
+                        None,
+                        &definition_types,
+                        definition_dag,
+                        tir,
+                        registry,
+                        builtin_fns,
+                        &bound.src,
+                        cancellation,
+                        infer::hir::MaterializedShapeCollector::default(),
+                    )?;
                 match &expected {
                     Some(expected) => check_one_bound_with_display_name(
                         &display_name,

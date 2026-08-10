@@ -847,6 +847,14 @@ impl DagRegistry {
         }
     }
 
+    pub(crate) fn get_mut(&mut self, dag_id: &crate::dag_id::DagId) -> Option<&mut DagTIR> {
+        if dag_id == self.root.dag_id() {
+            Some(&mut self.root)
+        } else {
+            self.other_dags.get_mut(dag_id)
+        }
+    }
+
     /// Iterate over canonical identities and DAG bodies.
     pub fn iter(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
         std::iter::once((self.root.dag_id(), &self.root)).chain(self.other_dags.iter())
@@ -1126,6 +1134,11 @@ pub struct DagSemanticBody {
     pub type_defs: ResolvedTypeDefs,
     /// Canonical declaration identity for every value name visible in this DAG.
     pub decl_bindings: HashMap<ScopedName, ResolvedDeclName>,
+    /// Checked total-cardinality facts for every concrete indexed expression.
+    pub materialized_shapes: HashMap<
+        crate::tir::materialized_shape::MaterializedExpressionKey,
+        crate::tir::materialized_shape::MaterializedShape,
+    >,
 }
 
 /// A resolved constructor and the tagged-union member it constructs.
@@ -1521,6 +1534,18 @@ impl DagTIR {
     #[must_use]
     pub const fn semantic(&self) -> &DagSemanticBody {
         &self.semantic
+    }
+
+    /// Look up the checked eager shape of one indexed expression.
+    #[must_use]
+    pub fn materialized_shape(
+        &self,
+        owner: &ResolvedDeclName,
+        span: Span,
+    ) -> Option<&crate::tir::materialized_shape::MaterializedShape> {
+        self.semantic.materialized_shapes.get(
+            &crate::tir::materialized_shape::MaterializedExpressionKey::new(owner.clone(), span),
+        )
     }
 
     /// Explicit template-instance edges owned by this DAG.

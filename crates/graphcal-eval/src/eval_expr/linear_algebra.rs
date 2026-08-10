@@ -11,7 +11,9 @@ use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use indexmap::IndexMap;
 use thiserror::Error;
 
+use super::EvalContext;
 use super::numeric::{self, QuantityValidationError};
+use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError, WorkBudgetError};
 
 #[derive(Debug, Clone)]
 struct Axis {
@@ -50,6 +52,16 @@ pub(super) enum LinearAlgebraError {
     Numeric(#[from] QuantityValidationError),
     #[error(transparent)]
     Algorithm(#[from] super::linear_algebra_lu::LuError),
+    #[error("linear-algebra work estimate failed: {0}")]
+    WorkAmount(#[from] WorkAmountError),
+    #[error("`{function}()` {source}")]
+    WorkBudget {
+        function: graphcal_compiler::builtin::BuiltinFnName,
+        #[source]
+        source: WorkBudgetError,
+    },
+    #[error(transparent)]
+    Cancelled(#[from] graphcal_compiler::cancellation::Cancelled),
 }
 
 impl LinearAlgebraError {
@@ -57,9 +69,39 @@ impl LinearAlgebraError {
         match self {
             Self::ShapeInvariant(_) => true,
             Self::Algorithm(error) => error.is_internal_invariant(),
-            Self::Numeric(_) => false,
+            Self::Numeric(_)
+            | Self::WorkAmount(_)
+            | Self::WorkBudget { .. }
+            | Self::Cancelled(_) => false,
         }
     }
+
+    pub(super) const fn cancellation(&self) -> Option<graphcal_compiler::cancellation::Cancelled> {
+        match self {
+            Self::Cancelled(cancelled) => Some(*cancelled),
+            Self::Algorithm(error) => error.cancellation(),
+            Self::ShapeInvariant(_)
+            | Self::Numeric(_)
+            | Self::WorkAmount(_)
+            | Self::WorkBudget { .. } => None,
+        }
+    }
+}
+
+fn kernel_control<'a>(
+    function: LinearAlgebraFn,
+    factors: &[usize],
+    multiplier: u64,
+    ctx: &'a EvalContext<'_>,
+) -> Result<KernelCheckpoint<'a>, LinearAlgebraError> {
+    let amount = WorkAmount::checked_product(factors, multiplier)?;
+    ctx.work_budget
+        .consume(amount)
+        .map_err(|source| LinearAlgebraError::WorkBudget {
+            function: function.builtin_name(),
+            source,
+        })?;
+    Ok(KernelCheckpoint::new(&ctx.cancellation))
 }
 
 fn vector_from_value(
@@ -218,15 +260,25 @@ fn sum_products(
     lhs: impl IntoIterator<Item = f64>,
     rhs: impl IntoIterator<Item = f64>,
     context: &'static str,
+    control: &mut KernelCheckpoint<'_>,
 ) -> Result<f64, LinearAlgebraError> {
     lhs.into_iter().zip(rhs).try_fold(0.0, |sum, (lhs, rhs)| {
+        control.step()?;
         let product = finite_product(lhs, rhs, context)?;
         numeric::computed_finite_quantity(sum + product, context).map_err(LinearAlgebraError::from)
     })
 }
 
-fn norm(values: &[f64]) -> Result<f64, LinearAlgebraError> {
-    numeric::root_sum_square(values.iter().copied(), "norm()").map_err(LinearAlgebraError::from)
+fn norm(values: &[f64], control: &mut KernelCheckpoint<'_>) -> Result<f64, LinearAlgebraError> {
+    let accumulator =
+        values
+            .iter()
+            .try_fold(numeric::RootSumSquare::new(), |mut accumulator, value| {
+                control.step()?;
+                accumulator.add(*value, "norm()")?;
+                Ok::<_, LinearAlgebraError>(accumulator)
+            })?;
+    accumulator.finish("norm()").map_err(Into::into)
 }
 
 fn one_argument(
@@ -290,7 +342,10 @@ fn vector_element(
     })
 }
 
-fn evaluate_dot(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_dot(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Dot;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = vector_from_value(lhs, "dot")?;
@@ -300,10 +355,14 @@ fn evaluate_dot(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlge
             "dot() received vectors over different axes".to_string(),
         ));
     }
-    sum_products(lhs.values, rhs.values, "dot()").map(RuntimeValue::Quantity)
+    let mut control = kernel_control(function, &[lhs.axis.len()], 1, ctx)?;
+    sum_products(lhs.values, rhs.values, "dot()", &mut control).map(RuntimeValue::Quantity)
 }
 
-fn evaluate_matmul(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_matmul(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Matmul;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = matrix_from_value(lhs, "matmul")?;
@@ -314,32 +373,47 @@ fn evaluate_matmul(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearA
         ));
     }
     let (rows, inner, columns) = (lhs.rows.len(), lhs.columns.len(), rhs.columns.len());
-    let values = (0..rows)
-        .flat_map(|row| (0..columns).map(move |column| (row, column)))
-        .map(|(row, column)| {
-            (0..inner).try_fold(0.0, |sum, position| {
-                let lhs = matrix_element(&lhs, row, position, "matmul()")?;
-                let rhs = matrix_element(&rhs, position, column, "matmul()")?;
-                let product = finite_product(lhs, rhs, "matmul()")?;
-                numeric::computed_finite_quantity(sum + product, "matmul()")
-                    .map_err(LinearAlgebraError::from)
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut control = kernel_control(function, &[rows, inner, columns], 1, ctx)?;
+    let mut values = Vec::with_capacity(rows.checked_mul(columns).ok_or_else(|| {
+        LinearAlgebraError::ShapeInvariant("matmul() result cardinality overflowed".to_string())
+    })?);
+    for row in 0..rows {
+        for column in 0..columns {
+            let mut sum = 0.0;
+            for position in 0..inner {
+                control.step()?;
+                let lhs_value = matrix_element(&lhs, row, position, "matmul()")?;
+                let rhs_value = matrix_element(&rhs, position, column, "matmul()")?;
+                let product = finite_product(lhs_value, rhs_value, "matmul()")?;
+                sum = numeric::computed_finite_quantity(sum + product, "matmul()")?;
+            }
+            values.push(sum);
+        }
+    }
     matrix_value(lhs.rows, rhs.columns, values)
 }
 
-fn evaluate_transpose(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_transpose(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Transpose;
     let matrix = matrix_from_value(one_argument(function, arguments)?, "transpose")?;
+    let mut control = kernel_control(function, &[matrix.rows.len(), matrix.columns.len()], 1, ctx)?;
     let values = (0..matrix.columns.len())
         .flat_map(|column| (0..matrix.rows.len()).map(move |row| (row, column)))
-        .map(|(row, column)| matrix_element(&matrix, row, column, "transpose()"))
+        .map(|(row, column)| {
+            control.step()?;
+            matrix_element(&matrix, row, column, "transpose()")
+        })
         .collect::<Result<Vec<_>, _>>()?;
     matrix_value(matrix.columns, matrix.rows, values)
 }
 
-fn evaluate_trace(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_trace(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Trace;
     let matrix = matrix_from_value(one_argument(function, arguments)?, "trace")?;
     if !matrix.rows.matches(&matrix.columns) {
@@ -347,8 +421,10 @@ fn evaluate_trace(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAl
             "trace() received a matrix with distinct row and column axes".to_string(),
         ));
     }
+    let mut control = kernel_control(function, &[matrix.rows.len()], 1, ctx)?;
     (0..matrix.rows.len())
         .try_fold(0.0, |sum, diagonal| {
+            control.step()?;
             let value = matrix_element(&matrix, diagonal, diagonal, "trace()")?;
             numeric::computed_finite_quantity(sum + value, "trace()")
                 .map_err(LinearAlgebraError::from)
@@ -356,13 +432,20 @@ fn evaluate_trace(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAl
         .map(RuntimeValue::Quantity)
 }
 
-fn evaluate_norm(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_norm(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Norm;
     let vector = vector_from_value(one_argument(function, arguments)?, "norm")?;
-    norm(&vector.values).map(RuntimeValue::Quantity)
+    let mut control = kernel_control(function, &[vector.axis.len()], 1, ctx)?;
+    norm(&vector.values, &mut control).map(RuntimeValue::Quantity)
 }
 
-fn evaluate_cross(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_cross(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Cross;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = vector_from_value(lhs, "cross")?;
@@ -372,6 +455,8 @@ fn evaluate_cross(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAl
             "cross() requires two vectors over the same three-entry axis".to_string(),
         ));
     }
+    let control = kernel_control(function, &[6], 1, ctx)?;
+    control.boundary()?;
     let component = |a: usize, b: usize, c: usize, d: usize| {
         let positive = finite_product(
             vector_element(&lhs, a, "cross()")?,
@@ -394,21 +479,31 @@ fn evaluate_cross(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAl
     vector_value(lhs.axis, values)
 }
 
-fn evaluate_outer(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_outer(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Outer;
     let [lhs, rhs] = two_arguments(function, arguments)?;
     let lhs = vector_from_value(lhs, "outer")?;
     let rhs = vector_from_value(rhs, "outer")?;
+    let mut control = kernel_control(function, &[lhs.axis.len(), rhs.axis.len()], 1, ctx)?;
     let values = lhs
         .values
         .iter()
         .flat_map(|lhs| rhs.values.iter().map(move |rhs| (*lhs, *rhs)))
-        .map(|(lhs, rhs)| finite_product(lhs, rhs, "outer()"))
+        .map(|(lhs, rhs)| {
+            control.step()?;
+            finite_product(lhs, rhs, "outer()")
+        })
         .collect::<Result<Vec<_>, _>>()?;
     matrix_value(lhs.axis, rhs.axis, values)
 }
 
-fn evaluate_solve(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_solve(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Solve;
     let [matrix, rhs] = two_arguments(function, arguments)?;
     let matrix = matrix_from_value(matrix, "solve")?;
@@ -418,11 +513,20 @@ fn evaluate_solve(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAl
             "solve() requires a square matrix and right-hand side over the same axis".to_string(),
         ));
     }
-    let solution = super::linear_algebra_lu::solve(&matrix.values, matrix.rows.len(), &rhs.values)?;
+    let mut control = kernel_control(function, &[matrix.rows.len(); 3], 2, ctx)?;
+    let solution = super::linear_algebra_lu::solve_with_control(
+        &matrix.values,
+        matrix.rows.len(),
+        &rhs.values,
+        &mut control,
+    )?;
     vector_value(matrix.rows, solution)
 }
 
-fn evaluate_inverse(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_inverse(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Inverse;
     let matrix = matrix_from_value(one_argument(function, arguments)?, "inverse")?;
     if !matrix.rows.matches(&matrix.columns) {
@@ -430,11 +534,19 @@ fn evaluate_inverse(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, Linear
             "inverse() requires identical row and column axes".to_string(),
         ));
     }
-    let inverse = super::linear_algebra_lu::inverse(&matrix.values, matrix.rows.len())?;
+    let mut control = kernel_control(function, &[matrix.rows.len(); 3], 3, ctx)?;
+    let inverse = super::linear_algebra_lu::inverse_with_control(
+        &matrix.values,
+        matrix.rows.len(),
+        &mut control,
+    )?;
     matrix_value(matrix.rows, matrix.columns, inverse)
 }
 
-fn evaluate_determinant(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, LinearAlgebraError> {
+fn evaluate_determinant(
+    arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, LinearAlgebraError> {
     let function = LinearAlgebraFn::Determinant;
     let matrix = matrix_from_value(one_argument(function, arguments)?, "det")?;
     if !matrix.rows.matches(&matrix.columns) {
@@ -442,26 +554,32 @@ fn evaluate_determinant(arguments: Vec<RuntimeValue>) -> Result<RuntimeValue, Li
             "det() requires identical row and column axes".to_string(),
         ));
     }
-    super::linear_algebra_lu::determinant(&matrix.values, matrix.rows.len())
-        .map(RuntimeValue::Quantity)
-        .map_err(LinearAlgebraError::from)
+    let mut control = kernel_control(function, &[matrix.rows.len(); 3], 1, ctx)?;
+    super::linear_algebra_lu::determinant_with_control(
+        &matrix.values,
+        matrix.rows.len(),
+        &mut control,
+    )
+    .map(RuntimeValue::Quantity)
+    .map_err(LinearAlgebraError::from)
 }
 
 /// Evaluate a shape-checked built-in linear-algebra operation.
 pub(super) fn evaluate(
     function: LinearAlgebraFn,
     arguments: Vec<RuntimeValue>,
+    ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraError> {
     match function {
-        LinearAlgebraFn::Dot => evaluate_dot(arguments),
-        LinearAlgebraFn::Matmul => evaluate_matmul(arguments),
-        LinearAlgebraFn::Transpose => evaluate_transpose(arguments),
-        LinearAlgebraFn::Trace => evaluate_trace(arguments),
-        LinearAlgebraFn::Norm => evaluate_norm(arguments),
-        LinearAlgebraFn::Cross => evaluate_cross(arguments),
-        LinearAlgebraFn::Outer => evaluate_outer(arguments),
-        LinearAlgebraFn::Solve => evaluate_solve(arguments),
-        LinearAlgebraFn::Inverse => evaluate_inverse(arguments),
-        LinearAlgebraFn::Determinant => evaluate_determinant(arguments),
+        LinearAlgebraFn::Dot => evaluate_dot(arguments, ctx),
+        LinearAlgebraFn::Matmul => evaluate_matmul(arguments, ctx),
+        LinearAlgebraFn::Transpose => evaluate_transpose(arguments, ctx),
+        LinearAlgebraFn::Trace => evaluate_trace(arguments, ctx),
+        LinearAlgebraFn::Norm => evaluate_norm(arguments, ctx),
+        LinearAlgebraFn::Cross => evaluate_cross(arguments, ctx),
+        LinearAlgebraFn::Outer => evaluate_outer(arguments, ctx),
+        LinearAlgebraFn::Solve => evaluate_solve(arguments, ctx),
+        LinearAlgebraFn::Inverse => evaluate_inverse(arguments, ctx),
+        LinearAlgebraFn::Determinant => evaluate_determinant(arguments, ctx),
     }
 }

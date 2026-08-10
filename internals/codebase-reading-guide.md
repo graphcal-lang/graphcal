@@ -327,7 +327,9 @@ variant literal rules) run when `HirProject` is consumed by checking.
 ### 1.6 TIR and Dimension Checking
 
 `tir/typed.rs` resolves type annotations into semantic type expressions.
-`tir/dim_check/` infers and checks dimensions and concrete value types.
+`tir/materialized_shape.rs` defines the checked total-cardinality policy carried
+by concrete indexed expressions, and `tir/dim_check/` infers and checks
+dimensions, concrete value types, and those eager shape facts.
 
 In the module-aware project path, TIR resolution receives both a
 `ModuleResolver` and the project-wide `ProjectTypeStore`. The resolver maps
@@ -474,6 +476,7 @@ The compiler crate owns the functional core through TIR.
 | `ir/lower.rs`                 | IR assembly, body-source provenance, strict HIR freeze boundary |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
+| `tir/materialized_shape.rs`   | Checked total cardinality for eagerly materialized indexed values |
 | `tir/typed.rs`                | Typed semantic bodies, including atomic dynamic-unit entries   |
 | `tir/dim_check/`              | Dimension/type inference, including scalar unit-scale checks   |
 | `tir/dim_check/plot.rs`       | Plot/figure/layer dimension validation                        |
@@ -514,6 +517,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `eval/types.rs`         | Public `EvalResult`, `Value`, plot/assert result types        |
 | `eval_expr/`            | HIR expression evaluation kernels by expression family        |
 | `eval_expr/numeric.rs`  | Shared checked numeric helpers for expression evaluation      |
+| `eval_expr/work_budget.rs` | Declaration-scoped kernel budgets and cancellation cadence  |
 | `eval_expr/unit_scale.rs` | Dynamic unit-scale resolution and finite-quantity validation |
 | `eval_expr/aggregations.rs` | Aggregation built-ins such as sum/mean/min/max/count     |
 | `eval_expr/conversions.rs` | Unit/type conversion helpers                              |
@@ -1210,29 +1214,30 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 2. `crates/graphcal-compiler/src/ir/instance.rs`
 3. `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
 4. `crates/graphcal-compiler/src/ir/lower.rs`
-5. `crates/graphcal-compiler/src/tir/typed/model.rs`
-6. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
-7. `crates/graphcal-compiler/src/tir/typed/collect.rs`
-8. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
-9. `crates/graphcal-compiler/src/tir/typed/ops.rs`
-10. `crates/graphcal-compiler/src/tir/typed.rs`
-11. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
-12. `crates/graphcal-compiler/src/tir/typed/tests.rs`
-13. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
-14. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-15. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
-16. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
-17. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
-18. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
-19. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
-20. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
-21. `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
-22. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
-23. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
-24. `crates/graphcal-compiler/src/plot_props.rs`
-25. `crates/graphcal-compiler/src/plot_shape.rs`
-26. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-27. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
+5. `crates/graphcal-compiler/src/tir/materialized_shape.rs`
+6. `crates/graphcal-compiler/src/tir/typed/model.rs`
+7. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
+8. `crates/graphcal-compiler/src/tir/typed/collect.rs`
+9. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
+10. `crates/graphcal-compiler/src/tir/typed/ops.rs`
+11. `crates/graphcal-compiler/src/tir/typed.rs`
+12. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
+13. `crates/graphcal-compiler/src/tir/typed/tests.rs`
+14. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
+15. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+16. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
+17. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
+18. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
+19. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
+20. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
+21. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
+22. `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
+23. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
+24. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
+25. `crates/graphcal-compiler/src/plot_props.rs`
+26. `crates/graphcal-compiler/src/plot_shape.rs`
+27. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+28. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
 
 ### Stage 9 - Filesystem abstraction (`graphcal-io`)
 
@@ -1270,28 +1275,29 @@ Note: the proc-macro pipeline is parse/lower/manifest/codegen, but `codegen.rs` 
 
 ### Stage 13 - Runtime values and expression evaluator
 
-Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_expr/builtin_call.rs`, `eval_expr/arithmetic.rs`, `eval_expr/aggregations.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.rs`, and `eval_expr/mod.rs` form a mutually dependent group.
+Note: `eval_expr/work_budget.rs`, `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_expr/builtin_call.rs`, `eval_expr/arithmetic.rs`, `eval_expr/aggregations.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.rs`, and `eval_expr/mod.rs` form a mutually dependent group.
 
 1. `crates/graphcal-eval/src/decl_key.rs`
 2. `crates/graphcal-eval/src/eval_expr/numeric.rs`
-3. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
-4. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
-5. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-6. `crates/graphcal-eval/src/eval_expr/datetime.rs`
-7. `crates/graphcal-eval/src/lib.rs`
-8. `crates/graphcal-eval/src/host_fns.rs`
-9. `crates/graphcal-eval/src/domain_check.rs`
-10. `crates/graphcal-eval/src/execution_facts.rs`
-11. `crates/graphcal-eval/src/eval/bindings.rs`
-12. `crates/graphcal-eval/src/eval_expr/complex.rs`
-13. `crates/graphcal-eval/src/eval_expr/builtin_call.rs`
-14. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-15. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-16. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-17. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-18. `crates/graphcal-eval/src/eval_expr/mod.rs`
-19. `crates/graphcal-eval/src/exec_plan.rs`
-20. `crates/graphcal-eval/src/import_surface.rs`
+3. `crates/graphcal-eval/src/eval_expr/work_budget.rs`
+4. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
+5. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
+6. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+7. `crates/graphcal-eval/src/eval_expr/datetime.rs`
+8. `crates/graphcal-eval/src/lib.rs`
+9. `crates/graphcal-eval/src/host_fns.rs`
+10. `crates/graphcal-eval/src/domain_check.rs`
+11. `crates/graphcal-eval/src/execution_facts.rs`
+12. `crates/graphcal-eval/src/eval/bindings.rs`
+13. `crates/graphcal-eval/src/eval_expr/complex.rs`
+14. `crates/graphcal-eval/src/eval_expr/builtin_call.rs`
+15. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+16. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+17. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+18. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+19. `crates/graphcal-eval/src/eval_expr/mod.rs`
+20. `crates/graphcal-eval/src/exec_plan.rs`
+21. `crates/graphcal-eval/src/import_surface.rs`
 
 ### Stage 14 - Project loading, checking, and runtime orchestration
 

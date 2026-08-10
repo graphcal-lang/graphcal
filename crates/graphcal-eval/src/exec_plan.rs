@@ -397,11 +397,13 @@ fn eval_const_pools_for_dags(
         let values = visible_values_with_imports(dag, local_values, &visible_values);
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
+            work_budget: crate::eval_expr::fresh_work_budget(),
             builtin_fns,
             registry: tir.registry(),
             src,
             tir,
             current_dag: Some(dag),
+            current_decl: Some(key.clone()),
             root_values: Some(&values),
             checked_execution_facts: None,
             struct_field_constraints: None,
@@ -465,11 +467,13 @@ pub fn eval_consts_from_tir_with_cancellation(
         let key = RuntimeDeclKey::for_local_decl(dag, &name);
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
+            work_budget: crate::eval_expr::fresh_work_budget(),
             builtin_fns,
             registry: tir.registry(),
             src,
             tir,
             current_dag: Some(tir.root()),
+            current_decl: Some(key.as_resolved().clone()),
             root_values: Some(&visible_values),
             checked_execution_facts: None,
             struct_field_constraints: None,
@@ -732,11 +736,13 @@ fn resolve_domain_constraints_for_dag(
 
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
+        work_budget: crate::eval_expr::fresh_work_budget(),
         builtin_fns,
         registry: tir.registry(),
         src,
         tir,
         current_dag: Some(dag),
+        current_decl: None,
         root_values: Some(&visible_const_values),
         checked_execution_facts: None,
         struct_field_constraints: None,
@@ -777,7 +783,7 @@ fn resolve_domain_constraints_for_dag(
             &name.to_string(),
             target,
             &visible_const_values,
-            &ctx.with_src(constraint_src),
+            &ctx.for_decl(&resolved_key).with_src(constraint_src),
             constraint_src,
         )?;
         let runtime_key = RuntimeDeclKey::for_local_decl(dag, name);
@@ -1170,11 +1176,13 @@ fn resolve_application_field_constraints(
     )?;
     let application_ctx = EvalContext {
         cancellation: ctx.cancellation.clone(),
+        work_budget: crate::eval_expr::fresh_work_budget(),
         builtin_fns: ctx.builtin_fns,
         registry: ctx.tir.registry(),
         src: owner_src,
         tir: ctx.tir,
         current_dag: Some(dag),
+        current_decl: None,
         root_values: Some(&visible_const_values),
         checked_execution_facts: None,
         struct_field_constraints: None,

@@ -65,6 +65,13 @@ node delta_v: Velocity[Maneuver] = {
 
 Both `param` and `node` can be indexed.
 
+Each axis may contain at most 1,000,000 entries, and the product of all concrete
+axes in one eagerly materialized value must also be at most 1,000,000 scalar
+leaves. The total limit is checked before evaluation—including after `Nat` and
+required-index bindings are instantiated—so a compact multi-axis expression
+cannot request an unbounded allocation. An oversized concrete shape is a
+`D035` compile error.
+
 An indexed value is a **total map**: every label of the index must appear
 exactly once, and the compiler rejects missing or duplicate entries. The
 written order of map entries is presentation only — the constructed value is

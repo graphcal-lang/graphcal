@@ -20,12 +20,16 @@ use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
 use crate::registry::error::GraphcalError;
-use crate::registry::types::{SemanticRegistry, TypeGenericConstraint};
+use crate::registry::types::{IndexCardinality, SemanticRegistry, TypeGenericConstraint};
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
+use crate::tir::materialized_shape::{
+    MaterializedExpressionKey, MaterializedShape, MaterializedShapeError,
+};
 use crate::tir::typed::NatPolyForm;
 
 use super::super::builtins::infer_fn_dim_from_spans;
@@ -74,6 +78,101 @@ enum NominalDependencyTracking {
     Collect(NominalDependencyCollector),
 }
 
+#[derive(Clone, Default)]
+pub(in crate::tir::dim_check) struct MaterializedShapeCollector {
+    shapes: Rc<RefCell<HashMap<MaterializedExpressionKey, MaterializedShape>>>,
+}
+
+impl MaterializedShapeCollector {
+    pub(in crate::tir::dim_check) fn snapshot(
+        &self,
+    ) -> HashMap<MaterializedExpressionKey, MaterializedShape> {
+        self.shapes.borrow().clone()
+    }
+
+    fn record(
+        &self,
+        owner: Option<&ResolvedDeclName>,
+        expr: &hir::Expr,
+        inferred: &InferredType,
+        tir: &crate::tir::typed::TIR,
+        src: &NamedSource<Arc<String>>,
+    ) -> Result<(), GraphcalError> {
+        let Some(shape) = validate_inferred_materialized_shape(inferred, tir, src, expr.span)?
+        else {
+            return Ok(());
+        };
+        let Some(owner) = owner else {
+            return Ok(());
+        };
+        let key = MaterializedExpressionKey::new(owner.clone(), expr.span);
+        match self.shapes.borrow_mut().entry(key) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(shape);
+                Ok(())
+            }
+            std::collections::hash_map::Entry::Occupied(entry) if entry.get() == &shape => Ok(()),
+            std::collections::hash_map::Entry::Occupied(_) => Err(GraphcalError::InternalError {
+                message: format!(
+                    "materialized expression in `{owner}` inferred with inconsistent concrete shapes"
+                ),
+                src: src.clone(),
+                span: expr.span.into(),
+            }),
+        }
+    }
+}
+
+pub(in crate::tir::dim_check) fn validate_inferred_materialized_shape(
+    inferred: &InferredType,
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Option<MaterializedShape>, GraphcalError> {
+    let mut axes = Vec::new();
+    let mut current = inferred;
+    while let InferredType::Indexed { element, index } = current {
+        let Some(cardinality) = concrete_index_cardinality(index, tir, src, span)? else {
+            return Ok(None);
+        };
+        axes.push(cardinality);
+        current = element;
+    }
+    let Ok(axes) = NonEmpty::try_from_vec(axes) else {
+        return Ok(None);
+    };
+    MaterializedShape::try_new(axes).map(Some).map_err(
+        |MaterializedShapeError::ExceedsLimit { maximum }| {
+            GraphcalError::MaterializedShapeTooLarge {
+                maximum,
+                src: src.clone(),
+                span: span.into(),
+            }
+        },
+    )
+}
+
+fn concrete_index_cardinality(
+    index: &InferredIndex,
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Option<IndexCardinality>, GraphcalError> {
+    if let Some(index) = index.concrete_finite_index() {
+        return Ok(Some(index.cardinality()));
+    }
+    let Some(resolved) = index.declared_resolved() else {
+        return Ok(None);
+    };
+    tir.declared_index_def(resolved)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("concrete index definition `{resolved}` is missing from checked TIR"),
+            src: src.clone(),
+            span: span.into(),
+        })
+        .map(crate::registry::types::IndexDef::concrete_cardinality)
+}
+
 impl NominalDependencyTracking {
     fn record_type(&self, identity: &ResolvedStructTypeName) {
         match self {
@@ -99,6 +198,7 @@ struct HirInferenceControl {
     cancellation: crate::cancellation::CancellationToken,
     generic_substitutions: Option<ConcreteGenericSubstitutions>,
     nominal_dependencies: NominalDependencyTracking,
+    materialized_shapes: Option<(MaterializedShapeCollector, Option<ResolvedDeclName>)>,
 }
 
 struct HirLocalTypes<'a> {
@@ -115,6 +215,7 @@ impl HirLocalTypes<'_> {
             cancellation,
             generic_substitutions,
             NominalDependencyTracking::Disabled,
+            None,
         )
     }
 
@@ -126,14 +227,29 @@ impl HirLocalTypes<'_> {
             cancellation,
             None,
             NominalDependencyTracking::Collect(collector.clone()),
+            None,
         );
         (locals, collector)
+    }
+
+    fn root_with_materialized_shapes(
+        cancellation: &crate::cancellation::CancellationToken,
+        collector: MaterializedShapeCollector,
+        owner: Option<ResolvedDeclName>,
+    ) -> Self {
+        Self::root_with_tracking(
+            cancellation,
+            None,
+            NominalDependencyTracking::Disabled,
+            Some((collector, owner)),
+        )
     }
 
     fn root_with_tracking(
         cancellation: &crate::cancellation::CancellationToken,
         generic_substitutions: Option<ConcreteGenericSubstitutions>,
         nominal_dependencies: NominalDependencyTracking,
+        materialized_shapes: Option<(MaterializedShapeCollector, Option<ResolvedDeclName>)>,
     ) -> Self {
         Self {
             bindings: hir::LocalEnv::root(),
@@ -141,6 +257,7 @@ impl HirLocalTypes<'_> {
                 cancellation: cancellation.clone(),
                 generic_substitutions,
                 nominal_dependencies,
+                materialized_shapes,
             }),
         }
     }
@@ -412,6 +529,36 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_owner_and_cancellation(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<InferredType, GraphcalError> {
     let locals = HirLocalTypes::root(cancellation, None);
+    infer_hir_type(
+        expr,
+        owner_decl_name,
+        declared_types,
+        &locals,
+        dag,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+    )
+}
+
+pub(in crate::tir::dim_check) fn infer_hir_type_with_materialized_shapes_and_cancellation(
+    expr: &hir::Expr,
+    owner_decl_name: Option<&ResolvedDeclName>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &SemanticRegistry,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+    collector: MaterializedShapeCollector,
+) -> Result<InferredType, GraphcalError> {
+    let locals = HirLocalTypes::root_with_materialized_shapes(
+        cancellation,
+        collector,
+        owner_decl_name.cloned(),
+    );
     infer_hir_type(
         expr,
         owner_decl_name,
@@ -837,6 +984,9 @@ fn infer_hir_type_inner(
             src,
         )?,
     };
+    if let Some((collector, owner)) = &local_types.control.materialized_shapes {
+        collector.record(owner.as_ref(), expr, &inferred, tir, src)?;
+    }
     Ok(inferred)
 }
 
@@ -3255,6 +3405,7 @@ fn validate_concrete_type_obligations_inner(
     stack: &mut Vec<ConcreteStructApplicationKey>,
 ) -> Result<(), GraphcalError> {
     ctx.cancellation.checkpoint()?;
+    validate_inferred_materialized_shape(inferred, ctx.tir, ctx.src, ctx.span)?;
     match inferred {
         InferredType::Struct(type_name, type_args) => {
             for arg in type_args {

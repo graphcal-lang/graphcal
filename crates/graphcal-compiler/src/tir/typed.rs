@@ -575,6 +575,7 @@ fn type_resolve_dag(
         bindable_nominals,
         type_defs,
         decl_bindings: HashMap::new(),
+        materialized_shapes: HashMap::new(),
     };
 
     Ok(DagTIRSeed {

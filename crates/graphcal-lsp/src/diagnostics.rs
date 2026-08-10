@@ -407,6 +407,14 @@ mod tests {
                 "graphcal::D027",
             ),
             (
+                GraphcalError::MaterializedShapeTooLarge {
+                    maximum: 1_000_000,
+                    src: src(),
+                    span: span(),
+                },
+                "graphcal::D035",
+            ),
+            (
                 GraphcalError::InvalidDatetimeLiteral {
                     expectation: DatetimeLiteralExpectation::OffsetDateTime,
                     reason: "invalid".to_string(),

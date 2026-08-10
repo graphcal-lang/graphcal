@@ -188,7 +188,7 @@ pub(super) fn check_hir_file(
         &checked_owners,
     );
     graphcal_compiler::tir::dim_check::check_dimensions_tir_with_cancellation(
-        &tir,
+        &mut tir,
         file_src,
         cancellation,
     )?;
