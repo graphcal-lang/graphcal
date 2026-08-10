@@ -1,6 +1,7 @@
 //! Regression tests for `.local/2026-08-08_chunk-5-code-review.md`.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_eval::eval::{CompileError, EvalResult, compile_and_eval, compile_and_eval_project};
@@ -338,4 +339,159 @@ plot p = {
         panic!("expected datetime plot data, got {values:?}");
     };
     assert_eq!(values, &["2026-01-01T00:00:00.000000001Z"]);
+}
+
+fn successful_node<'a>(
+    result: &'a EvalResult,
+    name: &str,
+) -> Result<&'a graphcal_eval::eval::Value, String> {
+    result
+        .nodes
+        .iter()
+        .find(|(candidate, _)| candidate.to_string() == name)
+        .ok_or_else(|| format!("node `{name}` is missing"))?
+        .1
+        .as_ref()
+        .map_err(|error| format!("node `{name}` failed: {error}"))
+}
+
+fn every_quantity_uses_km(value: &graphcal_eval::eval::Value) -> Result<(), String> {
+    match value {
+        graphcal_eval::eval::Value::Quantity { display_unit, .. } => {
+            let label = display_unit.as_ref().map(|unit| unit.label.as_str());
+            (label == Some("km"))
+                .then_some(())
+                .ok_or_else(|| format!("expected km presentation, got {label:?}"))
+        }
+        graphcal_eval::eval::Value::Indexed { entries, .. } => {
+            entries.values().try_for_each(every_quantity_uses_km)
+        }
+        other => Err(format!(
+            "expected quantity presentation tree, got {other:?}"
+        )),
+    }
+}
+
+#[test]
+fn presentation_provenance_has_no_read_chain_depth_limit() {
+    let mut source = "node n0: Length = 1000.0 m -> km;\n".to_string();
+    for index in 1..=100 {
+        writeln!(source, "node n{index}: Length = @n{};", index - 1).unwrap();
+    }
+
+    let result = compile_and_eval(&source).unwrap();
+    every_quantity_uses_km(successful_node(&result, "n100").unwrap()).unwrap();
+}
+
+#[test]
+fn dag_call_output_keeps_definition_owned_presentation() {
+    let result = compile_and_eval(
+        r"
+dag units {
+    pub node distance: Length = 1000.0 m -> km;
+}
+node called: Length = @units().distance;
+",
+    )
+    .unwrap();
+
+    every_quantity_uses_km(successful_node(&result, "called").unwrap()).unwrap();
+}
+
+fn dynamic_call_display_values(value: &graphcal_eval::eval::Value) -> Result<Vec<f64>, String> {
+    let graphcal_eval::eval::Value::Indexed { entries, .. } = value else {
+        return Err(format!(
+            "expected indexed dynamic-call output, got {value:?}"
+        ));
+    };
+    entries
+        .values()
+        .map(|entry| {
+            let graphcal_eval::eval::Value::Quantity {
+                si_value,
+                display_unit,
+                ..
+            } = entry
+            else {
+                return Err(format!("expected quantity call output, got {entry:?}"));
+            };
+            let label = display_unit.as_ref().map(|unit| unit.label.as_str());
+            if label != Some("DynamicM") {
+                return Err(format!("expected DynamicM presentation, got {label:?}"));
+            }
+            graphcal_eval::eval::quantity_display_value(*si_value, display_unit.as_ref())
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn repeated_dag_calls_resolve_dynamic_units_in_each_call_environment() {
+    let result = compile_and_eval(
+        r"
+index Rate = { Low, High };
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+node values: Length[Rate] = for rate: Rate {
+    @units(rate: match rate {
+        Rate.Low => 2.0,
+        Rate.High => 3.0,
+    }).distance
+};
+",
+    )
+    .unwrap();
+
+    let displayed =
+        dynamic_call_display_values(successful_node(&result, "values").unwrap()).unwrap();
+    assert_eq!(displayed, [1.0, 1.0]);
+}
+
+#[test]
+fn multi_axis_comprehension_keeps_nested_leaf_presentation() {
+    let result = compile_and_eval(
+        r"
+index Row = { A, B };
+index Column = { X, Y };
+node grid: Length[Row, Column] =
+    for row: Row, column: Column { 1.0 km };
+",
+    )
+    .unwrap();
+
+    every_quantity_uses_km(successful_node(&result, "grid").unwrap()).unwrap();
+}
+
+#[test]
+fn equivalent_plot_operands_use_the_same_checked_dimension() {
+    let result = compile_and_eval(
+        r"
+node distance: Length = 1.0 m;
+plot left_first = {
+    mark: point,
+    encode: { x: @distance * 2.0 },
+};
+plot right_first = {
+    mark: point,
+    encode: { x: 2.0 * @distance },
+};
+",
+    )
+    .unwrap();
+
+    assert_eq!(result.plots.len(), 2);
+    let dimensions = result
+        .plots
+        .iter()
+        .map(|plot| {
+            plot.encoding_meta
+                .first()
+                .and_then(|(_, metadata)| metadata.dimension_label.as_deref())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(dimensions[0], dimensions[1]);
+    assert_eq!(dimensions[0], Some("Length"));
 }

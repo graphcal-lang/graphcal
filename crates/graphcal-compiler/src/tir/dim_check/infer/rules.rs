@@ -627,7 +627,7 @@ pub(super) fn if_rule(
 }
 
 /// Resolve a canonical HIR unit expression's dimension.
-pub(super) fn resolve_unit_dimension_or_diagnose(
+pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
     unit: &crate::hir::ResolvedUnitExpr,
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,

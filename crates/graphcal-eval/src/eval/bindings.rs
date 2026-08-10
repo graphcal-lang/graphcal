@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::hir;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::tir::presentation::PresentationProvenance;
 
 use crate::decl_key::RuntimeDeclKey;
 
@@ -12,11 +12,11 @@ use crate::decl_key::RuntimeDeclKey;
 pub(super) struct RuntimeParameterBinding {
     /// Semantic runtime value in Graphcal's internal representation.
     pub(crate) value: RuntimeValue,
-    /// Closed HIR value expression retained only for display-unit metadata.
+    /// Checked presentation provenance for the injected value.
     ///
-    /// Arrow-originated model values have no source display expression and use
-    /// the model boundary's canonical unit instead.
-    pub(crate) display_expr: Option<hir::Expr>,
+    /// Arrow-originated model values use the model boundary's canonical unit
+    /// and therefore carry no authored presentation preference here.
+    pub(crate) presentation: PresentationProvenance,
 }
 
 /// Plan-keyed parameter bindings for one evaluation row.

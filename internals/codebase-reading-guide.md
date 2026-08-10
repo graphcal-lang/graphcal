@@ -328,8 +328,10 @@ variant literal rules) run when `HirProject` is consumed by checking.
 
 `tir/typed.rs` resolves type annotations into semantic type expressions.
 `tir/materialized_shape.rs` defines the checked total-cardinality policy carried
-by concrete indexed expressions, and `tir/dim_check/` infers and checks
-dimensions, concrete value types, and those eager shape facts.
+by concrete indexed expressions. `tir/presentation.rs` defines owner-qualified,
+structurally nested display provenance and checked plot-channel dimensions.
+`tir/dim_check/` infers and installs concrete value types, eager shape facts,
+and presentation facts before evaluation.
 
 In the module-aware project path, TIR resolution receives both a
 `ModuleResolver` and the project-wide `ProjectTypeStore`. The resolver maps
@@ -477,9 +479,11 @@ The compiler crate owns the functional core through TIR.
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
 | `tir/materialized_shape.rs`   | Checked total cardinality for eagerly materialized indexed values |
+| `tir/presentation.rs`         | Structured owner-qualified display and plot-channel facts     |
 | `tir/typed.rs`                | Typed semantic bodies, including atomic dynamic-unit entries   |
 | `tir/dim_check/`              | Dimension/type inference, including scalar unit-scale checks   |
 | `tir/dim_check/plot.rs`       | Plot/figure/layer dimension validation                        |
+| `tir/dim_check/presentation.rs` | Checked presentation derivation from canonical HIR          |
 
 ### 2.2 `graphcal-eval`
 
@@ -1215,29 +1219,31 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 3. `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
 4. `crates/graphcal-compiler/src/ir/lower.rs`
 5. `crates/graphcal-compiler/src/tir/materialized_shape.rs`
-6. `crates/graphcal-compiler/src/tir/typed/model.rs`
-7. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
-8. `crates/graphcal-compiler/src/tir/typed/collect.rs`
-9. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
-10. `crates/graphcal-compiler/src/tir/typed/ops.rs`
-11. `crates/graphcal-compiler/src/tir/typed.rs`
-12. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
-13. `crates/graphcal-compiler/src/tir/typed/tests.rs`
-14. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
-15. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-16. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
-17. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
-18. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
-19. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
-20. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
-21. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
-22. `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
-23. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
-24. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
-25. `crates/graphcal-compiler/src/plot_props.rs`
-26. `crates/graphcal-compiler/src/plot_shape.rs`
-27. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-28. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
+6. `crates/graphcal-compiler/src/tir/presentation.rs`
+7. `crates/graphcal-compiler/src/tir/typed/model.rs`
+8. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
+9. `crates/graphcal-compiler/src/tir/typed/collect.rs`
+10. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
+11. `crates/graphcal-compiler/src/tir/typed/ops.rs`
+12. `crates/graphcal-compiler/src/tir/typed.rs`
+13. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
+14. `crates/graphcal-compiler/src/tir/typed/tests.rs`
+15. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
+16. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+17. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
+18. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
+19. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
+20. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
+21. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
+22. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
+23. `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
+24. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
+25. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
+26. `crates/graphcal-compiler/src/plot_props.rs`
+27. `crates/graphcal-compiler/src/plot_shape.rs`
+28. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+29. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
+30. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
 
 ### Stage 9 - Filesystem abstraction (`graphcal-io`)
 

@@ -135,9 +135,11 @@ coordinate axis quantitatively by extracting the coordinate explicitly
 
 ### Unit-Aware Axis Titles
 
-Graphcal auto-generates axis titles from dimensional metadata. When an
-encoding channel references a dimensioned declaration (via `@`), the axis
-title is formatted as "Dimension (unit)":
+Graphcal auto-generates axis titles from the channel's checked inferred
+dimension and display provenance. The result does not depend on where a
+quantity appears syntactically: equivalent expressions such as
+`@distance * 2.0` and `2.0 * @distance` receive the same title. A dimensioned
+axis title is formatted as "Dimension (unit)":
 
 - `@velocity` with display unit `km/s` produces axis title **"Velocity (km/s)"**
 - `@power` with display unit `W` produces axis title **"Power (W)"**

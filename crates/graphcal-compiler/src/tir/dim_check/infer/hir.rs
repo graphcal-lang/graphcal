@@ -2448,7 +2448,9 @@ fn infer_hir_binop(
     )
 }
 
-fn hir_nat_to_linear_form(expr: &hir::NatExpr) -> Result<NatPolyForm, NatOverflowError> {
+pub(in crate::tir::dim_check) fn hir_nat_to_linear_form(
+    expr: &hir::NatExpr,
+) -> Result<NatPolyForm, NatOverflowError> {
     match expr {
         hir::NatExpr::Literal(n, _) => Ok(NatPolyForm::from_constant(*n)),
         hir::NatExpr::Param(param) => Ok(NatPolyForm::from_var(param.value.name.clone())),

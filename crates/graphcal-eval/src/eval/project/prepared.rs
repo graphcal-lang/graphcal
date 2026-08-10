@@ -466,12 +466,20 @@ impl PreparedProject {
             })?;
         let hir = self.lower_closed_binding(port, &normalized)?;
         let value = self.evaluate_closed_binding(&hir)?;
+        let presentation = graphcal_compiler::tir::dim_check::checked_expression_presentation(
+            &self.tir,
+            port.runtime_key.as_resolved(),
+            &hir,
+            &self.source,
+            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        )
+        .map_err(CompileError::Eval)?;
         Ok(ParameterValue {
             plan_id: self.plan_id,
             position,
             binding: RuntimeParameterBinding {
                 value,
-                display_expr: Some(hir),
+                presentation,
             },
         })
     }
@@ -659,7 +667,7 @@ impl PreparedProject {
 
         let builtin_fns = builtin_functions();
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
-        let EvalLoopResult { values, errors } = run_eval_loop_with_bindings(
+        let EvalLoopResult { values, errors, .. } = run_eval_loop_with_bindings(
             &self.plan,
             &row.bindings,
             &self.tir,
@@ -692,6 +700,7 @@ impl PreparedProject {
             current_decl: None,
             root_values: Some(&values),
             checked_execution_facts: Some(&self.plan.checked_execution_facts),
+            presentation_calls: None,
             struct_field_constraints: Some(&self.plan.struct_field_constraints),
             generic_nat_bindings: None,
             host_fns: Some(&self.host_fns),
@@ -1029,7 +1038,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Quantity(si_value),
-                display_expr: None,
+                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
             },
         )
     }
@@ -1048,7 +1057,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Int(value),
-                display_expr: None,
+                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
             },
         )
     }
@@ -1067,7 +1076,7 @@ impl ParameterBindingBuilder<'_> {
             position,
             RuntimeParameterBinding {
                 value: RuntimeValue::Bool(value),
-                display_expr: None,
+                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
             },
         )
     }
@@ -1108,7 +1117,7 @@ impl ParameterBindingBuilder<'_> {
                     index_name: index.clone(),
                     variant: variant.clone(),
                 },
-                display_expr: None,
+                presentation: graphcal_compiler::tir::presentation::PresentationProvenance::None,
             },
         )
     }
@@ -1678,6 +1687,7 @@ impl PreparedProject {
             current_decl: None,
             root_values: Some(&values),
             checked_execution_facts: Some(&self.plan.checked_execution_facts),
+            presentation_calls: None,
             struct_field_constraints: Some(&self.plan.struct_field_constraints),
             generic_nat_bindings: None,
             host_fns: Some(&self.host_fns),

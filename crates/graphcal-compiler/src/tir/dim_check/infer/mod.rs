@@ -12,6 +12,8 @@ pub(super) mod hir;
 mod linear_algebra;
 mod rules;
 
+pub(in crate::tir::dim_check) use rules::resolve_unit_dimension_or_diagnose;
+
 use super::InferredIndex;
 use crate::registry::types::SemanticRegistry;
 

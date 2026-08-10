@@ -25,7 +25,7 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::ast::EncodingChannel;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 
-use super::types::{DisplayUnit, PlotFieldValue, epoch_to_rfc3339, quantity_display_value};
+use super::types::{DisplayUnit, PlotFieldValue, Value, epoch_to_rfc3339, quantity_display_value};
 
 /// One leaf datum of an encoding channel.
 #[derive(Debug, Clone, PartialEq)]
@@ -178,6 +178,114 @@ pub(super) fn channel_data_from_runtime_with_display_unit(
     }];
     axes.extend(inner_axes.unwrap_or_default());
     Ok(ChannelData { axes, values })
+}
+
+/// Flatten runtime data using per-leaf display metadata from its checked public projection.
+pub(super) fn channel_data_from_presented_value(
+    runtime: &RuntimeValue,
+    presented: &Value,
+) -> Result<ChannelData, String> {
+    let RuntimeValue::Indexed {
+        index_name,
+        entries,
+    } = runtime
+    else {
+        let display_unit = match (runtime, presented) {
+            (RuntimeValue::Quantity(_), Value::Quantity { display_unit, .. })
+            | (RuntimeValue::Complex(_), Value::Complex { display_unit, .. }) => {
+                display_unit.as_ref()
+            }
+            _ => None,
+        };
+        return Ok(ChannelData {
+            axes: Vec::new(),
+            values: vec![plot_datum_from_leaf(runtime, display_unit)?],
+        });
+    };
+    let Value::Indexed {
+        index_name: presented_index,
+        entries: presented_entries,
+        ..
+    } = presented
+    else {
+        return Err("checked plot presentation does not mirror indexed runtime data".to_string());
+    };
+    if !index_name.matches_ref(presented_index) {
+        return Err(format!(
+            "checked plot presentation index `{presented_index}` does not match runtime index `{index_name}`"
+        ));
+    }
+
+    let entry_keys = entries.keys().cloned().collect::<Vec<_>>();
+    let mut inner_axes: Option<Vec<PlotAxis>> = None;
+    let mut values = Vec::new();
+    for (key, entry) in entries {
+        let presented_entry = presented_entries
+            .get(key)
+            .ok_or_else(|| format!("checked plot presentation is missing indexed entry `{key}`"))?;
+        let entry_data = channel_data_from_presented_value(entry, presented_entry)?;
+        match &inner_axes {
+            None => inner_axes = Some(entry_data.axes),
+            Some(expected)
+                if expected.len() == entry_data.axes.len()
+                    && expected
+                        .iter()
+                        .zip(&entry_data.axes)
+                        .all(|(left, right)| left.matches(right)) => {}
+            Some(_) => {
+                return Err(format!(
+                    "entries of `{}` have inconsistent index axes",
+                    index_name.display_name()
+                ));
+            }
+        }
+        values.extend(entry_data.values);
+    }
+    let mut axes = vec![PlotAxis {
+        index: index_name.clone(),
+        entry_keys,
+    }];
+    axes.extend(inner_axes.unwrap_or_default());
+    Ok(ChannelData { axes, values })
+}
+
+/// Return one unit label shared by every quantity leaf in a presented channel.
+pub(super) fn uniform_quantity_unit_label(value: &Value) -> Result<Option<String>, String> {
+    enum UniformUnit {
+        NoQuantity,
+        Quantity(Option<String>),
+    }
+
+    fn visit(value: &Value, found: &mut UniformUnit) -> Result<(), String> {
+        match value {
+            Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } => {
+                let label = display_unit.as_ref().map(|unit| unit.label.clone());
+                match found {
+                    UniformUnit::NoQuantity => *found = UniformUnit::Quantity(label),
+                    UniformUnit::Quantity(expected) if *expected == label => {}
+                    UniformUnit::Quantity(_) => {
+                        return Err("plot channel quantity leaves do not share one display unit"
+                            .to_string());
+                    }
+                }
+            }
+            Value::Indexed { entries, .. } => {
+                entries.values().try_for_each(|entry| visit(entry, found))?;
+            }
+            Value::Struct { fields, .. } => {
+                fields.values().try_for_each(|field| visit(field, found))?;
+            }
+            Value::Bool(_) | Value::Int(_) | Value::Label { .. } | Value::Datetime { .. } => {}
+        }
+        Ok(())
+    }
+
+    let mut found = UniformUnit::NoQuantity;
+    visit(value, &mut found)?;
+    match found {
+        UniformUnit::NoQuantity | UniformUnit::Quantity(None) => Ok(None),
+        UniformUnit::Quantity(Some(label)) => Ok(Some(label)),
+    }
 }
 
 /// Assemble a channel's projected data into a `PlotFieldValue`, rejecting

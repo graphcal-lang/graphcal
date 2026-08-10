@@ -1139,6 +1139,8 @@ pub struct DagSemanticBody {
         crate::tir::materialized_shape::MaterializedExpressionKey,
         crate::tir::materialized_shape::MaterializedShape,
     >,
+    /// Checked structured display and plot-channel presentation facts.
+    pub presentation: crate::tir::presentation::DagPresentationFacts,
 }
 
 /// A resolved constructor and the tagged-union member it constructs.
@@ -1316,6 +1318,23 @@ impl TIR {
         self.dags
             .iter()
             .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
+    }
+
+    /// Find the checked DAG environment that physically contains a declaration.
+    ///
+    /// Included declarations retain instance-qualified semantic owners even
+    /// though their instantiated bodies execute inside the importing DAG.
+    #[must_use]
+    pub fn dag_containing_declaration(&self, declaration: &ResolvedDeclName) -> Option<&DagTIR> {
+        self.dags.iter().find_map(|(_, dag)| {
+            dag.consts()
+                .iter()
+                .map(|entry| &entry.name)
+                .chain(dag.params().iter().map(|entry| &entry.name))
+                .chain(dag.nodes().iter().map(|entry| &entry.name))
+                .any(|name| dag.resolved_decl_key_for_local(name) == *declaration)
+                .then_some(dag)
+        })
     }
 
     /// Borrow resolved extern function signatures.
@@ -1534,6 +1553,29 @@ impl DagTIR {
     #[must_use]
     pub const fn semantic(&self) -> &DagSemanticBody {
         &self.semantic
+    }
+
+    /// Look up checked structured presentation for one declaration.
+    #[must_use]
+    pub fn declaration_presentation(
+        &self,
+        declaration: &ResolvedDeclName,
+    ) -> Option<&crate::tir::presentation::PresentationProvenance> {
+        self.semantic.presentation.declarations.get(declaration)
+    }
+
+    /// Look up checked plot-channel presentation facts.
+    #[must_use]
+    pub fn plot_channel_presentations(
+        &self,
+        plot: &ResolvedDeclName,
+    ) -> Option<
+        &HashMap<
+            crate::syntax::ast::EncodingChannel,
+            crate::tir::presentation::PlotChannelPresentation,
+        >,
+    > {
+        self.semantic.presentation.plot_channels.get(plot)
     }
 
     /// Look up the checked eager shape of one indexed expression.
