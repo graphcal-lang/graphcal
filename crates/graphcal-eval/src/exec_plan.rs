@@ -20,27 +20,13 @@ use crate::domain_check::{
     ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
     ResolvedDomainConstraint,
 };
-use crate::eval_expr::{
-    EvalContext, HirLocalValueMap, RuntimeValue, RuntimeValueMap, eval_hir_expr,
-};
+use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_hir_expr};
+use crate::execution_facts::{CheckedDagExecutionFacts, CheckedExecutionFacts, RuntimeValueMap};
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::tir::typed::{
     DagTIR, ResolvedDagDependencies, StructFieldConstraintKey, TIR,
 };
-
-/// Compile-time execution facts retained by a fully checked project.
-///
-/// These analyses are needed both by dependency interface construction and by
-/// runtime planning. Keeping their immutable stores shared avoids evaluating
-/// constants and resolving domain constraints a second time during `prepare`.
-#[derive(Debug, Clone)]
-pub struct CheckedExecutionFacts {
-    pub(crate) const_values: Arc<RuntimeValueMap>,
-    pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
-    pub(crate) struct_field_constraints:
-        Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
-}
 
 /// A compiled execution plan ready for runtime evaluation.
 #[derive(Debug)]
@@ -68,6 +54,8 @@ pub struct ExecPlan {
     /// `ExprKind::ConstructorCall` evaluation to validate field values.
     pub(crate) struct_field_constraints:
         Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
+    /// Per-DAG checked facts required by nested callable evaluation.
+    pub(crate) checked_execution_facts: CheckedExecutionFacts,
 }
 
 /// Compile a TIR into an execution plan.
@@ -105,32 +93,24 @@ pub fn compile_with_cancellation(
 }
 
 /// Evaluate and validate compile-time facts needed by later execution planning.
+#[cfg(test)]
 pub fn check_execution_facts_with_cancellation(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<CheckedExecutionFacts, GraphcalError> {
-    cancellation.checkpoint()?;
-    let const_values = eval_consts_from_tir_with_cancellation(tir, src, cancellation)?;
-    cancellation.checkpoint()?;
-    let domain_constraints =
-        resolve_domain_constraints_with_cancellation(tir, &const_values, src, cancellation)?;
-    cancellation.checkpoint()?;
-    let struct_field_constraints =
-        resolve_struct_field_constraints_with_cancellation(tir, &const_values, src, cancellation)?;
-    cancellation.checkpoint()?;
-    check_const_struct_field_constraints_at_compile_time(
-        tir,
-        &const_values,
-        &struct_field_constraints,
-        src,
-    )?;
+    check_execution_facts_with_inherited(tir, &CheckedExecutionFacts::empty(), src, cancellation)
+}
 
-    Ok(CheckedExecutionFacts {
-        const_values: Arc::new(const_values),
-        domain_constraints: Arc::new(domain_constraints),
-        struct_field_constraints: Arc::new(struct_field_constraints),
-    })
+/// Check every DAG not already present in `inherited`, preserving dependency
+/// facts (including their defining source) while compiling an importing file.
+pub fn check_execution_facts_with_inherited(
+    tir: &TIR,
+    inherited: &CheckedExecutionFacts,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CheckedExecutionFacts, GraphcalError> {
+    check_dag_execution_facts(tir, inherited, src, cancellation)
 }
 
 /// Build a runtime schedule from facts retained by the checked project.
@@ -141,10 +121,21 @@ pub fn compile_checked_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
     cancellation.checkpoint()?;
-    let topo_order = build_runtime_dag(tir, src, cancellation)?;
+    let root_facts =
+        facts
+            .for_dag(tir.root_dag_id())
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!(
+                    "checked execution facts are missing root DAG `{}`",
+                    tir.root_dag_id()
+                ),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+    debug_assert_eq!(&root_facts.dag_id, tir.root_dag_id());
 
     Ok(ExecPlan {
-        const_values: Arc::clone(&facts.const_values),
+        const_values: Arc::clone(&root_facts.const_values),
         imported_values: tir
             .root()
             .imported_bindings()
@@ -158,15 +149,16 @@ pub fn compile_checked_with_cancellation(
                 })
             })
             .collect(),
-        topo_order,
+        topo_order: root_facts.topo_order.as_ref().clone(),
         assumes_map: tir.root().assumes_map().clone(),
         expected_fail: tir
             .root()
             .expected_fail_entries()
             .map(|(name, expected)| (name.clone(), expected.clone()))
             .collect(),
-        domain_constraints: Arc::clone(&facts.domain_constraints),
+        domain_constraints: Arc::clone(&root_facts.domain_constraints),
         struct_field_constraints: Arc::clone(&facts.struct_field_constraints),
+        checked_execution_facts: facts.clone(),
     })
 }
 
@@ -175,16 +167,18 @@ type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 fn visible_values_with_imports(
     dag: &DagTIR,
     local_const_values: &RuntimeValueMap,
+    known_const_values: &RuntimeValueMap,
 ) -> RuntimeValueMap {
-    let mut values: RuntimeValueMap = dag
-        .imported_bindings()
-        .iter()
-        .filter_map(|(name, binding)| {
-            binding
-                .value()
-                .map(|value| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
-        })
-        .collect();
+    let mut values = known_const_values.clone();
+    values.extend(
+        dag.imported_bindings()
+            .iter()
+            .filter_map(|(name, binding)| {
+                binding
+                    .value()
+                    .map(|value| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
+            }),
+    );
     values.extend(
         local_const_values
             .iter()
@@ -193,7 +187,260 @@ fn visible_values_with_imports(
     values
 }
 
-/// Topologically sort and evaluate const declarations from a TIR.
+fn known_const_values(
+    tir: &TIR,
+    facts: &HashMap<graphcal_compiler::dag_id::DagId, CheckedDagExecutionFacts>,
+) -> RuntimeValueMap {
+    let mut values = facts
+        .values()
+        .flat_map(|facts| facts.const_values.iter())
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<RuntimeValueMap>();
+    for dag in tir.dag_registry().values() {
+        values.extend(
+            dag.imported_bindings()
+                .iter()
+                .filter_map(|(name, binding)| {
+                    binding
+                        .value()
+                        .map(|value| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
+                }),
+        );
+    }
+    values
+}
+
+fn freeze_checked_execution_facts(
+    dag_facts: HashMap<graphcal_compiler::dag_id::DagId, CheckedDagExecutionFacts>,
+    struct_field_constraints: HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+) -> CheckedExecutionFacts {
+    CheckedExecutionFacts {
+        by_dag: Arc::new(
+            dag_facts
+                .into_iter()
+                .map(|(dag_id, facts)| (dag_id, Arc::new(facts)))
+                .collect(),
+        ),
+        struct_field_constraints: Arc::new(struct_field_constraints),
+    }
+}
+
+fn check_dag_execution_facts(
+    tir: &TIR,
+    inherited: &CheckedExecutionFacts,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<CheckedExecutionFacts, GraphcalError> {
+    cancellation.checkpoint()?;
+    let mut dag_facts = inherited
+        .by_dag
+        .iter()
+        .map(|(dag_id, facts)| (dag_id.clone(), facts.as_ref().clone()))
+        .collect::<HashMap<_, _>>();
+    let dag_ids = tir
+        .dag_registry()
+        .keys()
+        .filter(|dag_id| !dag_facts.contains_key(*dag_id))
+        .cloned()
+        .collect::<HashSet<_>>();
+    let initial_values = known_const_values(tir, &dag_facts);
+    let const_pools = eval_const_pools_for_dags(tir, &dag_ids, initial_values, src, cancellation)?;
+
+    for dag_id in &dag_ids {
+        cancellation.checkpoint()?;
+        let dag = tir
+            .dag_registry()
+            .get(dag_id)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("checked DAG `{dag_id}` disappeared from the TIR registry"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        let const_values = const_pools.get(dag_id).cloned().unwrap_or_default();
+        dag_facts.insert(
+            dag_id.clone(),
+            CheckedDagExecutionFacts {
+                dag_id: dag_id.clone(),
+                source: src.clone(),
+                topo_order: Arc::new(build_runtime_dag(dag, src, cancellation)?),
+                domain_constraints: Arc::new(HashMap::new()),
+                const_values: Arc::new(const_values),
+                struct_field_constraints: Arc::new(HashMap::new()),
+            },
+        );
+    }
+
+    let all_const_values = known_const_values(tir, &dag_facts);
+    for dag_id in &dag_ids {
+        cancellation.checkpoint()?;
+        let dag = &tir.dag_registry()[dag_id];
+        let facts = dag_facts
+            .get_mut(dag_id)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("newly checked DAG facts for `{dag_id}` were lost"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        facts.domain_constraints = Arc::new(resolve_domain_constraints_for_dag(
+            tir,
+            dag,
+            &facts.const_values,
+            &all_const_values,
+            facts.source(),
+            cancellation,
+        )?);
+    }
+
+    cancellation.checkpoint()?;
+    let field_constraints = resolve_struct_field_constraints_for_dags(
+        tir,
+        &dag_facts,
+        &all_const_values,
+        src,
+        cancellation,
+    )?;
+    for (owner, constraints) in field_constraints {
+        let facts = dag_facts
+            .get_mut(&owner)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("field-constraint owner `{owner}` has no checked DAG facts"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        let mut merged = facts.struct_field_constraints.as_ref().clone();
+        merged.extend(constraints);
+        facts.struct_field_constraints = Arc::new(merged);
+    }
+
+    let all_field_constraints = dag_facts
+        .values()
+        .flat_map(|facts| facts.struct_field_constraints.iter())
+        .map(|(key, constraint)| (key.clone(), constraint.clone()))
+        .collect::<HashMap<_, _>>();
+    for dag_id in &dag_ids {
+        let dag = &tir.dag_registry()[dag_id];
+        let facts = &dag_facts[dag_id];
+        check_dag_const_struct_field_constraints_at_compile_time(
+            dag,
+            &facts.const_values,
+            &all_field_constraints,
+            facts.source(),
+        )?;
+    }
+
+    Ok(freeze_checked_execution_facts(
+        dag_facts,
+        all_field_constraints,
+    ))
+}
+
+fn eval_const_pools_for_dags(
+    tir: &TIR,
+    dag_ids: &HashSet<graphcal_compiler::dag_id::DagId>,
+    mut visible_values: RuntimeValueMap,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>, GraphcalError> {
+    cancellation.checkpoint()?;
+    let mut graph = DiGraph::<ResolvedDeclKey, ()>::new();
+    let mut index_map = HashMap::new();
+    let mut declaration_by_key = HashMap::new();
+    let mut sorted_dag_ids = dag_ids.iter().collect::<Vec<_>>();
+    sorted_dag_ids.sort();
+    for dag_id in sorted_dag_ids {
+        let dag = &tir.dag_registry()[dag_id];
+        let mut entries = dag.consts().iter().collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        for entry in entries {
+            cancellation.checkpoint()?;
+            let key = dag.resolved_decl_key_for_local(&entry.name);
+            index_map.insert(key.clone(), graph.add_node(key.clone()));
+            declaration_by_key.insert(key, (dag_id.clone(), entry.name.clone(), entry.span));
+        }
+    }
+    for dag_id in dag_ids {
+        let dag = &tir.dag_registry()[dag_id];
+        for (dependent, dependencies) in &dag.semantic().dependencies.const_deps {
+            let Some(&dependent_idx) = index_map.get(dependent) else {
+                continue;
+            };
+            for dependency in dependencies {
+                if let Some(&dependency_idx) = index_map.get(dependency) {
+                    graph.add_edge(dependency_idx, dependent_idx, ());
+                }
+            }
+        }
+    }
+    let order = toposort(&graph, None).map_err(|cycle| {
+        let key = &graph[cycle.node_id()];
+        let (_, name, span) = &declaration_by_key[key];
+        GraphcalError::CyclicDependency {
+            name: name.to_string(),
+            src: src.clone(),
+            span: (*span).into(),
+        }
+    })?;
+
+    let builtin_fns = builtin_functions();
+    let empty_hir_locals = HirLocalValueMap::root();
+    let mut const_pools = dag_ids
+        .iter()
+        .cloned()
+        .map(|dag_id| (dag_id, RuntimeValueMap::new()))
+        .collect::<HashMap<_, _>>();
+    for index in order {
+        cancellation.checkpoint()?;
+        let key = &graph[index];
+        let (dag_id, name, _) = &declaration_by_key[key];
+        let dag = &tir.dag_registry()[dag_id];
+        let local_values = &const_pools[dag_id];
+        let values = visible_values_with_imports(dag, local_values, &visible_values);
+        let ctx = EvalContext {
+            cancellation: cancellation.clone(),
+            builtin_fns,
+            registry: tir.registry(),
+            src,
+            tir,
+            current_dag: Some(dag),
+            root_values: Some(&values),
+            checked_execution_facts: None,
+            struct_field_constraints: None,
+            generic_nat_bindings: None,
+            host_fns: None,
+        };
+        let hir_expr = dag
+            .const_expr(key)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("constant schedule references missing declaration `{name}`"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        if let Some((target, call_span)) = graphcal_compiler::hir::find_dag_call(hir_expr) {
+            return Err(GraphcalError::DagCallInCompileTime {
+                name: target.to_string(),
+                src: src.clone(),
+                span: call_span.into(),
+            });
+        }
+        let value = eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx)?;
+        let runtime_key = RuntimeDeclKey::resolved(key.clone());
+        visible_values.insert(runtime_key.clone(), value.clone());
+        let pool = const_pools
+            .get_mut(dag_id)
+            .ok_or_else(|| GraphcalError::InternalError {
+                message: format!("checked DAG `{dag_id}` has no initialized const pool"),
+                src: src.clone(),
+                span: Span::new(0, 0).into(),
+            })?;
+        pool.insert(runtime_key, value);
+    }
+    Ok(const_pools)
+}
+
+#[expect(
+    dead_code,
+    reason = "legacy root-only test helper retained for focused plan tests"
+)]
 pub fn eval_consts_from_tir_with_cancellation(
     tir: &TIR,
     src: &NamedSource<Arc<String>>,
@@ -210,7 +457,7 @@ pub fn eval_consts_from_tir_with_cancellation(
     let sorted_names = const_eval_order(dag, src, cancellation)?;
 
     let empty_hir_locals = HirLocalValueMap::root();
-    let mut visible_values = visible_values_with_imports(dag, &HashMap::new());
+    let mut visible_values = visible_values_with_imports(dag, &HashMap::new(), &HashMap::new());
     let mut local_const_values: RuntimeValueMap = HashMap::new();
 
     for name in sorted_names {
@@ -224,6 +471,7 @@ pub fn eval_consts_from_tir_with_cancellation(
             tir,
             current_dag: Some(tir.root()),
             root_values: Some(&visible_values),
+            checked_execution_facts: None,
             struct_field_constraints: None,
             generic_nat_bindings: None,
             host_fns: None,
@@ -253,6 +501,7 @@ pub fn eval_consts_from_tir_with_cancellation(
     Ok(local_const_values)
 }
 
+#[expect(dead_code, reason = "used only by the root-only const helper")]
 fn const_eval_order(
     dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
@@ -261,6 +510,7 @@ fn const_eval_order(
     const_eval_order_resolved(dag, &dag.semantic().dependencies, src, cancellation)
 }
 
+#[expect(dead_code, reason = "used only by the root-only const helper")]
 fn const_eval_order_resolved(
     dag: &DagTIR,
     deps: &ResolvedDagDependencies,
@@ -321,7 +571,7 @@ fn const_eval_order_resolved(
 
 /// Build a topologically sorted runtime DAG from params and nodes in a TIR.
 fn build_runtime_dag(
-    tir: &TIR,
+    dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<RuntimeDeclKey>, GraphcalError> {
@@ -349,7 +599,6 @@ fn build_runtime_dag(
     }
 
     cancellation.checkpoint()?;
-    let dag = tir.root();
     let mut decl_spans: Vec<(ScopedName, Span)> = Vec::new();
 
     let mut all_decls: Vec<DeclRef<'_>> = dag
@@ -452,15 +701,34 @@ fn runtime_eval_order_resolved(
 /// For const declarations, the resolved constraint is also checked against the
 /// already-evaluated const value at compile time, raising `DomainViolation`
 /// if the value is out of bounds.
+#[expect(dead_code, reason = "root-only compatibility helper for focused tests")]
 pub fn resolve_domain_constraints_with_cancellation(
     tir: &TIR,
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
+    resolve_domain_constraints_for_dag(
+        tir,
+        tir.root(),
+        const_values,
+        const_values,
+        src,
+        cancellation,
+    )
+}
+
+fn resolve_domain_constraints_for_dag(
+    tir: &TIR,
+    dag: &DagTIR,
+    const_values: &RuntimeValueMap,
+    all_const_values: &RuntimeValueMap,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>, GraphcalError> {
     cancellation.checkpoint()?;
     let builtin_fns = builtin_functions();
-    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
+    let visible_const_values = visible_values_with_imports(dag, const_values, all_const_values);
 
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
@@ -468,61 +736,53 @@ pub fn resolve_domain_constraints_with_cancellation(
         registry: tir.registry(),
         src,
         tir,
-        current_dag: Some(tir.root()),
+        current_dag: Some(dag),
         root_values: Some(&visible_const_values),
+        checked_execution_facts: None,
         struct_field_constraints: None,
         generic_nat_bindings: None,
-        // Compile-time contexts carry no host registry; dimension checking
-        // rejects extern calls in const and unit-scale positions.
         host_fns: None,
     };
-
     let mut constraints = HashMap::new();
-
-    // Iterate over consts, params, and nodes with stored HIR domain bounds.
-    // The `is_const` flag selects whether an immediate compile-time
-    // value-vs-constraint check runs below; params/nodes defer that check to
-    // `eval/runtime.rs`.
-    let decl_iter = tir
-        .root()
+    let decl_iter = dag
         .consts()
         .iter()
-        .map(|e| (&e.name, e.span, true))
-        .chain(tir.root().params().iter().map(|e| (&e.name, e.span, false)))
-        .chain(tir.root().nodes().iter().map(|e| (&e.name, e.span, false)));
+        .map(|entry| (&entry.name, entry.span, true))
+        .chain(
+            dag.params()
+                .iter()
+                .map(|entry| (&entry.name, entry.span, false)),
+        )
+        .chain(
+            dag.nodes()
+                .iter()
+                .map(|entry| (&entry.name, entry.span, false)),
+        );
 
     for (name, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
-        let key = tir.root().resolved_decl_key_for_local(name);
-        let domain_bounds = tir.root().semantic().domain_bounds.get(&key);
-        let Some(domain_bounds) = domain_bounds else {
+        let resolved_key = dag.resolved_decl_key_for_local(name);
+        let Some(domain_bounds) = dag.semantic().domain_bounds.get(&resolved_key) else {
             continue;
         };
-
         let constraint_src = domain_bounds.first().map_or(src, |bound| &bound.src);
         let target = resolve_constraint_target(
             &name.to_string(),
-            tir.root()
-                .resolved_decl_types()
-                .get(name)
-                .map(strip_indexed),
+            dag.resolved_decl_types().get(name).map(strip_indexed),
             decl_span,
             constraint_src,
         )?;
-        let bound_ctx = ctx.with_src(constraint_src);
         let resolved_constraint = resolve_constraint_from_bounds(
             domain_bounds,
             &name.to_string(),
             target,
             &visible_const_values,
-            &bound_ctx,
+            &ctx.with_src(constraint_src),
             constraint_src,
         )?;
-
-        // For const declarations, validate the (already-known) value at compile time.
-        let key = RuntimeDeclKey::for_local_decl(tir.root(), name);
+        let runtime_key = RuntimeDeclKey::for_local_decl(dag, name);
         if is_const
-            && let Some(value) = const_values.get(&key)
+            && let Some(value) = const_values.get(&runtime_key)
             && let Err(violation) =
                 crate::domain_check::check_domain_constraint(value, &resolved_constraint)
         {
@@ -534,10 +794,8 @@ pub fn resolve_domain_constraints_with_cancellation(
                 span: decl_span.into(),
             });
         }
-
-        constraints.insert(key, resolved_constraint);
+        constraints.insert(runtime_key, resolved_constraint);
     }
-
     Ok(constraints)
 }
 
@@ -814,9 +1072,9 @@ fn generic_nat_bindings(
 /// Field bounds are stored atomically with their resolved target types in each
 /// DAG's semantic type defs; this evaluates each constrained field's
 /// typed `min`/`max` bounds, validates `min ≤ max`, and stores the result keyed
-/// by the owning struct type, constructor, and field name —
-/// under both the owner-qualified identity and the root-owned display leaf so
-/// runtime lookups for boundary-created synthetic owners still hit.
+/// by the canonical owning struct type, constructor, and field name. Concrete
+/// include instances already receive their own canonical owner during lowering;
+/// no root-owned display alias is fabricated here.
 ///
 /// Bound types and target compatibility are validated earlier by the compiler's
 /// field-domain checks. This pass focuses on the runtime-relevant pieces: bound
@@ -837,54 +1095,90 @@ pub fn resolve_struct_field_constraints(
 
 struct FieldConstraintResolutionContext<'a> {
     tir: &'a TIR,
-    visible_const_values: &'a RuntimeValueMap,
+    dag_facts: &'a HashMap<graphcal_compiler::dag_id::DagId, CheckedDagExecutionFacts>,
+    all_const_values: &'a RuntimeValueMap,
     builtin_fns: &'a graphcal_compiler::registry::builtins::BuiltinFunctions,
-    src: &'a NamedSource<Arc<String>>,
+    fallback_src: &'a NamedSource<Arc<String>>,
     cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
+}
+
+type DagFieldConstraints = HashMap<
+    graphcal_compiler::dag_id::DagId,
+    HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+>;
+type ApplicationFieldConstraints = (
+    graphcal_compiler::dag_id::DagId,
+    Vec<(StructFieldConstraintKey, ResolvedDomainConstraint)>,
+);
+
+fn application_field_constraint_key(
+    application: &ConcreteNominalApplication,
+    key: &graphcal_compiler::tir::typed::ResolvedStructFieldTypeKey,
+) -> StructFieldConstraintKey {
+    StructFieldConstraintKey::for_application(
+        StructTypeRef::from_resolved(key.owning_type.clone()),
+        application.generic_args.clone(),
+        key.constructor.clone(),
+        key.field.clone(),
+    )
 }
 
 fn resolve_application_field_constraints(
     application: &ConcreteNominalApplication,
     ctx: &FieldConstraintResolutionContext<'_>,
-) -> Result<Vec<(StructFieldConstraintKey, ResolvedDomainConstraint)>, GraphcalError> {
+) -> Result<ApplicationFieldConstraints, GraphcalError> {
     ctx.cancellation.checkpoint()?;
-    let (dag, type_def) = ctx
+    let dag_id = application.identity.resolved().owner();
+    let dag = ctx
         .tir
         .dag_registry()
-        .values()
-        .find_map(|dag| {
-            dag.semantic()
-                .type_defs
-                .struct_types
-                .get(application.identity.resolved())
-                .map(|type_def| (dag, type_def))
-        })
+        .get(dag_id)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("type owner `{dag_id}` has no checked DAG"),
+            src: ctx.fallback_src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    let type_def = dag
+        .semantic()
+        .type_defs
+        .struct_types
+        .get(application.identity.resolved())
         .ok_or_else(|| GraphcalError::InternalError {
             message: format!(
                 "semantic type metadata missing concrete application `{}`",
                 application.identity
             ),
-            src: ctx.src.clone(),
+            src: ctx.fallback_src.clone(),
             span: Span::new(0, 0).into(),
         })?;
+    let facts = ctx
+        .dag_facts
+        .get(dag_id)
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!("type owner `{dag_id}` has no checked execution facts"),
+            src: ctx.fallback_src.clone(),
+            span: Span::new(0, 0).into(),
+        })?;
+    let owner_src = facts.source();
+    let visible_const_values =
+        visible_values_with_imports(dag, &facts.const_values, ctx.all_const_values);
     let nat_bindings = generic_nat_bindings(
         type_def,
         &application.generic_args,
-        ctx.src,
+        owner_src,
         Span::new(0, 0),
     )?;
     let application_ctx = EvalContext {
         cancellation: ctx.cancellation.clone(),
         builtin_fns: ctx.builtin_fns,
         registry: ctx.tir.registry(),
-        src: ctx.src,
+        src: owner_src,
         tir: ctx.tir,
         current_dag: Some(dag),
-        root_values: Some(ctx.visible_const_values),
+        root_values: Some(&visible_const_values),
+        checked_execution_facts: None,
         struct_field_constraints: None,
         generic_nat_bindings: Some(&nat_bindings),
-        // Compile-time contexts carry no host registry; dimension checking
-        // rejects extern calls in const and unit-scale positions.
         host_fns: None,
     };
     let mut constraints = Vec::new();
@@ -899,7 +1193,7 @@ fn resolve_application_field_constraints(
         let bound_span = bounds
             .first()
             .map_or_else(|| Span::new(0, 0), |bound| bound.span);
-        let constraint_src = bounds.first().map_or(ctx.src, |bound| &bound.src);
+        let constraint_src = bounds.first().map_or(owner_src, |bound| &bound.src);
         let target = resolve_constraint_target(
             &display_name,
             Some(strip_indexed(field_semantics.resolved_type())),
@@ -910,46 +1204,22 @@ fn resolve_application_field_constraints(
             bounds,
             &display_name,
             target,
-            ctx.visible_const_values,
+            &visible_const_values,
             &application_ctx.with_src(constraint_src),
             constraint_src,
         )?;
-        let args = application.generic_args.clone();
         constraints.push((
-            StructFieldConstraintKey::for_application(
-                StructTypeRef::from_resolved(key.owning_type.clone()),
-                args.clone(),
-                key.constructor.clone(),
-                key.field.clone(),
-            ),
-            constraint.clone(),
-        ));
-        constraints.push((
-            StructFieldConstraintKey::for_application(
-                StructTypeRef::with_owner(
-                    ctx.tir.root_dag_id().clone(),
-                    key.owning_type.to_unowned_def_name(),
-                ),
-                args,
-                key.constructor.clone(),
-                key.field.clone(),
-            ),
+            application_field_constraint_key(application, key),
             constraint,
         ));
     }
-    Ok(constraints)
+    Ok((dag_id.clone(), constraints))
 }
 
-pub fn resolve_struct_field_constraints_with_cancellation(
+fn collect_field_constraint_applications(
     tir: &TIR,
-    const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
-    cancellation.checkpoint()?;
-    let builtin_fns = builtin_functions();
-    let visible_const_values = visible_values_with_imports(tir.root(), const_values);
-
+) -> Result<HashSet<ConcreteNominalApplication>, GraphcalError> {
     let mut applications = HashSet::new();
     for declared in tir.build_declared_types(src)?.values() {
         collect_concrete_nominal_applications(declared, tir, src, &mut applications)?;
@@ -963,11 +1233,6 @@ pub fn resolve_struct_field_constraints_with_cancellation(
                 generic_args: application.generic_args().to_vec(),
             });
         }
-    }
-    // Non-generic definitions have one concrete application even when no value
-    // declaration mentions them. Preserve compile-time validation of their
-    // min/max ordering instead of making it usage-dependent.
-    for dag in tir.dag_registry().values() {
         for (identity, type_def) in &dag.semantic().type_defs.struct_types {
             if type_def.generic_params().is_empty() {
                 applications.insert(ConcreteNominalApplication {
@@ -977,19 +1242,66 @@ pub fn resolve_struct_field_constraints_with_cancellation(
             }
         }
     }
+    Ok(applications)
+}
 
-    let resolution_ctx = FieldConstraintResolutionContext {
+fn resolve_struct_field_constraints_for_dags(
+    tir: &TIR,
+    dag_facts: &HashMap<graphcal_compiler::dag_id::DagId, CheckedDagExecutionFacts>,
+    all_const_values: &RuntimeValueMap,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<DagFieldConstraints, GraphcalError> {
+    cancellation.checkpoint()?;
+    let builtin_fns = builtin_functions();
+    let context = FieldConstraintResolutionContext {
         tir,
-        visible_const_values: &visible_const_values,
+        dag_facts,
+        all_const_values,
         builtin_fns,
-        src,
+        fallback_src: src,
         cancellation,
     };
-    applications
-        .iter()
-        .map(|application| resolve_application_field_constraints(application, &resolution_ctx))
-        .collect::<Result<Vec<_>, _>>()
-        .map(|entries| entries.into_iter().flatten().collect())
+    let mut grouped = DagFieldConstraints::new();
+    for application in collect_field_constraint_applications(tir, src)? {
+        let (owner, entries) = resolve_application_field_constraints(&application, &context)?;
+        grouped.entry(owner).or_default().extend(entries);
+    }
+    Ok(grouped)
+}
+
+#[cfg(test)]
+pub fn resolve_struct_field_constraints_with_cancellation(
+    tir: &TIR,
+    const_values: &RuntimeValueMap,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
+    let dag_facts = tir
+        .dag_registry()
+        .keys()
+        .map(|dag_id| {
+            let values = if dag_id == tir.root_dag_id() {
+                const_values.clone()
+            } else {
+                RuntimeValueMap::new()
+            };
+            (
+                dag_id.clone(),
+                CheckedDagExecutionFacts {
+                    dag_id: dag_id.clone(),
+                    source: src.clone(),
+                    const_values: Arc::new(values),
+                    topo_order: Arc::new(Vec::new()),
+                    domain_constraints: Arc::new(HashMap::new()),
+                    struct_field_constraints: Arc::new(HashMap::new()),
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let all_const_values = known_const_values(tir, &dag_facts);
+    resolve_struct_field_constraints_for_dags(tir, &dag_facts, &all_const_values, src, cancellation)
+        .map(|grouped| grouped.into_values().flatten().collect())
 }
 
 /// Walk every top-level const value and validate it against resolved
@@ -1001,17 +1313,31 @@ pub fn resolve_struct_field_constraints_with_cancellation(
 /// # Errors
 ///
 /// Returns the first [`GraphcalError::DomainViolation`] encountered.
+#[expect(dead_code, reason = "root-only compatibility helper for focused tests")]
 pub fn check_const_struct_field_constraints_at_compile_time(
     tir: &TIR,
     const_values: &RuntimeValueMap,
     field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    for entry in tir.root().consts() {
-        let key = RuntimeDeclKey::for_local_decl(tir.root(), &entry.name);
+    check_dag_const_struct_field_constraints_at_compile_time(
+        tir.root(),
+        const_values,
+        field_constraints,
+        src,
+    )
+}
+
+fn check_dag_const_struct_field_constraints_at_compile_time(
+    dag: &DagTIR,
+    const_values: &RuntimeValueMap,
+    field_constraints: &HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for entry in dag.consts() {
+        let key = RuntimeDeclKey::for_local_decl(dag, &entry.name);
         if let Some(value) = const_values.get(&key) {
-            let owning_type = tir
-                .root()
+            let owning_type = dag
                 .resolved_decl_types()
                 .get(&entry.name)
                 .and_then(struct_type_ref_from_resolved_type);
@@ -1362,10 +1688,11 @@ mod tests {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let facts = check_execution_facts_with_cancellation(&tir, &src, &cancellation).unwrap();
         let plan = compile_checked_with_cancellation(&tir, &facts, &src, &cancellation).unwrap();
+        let root_facts = facts.for_dag(tir.root_dag_id()).unwrap();
 
-        assert!(Arc::ptr_eq(&facts.const_values, &plan.const_values));
+        assert!(Arc::ptr_eq(&root_facts.const_values, &plan.const_values));
         assert!(Arc::ptr_eq(
-            &facts.domain_constraints,
+            &root_facts.domain_constraints,
             &plan.domain_constraints
         ));
         assert!(Arc::ptr_eq(

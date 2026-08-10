@@ -505,6 +505,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `eval/project/output.rs`          | Presentation-only output projection                            |
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
 | `decl_key.rs`                     | Runtime declaration keys backed by `ResolvedName<Decl>`         |
+| `execution_facts.rs`              | Per-DAG checked constants, constraints, schedules, and source   |
 | `exec_plan.rs`          | Const evaluation, runtime topological order, domain prep      |
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
 | `eval/runtime.rs`       | Evaluation loop                                               |
@@ -1280,16 +1281,17 @@ Note: `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_exp
 7. `crates/graphcal-eval/src/lib.rs`
 8. `crates/graphcal-eval/src/host_fns.rs`
 9. `crates/graphcal-eval/src/domain_check.rs`
-10. `crates/graphcal-eval/src/eval/bindings.rs`
-11. `crates/graphcal-eval/src/eval_expr/complex.rs`
-12. `crates/graphcal-eval/src/eval_expr/builtin_call.rs`
-13. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
-14. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
-15. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
-16. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
-17. `crates/graphcal-eval/src/eval_expr/mod.rs`
-18. `crates/graphcal-eval/src/exec_plan.rs`
-19. `crates/graphcal-eval/src/import_surface.rs`
+10. `crates/graphcal-eval/src/execution_facts.rs`
+11. `crates/graphcal-eval/src/eval/bindings.rs`
+12. `crates/graphcal-eval/src/eval_expr/complex.rs`
+13. `crates/graphcal-eval/src/eval_expr/builtin_call.rs`
+14. `crates/graphcal-eval/src/eval_expr/arithmetic.rs`
+15. `crates/graphcal-eval/src/eval_expr/aggregations.rs`
+16. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
+17. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
+18. `crates/graphcal-eval/src/eval_expr/mod.rs`
+19. `crates/graphcal-eval/src/exec_plan.rs`
+20. `crates/graphcal-eval/src/import_surface.rs`
 
 ### Stage 14 - Project loading, checking, and runtime orchestration
 

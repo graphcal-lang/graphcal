@@ -192,8 +192,17 @@ pub(super) fn check_hir_file(
         file_src,
         cancellation,
     )?;
-    let checked_execution_facts =
-        crate::exec_plan::check_execution_facts_with_cancellation(&tir, file_src, cancellation)?;
+    let inherited_execution_facts = crate::execution_facts::CheckedExecutionFacts::merge(
+        module_artifacts
+            .values()
+            .map(|artifact| &artifact.checked_execution_facts),
+    );
+    let checked_execution_facts = crate::exec_plan::check_execution_facts_with_inherited(
+        &tir,
+        &inherited_execution_facts,
+        file_src,
+        cancellation,
+    )?;
     let declared_types = tir.build_declared_types(file_src)?;
     let entry_interface = entry_interface::build_checked_entry_interface(
         &source_declarations,

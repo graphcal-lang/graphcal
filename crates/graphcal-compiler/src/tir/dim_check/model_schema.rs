@@ -250,10 +250,8 @@ fn validate_application_obligations(
         super::InferredStructType::from_ref(identity.clone()),
         inferred_args,
     );
-    let declared_types = tir.build_declared_types(src)?;
     super::infer::hir::validate_concrete_type_obligations(
         &inferred_application,
-        &declared_types,
         tir.root(),
         tir,
         &tir.registry,

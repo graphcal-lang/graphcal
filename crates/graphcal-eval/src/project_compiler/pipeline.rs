@@ -112,10 +112,20 @@ fn store_module_artifact(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
-    let top_level_consts = top_level_const_values(
-        &compiled.tir,
-        compiled.checked_execution_facts.const_values.as_ref(),
-    );
+    let root_facts = compiled
+        .checked_execution_facts
+        .for_dag(compiled.tir.root_dag_id())
+        .ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: format!(
+                    "checked module artifact is missing root DAG `{}`",
+                    compiled.tir.root_dag_id()
+                ),
+                src: file_src.clone(),
+                span: Span::new(0, 0).into(),
+            })
+        })?;
+    let top_level_consts = top_level_const_values(&compiled.tir, &root_facts.const_values);
     let declared_types_by_dag = compiled
         .tir
         .local_dags()
@@ -137,6 +147,7 @@ fn store_module_artifact(
     module_artifacts.insert(
         file_dag_id.clone(),
         ModuleArtifact {
+            checked_execution_facts: compiled.checked_execution_facts,
             const_values: top_level_consts,
             declared_types: compiled.declared_types,
             declared_types_by_dag,

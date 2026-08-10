@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
 use graphcal_compiler::hir::{NominalField, NominalTypeDef};
@@ -23,16 +22,16 @@ use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::SemanticRegistry;
-use graphcal_compiler::tir::typed::{DagTIR, ResolvedDagDependencies, StructFieldConstraintKey};
+use graphcal_compiler::tir::typed::StructFieldConstraintKey;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::ResolvedDomainConstraint;
 
+pub use crate::execution_facts::RuntimeValueMap;
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
 pub use hir_eval::{HirLocalValueMap, eval_hir_expr};
 pub use unit_scale::resolve_unit_scale;
 pub(in crate::eval_expr) use unit_scale::{checked_finite_quantity, checked_unit_scaled_value};
-pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
@@ -58,6 +57,9 @@ pub struct EvalContext<'a> {
     /// self-imports route by their canonical source `DagId` rather than by a
     /// same-leaf name in the immediate caller's local value map.
     pub root_values: Option<&'a RuntimeValueMap>,
+    /// Checked facts for every runtime-callable DAG. Compile-time expression
+    /// contexts use `None` because DAG calls are statically forbidden there.
+    pub checked_execution_facts: Option<&'a crate::execution_facts::CheckedExecutionFacts>,
     /// Resolved domain constraints declared on struct/union member fields,
     /// keyed by owner-qualified struct/constructor/field identity. Looked up at
     /// every `ExprKind::ConstructorCall` to validate field values immediately.
@@ -131,6 +133,7 @@ impl<'a> EvalContext<'a> {
             tir: self.tir,
             current_dag: self.current_dag,
             root_values: self.root_values,
+            checked_execution_facts: self.checked_execution_facts,
             struct_field_constraints: self.struct_field_constraints,
             generic_nat_bindings: self.generic_nat_bindings,
             host_fns: self.host_fns,
@@ -182,115 +185,5 @@ fn imported_binding_value<'a>(
             ctx.root_values.and_then(|values| values.get(&key))
         }
         _ => None,
-    }
-}
-
-/// Kahn-style topological sort over a dag body's combined dep graph.
-///
-/// Produces an order in which each const/param/node appears after every one
-/// of its runtime and const dependencies. Cycles are impossible in a
-/// well-typed dag body because compile-time dep collection rejects them.
-/// # Errors
-///
-/// Returns the names left unordered if the dependency graph contains a
-/// cycle — impossible for a well-typed dag body, but a silently truncated
-/// order would surface later as a misleading "dag has no node X" error.
-fn topo_order_for_dag_body(dag_tir: &DagTIR) -> Result<Vec<ScopedName>, Vec<ScopedName>> {
-    topo_order_for_dag_body_resolved(dag_tir, &dag_tir.semantic().dependencies)
-}
-
-type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
-
-fn topo_order_for_dag_body_resolved(
-    dag_tir: &DagTIR,
-    deps: &ResolvedDagDependencies,
-) -> Result<Vec<ScopedName>, Vec<ScopedName>> {
-    use std::collections::BTreeSet;
-
-    let mut names: Vec<ScopedName> = dag_tir
-        .source_order()
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect();
-    names.sort();
-
-    let mut key_by_name: HashMap<ScopedName, ResolvedDeclKey> = HashMap::new();
-    let mut name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
-    for name in &names {
-        let key = dag_tir.resolved_decl_key_for_local(name);
-        key_by_name.insert(name.clone(), key.clone());
-        name_by_key.insert(key, name.clone());
-    }
-
-    let mut incoming: HashMap<ResolvedDeclKey, usize> = HashMap::new();
-    let mut outgoing: HashMap<ResolvedDeclKey, Vec<ResolvedDeclKey>> = HashMap::new();
-    for key in key_by_name.values() {
-        incoming.insert(key.clone(), 0);
-        outgoing.insert(key.clone(), Vec::new());
-    }
-
-    let add_edge =
-        |from: &ResolvedDeclKey,
-         to: &ResolvedDeclKey,
-         incoming: &mut HashMap<ResolvedDeclKey, usize>,
-         outgoing: &mut HashMap<ResolvedDeclKey, Vec<ResolvedDeclKey>>| {
-            if let (Some(out), Some(deg)) = (outgoing.get_mut(from), incoming.get_mut(to)) {
-                out.push(to.clone());
-                #[expect(
-                    clippy::arithmetic_side_effects,
-                    reason = "in-degree cannot overflow without an impossible in-memory edge count"
-                )]
-                {
-                    *deg += 1;
-                }
-            }
-        };
-
-    for (name, dep_set) in deps.runtime_deps.iter().chain(deps.const_deps.iter()) {
-        for dep in dep_set {
-            add_edge(dep, name, &mut incoming, &mut outgoing);
-        }
-    }
-
-    let mut ready: BTreeSet<ResolvedDeclKey> = incoming
-        .iter()
-        .filter(|(_, deg)| **deg == 0)
-        .map(|(name, _)| name.clone())
-        .collect();
-    let mut order = Vec::with_capacity(names.len());
-    while let Some(key) = ready.iter().next().cloned() {
-        ready.remove(&key);
-        if let Some(name) = name_by_key.get(&key) {
-            order.push(name.clone());
-        }
-        if let Some(succs) = outgoing.remove(&key) {
-            for succ in succs {
-                if let Some(deg) = incoming.get_mut(&succ) {
-                    #[expect(
-                        clippy::arithmetic_side_effects,
-                        reason = "Kahn traversal only decrements positive in-degree counters"
-                    )]
-                    {
-                        *deg -= 1;
-                    }
-                    if *deg == 0 {
-                        ready.insert(succ);
-                    }
-                }
-            }
-        }
-    }
-    if order.len() == key_by_name.len() {
-        Ok(order)
-    } else {
-        // Nodes with nonzero in-degree remain: a cycle. Report the leftovers
-        // instead of silently truncating the evaluation order.
-        let ordered: std::collections::HashSet<&ScopedName> = order.iter().collect();
-        let remaining: Vec<ScopedName> = names
-            .iter()
-            .filter(|name| key_by_name.contains_key(*name) && !ordered.contains(name))
-            .cloned()
-            .collect();
-        Err(remaining)
     }
 }

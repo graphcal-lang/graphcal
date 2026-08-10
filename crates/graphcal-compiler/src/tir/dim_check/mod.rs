@@ -375,7 +375,6 @@ fn validate_decl_concrete_type_obligations(
     })?;
     infer::hir::validate_concrete_type_obligations(
         &InferredType::from(declared),
-        ctx.declared_types,
         dag,
         ctx.tir,
         ctx.registry,
@@ -404,7 +403,6 @@ fn validate_hir_concrete_type_obligations(ctx: &DimCheckContext<'_>) -> Result<(
         );
         infer::hir::validate_concrete_type_obligations(
             &inferred,
-            ctx.declared_types,
             dag,
             ctx.tir,
             ctx.registry,
@@ -985,18 +983,10 @@ pub fn check_dimensions_tir_with_cancellation(
     // Validate domain constraints on HIR nominal fields. Types reachable
     // through dep imports were already validated in their defining file's
     // pipeline, so the redundant pass is idempotent. (#450 Position 1+2.)
-    let declared_types = tir.build_declared_types(src)?;
     cancellation.checkpoint()?;
     check_field_domain_constraint_targets(tir, src)?;
     cancellation.checkpoint()?;
-    check_field_domain_constraint_dimensions(
-        tir,
-        &declared_types,
-        &tir.registry,
-        builtin_fns,
-        src,
-        cancellation,
-    )?;
+    check_field_domain_constraint_dimensions(tir, &tir.registry, builtin_fns, src, cancellation)?;
 
     Ok(())
 }
@@ -1313,7 +1303,6 @@ pub fn check_external_value_expr_type(
     )?;
     infer::hir::validate_concrete_type_obligations(
         &inferred,
-        declared_types,
         tir.root(),
         tir,
         &tir.registry,
@@ -1662,6 +1651,24 @@ fn field_type_annotation<'a>(
         .find(|field| field.name() == &key.field)
 }
 
+fn field_constraint_definition_dag<'a>(
+    tir: &'a crate::tir::typed::TIR,
+    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<&'a crate::tir::typed::DagTIR, GraphcalError> {
+    tir.dag_registry()
+        .get(key.owning_type.owner())
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!(
+                "field-constraint owner `{}` has no checked DAG",
+                key.owning_type.owner()
+            ),
+            src: src.clone(),
+            span: span.into(),
+        })
+}
+
 /// Check that domain bound expressions on struct/union fields have the
 /// correct type. Mirrors [`check_domain_constraint_dimensions_dag`] for
 /// top-level decls.
@@ -1671,7 +1678,6 @@ fn field_type_annotation<'a>(
 /// from several DAGs, so a seen-set dedupes the checks.
 fn check_field_domain_constraint_dimensions(
     tir: &crate::tir::typed::TIR,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
     registry: &SemanticRegistry,
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
@@ -1744,12 +1750,15 @@ fn check_field_domain_constraint_dimensions(
             } else {
                 format!("{}.{}.{}", type_def.name(), variant.name(), field.name())
             };
+            let definition_dag =
+                field_constraint_definition_dag(tir, key, diagnostic_src, diagnostic_span)?;
             for bound in field_semantics.domain_bounds() {
+                let definition_types = definition_dag.build_declared_types(&bound.src)?;
                 let inferred = infer::hir::infer_hir_type_with_owner_and_cancellation(
                     &bound.value,
                     None,
-                    declared_types,
-                    dag,
+                    &definition_types,
+                    definition_dag,
                     tir,
                     registry,
                     builtin_fns,
