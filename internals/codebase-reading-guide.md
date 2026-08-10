@@ -516,8 +516,9 @@ elaboration out of runtime modules even though both currently share this crate.
 | `exec_plan.rs`          | Const evaluation, runtime topological order, domain prep      |
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
 | `eval/runtime.rs`       | Evaluation loop                                               |
-| `eval/display.rs`       | Display-unit extraction and attachment                        |
+| `eval/display.rs`       | Application of checked structured presentation facts          |
 | `eval/plot_data.rs`     | Runtime plot/figure/layer data extraction                     |
+| `eval/public_projection.rs` | Fallible checked runtime-to-public value projection       |
 | `eval/types.rs`         | Public `EvalResult`, `Value`, plot/assert result types        |
 | `eval_expr/`            | HIR expression evaluation kernels by expression family        |
 | `eval_expr/numeric.rs`  | Shared checked numeric helpers for expression evaluation      |
@@ -1333,15 +1334,16 @@ into an execution plan.
 17. `crates/graphcal-eval/src/project_compiler/session.rs`
 18. `crates/graphcal-eval/src/project_compiler/mod.rs`
 19. `crates/graphcal-eval/src/eval/plot_data.rs`
-20. `crates/graphcal-eval/src/eval/runtime.rs`
-21. `crates/graphcal-eval/src/eval/project/output.rs`
-22. `crates/graphcal-eval/src/eval/project/prepared.rs`
-23. `crates/graphcal-eval/src/eval/project/prepare.rs`
-24. `crates/graphcal-eval/src/eval/project/mod.rs`
-25. `crates/graphcal-eval/src/eval/mod.rs`
-26. `crates/graphcal-eval/src/eval/tests.rs`
-27. `crates/graphcal-eval/src/graph_ir/mod.rs`
-28. `crates/graphcal-eval/src/graph_ir/dot.rs`
+20. `crates/graphcal-eval/src/eval/public_projection.rs`
+21. `crates/graphcal-eval/src/eval/runtime.rs`
+22. `crates/graphcal-eval/src/eval/project/output.rs`
+23. `crates/graphcal-eval/src/eval/project/prepared.rs`
+24. `crates/graphcal-eval/src/eval/project/prepare.rs`
+25. `crates/graphcal-eval/src/eval/project/mod.rs`
+26. `crates/graphcal-eval/src/eval/mod.rs`
+27. `crates/graphcal-eval/src/eval/tests.rs`
+28. `crates/graphcal-eval/src/graph_ir/mod.rs`
+29. `crates/graphcal-eval/src/graph_ir/dot.rs`
 
 ### Stage 15 - Tenax Arrow transport (`graphcal-tenax`)
 

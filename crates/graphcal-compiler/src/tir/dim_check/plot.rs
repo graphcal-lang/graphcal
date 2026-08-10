@@ -8,7 +8,6 @@
 
 use std::collections::HashMap;
 
-use crate::dimension::Dimension;
 use crate::hir::ExprKind;
 use crate::ir::lower::LoweredPlotField;
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
@@ -19,9 +18,9 @@ use super::{
     DimCheckContext, InferredType, check_ineffective_conversions, helpers::format_inferred_type,
 };
 
-pub(super) type CheckedPlotChannelDimensions = HashMap<
+pub(super) type CheckedPlotChannelShapes = HashMap<
     crate::syntax::decl_name::ResolvedDeclName,
-    HashMap<crate::syntax::ast::EncodingChannel, Option<Dimension>>,
+    HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>,
 >;
 
 /// Check every plot/figure/layer declaration of one DAG and retain each
@@ -29,15 +28,15 @@ pub(super) type CheckedPlotChannelDimensions = HashMap<
 pub(super) fn check_plot_properties_dag(
     ctx: &DimCheckContext<'_>,
     dag: &crate::tir::typed::DagTIR,
-) -> Result<CheckedPlotChannelDimensions, GraphcalError> {
+) -> Result<CheckedPlotChannelShapes, GraphcalError> {
     check_plot_references(ctx, dag)?;
-    let mut channel_dimensions = HashMap::new();
+    let mut channel_types = HashMap::new();
     for entry in &dag.plots {
         let body = &entry.body;
         let owner = dag.resolved_decl_key_for_local(&entry.name);
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
-        let dimensions = check_plot_encodings(&entry_ctx, &owner, body)?;
-        channel_dimensions.insert(owner.clone(), dimensions);
+        let types = check_plot_encodings(&entry_ctx, &owner, body)?;
+        channel_types.insert(owner.clone(), types);
         for field in &body.mark_properties {
             let Some(prop) = MarkProperty::from_name(field.name.as_str()) else {
                 return Err(invalid_property(
@@ -102,7 +101,7 @@ pub(super) fn check_plot_properties_dag(
             check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
     }
-    Ok(channel_dimensions)
+    Ok(channel_types)
 }
 
 /// Validate the `plots:` lists of figure/layer declarations (#843):
@@ -169,7 +168,7 @@ fn check_plot_encodings(
     ctx: &DimCheckContext<'_>,
     owner: &crate::syntax::decl_name::ResolvedDeclName,
     body: &crate::ir::lower::LoweredPlotBody,
-) -> Result<HashMap<crate::syntax::ast::EncodingChannel, Option<Dimension>>, GraphcalError> {
+) -> Result<HashMap<crate::syntax::ast::EncodingChannel, PlotChannelShape>, GraphcalError> {
     let shapes = body
         .encodings
         .iter()
@@ -207,17 +206,7 @@ fn check_plot_encodings(
         .encodings
         .iter()
         .zip(shapes)
-        .map(|((channel, _), shape)| {
-            let dimension = match shape.leaf() {
-                PlotLeafKind::Quantity(dimension) => Some(dimension.clone()),
-                PlotLeafKind::Int
-                | PlotLeafKind::Bool
-                | PlotLeafKind::Datetime(_)
-                | PlotLeafKind::Key(_)
-                | PlotLeafKind::ContextualString => None,
-            };
-            (*channel, dimension)
-        })
+        .map(|((channel, _), shape)| (*channel, shape))
         .collect())
 }
 

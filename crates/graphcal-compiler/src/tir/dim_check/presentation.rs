@@ -44,7 +44,7 @@ pub fn checked_expression_presentation(
 /// Collect presentation facts for every DAG checked in this physical file.
 pub(super) fn collect_presentation_facts(
     tir: &crate::tir::typed::TIR,
-    plot_dimensions: &HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelDimensions>,
+    plot_shapes: &HashMap<crate::dag_id::DagId, super::plot::CheckedPlotChannelShapes>,
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<HashMap<crate::dag_id::DagId, DagPresentationFacts>, GraphcalError> {
@@ -59,18 +59,17 @@ pub(super) fn collect_presentation_facts(
         .map(|(dag_id, _)| dag_id.clone())
         .map(|dag_id| {
             cancellation.checkpoint()?;
-            let dimensions =
-                plot_dimensions
-                    .get(&dag_id)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "checked plot dimensions are missing for presentation DAG `{dag_id}`"
-                        ),
-                        src: src.clone(),
-                        span: Span::new(0, 0).into(),
-                    })?;
+            let shapes = plot_shapes
+                .get(&dag_id)
+                .ok_or_else(|| GraphcalError::InternalError {
+                    message: format!(
+                        "checked plot shapes are missing for presentation DAG `{dag_id}`"
+                    ),
+                    src: src.clone(),
+                    span: Span::new(0, 0).into(),
+                })?;
             resolver
-                .facts_for_dag(&dag_id, dimensions)
+                .facts_for_dag(&dag_id, shapes)
                 .map(|facts| (dag_id, facts))
         })
         .collect()
@@ -88,7 +87,7 @@ impl PresentationResolver<'_> {
     fn facts_for_dag(
         &mut self,
         dag_id: &crate::dag_id::DagId,
-        checked_plot_dimensions: &super::plot::CheckedPlotChannelDimensions,
+        checked_plot_shapes: &super::plot::CheckedPlotChannelShapes,
     ) -> Result<DagPresentationFacts, GraphcalError> {
         let dag = self.dag(dag_id, Span::new(0, 0))?;
         // Materialize keys to release the immutable DAG borrow before the
@@ -113,13 +112,11 @@ impl PresentationResolver<'_> {
 
         let mut plot_channels = HashMap::new();
         for (plot, body, body_src) in plot_entries {
-            let dimensions =
-                checked_plot_dimensions
+            let shapes =
+                checked_plot_shapes
                     .get(&plot)
                     .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "checked channel dimensions are missing for plot `{plot}`"
-                        ),
+                        message: format!("checked channel shapes are missing for plot `{plot}`"),
                         src: body_src.clone(),
                         span: Span::new(0, 0).into(),
                     })?;
@@ -127,17 +124,17 @@ impl PresentationResolver<'_> {
                 .encodings
                 .into_iter()
                 .map(|(channel, expr)| {
-                    let dimension = dimensions.get(&channel).cloned().ok_or_else(|| {
+                    let shape = shapes.get(&channel).cloned().ok_or_else(|| {
                         GraphcalError::InternalError {
                             message: format!(
-                                "checked dimension is missing for plot channel `{channel}`"
+                                "checked shape is missing for plot channel `{channel}`"
                             ),
                             src: body_src.clone(),
                             span: expr.span.into(),
                         }
                     })?;
                     let provenance = self.expression(&plot, dag_id, &expr, &body_src)?;
-                    Ok((channel, PlotChannelPresentation::new(dimension, provenance)))
+                    Ok((channel, PlotChannelPresentation::new(shape, provenance)))
                 })
                 .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
             plot_channels.insert(plot, channels);

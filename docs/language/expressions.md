@@ -112,6 +112,9 @@ quantities support exact `==` and `!=` when their dimensions match, but do not
 support ordering comparisons. [Index keys](indexes.md#index-keys) likewise
 support `==` and `!=` on the same axis only and have no ordering; compare
 their extracted contents (`coord(t)`, `to_int(i)`) when an order is needed.
+Struct and union equality is recursive: every field must compare equal,
+including indexed fields and coordinate-index keys (whose axis and position
+are both part of their identity).
 
 Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Time + Datetime`, and `Datetime - Time` produce `Datetime`, while
