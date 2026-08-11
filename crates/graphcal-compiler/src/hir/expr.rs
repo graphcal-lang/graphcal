@@ -1654,26 +1654,20 @@ impl<'a> ExprLowerer<'a> {
                 let path = reference.to_name_path();
                 let resolved = match self.ctx.resolver.resolve_unit_path(self.ctx.owner, &path) {
                     Ok(resolved) => resolved,
-                    Err(source) => self
+                    Err(ModuleResolveError::UnknownName { .. }) => self
                         .ctx
                         .resolve_prelude_unit_ref(reference)
                         .or_else(|| self.ctx.resolve_registry_unit_ref(reference))
-                        .map_or_else(
-                            || {
-                                if matches!(source, ModuleResolveError::UnknownName { .. }) {
-                                    Err(ExprLowerError::UnknownUnit {
-                                        name: reference.clone(),
-                                        span: item.name.span,
-                                    })
-                                } else {
-                                    Err(ExprLowerError::ModuleResolve {
-                                        source,
-                                        span: item.name.span,
-                                    })
-                                }
-                            },
-                            Ok,
-                        )?,
+                        .ok_or_else(|| ExprLowerError::UnknownUnit {
+                            name: reference.clone(),
+                            span: item.name.span,
+                        })?,
+                    Err(source) => {
+                        return Err(ExprLowerError::ModuleResolve {
+                            source,
+                            span: item.name.span,
+                        });
+                    }
                 };
                 Ok(ResolvedUnitExprItem {
                     op: item.op,
@@ -2006,17 +2000,23 @@ impl<'a> ExprLowerer<'a> {
         {
             return Ok(resolved);
         }
-        self.ctx
-            .resolver
-            .resolve_decl_path(self.ctx.owner, &path)
-            .or_else(|err| self.resolve_synthetic_child_decl_path(&path).ok_or(err))
-            .map_err(|source| match source {
-                ModuleResolveError::UnknownName { .. } => ExprLowerError::UnknownGraphRef {
-                    name: name.clone(),
-                    span,
-                },
-                source => ExprLowerError::ModuleResolve { source, span },
-            })
+        let resolved = match self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path) {
+            Ok(resolved) => Ok(resolved),
+            // Synthetic include-instance children intentionally are not module
+            // aliases. Retry only when the qualifier itself is absent; once
+            // the resolver reaches a real alias, its rejection is authoritative.
+            Err(source @ ModuleResolveError::UnknownModuleAlias { .. }) => {
+                self.resolve_synthetic_child_decl_path(&path).ok_or(source)
+            }
+            Err(source) => Err(source),
+        };
+        resolved.map_err(|source| match source {
+            ModuleResolveError::UnknownName { .. } => ExprLowerError::UnknownGraphRef {
+                name: name.clone(),
+                span,
+            },
+            source => ExprLowerError::ModuleResolve { source, span },
+        })
     }
 
     fn resolve_synthetic_child_decl_path(&self, path: &NamePath) -> Option<ResolvedDeclName> {

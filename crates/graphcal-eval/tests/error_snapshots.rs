@@ -381,6 +381,13 @@ fn error_unknown_unit() {
 }
 
 #[test]
+fn error_unit_name_wrong_universe() {
+    let source = include_str!("../../../tests/fixtures/invalid/unit_name_wrong_universe.gcl");
+    let rendered = render_error(source, "unit_name_wrong_universe.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_conversion_dim_mismatch() {
     let source = include_str!("../../../tests/fixtures/invalid/conversion_dim_mismatch.gcl");
     let rendered = render_error(source, "conversion_dim_mismatch.gcl");
