@@ -66,7 +66,7 @@ pub enum IndexCardinalityError {
 }
 
 /// Direct coordinate-generation rule for a concrete coordinate index.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CoordinateSpacing {
     /// Exact increment supplied by `range(..., step: ...)`.
     Step { step: f64 },
@@ -74,7 +74,7 @@ pub enum CoordinateSpacing {
     Linspace,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CoordinateIndexData {
     pub start: f64,
     pub end: f64,
@@ -245,7 +245,7 @@ pub enum IndexBindingContractError {
 }
 
 /// Closed semantic categories of indexes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IndexKind {
     /// A named label set, e.g. `index Maneuver = { Departure, Correction, Insertion };`
     Named { variants: Vec<IndexVariantName> },
@@ -261,7 +261,7 @@ pub enum IndexKind {
 }
 
 /// A concrete or required index with its ordered elements.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IndexDef {
     pub name: IndexName,
     pub kind: IndexKind,

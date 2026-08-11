@@ -20,8 +20,8 @@ fn reject_runtime_units_at_include_boundary(
     registry
         .units
         .all_units()
-        .filter(|(_, _, scale)| scale.is_dynamic())
-        .map(|(unit, _, _)| unit)
+        .filter(|(_, info)| info.scale.is_dynamic())
+        .map(|(unit, _)| unit)
         .min()
         .map_or(Ok(()), |unit| {
             Err(CompileError::Eval(GraphcalError::IncludeRuntimeUnit {
@@ -672,11 +672,18 @@ pub(super) fn merge_dep_dag_tirs(
     for (dep_dag_id, dep_eval) in module_artifacts {
         // Extern signatures travel with the dep's dag bodies: a qualified
         // inline call into a dep dag that uses extern functions resolves its
-        // signature from the importer's merged TIR at eval time. First
-        // insertion wins; conflicting cross-file redeclarations are rejected
-        // when the declaring files themselves compile.
+        // signature from the importer's merged TIR at eval time. Repeated
+        // identical signatures are idempotent; a divergent copy is an
+        // internal project-assembly error even if upstream checks missed it.
         for (key, function) in &dep_eval.extern_functions {
-            tir.insert_extern_function_if_absent(key.clone(), function.clone());
+            tir.insert_extern_function(key.clone(), function.clone())
+                .map_err(|error| {
+                    CompileError::Eval(GraphcalError::InternalError {
+                        message: error.to_string(),
+                        src: src.clone(),
+                        span: Span::new(0, 0).into(),
+                    })
+                })?;
         }
         for (dep_id, dag_tir) in &dep_eval.dag_tirs {
             if dep_id != dep_dag_id && !dep_id.is_descendant_of(dep_dag_id) {

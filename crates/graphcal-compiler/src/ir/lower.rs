@@ -5129,6 +5129,20 @@ pub struct ExternFunctionEntry {
     pub path_span: Span,
 }
 
+impl ExternFunctionEntry {
+    /// Whether two entries describe the same callable definition.
+    ///
+    /// Source aliases and spans are diagnostic provenance, not signature
+    /// identity, so independently compiled copies may differ in those fields.
+    pub(crate) fn has_same_callable_definition(&self, other: &Self) -> bool {
+        self.plugin == other.plugin
+            && self.name == other.name
+            && self.signature == other.signature
+            && self.result_struct.as_ref().map(|result| &result.resolved)
+                == other.result_struct.as_ref().map(|result| &result.resolved)
+    }
+}
+
 /// The record type a struct-returning extern function was declared with.
 #[derive(Debug, Clone)]
 pub struct ExternStructResult {

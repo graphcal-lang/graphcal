@@ -447,7 +447,15 @@ pub enum ProjectTypeStoreInsertError {
         identity: ResolvedStructTypeName,
         actual_owner: crate::dag_id::DagId,
     },
-    #[error("project type store already contains a different definition for `{identity}`")]
+    #[error(
+        "project type store already contains a different dimension definition for `{identity}`"
+    )]
+    CompetingDimensionDefinition { identity: ResolvedDimName },
+    #[error("project type store already contains a different unit definition for `{identity}`")]
+    CompetingUnitDefinition { identity: ResolvedUnitName },
+    #[error("project type store already contains a different index definition for `{identity}`")]
+    CompetingIndexDefinition { identity: ResolvedIndexName },
+    #[error("project type store already contains a different nominal definition for `{identity}`")]
     CompetingNominalDefinition { identity: ResolvedStructTypeName },
     #[error("project type store already assigns constructor `{constructor}` to `{first_owner}`")]
     CompetingConstructorOwner {
@@ -496,43 +504,89 @@ impl ProjectTypeStore {
         Ok(())
     }
 
+    fn insert_dimension_definition(
+        &mut self,
+        identity: ResolvedDimName,
+        dimension: &Dimension,
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        match self.dimensions.get(&identity) {
+            Some(existing) if existing != dimension => {
+                Err(ProjectTypeStoreInsertError::CompetingDimensionDefinition { identity })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.dimensions.insert(identity, dimension.clone());
+                Ok(())
+            }
+        }
+    }
+
+    fn insert_unit_definition(
+        &mut self,
+        identity: ResolvedUnitName,
+        info: &UnitInfo,
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        match self.units.get(&identity) {
+            Some(existing) if existing != info => {
+                Err(ProjectTypeStoreInsertError::CompetingUnitDefinition { identity })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.units.insert(identity, info.clone());
+                Ok(())
+            }
+        }
+    }
+
+    fn insert_index_definition(
+        &mut self,
+        identity: ResolvedIndexName,
+        index: &IndexDef,
+    ) -> Result<(), ProjectTypeStoreInsertError> {
+        match self.indexes.get(&identity) {
+            Some(existing) if existing.as_ref() != index => {
+                Err(ProjectTypeStoreInsertError::CompetingIndexDefinition { identity })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.indexes.insert(identity, Arc::new(index.clone()));
+                Ok(())
+            }
+        }
+    }
+
     /// Insert a standalone HIR DAG whose semantic registry contains only its
     /// local non-nominal definitions. The DAG identity comes from the body.
     ///
     /// # Errors
     ///
     /// Returns an invariant error if another HIR body already claims the same
-    /// canonical nominal identity.
+    /// canonical semantic identity with a different definition.
     pub fn insert_local_hir(
         &mut self,
         hir: &crate::ir::lower::HirDag,
     ) -> Result<(), ProjectTypeStoreInsertError> {
         let owner = hir.dag_id();
-        for (name, dim) in hir.registry.dimensions.all_dimensions() {
-            self.dimensions
-                .entry(ResolvedDimName::from_def(owner.clone(), name.clone()))
-                .or_insert_with(|| dim.clone());
+        for (name, dimension) in hir.registry.dimensions.all_dimensions() {
+            self.insert_dimension_definition(
+                ResolvedDimName::from_def(owner.clone(), name.clone()),
+                dimension,
+            )?;
         }
-        for (reference, _, _) in hir.registry.units.all_units() {
+        for (reference, info) in hir.registry.units.all_units() {
             if reference.is_qualified() {
                 continue;
             }
-            if let Some(info) = hir.registry.units.get_unit(reference) {
-                self.units
-                    .entry(ResolvedUnitName::from_def(
-                        owner.clone(),
-                        reference.name().clone(),
-                    ))
-                    .or_insert_with(|| info.clone());
-            }
+            self.insert_unit_definition(
+                ResolvedUnitName::from_def(owner.clone(), reference.name().clone()),
+                info,
+            )?;
         }
         for index in hir.registry.indexes.declared_indexes() {
-            self.indexes
-                .entry(ResolvedIndexName::from_def(
-                    owner.clone(),
-                    index.name.clone(),
-                ))
-                .or_insert_with(|| Arc::new(index.clone()));
+            self.insert_index_definition(
+                ResolvedIndexName::from_def(owner.clone(), index.name.clone()),
+                index,
+            )?;
         }
         self.insert_nominal_types(hir)?;
         Ok(())
@@ -569,9 +623,7 @@ impl ProjectTypeStore {
                 .ok_or_else(|| ProjectTypeStoreInsertError::MissingDimension {
                     identity: identity.clone(),
                 })?;
-            self.dimensions
-                .entry(identity)
-                .or_insert_with(|| dimension.clone());
+            self.insert_dimension_definition(identity, dimension)?;
         }
         for name in symbols.units().keys() {
             let identity = ResolvedUnitName::from_def(owner.clone(), name.clone());
@@ -581,7 +633,7 @@ impl ProjectTypeStore {
                     identity: identity.clone(),
                 }
             })?;
-            self.units.entry(identity).or_insert_with(|| info.clone());
+            self.insert_unit_definition(identity, info)?;
         }
         for name in symbols.indexes().keys() {
             let identity = ResolvedIndexName::from_def(owner.clone(), name.clone());
@@ -592,9 +644,7 @@ impl ProjectTypeStore {
                 .ok_or_else(|| ProjectTypeStoreInsertError::MissingIndex {
                     identity: identity.clone(),
                 })?;
-            self.indexes
-                .entry(identity)
-                .or_insert_with(|| Arc::new(index.clone()));
+            self.insert_index_definition(identity, index)?;
         }
         self.insert_nominal_types(hir)?;
         Ok(())
@@ -1155,6 +1205,15 @@ pub struct ResolvedConstructorTarget {
 // TIR struct
 // ---------------------------------------------------------------------------
 
+/// A project TIR already carried a different signature for one canonical
+/// plugin function.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("TIR already contains a different definition for plugin `{plugin}` function `{name}`")]
+pub struct CompetingExternFunctionDefinition {
+    pub plugin: crate::syntax::plugin::PluginPath,
+    pub name: crate::syntax::function_name::FnName,
+}
+
 /// Mutable assembly state for a project TIR.
 ///
 /// Type resolution creates this builder with a mandatory root DAG. Project
@@ -1237,13 +1296,30 @@ impl TirBuilder {
         self.module_aliases.insert(alias, target)
     }
 
-    /// Merge one canonical extern signature without replacing an earlier copy.
-    pub fn insert_extern_function_if_absent(
+    /// Merge one canonical extern signature without replacing an identical copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CompetingExternFunctionDefinition`] when the same plugin and
+    /// function identity already has a different callable signature.
+    pub fn insert_extern_function(
         &mut self,
         key: crate::syntax::plugin::ExternFnKey,
         function: crate::ir::lower::ExternFunctionEntry,
-    ) {
-        self.extern_functions.entry(key).or_insert(function);
+    ) -> Result<(), CompetingExternFunctionDefinition> {
+        match self.extern_functions.get(&key) {
+            Some(existing) if !existing.has_same_callable_definition(&function) => {
+                Err(CompetingExternFunctionDefinition {
+                    plugin: key.plugin,
+                    name: key.name,
+                })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.extern_functions.insert(key, function);
+                Ok(())
+            }
+        }
     }
 
     /// Finalize project assembly into an immutable, structurally valid TIR.
