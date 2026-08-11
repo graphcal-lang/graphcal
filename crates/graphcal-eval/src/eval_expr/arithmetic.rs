@@ -12,51 +12,88 @@ use super::EvalContext;
 // Helper functions
 // ---------------------------------------------------------------------------
 
-fn struct_value_type_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> bool {
-    lhs.matches_ref(rhs)
+fn struct_value_constructor_refs_equal(lhs: &StructTypeRef, rhs: &StructTypeRef) -> bool {
+    lhs.matches_ref(rhs) && lhs.name().atom() == rhs.name().atom()
 }
 
-fn runtime_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
-    match (lhs, rhs) {
+fn semantic_value_equals(lhs: &RuntimeValue, rhs: &RuntimeValue) -> bool {
+    match lhs {
         #[expect(
             clippy::float_cmp,
             reason = "Graphcal equality uses exact IEEE quantity equality"
         )]
-        (RuntimeValue::Quantity(lhs), RuntimeValue::Quantity(rhs)) => lhs == rhs,
-        (RuntimeValue::Complex(lhs), RuntimeValue::Complex(rhs)) => lhs == rhs,
-        (RuntimeValue::Bool(lhs), RuntimeValue::Bool(rhs)) => lhs == rhs,
-        (RuntimeValue::Int(lhs), RuntimeValue::Int(rhs)) => lhs == rhs,
-        (
-            RuntimeValue::Label {
-                index_name: lhs_index,
-                variant: lhs_variant,
-            },
+        RuntimeValue::Quantity(lhs) => {
+            matches!(rhs, RuntimeValue::Quantity(rhs) if lhs == rhs)
+        }
+        RuntimeValue::Complex(lhs) => {
+            matches!(rhs, RuntimeValue::Complex(rhs) if lhs == rhs)
+        }
+        RuntimeValue::Bool(lhs) => matches!(rhs, RuntimeValue::Bool(rhs) if lhs == rhs),
+        RuntimeValue::Int(lhs) => matches!(rhs, RuntimeValue::Int(rhs) if lhs == rhs),
+        RuntimeValue::Label {
+            index_name: lhs_index,
+            variant: lhs_variant,
+        } => matches!(
+            rhs,
             RuntimeValue::Label {
                 index_name: rhs_index,
                 variant: rhs_variant,
-            },
-        ) => lhs_index.matches_ref(rhs_index) && lhs_variant == rhs_variant,
-        (
+            } if lhs_index.matches_ref(rhs_index) && lhs_variant == rhs_variant
+        ),
+        RuntimeValue::Struct {
+            type_name: lhs_type,
+            generic_args: lhs_args,
+            fields: lhs_fields,
+        } => match rhs {
             RuntimeValue::Struct {
-                type_name: lt,
-                generic_args: la,
-                fields: lf,
-            },
-            RuntimeValue::Struct {
-                type_name: rt,
-                generic_args: ra,
-                fields: rf,
-            },
-        ) => {
-            struct_value_type_refs_equal(lt, rt)
-                && la == ra
-                && lf.len() == rf.len()
-                && lf
-                    .iter()
-                    .all(|(k, lvf)| rf.get(k).is_some_and(|rvf| runtime_value_equals(lvf, rvf)))
+                type_name: rhs_type,
+                generic_args: rhs_args,
+                fields: rhs_fields,
+            } => {
+                struct_value_constructor_refs_equal(lhs_type, rhs_type)
+                    && lhs_args == rhs_args
+                    && lhs_fields.len() == rhs_fields.len()
+                    && lhs_fields.iter().all(|(field, lhs_value)| {
+                        rhs_fields
+                            .get(field)
+                            .is_some_and(|rhs_value| semantic_value_equals(lhs_value, rhs_value))
+                    })
+            }
+            _ => false,
+        },
+        RuntimeValue::Indexed {
+            index_name: lhs_index,
+            entries: lhs_entries,
+        } => match rhs {
+            RuntimeValue::Indexed {
+                index_name: rhs_index,
+                entries: rhs_entries,
+            } => {
+                lhs_index.matches_ref(rhs_index)
+                    && lhs_entries.len() == rhs_entries.len()
+                    && lhs_entries.iter().zip(rhs_entries).all(
+                        |((lhs_key, lhs_value), (rhs_key, rhs_value))| {
+                            lhs_key == rhs_key && semantic_value_equals(lhs_value, rhs_value)
+                        },
+                    )
+            }
+            _ => false,
+        },
+        RuntimeValue::CoordinateLabel {
+            index_name: lhs_index,
+            position: lhs_position,
+            ..
+        } => matches!(
+            rhs,
+            RuntimeValue::CoordinateLabel {
+                index_name: rhs_index,
+                position: rhs_position,
+                ..
+            } if lhs_index.matches_ref(rhs_index) && lhs_position == rhs_position
+        ),
+        RuntimeValue::Datetime(lhs) => {
+            matches!(rhs, RuntimeValue::Datetime(rhs) if lhs == rhs)
         }
-        (RuntimeValue::Datetime(lhs), RuntimeValue::Datetime(rhs)) => lhs == rhs,
-        _ => false,
     }
 }
 
@@ -87,21 +124,13 @@ pub(super) fn eval_equality_values(
         (RuntimeValue::Indexed { .. }, _) | (_, RuntimeValue::Indexed { .. }) => {
             return Err(ctx.internal_error("indexed operand reached comparison evaluation", span));
         }
-        (RuntimeValue::Bool(lb), RuntimeValue::Bool(rb)) => lb == rb,
-        (RuntimeValue::Int(li), RuntimeValue::Int(ri)) => li == ri,
-        (RuntimeValue::Complex(lc), RuntimeValue::Complex(rc)) => lc == rc,
-        (
-            RuntimeValue::Label {
-                index_name: li,
-                variant: lv,
-            },
-            RuntimeValue::Label {
-                index_name: ri,
-                variant: rv,
-            },
-        ) => li.matches_ref(ri) && lv == rv,
-        (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. }) => runtime_value_equals(l, r),
-        (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) => le == re,
+        (RuntimeValue::Bool(_), RuntimeValue::Bool(_))
+        | (RuntimeValue::Int(_), RuntimeValue::Int(_))
+        | (RuntimeValue::Complex(_), RuntimeValue::Complex(_))
+        | (RuntimeValue::Label { .. }, RuntimeValue::Label { .. })
+        | (RuntimeValue::Struct { .. }, RuntimeValue::Struct { .. })
+        | (RuntimeValue::CoordinateLabel { .. }, RuntimeValue::CoordinateLabel { .. })
+        | (RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => semantic_value_equals(l, r),
         _ => {
             let lv = l
                 .expect_quantity("comparison operand")

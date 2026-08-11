@@ -373,6 +373,34 @@ fn every_quantity_uses_km(value: &graphcal_eval::eval::Value) -> Result<(), Stri
 }
 
 #[test]
+fn semantic_struct_equality_covers_constructors_indexed_and_coordinate_fields() {
+    let result = compile_and_eval(
+        r"
+index Sample = { A, B };
+index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
+type Choice { A, B }
+type IndexedHolder { IndexedHolder(values: Dimensionless[Sample]) }
+type KeyHolder { KeyHolder(key: Key<TimeStep>) }
+node constructors_differ: Bool = A != B;
+node indexed_equal: Bool =
+    IndexedHolder(values: { Sample.A: 1.0, Sample.B: 2.0 }) ==
+    IndexedHolder(values: { Sample.A: 1.0, Sample.B: 2.0 });
+node coordinate_equal: Bool =
+    KeyHolder(key: nearest_key(TimeStep, 1.0 s)) ==
+    KeyHolder(key: nearest_key(TimeStep, 1.0 s));
+",
+    )
+    .unwrap();
+
+    for name in ["constructors_differ", "indexed_equal", "coordinate_equal"] {
+        assert!(matches!(
+            successful_node(&result, name).unwrap(),
+            graphcal_eval::eval::Value::Bool(true)
+        ));
+    }
+}
+
+#[test]
 fn presentation_provenance_has_no_read_chain_depth_limit() {
     let mut source = "node n0: Length = 1000.0 m -> km;\n".to_string();
     for index in 1..=100 {

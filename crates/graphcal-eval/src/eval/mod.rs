@@ -6,6 +6,7 @@ mod bindings;
 mod display;
 mod plot_data;
 mod project;
+mod public_projection;
 pub(crate) mod runtime;
 #[cfg(test)]
 mod tests;

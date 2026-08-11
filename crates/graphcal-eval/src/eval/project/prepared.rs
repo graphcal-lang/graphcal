@@ -731,22 +731,15 @@ impl PreparedProject {
             .outputs
             .iter()
             .map(|output| {
-                values
-                    .get(&output.runtime_key)
-                    .map(|value| {
-                        crate::eval::runtime::runtime_to_value(
-                            value,
-                            Some(&output.declared_type),
-                            &self.tir,
-                            &self.source,
-                        )
-                    })
-                    .ok_or_else(|| {
-                        ModelExecutionError::Internal(format!(
-                            "selected output `{}` has no runtime value",
-                            output.name
-                        ))
-                    })
+                let runtime = values.get(&output.runtime_key).ok_or_else(|| {
+                    ModelExecutionError::Internal(format!(
+                        "selected output `{}` has no runtime value",
+                        output.name
+                    ))
+                })?;
+                crate::eval::public_projection::EvaluatedValue::new(runtime, &output.declared_type)
+                    .project(&self.tir, &self.source)
+                    .map_err(ModelExecutionError::from)
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(ModelRowOutcome::Success(outputs))
@@ -914,12 +907,10 @@ impl PreparedProject {
                 continue;
             };
             if let Some((runtime, declared_type)) = self.output_assembly.imported_values.get(name) {
-                let value = crate::eval::runtime::runtime_to_value(
-                    runtime,
-                    Some(declared_type),
-                    &self.tir,
-                    &self.source,
-                );
+                let value =
+                    crate::eval::public_projection::EvaluatedValue::new(runtime, declared_type)
+                        .project(&self.tir, &self.source)
+                        .map_err(CompileError::from)?;
                 push_output_value(
                     (name.clone(), Ok(value), decl_type),
                     &mut consts,

@@ -1982,21 +1982,13 @@ fn eval_boolean_not() {
 }
 
 #[test]
-fn eval_boolean_and_short_circuit() {
-    // When first operand is false, second should not matter
-    let result = compile_and_eval(
-        "param x: Dimensionless = 0.0;\nnode y: Dimensionless = if @x > 0.0 && @x < 10.0 { 1.0 } else { 0.0 };",
-    ).unwrap();
-    assert!((find_value(&result, "y") - 0.0).abs() < f64::EPSILON);
+fn eval_boolean_and_eagerly_evaluates_the_right_operand() {
+    assert_node_error("node y: Bool = false && sqrt(-1.0) > 0.0;", "y", "NaN");
 }
 
 #[test]
-fn eval_boolean_or_short_circuit() {
-    // When first operand is true, second should not matter
-    let result = compile_and_eval(
-        "param x: Dimensionless = 5.0;\nnode y: Dimensionless = if @x > 0.0 || @x < -10.0 { 1.0 } else { 0.0 };",
-    ).unwrap();
-    assert!((find_value(&result, "y") - 1.0).abs() < f64::EPSILON);
+fn eval_boolean_or_eagerly_evaluates_the_right_operand() {
+    assert_node_error("node y: Bool = true || sqrt(-1.0) > 0.0;", "y", "NaN");
 }
 
 #[test]

@@ -11,6 +11,7 @@ use indexmap::IndexMap;
 use crate::dag_id::DagId;
 use crate::dimension::Dimension;
 use crate::hir;
+use crate::plot_shape::{PlotChannelShape, PlotLeafKind};
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::syntax::ast::EncodingChannel;
 use crate::syntax::decl_name::ResolvedDeclName;
@@ -230,24 +231,40 @@ impl PresentationProvenance {
 /// Checked presentation facts for one plot encoding channel.
 #[derive(Debug, Clone)]
 pub struct PlotChannelPresentation {
-    dimension: Option<Dimension>,
+    shape: PlotChannelShape,
     provenance: PresentationProvenance,
 }
 
 impl PlotChannelPresentation {
     /// Pair the inferred quantity dimension with checked display provenance.
     #[must_use]
-    pub const fn new(dimension: Option<Dimension>, provenance: PresentationProvenance) -> Self {
-        Self {
-            dimension,
-            provenance,
-        }
+    pub const fn new(shape: PlotChannelShape, provenance: PresentationProvenance) -> Self {
+        Self { shape, provenance }
+    }
+
+    /// Already-inferred plottable type shape, including every checked axis.
+    #[must_use]
+    pub const fn shape(&self) -> &PlotChannelShape {
+        &self.shape
+    }
+
+    /// Already-inferred plottable scalar leaf type.
+    #[must_use]
+    pub const fn leaf(&self) -> &PlotLeafKind {
+        self.shape.leaf()
     }
 
     /// Quantity dimension inferred for the channel's scalar leaves.
     #[must_use]
     pub const fn dimension(&self) -> Option<&Dimension> {
-        self.dimension.as_ref()
+        match self.shape.leaf() {
+            PlotLeafKind::Quantity(dimension) => Some(dimension),
+            PlotLeafKind::Int
+            | PlotLeafKind::Bool
+            | PlotLeafKind::Datetime(_)
+            | PlotLeafKind::Key(_)
+            | PlotLeafKind::ContextualString => None,
+        }
     }
 
     /// Structured display provenance inferred for the channel expression.

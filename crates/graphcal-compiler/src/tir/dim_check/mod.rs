@@ -993,7 +993,7 @@ pub fn check_dimensions_tir_with_cancellation(
         .map(|(dag_id, dag)| {
             cancellation.checkpoint()?;
             let collector = infer::hir::MaterializedShapeCollector::default();
-            let plot_dimensions = check_dimensions_dag(
+            let plot_shapes = check_dimensions_dag(
                 dag,
                 tir,
                 &tir.registry,
@@ -1002,11 +1002,11 @@ pub fn check_dimensions_tir_with_cancellation(
                 cancellation,
                 &collector,
             )?;
-            Ok((dag_id.clone(), collector.snapshot(), plot_dimensions))
+            Ok((dag_id.clone(), collector.snapshot(), plot_shapes))
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
-    let mut checked_plot_dimensions = HashMap::new();
-    for (dag_id, shapes, plot_dimensions) in checked_dag_facts {
+    let mut checked_plot_shapes = HashMap::new();
+    for (dag_id, shapes, plot_shapes) in checked_dag_facts {
         let dag = tir
             .dags
             .get_mut(&dag_id)
@@ -1016,7 +1016,7 @@ pub fn check_dimensions_tir_with_cancellation(
                 span: Span::new(0, 0).into(),
             })?;
         dag.semantic.materialized_shapes = shapes;
-        checked_plot_dimensions.insert(dag_id, plot_dimensions);
+        checked_plot_shapes.insert(dag_id, plot_shapes);
     }
 
     // Validate domain constraints on HIR nominal fields. Types reachable
@@ -1029,7 +1029,7 @@ pub fn check_dimensions_tir_with_cancellation(
 
     cancellation.checkpoint()?;
     let presentation_facts =
-        presentation::collect_presentation_facts(tir, &checked_plot_dimensions, src, cancellation)?;
+        presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
     for (dag_id, facts) in presentation_facts {
         let dag = tir
             .dags
@@ -1389,7 +1389,7 @@ fn check_dimensions_dag(
     src: &NamedSource<Arc<String>>,
     cancellation: &crate::cancellation::CancellationToken,
     materialized_shapes: &infer::hir::MaterializedShapeCollector,
-) -> Result<plot::CheckedPlotChannelDimensions, GraphcalError> {
+) -> Result<plot::CheckedPlotChannelShapes, GraphcalError> {
     cancellation.checkpoint()?;
     let declared_types = dag.build_declared_types(src)?;
     let ctx = DimCheckContext {
@@ -1481,14 +1481,14 @@ fn check_dimensions_dag(
     }
 
     ctx.checkpoint()?;
-    let plot_dimensions = plot::check_plot_properties_dag(&ctx, dag)?;
+    let plot_shapes = plot::check_plot_properties_dag(&ctx, dag)?;
 
     ctx.checkpoint()?;
     check_domain_constraint_targets_dag(dag, src)?;
     ctx.checkpoint()?;
     check_domain_constraint_dimensions_dag(&ctx)?;
 
-    Ok(plot_dimensions)
+    Ok(plot_shapes)
 }
 
 /// What a domain bound expression must infer to for a given target type.
