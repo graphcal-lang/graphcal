@@ -1,5 +1,6 @@
 //! `textDocument/formatting` handler.
 
+use graphcal_compiler::cancellation::CancellationToken;
 use tower_lsp::lsp_types::{Position, Range, TextEdit};
 
 use crate::convert::LineIndex;
@@ -10,11 +11,21 @@ use crate::convert::LineIndex;
 /// Returns `Ok(None)` when the formatted output is identical. Parse and
 /// internal formatter failures remain distinct typed errors for the server
 /// boundary to handle explicitly.
+#[cfg(test)]
 pub fn format_document(
     source: &str,
 ) -> Result<Option<Vec<TextEdit>>, Box<graphcal_fmt::FormatError>> {
     format_document_with(source, |input| {
         graphcal_fmt::format_source(input).map_err(Box::new)
+    })
+}
+
+pub fn format_document_with_cancellation(
+    source: &str,
+    cancellation: &CancellationToken,
+) -> Result<Option<Vec<TextEdit>>, Box<graphcal_fmt::FormatError>> {
+    format_document_with(source, |input| {
+        graphcal_fmt::format_source_with_cancellation(input, cancellation).map_err(Box::new)
     })
 }
 

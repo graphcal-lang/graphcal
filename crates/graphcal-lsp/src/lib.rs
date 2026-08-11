@@ -12,6 +12,7 @@ mod diagnostics;
 mod document_links;
 mod document_symbols;
 mod formatting;
+mod formatting_scheduler;
 mod goto_definition;
 mod hover;
 mod inlay_hints;

@@ -24,6 +24,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
+use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
 use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbolIndex, ProjectSymbols};
 use crate::symbol_identity::{
     SourceSymbolPath, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
@@ -367,6 +368,8 @@ pub struct Backend {
     /// trigger-character completion, signature help, formatting — must read
     /// this instead of the analyzed snapshot.
     latest_text: Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    /// Bounded worker gate for memory-intensive synchronous formatting.
+    formatting_scheduler: Arc<FormattingScheduler>,
     /// Monotonic revision allocator shared by all document identities.
     revision_clock: Arc<RevisionClock>,
     /// Reverse dependency edges from the latest accepted analyses.
@@ -2743,20 +2746,34 @@ impl LanguageServer for Backend {
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
-        // Formatting is text-only and must never depend on cached semantic
-        // coordinates. Formatting resource bounds are handled separately.
-        let Some(text) = self
-            .latest_text
-            .read()
-            .await
-            .get(&uri)
-            .map(|snapshot| Arc::clone(&snapshot.text))
-        else {
+        // Snapshot only the current Arc and release the text lock before
+        // waiting for the bounded blocking worker.
+        let text = {
+            let snapshots = self.latest_text.read().await;
+            snapshots
+                .get(&uri)
+                .map(|snapshot| Arc::clone(&snapshot.text))
+        };
+        let Some(text) = text else {
             return Ok(None);
         };
-        match crate::formatting::format_document(&text) {
+        match self.formatting_scheduler.format(text).await {
             Ok(edits) => Ok(edits),
-            Err(error) if matches!(*error, graphcal_fmt::FormatError::Parse(_)) => Ok(None),
+            Err(FormattingTaskError::Formatter(error))
+                if matches!(*error, graphcal_fmt::FormatError::Parse(_)) =>
+            {
+                Ok(None)
+            }
+            Err(error @ FormattingTaskError::SourceTooLarge { .. }) => {
+                let message = error.to_string();
+                self.client
+                    .log_message(MessageType::WARNING, message.clone())
+                    .await;
+                Err(tower_lsp::jsonrpc::Error::invalid_params(message))
+            }
+            Err(FormattingTaskError::Cancelled) => {
+                Err(tower_lsp::jsonrpc::Error::request_cancelled())
+            }
             Err(error) => {
                 let message = error.to_string();
                 self.client
@@ -2780,6 +2797,7 @@ pub(crate) async fn run() {
         documents: Arc::new(RwLock::new(HashMap::new())),
         change_generations: Arc::new(RwLock::new(HashMap::new())),
         latest_text: Arc::new(RwLock::new(HashMap::new())),
+        formatting_scheduler: Arc::new(FormattingScheduler::new()),
         revision_clock: Arc::new(RevisionClock::default()),
         dependency_graph: Arc::new(RwLock::new(DependencyGraph::default())),
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
