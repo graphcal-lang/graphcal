@@ -939,14 +939,14 @@ fn eval_hir_conversion_fn(
             super::conversions::exact_f64_to_i64(f)
                 .map(RuntimeValue::Int)
                 .map_err(|error| {
-                    let rounding_help = matches!(
+                    let rounding_help = if matches!(
                         &error,
                         super::conversions::ExactIntConversionError::NonInteger { .. }
-                    )
-                    .then_some(
-                        "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()",
-                    )
-                    .unwrap_or_default();
+                    ) {
+                        "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
+                    } else {
+                        ""
+                    };
                     ctx.eval_error(format!("to_int() argument {error}{rounding_help}"), span)
                 })
         }

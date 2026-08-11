@@ -55,13 +55,17 @@ fn write_temp_file(root: &Path, rel: &str, source: &str) -> PathBuf {
     path
 }
 
+#[expect(
+    clippy::option_if_let_else,
+    reason = "the explicit error branch documents that a fixture repository with an unborn HEAD has no parent commit"
+)]
 fn commit_git_repo(root: &Path, message: &str) -> String {
     let repo = gix::open(root).unwrap();
     let tree_id = write_tree_object(&repo, root);
-    let parents = repo
-        .head_id()
-        .map(|id| vec![id.detach()])
-        .unwrap_or_default();
+    let parents = match repo.head_id() {
+        Ok(id) => vec![id.detach()],
+        Err(_) => Vec::new(),
+    };
     let signature =
         gix::actor::SignatureRef::from_bytes(b"Graphcal Test <graphcal@example.invalid> 0 +0000")
             .unwrap();
@@ -5145,15 +5149,13 @@ fn plot_names(main: &Path) -> (Vec<String>, std::process::Output) {
         .output()
         .expect("failed to run graphcal");
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_default();
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     let names = json
         .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|f| f["name"].as_str().unwrap_or_default().to_string())
-                .collect()
-        })
-        .unwrap_or_default();
+        .unwrap()
+        .iter()
+        .map(|figure| figure["name"].as_str().unwrap().to_string())
+        .collect();
     (names, output)
 }
 

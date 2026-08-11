@@ -2,3 +2,11 @@ allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-print-in-tests = true
 allow-unwrap-in-tests = true
+
+[[disallowed-methods]]
+path = "core::option::Option::unwrap_or_default"
+reason = "Silent fallbacks can mask absent-state bugs (issues #1223-#1241). Return an error, establish a typed default at one boundary, or add an expectation explaining why absence is legal."
+
+[[disallowed-methods]]
+path = "core::result::Result::unwrap_or_default"
+reason = "Swallowing an error and fabricating a default can hide rejected states (issues #1223-#1241). Handle the error, or add an expectation explaining why degradation is intentional."

@@ -1,4 +1,8 @@
 //! Graphcal Language Server Protocol implementation.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the LSP is an imperative shell where missing editor metadata deliberately degrades to an empty response"
+)]
 
 mod code_actions;
 mod completion;

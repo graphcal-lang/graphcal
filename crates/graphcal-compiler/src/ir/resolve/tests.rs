@@ -40,14 +40,13 @@ fn dep_names_of<'a>(
     >,
     decl: &str,
 ) -> Vec<&'a str> {
-    map.iter()
-        .find(|(key, _)| key.as_str() == decl)
-        .map(|(_, deps)| {
-            deps.iter()
-                .map(crate::syntax::names::ResolvedName::as_str)
-                .collect()
-        })
-        .unwrap_or_default()
+    match map.iter().find(|(key, _)| key.as_str() == decl) {
+        Some((_, dependencies)) => dependencies
+            .iter()
+            .map(crate::syntax::names::ResolvedName::as_str)
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 #[test]

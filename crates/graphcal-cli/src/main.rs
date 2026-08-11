@@ -11,6 +11,10 @@
     clippy::result_large_err,
     reason = "GraphcalError is inherently large and only constructed on the error path"
 )]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the CLI is an imperative shell where reviewed graceful-degradation fallbacks are intentional"
+)]
 
 mod deps;
 mod display;

@@ -4,6 +4,10 @@
     clippy::result_large_err,
     reason = "FormatError embeds ParseError, which is inherently large and only constructed on the error path"
 )]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the formatter is an output shell where reviewed best-effort fallbacks are intentional"
+)]
 
 mod format;
 

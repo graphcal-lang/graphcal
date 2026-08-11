@@ -1093,6 +1093,13 @@ just lint
 | `IndexMap` in output-facing maps | eval/display output                    | Stable user-facing order                                            |
 | Separate const/runtime phases    | `exec_plan.rs`                         | Compile-time values and runtime values have different failure modes |
 | Display units outside dimensions | `eval/display.rs`                      | Compute in SI, display in requested units                           |
+| Deliberate absent-state fallbacks | `clippy.toml`                           | Core `unwrap_or_default` calls require a reasoned lint expectation  |
+
+`clippy::disallowed_methods` rejects unreviewed `Option::unwrap_or_default` and
+`Result::unwrap_or_default` calls. Prefer a typed boundary default, explicit
+error, or explicit control-flow branch. When absence is genuinely semantic in
+the functional core, use `#[expect(clippy::disallowed_methods, reason = "…")]`
+to record why; imperative shell crates carry documented crate-level allowances.
 
 When adding a feature, update the grammar, parser, compiler stages, evaluator,
 LSP/editor surfaces, docs, and fixtures together. The compiler core should carry
