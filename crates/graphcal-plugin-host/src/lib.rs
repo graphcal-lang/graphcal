@@ -13,11 +13,13 @@
 //!   when failure messages need reading, and every manifest function exported
 //!   with the wasm parameter/result types required by its signature, plus an
 //!   encoded-module byte cap and malicious-input parser/compiler limits;
+//! - instantiate fresh call-scoped stores so mutable globals, tables, memory,
+//!   allocator state, and start functions cannot leak evaluation history;
 //! - execute plugin functions under mandatory resource bounds
 //!   ([`PluginLimits`]: per-call fuel plus per-instance linear-memory and
 //!   table-element caps), mapping failure messages, traps, and fuel exhaustion
 //!   to [`PluginCallError`];
-//! - cache compiled modules by content hash ([`PluginHost`]), so the
+//! - cache only immutable compiled modules by content hash ([`PluginHost`]), so the
 //!   language server's keystroke-frequency re-evaluation never recompiles
 //!   an unchanged plugin.
 //!
