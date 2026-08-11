@@ -23,7 +23,7 @@ pub use atomic_write::{
 pub use in_memory_fs::{
     InMemoryFileSystem, InMemoryFileSystemError, VirtualAbsolutePath, VirtualPathError,
 };
-pub use overlay_fs::OverlayFileSystem;
+pub use overlay_fs::{OverlayFileSystem, OverlayFileSystemError};
 pub use real_fs::RealFileSystem;
 pub use source_tree::{
     SourceTreeHash, SourceTreeHashError, SourceTreeHashLimits, hash_source_tree,
