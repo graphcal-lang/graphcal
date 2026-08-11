@@ -62,9 +62,9 @@ pub fn evaluate(request: PlaygroundRequest) -> PlaygroundOutcome {
     };
 
     if loaded
-        .files
+        .files()
         .values()
-        .any(|file| declarations_use_plugins(&file.ast.declarations))
+        .any(|file| declarations_use_plugins(&file.ast().declarations))
     {
         let error = ProjectValidationError::PluginsUnsupported;
         return PlaygroundOutcome::Rejected {

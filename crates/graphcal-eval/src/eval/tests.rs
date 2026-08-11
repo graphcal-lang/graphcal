@@ -2980,13 +2980,13 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
 
     match project.build_module_resolver() {
-        Err(
+        Err(crate::loader::ModuleResolverBuildError::ModuleResolve(
             graphcal_compiler::syntax::module_resolve::ModuleResolveError::DuplicateImportName {
                 namespace,
                 name,
                 ..
             },
-        ) => {
+        )) => {
             assert_eq!(namespace, "name");
             assert_eq!(name, "duplicate");
         }
@@ -3408,12 +3408,12 @@ fn loaded_file_dag_id(
     file_name: &str,
 ) -> graphcal_compiler::dag_id::DagId {
     project
-        .files
+        .files()
         .values()
-        .find(|file| file.path.file_name().and_then(|name| name.to_str()) == Some(file_name))
+        .find(|file| file.path().file_name().and_then(|name| name.to_str()) == Some(file_name))
         .map_or_else(
             || panic!("loaded file `{file_name}` not found"),
-            |file| file.dag_id.clone(),
+            |file| file.dag_id().clone(),
         )
 }
 
@@ -3750,7 +3750,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     )]);
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
-    let src = &project.files[&project.root].named_source;
+    let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         work_budget: crate::eval_expr::fresh_work_budget(),
@@ -3814,7 +3814,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     )]);
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
-    let src = &project.files[&project.root].named_source;
+    let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         work_budget: crate::eval_expr::fresh_work_budget(),
@@ -3886,7 +3886,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let src = &project.files[&project.root].named_source;
+    let src = &project.root_file().named_source();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let declared = tir.root().build_declared_types(src).unwrap();
 
@@ -3914,7 +3914,7 @@ fn project_declared_type_preserves_same_leaf_struct_owner() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let src = &project.files[&project.root].named_source;
+    let src = &project.root_file().named_source();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
     let declared = tir.root().build_declared_types(src).unwrap();
@@ -3945,7 +3945,7 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let src = &project.files[&project.root].named_source;
+    let src = &project.root_file().named_source();
     let constraints =
         crate::exec_plan::resolve_struct_field_constraints(&tir, &HashMap::new(), src).unwrap();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
@@ -4692,7 +4692,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     )]);
     let empty_locals = crate::eval_expr::HirLocalValueMap::root();
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
-    let src = &project.files[&project.root].named_source;
+    let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         work_budget: crate::eval_expr::fresh_work_budget(),
@@ -4757,7 +4757,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         },
     )]);
     let builtin_fns = graphcal_compiler::registry::builtins::builtin_functions();
-    let src = &project.files[&project.root].named_source;
+    let src = &project.root_file().named_source();
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
         work_budget: crate::eval_expr::fresh_work_budget(),
@@ -5529,7 +5529,7 @@ node result: Dimensionless = @scaled(x: 2.0).out;
 
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
     assert_eq!(
-        project.files.len(),
+        project.files().len(),
         2,
         "inline DAG body import should load its dependency"
     );

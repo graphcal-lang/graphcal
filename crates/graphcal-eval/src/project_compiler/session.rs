@@ -43,10 +43,31 @@ impl<'project> ProjectCompiler<'project> {
     ) -> Result<Self, CompileError> {
         cancellation.checkpoint()?;
         pipeline::validate_project_dag_recursion(project)?;
-        let root_source = &project.files[&project.root].named_source;
+        let root_source = project.root_file().named_source();
         let module_resolver = project
             .build_module_resolver()
-            .map_err(|error| lowering::module_resolve_compile_error(error, root_source))?;
+            .map_err(|error| match error {
+                crate::loader::ModuleResolverBuildError::ModuleResolve(error) => {
+                    lowering::module_resolve_compile_error(error, root_source)
+                }
+                crate::loader::ModuleResolverBuildError::RecursiveIncludeExpansion {
+                    cycle,
+                    ..
+                } => CompileError::Eval(
+                    graphcal_compiler::registry::error::GraphcalError::EvalError {
+                        message: format!(
+                            "recursive DAG instantiation: {}",
+                            cycle
+                                .iter()
+                                .map(std::string::ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(" -> ")
+                        ),
+                        src: root_source.clone(),
+                        span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
+                    },
+                ),
+            })?;
         Ok(Self {
             project,
             cancellation: cancellation.clone(),

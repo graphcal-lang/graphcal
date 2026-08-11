@@ -11,6 +11,7 @@ use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
@@ -51,6 +52,17 @@ pub struct ResolvedModuleTarget {
 }
 
 impl ResolvedModuleTarget {
+    const fn in_file(source_file: DagId, target: DagId) -> Self {
+        Self {
+            source_file,
+            target,
+        }
+    }
+
+    fn file_root(source_file: DagId) -> Self {
+        Self::in_file(source_file.clone(), source_file)
+    }
+
     /// Loaded file that owns the target's compiled artifacts.
     #[must_use]
     pub const fn source_file(&self) -> &DagId {
@@ -70,6 +82,23 @@ pub enum ResolvedModuleTargetError {
     /// The resolved identity is neither a loaded file root nor one of its inline DAGs.
     #[error("resolved module `{target}` is not owned by a loaded source file")]
     UnknownOwner { target: DagId },
+}
+
+/// Failure to construct a total module resolver from an immutable loaded project.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ModuleResolverBuildError {
+    /// The source template include graph contains a cycle and therefore has no
+    /// finite concrete-instance expansion.
+    #[error("recursive include expansion involving module `{module}`")]
+    RecursiveIncludeExpansion {
+        /// First repeated source module observed by the typed DFS.
+        module: DagId,
+        /// Canonical source-module cycle, including the repeated endpoint.
+        cycle: Vec<DagId>,
+    },
+    /// Ordinary symbol-table construction failed.
+    #[error(transparent)]
+    ModuleResolve(#[from] graphcal_compiler::syntax::module_resolve::ModuleResolveError),
 }
 
 /// Span-free identity for an `import`/`include` path.
@@ -100,8 +129,8 @@ impl ModulePathKey {
 /// Loader-side resolution status for an import inside an inline DAG body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InlineBodyImportResolution {
-    /// The module path resolved to a loaded DAG/file identity.
-    Resolved(DagId),
+    /// The module path resolved to an exact module and its owning source file.
+    Resolved(ResolvedModuleTarget),
     /// The loader could not resolve the path in its current project context.
     ///
     /// The import declaration remains in the DAG body so the downstream
@@ -121,17 +150,51 @@ impl std::fmt::Display for ModulePathKey {
     }
 }
 
+/// Filesystem resolution result before the owning file receives its [`DagId`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedFilePath {
+    file: PathBuf,
+    inline_path: Vec<DeclName>,
+}
+
+impl ResolvedFilePath {
+    fn target_from(&self, source_file: &DagId) -> ResolvedModuleTarget {
+        let target = self
+            .inline_path
+            .iter()
+            .fold(source_file.clone(), |owner, name| {
+                owner.child(name.as_str())
+            });
+        ResolvedModuleTarget::in_file(source_file.clone(), target)
+    }
+}
+
 /// Validated path from a file AST root to one nested inline-DAG body.
 ///
 /// Construction is private and requires at least one declaration index, so a
 /// locator cannot accidentally denote the file root.
 #[derive(Debug, Clone)]
-struct DagBodyLocator(Box<[usize]>);
+struct DagBodyLocator {
+    first: usize,
+    rest: Box<[usize]>,
+}
 
 impl DagBodyLocator {
-    fn new(path: Vec<usize>) -> Self {
-        assert!(!path.is_empty(), "an inline DAG locator cannot be empty");
-        Self(path.into_boxed_slice())
+    fn at_child(parent_path: &[usize], child_index: usize) -> Self {
+        match parent_path.split_first() {
+            None => Self {
+                first: child_index,
+                rest: Box::new([]),
+            },
+            Some((first, rest)) => Self {
+                first: *first,
+                rest: rest
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(child_index))
+                    .collect(),
+            },
+        }
     }
 
     #[expect(
@@ -139,18 +202,29 @@ impl DagBodyLocator {
         clippy::unreachable,
         reason = "private locators are validated while traversing the immutable owning AST"
     )]
-    fn resolve<'a>(&self, ast: &'a File) -> &'a [Declaration] {
-        let mut declarations = ast.declarations.as_slice();
-        for index in &*self.0 {
-            let declaration = declarations
+    fn declaration<'a>(
+        &self,
+        ast: &'a File,
+    ) -> &'a graphcal_compiler::desugar::desugared_ast::DagDecl {
+        let declaration = ast
+            .declarations
+            .get(self.first)
+            .expect("loader-created inline DAG locator must remain in bounds");
+        let DeclKind::Dag(first_dag) = &declaration.kind else {
+            unreachable!("loader-created inline DAG locator must address DAG declarations")
+        };
+        let mut dag = first_dag;
+        for index in &self.rest {
+            let declaration = dag
+                .body
                 .get(*index)
                 .expect("loader-created inline DAG locator must remain in bounds");
-            let DeclKind::Dag(dag) = &declaration.kind else {
+            let DeclKind::Dag(child) = &declaration.kind else {
                 unreachable!("loader-created inline DAG locator must address DAG declarations")
             };
-            declarations = &dag.body;
+            dag = child;
         }
-        declarations
+        dag
     }
 }
 
@@ -163,12 +237,10 @@ impl DagBodyLocator {
 pub struct LoadedDag {
     /// Abstract DAG identity for this inline dag, formed by appending the
     /// dag's name to its parent file's `DagId`.
-    pub(crate) dag_id: DagId,
+    dag_id: DagId,
     /// The enclosing file's `DagId`. Imports whose path resolves to this id
     /// are dag-body self-imports (`import <self>.{...}`).
-    pub(crate) parent_dag_id: DagId,
-    /// The dag declaration's name in source.
-    name: String,
+    parent_dag_id: DagId,
     /// Stable locator into the owning file AST, which remains the single body owner.
     body_locator: DagBodyLocator,
     /// Loader-resolved DAG identities for each `import` declaration in the
@@ -176,15 +248,40 @@ pub struct LoadedDag {
     /// `parent_dag_id`; cross-file imports map to the dependency file's id.
     /// Imports whose path fails to resolve at load time are absent here; the
     /// downstream resolver surfaces a structured error for them.
-    pub(crate) resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
+    resolved_imports: HashMap<ModulePathKey, InlineBodyImportResolution>,
 }
 
 impl LoadedDag {
+    #[must_use]
+    pub(crate) const fn dag_id(&self) -> &DagId {
+        &self.dag_id
+    }
+
+    #[must_use]
+    pub(crate) const fn parent_dag_id(&self) -> &DagId {
+        &self.parent_dag_id
+    }
+
+    #[must_use]
+    pub(crate) const fn resolved_imports(
+        &self,
+    ) -> &HashMap<ModulePathKey, InlineBodyImportResolution> {
+        &self.resolved_imports
+    }
+
+    #[must_use]
+    pub(crate) fn declaration<'a>(
+        &self,
+        file: &'a LoadedFile,
+    ) -> &'a graphcal_compiler::desugar::desugared_ast::DagDecl {
+        debug_assert_eq!(self.parent_dag_id, file.dag_id);
+        self.body_locator.declaration(&file.ast)
+    }
+
     /// Borrow this DAG's authoritative body from its owning file AST.
     #[must_use]
     pub(crate) fn body<'a>(&self, file: &'a LoadedFile) -> &'a [Declaration] {
-        debug_assert_eq!(self.parent_dag_id, file.dag_id);
-        self.body_locator.resolve(&file.ast)
+        &self.declaration(file).body
     }
 }
 
@@ -192,65 +289,98 @@ impl LoadedDag {
 #[derive(Debug)]
 pub struct LoadedFile {
     /// Canonical path of this file (retained for I/O: diagnostics, LSP URIs).
-    pub path: PathBuf,
+    path: PathBuf,
     /// Abstract DAG identity (filesystem-independent).
-    pub(crate) dag_id: DagId,
+    dag_id: DagId,
     /// Raw source text.
-    pub source: Arc<String>,
+    source: Arc<String>,
     /// Parsed AST.
-    pub ast: File,
+    ast: File,
     /// Named source for diagnostics.
-    pub(crate) named_source: NamedSource<Arc<String>>,
+    named_source: NamedSource<Arc<String>>,
     /// Loader-resolved DAG identities for each import declaration, keyed by the
     /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
-    resolved_imports: HashMap<ModulePathKey, DagId>,
+    resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>,
     /// Inline `dag X { ... }` metadata indexed from this file, with per-DAG
     /// pre-resolved imports. Entries retain source preorder and borrow their
     /// authoritative bodies from `ast` through validated locators.
-    pub(crate) inline_dags: Vec<LoadedDag>,
+    inline_dags: Vec<LoadedDag>,
 }
 
 impl LoadedFile {
-    /// Iterate over `import` declarations together with their loader-resolved
-    /// DAG identities.
-    pub fn imports_with_dag_ids(
+    /// Canonical path used for I/O and diagnostic URI mapping.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Abstract, filesystem-independent identity of this source file.
+    #[must_use]
+    pub const fn dag_id(&self) -> &DagId {
+        &self.dag_id
+    }
+
+    /// Raw source text parsed into this immutable loader artifact.
+    #[must_use]
+    pub const fn source(&self) -> &Arc<String> {
+        &self.source
+    }
+
+    /// Parsed, desugared AST from the same source snapshot.
+    #[must_use]
+    pub const fn ast(&self) -> &File {
+        &self.ast
+    }
+
+    /// Named source paired with this file's path and source snapshot.
+    #[must_use]
+    pub(crate) const fn named_source(&self) -> &NamedSource<Arc<String>> {
+        &self.named_source
+    }
+
+    #[must_use]
+    pub(crate) fn inline_dags(&self) -> &[LoadedDag] {
+        &self.inline_dags
+    }
+
+    /// Iterate over imports together with their exact module targets and owners.
+    pub fn imports_with_targets(
         &self,
     ) -> impl Iterator<
         Item = (
             &graphcal_compiler::desugar::desugared_ast::Declaration,
             &graphcal_compiler::syntax::ast::ImportDecl,
-            &DagId,
+            &ResolvedModuleTarget,
         ),
     > {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Import(import_decl) = &decl.kind {
                 self.resolved_imports
                     .get(&ModulePathKey::from_path(&import_decl.path))
-                    .map(|dag_id| (decl, import_decl, dag_id))
+                    .map(|target| (decl, import_decl, target))
             } else {
                 None
             }
         })
     }
 
-    /// Iterate over `include` declarations together with their loader-resolved
-    /// DAG identities.
-    pub fn includes_with_dag_ids(
+    /// Iterate over includes together with their exact module targets and owners.
+    pub fn includes_with_targets(
         &self,
     ) -> impl Iterator<
         Item = (
             &graphcal_compiler::desugar::desugared_ast::Declaration,
             &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
-            &DagId,
+            &ResolvedModuleTarget,
         ),
     > {
         self.ast.declarations.iter().filter_map(|decl| {
             if let DeclKind::Include(include_decl) = &decl.kind {
                 self.resolved_imports
                     .get(&ModulePathKey::from_path(&include_decl.path))
-                    .map(|dag_id| (decl, include_decl, dag_id))
+                    .map(|target| (decl, include_decl, target))
             } else {
                 None
             }
@@ -262,12 +392,14 @@ impl LoadedFile {
 #[derive(Debug)]
 pub struct LoadedProject {
     /// All loaded files keyed by DAG identity.
-    pub files: HashMap<DagId, LoadedFile>,
+    files: HashMap<DagId, LoadedFile>,
     /// The DAG identity of the root file.
-    pub root: DagId,
+    root: DagId,
     /// Topological load order: dependencies before dependents.
     /// The root file is last.
-    pub(crate) load_order: Vec<DagId>,
+    load_order: Vec<DagId>,
+    /// Canonical owner source file for every file-root and inline DAG identity.
+    dag_owners: HashMap<DagId, DagId>,
     /// WASM plugin files referenced by `import plugin "….wasm"` declarations
     /// in root-package files, keyed by the verbatim plugin path.
     ///
@@ -278,7 +410,7 @@ pub struct LoadedProject {
     /// plugin identities (e.g. `graphcal:demo`) never appear in this map,
     /// and neither do wasm imports declared by dependency packages (those
     /// are rejected at verification time).
-    pub plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+    plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
 }
 
 /// Outcome of locating and reading one wasm plugin file.
@@ -356,9 +488,17 @@ fn read_plugin_file<F: FileSystemReader>(
 #[derive(Clone)]
 pub struct LoadedPlugin {
     /// The raw module bytes.
-    pub bytes: Arc<[u8]>,
+    bytes: Arc<[u8]>,
     /// Lowercase-hex SHA-256 of the bytes — the form `graphcal.lock` pins.
     sha256_hex: String,
+}
+
+impl LoadedPlugin {
+    /// Immutable module bytes whose digest was checked by the loader.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 impl std::fmt::Debug for LoadedPlugin {
@@ -432,6 +572,84 @@ fn apply_plugin_pins(
 }
 
 impl LoadedProject {
+    fn from_parts(
+        files: HashMap<DagId, LoadedFile>,
+        root: DagId,
+        load_order: Vec<DagId>,
+        plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+    ) -> Self {
+        let dag_owners = files
+            .iter()
+            .flat_map(|(file_id, file)| {
+                std::iter::once((file_id.clone(), file_id.clone())).chain(
+                    file.inline_dags
+                        .iter()
+                        .map(|dag| (dag.dag_id.clone(), file_id.clone())),
+                )
+            })
+            .collect();
+        Self {
+            files,
+            root,
+            load_order,
+            dag_owners,
+            plugins,
+        }
+    }
+
+    /// All loaded files, keyed by their canonical semantic identity.
+    #[must_use]
+    pub const fn files(&self) -> &HashMap<DagId, LoadedFile> {
+        &self.files
+    }
+
+    /// Look up one loaded source file by semantic identity.
+    #[must_use]
+    pub fn file(&self, dag_id: &DagId) -> Option<&LoadedFile> {
+        self.files.get(dag_id)
+    }
+
+    pub(crate) fn inline_dag(&self, dag_id: &DagId) -> Option<(&LoadedFile, &LoadedDag)> {
+        let owner = self.dag_owners.get(dag_id)?;
+        let file = self.files.get(owner)?;
+        file.inline_dags
+            .iter()
+            .find(|inline| inline.dag_id == *dag_id)
+            .map(|inline| (file, inline))
+    }
+
+    /// Root source-file identity.
+    #[must_use]
+    pub const fn root_id(&self) -> &DagId {
+        &self.root
+    }
+
+    /// Root source file. Construction guarantees that `root_id` is present.
+    #[must_use]
+    #[expect(
+        clippy::expect_used,
+        reason = "private construction preserves the root-file membership invariant"
+    )]
+    pub fn root_file(&self) -> &LoadedFile {
+        self.files
+            .get(&self.root)
+            .expect("loaded project root must identify one loaded file")
+    }
+
+    /// Dependency-first source-file identities, ending with the root.
+    #[must_use]
+    pub(crate) fn load_order(&self) -> &[DagId] {
+        &self.load_order
+    }
+
+    /// Validated plugin artifacts and deferred plugin-loading errors.
+    #[must_use]
+    pub const fn plugins(
+        &self,
+    ) -> &HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry> {
+        &self.plugins
+    }
+
     /// Build a single-file project from in-memory source text.
     ///
     /// The file is assigned a synthetic path derived from `name` (no disk I/O).
@@ -509,52 +727,31 @@ impl LoadedProject {
         };
         let mut files = HashMap::new();
         files.insert(dag_id.clone(), loaded_file);
-        Ok(Self {
+        Ok(Self::from_parts(
             files,
-            root: dag_id.clone(),
-            load_order: vec![dag_id],
+            dag_id.clone(),
+            vec![dag_id],
             plugins,
-        })
+        ))
     }
 
-    /// Refine a loader-resolved dependency identity to the exact module named
-    /// by `path`, while retaining the file that owns its compiled artifacts.
-    ///
-    /// File loading resolves a path to a physical source file first. When the
-    /// path's leaf names an inline DAG in that file, the semantic target is the
-    /// corresponding child [`DagId`] rather than the file root.
+    /// Pair an exact DAG identity with the loaded source file that owns it.
     ///
     /// # Errors
     ///
-    /// Returns [`ResolvedModuleTargetError`] when `resolved` is not owned by
-    /// any loaded file.
+    /// Returns [`ResolvedModuleTargetError`] when `resolved` is not a file root
+    /// or inline DAG in this immutable project snapshot.
     pub fn resolved_module_target(
         &self,
-        path: &ModulePath,
         resolved: &DagId,
     ) -> Result<ResolvedModuleTarget, ResolvedModuleTargetError> {
-        match self.files.get(resolved) {
-            Some(_) => Ok(ResolvedModuleTarget {
-                source_file: resolved.clone(),
-                target: module_resolver_target_for_path(path, resolved, &self.files),
-            }),
-            None => self
-                .files
-                .iter()
-                .find_map(|(file_id, loaded)| {
-                    loaded
-                        .inline_dags
-                        .iter()
-                        .any(|inline| inline.dag_id == *resolved)
-                        .then(|| ResolvedModuleTarget {
-                            source_file: file_id.clone(),
-                            target: resolved.clone(),
-                        })
-                })
-                .ok_or_else(|| ResolvedModuleTargetError::UnknownOwner {
-                    target: resolved.clone(),
-                }),
-        }
+        self.dag_owners
+            .get(resolved)
+            .cloned()
+            .map(|source_file| ResolvedModuleTarget::in_file(source_file, resolved.clone()))
+            .ok_or_else(|| ResolvedModuleTargetError::UnknownOwner {
+                target: resolved.clone(),
+            })
     }
 
     /// Build module-aware symbol tables for every loaded file and inline DAG.
@@ -566,15 +763,13 @@ impl LoadedProject {
     ///
     /// # Errors
     ///
-    /// Returns [`graphcal_compiler::syntax::module_resolve::ModuleResolveError`]
-    /// if duplicate symbols are found or a resolved import edge names a symbol
-    /// that is absent/private in its target module.
+    /// Returns [`ModuleResolverBuildError`] for recursive expansion, duplicate
+    /// symbols, or invalid resolved import surfaces.
     pub fn build_module_resolver(
         &self,
-    ) -> Result<
-        graphcal_compiler::syntax::module_resolve::ModuleResolver,
-        graphcal_compiler::syntax::module_resolve::ModuleResolveError,
-    > {
+    ) -> Result<graphcal_compiler::syntax::module_resolve::ModuleResolver, ModuleResolverBuildError>
+    {
+        ensure_acyclic_include_expansion(self)?;
         let mut resolver = graphcal_compiler::syntax::module_resolve::ModuleResolver::default();
 
         for dag_id in &self.load_order {
@@ -623,7 +818,6 @@ impl LoadedProject {
                 &loaded.dag_id,
                 &loaded.ast.declarations,
                 &loaded.resolved_imports,
-                &self.files,
             )?;
             for inline in &loaded.inline_dags {
                 inherit_include_instance_scopes(
@@ -638,7 +832,6 @@ impl LoadedProject {
                     &inline.dag_id,
                     inline.body(loaded),
                     &inline.resolved_imports,
-                    &self.files,
                 )?;
             }
         }
@@ -667,18 +860,91 @@ impl LoadedProject {
     }
 }
 
-trait ResolvedModuleLookup {
-    fn resolved_target(&self, key: &ModulePathKey) -> Option<&DagId>;
+#[derive(Debug)]
+enum IncludeGraphVisit {
+    Enter(DagId),
+    Exit(DagId),
 }
 
-impl ResolvedModuleLookup for HashMap<ModulePathKey, DagId> {
-    fn resolved_target(&self, key: &ModulePathKey) -> Option<&DagId> {
+fn ensure_acyclic_include_expansion(
+    project: &LoadedProject,
+) -> Result<(), ModuleResolverBuildError> {
+    let module_ids = project.load_order.iter().flat_map(|file_id| {
+        let file = &project.files[file_id];
+        std::iter::once(file_id.clone())
+            .chain(file.inline_dags.iter().map(|inline| inline.dag_id.clone()))
+    });
+    let mut complete = HashSet::new();
+    let mut active_positions = HashMap::new();
+    let mut active_path = Vec::new();
+
+    for root in module_ids {
+        if complete.contains(&root) {
+            continue;
+        }
+        let mut visits = vec![IncludeGraphVisit::Enter(root)];
+        while let Some(visit) = visits.pop() {
+            match visit {
+                IncludeGraphVisit::Enter(module) => {
+                    if complete.contains(&module) {
+                        continue;
+                    }
+                    if let Some(cycle_start) = active_positions.get(&module).copied() {
+                        let mut cycle = active_path[cycle_start..].to_vec();
+                        cycle.push(module.clone());
+                        return Err(ModuleResolverBuildError::RecursiveIncludeExpansion {
+                            module,
+                            cycle,
+                        });
+                    }
+                    active_positions.insert(module.clone(), active_path.len());
+                    active_path.push(module.clone());
+                    visits.push(IncludeGraphVisit::Exit(module.clone()));
+                    visits.extend(
+                        module_include_targets(&module, &project.files)
+                            .into_iter()
+                            .rev()
+                            .map(IncludeGraphVisit::Enter),
+                    );
+                }
+                IncludeGraphVisit::Exit(module) => {
+                    active_positions.remove(&module);
+                    let popped = active_path.pop();
+                    debug_assert_eq!(popped.as_ref(), Some(&module));
+                    complete.insert(module);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn module_include_targets(source: &DagId, files: &HashMap<DagId, LoadedFile>) -> Vec<DagId> {
+    module_declarations(source, files).map_or_else(Vec::new, |declarations| {
+        declarations
+            .iter()
+            .filter_map(|declaration| {
+                let DeclKind::Include(include) = &declaration.kind else {
+                    return None;
+                };
+                resolved_module_target_from(source, &include.path, files)
+            })
+            .collect()
+    })
+}
+
+trait ResolvedModuleLookup {
+    fn resolved_target(&self, key: &ModulePathKey) -> Option<&ResolvedModuleTarget>;
+}
+
+impl ResolvedModuleLookup for HashMap<ModulePathKey, ResolvedModuleTarget> {
+    fn resolved_target(&self, key: &ModulePathKey) -> Option<&ResolvedModuleTarget> {
         self.get(key)
     }
 }
 
 impl ResolvedModuleLookup for HashMap<ModulePathKey, InlineBodyImportResolution> {
-    fn resolved_target(&self, key: &ModulePathKey) -> Option<&DagId> {
+    fn resolved_target(&self, key: &ModulePathKey) -> Option<&ResolvedModuleTarget> {
         match self.get(key) {
             Some(InlineBodyImportResolution::Resolved(target)) => Some(target),
             Some(InlineBodyImportResolution::Unresolved) | None => None,
@@ -699,18 +965,17 @@ fn add_include_instance_modules(
         };
         let instance_scope = include_instance_scope(include);
         let prefix = instance_scope.merge_scope_name();
-        let Some(file_target) =
+        let Some(target) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
             continue;
         };
-        let target = module_resolver_target_for_path(&include.path, file_target, files);
-        let Some(target_decls) = module_declarations(&target, files) else {
+        let Some(target_decls) = module_declarations(target.target(), files) else {
             continue;
         };
         let instance = owner.instance_child(prefix.as_str());
         resolver.add_module(instance.clone(), target_decls)?;
-        add_nested_include_instance_modules(resolver, &target, &instance, files)?;
+        add_nested_include_instance_modules(resolver, target.target(), &instance, files)?;
     }
     Ok(())
 }
@@ -733,15 +998,14 @@ fn inherit_include_instance_scopes(
             continue;
         };
         let instance_scope = include_instance_scope(include);
-        let Some(file_target) =
+        let Some(source) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
             continue;
         };
-        let source = module_resolver_target_for_path(&include.path, file_target, files);
         let instance = owner.instance_child(instance_scope.merge_scope_name().as_str());
-        resolver.inherit_module_scope(&source, &instance)?;
-        inherit_nested_include_instance_scopes(resolver, &source, &instance, files)?;
+        resolver.inherit_module_scope(source.target(), &instance)?;
+        inherit_nested_include_instance_scopes(resolver, source.target(), &instance, files)?;
     }
     Ok(())
 }
@@ -768,7 +1032,7 @@ fn link_include_instance_indexes(
         };
         let instance_scope = include_instance_scope(include);
         let prefix = instance_scope.merge_scope_name();
-        let Some(file_target) =
+        let Some(source) =
             resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path))
         else {
             continue;
@@ -783,8 +1047,7 @@ fn link_include_instance_indexes(
         if let Some(bound_indexes) = include_index_bindings(include) {
             resolver.inline_instantiated_include_indexes(owner, &synthetic, &bound_indexes)?;
         }
-        let source = module_resolver_target_for_path(&include.path, file_target, files);
-        link_nested_include_instance_indexes(resolver, &source, &synthetic, files)?;
+        link_nested_include_instance_indexes(resolver, source.target(), &synthetic, files)?;
     }
     Ok(())
 }
@@ -825,12 +1088,20 @@ fn add_nested_include_instance_modules(
     instance: &DagId,
     files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    for child in nested_include_instances(source, instance, files) {
+    let mut pending = nested_include_instances(source, instance, files)
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    while let Some(child) = pending.pop() {
         let Some(child_declarations) = module_declarations(&child.source, files) else {
             continue;
         };
         resolver.add_module(child.instance.clone(), child_declarations)?;
-        add_nested_include_instance_modules(resolver, &child.source, &child.instance, files)?;
+        pending.extend(
+            nested_include_instances(&child.source, &child.instance, files)
+                .into_iter()
+                .rev(),
+        );
     }
     Ok(())
 }
@@ -841,9 +1112,17 @@ fn inherit_nested_include_instance_scopes(
     instance: &DagId,
     files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    for child in nested_include_instances(source, instance, files) {
+    let mut pending = nested_include_instances(source, instance, files)
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    while let Some(child) = pending.pop() {
         resolver.inherit_module_scope(&child.source, &child.instance)?;
-        inherit_nested_include_instance_scopes(resolver, &child.source, &child.instance, files)?;
+        pending.extend(
+            nested_include_instances(&child.source, &child.instance, files)
+                .into_iter()
+                .rev(),
+        );
     }
     Ok(())
 }
@@ -854,15 +1133,25 @@ fn link_nested_include_instance_indexes(
     instance: &DagId,
     files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
-    for child in nested_include_instances(source, instance, files) {
+    let mut pending = nested_include_instances(source, instance, files)
+        .into_iter()
+        .rev()
+        .map(|child| (instance.clone(), child))
+        .collect::<Vec<_>>();
+    while let Some((parent_instance, child)) = pending.pop() {
         if let Some(bound_indexes) = &child.index_bindings {
             resolver.inline_instantiated_include_indexes(
-                instance,
+                &parent_instance,
                 &child.instance,
                 bound_indexes,
             )?;
         }
-        link_nested_include_instance_indexes(resolver, &child.source, &child.instance, files)?;
+        pending.extend(
+            nested_include_instances(&child.source, &child.instance, files)
+                .into_iter()
+                .rev()
+                .map(|grandchild| (child.instance.clone(), grandchild)),
+        );
     }
     Ok(())
 }
@@ -873,7 +1162,7 @@ fn resolved_module_target_from(
     files: &HashMap<DagId, LoadedFile>,
 ) -> Option<DagId> {
     let key = ModulePathKey::from_path(path);
-    let file_target = files.get(source).map_or_else(
+    let resolved = files.get(source).map_or_else(
         || {
             files.values().find_map(|file| {
                 file.inline_dags
@@ -887,7 +1176,7 @@ fn resolved_module_target_from(
         },
         |file| file.resolved_imports.get(&key).cloned(),
     )?;
-    Some(module_resolver_target_for_path(path, &file_target, files))
+    Some(resolved.target().clone())
 }
 
 fn include_instance_scope<P: Phase>(include: &IncludeDecl<P>) -> IncludeInstanceScope {
@@ -924,7 +1213,6 @@ fn register_module_imports(
     owner: &DagId,
     declarations: &[Declaration],
     resolved_imports: &impl ResolvedModuleLookup,
-    files: &HashMap<DagId, LoadedFile>,
 ) -> Result<(), graphcal_compiler::syntax::module_resolve::ModuleResolveError> {
     for decl in declarations {
         match &decl.kind {
@@ -932,12 +1220,7 @@ fn register_module_imports(
                 if let Some(target) =
                     resolved_imports.resolved_target(&ModulePathKey::from_path(&import.path))
                 {
-                    resolver.register_import(
-                        owner,
-                        &import.path,
-                        &import.kind,
-                        &module_resolver_target_for_path(&import.path, target, files),
-                    )?;
+                    resolver.register_import(owner, &import.path, &import.kind, target.target())?;
                 }
             }
             DeclKind::Include(include)
@@ -954,34 +1237,6 @@ fn register_module_imports(
         }
     }
     Ok(())
-}
-
-/// Refine a loader-resolved file target to an inline-DAG child target when
-/// the source module path used the loader's `parent-file + dag leaf` fallback.
-///
-/// The loader still owns filesystem resolution: `file_target` is the canonical
-/// file chosen for `path`. This helper only maps that already-loaded file to
-/// its already-lifted inline DAG child when the path leaf names one.
-fn module_resolver_target_for_path(
-    path: &ModulePath,
-    file_target: &DagId,
-    files: &HashMap<DagId, LoadedFile>,
-) -> DagId {
-    let leaf = path.leaf().name.as_str();
-    if leaf == file_target.name() {
-        return file_target.clone();
-    }
-
-    files
-        .get(file_target)
-        .and_then(|loaded| {
-            loaded
-                .inline_dags
-                .iter()
-                .find(|inline| inline.name.as_str() == leaf)
-                .map(|inline| inline.dag_id.clone())
-        })
-        .unwrap_or_else(|| file_target.clone())
 }
 
 /// Load a project starting from `root_path`, recursively loading all
@@ -1086,12 +1341,12 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
         apply_plugin_pins(&mut plugins, &pins);
     }
     cancellation.checkpoint()?;
-    Ok(LoadedProject {
+    Ok(LoadedProject::from_parts(
         files,
-        root: root_dag_id,
+        root_dag_id,
         load_order,
         plugins,
-    })
+    ))
 }
 
 /// Read the root package's plugin pins from `graphcal.lock`, when present.
@@ -1173,12 +1428,12 @@ fn load_locked_package_project<F: FileSystemReader>(
     );
     apply_plugin_pins(&mut plugins, &context.plugin_pins);
     cancellation.checkpoint()?;
-    Ok(LoadedProject {
+    Ok(LoadedProject::from_parts(
         files,
-        root: root_dag_id,
+        root_dag_id,
         load_order,
         plugins,
-    })
+    ))
 }
 
 struct PackageLoadContext {
@@ -1318,8 +1573,7 @@ fn load_package_file_dfs(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    let mut resolved_imports_paths: HashMap<ModulePathKey, (PackageInstanceId, PathBuf)> =
-        HashMap::new();
+    let mut resolved_imports_paths: HashMap<ModulePathKey, PackageResolvedPath> = HashMap::new();
 
     for decl in &ast.declarations {
         cancellation.checkpoint()?;
@@ -1337,7 +1591,7 @@ fn load_package_file_dfs(
         let resolved =
             resolve_package_import_path(path, package_id, context, &named_source, parent_dir)?;
         if resolved.path == canonical_path && resolved.package == *package_id {
-            resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.into_key());
+            resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved);
             continue;
         }
         load_package_file_dfs(
@@ -1351,7 +1605,7 @@ fn load_package_file_dfs(
             stack,
             cancellation,
         )?;
-        resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.into_key());
+        resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved);
     }
 
     for path in inline_dag_dependency_paths(&ast.declarations) {
@@ -1388,15 +1642,16 @@ fn load_package_file_dfs(
         .strip_prefix(package_root)
         .unwrap_or(canonical_path);
     let dag_id = package_dag_id(package_id, relative_path, &named_source)?;
-    let resolved_imports: HashMap<ModulePathKey, DagId> = resolved_imports_paths
+    let resolved_imports = resolved_imports_paths
         .iter()
-        .map(|(key, (dep_package, canonical))| {
-            let dep_dag_id = if dep_package == package_id && canonical == canonical_path {
+        .map(|(key, resolved)| {
+            let source_file = if resolved.package == *package_id && resolved.path == canonical_path
+            {
                 dag_id.clone()
             } else {
-                path_to_dag_id[&(dep_package.clone(), canonical.clone())].clone()
+                path_to_dag_id[&(resolved.package.clone(), resolved.path.clone())].clone()
             };
-            (key.clone(), dep_dag_id)
+            (key.clone(), resolved.target_from(&source_file))
         })
         .collect();
     let same_file_dag_ids = collect_inline_dag_ids(&ast.declarations, &dag_id);
@@ -1406,6 +1661,7 @@ fn load_package_file_dfs(
         file_dag_id: &dag_id,
         same_file_dag_ids: &same_file_dag_ids,
         canonical_path,
+        path_to_dag_id,
         src: &named_source,
         file_stem,
     };
@@ -1446,14 +1702,22 @@ fn package_dag_id(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PackageResolvedPath {
     package: PackageInstanceId,
     path: PathBuf,
+    inline_path: Vec<DeclName>,
 }
 
 impl PackageResolvedPath {
-    fn into_key(self) -> (PackageInstanceId, PathBuf) {
-        (self.package, self.path)
+    fn target_from(&self, source_file: &DagId) -> ResolvedModuleTarget {
+        let target = self
+            .inline_path
+            .iter()
+            .fold(source_file.clone(), |owner, name| {
+                owner.child(name.as_str())
+            });
+        ResolvedModuleTarget::in_file(source_file.clone(), target)
     }
 }
 
@@ -1495,11 +1759,12 @@ fn resolve_package_import_path(
         })
     })?;
     let root = context.root_for(&resolved.package)?;
-    let canonical =
+    let resolved_file =
         package_module_path(root, package, &resolved.module_segments, src, import_path)?;
     Ok(PackageResolvedPath {
         package: resolved.package,
-        path: canonical,
+        path: resolved_file.file,
+        inline_path: resolved_file.inline_path,
     })
 }
 
@@ -1509,29 +1774,32 @@ fn package_module_path(
     module_segments: &[String],
     src: &NamedSource<Arc<String>>,
     import_path: &ModulePath,
-) -> Result<PathBuf, CompileError> {
-    let mut file_path = package_root
-        .join(&package.source_dir)
-        .join(package.name.as_str());
-    for segment in module_segments {
-        file_path = file_path.join(segment);
-    }
-    file_path.set_extension("gcl");
-    if let Ok(canonical) = std::fs::canonicalize(&file_path) {
-        return ensure_package_path(canonical, package_root, import_path, src);
-    }
-
-    if let Some((_last, parent_segments)) = module_segments.split_last() {
-        let mut parent_path = package_root
+) -> Result<ResolvedFilePath, CompileError> {
+    for file_segment_count in (0..=module_segments.len()).rev() {
+        let mut file_path = package_root
             .join(&package.source_dir)
             .join(package.name.as_str());
-        for segment in parent_segments {
-            parent_path = parent_path.join(segment);
+        for segment in &module_segments[..file_segment_count] {
+            file_path = file_path.join(segment);
         }
-        parent_path.set_extension("gcl");
-        if let Ok(canonical) = std::fs::canonicalize(&parent_path) {
-            return ensure_package_path(canonical, package_root, import_path, src);
-        }
+        file_path.set_extension("gcl");
+        let Ok(canonical) = std::fs::canonicalize(&file_path) else {
+            continue;
+        };
+        let canonical = ensure_package_path(canonical, package_root, import_path, src)?;
+        let inline_path = module_segments[file_segment_count..]
+            .iter()
+            .map(|segment| DeclName::try_new(segment.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                CompileError::Eval(GraphcalError::ManifestError {
+                    message: format!("invalid locked module segment: {error}"),
+                })
+            })?;
+        return Ok(ResolvedFilePath {
+            file: canonical,
+            inline_path,
+        });
     }
 
     Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
@@ -1742,6 +2010,7 @@ struct PackageInlineLiftContext<'a> {
     file_dag_id: &'a DagId,
     same_file_dag_ids: &'a HashSet<DagId>,
     canonical_path: &'a Path,
+    path_to_dag_id: &'a HashMap<(PackageInstanceId, PathBuf), DagId>,
     src: &'a NamedSource<Arc<String>>,
     file_stem: &'a str,
 }
@@ -1781,8 +2050,7 @@ fn lift_package_inline_dags_from_declarations(
         out.push(LoadedDag {
             dag_id: dag_id.clone(),
             parent_dag_id: context.file_dag_id.clone(),
-            name,
-            body_locator: DagBodyLocator::new(body_path.clone()),
+            body_locator: DagBodyLocator::at_child(parent_path, index),
             resolved_imports,
         });
         lift_package_inline_dags_from_declarations(&dag.body, &dag_id, context, &body_path, out);
@@ -1816,10 +2084,15 @@ fn resolve_package_inline_body_import(
     if let Some(target) =
         resolve_same_file_inline_dag_path(path, lexical_parent_id, context.same_file_dag_ids)
     {
-        return InlineBodyImportResolution::Resolved(target);
+        return InlineBodyImportResolution::Resolved(ResolvedModuleTarget::in_file(
+            context.file_dag_id.clone(),
+            target,
+        ));
     }
     if path.segments.len() == 1 && path.segments[0].name == context.file_stem {
-        return InlineBodyImportResolution::Resolved(context.file_dag_id.clone());
+        return InlineBodyImportResolution::Resolved(ResolvedModuleTarget::file_root(
+            context.file_dag_id.clone(),
+        ));
     }
     let Ok(resolved) = resolve_package_import_path(
         path,
@@ -1833,11 +2106,18 @@ fn resolve_package_inline_body_import(
     ) else {
         return InlineBodyImportResolution::Unresolved;
     };
-    if resolved.path == context.canonical_path && resolved.package == *context.package_id {
-        InlineBodyImportResolution::Resolved(context.file_dag_id.clone())
-    } else {
-        InlineBodyImportResolution::Unresolved
-    }
+    let source_file =
+        if resolved.path == context.canonical_path && resolved.package == *context.package_id {
+            Some(context.file_dag_id.clone())
+        } else {
+            context
+                .path_to_dag_id
+                .get(&(resolved.package.clone(), resolved.path.clone()))
+                .cloned()
+        };
+    source_file.map_or(InlineBodyImportResolution::Unresolved, |source_file| {
+        InlineBodyImportResolution::Resolved(resolved.target_from(&source_file))
+    })
 }
 
 /// DFS helper: load a single file and recurse into its `import` declarations.
@@ -1910,7 +2190,7 @@ fn load_file_dfs<F: FileSystemReader>(
 
     // Find import and include declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut resolved_imports_paths: HashMap<ModulePathKey, PathBuf> = HashMap::new();
+    let mut resolved_imports_paths: HashMap<ModulePathKey, ResolvedFilePath> = HashMap::new();
     for decl in &ast.declarations {
         cancellation.checkpoint()?;
         let path = match &decl.kind {
@@ -1932,11 +2212,11 @@ fn load_file_dfs<F: FileSystemReader>(
             continue;
         }
 
-        let import_canonical =
+        let resolved =
             resolve_import_path(path, parent_dir, project_root, &named_source, manifest, fs)?;
 
         // Path sandboxing: reject imports that resolve outside the project root.
-        if !import_canonical.starts_with(project_root) {
+        if !resolved.file.starts_with(project_root) {
             return Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
                 path: path.display_path(),
                 src: named_source,
@@ -1944,18 +2224,18 @@ fn load_file_dfs<F: FileSystemReader>(
             }));
         }
 
-        resolved_imports_paths.insert(ModulePathKey::from_path(path), import_canonical.clone());
+        resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.clone());
 
         // A fully-qualified import that resolves to this very file (e.g.
         // `import pkg.main.inline_dag.{x};` inside main.gcl) is a
         // self-reference, not a dependency — recursing would trip the
         // circular-import check (mirrors the inline-dag loop below).
-        if import_canonical == canonical_path {
+        if resolved.file == canonical_path {
             continue;
         }
 
         load_file_dfs(
-            &import_canonical,
+            &resolved.file,
             project_root,
             package_id,
             files,
@@ -1987,23 +2267,23 @@ fn load_file_dfs<F: FileSystemReader>(
             continue;
         }
 
-        let Ok(import_canonical) =
+        let Ok(resolved) =
             resolve_import_path(path, parent_dir, project_root, &named_source, manifest, fs)
         else {
             continue;
         };
-        if !import_canonical.starts_with(project_root) {
+        if !resolved.file.starts_with(project_root) {
             return Err(CompileError::Eval(GraphcalError::ImportOutsideRoot {
                 path: path.display_path(),
                 src: named_source,
                 span: path.span().into(),
             }));
         }
-        if import_canonical == canonical_path {
+        if resolved.file == canonical_path {
             continue;
         }
         load_file_dfs(
-            &import_canonical,
+            &resolved.file,
             project_root,
             package_id,
             files,
@@ -2035,15 +2315,15 @@ fn load_file_dfs<F: FileSystemReader>(
     // Convert resolved import paths to DagIds. A self-import resolves to
     // this file's own id, which is not in `path_to_dag_id` yet (it is
     // inserted post-order, below).
-    let resolved_imports: HashMap<ModulePathKey, DagId> = resolved_imports_paths
+    let resolved_imports = resolved_imports_paths
         .iter()
-        .map(|(key, canonical)| {
-            let dep_dag_id = if canonical == canonical_path {
+        .map(|(key, resolved)| {
+            let source_file = if resolved.file == canonical_path {
                 dag_id.clone()
             } else {
-                path_to_dag_id[canonical].clone()
+                path_to_dag_id[&resolved.file].clone()
             };
-            (key.clone(), dep_dag_id)
+            (key.clone(), resolved.target_from(&source_file))
         })
         .collect();
 
@@ -2222,8 +2502,7 @@ fn lift_inline_dags_from_declarations<F: FileSystemReader>(
         out.push(LoadedDag {
             dag_id: dag_id.clone(),
             parent_dag_id: context.file_dag_id.clone(),
-            name,
-            body_locator: DagBodyLocator::new(body_path.clone()),
+            body_locator: DagBodyLocator::at_child(parent_path, index),
             resolved_imports,
         });
         lift_inline_dags_from_declarations(&dag.body, &dag_id, context, &body_path, out);
@@ -2275,11 +2554,16 @@ fn resolve_inline_body_import<F: FileSystemReader>(
     if let Some(target) =
         resolve_same_file_inline_dag_path(path, lexical_parent_id, context.same_file_dag_ids)
     {
-        return InlineBodyImportResolution::Resolved(target);
+        return InlineBodyImportResolution::Resolved(ResolvedModuleTarget::in_file(
+            context.file_dag_id.clone(),
+            target,
+        ));
     }
     // Single-segment file-stem reference — Concept 7 self-import.
     if path.segments.len() == 1 && path.segments[0].name == context.file_stem {
-        return InlineBodyImportResolution::Resolved(context.file_dag_id.clone());
+        return InlineBodyImportResolution::Resolved(ResolvedModuleTarget::file_root(
+            context.file_dag_id.clone(),
+        ));
     }
     let Ok(resolved) = resolve_import_path(
         path,
@@ -2291,17 +2575,14 @@ fn resolve_inline_body_import<F: FileSystemReader>(
     ) else {
         return InlineBodyImportResolution::Unresolved;
     };
-    if resolved == context.canonical_path {
-        InlineBodyImportResolution::Resolved(context.file_dag_id.clone())
+    let source_file = if resolved.file == context.canonical_path {
+        Some(context.file_dag_id.clone())
     } else {
-        context
-            .path_to_dag_id
-            .get(&resolved)
-            .cloned()
-            .map_or(InlineBodyImportResolution::Unresolved, |dag_id| {
-                InlineBodyImportResolution::Resolved(dag_id)
-            })
-    }
+        context.path_to_dag_id.get(&resolved.file).cloned()
+    };
+    source_file.map_or(InlineBodyImportResolution::Unresolved, |source_file| {
+        InlineBodyImportResolution::Resolved(resolved.target_from(&source_file))
+    })
 }
 
 /// Stem-only variant of [`lift_inline_dags`] for the single-file
@@ -2339,40 +2620,45 @@ fn lift_inline_dags_by_stem_from_declarations(
         };
         let name = dag.name.value.to_string();
         let dag_id = lexical_parent_id.child(name.as_str());
-        let resolved_imports = dag
-            .body
-            .iter()
-            .filter_map(|body_decl| match &body_decl.kind {
-                DeclKind::Import(import_decl) => Some(&import_decl.path),
-                DeclKind::Include(include_decl) => Some(&include_decl.path),
-                _ => None,
-            })
-            .map(|import_path| {
-                let key = ModulePathKey::from_path(import_path);
-                let resolution =
-                    resolve_same_file_inline_dag_path(import_path, &dag_id, same_file_dag_ids)
-                        .map_or_else(
-                            || {
-                                if import_path.segments.len() == 1
-                                    && import_path.segments[0].name == file_stem
-                                {
-                                    InlineBodyImportResolution::Resolved(file_dag_id.clone())
-                                } else {
-                                    InlineBodyImportResolution::Unresolved
-                                }
-                            },
-                            InlineBodyImportResolution::Resolved,
-                        );
-                (key, resolution)
-            })
-            .collect();
+        let resolved_imports =
+            dag.body
+                .iter()
+                .filter_map(|body_decl| match &body_decl.kind {
+                    DeclKind::Import(import_decl) => Some(&import_decl.path),
+                    DeclKind::Include(include_decl) => Some(&include_decl.path),
+                    _ => None,
+                })
+                .map(|import_path| {
+                    let key = ModulePathKey::from_path(import_path);
+                    let resolution =
+                        resolve_same_file_inline_dag_path(import_path, &dag_id, same_file_dag_ids)
+                            .map_or_else(
+                                || {
+                                    if import_path.segments.len() == 1
+                                        && import_path.segments[0].name == file_stem
+                                    {
+                                        InlineBodyImportResolution::Resolved(
+                                            ResolvedModuleTarget::file_root(file_dag_id.clone()),
+                                        )
+                                    } else {
+                                        InlineBodyImportResolution::Unresolved
+                                    }
+                                },
+                                |target| {
+                                    InlineBodyImportResolution::Resolved(
+                                        ResolvedModuleTarget::in_file(file_dag_id.clone(), target),
+                                    )
+                                },
+                            );
+                    (key, resolution)
+                })
+                .collect();
         let mut body_path = parent_path.to_vec();
         body_path.push(index);
         out.push(LoadedDag {
             dag_id: dag_id.clone(),
             parent_dag_id: file_dag_id.clone(),
-            name,
-            body_locator: DagBodyLocator::new(body_path.clone()),
+            body_locator: DagBodyLocator::at_child(parent_path, index),
             resolved_imports,
         });
         lift_inline_dags_by_stem_from_declarations(
@@ -2553,7 +2839,7 @@ fn resolve_import_path<F: FileSystemReader>(
     src: &NamedSource<Arc<String>>,
     manifest: Option<&PackageManifest>,
     fs: &F,
-) -> Result<PathBuf, CompileError> {
+) -> Result<ResolvedFilePath, CompileError> {
     resolve_module_path(
         import_path.segments.as_slice(),
         import_path.span,
@@ -2574,7 +2860,7 @@ fn resolve_module_path<F: FileSystemReader>(
     src: &NamedSource<Arc<String>>,
     manifest: Option<&PackageManifest>,
     fs: &F,
-) -> Result<PathBuf, CompileError> {
+) -> Result<ResolvedFilePath, CompileError> {
     let display_path = segments
         .iter()
         .map(|s| s.name.as_str())
@@ -2607,31 +2893,25 @@ fn resolve_module_path<F: FileSystemReader>(
             }));
         }
 
-        // Build path: <project_root>/<source_dir>/seg0/seg1/.../segN.gcl
-        let mut file_path = project_root.join(&m.source_dir);
-        for seg in segments {
-            file_path = file_path.join(seg.name.as_str());
-        }
-        file_path.set_extension("gcl");
-
-        if let Ok(canonical) = fs.canonicalize(&file_path) {
-            return Ok(canonical);
-        }
-
-        // Fallback: 2+ segments — try the parent file. E.g. for
-        // `nasa.rocket.velocity`, try `nasa/rocket.gcl` and expect
-        // `velocity` to be a DAG defined inside it.
-        if segments.len() >= 2
-            && let Some((_last, parent_segments)) = segments.split_last()
-        {
-            let mut parent_path = project_root.join(&m.source_dir);
-            for seg in parent_segments {
-                parent_path = parent_path.join(seg.name.as_str());
+        // Choose the longest prefix that names a physical source file. Any
+        // remaining segments are an exact nested inline-DAG path in that file.
+        for file_segment_count in (1..=segments.len()).rev() {
+            let mut file_path = project_root.join(&m.source_dir);
+            for segment in &segments[..file_segment_count] {
+                file_path = file_path.join(segment.name.as_str());
             }
-            parent_path.set_extension("gcl");
-            if let Ok(canonical) = fs.canonicalize(&parent_path) {
-                return Ok(canonical);
-            }
+            file_path.set_extension("gcl");
+            let Ok(canonical) = fs.canonicalize(&file_path) else {
+                continue;
+            };
+            let inline_path = segments[file_segment_count..]
+                .iter()
+                .map(|segment| DeclName::from_atom(segment.name.clone()))
+                .collect();
+            return Ok(ResolvedFilePath {
+                file: canonical,
+                inline_path,
+            });
         }
 
         return Err(CompileError::Eval(GraphcalError::ImportFileNotFound {
@@ -2933,7 +3213,7 @@ dag calc {
         let loaded_dag = root_file
             .inline_dags
             .iter()
-            .find(|dag| dag.name == "calc")
+            .find(|dag| dag.dag_id.name() == "calc")
             .expect("inline DAG should be lifted");
 
         assert!(
@@ -3356,7 +3636,6 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
     }
 
     #[test]
-    #[ignore = "fixed by #1256 in Phase 1"]
     fn package_inline_dag_import_resolves_dependency_module() {
         let fixture = locked_package_fixture(
             r"

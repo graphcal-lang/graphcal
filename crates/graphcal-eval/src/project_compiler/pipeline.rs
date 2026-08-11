@@ -16,9 +16,9 @@ use graphcal_compiler::desugar::desugared_ast::DeclKind;
 pub(in crate::project_compiler) fn validate_project_dag_recursion(
     project: &crate::loader::LoadedProject,
 ) -> Result<(), CompileError> {
-    project.files.values().try_for_each(|loaded_file| {
+    project.files().values().try_for_each(|loaded_file| {
         let definitions = loaded_file
-            .ast
+            .ast()
             .declarations
             .iter()
             .filter_map(|declaration| match &declaration.kind {
@@ -26,7 +26,7 @@ pub(in crate::project_compiler) fn validate_project_dag_recursion(
                 _ => None,
             })
             .collect();
-        recursion::check_dag_recursion(&definitions, &loaded_file.named_source)
+        recursion::check_dag_recursion(&definitions, loaded_file.named_source())
     })
 }
 
@@ -38,10 +38,16 @@ fn lower_single_file_to_hir(
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(HirFile, LoweringModuleInterface), CompileError> {
+) -> Result<
+    (
+        HirFile,
+        Vec<(graphcal_compiler::dag_id::DagId, LoweringModuleInterface)>,
+    ),
+    CompileError,
+> {
     cancellation.checkpoint()?;
-    let loaded_file = &project.files[file_dag_id];
-    let file_src = &loaded_file.named_source;
+    let loaded_file = &project.files()[file_dag_id];
+    let file_src = loaded_file.named_source();
 
     let mut ctx = ImportContext {
         imported_names: ImportedValueNames::default(),
@@ -64,12 +70,12 @@ fn lower_single_file_to_hir(
     // Resolve qualified references in both the body and pending include
     // bindings before lowering either representation.
     let file_ast = rewrite_qualified_refs_in_compilation_body(
-        &loaded_file.ast,
+        loaded_file.ast(),
         &ctx.imported_names,
         &mut ctx.include_instances,
     );
 
-    lowering::lower_file_to_hir(
+    let (hir, root_interface) = lowering::lower_file_to_hir(
         ProjectSemanticContext {
             project,
             module_resolver,
@@ -81,20 +87,38 @@ fn lower_single_file_to_hir(
         ctx,
         module_artifacts,
         cancellation,
-    )
+    )?;
+    let mut interfaces = vec![(file_dag_id.clone(), root_interface)];
+    for inline in loaded_file.inline_dags() {
+        let template = module_templates.get(inline.dag_id()).ok_or_else(|| {
+            CompileError::Eval(GraphcalError::InternalError {
+                message: format!(
+                    "inline module template `{}` was not retained",
+                    inline.dag_id()
+                ),
+                src: file_src.clone(),
+                span: Span::new(0, 0).into(),
+            })
+        })?;
+        interfaces.push((
+            inline.dag_id().clone(),
+            LoweringModuleInterface::new(
+                template.frontend_registry.clone(),
+                template.external_surface.clone(),
+            ),
+        ));
+    }
+    Ok((hir, interfaces))
 }
 
-fn top_level_const_values(
-    tir: &graphcal_compiler::tir::typed::TIR,
+fn dag_const_values(
+    dag: &graphcal_compiler::tir::typed::DagTIR,
     const_values: &crate::eval_expr::RuntimeValueMap,
 ) -> HashMap<DeclName, RuntimeValue> {
-    // Top-level consts are exposed by leaf name at the project import
-    // boundary; internal eval routing uses canonical declaration keys.
-    tir.root()
-        .consts()
+    dag.consts()
         .iter()
         .filter_map(|entry| {
-            let key = crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &entry.name);
+            let key = crate::decl_key::RuntimeDeclKey::for_local_decl(dag, &entry.name);
             const_values
                 .get(&key)
                 .cloned()
@@ -112,20 +136,23 @@ fn store_module_artifact(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
-    let root_facts = compiled
-        .checked_execution_facts
-        .for_dag(compiled.tir.root_dag_id())
-        .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: format!(
-                    "checked module artifact is missing root DAG `{}`",
-                    compiled.tir.root_dag_id()
-                ),
-                src: file_src.clone(),
-                span: Span::new(0, 0).into(),
-            })
-        })?;
-    let top_level_consts = top_level_const_values(&compiled.tir, &root_facts.const_values);
+    let const_values_by_dag = compiled
+        .tir
+        .local_dags()
+        .map(|(dag_id, dag)| {
+            let facts = compiled
+                .checked_execution_facts
+                .for_dag(dag_id)
+                .ok_or_else(|| {
+                    CompileError::Eval(GraphcalError::InternalError {
+                        message: format!("checked module artifact is missing DAG `{dag_id}`"),
+                        src: file_src.clone(),
+                        span: Span::new(0, 0).into(),
+                    })
+                })?;
+            Ok((dag_id.clone(), dag_const_values(dag, &facts.const_values)))
+        })
+        .collect::<Result<HashMap<_, _>, CompileError>>()?;
     let declared_types_by_dag = compiled
         .tir
         .local_dags()
@@ -148,8 +175,7 @@ fn store_module_artifact(
         file_dag_id.clone(),
         ModuleArtifact {
             checked_execution_facts: compiled.checked_execution_facts,
-            const_values: top_level_consts,
-            declared_types: compiled.declared_types,
+            const_values_by_dag,
             declared_types_by_dag,
             override_dependencies,
             dag_tirs,
@@ -173,9 +199,9 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
     let mut module_interfaces = HashMap::new();
     let mut module_templates = ModuleTemplateStore::default();
 
-    for file_dag_id in &project.load_order {
+    for file_dag_id in project.load_order() {
         cancellation.checkpoint()?;
-        let (hir, lowering_interface) = lower_single_file_to_hir(
+        let (hir, lowering_interfaces) = lower_single_file_to_hir(
             project,
             file_dag_id,
             &module_interfaces,
@@ -183,11 +209,11 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
             &mut module_templates,
             cancellation,
         )?;
-        module_interfaces.insert(file_dag_id.clone(), lowering_interface);
+        module_interfaces.extend(lowering_interfaces);
         files.insert(file_dag_id.clone(), hir);
     }
 
-    if !files.contains_key(&project.root) {
+    if !files.contains_key(project.root_id()) {
         return Err(CompileError::Eval(GraphcalError::InternalError {
             message: "root file not found in project load order".to_string(),
             src: NamedSource::new("internal", Arc::new(String::new())),
@@ -201,10 +227,10 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         .collect();
 
     Ok(HirProject {
-        root: project.root.clone(),
-        load_order: project.load_order.clone(),
+        root: project.root_id().clone(),
+        load_order: project.load_order().to_vec(),
         files,
-        plugins: &project.plugins,
+        plugins: project.plugins(),
         exported_dynamic_units,
         module_resolver,
         cancellation: cancellation.clone(),

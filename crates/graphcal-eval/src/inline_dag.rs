@@ -99,8 +99,8 @@ pub fn preprocess_dag_body_self_imports(
             .is_some_and(|resolution| {
                 matches!(
                     resolution,
-                    crate::loader::InlineBodyImportResolution::Resolved(dag_id)
-                        if dag_id == parent_dag_id
+                    crate::loader::InlineBodyImportResolution::Resolved(target)
+                        if target.target() == parent_dag_id
                 )
             });
         if !is_self_import {

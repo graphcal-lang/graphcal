@@ -102,8 +102,8 @@ pub(super) struct HirFile {
 /// Checked compile-time artifact made available to downstream modules.
 pub(super) struct ModuleArtifact {
     pub(super) checked_execution_facts: crate::execution_facts::CheckedExecutionFacts,
-    pub(super) const_values: HashMap<DeclName, RuntimeValue>,
-    pub(super) declared_types: HashMap<ScopedName, DeclaredType>,
+    pub(super) const_values_by_dag:
+        HashMap<graphcal_compiler::dag_id::DagId, HashMap<DeclName, RuntimeValue>>,
     pub(super) declared_types_by_dag:
         HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
     pub(super) override_dependencies: graphcal_compiler::tir::dim_check::OverrideDependencySummary,

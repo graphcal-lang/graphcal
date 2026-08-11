@@ -115,7 +115,7 @@ pub enum DumpError {
     #[diagnostic(code(graphcal::dump::D004))]
     ModuleIndex {
         #[source]
-        source: graphcal_compiler::syntax::module_resolve::ModuleResolveError,
+        source: graphcal_eval::loader::ModuleResolverBuildError,
     },
     #[error("could not write dump output: {source}")]
     #[diagnostic(code(graphcal::dump::D005))]

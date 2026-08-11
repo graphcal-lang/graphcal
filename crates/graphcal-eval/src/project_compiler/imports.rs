@@ -7,9 +7,7 @@ use super::recursion;
     reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
-use crate::import_surface::{
-    ProjectDeclIdentity, ProjectDeclKind, decl_identity, import_item_not_found_error,
-};
+use crate::import_surface::{ProjectDeclIdentity, ProjectDeclKind, decl_identity};
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
@@ -87,11 +85,11 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     ctx: &mut ImportContext<'a>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
-    let loaded_file = &project.files[file_dag_id];
-    let file_src = &loaded_file.named_source;
+    let loaded_file = &project.files()[file_dag_id];
+    let file_src = loaded_file.named_source();
     let dag_definitions: HashMap<DeclName, &graphcal_compiler::desugar::desugared_ast::DagDecl> =
         loaded_file
-            .ast
+            .ast()
             .declarations
             .iter()
             .filter_map(|declaration| match &declaration.kind {
@@ -101,7 +99,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             .collect();
     recursion::check_dag_recursion(&dag_definitions, file_src)?;
 
-    for (_declaration, import, target) in loaded_file.imports_with_dag_ids() {
+    for (_declaration, import, target) in loaded_file.imports_with_targets() {
         cancellation.checkpoint()?;
         process_pure_import(
             project,
@@ -114,14 +112,14 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         )?;
     }
 
-    for (declaration, include, target) in loaded_file.includes_with_dag_ids() {
+    for (declaration, include, target) in loaded_file.includes_with_targets() {
         cancellation.checkpoint()?;
-        if is_bare_module_dag_ref(&include.path, target, project) {
+        if target.target() != target.source_file() {
             continue;
         }
         process_file_include(
             project,
-            target,
+            target.source_file(),
             include,
             declaration,
             file_src,
@@ -130,7 +128,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         )?;
     }
 
-    for declaration in &loaded_file.ast.declarations {
+    for declaration in &loaded_file.ast().declarations {
         cancellation.checkpoint()?;
         let DeclKind::Include(include) = &declaration.kind else {
             continue;
@@ -158,50 +156,43 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
         )?;
     }
 
-    for (declaration, include, target) in loaded_file.includes_with_dag_ids() {
+    for (declaration, include, target) in loaded_file.includes_with_targets() {
         cancellation.checkpoint()?;
-        if !is_bare_module_dag_ref(&include.path, target, project) {
+        if target.target() == target.source_file() {
             continue;
         }
-        let dag_name = &include.path.segments.last().name;
-        let target_loaded = project.files.get(target).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::EvalError {
-                message: format!("bare module DAG target file not found in project: {target}"),
+        let Some((target_loaded, target_dag)) = project.inline_dag(target.target()) else {
+            return Err(CompileError::Eval(GraphcalError::EvalError {
+                message: format!(
+                    "inline DAG target not found in project: {}",
+                    target.target()
+                ),
                 src: file_src.clone(),
                 span: include.path.span().into(),
-            })
-        })?;
-        let target_dag = target_loaded
-            .ast
-            .declarations
-            .iter()
-            .find_map(|candidate| match &candidate.kind {
-                DeclKind::Dag(dag) if dag.name.value.as_str() == dag_name.as_str() => Some(dag),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::EvalError {
-                    message: format!("DAG `{dag_name}` not found in file `{target}`"),
-                    src: file_src.clone(),
-                    span: include.path.span().into(),
-                })
-            })?;
-        if !target_dag.visibility.is_public() {
+            }));
+        };
+        if !target_dag.declaration(target_loaded).visibility.is_public()
+            && target.source_file() != file_dag_id
+        {
             return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
-                name: dag_name.to_string(),
+                name: target.target().name().to_string(),
                 file_path: include.path.display_path(),
                 src: file_src.clone(),
                 span: include.path.leaf().span.into(),
             }));
         }
-        let target_dag_id = target_loaded.dag_id.child(dag_name.as_str());
+        let boundary = if target.source_file() == file_dag_id {
+            IncludeVisibilityBoundary::Local
+        } else {
+            IncludeVisibilityBoundary::CrossModule
+        };
         process_inline_dag_include(
             &InlineDagIncludeTarget {
-                dag_def: target_dag,
-                dag_id: &target_dag_id,
-                dag_name,
-                parent_dag_id: &target_loaded.dag_id,
-                boundary: IncludeVisibilityBoundary::CrossModule,
+                dag_def: target_dag.declaration(target_loaded),
+                dag_id: target.target(),
+                dag_name: target.target().name(),
+                parent_dag_id: target.source_file(),
+                boundary,
             },
             include,
             declaration,
@@ -420,14 +411,14 @@ fn file_exports_plot(
         name: &NameAtom,
         seen: &mut HashSet<(graphcal_compiler::dag_id::DagId, DeclName)>,
     ) -> bool {
-        let Some(file) = project.files.get(file_dag_id) else {
+        let Some(file) = project.files().get(file_dag_id) else {
             return false;
         };
         let typed_name = DeclName::from_atom(name.clone());
         if !seen.insert((file_dag_id.clone(), typed_name)) {
             return false;
         }
-        if file.ast.declarations.iter().any(|declaration| {
+        if file.ast().declarations.iter().any(|declaration| {
             matches!(
                 &declaration.kind,
                 DeclKind::Plot(plot)
@@ -436,7 +427,7 @@ fn file_exports_plot(
         }) {
             return true;
         }
-        file.includes_with_dag_ids().any(|(_, include, target)| {
+        file.includes_with_targets().any(|(_, include, target)| {
             let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
                 &include.kind
             else {
@@ -445,7 +436,7 @@ fn file_exports_plot(
             items.iter().any(|item| {
                 item.is_pub
                     && item.local_name_atom() == name
-                    && visit(project, target, &item.name.name, seen)
+                    && visit(project, target.source_file(), &item.name.name, seen)
             })
         })
     }
@@ -609,8 +600,8 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
-    let dep_loaded = &project.files[import_dag_id];
-    let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
+    let dep_loaded = &project.files()[import_dag_id];
+    let dep_index = build_dep_decl_index(&dep_loaded.ast().declarations);
 
     // A module-form include introduces a source-visible alias and therefore
     // participates in duplicate-alias checks. A selective include introduces
@@ -676,7 +667,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                 let local = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 ensure_include_item_selectable(
-                    &dep_loaded.ast,
+                    dep_loaded.ast(),
                     orig_name,
                     import_item.namespace,
                     IncludeVisibilityBoundary::CrossModule,
@@ -740,7 +731,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {
             // Register all dep names under the prefix for scope checking.
             let import_span = include_decl.path.span();
-            for dep_decl in &dep_loaded.ast.declarations {
+            for dep_decl in &dep_loaded.ast().declarations {
                 if let Some((name, is_const)) =
                     include_value_decl(dep_decl, IncludeVisibilityBoundary::CrossModule)
                 {
@@ -775,13 +766,13 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         }
     };
     let surface_outputs = include_surface_outputs(
-        &dep_loaded.ast.declarations,
+        &dep_loaded.ast().declarations,
         &prefix,
         selective_names.as_deref(),
     );
 
     // Required indexes must always be bound.
-    for dep_decl in &dep_loaded.ast.declarations {
+    for dep_decl in &dep_loaded.ast().declarations {
         if let DeclKind::Index(idx) = &dep_decl.kind
             && idx.kind.is_required()
             && !index_bindings.contains_key(idx.name.value.as_str())
@@ -1038,36 +1029,6 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     Ok(())
 }
 
-/// Check whether a multi-segment `ModulePath` include is a bare module path
-/// DAG reference. This is the case when:
-/// 1. The path has 2+ segments, AND
-/// 2. The resolved target file's AST contains a `dag` definition whose name
-///    matches the last segment of the module path.
-///
-/// For example, `include pkg.lib.double(...)` where `pkg/lib.gcl` defines
-/// `dag double { ... }`.
-pub(in crate::project_compiler) fn is_bare_module_dag_ref(
-    import_path: &ModulePath,
-    resolved_dag_id: &graphcal_compiler::dag_id::DagId,
-    project: &crate::loader::LoadedProject,
-) -> bool {
-    if import_path.segments.len() < 2 {
-        return false;
-    }
-    let last_segment = &import_path.segments.last().name;
-
-    // Check if the resolved file contains a DAG with the matching name.
-    let Some(target_loaded) = project.files.get(resolved_dag_id) else {
-        return false;
-    };
-
-    target_loaded
-        .ast
-        .declarations
-        .iter()
-        .any(|d| matches!(&d.kind, DeclKind::Dag(dag) if dag.name.value.as_str() == last_segment.as_str()))
-}
-
 /// Process one pure import from a dependency's compile-time artifact.
 ///
 /// Imports expose only compile-time items (consts, dimensions, static units,
@@ -1079,33 +1040,38 @@ pub(in crate::project_compiler) fn is_bare_module_dag_ref(
 )]
 pub(in crate::project_compiler) fn process_pure_import<'a>(
     project: &crate::loader::LoadedProject,
-    import_dag_id: &graphcal_compiler::dag_id::DagId,
+    resolved_module: &crate::loader::ResolvedModuleTarget,
     import_path: &graphcal_compiler::desugar::desugared_ast::ModulePath,
     import_kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
-    let resolved_module = project
-        .resolved_module_target(import_path, import_dag_id)
-        .map_err(|err| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: err.to_string(),
-                src: file_src.clone(),
-                span: import_path.span().into(),
-            })
-        })?;
     let source_file = resolved_module.source_file();
     let module_target = resolved_module.target();
-    let dep = module_artifacts.get(source_file).ok_or_else(|| {
+    let dep = module_artifacts.get(module_target).ok_or_else(|| {
         CompileError::Eval(GraphcalError::EvalError {
-            message: format!("dependency `{source_file}` is not available for imports"),
+            message: format!("module `{module_target}` is not available for imports"),
             src: file_src.clone(),
             span: import_path.span().into(),
         })
     })?;
-    let dep_loaded = &project.files[source_file];
-    let dep_index = build_dep_decl_index(&dep_loaded.ast.declarations);
+    let dep_loaded = &project.files()[source_file];
+    let declarations = if module_target == source_file {
+        dep_loaded.ast().declarations.as_slice()
+    } else {
+        project
+            .inline_dag(module_target)
+            .map(|(file, dag)| dag.body(file))
+            .ok_or_else(|| {
+                CompileError::Eval(GraphcalError::InternalError {
+                    message: format!("inline module `{module_target}` has no owning declaration"),
+                    src: file_src.clone(),
+                    span: import_path.span().into(),
+                })
+            })?
+    };
+    let dep_index = build_dep_decl_index(declarations);
 
     match import_kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
@@ -1115,9 +1081,13 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
 
                 // Boundary check: an ordinary item must be exported; a param is
                 // nameable through its distinct input-port role.
-                if !file_exposes_import_item(&dep_loaded.ast, orig_name, import_item.namespace) {
-                    let exists =
-                        file_has_import_item(&dep_loaded.ast, orig_name, import_item.namespace);
+                if !declarations_expose_import_item(declarations, orig_name, import_item.namespace)
+                {
+                    let exists = declarations_have_import_item(
+                        declarations,
+                        orig_name,
+                        import_item.namespace,
+                    );
                     if exists {
                         return Err(CompileError::Eval(GraphcalError::ImportPrivateItem {
                             name: orig_name.to_string(),
@@ -1126,14 +1096,16 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                             span: import_item.name.span.into(),
                         }));
                     }
-                    return Err(CompileError::Eval(import_item_not_found_error(
-                        &dep_loaded.ast,
-                        orig_name,
-                        import_item.namespace,
-                        &import_path.display_path(),
-                        file_src,
-                        import_item.name.span,
-                    )));
+                    return Err(CompileError::Eval(
+                        import_item_not_found_error_from_declarations(
+                            declarations,
+                            orig_name,
+                            import_item.namespace,
+                            &import_path.display_path(),
+                            file_src,
+                            import_item.name.span,
+                        ),
+                    ));
                 }
 
                 if import_item.namespace
@@ -1150,7 +1122,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         )?;
                     }
                     ctx.imported_type_system_names
-                        .entry(source_file.clone())
+                        .entry(module_target.clone())
                         .or_default()
                         .insert(import_item.namespace, orig_name.clone());
                     continue;
@@ -1183,7 +1155,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
 
                 if dep_index.is_const(orig_name) {
                     import_selective_item(
-                        source_file,
+                        module_target,
                         orig_name,
                         &local_name,
                         import_item.name.span,
@@ -1192,14 +1164,14 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         &mut ctx.imported_bindings,
                         Some(&mut ctx.imported_source_order),
                     )?;
-                } else if file_has_import_item(
-                    &dep_loaded.ast,
+                } else if declarations_have_import_item(
+                    declarations,
                     orig_name,
                     graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
                 ) {
                     // A bare non-value term, such as a DAG or constructor.
                     ctx.imported_type_system_names
-                        .entry(source_file.clone())
+                        .entry(module_target.clone())
                         .or_default()
                         .insert(import_item.namespace, orig_name.clone());
                 } else {
@@ -1238,9 +1210,9 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
             let import_span = import_path.span();
             // Import compile-time constants under the module prefix.
             import_module_values(
-                &dep_loaded.ast.declarations,
+                declarations,
                 dep.external_surface(),
-                source_file,
+                module_target,
                 &module_name,
                 import_span,
                 file_src,
