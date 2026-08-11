@@ -1333,21 +1333,6 @@ impl SymbolTable {
             (owner_matches && resolved.as_str() == name.member().as_str()).then_some(definition)
         })
     }
-
-    /// The name of the innermost `dag` declaration whose body contains
-    /// `offset`, if any. Used by completion to respect lexical scope: inside
-    /// a dag body, top-level declarations are not referenceable.
-    pub fn enclosing_dag_at(&self, offset: usize) -> Option<&str> {
-        self.definitions
-            .values()
-            .filter(|def| {
-                def.category == SymbolCategory::Dag
-                    && offset >= def.decl_span.offset()
-                    && offset < def.decl_span.offset() + def.decl_span.len()
-            })
-            .min_by_key(|def| def.decl_span.len())
-            .map(|def| def.name.as_str())
-    }
 }
 
 /// Build a symbol table from a parsed AST file.

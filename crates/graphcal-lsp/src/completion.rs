@@ -2,6 +2,10 @@
 
 use std::borrow::Cow;
 
+use graphcal_compiler::dag_id::DagId;
+use graphcal_compiler::syntax::lexer::tokenize;
+use graphcal_compiler::syntax::names::NameAtom;
+use graphcal_compiler::syntax::token::Token;
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::cursor_context::{
@@ -81,7 +85,7 @@ pub fn completion(
     let context = determine_completion_context(source, offset);
     let items = match context {
         CompletionContext::ImportItem(context) => complete_import_items(analysis, &context),
-        CompletionContext::GraphRef => complete_graph_refs(analysis, offset),
+        CompletionContext::GraphRef => complete_graph_refs(analysis, source, offset),
         CompletionContext::TypeAnnotation => complete_types(analysis),
         CompletionContext::ConversionTarget => complete_conversion_targets(analysis),
         CompletionContext::TopLevel => complete_top_level(),
@@ -204,6 +208,73 @@ fn graph_ref_item(def: &DefinitionInfo, label: String) -> Option<CompletionItem>
     })
 }
 
+#[derive(Debug)]
+enum BraceScope {
+    Dag(NameAtom),
+    Other,
+}
+
+#[derive(Debug, Default)]
+enum DagHeader {
+    #[default]
+    None,
+    AwaitingName,
+    Named(NameAtom),
+    Invalid,
+}
+
+/// Derive the current DAG owner from the latest token stream without relying
+/// on declaration spans from a possibly older successful parse.
+fn current_graph_owner(root: &DagId, source: &str, offset: usize) -> Option<DagId> {
+    let mut braces = Vec::new();
+    let mut dag_header = DagHeader::None;
+    for &(token, span) in tokenize(source).tokens() {
+        if span.offset() >= offset {
+            break;
+        }
+        if token == Token::Dag {
+            dag_header = DagHeader::AwaitingName;
+            continue;
+        }
+        if matches!(dag_header, DagHeader::AwaitingName) {
+            dag_header = if token.is_identifier() {
+                source
+                    .get(span.offset()..span.offset() + span.len())
+                    .and_then(|spelling| NameAtom::parse(spelling).ok())
+                    .map_or(DagHeader::Invalid, DagHeader::Named)
+            } else {
+                DagHeader::Invalid
+            };
+            continue;
+        }
+        if matches!(dag_header, DagHeader::Named(_)) && token != Token::LBrace {
+            dag_header = DagHeader::Invalid;
+        }
+        match token {
+            Token::LBrace => match std::mem::take(&mut dag_header) {
+                DagHeader::None => braces.push(BraceScope::Other),
+                DagHeader::Named(name) => braces.push(BraceScope::Dag(name)),
+                DagHeader::AwaitingName | DagHeader::Invalid => return None,
+            },
+            Token::RBrace => {
+                braces.pop()?;
+                dag_header = DagHeader::None;
+            }
+            Token::Semicolon => dag_header = DagHeader::None,
+            _ => {}
+        }
+    }
+
+    Some(
+        braces
+            .into_iter()
+            .fold(root.clone(), |owner, scope| match scope {
+                BraceScope::Dag(name) => owner.child(name.as_str()),
+                BraceScope::Other => owner,
+            }),
+    )
+}
+
 /// Complete param, node, and const node names (after `@`), respecting the
 /// cursor's lexical scope.
 ///
@@ -212,20 +283,21 @@ fn graph_ref_item(def: &DefinitionInfo, label: String) -> Option<CompletionItem>
 /// whose single qualifier segment is the dag name) and imported names are
 /// offered. At the top level the dag members are excluded for the same
 /// reason — offering identifiers that cannot compile is a usability trap.
-fn complete_graph_refs(analysis: &AnalysisResult, offset: usize) -> Vec<CompletionItem> {
-    let enclosing_dag = analysis.symbol_table.enclosing_dag_at(offset);
+fn complete_graph_refs(
+    analysis: &AnalysisResult,
+    source: &str,
+    offset: usize,
+) -> Vec<CompletionItem> {
+    let Some(expected_owner) = current_graph_owner(analysis.symbol_table.owner(), source, offset)
+    else {
+        return Vec::new();
+    };
 
     let local = analysis
         .symbol_table
         .definitions
         .iter()
-        .filter(|(key, _)| {
-            let expected_owner = enclosing_dag.map_or_else(
-                || analysis.symbol_table.owner().clone(),
-                |dag_name| analysis.symbol_table.owner().child(dag_name),
-            );
-            key.owner() == Some(&expected_owner)
-        })
+        .filter(|(key, _)| key.owner() == Some(&expected_owner))
         .map(|(_, def)| (def, def.name.clone()));
     // Imported names are referenceable in both scopes (a dag body may not
     // reach top-level declarations, but imports stay visible). Members of
@@ -347,6 +419,28 @@ mod tests {
                 "missing complex function completion `{function}`"
             );
         }
+    }
+
+    #[test]
+    fn stale_semantic_candidates_use_current_tolerant_dag_scope() {
+        let analyzed = "const node top: Dimensionless = 1.0;\n\
+                        dag inner {\n\
+                            const node local: Dimensionless = 2.0;\n\
+                            node result: Dimensionless = @local;\n\
+                        }\n";
+        let uri = tower_lsp::lsp_types::Url::parse("file:///tmp/completion-stale.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, analyzed);
+        let current = format!("node incomplete:\r\n// UTF-16 shift 🚀\r\n{analyzed}");
+        let offset = current.find("@local").unwrap() + 1;
+
+        let labels = completion(&analysis, &current, offset)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+
+        assert!(labels.iter().any(|label| label == "local"));
+        assert!(!labels.iter().any(|label| label == "top"));
     }
 
     #[test]
