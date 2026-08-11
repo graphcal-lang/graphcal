@@ -438,7 +438,10 @@ positions.
 
 Units are referenced only in unit syntax, such as quantity literals and conversion
 targets. A unit name can match a type, index, or value leaf without changing
-which declaration a type, index, or value position resolves.
+which declaration a type, index, or value position resolves. The reverse lookup
+is deliberately strict: if unit syntax finds a same-spelled non-unit declaration,
+it reports that wrong-universe declaration instead of silently falling through
+to a prelude or registry unit with a different semantic identity.
 
 ## Type Categories
 

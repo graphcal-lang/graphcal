@@ -135,14 +135,18 @@ fn resolve_rejects_value_index_name_collision() {
 }
 
 #[test]
-fn resolve_allows_index_name_matching_prelude_unit_name() {
-    let tir = compile_to_tir(
+fn resolve_does_not_fall_through_to_same_spelled_prelude_unit() {
+    let err = compile_to_tir(
         "pub index s = { A };
          param sample: Time[s] = { s.A: 1.0 s };",
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(tir.root().params.len(), 1);
+    assert!(matches!(
+        err,
+        GraphcalError::EvalError { ref message, .. }
+            if message.contains("`s` is an index, not a unit")
+    ));
 }
 
 #[test]
