@@ -823,6 +823,37 @@ fn eval_indexed_text_output() {
 }
 
 #[test]
+fn eval_heterogeneous_table_units_are_never_misrepresented_by_one_caption() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_temp_file(
+        dir.path(),
+        "heterogeneous-table-units.gcl",
+        "index R = { A, B };\n\
+         index C = { X };\n\
+         node grid: Length[R, C] = {\n\
+             (R.A, C.X): 1000.0 m -> km,\n\
+             (R.B, C.X): 2000.0 m -> m,\n\
+         };\n",
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", source.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.trim_start().starts_with("grid:\n"), "{stdout}");
+    assert!(!stdout.contains("grid (km):"), "{stdout}");
+    assert!(stdout.contains("1 [km]"), "{stdout}");
+    assert!(stdout.contains("2000 [m]"), "{stdout}");
+}
+
+#[test]
 fn eval_indexed_json_output() {
     let output = graphcal_bin()
         .args(["eval", &fixture("valid/indexed.gcl"), "--format", "json"])
