@@ -426,6 +426,14 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
         }
     };
 
+    let path_hint = module_path.display().to_string().replace('\\', "/");
+    let alias = plugin::suggest_alias(module_path);
+    let import_block =
+        plugin::render_import_block(&path_hint, &alias, &module).unwrap_or_else(|e| {
+            eprintln!("error: cannot render a Graphcal import for this plugin: {e}");
+            process::exit(1);
+        });
+
     println!("plugin: {}", module_path.display());
     println!("sha256: {}", module.sha256_hex());
     println!(
@@ -434,12 +442,7 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
         module.functions().len()
     );
     println!();
-    let path_hint = module_path.display().to_string().replace('\\', "/");
-    let alias = plugin::suggest_alias(module_path);
-    println!(
-        "{}",
-        plugin::render_import_block(&path_hint, &alias, &module)
-    );
+    println!("{import_block}");
     eprintln!();
     eprintln!("note: adjust the import path to the module's vendored location in your project");
 

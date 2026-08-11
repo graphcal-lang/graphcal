@@ -6,11 +6,15 @@
 //! display boundary: the output is `.gcl`-valid extern-declaration syntax,
 //! ready to paste into an `import plugin` block.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use graphcal_compiler::dimension::Dimension;
-use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
+use graphcal_compiler::dimension::{Dimension, Rational};
+use graphcal_compiler::function_signature::{
+    DimMonomial, FunctionSignature, StructFieldKind, ValueKind,
+};
 use graphcal_compiler::registry::format::format_exponent;
+use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
 use graphcal_eval::eval::format_number;
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_host::PluginModule;
@@ -281,27 +285,271 @@ fn validate_name(name: &str) -> Result<(), ScaffoldNameError> {
 // `graphcal plugin test`
 // ---------------------------------------------------------------------------
 
-/// Render one function as a `.gcl` extern declaration line (no leading
-/// indentation): `fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;`.
-///
-/// A struct-returning function names its result type: the manifest is
-/// structural, so a suggested record name is derived from the function
-/// (`solve` → `SolveResult`) and the caller pairs the declaration with
-/// [`render_result_type_decl`].
-pub fn render_declaration(name: &str, signature: &FunctionSignature) -> String {
-    let rendered = signature.format_with(render_dimension);
-    if matches!(signature.result(), ValueKind::Struct(_))
-        && let Some((head, _)) = rendered.rsplit_once(" -> ")
-    {
-        return format!("fn {name}{head} -> {};", suggest_result_type_name(name));
-    }
-    format!("fn {name}{rendered};")
+/// A failure to turn a validated plugin module into paste-ready Graphcal source.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ImportBlockRenderError {
+    /// Graphcal string literals currently have no escape syntax.
+    #[error(
+        "plugin import path {path:?} contains a quote or line break, which Graphcal string literals cannot represent"
+    )]
+    UnrepresentablePath {
+        /// The rejected path.
+        path: String,
+    },
+    /// A manifest function name is broader than a source identifier.
+    #[error("plugin function name {name:?} {reason}")]
+    InvalidFunctionName {
+        /// The rejected wire name.
+        name: String,
+        /// Why source rendering rejected it.
+        reason: SourceIdentifierError,
+    },
+    /// A manifest parameter name is broader than a source identifier.
+    #[error("parameter name {name:?} of plugin function {function:?} {reason}")]
+    InvalidParameterName {
+        /// The containing function.
+        function: String,
+        /// The rejected wire name.
+        name: String,
+        /// Why source rendering rejected it.
+        reason: SourceIdentifierError,
+    },
+    /// A manifest dimension variable is broader than a source identifier.
+    #[error("dimension variable {name:?} of plugin function {function:?} {reason}")]
+    InvalidDimensionVariable {
+        /// The containing function.
+        function: String,
+        /// The rejected wire name.
+        name: String,
+        /// Why source rendering rejected it.
+        reason: SourceIdentifierError,
+    },
+    /// A manifest index variable is broader than a source identifier.
+    #[error("index variable {name:?} of plugin function {function:?} {reason}")]
+    InvalidIndexVariable {
+        /// The containing function.
+        function: String,
+        /// The rejected wire name.
+        name: String,
+        /// Why source rendering rejected it.
+        reason: SourceIdentifierError,
+    },
+    /// A manifest result field is broader than a source identifier.
+    #[error("result field name {name:?} of plugin function {function:?} {reason}")]
+    InvalidResultFieldName {
+        /// The containing function.
+        function: String,
+        /// The rejected wire name.
+        name: String,
+        /// Why source rendering rejected it.
+        reason: SourceIdentifierError,
+    },
 }
 
-/// The suggested record type name for a struct-returning function:
-/// `solve_orbit` → `SolveOrbitResult`.
+/// A Graphcal string-literal payload proven representable by the current lexer.
+#[derive(Debug, Clone, Copy)]
+struct SourceStringLiteral<'a>(&'a str);
+
+impl<'a> SourceStringLiteral<'a> {
+    fn parse(path: &'a str) -> Result<Self, ImportBlockRenderError> {
+        if path.contains(['"', '\r', '\n']) {
+            return Err(ImportBlockRenderError::UnrepresentablePath {
+                path: path.to_string(),
+            });
+        }
+        Ok(Self(path))
+    }
+
+    const fn as_str(self) -> &'a str {
+        self.0
+    }
+}
+
+/// One function after every source spelling in its signature has been validated.
+struct RenderableFunction<'a> {
+    name: SourceIdentifier,
+    signature: &'a FunctionSignature,
+    result_type_name: Option<SourceIdentifier>,
+}
+
+/// A complete import that cannot contain source-breaking manifest text.
+struct RenderableImport<'a> {
+    path: SourceStringLiteral<'a>,
+    alias: &'a SourceIdentifier,
+    functions: Vec<RenderableFunction<'a>>,
+}
+
+impl<'a> RenderableImport<'a> {
+    fn try_new(
+        path: &'a str,
+        alias: &'a SourceIdentifier,
+        module: &'a PluginModule,
+    ) -> Result<Self, ImportBlockRenderError> {
+        let path = SourceStringLiteral::parse(path)?;
+        let mut used_result_names = HashSet::new();
+        let functions = module
+            .functions()
+            .iter()
+            .map(|(function, signature)| {
+                let function_name = parse_function_name(function.as_str())?;
+                validate_signature_names(function.as_str(), signature)?;
+                let result_type_name =
+                    matches!(signature.result(), ValueKind::Struct(_)).then(|| {
+                        allocate_result_type_name(function_name.as_str(), &mut used_result_names)
+                    });
+                Ok(RenderableFunction {
+                    name: function_name,
+                    signature,
+                    result_type_name,
+                })
+            })
+            .collect::<Result<_, ImportBlockRenderError>>()?;
+        Ok(Self {
+            path,
+            alias,
+            functions,
+        })
+    }
+
+    fn render(&self) -> String {
+        use std::fmt::Write as _;
+
+        let mut out = String::new();
+        for function in &self.functions {
+            if let (Some(type_name), ValueKind::Struct(shape)) =
+                (&function.result_type_name, function.signature.result())
+            {
+                out.push_str(&render_result_type_decl(type_name, shape));
+                out.push_str("\n\n");
+            }
+        }
+        let _ = writeln!(
+            out,
+            "import plugin \"{}\" as {} {{",
+            self.path.as_str(),
+            self.alias
+        );
+        for function in &self.functions {
+            out.push_str("    ");
+            out.push_str(&render_declaration(function));
+            out.push('\n');
+        }
+        out.push('}');
+        out
+    }
+}
+
+/// Render the paste-ready `import plugin` block for a loaded module.
+///
+/// Suggested record declarations for struct-returning functions precede the
+/// import. Colliding suggestions receive deterministic numeric suffixes.
+///
+/// # Errors
+///
+/// Returns [`ImportBlockRenderError`] rather than interpolating a manifest name
+/// or path that Graphcal source cannot represent.
+pub fn render_import_block(
+    path: &str,
+    alias: &SourceIdentifier,
+    module: &PluginModule,
+) -> Result<String, ImportBlockRenderError> {
+    RenderableImport::try_new(path, alias, module).map(|source| source.render())
+}
+
+/// Derive a source-valid import alias from the module's file name.
 #[must_use]
-pub fn suggest_result_type_name(function: &str) -> String {
+pub fn suggest_alias(module_path: &Path) -> SourceIdentifier {
+    let stem = module_path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy())
+        .unwrap_or_default();
+    let mut alias: String = stem
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if SourceIdentifier::parse(alias.clone()).is_err() {
+        alias.insert_str(0, "plugin_");
+    }
+    SourceIdentifier::parse(alias).expect("sanitized plugin alias must be a source identifier")
+}
+
+fn parse_function_name(name: &str) -> Result<SourceIdentifier, ImportBlockRenderError> {
+    SourceIdentifier::parse(name).map_err(|reason| ImportBlockRenderError::InvalidFunctionName {
+        name: name.to_string(),
+        reason,
+    })
+}
+
+fn validate_signature_names(
+    function: &str,
+    signature: &FunctionSignature,
+) -> Result<(), ImportBlockRenderError> {
+    for variable in signature.dim_vars() {
+        SourceIdentifier::parse(variable.as_str()).map_err(|reason| {
+            ImportBlockRenderError::InvalidDimensionVariable {
+                function: function.to_string(),
+                name: variable.as_str().to_string(),
+                reason,
+            }
+        })?;
+    }
+    for variable in signature.index_vars() {
+        SourceIdentifier::parse(variable.as_str()).map_err(|reason| {
+            ImportBlockRenderError::InvalidIndexVariable {
+                function: function.to_string(),
+                name: variable.as_str().to_string(),
+                reason,
+            }
+        })?;
+    }
+    for parameter in signature.params() {
+        SourceIdentifier::parse(parameter.name.as_str()).map_err(|reason| {
+            ImportBlockRenderError::InvalidParameterName {
+                function: function.to_string(),
+                name: parameter.name.as_str().to_string(),
+                reason,
+            }
+        })?;
+    }
+    if let ValueKind::Struct(shape) = signature.result() {
+        for field in shape.fields() {
+            SourceIdentifier::parse(field.name.as_str()).map_err(|reason| {
+                ImportBlockRenderError::InvalidResultFieldName {
+                    function: function.to_string(),
+                    name: field.name.as_str().to_string(),
+                    reason,
+                }
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn allocate_result_type_name(function: &str, used: &mut HashSet<String>) -> SourceIdentifier {
+    let base = suggest_result_type_name(function);
+    let mut suffix = 1_u32;
+    let candidate = std::iter::from_fn(|| {
+        let candidate = if suffix == 1 {
+            base.clone()
+        } else {
+            format!("{base}{suffix}")
+        };
+        suffix += 1;
+        Some(candidate)
+    })
+    .find(|candidate| used.insert(candidate.clone()))
+    .expect("result type suffix space is unbounded");
+    SourceIdentifier::parse(candidate)
+        .expect("a result type derived from a source identifier must remain valid")
+}
+
+fn suggest_result_type_name(function: &str) -> String {
     let mut out = String::new();
     for part in function.split('_').filter(|part| !part.is_empty()) {
         let mut chars = part.chars();
@@ -314,75 +562,109 @@ pub fn suggest_result_type_name(function: &str) -> String {
     out
 }
 
-/// Render the suggested `.gcl` record declaration for a struct-returning
-/// function, e.g. `type SolveResult { SolveResult(root: Dimensionless, iters: Int) }`.
-#[must_use]
-pub fn render_result_type_decl(
-    function: &str,
+fn render_result_type_decl(
+    type_name: &SourceIdentifier,
     shape: &graphcal_compiler::function_signature::StructShape,
 ) -> String {
-    use graphcal_compiler::function_signature::StructFieldKind;
-
-    let type_name = suggest_result_type_name(function);
-    let fields: Vec<String> = shape
+    let fields = shape
         .fields()
         .iter()
-        .map(|field| {
-            let kind = match &field.kind {
-                StructFieldKind::Bool => "Bool".to_string(),
-                StructFieldKind::Int => "Int".to_string(),
-                StructFieldKind::Quantity(dim) => {
-                    if dim.is_dimensionless() {
-                        "Dimensionless".to_string()
-                    } else {
-                        render_dimension(dim)
-                    }
-                }
-            };
-            format!("{}: {kind}", field.name)
-        })
-        .collect();
-    format!("type {type_name} {{ {type_name}({}) }}", fields.join(", "))
+        .map(|field| format!("{}: {}", field.name, render_struct_field_kind(&field.kind)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("type {type_name} {{ {type_name}({fields}) }}")
 }
 
-/// Render the paste-ready `import plugin` block for a loaded module,
-/// preceded by suggested record declarations for struct-returning
-/// functions (their names are suggestions — rename freely, the loader
-/// compares shapes, not names).
-pub fn render_import_block(path: &str, alias: &str, module: &PluginModule) -> String {
-    use std::fmt::Write as _;
-
-    let mut out = String::new();
-    for (name, signature) in module.functions() {
-        if let ValueKind::Struct(shape) = signature.result() {
-            out.push_str(&render_result_type_decl(name.as_str(), shape));
-            out.push_str("\n\n");
-        }
+fn render_declaration(function: &RenderableFunction<'_>) -> String {
+    let signature = function.signature;
+    let mut out = format!("fn {}", function.name);
+    if !signature.dim_vars().is_empty() || !signature.index_vars().is_empty() {
+        let binders = signature
+            .dim_vars()
+            .iter()
+            .map(|variable| format!("{}: Dim", variable.as_str()))
+            .chain(
+                signature
+                    .index_vars()
+                    .iter()
+                    .map(|variable| format!("{}: Index", variable.as_str())),
+            )
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!("<{binders}>"));
     }
-    let _ = writeln!(out, "import plugin \"{path}\" as {alias} {{");
-    for (name, signature) in module.functions() {
-        out.push_str("    ");
-        out.push_str(&render_declaration(name.as_str(), signature));
-        out.push('\n');
+    let parameters = signature
+        .params()
+        .iter()
+        .map(|parameter| format!("{}: {}", parameter.name, render_value_kind(&parameter.kind)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.push_str(&format!("({parameters}) -> "));
+    match (&function.result_type_name, signature.result()) {
+        (Some(type_name), ValueKind::Struct(_)) => out.push_str(type_name.as_str()),
+        (_, result) => out.push_str(&render_value_kind(result)),
     }
-    out.push('}');
+    out.push(';');
     out
 }
 
-/// Derive a usable import alias from the module's file name.
-pub fn suggest_alias(module_path: &Path) -> String {
-    let stem = module_path
-        .file_stem()
-        .map(|stem| stem.to_string_lossy())
-        .unwrap_or_default();
-    let mut alias: String = stem
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
-    if alias.is_empty() || alias.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        alias.insert_str(0, "plugin_");
+fn render_value_kind(kind: &ValueKind) -> String {
+    match kind {
+        ValueKind::Bool => "Bool".to_string(),
+        ValueKind::Int => "Int".to_string(),
+        ValueKind::Quantity(monomial) => render_monomial(monomial),
+        ValueKind::Indexed { element, indexes } => format!(
+            "{}[{}]",
+            render_monomial(element),
+            indexes
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        ValueKind::Struct(shape) => format!(
+            "{{ {} }}",
+            shape
+                .fields()
+                .iter()
+                .map(|field| format!("{}: {}", field.name, render_struct_field_kind(&field.kind)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
-    alias
+}
+
+fn render_struct_field_kind(kind: &StructFieldKind) -> String {
+    match kind {
+        StructFieldKind::Bool => "Bool".to_string(),
+        StructFieldKind::Int => "Int".to_string(),
+        StructFieldKind::Quantity(dimension) if dimension.is_dimensionless() => {
+            "Dimensionless".to_string()
+        }
+        StructFieldKind::Quantity(dimension) => render_dimension(dimension),
+    }
+}
+
+fn render_monomial(monomial: &DimMonomial) -> String {
+    let mut parts = monomial
+        .vars
+        .iter()
+        .map(|factor| {
+            if factor.power == Rational::ONE {
+                factor.var.to_string()
+            } else {
+                format!("{}{}", factor.var, format_exponent(factor.power))
+            }
+        })
+        .collect::<Vec<_>>();
+    if !monomial.fixed.is_dimensionless() {
+        parts.push(render_dimension(&monomial.fixed));
+    }
+    if parts.is_empty() {
+        "Dimensionless".to_string()
+    } else {
+        parts.join(" * ")
+    }
 }
 
 /// Render a concrete dimension in `.gcl` dimension-expression syntax
@@ -804,14 +1086,25 @@ mod tests {
         assert_eq!(plan.root, PathBuf::from("plugins/fluids-src"));
     }
 
+    fn render_test_declaration(name: &str, signature: &FunctionSignature) -> String {
+        let name = SourceIdentifier::parse(name).unwrap();
+        let result_type_name = matches!(signature.result(), ValueKind::Struct(_))
+            .then(|| SourceIdentifier::parse(suggest_result_type_name(name.as_str())).unwrap());
+        render_declaration(&RenderableFunction {
+            name,
+            signature,
+            result_type_name,
+        })
+    }
+
     #[test]
     fn declarations_render_in_gcl_syntax() {
         assert_eq!(
-            render_declaration("lerp", &lerp_signature()),
+            render_test_declaration("lerp", &lerp_signature()),
             "fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"
         );
         assert_eq!(
-            render_declaration("step", &step_signature()),
+            render_test_declaration("step", &step_signature()),
             "fn step(n: Int, up: Bool) -> Int;"
         );
 
@@ -836,18 +1129,60 @@ mod tests {
         )
         .expect("valid signature");
         assert_eq!(
-            render_declaration("weird", &signature),
+            render_test_declaration("weird", &signature),
             "fn weird(p: Length^-1 * Mass * Time^-2) -> Length^(1/2);"
         );
     }
 
     #[test]
+    fn source_identifiers_reject_keywords_and_non_source_characters() {
+        assert_eq!(
+            SourceIdentifier::parse("node").unwrap_err(),
+            SourceIdentifierError::ReservedKeyword
+        );
+        assert_eq!(
+            SourceIdentifier::parse("x;\nnode injected").unwrap_err(),
+            SourceIdentifierError::InvalidCharacters
+        );
+        assert_eq!(SourceIdentifier::parse("scan").unwrap().as_str(), "scan");
+    }
+
+    #[test]
+    fn result_type_names_are_collision_free() {
+        let mut used = HashSet::new();
+        assert_eq!(
+            allocate_result_type_name("solve_orbit", &mut used).as_str(),
+            "SolveOrbitResult"
+        );
+        assert_eq!(
+            allocate_result_type_name("solve__orbit", &mut used).as_str(),
+            "SolveOrbitResult2"
+        );
+    }
+
+    #[test]
+    fn unrepresentable_plugin_paths_are_rejected() {
+        assert!(matches!(
+            SourceStringLiteral::parse("plugins/quoted\"name.wasm"),
+            Err(ImportBlockRenderError::UnrepresentablePath { .. })
+        ));
+        assert!(matches!(
+            SourceStringLiteral::parse("plugins/line\nbreak.wasm"),
+            Err(ImportBlockRenderError::UnrepresentablePath { .. })
+        ));
+    }
+
+    #[test]
     fn aliases_are_derived_from_file_names() {
         assert_eq!(
-            suggest_alias(Path::new("plugins/fluid-props.wasm")),
+            suggest_alias(Path::new("plugins/fluid-props.wasm")).as_str(),
             "fluid_props"
         );
-        assert_eq!(suggest_alias(Path::new("x/3d.wasm")), "plugin_3d");
+        assert_eq!(suggest_alias(Path::new("x/3d.wasm")).as_str(), "plugin_3d");
+        assert_eq!(
+            suggest_alias(Path::new("x/node.wasm")).as_str(),
+            "plugin_node"
+        );
     }
 
     #[test]
