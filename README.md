@@ -93,6 +93,11 @@ schemes, and embedded credentials are rejected before fetching; see the
 [package dependency guide](https://graphcal.org/docs/language/multi-file/#package-dependencies)
 for supported forms and migration guidance.
 
+Editor snapshots preserve the same rooted filesystem capability as disk loads:
+existing buffers use canonical identities, while unsaved buffers must have an
+authorized existing parent; outside paths and file/directory collisions are
+rejected.
+
 ## Editor Support
 
 Inlay hints show computed values right next to the source -- install one of the supported integrations and your editor turns into a live notebook.

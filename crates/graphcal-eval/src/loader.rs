@@ -3811,7 +3811,8 @@ dag calc {
             RealFileSystem::default(),
             canonical,
             overlay_source.to_string(),
-        );
+        )
+        .unwrap();
         let project = load_project(&root_path, None, &fs).unwrap();
 
         let root_file = &project.files[&project.root];
@@ -3836,7 +3837,8 @@ dag calc {
             RealFileSystem::default(),
             canonical,
             overlay_source.to_string(),
-        );
+        )
+        .unwrap();
         let project = load_project(&root_path, None, &fs).unwrap();
 
         // Root file should use overlay content
@@ -3860,7 +3862,8 @@ dag calc {
             RealFileSystem::default(),
             canonical,
             bad_overlay.to_string(),
-        );
+        )
+        .unwrap();
         let result = load_project(&root_path, None, &fs);
         assert!(result.is_err());
     }
@@ -4186,7 +4189,8 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
             RealFileSystem::default(),
             fixture.root_file.canonicalize().unwrap(),
             overlay_source.to_string(),
-        );
+        )
+        .unwrap();
 
         let project = load_project(&fixture.root_file, None, &overlay).unwrap();
         assert_eq!(project.files[&project.root].source.as_str(), overlay_source);
@@ -4203,7 +4207,8 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
             RealFileSystem::default(),
             fixture.root_helper.canonicalize().unwrap(),
             overlay_source.to_string(),
-        );
+        )
+        .unwrap();
 
         let project = load_project(&fixture.root_file, None, &overlay).unwrap();
         let helper = project

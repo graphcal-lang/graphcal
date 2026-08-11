@@ -39,6 +39,7 @@ use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Can
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
 use graphcal_compiler::registry::builtins::builtin_functions;
+use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_eval::eval::{
@@ -1132,20 +1133,38 @@ fn build_project(
     let name = uri.as_str();
     match uri.to_file_path() {
         Ok(path) => {
-            // OverlayFileSystem canonicalizes internally and falls back to the
-            // raw path when the overlay file is not yet on disk — this makes
-            // unsaved LSP buffers work without a preflight `FileNotFound`.
+            // OverlayFileSystem validates existing identities and proves
+            // unsaved buffers are below a base-authorized canonical parent.
             // The analyzed snapshot comes first so it wins over any (possibly
             // newer) latest-text entry for the same file: the produced
             // `AnalysisResult` must stay consistent with `text`.
             let base =
                 graphcal_eval::loader::build_rooted_filesystem(&path, None).map_err(Box::new)?;
-            let overlays = std::iter::once((path.clone(), text.to_string())).chain(
-                open_buffers
-                    .iter()
-                    .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
-            );
-            let fs = graphcal_io::OverlayFileSystem::with_overlays(base, overlays);
+            let overlays = std::iter::once((path.clone(), text.to_string()))
+                .chain(
+                    open_buffers
+                        .iter()
+                        // The editor may have documents from unrelated workspace
+                        // roots open. Only buffers independently proven to fit the
+                        // active project's base capability belong in this snapshot.
+                        .filter(|buffer| {
+                            graphcal_io::OverlayFileSystem::new(
+                                base.clone(),
+                                buffer.path.clone(),
+                                String::new(),
+                            )
+                            .is_ok()
+                        })
+                        .map(|buffer| (buffer.path.clone(), buffer.text.as_ref().clone())),
+                )
+                .collect::<Vec<_>>();
+            let fs =
+                graphcal_io::OverlayFileSystem::with_overlays(base, overlays).map_err(|error| {
+                    Box::new(CompileError::Eval(GraphcalError::InvalidSourcePath {
+                        path: error.path().display().to_string(),
+                        reason: error.to_string(),
+                    }))
+                })?;
             graphcal_eval::loader::load_project_with_cancellation(&path, None, &fs, cancellation)
                 .map_err(Box::new)
         }
@@ -4352,6 +4371,33 @@ node momentum: Force * Time = @mass * @velocity;
             analysis.has_no_diagnostics(),
             "the fixed editor buffer must shadow the broken disk content, got: {:?}",
             analysis.diagnostics,
+        );
+    }
+
+    #[test]
+    fn analysis_ignores_open_buffers_outside_the_active_root_capability() {
+        let project = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"active\"\n"),
+            ("src/active/main.gcl", "node x: Dimensionless = 1.0;\n"),
+        ]);
+        let unrelated = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"other\"\n"),
+            ("src/other/main.gcl", "node outside: Dimensionless = 2.0;\n"),
+        ]);
+        let main_path = project.path().join("src/active/main.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let open_buffers = vec![OpenBuffer {
+            path: unrelated.path().join("src/other/main.gcl"),
+            text: Arc::new("this unrelated buffer is mid-edit }{".to_string()),
+        }];
+
+        let analysis = run_analysis(&main_uri, &text, &open_buffers, test_plugin_host());
+
+        assert!(
+            analysis.has_no_diagnostics(),
+            "an unrelated open buffer must not widen or invalidate the active project: {:?}",
+            analysis.diagnostics
         );
     }
 
