@@ -337,22 +337,81 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
     ));
 }
 
+fn lower_store_hir(source: &str) -> crate::ir::lower::HirDag {
+    let raw = Parser::new(source).parse_file().unwrap();
+    let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
+    let src = NamedSource::new("same.gcl", Arc::new(source.to_string()));
+    crate::ir::lower::lower(&file, &src).unwrap()
+}
+
 #[test]
-fn project_type_store_rejects_competing_hir_definitions() {
-    let lower = |source: &str| {
-        let raw = Parser::new(source).parse_file().unwrap();
-        let file = crate::syntax::desugar::desugar_multi_decls_in_file(raw);
-        let src = NamedSource::new("same.gcl", Arc::new(source.to_string()));
-        crate::ir::lower::lower(&file, &src).unwrap()
-    };
-    let first = lower("type Item { Item(value: Dimensionless) }");
-    let competing = lower("type Item { Item(value: Bool) }");
+fn project_type_store_rejects_competing_dimension_definitions() {
+    let first = lower_store_hir("dim Custom = Length;");
+    let competing = lower_store_hir("dim Custom = Time;");
+    let identity = crate::syntax::dimension::ResolvedDimName::from_def(
+        first.dag_id().clone(),
+        crate::syntax::dimension::DimName::expect_valid("Custom"),
+    );
+    let mut store = ProjectTypeStore::default();
+    store.insert_local_hir(&first).unwrap();
+
+    assert!(matches!(
+        store.insert_local_hir(&competing),
+        Err(ProjectTypeStoreInsertError::CompetingDimensionDefinition {
+            identity: found,
+        }) if found == identity
+    ));
+}
+
+#[test]
+fn project_type_store_rejects_competing_unit_definitions() {
+    let first = lower_store_hir("const unit custom: Length = 2.0 m;");
+    let competing = lower_store_hir("const unit custom: Length = 3.0 m;");
+    let identity = crate::syntax::dimension::ResolvedUnitName::from_def(
+        first.dag_id().clone(),
+        crate::syntax::dimension::UnitName::expect_valid("custom"),
+    );
+    let mut store = ProjectTypeStore::default();
+    store.insert_local_hir(&first).unwrap();
+
+    assert!(matches!(
+        store.insert_local_hir(&competing),
+        Err(ProjectTypeStoreInsertError::CompetingUnitDefinition {
+            identity: found,
+        }) if found == identity
+    ));
+}
+
+#[test]
+fn project_type_store_rejects_competing_index_definitions() {
+    let first = lower_store_hir("index Axis = { A };");
+    let competing = lower_store_hir("index Axis = { B };");
+    let identity = ResolvedIndexName::from_def(
+        first.dag_id().clone(),
+        crate::syntax::index_name::IndexName::expect_valid("Axis"),
+    );
+    let mut store = ProjectTypeStore::default();
+    store.insert_local_hir(&first).unwrap();
+
+    assert!(matches!(
+        store.insert_local_hir(&competing),
+        Err(ProjectTypeStoreInsertError::CompetingIndexDefinition {
+            identity: found,
+        }) if found == identity
+    ));
+}
+
+#[test]
+fn project_type_store_rejects_competing_nominal_definitions() {
+    let first = lower_store_hir("type Item { Item(value: Dimensionless) }");
+    let competing = lower_store_hir("type Item { Item(value: Bool) }");
     let identity = crate::syntax::type_name::ResolvedStructTypeName::from_def(
         first.dag_id().clone(),
         StructTypeName::expect_valid("Item"),
     );
     let mut store = ProjectTypeStore::default();
     store.insert_local_hir(&first).unwrap();
+
     assert!(matches!(
         store.insert_local_hir(&competing),
         Err(ProjectTypeStoreInsertError::CompetingNominalDefinition {
@@ -361,12 +420,52 @@ fn project_type_store_rejects_competing_hir_definitions() {
     ));
 }
 
+#[test]
+fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
+    let mut builder = parse_and_type_resolve_builder(
+        r#"import plugin "graphcal:demo" as first {
+            fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+        }"#,
+    )
+    .unwrap();
+    let identical = parse_and_type_resolve(
+        r#"
+        import plugin "graphcal:demo" as second {
+            fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+        }"#,
+    )
+    .unwrap();
+    let (key, function) = identical.extern_functions().iter().next().unwrap();
+    builder
+        .insert_extern_function(key.clone(), function.clone())
+        .unwrap();
+
+    let competing = parse_and_type_resolve(
+        r#"import plugin "graphcal:demo" as third {
+            fn lerp(a: Length, b: Length) -> Length;
+        }"#,
+    )
+    .unwrap();
+    let (key, function) = competing.extern_functions().iter().next().unwrap();
+    let expected_key = key.clone();
+    let error = builder
+        .insert_extern_function(key.clone(), function.clone())
+        .unwrap_err();
+
+    assert_eq!(error.plugin, expected_key.plugin);
+    assert_eq!(error.name, expected_key.name);
+}
+
 /// Single-file integration helper: lower + type-resolve + compile each
 /// inline dag body using the dumb `lower_dag_body_to_ir` primitive
 /// directly (no self-import preprocessing — fixtures exercised here
 /// either don't use self-imports or are expected to surface errors that
 /// fall out of the unprocessed body).
 fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
+    parse_and_type_resolve_builder(source).map(TirBuilder::finish)
+}
+
+fn parse_and_type_resolve_builder(source: &str) -> Result<TirBuilder, GraphcalError> {
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let file = desugared;
@@ -426,7 +525,7 @@ fn parse_and_type_resolve(source: &str) -> Result<TIR, GraphcalError> {
         &file.declarations,
         &parent_registry,
     )?;
-    Ok(builder.finish())
+    Ok(builder)
 }
 
 /// Compile each inline dag body in `tir` with no self-import

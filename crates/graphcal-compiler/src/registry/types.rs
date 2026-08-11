@@ -375,11 +375,9 @@ impl RegistryBuilder {
         self.units.get(name)
     }
 
-    /// Iterate over all units: (reference, dimension, scale).
-    pub fn all_units(&self) -> impl Iterator<Item = (&UnitRef, &Dimension, &UnitScale)> {
-        self.units
-            .iter()
-            .map(|(name, info)| (name, &info.dimension, &info.scale))
+    /// Iterate over every unit reference and its complete semantic definition.
+    pub fn all_units(&self) -> impl Iterator<Item = (&UnitRef, &UnitInfo)> {
+        self.units.iter()
     }
 
     /// Look up a type definition by type name.

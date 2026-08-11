@@ -53,13 +53,13 @@ impl LoweringModuleInterface {
         let exported_dynamic_units = frontend_registry
             .units
             .all_units()
-            .filter(|(unit, _, scale)| {
+            .filter(|(unit, info)| {
                 !unit.is_qualified()
-                    && scale.is_dynamic()
+                    && info.scale.is_dynamic()
                     && external_surface
                         .is_explicit_export(&DeclName::from_atom(unit.name().atom().clone()))
             })
-            .map(|(unit, _, _)| unit.name().clone())
+            .map(|(unit, _)| unit.name().clone())
             .collect();
         Self {
             frontend_registry,

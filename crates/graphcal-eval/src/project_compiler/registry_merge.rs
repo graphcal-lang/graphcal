@@ -244,8 +244,8 @@ fn merge_registry_into_builder_filtered(
     // identical definition (diamond includes, prelude units present in every
     // dep registry) is idempotent; a *different* definition under the same
     // reference is a conflict.
-    for (name, dim, scale) in dep_registry.units.all_units() {
-        if scale.is_dynamic() && !dynamic_unit_boundary.includes_dynamic_units() {
+    for (name, info) in dep_registry.units.all_units() {
+        if info.scale.is_dynamic() && !dynamic_unit_boundary.includes_dynamic_units() {
             continue;
         }
         let target = if let Some(alias) = unit_alias {
@@ -269,18 +269,15 @@ fn merge_registry_into_builder_filtered(
             }
             name.clone()
         };
-        let merged_scale = scale.clone();
-        let constness = dep_registry.units.get_unit(name).map_or(
-            graphcal_compiler::syntax::ast::UnitConstness::Dynamic,
-            |info| info.constness,
-        );
+        let merged_scale = info.scale.clone();
+        let constness = info.constness;
         if let Some(existing) = builder.get_unit(&target) {
-            if unit_definitions_compatible(existing, dim, &merged_scale, constness) {
+            if unit_definitions_compatible(existing, &info.dimension, &merged_scale, constness) {
                 continue;
             }
             return Err(UnitMergeConflict { name: target });
         }
-        builder.register_unit_with_scale(target, dim.clone(), merged_scale, constness);
+        builder.register_unit_with_scale(target, info.dimension.clone(), merged_scale, constness);
     }
 
     // Import indexes — skip bound indexes (they are replaced by the importer's index).

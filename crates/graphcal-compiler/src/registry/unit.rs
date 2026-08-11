@@ -58,7 +58,7 @@ impl std::fmt::Display for PositiveFiniteScale {
 }
 
 /// How a unit's scale factor is determined.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UnitScale {
     /// Scale factor known at compile time (e.g., `const unit km: Length = 1000 m;`).
     Static(PositiveFiniteScale),
@@ -95,7 +95,7 @@ impl UnitScale {
 }
 
 /// Information about a registered unit.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct UnitInfo {
     /// The dimension this unit measures.
     pub dimension: Dimension,
@@ -215,11 +215,9 @@ impl UnitRegistry {
         self.units.get(name)
     }
 
-    /// Iterate over all units: (reference, dimension, scale).
-    pub fn all_units(&self) -> impl Iterator<Item = (&UnitRef, &Dimension, &UnitScale)> {
-        self.units
-            .iter()
-            .map(|(name, info)| (name, &info.dimension, &info.scale))
+    /// Iterate over every unit reference and its complete semantic definition.
+    pub fn all_units(&self) -> impl Iterator<Item = (&UnitRef, &UnitInfo)> {
+        self.units.iter()
     }
 
     /// Resolve a `UnitExpr` to its dimension and compound static scale factor.
