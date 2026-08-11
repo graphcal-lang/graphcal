@@ -414,7 +414,11 @@ topological `param`/`node` schedule.
 
 Runtime execution is keyed by `RuntimeDeclKey`, which wraps canonical
 `ResolvedName<Decl>` identities so same-leaf declarations from different DAGs do
-not collide. Const and runtime declaration evaluation read the authoritative
+not collide. Every `EvalContext` also carries a non-optional `DagTIR` scope:
+root evaluation selects `TIR::root()` at construction, while inline calls select
+their concrete DAG. Dynamic-unit, constructor, materialized-shape, and
+presentation lookups therefore cannot silently reinterpret a missing scope as
+the root DAG. Const and runtime declaration evaluation read the authoritative
 `DagTIR` declaration records through typed ID-to-record indexes and use
 `eval_expr/hir_eval.rs`. Assertions and visualization declarations are also
 read directly from `DagTIR`, not copied into `ExecPlan`.

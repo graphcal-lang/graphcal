@@ -154,7 +154,7 @@ pub(super) fn run_eval_loop_with_bindings(
             registry: tir.registry(),
             src,
             tir,
-            current_dag: Some(tir.root()),
+            current_dag: tir.root(),
             current_decl: Some(name.as_resolved().clone()),
             root_values: Some(&values),
             checked_execution_facts: Some(&plan.checked_execution_facts),
@@ -311,7 +311,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         registry: tir.registry(),
         src,
         tir,
-        current_dag: Some(tir.root()),
+        current_dag: tir.root(),
         current_decl: None,
         root_values: Some(&values),
         checked_execution_facts: Some(&plan.checked_execution_facts),
@@ -1324,18 +1324,15 @@ fn evaluate_plot(
             DiagnosticAnchor::WholeFile,
         ))
     })?;
-    let dag = ctx.current_dag.ok_or_else(|| {
-        PlotEvaluationError::Fatal(ctx.internal_error(
-            "plot evaluation has no checked DAG",
-            DiagnosticAnchor::WholeFile,
-        ))
-    })?;
-    let channel_facts = dag.plot_channel_presentations(owner).ok_or_else(|| {
-        PlotEvaluationError::Fatal(ctx.internal_error(
-            format!("checked presentation facts are missing for plot `{owner}`"),
-            DiagnosticAnchor::WholeFile,
-        ))
-    })?;
+    let channel_facts = ctx
+        .current_dag
+        .plot_channel_presentations(owner)
+        .ok_or_else(|| {
+            PlotEvaluationError::Fatal(ctx.internal_error(
+                format!("checked presentation facts are missing for plot `{owner}`"),
+                DiagnosticAnchor::WholeFile,
+            ))
+        })?;
     let mut encoding_meta = Vec::new();
 
     // Evaluate channels and apply their checked structured presentation before
