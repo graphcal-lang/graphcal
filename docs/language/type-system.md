@@ -544,6 +544,9 @@ param t_tt: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00");
 
 Supported time scales: `UTC`, `TAI`, `TT`, `TDB`, `ET`, `GPST`, `GST`, `BDT`, `QZSST`.
 
+Local civil coordinates must include both a date and an explicit time. Date-only
+strings are rejected; write `T00:00:00` when midnight is intended.
+
 Civil `datetime` and scientific `epoch<S>` construction are deliberately
 separate. `datetime("...")` requires an explicit `Z` or numeric UTC offset;
 `datetime("...", timezone)` accepts only offset-free local civil coordinates;

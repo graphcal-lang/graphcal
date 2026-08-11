@@ -972,8 +972,10 @@ generic_arg
    that ambiguity until the declaration's GenericConstraint is known.
    Constructors consume sorted generic arguments. Among function calls, only
    the built-in scientific-time constructor consumes a static argument:
-   `epoch<S>(civil_literal)`, where S is one supported time scale. Every other
-   non-empty function generic argument list is rejected. *)
+   `epoch<S>(civil_literal)`, where S is one supported time scale. Civil
+   datetime strings require an explicit date and time
+   (`YYYY-MM-DDTHH:MM:SS...`); date-only strings do not implicitly mean
+   midnight. Every other non-empty function generic argument list is rejected. *)
 
 expr_list
    = expr, { ",", expr }, [ "," ];
