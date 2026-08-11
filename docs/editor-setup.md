@@ -59,7 +59,10 @@ available rather than replacing source diagnostics with a server-timeout error.
 If analysis must fall back to an empty
 symbol table or module resolver, the server emits a warning through the LSP
 client log (`window/logMessage`) so unavailable navigation or completion can be
-diagnosed instead of appearing indistinguishable from an empty result.
+diagnosed instead of appearing indistinguishable from an empty result. Formatting
+an incomplete buffer quietly produces no edit, while an internal formatter
+reparse, AST-equivalence, rendering, or UTF-8 failure is returned as a
+JSON-RPC internal error and written to the client log.
 
 ## VS Code
 
