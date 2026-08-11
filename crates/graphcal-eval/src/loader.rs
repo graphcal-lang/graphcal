@@ -23,7 +23,7 @@ use graphcal_io::{
 use graphcal_package::{
     GitCommitHash, GitUrl, LockedPackage, LockfileParseLimits, PackageInstanceId, PackageManifest,
     PackageSource, STDLIB_VERSION, ValidatedPackageGraph, parse_lockfile_str_with_limits,
-    parse_manifest_str, validate_lock_against_manifests,
+    parse_manifest_str,
 };
 
 #[cfg(test)]
@@ -1825,16 +1825,15 @@ fn load_plugin_pins(
             message: error.to_string(),
         })
     })?;
-    lockfile
-        .validate(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
-        .map_err(|e| {
+    let validated = lockfile
+        .validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
+        .map_err(|error| {
             CompileError::Eval(GraphcalError::ManifestError {
-                message: e.to_string(),
+                message: error.to_string(),
             })
         })?;
-    Ok(lockfile
-        .plugins
-        .iter()
+    Ok(validated
+        .plugins()
         .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
         .collect())
 }
@@ -1933,8 +1932,8 @@ impl<'a> PackageLoadContext<'a> {
         let lockfile =
             parse_lockfile_str_with_limits(&lockfile_text, budget.lockfile_parse_limits())
                 .map_err(|error| loader_manifest_error(error.to_string()))?;
-        lockfile
-            .validate(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
+        let validated = lockfile
+            .validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
             .map_err(|error| loader_manifest_error(error.to_string()))?;
         let cache_dir = cache_dir().map_err(loader_manifest_error)?;
         let canonical_project_root = fs.canonicalize(project_root).map_err(|error| {
@@ -1946,10 +1945,10 @@ impl<'a> PackageLoadContext<'a> {
         let mut roots = BTreeMap::new();
         let mut dependency_readers = BTreeMap::new();
 
-        for package in &lockfile.packages {
+        for package in validated.packages() {
             cancellation.checkpoint()?;
             let candidate = source_root_candidate(project_root, &cache_dir, package);
-            if package.id == lockfile.root {
+            if &package.id == validated.root() {
                 let canonical = fs
                     .canonicalize(&candidate)
                     .map_err(|error| source_root_error(package, &candidate, &error))?;
@@ -1973,9 +1972,9 @@ impl<'a> PackageLoadContext<'a> {
         }
 
         let mut manifests = BTreeMap::new();
-        for package in &lockfile.packages {
+        for package in validated.packages() {
             cancellation.checkpoint()?;
-            if package.id == lockfile.root {
+            if &package.id == validated.root() {
                 continue;
             }
             let root = roots.get(&package.id).ok_or_else(|| {
@@ -1994,22 +1993,17 @@ impl<'a> PackageLoadContext<'a> {
             verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
             manifests.insert(package.id.clone(), manifest);
         }
-        manifests.insert(lockfile.root.clone(), root_manifest);
-        let graph = validate_lock_against_manifests(
-            &lockfile,
-            &manifests,
-            env!("CARGO_PKG_VERSION"),
-            STDLIB_VERSION,
-        )
-        .map_err(|error| loader_manifest_error(error.to_string()))?;
-        let plugin_pins = lockfile
-            .plugins
-            .iter()
+        manifests.insert(validated.root().clone(), root_manifest);
+        let graph = validated
+            .bind_manifests(&manifests)
+            .map_err(|error| loader_manifest_error(error.to_string()))?;
+        let plugin_pins = validated
+            .plugins()
             .map(|plugin| (plugin.path().to_string(), plugin.sha256().to_string()))
             .collect();
         Ok(Self {
             graph,
-            root_package: lockfile.root,
+            root_package: validated.root().clone(),
             root_reader: fs,
             roots,
             dependency_readers,
@@ -2385,7 +2379,7 @@ fn source_root_candidate(
     package: &LockedPackage,
 ) -> PathBuf {
     match &package.source {
-        PackageSource::Path { path } => project_root.join(path),
+        PackageSource::Root => project_root.to_path_buf(),
         PackageSource::Git { url, commit, .. } => {
             cache_dir.join("git").join(cache_key(url, commit))
         }
@@ -2398,7 +2392,7 @@ fn source_root_error(
     error: &std::io::Error,
 ) -> CompileError {
     match &package.source {
-        PackageSource::Path { .. } => loader_manifest_error(format!(
+        PackageSource::Root => loader_manifest_error(format!(
             "could not canonicalize locked path source `{}`: {error}",
             candidate.display()
         )),
@@ -3506,6 +3500,62 @@ mod tests {
         assert!(!rendered.contains("112, 114, 105, 118, 97, 116, 101"));
     }
 
+    struct CanonicalizeCountingFileSystem {
+        inner: RealFileSystem,
+        canonicalize_calls: Cell<usize>,
+    }
+
+    impl Default for CanonicalizeCountingFileSystem {
+        fn default() -> Self {
+            Self {
+                inner: RealFileSystem::default(),
+                canonicalize_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl FileSystemReader for CanonicalizeCountingFileSystem {
+        fn read_bytes_bounded(
+            &self,
+            path: &Path,
+            limit: ByteLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<u8>, FileSystemReadError> {
+            self.inner.read_bytes_bounded(path, limit, cancellation)
+        }
+
+        fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
+            let next = self
+                .canonicalize_calls
+                .get()
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("canonicalization counter overflow"))?;
+            self.canonicalize_calls.set(next);
+            self.inner.canonicalize(path)
+        }
+
+        fn entry_kind(&self, path: &Path) -> Result<FileSystemEntryKind, io::Error> {
+            self.inner.entry_kind(path)
+        }
+
+        fn read_directory_bounded(
+            &self,
+            path: &Path,
+            limit: EntryLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+            self.inner.read_directory_bounded(path, limit, cancellation)
+        }
+
+        fn is_file(&self, path: &Path) -> bool {
+            self.inner.is_file(path)
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.inner.exists(path)
+        }
+    }
+
     struct MutatingManifestFileSystem {
         inner: RealFileSystem,
         manifest_reads: Cell<usize>,
@@ -3592,6 +3642,73 @@ mod tests {
         graphcal_compiler::syntax::names::NamePath::new(
             graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(atoms).unwrap(),
         )
+    }
+
+    #[test]
+    fn malformed_outside_path_lock_is_rejected_before_source_root_access() {
+        let project = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root_manifest = parse_manifest_str(
+            r#"
+[package]
+name = "mission"
+"#,
+        )
+        .unwrap();
+        let escaped_outside = outside
+            .path()
+            .display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        let lockfile = format!(
+            r#"lock_version = 1
+created_by = "test"
+graphcal_version = "{}"
+stdlib_version = "{}"
+root = "pkg-mission"
+
+[[package]]
+id = "pkg-mission"
+name = "mission"
+source_dir = "src"
+
+[package.source]
+type = "path"
+path = "."
+
+[[package]]
+id = "pkg-outside"
+name = "outside"
+source_dir = "src"
+
+[package.source]
+type = "path"
+path = "{escaped_outside}"
+"#,
+            env!("CARGO_PKG_VERSION"),
+            STDLIB_VERSION,
+        );
+        fs::write(project.path().join("graphcal.lock"), lockfile).unwrap();
+        let file_system = CanonicalizeCountingFileSystem::default();
+        let mut budget = LoaderBudgetState::new(LoaderBudget::default());
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+
+        let result = PackageLoadContext::from_lockfile(
+            project.path(),
+            root_manifest,
+            &file_system,
+            &mut budget,
+            &cancellation,
+        );
+
+        let error = result.err().expect("outside path source must be rejected");
+        assert!(error.to_string().contains("unsupported path source"));
+        assert_eq!(
+            file_system.canonicalize_calls.get(),
+            0,
+            "source-root canonicalization must not start for an invalid lock"
+        );
     }
 
     #[test]
@@ -4148,9 +4265,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
                     id: root_id,
                     name: parsed_root_manifest.name.clone(),
                     source_dir: parsed_root_manifest.source_dir.clone(),
-                    source: PackageSource::Path {
-                        path: ".".to_string(),
-                    },
+                    source: PackageSource::Root,
                     dependencies: BTreeMap::from([(
                         dependency_name.clone(),
                         dependency_id.clone(),

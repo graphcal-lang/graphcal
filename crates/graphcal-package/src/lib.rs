@@ -982,6 +982,47 @@ pub struct Lockfile {
     pub plugins: Vec<LockedPlugin>,
 }
 
+/// Borrowed lockfile proven to satisfy version, source, graph, and pin
+/// invariants.
+#[derive(Debug, Clone, Copy)]
+pub struct ValidatedLockfile<'a> {
+    lockfile: &'a Lockfile,
+}
+
+impl ValidatedLockfile<'_> {
+    /// Root package identity.
+    #[must_use]
+    pub const fn root(&self) -> &PackageInstanceId {
+        &self.lockfile.root
+    }
+
+    /// Iterate over the complete, root-reachable package set.
+    #[must_use]
+    pub fn packages(&self) -> impl ExactSizeIterator<Item = &LockedPackage> {
+        self.lockfile.packages.iter()
+    }
+
+    /// Iterate over validated root plugin pins.
+    #[must_use]
+    pub fn plugins(&self) -> impl ExactSizeIterator<Item = &LockedPlugin> {
+        self.lockfile.plugins.iter()
+    }
+
+    fn package_graph(self) -> PackageGraph {
+        let packages = self
+            .lockfile
+            .packages
+            .iter()
+            .cloned()
+            .map(|package| (package.id.clone(), package))
+            .collect();
+        PackageGraph {
+            root: self.lockfile.root.clone(),
+            packages,
+        }
+    }
+}
+
 /// One pinned wasm plugin artifact: the root-package-relative path exactly
 /// as spelled by `import plugin "…"`, plus the SHA-256 of the file bytes.
 ///
@@ -1066,6 +1107,21 @@ impl Lockfile {
         active_graphcal_version: &str,
         active_stdlib_version: &str,
     ) -> Result<(), LockValidationError> {
+        self.validated(active_graphcal_version, active_stdlib_version)
+            .map(|_| ())
+    }
+
+    /// Enter the closed lockfile phase after validating every graph invariant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockValidationError`] when the lockfile is structurally
+    /// invalid or incompatible with the provided active versions.
+    pub fn validated(
+        &self,
+        active_graphcal_version: &str,
+        active_stdlib_version: &str,
+    ) -> Result<ValidatedLockfile<'_>, LockValidationError> {
         if self.lock_version != LOCK_VERSION {
             return Err(LockValidationError::UnsupportedLockVersion {
                 version: self.lock_version,
@@ -1107,6 +1163,21 @@ impl Lockfile {
             });
         }
         for package in &self.packages {
+            match (package.id == self.root, &package.source) {
+                (true, PackageSource::Root) | (false, PackageSource::Git { .. }) => {}
+                (true, PackageSource::Git { .. }) => {
+                    return Err(LockValidationError::RootPackageMustUseRootSource {
+                        package: package.id.clone(),
+                    });
+                }
+                (false, PackageSource::Root) => {
+                    return Err(LockValidationError::RootSourceOnDependency {
+                        package: package.id.clone(),
+                    });
+                }
+            }
+        }
+        for package in &self.packages {
             for (dependency, target) in &package.dependencies {
                 if !ids.contains(target) {
                     return Err(LockValidationError::MissingDependencyTarget {
@@ -1118,6 +1189,7 @@ impl Lockfile {
             }
         }
         self.reject_dependency_cycles()?;
+        self.reject_unreachable_packages()?;
         self.reject_conflicting_git_source_hashes()?;
         self.reject_duplicate_canonical_instances()?;
 
@@ -1129,7 +1201,7 @@ impl Lockfile {
                 });
             }
         }
-        Ok(())
+        Ok(ValidatedLockfile { lockfile: self })
     }
 
     fn reject_dependency_cycles(&self) -> Result<(), LockValidationError> {
@@ -1196,6 +1268,34 @@ impl Lockfile {
             }
         }
         Ok(())
+    }
+
+    fn reject_unreachable_packages(&self) -> Result<(), LockValidationError> {
+        let packages = self
+            .packages
+            .iter()
+            .map(|package| (&package.id, package))
+            .collect::<BTreeMap<_, _>>();
+        let mut reachable = BTreeSet::new();
+        let mut pending = vec![&self.root];
+        while let Some(package_id) = pending.pop() {
+            if !reachable.insert(package_id) {
+                continue;
+            }
+            if let Some(package) = packages.get(package_id) {
+                pending.extend(package.dependencies.values());
+            }
+        }
+        self.packages
+            .iter()
+            .map(|package| &package.id)
+            .filter(|package| !reachable.contains(package))
+            .min()
+            .map_or(Ok(()), |package| {
+                Err(LockValidationError::UnreachablePackage {
+                    package: package.clone(),
+                })
+            })
     }
 
     fn reject_conflicting_git_source_hashes(&self) -> Result<(), LockValidationError> {
@@ -1267,17 +1367,8 @@ impl Lockfile {
         active_graphcal_version: &str,
         active_stdlib_version: &str,
     ) -> Result<PackageGraph, LockValidationError> {
-        self.validate(active_graphcal_version, active_stdlib_version)?;
-        let packages = self
-            .packages
-            .iter()
-            .cloned()
-            .map(|package| (package.id.clone(), package))
-            .collect();
-        Ok(PackageGraph {
-            root: self.root.clone(),
-            packages,
-        })
+        self.validated(active_graphcal_version, active_stdlib_version)
+            .map(ValidatedLockfile::package_graph)
     }
 
     /// Serialize the lockfile in deterministic TOML form.
@@ -1299,9 +1390,9 @@ impl Lockfile {
             push_kv_string(&mut out, "source_dir", &package.source_dir.to_string());
             out.push_str("\n[package.source]\n");
             match &package.source {
-                PackageSource::Path { path } => {
+                PackageSource::Root => {
                     push_kv_string(&mut out, "type", "path");
-                    push_kv_string(&mut out, "path", path);
+                    push_kv_string(&mut out, "path", ".");
                 }
                 PackageSource::Git {
                     url,
@@ -1378,12 +1469,8 @@ pub struct LockedPackage {
 /// Source table for one locked package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PackageSource {
-    /// Root path source.
-    Path {
-        /// Root path as written to the lockfile. Only `"."` is required for
-        /// the MVP root package.
-        path: String,
-    },
+    /// The one project-root package, semantically fixed to lockfile path `.`.
+    Root,
     /// Git source locked to an immutable commit and normalized tree hash.
     Git {
         /// Repository URL.
@@ -1401,7 +1488,7 @@ pub enum PackageSource {
 impl PackageSource {
     fn canonical_key(&self) -> CanonicalPackageSource {
         match self {
-            Self::Path { path } => CanonicalPackageSource::Path { path: path.clone() },
+            Self::Root => CanonicalPackageSource::Root,
             Self::Git { url, commit, .. } => CanonicalPackageSource::Git {
                 url: url.clone(),
                 commit: commit.clone(),
@@ -1412,7 +1499,7 @@ impl PackageSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum CanonicalPackageSource {
-    Path { path: String },
+    Root,
     Git { url: GitUrl, commit: GitCommitHash },
 }
 
@@ -1478,6 +1565,12 @@ pub enum LockValidationError {
     /// Root id does not appear in package entries.
     #[error("graphcal.lock root `{root}` does not match any package entry")]
     MissingRoot { root: PackageInstanceId },
+    /// The root package uses a source form reserved for dependencies.
+    #[error("root package `{package}` must use the project-root path source `.`")]
+    RootPackageMustUseRootSource { package: PackageInstanceId },
+    /// A dependency package claims the unique project-root source capability.
+    #[error("dependency package `{package}` cannot use the project-root path source `.`")]
+    RootSourceOnDependency { package: PackageInstanceId },
     /// A dependency edge points to a missing package instance.
     #[error("package `{package}` dependency `{dependency}` points to missing `{target}`")]
     MissingDependencyTarget {
@@ -1494,6 +1587,9 @@ pub enum LockValidationError {
     /// The locked dependency graph contains a cycle.
     #[error("dependency cycle in graphcal.lock: {cycle}")]
     DependencyCycle { cycle: LockedDependencyCycle },
+    /// A package entry cannot be reached from the root package.
+    #[error("package `{package}` is unreachable from graphcal.lock root")]
+    UnreachablePackage { package: PackageInstanceId },
     /// The same immutable Git source is pinned to contradictory tree digests.
     #[error(transparent)]
     ConflictingGitSourceDigest(Box<GitSourceDigestConflict>),
@@ -1580,106 +1676,124 @@ pub fn validate_lock_against_manifests(
     active_graphcal_version: &str,
     active_stdlib_version: &str,
 ) -> Result<ValidatedPackageGraph, LockValidationError> {
-    let graph = lockfile.package_graph(active_graphcal_version, active_stdlib_version)?;
+    lockfile
+        .validated(active_graphcal_version, active_stdlib_version)?
+        .bind_manifests(manifests)
+}
 
-    for package in manifests.keys() {
-        if graph.package(package).is_none() {
-            return Err(LockValidationError::ManifestWithoutLockedPackage {
-                package: package.clone(),
-            });
-        }
-    }
-    let matched_packages = lockfile
-        .packages
-        .iter()
-        .map(|package| {
-            let manifest = manifests.get(&package.id).ok_or_else(|| {
-                LockValidationError::MissingPackageManifest {
-                    package: package.id.clone(),
-                }
-            })?;
-            if package.name != manifest.name {
-                return Err(LockValidationError::LockedManifestNameMismatch {
-                    package: package.id.clone(),
-                    locked: package.name.clone(),
-                    manifest: manifest.name.clone(),
-                });
-            }
-            if package.source_dir != manifest.source_dir {
-                return Err(LockValidationError::LockedManifestSourceDirectoryMismatch {
-                    package: package.id.clone(),
-                    locked: package.source_dir.clone(),
-                    manifest: manifest.source_dir.clone(),
-                });
-            }
-            Ok((package, manifest))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+impl ValidatedLockfile<'_> {
+    /// Bind every reachable lock entry to exactly one materialized manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockValidationError`] unless package identity, source
+    /// directories, dependency aliases, and dependency sources match in both
+    /// directions.
+    pub fn bind_manifests(
+        &self,
+        manifests: &BTreeMap<PackageInstanceId, PackageManifest>,
+    ) -> Result<ValidatedPackageGraph, LockValidationError> {
+        let graph = (*self).package_graph();
 
-    for (package, manifest) in matched_packages {
-        for dependency in package.dependencies.keys() {
-            if !manifest.dependencies.contains_key(dependency) {
-                return Err(LockValidationError::UndeclaredDependencyEdge {
-                    package: package.id.clone(),
-                    dependency: dependency.clone(),
+        for package in manifests.keys() {
+            if graph.package(package).is_none() {
+                return Err(LockValidationError::ManifestWithoutLockedPackage {
+                    package: package.clone(),
                 });
             }
         }
-        for (dependency, spec) in &manifest.dependencies {
-            let target_id = package.dependencies.get(dependency).ok_or_else(|| {
-                LockValidationError::MissingDependencyEdge {
-                    package: package.id.clone(),
-                    dependency: dependency.clone(),
+        let matched_packages = self
+            .packages()
+            .map(|package| {
+                let manifest = manifests.get(&package.id).ok_or_else(|| {
+                    LockValidationError::MissingPackageManifest {
+                        package: package.id.clone(),
+                    }
+                })?;
+                if package.name != manifest.name {
+                    return Err(LockValidationError::LockedManifestNameMismatch {
+                        package: package.id.clone(),
+                        locked: package.name.clone(),
+                        manifest: manifest.name.clone(),
+                    });
                 }
-            })?;
-            let target = graph.package(target_id).ok_or_else(|| {
-                LockValidationError::MissingDependencyTarget {
-                    package: package.id.clone(),
-                    dependency: dependency.clone(),
-                    target: target_id.clone(),
+                if package.source_dir != manifest.source_dir {
+                    return Err(LockValidationError::LockedManifestSourceDirectoryMismatch {
+                        package: package.id.clone(),
+                        locked: package.source_dir.clone(),
+                        manifest: manifest.source_dir.clone(),
+                    });
                 }
-            })?;
-            let expected = spec.expected_package_name(dependency);
-            if target.name != expected {
-                return Err(LockValidationError::PackageNameMismatch {
-                    package: package.id.clone(),
-                    dependency: dependency.clone(),
-                    expected,
-                    target: target.id.clone(),
-                    actual: target.name.clone(),
-                });
-            }
-            match &target.source {
-                PackageSource::Git {
-                    url,
-                    requested_rev,
-                    commit,
-                    ..
-                } if url == &spec.git.url
-                    && requested_rev == &spec.git.rev
-                    && commit == &spec.git.rev => {}
-                PackageSource::Git { .. } | PackageSource::Path { .. } => {
-                    return Err(LockValidationError::DependencySourceMismatch {
+                Ok((package, manifest))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (package, manifest) in matched_packages {
+            for dependency in package.dependencies.keys() {
+                if !manifest.dependencies.contains_key(dependency) {
+                    return Err(LockValidationError::UndeclaredDependencyEdge {
                         package: package.id.clone(),
                         dependency: dependency.clone(),
                     });
                 }
             }
+            for (dependency, spec) in &manifest.dependencies {
+                let target_id = package.dependencies.get(dependency).ok_or_else(|| {
+                    LockValidationError::MissingDependencyEdge {
+                        package: package.id.clone(),
+                        dependency: dependency.clone(),
+                    }
+                })?;
+                let target = graph.package(target_id).ok_or_else(|| {
+                    LockValidationError::MissingDependencyTarget {
+                        package: package.id.clone(),
+                        dependency: dependency.clone(),
+                        target: target_id.clone(),
+                    }
+                })?;
+                let expected = spec.expected_package_name(dependency);
+                if target.name != expected {
+                    return Err(LockValidationError::PackageNameMismatch {
+                        package: package.id.clone(),
+                        dependency: dependency.clone(),
+                        expected,
+                        target: target.id.clone(),
+                        actual: target.name.clone(),
+                    });
+                }
+                match &target.source {
+                    PackageSource::Git {
+                        url,
+                        requested_rev,
+                        commit,
+                        ..
+                    } if url == &spec.git.url
+                        && requested_rev == &spec.git.rev
+                        && commit == &spec.git.rev => {}
+                    PackageSource::Git { .. } | PackageSource::Root => {
+                        return Err(LockValidationError::DependencySourceMismatch {
+                            package: package.id.clone(),
+                            dependency: dependency.clone(),
+                        });
+                    }
+                }
+            }
         }
-    }
 
-    Ok(ValidatedPackageGraph {
-        graph,
-        manifests: manifests.clone(),
-    })
+        Ok(ValidatedPackageGraph {
+            graph,
+            manifests: manifests.clone(),
+        })
+    }
 }
 
 /// A package graph whose lock entries are totally matched to materialized
 /// manifests.
 ///
-/// Construction is only available through [`validate_lock_against_manifests`],
-/// so consumers cannot resolve modules through source metadata that differs
-/// from the manifest used for integrity verification.
+/// Construction is only available through [`validate_lock_against_manifests`]
+/// or [`ValidatedLockfile::bind_manifests`], so consumers cannot resolve
+/// modules through source metadata that differs from the manifest used for
+/// integrity verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatedPackageGraph {
     graph: PackageGraph,
@@ -1911,6 +2025,11 @@ pub enum LockfileParseError {
         /// Portable-directory invariant that failed.
         reason: PackageSourceDirectoryErrorReason,
     },
+    /// A path source was not the unique root spelling `.`.
+    #[error(
+        "unsupported path source `{path}` in graphcal.lock: only the root package path `.` is allowed"
+    )]
+    UnsupportedPathSource { path: String },
     /// Package source type was not recognized.
     #[error("unsupported package source type `{source_type}` in graphcal.lock")]
     UnsupportedSourceType { source_type: String },
@@ -2092,9 +2211,13 @@ fn parse_package_source(
     match source_type {
         "path" => {
             reject_unknown_lock_fields(table, "package.source", &["type", "path"], strict_schema)?;
-            Ok(PackageSource::Path {
-                path: required_string(table.get("path"), "package.source.path")?.to_string(),
-            })
+            let path = required_string(table.get("path"), "package.source.path")?;
+            if path != "." {
+                return Err(LockfileParseError::UnsupportedPathSource {
+                    path: path.to_string(),
+                });
+            }
+            Ok(PackageSource::Root)
         }
         "git" => {
             reject_unknown_lock_fields(
@@ -2324,9 +2447,7 @@ mod tests {
     }
 
     fn path_source() -> PackageSource {
-        PackageSource::Path {
-            path: ".".to_string(),
-        }
+        PackageSource::Root
     }
 
     fn package(
@@ -2430,6 +2551,45 @@ mod tests {
             ),
         ]);
         (lock, manifests)
+    }
+
+    fn missing_direct_edge_fixture(
+        lock: &Lockfile,
+        manifests: &BTreeMap<PackageInstanceId, PackageManifest>,
+    ) -> (Lockfile, BTreeMap<PackageInstanceId, PackageManifest>) {
+        let mut missing_edge = lock.clone();
+        missing_edge.packages[0].dependencies = BTreeMap::from([(dep("bridge"), id("pkg-bridge"))]);
+        missing_edge.packages.push(package(
+            "pkg-bridge",
+            "bridge",
+            git_source("https://github.com/acme/bridge.git", 'b'),
+            BTreeMap::from([(dep("units"), id("pkg-units"))]),
+        ));
+        let units_spec = manifests[&id("pkg-mission")].dependencies[&dep("units")].clone();
+        let mut missing_edge_manifests = manifests.clone();
+        missing_edge_manifests
+            .get_mut(&id("pkg-mission"))
+            .unwrap()
+            .dependencies
+            .insert(
+                dep("bridge"),
+                DependencySpec {
+                    package: None,
+                    git: GitDependency {
+                        url: url("https://github.com/acme/bridge.git"),
+                        rev: hash('b'),
+                    },
+                },
+            );
+        missing_edge_manifests.insert(
+            id("pkg-bridge"),
+            PackageManifest {
+                name: pkg("bridge"),
+                source_dir: source_dir("src"),
+                dependencies: BTreeMap::from([(dep("units"), units_spec)]),
+            },
+        );
+        (missing_edge, missing_edge_manifests)
     }
 
     const GRAPHICAL_VERSION: &str = GRAPHCAL_VERSION;
@@ -2769,6 +2929,76 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn lockfile_parser_rejects_arbitrary_path_sources() {
+        let base = lockfile(vec![package(
+            "pkg-mission",
+            "mission",
+            path_source(),
+            BTreeMap::new(),
+        )])
+        .to_deterministic_toml();
+
+        for path in ["/etc", "../outside", "nested"] {
+            let content = base.replacen("path = \".\"", &format!("path = \"{path}\""), 1);
+            assert!(matches!(
+                parse_lockfile_str(&content),
+                Err(LockfileParseError::UnsupportedPathSource { path: rejected })
+                    if rejected == path
+            ));
+        }
+    }
+
+    #[test]
+    fn lockfile_rejects_root_source_on_dependency_packages() {
+        let root_dependencies = BTreeMap::from([(dep("outside"), id("pkg-outside"))]);
+        let lock = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), root_dependencies),
+            package("pkg-outside", "outside", path_source(), BTreeMap::new()),
+        ]);
+
+        assert!(matches!(
+            lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION),
+            Err(LockValidationError::RootSourceOnDependency { package })
+                if package == id("pkg-outside")
+        ));
+    }
+
+    #[test]
+    fn lockfile_rejects_git_source_on_the_root_package() {
+        let lock = lockfile(vec![package(
+            "pkg-mission",
+            "mission",
+            git_source("https://github.com/acme/mission.git", 'a'),
+            BTreeMap::new(),
+        )]);
+
+        assert!(matches!(
+            lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION),
+            Err(LockValidationError::RootPackageMustUseRootSource { package })
+                if package == id("pkg-mission")
+        ));
+    }
+
+    #[test]
+    fn lockfile_rejects_packages_unreachable_from_root() {
+        let lock = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), BTreeMap::new()),
+            package(
+                "pkg-orphan",
+                "orphan",
+                git_source("https://github.com/acme/orphan.git", 'a'),
+                BTreeMap::new(),
+            ),
+        ]);
+
+        assert!(matches!(
+            lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION),
+            Err(LockValidationError::UnreachablePackage { package })
+                if package == id("pkg-orphan")
+        ));
+    }
+
+    #[test]
     fn lockfile_rejects_dependency_cycles() {
         let mut root_deps = BTreeMap::new();
         root_deps.insert(dep("orbital"), id("pkg-orbital"));
@@ -2825,8 +3055,12 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
 
     #[test]
     fn lockfile_rejects_duplicate_canonical_package_instances() {
+        let root_dependencies = BTreeMap::from([
+            (dep("units_a"), id("pkg-units-a")),
+            (dep("units_b"), id("pkg-units-b")),
+        ]);
         let lock = lockfile(vec![
-            package("pkg-mission", "mission", path_source(), BTreeMap::new()),
+            package("pkg-mission", "mission", path_source(), root_dependencies),
             package(
                 "pkg-units-a",
                 "units",
@@ -3308,12 +3542,11 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 if package == id("pkg-units")
         ));
 
-        let mut missing_edge = lock.clone();
-        missing_edge.packages[0].dependencies.clear();
+        let (missing_edge, missing_edge_manifests) = missing_direct_edge_fixture(&lock, &manifests);
         assert!(matches!(
             validate_lock_against_manifests(
                 &missing_edge,
-                &manifests,
+                &missing_edge_manifests,
                 GRAPHICAL_VERSION,
                 STDLIB_VERSION
             ),
