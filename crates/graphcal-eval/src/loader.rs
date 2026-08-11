@@ -21,6 +21,13 @@ use graphcal_package::{
     validate_lock_against_manifests,
 };
 
+#[cfg(test)]
+thread_local! {
+    static TEST_CACHE_DIR: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
 fn parse_operation_error(
     error: graphcal_compiler::syntax::parser::ParseOperationError,
 ) -> CompileError {
@@ -1619,6 +1626,10 @@ fn read_package_manifest_from_path(root: &Path) -> Result<PackageManifest, Compi
 }
 
 fn cache_dir() -> Result<PathBuf, String> {
+    #[cfg(test)]
+    if let Some(path) = TEST_CACHE_DIR.with(|slot| slot.borrow().clone()) {
+        return Ok(path);
+    }
     if let Some(path) = std::env::var_os("GRAPHCAL_CACHE_DIR") {
         return Ok(PathBuf::from(path));
     }
@@ -3186,6 +3197,280 @@ dag calc {
         assert!(
             err.contains("CrossFileImportInVirtualPackage"),
             "expected loose-entry rejection: {err}"
+        );
+    }
+
+    struct CacheDirectoryOverride(Option<PathBuf>);
+
+    impl CacheDirectoryOverride {
+        fn set(path: PathBuf) -> Self {
+            Self(TEST_CACHE_DIR.with(|slot| slot.replace(Some(path))))
+        }
+    }
+
+    impl Drop for CacheDirectoryOverride {
+        fn drop(&mut self) {
+            TEST_CACHE_DIR.with(|slot| {
+                slot.replace(self.0.take());
+            });
+        }
+    }
+
+    struct LockedPackageFixture {
+        root_file: PathBuf,
+        root_helper: PathBuf,
+        _cache_directory: CacheDirectoryOverride,
+        _directory: tempfile::TempDir,
+    }
+
+    fn locked_package_fixture(root_source: &str, dependency_source: &str) -> LockedPackageFixture {
+        use graphcal_package::{LOCK_VERSION, Lockfile, PackageInstanceId, SourceTreeHashes};
+
+        let directory = tempfile::tempdir().unwrap();
+        let project_root = directory.path().join("project");
+        let cache_root = directory.path().join("cache");
+        let root_source_dir = project_root.join("src/mission");
+        std::fs::create_dir_all(&root_source_dir).unwrap();
+
+        let root_manifest = r#"[package]
+name = "mission"
+
+[dependencies]
+units_v1 = { package = "units", git = "https://example.com/units.git", rev = "1111111111111111111111111111111111111111" }
+"#;
+        let parsed_root_manifest = parse_manifest_str(root_manifest).unwrap();
+        let (dependency_name, dependency_spec) = parsed_root_manifest
+            .dependencies
+            .first_key_value()
+            .expect("fixture dependency");
+        let revision = dependency_spec.git.rev.clone();
+        let url = dependency_spec.git.url.clone();
+        let dependency_root = cache_root.join("git").join(cache_key(&url, &revision));
+        std::fs::create_dir_all(dependency_root.join("src/units")).unwrap();
+        let dependency_manifest = "[package]\nname = \"units\"\n";
+        std::fs::write(project_root.join("graphcal.toml"), root_manifest).unwrap();
+        std::fs::write(dependency_root.join("graphcal.toml"), dependency_manifest).unwrap();
+        std::fs::write(dependency_root.join("src/units/lib.gcl"), dependency_source).unwrap();
+
+        let root_file = root_source_dir.join("main.gcl");
+        let root_helper = root_source_dir.join("helper.gcl");
+        std::fs::write(&root_file, root_source).unwrap();
+        std::fs::write(
+            &root_helper,
+            "pub const node local_value: Dimensionless = 1.0;",
+        )
+        .unwrap();
+
+        let dependency_manifest = parse_manifest_str(dependency_manifest).unwrap();
+        let tree_hash = hash_source_tree(&dependency_root, &dependency_manifest).unwrap();
+        let root_id = PackageInstanceId::new("pkg-mission").unwrap();
+        let dependency_id = PackageInstanceId::new("pkg-units-v1").unwrap();
+        let lockfile = Lockfile {
+            lock_version: LOCK_VERSION,
+            created_by: "graphcal-test".to_string(),
+            graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
+            stdlib_version: STDLIB_VERSION.to_string(),
+            root: root_id.clone(),
+            plugins: Vec::new(),
+            packages: vec![
+                LockedPackage {
+                    id: root_id,
+                    name: parsed_root_manifest.name.clone(),
+                    source_dir: PathBuf::from("src"),
+                    source: PackageSource::Path {
+                        path: ".".to_string(),
+                    },
+                    dependencies: BTreeMap::from([(
+                        dependency_name.clone(),
+                        dependency_id.clone(),
+                    )]),
+                },
+                LockedPackage {
+                    id: dependency_id,
+                    name: dependency_manifest.name,
+                    source_dir: PathBuf::from("src"),
+                    source: PackageSource::Git {
+                        url,
+                        requested_rev: revision.clone(),
+                        commit: revision,
+                        tree_hashes: SourceTreeHashes { sha256: tree_hash },
+                    },
+                    dependencies: BTreeMap::new(),
+                },
+            ],
+        };
+        std::fs::write(
+            project_root.join("graphcal.lock"),
+            lockfile.to_deterministic_toml().unwrap(),
+        )
+        .unwrap();
+        let cache_directory = CacheDirectoryOverride::set(cache_root);
+
+        LockedPackageFixture {
+            root_file,
+            root_helper,
+            _cache_directory: cache_directory,
+            _directory: directory,
+        }
+    }
+
+    #[test]
+    #[ignore = "fixed by #1259 in Phase 2"]
+    fn dependency_enabled_loader_uses_overlay_for_root_file() {
+        let fixture = locked_package_fixture(
+            "node disk: Dimensionless = 1.0;",
+            "pub const node one: Dimensionless = 1.0;",
+        );
+        let overlay_source = "node overlay: Dimensionless = 2.0;";
+        let overlay = graphcal_io::OverlayFileSystem::new(
+            RealFileSystem::default(),
+            fixture.root_file.canonicalize().unwrap(),
+            overlay_source.to_string(),
+        );
+
+        let project = load_project(&fixture.root_file, None, &overlay).unwrap();
+        assert_eq!(project.files[&project.root].source.as_str(), overlay_source);
+    }
+
+    #[test]
+    #[ignore = "fixed by #1259 in Phase 2"]
+    fn dependency_enabled_loader_uses_overlay_for_root_package_import() {
+        let fixture = locked_package_fixture(
+            "import mission.helper.{ local_value };\nnode result: Dimensionless = @local_value;",
+            "pub const node one: Dimensionless = 1.0;",
+        );
+        let overlay_source = "pub const node local_value: Dimensionless = 99.0;";
+        let overlay = graphcal_io::OverlayFileSystem::new(
+            RealFileSystem::default(),
+            fixture.root_helper.canonicalize().unwrap(),
+            overlay_source.to_string(),
+        );
+
+        let project = load_project(&fixture.root_file, None, &overlay).unwrap();
+        let helper = project
+            .files
+            .values()
+            .find(|file| file.path == fixture.root_helper.canonicalize().unwrap())
+            .expect("loaded helper");
+        assert_eq!(helper.source.as_str(), overlay_source);
+    }
+
+    #[test]
+    #[ignore = "fixed by #1256 in Phase 1"]
+    fn package_inline_dag_import_resolves_dependency_module() {
+        let fixture = locked_package_fixture(
+            r"
+dag calculation {
+    import units_v1.lib.{ one };
+    pub node out: Dimensionless = @one;
+}
+node result: Dimensionless = @calculation().out;
+",
+            "pub const node one: Dimensionless = 1.0;",
+        );
+
+        let result = crate::eval::compile_and_eval_project(
+            &fixture.root_file,
+            &HashMap::new(),
+            None,
+            &RealFileSystem::default(),
+        );
+        assert!(result.is_ok(), "dependency import failed: {result:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "fixed by #1260 in Phase 2"]
+    fn unrooted_plugin_reader_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let package_root = directory.path().join("project");
+        let outside = directory.path().join("outside.wasm");
+        std::fs::create_dir_all(package_root.join("plugins")).unwrap();
+        std::fs::write(&outside, b"outside module bytes").unwrap();
+        symlink(&outside, package_root.join("plugins/escaped.wasm")).unwrap();
+
+        let result = read_plugin_file(
+            &package_root,
+            &graphcal_compiler::syntax::plugin::PluginPath::new("plugins/escaped.wasm"),
+            &RealFileSystem::default(),
+        );
+        assert!(matches!(result, Err(PluginFileError::OutsideRoot)));
+    }
+
+    #[test]
+    #[ignore = "fixed by #1262 in Phase 2"]
+    fn plugin_reader_rejects_oversized_module_before_loading() {
+        const OVERSIZED_PLUGIN_BYTES: u64 = 16 * 1024 * 1024 + 1;
+
+        let directory = tempfile::tempdir().unwrap();
+        let plugin_path = directory.path().join("large.wasm");
+        let file = std::fs::File::create(&plugin_path).unwrap();
+        file.set_len(OVERSIZED_PLUGIN_BYTES).unwrap();
+
+        let result = read_plugin_file(
+            directory.path(),
+            &graphcal_compiler::syntax::plugin::PluginPath::new("large.wasm"),
+            &RealFileSystem::default(),
+        );
+        assert!(result.is_err(), "oversized plugin was read into memory");
+    }
+
+    struct LockReadFailureFileSystem(RealFileSystem);
+
+    impl FileSystemReader for LockReadFailureFileSystem {
+        fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
+            if path.file_name() == Some(std::ffi::OsStr::new("graphcal.lock")) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "lockfile denied by test filesystem",
+                ));
+            }
+            self.0.read_to_string(path)
+        }
+
+        fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
+            self.0.read_bytes(path)
+        }
+
+        fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
+            self.0.canonicalize(path)
+        }
+
+        fn is_file(&self, path: &Path) -> bool {
+            self.0.is_file(path)
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            self.0.exists(path)
+        }
+    }
+
+    #[test]
+    #[ignore = "fixed by #1261 in Phase 2"]
+    fn unreadable_plugin_lockfile_is_not_treated_as_missing() {
+        let directory = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+            (
+                "src/mission/main.gcl",
+                "import plugin \"plugin.wasm\" as plugin {\nfn value() -> Dimensionless;\n}",
+            ),
+            ("plugin.wasm", "not wasm"),
+        ]);
+        let filesystem = LockReadFailureFileSystem(RealFileSystem::default());
+        let result = load_project(
+            &directory.path().join("src/mission/main.gcl"),
+            None,
+            &filesystem,
+        );
+
+        let error = result.expect_err("permission failure must be a hard loader error");
+        assert!(
+            error
+                .to_string()
+                .contains("lockfile denied by test filesystem"),
+            "unexpected lockfile diagnostic: {error:?}"
         );
     }
 }
