@@ -344,6 +344,12 @@ struct OpenDocumentSnapshot {
     version: i32,
 }
 
+#[derive(Debug)]
+struct RecordedDocument {
+    identity: DocumentIdentity,
+    revision: DocumentRevision,
+}
+
 /// The LSP server backend.
 #[cfg_attr(test, derive(Debug))]
 pub struct Backend {
@@ -485,30 +491,31 @@ impl Backend {
         uri: &Url,
         text: &str,
         version: Option<i32>,
-    ) -> std::result::Result<DocumentRevision, RevisionExhausted> {
+    ) -> std::result::Result<RecordedDocument, RevisionExhausted> {
         use std::collections::hash_map::Entry;
         let revision = self.revision_clock.next()?;
-        let identity = document_identity(uri);
-        match self.latest_text.write().await.entry(uri.clone()) {
+        let identity = match self.latest_text.write().await.entry(uri.clone()) {
             Entry::Occupied(mut entry) => {
                 let snapshot = entry.get_mut();
-                snapshot.identity = identity;
                 snapshot.revision = revision;
                 snapshot.text = Arc::new(text.to_string());
                 if let Some(version) = version {
                     snapshot.version = version;
                 }
+                snapshot.identity.clone()
             }
             Entry::Vacant(entry) => {
+                let identity = document_identity(uri);
                 entry.insert(OpenDocumentSnapshot {
-                    identity,
+                    identity: identity.clone(),
                     revision,
                     text: Arc::new(text.to_string()),
                     version: version.unwrap_or_default(),
                 });
+                identity
             }
-        }
-        Ok(revision)
+        };
+        Ok(RecordedDocument { identity, revision })
     }
 
     /// Cancel and debounce every open analysis that consumes `changed`.
@@ -551,8 +558,8 @@ impl Backend {
         }
 
         self.analysis_scheduler.open_document(&uri);
-        let root_revision = match self.record_latest_text(&uri, &text, version).await {
-            Ok(revision) => revision,
+        let recorded = match self.record_latest_text(&uri, &text, version).await {
+            Ok(recorded) => recorded,
             Err(error) => {
                 self.client
                     .log_message(MessageType::ERROR, error.to_string())
@@ -560,7 +567,7 @@ impl Backend {
                 return;
             }
         };
-        self.schedule_transitive_importers(&uri, &document_identity(&uri))
+        self.schedule_transitive_importers(&uri, &recorded.identity)
             .await;
 
         // Bump the generation so any in-flight debounced analysis for this URI
@@ -577,7 +584,7 @@ impl Backend {
             Arc::clone(&self.analysis_scheduler),
             uri,
             text,
-            root_revision,
+            recorded.revision,
             generation,
         )
         .await;
@@ -846,7 +853,7 @@ async fn analyze_store_publish_once(
     let current_revisions = open_revisions(&latest_guard);
     if !analysis.inputs.is_current(&current_revisions) {
         let root_is_current = analysis.inputs.root_is_current(&current_revisions);
-        if analysis.project_symbols.complete().is_some() {
+        if analysis.inputs.has_complete_dependencies() {
             dependency_graph.write().await.update(
                 analysis.inputs.root().clone(),
                 analysis.inputs.dependencies().cloned().collect(),
@@ -858,7 +865,7 @@ async fn analyze_store_publish_once(
         drop(latest_guard);
         return retry.map_or(AnalysisCompletion::Done, AnalysisCompletion::Retry);
     }
-    let graph_update = analysis.project_symbols.complete().is_some().then(|| {
+    let graph_update = analysis.inputs.has_complete_dependencies().then(|| {
         (
             analysis.inputs.root().clone(),
             analysis.inputs.dependencies().cloned().collect(),
@@ -1191,7 +1198,7 @@ fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             return Ok(AnalysisRun {
                 analysis: AnalysisResult {
-                    inputs: input_snapshot.finish(HashSet::new()),
+                    inputs: input_snapshot.finish_incomplete(),
                     source: Arc::new(text.to_string()),
                     symbol_table,
                     project_symbols: ProjectSymbols::Incomplete,
@@ -1211,7 +1218,8 @@ fn run_analysis_with_cancellation(
     };
 
     cancellation.checkpoint()?;
-    let analysis_inputs = input_snapshot.finish(project_dependency_identities(&project));
+    let analysis_inputs =
+        input_snapshot.finish_loaded_project(project_dependency_identities(&project));
     let root_ast = project.root_file().ast();
     let import_links = collect_import_links(&project, cancellation)?;
     cancellation.checkpoint()?;
@@ -2426,11 +2434,11 @@ impl LanguageServer for Backend {
         // Record the new text synchronously: completion/signature-help fire
         // on trigger characters milliseconds after this notification, long
         // before the debounced analysis lands.
-        let revision = match self
+        let recorded = match self
             .record_latest_text(&uri, &change.text, Some(params.text_document.version))
             .await
         {
-            Ok(revision) => revision,
+            Ok(recorded) => recorded,
             Err(error) => {
                 self.client
                     .log_message(MessageType::ERROR, error.to_string())
@@ -2438,10 +2446,10 @@ impl LanguageServer for Backend {
                 return;
             }
         };
-        self.schedule_transitive_importers(&uri, &document_identity(&uri))
+        self.schedule_transitive_importers(&uri, &recorded.identity)
             .await;
         let generation = self.bump_generation(&uri).await;
-        self.spawn_debounced_analysis(uri, change.text, revision, generation);
+        self.spawn_debounced_analysis(uri, change.text, recorded.revision, generation);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -4238,17 +4246,21 @@ node momentum: Force * Time = @mass * @velocity;
         .unwrap()
         .analysis;
         assert!(analysis.has_no_diagnostics());
+        assert!(
+            analysis
+                .inputs
+                .dependencies()
+                .any(|identity| identity == &dependency)
+        );
         assert!(analysis.inputs.is_current(&HashMap::from([
             (root.clone(), root_revision),
             (dependency.clone(), old_dependency_revision),
         ])));
-
         let new_dependency_revision = clock.next().unwrap();
         assert!(!analysis.inputs.is_current(&HashMap::from([
             (root.clone(), root_revision),
             (dependency.clone(), new_dependency_revision),
         ])));
-
         let refreshed_input = AnalysisInputSnapshot::new(
             root,
             root_revision,
@@ -4269,11 +4281,9 @@ node momentum: Force * Time = @mass * @velocity;
         .unwrap()
         .analysis;
         assert!(!refreshed.has_no_diagnostics());
-
         let use_offset = main_text.rfind('y').unwrap();
         assert!(goto_definition::goto_definition(&analysis, &main_uri, use_offset).is_some());
         assert!(goto_definition::goto_definition(&refreshed, &main_uri, use_offset).is_none());
-
         let old_labels: HashSet<_> = completion::completion(&analysis, &main_text, use_offset)
             .unwrap()
             .into_iter()

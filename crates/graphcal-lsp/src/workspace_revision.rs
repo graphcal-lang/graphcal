@@ -73,7 +73,21 @@ impl AnalysisInputSnapshot {
 
     /// Restrict the launch snapshot to identities the loader actually consumed.
     #[must_use]
-    pub fn finish(&self, dependencies: HashSet<DocumentIdentity>) -> AnalysisInputs {
+    pub fn finish_loaded_project(&self, dependencies: HashSet<DocumentIdentity>) -> AnalysisInputs {
+        self.finish(dependencies, DependencyCoverage::Complete)
+    }
+
+    /// Finish a fallback that could not discover a complete dependency set.
+    #[must_use]
+    pub fn finish_incomplete(&self) -> AnalysisInputs {
+        self.finish(HashSet::new(), DependencyCoverage::Incomplete)
+    }
+
+    fn finish(
+        &self,
+        dependencies: HashSet<DocumentIdentity>,
+        dependency_coverage: DependencyCoverage,
+    ) -> AnalysisInputs {
         let expected_revisions = std::iter::once(self.root.clone())
             .chain(dependencies.iter().cloned())
             .map(|identity| {
@@ -84,9 +98,17 @@ impl AnalysisInputSnapshot {
         AnalysisInputs {
             root: self.root.clone(),
             dependencies,
+            dependency_coverage,
             expected_revisions,
         }
     }
+}
+
+/// Whether loader-resolved dependencies are exhaustive for an analysis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DependencyCoverage {
+    Complete,
+    Incomplete,
 }
 
 /// Exact open-buffer revisions and source dependencies consumed by one result.
@@ -94,6 +116,7 @@ impl AnalysisInputSnapshot {
 pub struct AnalysisInputs {
     root: DocumentIdentity,
     dependencies: HashSet<DocumentIdentity>,
+    dependency_coverage: DependencyCoverage,
     expected_revisions: HashMap<DocumentIdentity, Option<DocumentRevision>>,
 }
 
@@ -104,6 +127,7 @@ impl AnalysisInputs {
         Self {
             root,
             dependencies: HashSet::new(),
+            dependency_coverage: DependencyCoverage::Incomplete,
             expected_revisions: HashMap::new(),
         }
     }
@@ -115,6 +139,11 @@ impl AnalysisInputs {
 
     pub fn dependencies(&self) -> impl Iterator<Item = &DocumentIdentity> {
         self.dependencies.iter()
+    }
+
+    #[must_use]
+    pub fn has_complete_dependencies(&self) -> bool {
+        self.dependency_coverage == DependencyCoverage::Complete
     }
 
     #[must_use]
@@ -174,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn analysis_inputs_compare_open_closed_state_and_revision() {
+    fn analysis_inputs_detect_dependency_edit_save_and_close() {
         let clock = RevisionClock::default();
         let root = file("root.gcl");
         let dependency = file("dep.gcl");
@@ -185,7 +214,7 @@ mod tests {
             root_revision,
             HashMap::from([(dependency.clone(), dependency_revision)]),
         );
-        let inputs = snapshot.finish(HashSet::from([dependency.clone()]));
+        let inputs = snapshot.finish_loaded_project(HashSet::from([dependency.clone()]));
 
         assert!(inputs.is_current(&HashMap::from([
             (root.clone(), root_revision),
@@ -205,7 +234,7 @@ mod tests {
         let dependency = file("dep.gcl");
         let root_revision = clock.next().unwrap();
         let snapshot = AnalysisInputSnapshot::new(root.clone(), root_revision, HashMap::new());
-        let inputs = snapshot.finish(HashSet::from([dependency.clone()]));
+        let inputs = snapshot.finish_loaded_project(HashSet::from([dependency.clone()]));
 
         assert!(inputs.is_current(&HashMap::from([(root.clone(), root_revision)])));
         assert!(!inputs.is_current(&HashMap::from([
