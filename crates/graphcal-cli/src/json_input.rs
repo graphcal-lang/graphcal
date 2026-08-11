@@ -416,7 +416,7 @@ pub enum JsonInputError {
         /// The failed numeric invariant.
         reason: JsonNumberError,
     },
-    /// An empty raw value escaped serde_json's syntax validation.
+    /// An empty raw value escaped `serde_json`'s syntax validation.
     EmptyRawValue,
     /// An unsupported JSON type was encountered (null or array).
     UnsupportedJsonType { param: String, kind: &'static str },
@@ -1037,7 +1037,8 @@ mod tests {
         let rounded = json_to_overrides(r#"{"x": 9223372036854775808.0}"#).unwrap();
         assert!(matches!(
             rounded[&DeclName::expect_valid("x")].kind,
-            ExprKind::Number(value) if value == 9_223_372_036_854_775_808.0
+            ExprKind::Number(value)
+                if value.to_bits() == 9_223_372_036_854_775_808.0_f64.to_bits()
         ));
 
         assert!(matches!(
