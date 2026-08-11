@@ -94,19 +94,21 @@ fn resolve_plugin_pins(root: &Path, source_dir: &Path) -> Result<Vec<LockedPlugi
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
 
     let scan_dir = root.join(source_dir);
-    let (mut gcl_files, walk_errors) = if scan_dir.is_dir() {
+    let discovery = if scan_dir.is_dir() {
         graphcal::format::collect_gcl_files(&scan_dir)
     } else {
-        (Vec::new(), Vec::new())
+        graphcal::format::FileDiscovery::complete(Vec::new())
     };
+    let (mut gcl_files, traversal_failures) = discovery.into_parts();
     // Unreadable directories would silently drop pins; that must be a hard
-    // error, unlike formatting where a warning suffices.
-    if let Some(err) = walk_errors.into_iter().next() {
+    // error for lock generation.
+    if let Some(failures) = traversal_failures
+        && let Some(failure) = failures.into_failures().next()
+    {
+        let path = failure.path().to_path_buf();
         return Err(DepsError::ReadDir {
-            path: err
-                .path()
-                .map_or_else(|| scan_dir.clone(), Path::to_path_buf),
-            source: err.into(),
+            path,
+            source: failure.into_source().into(),
         });
     }
     gcl_files.sort();
