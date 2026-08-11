@@ -1176,6 +1176,25 @@ node bad: Dimensionless = @x ^ @n;";
 }
 
 #[test]
+fn hir_normalizes_omitted_dimension_and_unit_powers() {
+    let (tir, _) = module_aware_tir("param distance: Length = 1.0 m;");
+    let param = tir.root().params().first().unwrap();
+    let crate::hir::TypeExprKind::DimExpr(dimension) = &param.type_ann.type_expr.kind else {
+        panic!("expected dimension expression");
+    };
+    assert_eq!(
+        dimension.terms[0].term.power,
+        crate::dimension::Rational::ONE
+    );
+
+    let expression = param.default_expr.as_ref().unwrap();
+    let crate::hir::ExprKind::QuantityLiteral { unit, .. } = &expression.kind else {
+        panic!("expected quantity literal");
+    };
+    assert_eq!(unit.terms[0].power, crate::dimension::Rational::ONE);
+}
+
+#[test]
 fn hir_preserves_exact_power_metadata() {
     let (tir, _) = module_aware_tir("param x: Length = 4.0 m;\nnode y: Length^(3/2) = @x ^ (3/2);");
     let expression = &tir.root().nodes().first().unwrap().expr;

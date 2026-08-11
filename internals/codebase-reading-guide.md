@@ -81,7 +81,9 @@ Read the pipeline as a sequence of practical questions:
    code should not need to ask whether the string `"sum"`, `"PI"`, or
    `"helpers.physics.mass"` has a special meaning; it should pattern-match on
    typed values instead. The frozen `HirDag` carries its canonical `DagId` and
-   no syntax-AST expression.
+   no syntax-AST expression. Omitted dimension and unit exponents are normalized
+   to exact `Rational::ONE` values at this boundary; only syntax AST retains
+   `Option<Rational>` so source-aware tools can distinguish `m` from `m^1`.
 6. **TIR: is the program type- and dimension-correct?**
    TIR combines the declaration structure from HIR with its bodies, resolved
    type expressions, dimension facts, domain constraints, inline DAG bodies, and
