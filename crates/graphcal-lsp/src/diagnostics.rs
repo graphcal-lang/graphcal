@@ -1057,6 +1057,30 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn inline_self_import_policy_diagnostics_reach_lsp_clients() {
+        for (source, expected) in [
+            (
+                "pub assert okay = true;\n\
+                 dag calculation { import self.{ okay }; }\n",
+                "graphcal::M024",
+            ),
+            (
+                "pub plot chart = { mark: point, encode: { x: 1.0 } };\n\
+                 dag calculation { import self.{ chart }; }\n",
+                "graphcal::M021",
+            ),
+        ] {
+            let diagnostics = produce_diagnostics(source, "self.gcl");
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(matches!(
+                diagnostics[0].code.as_ref(),
+                Some(NumberOrString::String(code)) if code == expected
+            ));
+            assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+        }
+    }
+
+    #[test]
     fn pub_param_produces_parse_diagnostic() {
         // `pub param` is rejected at parse time with a P001 unexpected-token
         // diagnostic — params are annotation-free per axioms §4.0.

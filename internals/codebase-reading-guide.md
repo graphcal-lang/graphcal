@@ -649,8 +649,15 @@ Use these newtypes for actual definition leaves only. Reference positions that
 may be qualified stay as `IdentPath`/`NamePath` until module-aware resolution
 produces `ResolvedName<Ns>` or `ResolvedIndexVariant`. `ResolvedName<Ns>` is the
 core owner-qualified identity: a canonical `DagId` owner plus a namespace-typed
-leaf atom. `ResolvedIndexVariant` stores the resolved index identity plus the
-variant leaf.
+leaf atom. `DagId` keeps package identity, path segments, and each typed
+`DagHierarchyEdge` (`SourceModule` versus `ConcreteInstance`) structurally;
+its dotted `Display` output is not canonical identity. `ResolvedIndexVariant`
+stores the resolved index identity plus the variant leaf.
+
+The graph IR preserves these typed identities through projection. Its DOT
+renderer assigns deterministic opaque local ids to node and cluster statements,
+then renders semantic names only as labels; display collisions can therefore
+never merge vertices or edge endpoints.
 
 `ScopedName` carries legacy declaration lookup/display paths structurally as
 qualifier segments plus a member. Its dotted `Display` form is a boundary

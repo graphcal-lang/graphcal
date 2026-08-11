@@ -4,7 +4,7 @@
 //! this module keeps the self-import classification logic that needs access to
 //! parent-file visibility and values.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -19,27 +19,9 @@ use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::decl_name::DeclName;
 
 use crate::import_surface::{
-    ImportItemPresence, file_import_item_presence, import_item_not_found_error,
+    ImportItemPresence, PureImportTermDisposition, file_import_item_presence,
+    import_item_not_found_error, pure_import_term_disposition,
 };
-
-/// Parent-file value declarations externally nameable by an inline DAG
-/// self-import classifier. Runtime entries include exported nodes and param
-/// input ports as distinct source roles, though both are rejected as imports.
-#[derive(Debug, Clone, Default)]
-pub struct ParentValueDecls {
-    consts: HashSet<DeclName>,
-    runtime: HashSet<DeclName>,
-}
-
-impl ParentValueDecls {
-    fn is_external_const(&self, name: &str) -> bool {
-        self.consts.contains(name)
-    }
-
-    fn is_external_runtime(&self, name: &str) -> bool {
-        self.runtime.contains(name)
-    }
-}
 
 /// Pre-process `import <self>.{...}` declarations inside a dag body.
 ///
@@ -56,7 +38,8 @@ impl ParentValueDecls {
 ///   checking attaches the resolved type and any available value later.
 /// - Bare term `param` / non-const `node` items are rejected with
 ///   `ImportRuntimeItem` — runtime values must be passed via the dag's own
-///   params.
+///   params. Assertions and visualization requests are likewise rejected with
+///   the same diagnostics as cross-file pure imports.
 /// - Other compile-time items require no value resolver registration here;
 ///   module-aware lowering uses the loader-built import scope for their typed
 ///   namespaces.
@@ -73,11 +56,14 @@ impl ParentValueDecls {
 /// Returns a [`GraphcalError`] if a self-import names a runtime declaration
 /// (a param input port or node), a private non-param declaration, or a name
 /// that does not exist in the parent.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass classifies and strips every namespace of selective self-import"
+)]
 pub fn preprocess_dag_body_self_imports(
     body: &[Declaration],
     parent_dag_id: &DagId,
     parent_ast: &File,
-    parent_values: &ParentValueDecls,
     body_resolved_imports: &HashMap<
         crate::loader::ModulePathKey,
         crate::loader::InlineBodyImportResolution,
@@ -147,32 +133,39 @@ pub fn preprocess_dag_body_self_imports(
                             // pipeline. A same-named constructor is a separate
                             // bare term item.
                         }
-                        ImportItemNamespace::Term => match (
-                            parent_values.is_external_const(orig_name.as_str()),
-                            parent_values.is_external_runtime(orig_name.as_str()),
-                        ) {
-                            (true, _) => {
-                                let scoped = ScopedName::local(local_name);
-                                names.const_names.push((scoped.clone(), span));
-                                bindings.insert(
-                                    scoped,
-                                    HirImportedBinding::new(
-                                        graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
-                                            parent_dag_id.clone(),
-                                            DeclName::from_atom(orig_name.clone()),
+                        ImportItemNamespace::Term => {
+                            let disposition =
+                                pure_import_term_disposition(&parent_ast.declarations, orig_name)
+                                    .ok_or_else(|| {
+                                    import_item_not_found_error(
+                                        parent_ast,
+                                        orig_name,
+                                        item.namespace,
+                                        &import_decl.path.display_path(),
+                                        src,
+                                        span,
+                                    )
+                                })?;
+                            match disposition {
+                                PureImportTermDisposition::BindConstant => {
+                                    let scoped = ScopedName::local(local_name);
+                                    names.const_names.push((scoped.clone(), span));
+                                    bindings.insert(
+                                        scoped,
+                                        HirImportedBinding::new(
+                                            graphcal_compiler::syntax::decl_name::ResolvedDeclName::from_def(
+                                                parent_dag_id.clone(),
+                                                DeclName::from_atom(orig_name.clone()),
+                                            ),
                                         ),
-                                    ),
-                                );
+                                    );
+                                }
+                                PureImportTermDisposition::ResolverOnly => {}
+                                PureImportTermDisposition::Reject(reason) => {
+                                    return Err(reason.diagnostic(orig_name, src, span));
+                                }
                             }
-                            (false, true) => {
-                                return Err(GraphcalError::ImportRuntimeItem {
-                                    name: orig_name.to_string(),
-                                    src: src.clone(),
-                                    span: span.into(),
-                                });
-                            }
-                            (false, false) => {}
-                        },
+                        }
                     }
                 }
             }
@@ -187,29 +180,4 @@ pub fn preprocess_dag_body_self_imports(
         bindings,
         stripped_body,
     })
-}
-
-/// Classify parent declarations by the source roles visible to an inline DAG.
-pub fn classify_value_decls_in_ast(
-    ast: &graphcal_compiler::desugar::desugared_ast::File,
-) -> ParentValueDecls {
-    let mut values = ParentValueDecls::default();
-    for decl in &ast.declarations {
-        match &decl.kind {
-            DeclKind::ConstNode(c) if c.visibility.is_public() => {
-                values.consts.insert(c.name.value.clone());
-            }
-            DeclKind::Param(p) => {
-                // Params are named input ports across import/include boundaries,
-                // but they are runtime values and cannot be imported into an
-                // inline DAG body.
-                values.runtime.insert(p.name.value.clone());
-            }
-            DeclKind::Node(n) if n.visibility.is_public() => {
-                values.runtime.insert(n.name.value.clone());
-            }
-            _ => {}
-        }
-    }
-    values
 }

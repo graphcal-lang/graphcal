@@ -7,7 +7,10 @@ use super::recursion;
     reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
-use crate::import_surface::{ProjectDeclIdentity, ProjectDeclKind, decl_identity};
+use crate::import_surface::{
+    ProjectDeclIdentity, ProjectDeclKind, PureImportRejection, PureImportTermDisposition,
+    decl_identity, pure_import_term_disposition,
+};
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
@@ -1071,7 +1074,6 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 })
             })?
     };
-    let dep_index = build_dep_decl_index(declarations);
 
     match import_kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
@@ -1128,33 +1130,32 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     continue;
                 }
 
-                let is_plot = dep_index.is_plot(orig_name);
-                let is_assert = dep_index.is_assert(orig_name);
-                validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
-                if is_plot {
-                    return Err(CompileError::Eval(GraphcalError::ImportPlotItem {
-                        name: orig_name.to_string(),
-                        src: file_src.clone(),
-                        span: import_item.name.span.into(),
-                    }));
-                }
-                if dep_index.is_runtime(orig_name) {
-                    return Err(CompileError::Eval(GraphcalError::ImportRuntimeItem {
-                        name: orig_name.to_string(),
-                        src: file_src.clone(),
-                        span: import_item.name.span.into(),
-                    }));
-                }
-                if dep_index.is_assert(orig_name) {
-                    return Err(CompileError::Eval(GraphcalError::ImportAssertionItem {
-                        name: orig_name.to_string(),
-                        src: file_src.clone(),
-                        span: import_item.name.span.into(),
-                    }));
-                }
+                let disposition = pure_import_term_disposition(declarations, orig_name)
+                    .ok_or_else(|| {
+                        CompileError::Eval(GraphcalError::ImportNameNotFound {
+                            name: orig_name.to_string(),
+                            file_path: import_path.display_path(),
+                            src: file_src.clone(),
+                            span: import_item.name.span.into(),
+                        })
+                    })?;
+                let is_visualization = matches!(
+                    disposition,
+                    PureImportTermDisposition::Reject(PureImportRejection::Visualization)
+                );
+                let is_assertion = matches!(
+                    disposition,
+                    PureImportTermDisposition::Reject(PureImportRejection::Assertion)
+                );
+                validate_include_item_attributes(
+                    import_item,
+                    is_visualization,
+                    is_assertion,
+                    file_src,
+                )?;
 
-                if dep_index.is_const(orig_name) {
-                    import_selective_item(
+                match disposition {
+                    PureImportTermDisposition::BindConstant => import_selective_item(
                         module_target,
                         orig_name,
                         &local_name,
@@ -1163,24 +1164,20 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         &mut ctx.imported_names,
                         &mut ctx.imported_bindings,
                         Some(&mut ctx.imported_source_order),
-                    )?;
-                } else if declarations_have_import_item(
-                    declarations,
-                    orig_name,
-                    graphcal_compiler::syntax::ast::ImportItemNamespace::Term,
-                ) {
-                    // A bare non-value term, such as a DAG or constructor.
-                    ctx.imported_type_system_names
-                        .entry(module_target.clone())
-                        .or_default()
-                        .insert(import_item.namespace, orig_name.clone());
-                } else {
-                    return Err(CompileError::Eval(GraphcalError::ImportNameNotFound {
-                        name: orig_name.to_string(),
-                        file_path: import_path.display_path(),
-                        src: file_src.clone(),
-                        span: import_item.name.span.into(),
-                    }));
+                    )?,
+                    PureImportTermDisposition::ResolverOnly => {
+                        ctx.imported_type_system_names
+                            .entry(module_target.clone())
+                            .or_default()
+                            .insert(import_item.namespace, orig_name.clone());
+                    }
+                    PureImportTermDisposition::Reject(reason) => {
+                        return Err(CompileError::Eval(reason.diagnostic(
+                            orig_name,
+                            file_src,
+                            import_item.name.span,
+                        )));
+                    }
                 }
             }
         }
