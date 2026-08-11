@@ -583,14 +583,21 @@ for lifecycle diagrams and client guidance.
 
 Format `.gcl` files. When given a directory, recursively formats regular
 `.gcl` files within. Symlinked entries found during directory traversal are
-skipped; an explicitly named symlinked file path is treated like any other
-file argument and may write through to its target.
+skipped, and explicitly named symlinked paths are rejected rather than followed.
 
 Formatting only ever changes layout, never meaning. After producing the
 formatted text, the formatter re-parses it and verifies the result is the same
 syntax tree as the input (ignoring source positions). If they ever diverge —
 which would be a bug in the formatter, not in your code — formatting fails with
 an error instead of writing a file whose meaning might differ from the source.
+Changed files are written completely to same-directory temporary files,
+synchronized, and atomically renamed into place. Existing permissions are
+preserved, but ownership, ACLs, extended attributes, and hard-link identity are
+not; an atomic replacement creates a new file identity. If a source changes
+after it was read, replacement fails instead of overwriting the newer bytes.
+One replacement failure does not prevent later batch targets from being
+formatted.
+
 Parentheses are removed only when an exhaustive precedence and associativity
 check proves that reparsing preserves the same expression tree, including
 prefix, infix, postfix, conversion, call, and delimited contexts. Breakable
@@ -638,7 +645,7 @@ certification result.
 | Code | Meaning |
 |------|---------|
 | `0` | Formatting completed, or every inspected file was already formatted under `--check` |
-| `1` | A file could not be read/formatted, or `--check` found changes |
+| `1` | A file could not be read/formatted/replaced, or `--check` found changes |
 | `2` | One or more requested directories could not be traversed completely |
 
 ---

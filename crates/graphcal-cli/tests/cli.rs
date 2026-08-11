@@ -3179,6 +3179,46 @@ fn format_in_place_then_check() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[cfg(unix)]
+#[test]
+fn format_replacement_failure_preserves_source_and_continues_the_batch() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().unwrap();
+    let original = "param   x  :  Dimensionless  =   1.0  ;";
+    let target = directory.path().join("symlink-target.gcl");
+    let symlink_path = directory.path().join("first.gcl");
+    let writable = directory.path().join("second.gcl");
+    std::fs::write(&target, original).unwrap();
+    symlink(&target, &symlink_path).unwrap();
+    std::fs::write(&writable, original).unwrap();
+
+    let output = graphcal_bin()
+        .args([
+            "format",
+            symlink_path.to_str().unwrap(),
+            writable.to_str().unwrap(),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert_eq!(output.status.code(), Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains("cannot atomically replace")
+            && stderr.contains("is not a regular file")
+            && stderr.contains("1 file(s) could not be read, formatted, or replaced"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains(&format!("Formatted: {}", writable.display())),
+        "stdout: {stdout}"
+    );
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+    assert_ne!(std::fs::read_to_string(&writable).unwrap(), original);
+}
+
 #[test]
 fn recursive_parser_nesting_returns_p015_without_aborting() {
     // Keep these regressions in subprocesses: an omitted parser guard can
