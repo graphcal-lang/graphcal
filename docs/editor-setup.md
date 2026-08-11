@@ -35,7 +35,10 @@ same-leaf declarations. If `a.gcl` and `b.gcl` both export `Phase`, `Item`, and
 jumps to `a.gcl`, not whichever same-leaf symbol was seen first. Navigation and
 rename also preserve Graphcal namespaces: a term and a unit may share a spelling
 without being merged. Selective imports retain every authored alias while all
-aliases still navigate to the one canonical declaration.
+aliases still navigate to the one canonical declaration. File-local rename
+covers nested DAG bodies, include bindings, plot composition, domain bounds,
+and record field accesses; it is refused when a tolerant occurrence cannot be
+assigned to one canonical symbol safely.
 
 Analysis is revision-aware and bounded. A new edit cancels superseded loading,
 compilation, and evaluation work; only the newest completed revision publishes
