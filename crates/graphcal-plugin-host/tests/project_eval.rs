@@ -396,7 +396,7 @@ fn eval_package_project(
             packages: vec![graphcal_package::LockedPackage {
                 id: graphcal_package::PackageInstanceId::new("pkg-proj").unwrap(),
                 name: graphcal_package::PackageName::new("proj").unwrap(),
-                source_dir: "src".into(),
+                source_dir: graphcal_package::PackageSourceDirectory::new("src").unwrap(),
                 source: graphcal_package::PackageSource::Path {
                     path: ".".to_string(),
                 },
@@ -404,11 +404,7 @@ fn eval_package_project(
             }],
             plugins: vec![graphcal_package::LockedPlugin::new("plugins/demo.wasm", sha).unwrap()],
         };
-        std::fs::write(
-            dir.join("graphcal.lock"),
-            lockfile.to_deterministic_toml().unwrap(),
-        )
-        .unwrap();
+        std::fs::write(dir.join("graphcal.lock"), lockfile.to_deterministic_toml()).unwrap();
     }
 
     let fs = RealFileSystem::default();

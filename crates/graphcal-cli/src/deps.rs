@@ -12,9 +12,9 @@ use graphcal_io::{
 };
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitUrl, LOCK_VERSION, LockedPackage,
-    LockedPlugin, LockedPluginError, Lockfile, LockfileSerializeError, PackageGraph,
-    PackageInstanceId, PackageManifest, PackageName, PackageSource, STDLIB_VERSION,
-    SourceTreeHashes, parse_manifest_str,
+    LockedPlugin, LockedPluginError, Lockfile, PackageGraph, PackageInstanceId, PackageManifest,
+    PackageName, PackageSource, PackageSourceDirectory, STDLIB_VERSION, SourceTreeHashes,
+    parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -64,9 +64,7 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let graph = lockfile.package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)?;
     ensure_lock_graph_loadable(&graph)?;
 
-    let content = lockfile
-        .to_deterministic_toml()
-        .map_err(DepsError::LockfileSerialize)?;
+    let content = lockfile.to_deterministic_toml();
     let lockfile_path = root.join("graphcal.lock");
     let changed = match std::fs::read_to_string(&lockfile_path) {
         Ok(existing) if existing == content => false,
@@ -90,10 +88,13 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
 /// entry), so a pin exists for every plugin any file of the package can
 /// load. Host-registry plugin identities (no `.wasm` suffix) are not
 /// artifacts and get no pins.
-fn resolve_plugin_pins(root: &Path, source_dir: &Path) -> Result<Vec<LockedPlugin>, DepsError> {
+fn resolve_plugin_pins(
+    root: &Path,
+    source_dir: &PackageSourceDirectory,
+) -> Result<Vec<LockedPlugin>, DepsError> {
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
 
-    let scan_dir = root.join(source_dir);
+    let scan_dir = source_dir.join_to(root);
     let discovery = if scan_dir.is_dir() {
         graphcal::format::collect_gcl_files(&scan_dir)
     } else {
@@ -532,10 +533,11 @@ fn hash_source_tree(root: &Path) -> Result<String, DepsError> {
         path: root.to_path_buf(),
         source,
     })?;
+    let source_dir = manifest.source_dir.to_path_buf();
     let hash = hash_package_source_tree(
         &fs,
         root,
-        &manifest.source_dir,
+        &source_dir,
         SourceTreeHashLimits::unbounded(),
         &NeverCancel,
     )?;
@@ -651,9 +653,6 @@ pub enum DepsError {
     /// Lock validation failed.
     #[error("{0}")]
     LockValidation(#[from] graphcal_package::LockValidationError),
-    /// Lockfile serialization failed.
-    #[error("could not serialize graphcal.lock: {0}")]
-    LockfileSerialize(#[from] LockfileSerializeError),
     /// Generated package id was invalid.
     #[error(transparent)]
     PackageId(graphcal_package::PackageInstanceIdError),
@@ -723,7 +722,8 @@ node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
         let plugin_bytes = b"not-really-wasm; pinning hashes bytes only";
         std::fs::write(root.join("plugins/demo.wasm"), plugin_bytes).unwrap();
 
-        let pins = resolve_plugin_pins(&root, Path::new("src")).unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let pins = resolve_plugin_pins(&root, &source_dir).unwrap();
         assert_eq!(pins.len(), 1, "host-registry identities get no pins");
         assert_eq!(pins[0].path(), "plugins/demo.wasm");
         assert_eq!(pins[0].sha256(), hex_string(&Sha256::digest(plugin_bytes)));
@@ -744,8 +744,9 @@ import plugin "plugins/nope.wasm" as demo {
 "#,
         )
         .unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
         assert!(matches!(
-            resolve_plugin_pins(&root, Path::new("src")).unwrap_err(),
+            resolve_plugin_pins(&root, &source_dir).unwrap_err(),
             DepsError::PluginFileUnreadable { plugin, .. } if plugin == "plugins/nope.wasm"
         ));
         let _ = std::fs::remove_dir_all(&root);
@@ -756,8 +757,9 @@ import plugin "plugins/nope.wasm" as demo {
         let root = unique_temp_dir();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/broken.gcl"), "import plugin \"x.wasm").unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
         assert!(matches!(
-            resolve_plugin_pins(&root, Path::new("src")).unwrap_err(),
+            resolve_plugin_pins(&root, &source_dir).unwrap_err(),
             DepsError::PluginScanParse { .. }
         ));
         let _ = std::fs::remove_dir_all(&root);
