@@ -15,7 +15,10 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
-use graphcal_io::{FileSystemReader, RealFileSystem};
+use graphcal_io::{
+    ByteLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, RealFileSystem,
+    SourceTreeHashLimits, hash_source_tree,
+};
 use graphcal_package::{
     GitCommitHash, GitUrl, LockedPackage, PackageGraph, PackageInstanceId, PackageManifest,
     PackageSource, STDLIB_VERSION, parse_lockfile_str, parse_manifest_str,
@@ -27,6 +30,306 @@ thread_local! {
     static TEST_CACHE_DIR: std::cell::RefCell<Option<PathBuf>> = const {
         std::cell::RefCell::new(None)
     };
+}
+
+const MEBIBYTE: u64 = 1024 * 1024;
+
+/// Per-artifact byte limits for one project load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoaderArtifactByteLimits {
+    source_file: u64,
+    manifest: u64,
+    lockfile: u64,
+    plugin: u64,
+    source_tree_file: u64,
+}
+
+impl LoaderArtifactByteLimits {
+    /// Construct explicit byte limits for every artifact category. Zero is a
+    /// valid deny-all policy for a category.
+    #[must_use]
+    pub const fn new(
+        source_file: u64,
+        manifest: u64,
+        lockfile: u64,
+        plugin: u64,
+        source_tree_file: u64,
+    ) -> Self {
+        Self {
+            source_file,
+            manifest,
+            lockfile,
+            plugin,
+            source_tree_file,
+        }
+    }
+}
+
+impl Default for LoaderArtifactByteLimits {
+    fn default() -> Self {
+        Self::new(
+            16 * MEBIBYTE,
+            MEBIBYTE,
+            4 * MEBIBYTE,
+            16 * MEBIBYTE,
+            16 * MEBIBYTE,
+        )
+    }
+}
+
+/// Resource policy for one complete project load.
+///
+/// The budget covers root/dependency source files, manifests, lockfiles,
+/// plugin modules, and every regular file read while verifying a locked source
+/// tree. Aggregate counters are private and are created afresh for each load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoaderBudget {
+    artifacts: LoaderArtifactByteLimits,
+    max_files: u64,
+    max_total_bytes: u64,
+}
+
+impl LoaderBudget {
+    /// Construct an explicit loader policy. Zero values are valid and reject
+    /// the corresponding resource immediately.
+    #[must_use]
+    pub const fn new(
+        artifacts: LoaderArtifactByteLimits,
+        max_files: u64,
+        max_total_bytes: u64,
+    ) -> Self {
+        Self {
+            artifacts,
+            max_files,
+            max_total_bytes,
+        }
+    }
+}
+
+impl Default for LoaderBudget {
+    fn default() -> Self {
+        Self::new(LoaderArtifactByteLimits::default(), 10_000, 256 * MEBIBYTE)
+    }
+}
+
+/// Closed loader resource category reported when a budget is exhausted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoaderResource {
+    /// One Graphcal source file.
+    SourceFileBytes,
+    /// One `graphcal.toml` manifest.
+    ManifestBytes,
+    /// One `graphcal.lock` lockfile.
+    LockfileBytes,
+    /// One WASM plugin module.
+    PluginBytes,
+    /// One regular file in a verified dependency source tree.
+    SourceTreeFileBytes,
+    /// Number of loaded artifacts and verified source-tree entries.
+    FileCount,
+    /// Aggregate bytes read during the complete load.
+    TotalBytes,
+}
+
+impl std::fmt::Display for LoaderResource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SourceFileBytes => formatter.write_str("source-file byte"),
+            Self::ManifestBytes => formatter.write_str("manifest byte"),
+            Self::LockfileBytes => formatter.write_str("lockfile byte"),
+            Self::PluginBytes => formatter.write_str("plugin byte"),
+            Self::SourceTreeFileBytes => formatter.write_str("source-tree file byte"),
+            Self::FileCount => formatter.write_str("file-count"),
+            Self::TotalBytes => formatter.write_str("aggregate byte"),
+        }
+    }
+}
+
+/// One concrete loader-budget violation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "loader {resource} limit of {limit} exceeded while reading `{}`",
+    path.display()
+)]
+pub struct LoaderBudgetExceeded {
+    /// Artifact whose read exhausted the policy.
+    pub path: PathBuf,
+    /// Closed resource category.
+    pub resource: LoaderResource,
+    /// Configured maximum.
+    pub limit: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum LoaderArtifact {
+    SourceFile,
+    Manifest,
+    Lockfile,
+    Plugin,
+}
+
+impl LoaderArtifact {
+    const fn resource(self) -> LoaderResource {
+        match self {
+            Self::SourceFile => LoaderResource::SourceFileBytes,
+            Self::Manifest => LoaderResource::ManifestBytes,
+            Self::Lockfile => LoaderResource::LockfileBytes,
+            Self::Plugin => LoaderResource::PluginBytes,
+        }
+    }
+
+    const fn byte_limit(self, limits: LoaderArtifactByteLimits) -> u64 {
+        match self {
+            Self::SourceFile => limits.source_file,
+            Self::Manifest => limits.manifest,
+            Self::Lockfile => limits.lockfile,
+            Self::Plugin => limits.plugin,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum LoaderReadError {
+    Budget(LoaderBudgetExceeded),
+    Filesystem(FileSystemReadError),
+}
+
+impl std::fmt::Display for LoaderReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Budget(error) => error.fmt(formatter),
+            Self::Filesystem(error) => error.fmt(formatter),
+        }
+    }
+}
+
+struct LoaderBudgetState {
+    policy: LoaderBudget,
+    files_read: u64,
+    total_bytes: u64,
+}
+
+impl LoaderBudgetState {
+    const fn new(policy: LoaderBudget) -> Self {
+        Self {
+            policy,
+            files_read: 0,
+            total_bytes: 0,
+        }
+    }
+
+    fn exceeded(path: &Path, resource: LoaderResource, limit: u64) -> LoaderReadError {
+        LoaderReadError::Budget(LoaderBudgetExceeded {
+            path: path.to_path_buf(),
+            resource,
+            limit,
+        })
+    }
+
+    fn read_bytes(
+        &mut self,
+        fs: &dyn FileSystemReader,
+        path: &Path,
+        artifact: LoaderArtifact,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<Vec<u8>, LoaderReadError> {
+        if self.files_read >= self.policy.max_files {
+            return Err(Self::exceeded(
+                path,
+                LoaderResource::FileCount,
+                self.policy.max_files,
+            ));
+        }
+        let artifact_limit = artifact.byte_limit(self.policy.artifacts);
+        let total_remaining = self.policy.max_total_bytes.saturating_sub(self.total_bytes);
+        let (read_limit, exhausted_resource) = if artifact_limit <= total_remaining {
+            (artifact_limit, artifact.resource())
+        } else {
+            (total_remaining, LoaderResource::TotalBytes)
+        };
+        let cancellation_signal = || cancellation.is_cancelled();
+        let bytes = fs
+            .read_bytes_bounded(path, ByteLimit::new(read_limit), &cancellation_signal)
+            .map_err(|error| match error {
+                FileSystemReadError::ByteLimitExceeded { .. } => Self::exceeded(
+                    path,
+                    exhausted_resource,
+                    match exhausted_resource {
+                        LoaderResource::TotalBytes => self.policy.max_total_bytes,
+                        _ => artifact_limit,
+                    },
+                ),
+                other => LoaderReadError::Filesystem(other),
+            })?;
+        self.files_read = self.files_read.saturating_add(1);
+        self.total_bytes = self.total_bytes.saturating_add(bytes.len() as u64);
+        Ok(bytes)
+    }
+
+    fn read_text(
+        &mut self,
+        fs: &dyn FileSystemReader,
+        path: &Path,
+        artifact: LoaderArtifact,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<String, LoaderReadError> {
+        let bytes = self.read_bytes(fs, path, artifact, cancellation)?;
+        String::from_utf8(bytes).map_err(|error| {
+            LoaderReadError::Filesystem(FileSystemReadError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                error,
+            )))
+        })
+    }
+
+    const fn remaining_files(&self) -> u64 {
+        self.policy.max_files.saturating_sub(self.files_read)
+    }
+
+    const fn remaining_bytes(&self) -> u64 {
+        self.policy.max_total_bytes.saturating_sub(self.total_bytes)
+    }
+
+    const fn source_tree_limits(&self) -> SourceTreeHashLimits {
+        SourceTreeHashLimits::new(
+            ByteLimit::new(self.policy.artifacts.source_tree_file),
+            self.remaining_bytes(),
+            self.remaining_files(),
+        )
+    }
+
+    fn account_source_tree(
+        &mut self,
+        root: &Path,
+        entries: u64,
+        bytes: u64,
+    ) -> Result<(), LoaderBudgetExceeded> {
+        let next_files = self.files_read.saturating_add(entries);
+        if next_files > self.policy.max_files {
+            return Err(LoaderBudgetExceeded {
+                path: root.to_path_buf(),
+                resource: LoaderResource::FileCount,
+                limit: self.policy.max_files,
+            });
+        }
+        let next_bytes = self.total_bytes.saturating_add(bytes);
+        if next_bytes > self.policy.max_total_bytes {
+            return Err(LoaderBudgetExceeded {
+                path: root.to_path_buf(),
+                resource: LoaderResource::TotalBytes,
+                limit: self.policy.max_total_bytes,
+            });
+        }
+        self.files_read = next_files;
+        self.total_bytes = next_bytes;
+        Ok(())
+    }
+}
+
+fn loader_manifest_error(error: impl std::fmt::Display) -> CompileError {
+    CompileError::Eval(GraphcalError::ManifestError {
+        message: error.to_string(),
+    })
 }
 
 fn parse_operation_error(
@@ -437,33 +740,36 @@ fn wasm_plugin_paths(
 /// Read failures are recorded per plugin rather than failing the load, so
 /// compile-only consumers (hover, symbols) keep working; evaluation surfaces
 /// the stored error at the declaring import.
-fn read_wasm_plugins<'a, F: FileSystemReader>(
+fn read_wasm_plugins<'a>(
     file_asts: impl Iterator<Item = &'a graphcal_compiler::desugar::desugared_ast::File>,
     package_root: &Path,
-    fs: &F,
-) -> HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry> {
+    fs: &dyn FileSystemReader,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>, CompileError> {
     let mut plugins = HashMap::new();
     for ast in file_asts {
         for path in wasm_plugin_paths(ast) {
-            plugins
-                .entry(path.clone())
-                .or_insert_with(|| read_plugin_file(package_root, path, fs));
+            cancellation.checkpoint()?;
+            if !plugins.contains_key(path) {
+                let entry = read_plugin_file(package_root, path, fs, budget, cancellation);
+                cancellation.checkpoint()?;
+                plugins.insert(path.clone(), entry);
+            }
         }
     }
-    plugins
+    Ok(plugins)
 }
 
-/// Resolve one plugin path against the package root and read its bytes.
-///
-/// Only plain relative paths are accepted (no `.`, `..`, absolute, or
-/// prefix components), which keeps the resolved path inside the package
-/// root lexically; a rooted filesystem reader additionally rejects symlink
-/// escapes on canonicalization.
-fn read_plugin_file<F: FileSystemReader>(
+/// Canonical regular-file path accepted by the plugin containment policy.
+#[derive(Debug)]
+struct PluginArtifactPath(PathBuf);
+
+fn resolve_plugin_artifact_path(
     package_root: &Path,
     plugin: &graphcal_compiler::syntax::plugin::PluginPath,
-    fs: &F,
-) -> PluginFileEntry {
+    fs: &dyn FileSystemReader,
+) -> Result<PluginArtifactPath, PluginFileError> {
     let relative = Path::new(plugin.as_str());
     if relative
         .components()
@@ -471,15 +777,59 @@ fn read_plugin_file<F: FileSystemReader>(
     {
         return Err(PluginFileError::OutsideRoot);
     }
-    let resolved = package_root.join(relative);
-    match fs.read_bytes(&resolved) {
+    let canonical_root =
+        fs.canonicalize(package_root)
+            .map_err(|error| PluginFileError::Unreadable {
+                resolved: package_root.to_path_buf(),
+                message: error.to_string(),
+            })?;
+    let candidate = canonical_root.join(relative);
+    match fs.entry_kind(&candidate) {
+        Ok(FileSystemEntryKind::File) => {}
+        Ok(FileSystemEntryKind::Symlink) => return Err(PluginFileError::OutsideRoot),
+        Ok(FileSystemEntryKind::Directory | FileSystemEntryKind::Other) => {
+            return Err(PluginFileError::NotRegularFile {
+                resolved: candidate,
+            });
+        }
+        Err(error) => {
+            return Err(PluginFileError::Unreadable {
+                resolved: candidate,
+                message: error.to_string(),
+            });
+        }
+    }
+    let canonical = fs
+        .canonicalize(&candidate)
+        .map_err(|error| PluginFileError::Unreadable {
+            resolved: candidate.clone(),
+            message: error.to_string(),
+        })?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(PluginFileError::OutsideRoot);
+    }
+    Ok(PluginArtifactPath(canonical))
+}
+
+/// Resolve one plugin path against the package root and read exactly the
+/// canonical regular file accepted by the containment check.
+fn read_plugin_file(
+    package_root: &Path,
+    plugin: &graphcal_compiler::syntax::plugin::PluginPath,
+    fs: &dyn FileSystemReader,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> PluginFileEntry {
+    let artifact = resolve_plugin_artifact_path(package_root, plugin, fs)?;
+    match budget.read_bytes(fs, &artifact.0, LoaderArtifact::Plugin, cancellation) {
         Ok(bytes) => Ok(LoadedPlugin {
             sha256_hex: hex_string(&Sha256::digest(&bytes)),
             bytes: bytes.into(),
         }),
-        Err(err) => Err(PluginFileError::Unreadable {
-            resolved,
-            message: err.to_string(),
+        Err(LoaderReadError::Budget(error)) => Err(PluginFileError::ResourceLimit(error)),
+        Err(LoaderReadError::Filesystem(error)) => Err(PluginFileError::Unreadable {
+            resolved: artifact.0,
+            message: error.to_string(),
         }),
     }
 }
@@ -517,6 +867,12 @@ pub enum PluginFileError {
     /// The plugin path is absolute or leaves the package root.
     #[error("plugin paths must be relative and stay inside the package root")]
     OutsideRoot,
+    /// The resolved entry exists but is not a regular file.
+    #[error("plugin artifact `{}` is not a regular file", resolved.display())]
+    NotRegularFile {
+        /// The path the plugin string resolved to.
+        resolved: PathBuf,
+    },
     /// The resolved file is missing or unreadable.
     #[error("cannot read `{}`: {message}", resolved.display())]
     Unreadable {
@@ -525,6 +881,9 @@ pub enum PluginFileError {
         /// The underlying I/O error.
         message: String,
     },
+    /// Reading this artifact would exceed the project loader budget.
+    #[error(transparent)]
+    ResourceLimit(LoaderBudgetExceeded),
     /// The project was built from in-memory source with no filesystem.
     #[error("plugin files cannot be loaded without a project on disk")]
     NoProjectFilesystem,
@@ -1254,15 +1613,38 @@ pub fn load_project<F: FileSystemReader>(
     project_root_override: Option<&Path>,
     fs: &F,
 ) -> Result<LoadedProject, CompileError> {
-    load_project_with_cancellation(
+    load_project_with_budget_and_cancellation(
         root_path,
         project_root_override,
         fs,
+        LoaderBudget::default(),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
 }
 
-/// Load a project with cooperative cancellation between files and declarations.
+/// Load a project with an explicit ingestion budget.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for loading/parsing failures or a loader-budget
+/// violation.
+pub fn load_project_with_budget<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+    budget: LoaderBudget,
+) -> Result<LoadedProject, CompileError> {
+    load_project_with_budget_and_cancellation(
+        root_path,
+        project_root_override,
+        fs,
+        budget,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+}
+
+/// Load a project with cooperative cancellation between bounded reads, files,
+/// and declarations.
 ///
 /// # Errors
 ///
@@ -1272,6 +1654,45 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
     root_path: &Path,
     project_root_override: Option<&Path>,
     fs: &F,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<LoadedProject, CompileError> {
+    load_project_with_budget_and_cancellation(
+        root_path,
+        project_root_override,
+        fs,
+        LoaderBudget::default(),
+        cancellation,
+    )
+}
+
+/// Load a project with explicit resource and cancellation policies.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] for loading/parsing failures, budget violations,
+/// or cooperative cancellation.
+pub fn load_project_with_budget_and_cancellation<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+    budget: LoaderBudget,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<LoadedProject, CompileError> {
+    let mut budget = LoaderBudgetState::new(budget);
+    load_project_with_budget_state(
+        root_path,
+        project_root_override,
+        fs,
+        &mut budget,
+        cancellation,
+    )
+}
+
+fn load_project_with_budget_state<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+    budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
     cancellation.checkpoint()?;
@@ -1295,7 +1716,8 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
     // outside the namespace is treated as a virtual package — cross-file
     // imports from it will be rejected. This collapses the two modes into a
     // single rule: to import across files, you must live in a real package.
-    let manifest = load_manifest_for_root(&project_root, &root_canonical, fs)?;
+    let manifest =
+        load_manifest_for_root(&project_root, &root_canonical, fs, budget, cancellation)?;
     if let Some(package_manifest) = manifest.as_ref()
         && !package_manifest.dependencies.is_empty()
     {
@@ -1304,6 +1726,7 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
             &project_root,
             package_manifest.clone(),
             fs,
+            budget,
             cancellation,
         );
     }
@@ -1323,6 +1746,7 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
         &mut stack,
         manifest.as_ref(),
         fs,
+        budget,
         cancellation,
     )?;
 
@@ -1331,13 +1755,19 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
     cancellation.checkpoint()?;
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
-    let mut plugins = read_wasm_plugins(files.values().map(|file| &file.ast), &project_root, fs);
+    let mut plugins = read_wasm_plugins(
+        files.values().map(|file| &file.ast),
+        &project_root,
+        fs,
+        budget,
+        cancellation,
+    )?;
     // A manifest opts the project into the lockfile trust regime: wasm
     // plugins must be pinned in graphcal.lock even when there are no
     // package dependencies. Virtual (manifest-less) projects load unpinned —
     // the sandbox and resource limits still bound what a plugin can do.
     if manifest.is_some() && !plugins.is_empty() {
-        let pins = load_plugin_pins(&project_root, fs)?;
+        let pins = load_plugin_pins(&project_root, fs, budget, cancellation)?;
         apply_plugin_pins(&mut plugins, &pins);
     }
     cancellation.checkpoint()?;
@@ -1354,14 +1784,32 @@ pub fn load_project_with_cancellation<F: FileSystemReader>(
 /// A missing lockfile yields zero pins (every plugin then reports "not
 /// pinned"); an unreadable or invalid lockfile is a hard error, matching
 /// the dependency-loading path.
-fn load_plugin_pins<F: FileSystemReader>(
+fn load_plugin_pins(
     project_root: &Path,
-    fs: &F,
+    fs: &dyn FileSystemReader,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<BTreeMap<String, String>, CompileError> {
     let lockfile_path = project_root.join("graphcal.lock");
-    let Ok(lockfile_text) = fs.read_to_string(&lockfile_path) else {
-        return Ok(BTreeMap::new());
-    };
+    let lockfile_text =
+        match budget.read_text(fs, &lockfile_path, LoaderArtifact::Lockfile, cancellation) {
+            Ok(text) => text,
+            Err(LoaderReadError::Filesystem(error))
+                if error.io_kind() == Some(std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(BTreeMap::new());
+            }
+            Err(LoaderReadError::Filesystem(FileSystemReadError::Cancelled)) => {
+                cancellation.checkpoint()?;
+                return Err(loader_manifest_error("plugin lockfile read cancelled"));
+            }
+            Err(error) => {
+                return Err(loader_manifest_error(format!(
+                    "could not read `{}`: {error}",
+                    lockfile_path.display()
+                )));
+            }
+        };
     let lockfile = parse_lockfile_str(&lockfile_text).map_err(|e| {
         CompileError::Eval(GraphcalError::ManifestError {
             message: e.to_string(),
@@ -1386,10 +1834,12 @@ fn load_locked_package_project<F: FileSystemReader>(
     project_root: &Path,
     root_manifest: PackageManifest,
     fs: &F,
+    budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
     cancellation.checkpoint()?;
-    let context = PackageLoadContext::from_lockfile(project_root, root_manifest, fs, cancellation)?;
+    let context =
+        PackageLoadContext::from_lockfile(project_root, root_manifest, fs, budget, cancellation)?;
     let root_package = context.graph.root().clone();
 
     let mut files: HashMap<DagId, LoadedFile> = HashMap::new();
@@ -1407,6 +1857,7 @@ fn load_locked_package_project<F: FileSystemReader>(
         &mut load_order,
         &mut loading,
         &mut stack,
+        budget,
         cancellation,
     )?;
 
@@ -1418,14 +1869,17 @@ fn load_locked_package_project<F: FileSystemReader>(
     // them against the root package's source root.
     let root_package_root = context.root_for(&root_package)?.to_path_buf();
     let root_dag_package = root_dag_id.package().clone();
+    let root_reader = context.reader_for(&root_package)?;
     let mut plugins = read_wasm_plugins(
         files
             .values()
             .filter(|file| *file.dag_id.package() == root_dag_package)
             .map(|file| &file.ast),
         &root_package_root,
-        fs,
-    );
+        root_reader,
+        budget,
+        cancellation,
+    )?;
     apply_plugin_pins(&mut plugins, &context.plugin_pins);
     cancellation.checkpoint()?;
     Ok(LoadedProject::from_parts(
@@ -1436,54 +1890,98 @@ fn load_locked_package_project<F: FileSystemReader>(
     ))
 }
 
-struct PackageLoadContext {
+/// Package-aware filesystem authority: root-package reads preserve the
+/// caller-supplied capability (and therefore LSP overlays), while every locked
+/// dependency receives its own immutable rooted capability.
+struct PackageLoadContext<'a> {
     graph: PackageGraph,
+    root_package: PackageInstanceId,
+    root_reader: &'a dyn FileSystemReader,
     roots: BTreeMap<PackageInstanceId, PathBuf>,
+    dependency_readers: BTreeMap<PackageInstanceId, RealFileSystem>,
     /// Root-package plugin pins from `graphcal.lock`: path → SHA-256.
     plugin_pins: BTreeMap<String, String>,
 }
 
-impl PackageLoadContext {
-    fn from_lockfile<F: FileSystemReader>(
+impl<'a> PackageLoadContext<'a> {
+    fn from_lockfile(
         project_root: &Path,
         root_manifest: PackageManifest,
-        fs: &F,
+        fs: &'a dyn FileSystemReader,
+        budget: &mut LoaderBudgetState,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<Self, CompileError> {
         cancellation.checkpoint()?;
         let lockfile_path = project_root.join("graphcal.lock");
-        let lockfile_text = fs.read_to_string(&lockfile_path).map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: format!(
-                    "package dependencies require graphcal.lock; run `graphcal deps lock`: {e}"
-                ),
-            })
-        })?;
-        let lockfile = parse_lockfile_str(&lockfile_text).map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: e.to_string(),
-            })
-        })?;
+        let lockfile_text = budget
+            .read_text(fs, &lockfile_path, LoaderArtifact::Lockfile, cancellation)
+            .map_err(|error| {
+                loader_manifest_error(format!(
+                    "package dependencies require graphcal.lock; run `graphcal deps lock`: {error}"
+                ))
+            })?;
+        let lockfile = parse_lockfile_str(&lockfile_text)
+            .map_err(|error| loader_manifest_error(error.to_string()))?;
         let graph = lockfile
             .package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
-            .map_err(|e| {
-                CompileError::Eval(GraphcalError::ManifestError {
-                    message: e.to_string(),
-                })
-            })?;
-        let cache_dir = cache_dir()
-            .map_err(|e| CompileError::Eval(GraphcalError::ManifestError { message: e }))?;
+            .map_err(|error| loader_manifest_error(error.to_string()))?;
+        let cache_dir = cache_dir().map_err(loader_manifest_error)?;
+        let canonical_project_root = fs.canonicalize(project_root).map_err(|error| {
+            loader_manifest_error(format!(
+                "could not canonicalize root package `{}`: {error}",
+                project_root.display()
+            ))
+        })?;
         let mut roots = BTreeMap::new();
+        let mut dependency_readers = BTreeMap::new();
+
+        for package in &lockfile.packages {
+            cancellation.checkpoint()?;
+            let candidate = source_root_candidate(project_root, &cache_dir, package);
+            if package.id == lockfile.root {
+                let canonical = fs
+                    .canonicalize(&candidate)
+                    .map_err(|error| source_root_error(package, &candidate, &error))?;
+                if !canonical.starts_with(&canonical_project_root) {
+                    return Err(loader_manifest_error(format!(
+                        "locked root package `{}` resolves outside project root `{}`",
+                        canonical.display(),
+                        canonical_project_root.display()
+                    )));
+                }
+                roots.insert(package.id.clone(), canonical);
+            } else {
+                let reader = RealFileSystem::rooted(&candidate)
+                    .map_err(|error| source_root_error(package, &candidate, &error))?;
+                let canonical = reader
+                    .canonicalize(&candidate)
+                    .map_err(|error| source_root_error(package, &candidate, &error))?;
+                roots.insert(package.id.clone(), canonical);
+                dependency_readers.insert(package.id.clone(), reader);
+            }
+        }
+
         let mut manifests = BTreeMap::new();
         for package in &lockfile.packages {
             cancellation.checkpoint()?;
-            let root = source_root(project_root, &cache_dir, package)?;
-            if package.id != lockfile.root {
-                let manifest = read_package_manifest_from_path(&root)?;
-                verify_locked_source(&root, package, &manifest)?;
-                manifests.insert(package.id.clone(), manifest);
+            if package.id == lockfile.root {
+                continue;
             }
-            roots.insert(package.id.clone(), root);
+            let root = roots.get(&package.id).ok_or_else(|| {
+                loader_manifest_error(format!(
+                    "lockfile package `{}` has no approved source root",
+                    package.id
+                ))
+            })?;
+            let reader = dependency_readers.get(&package.id).ok_or_else(|| {
+                loader_manifest_error(format!(
+                    "lockfile package `{}` has no filesystem capability",
+                    package.id
+                ))
+            })?;
+            let manifest = read_package_manifest_from_path(root, reader, budget, cancellation)?;
+            verify_locked_source(root, package, &manifest, reader, budget, cancellation)?;
+            manifests.insert(package.id.clone(), manifest);
         }
         manifests.insert(lockfile.root.clone(), root_manifest);
         validate_lock_against_manifests(
@@ -1492,11 +1990,7 @@ impl PackageLoadContext {
             env!("CARGO_PKG_VERSION"),
             STDLIB_VERSION,
         )
-        .map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: e.to_string(),
-            })
-        })?;
+        .map_err(|error| loader_manifest_error(error.to_string()))?;
         let plugin_pins = lockfile
             .plugins
             .iter()
@@ -1504,7 +1998,10 @@ impl PackageLoadContext {
             .collect();
         Ok(Self {
             graph,
+            root_package: lockfile.root,
+            root_reader: fs,
             roots,
+            dependency_readers,
             plugin_pins,
         })
     }
@@ -1514,10 +2011,26 @@ impl PackageLoadContext {
             .get(package)
             .map(PathBuf::as_path)
             .ok_or_else(|| {
-                CompileError::Eval(GraphcalError::ManifestError {
-                    message: format!("lockfile package `{package}` has no source root"),
-                })
+                loader_manifest_error(format!("lockfile package `{package}` has no source root"))
             })
+    }
+
+    fn reader_for(
+        &self,
+        package: &PackageInstanceId,
+    ) -> Result<&dyn FileSystemReader, CompileError> {
+        if package == &self.root_package {
+            Ok(self.root_reader)
+        } else {
+            self.dependency_readers
+                .get(package)
+                .map(|reader| reader as &dyn FileSystemReader)
+                .ok_or_else(|| {
+                    loader_manifest_error(format!(
+                        "lockfile package `{package}` has no filesystem capability"
+                    ))
+                })
+        }
     }
 }
 
@@ -1532,12 +2045,13 @@ impl PackageLoadContext {
 fn load_package_file_dfs(
     canonical_path: &Path,
     package_id: &PackageInstanceId,
-    context: &PackageLoadContext,
+    context: &PackageLoadContext<'_>,
     files: &mut HashMap<DagId, LoadedFile>,
     path_to_dag_id: &mut HashMap<(PackageInstanceId, PathBuf), DagId>,
     load_order: &mut Vec<DagId>,
     loading: &mut HashSet<(PackageInstanceId, PathBuf)>,
     stack: &mut Vec<String>,
+    budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
@@ -1556,8 +2070,25 @@ fn load_package_file_dfs(
     }
     stack.push(display_name.clone());
 
-    let source_str =
-        std::fs::read_to_string(canonical_path).map_err(|_| io_not_found(canonical_path))?;
+    let package_reader = context.reader_for(package_id)?;
+    let source_str = budget
+        .read_text(
+            package_reader,
+            canonical_path,
+            LoaderArtifact::SourceFile,
+            cancellation,
+        )
+        .map_err(|error| match error {
+            LoaderReadError::Filesystem(filesystem)
+                if filesystem.io_kind() == Some(std::io::ErrorKind::NotFound) =>
+            {
+                io_not_found(canonical_path)
+            }
+            other => loader_manifest_error(format!(
+                "could not read source `{}`: {other}",
+                canonical_path.display()
+            )),
+        })?;
     let source = Arc::new(source_str);
     let named_source = NamedSource::new(display_name.as_str(), Arc::clone(&source));
     let raw_ast = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display_name)
@@ -1603,6 +2134,7 @@ fn load_package_file_dfs(
             load_order,
             loading,
             stack,
+            budget,
             cancellation,
         )?;
         resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved);
@@ -1633,6 +2165,7 @@ fn load_package_file_dfs(
             load_order,
             loading,
             stack,
+            budget,
             cancellation,
         )?;
     }
@@ -1724,7 +2257,7 @@ impl PackageResolvedPath {
 fn resolve_package_import_path(
     import_path: &ModulePath,
     current_package: &PackageInstanceId,
-    context: &PackageLoadContext,
+    context: &PackageLoadContext<'_>,
     src: &NamedSource<Arc<String>>,
     _parent_dir: &Path,
 ) -> Result<PackageResolvedPath, CompileError> {
@@ -1759,8 +2292,15 @@ fn resolve_package_import_path(
         })
     })?;
     let root = context.root_for(&resolved.package)?;
-    let resolved_file =
-        package_module_path(root, package, &resolved.module_segments, src, import_path)?;
+    let reader = context.reader_for(&resolved.package)?;
+    let resolved_file = package_module_path(
+        root,
+        package,
+        &resolved.module_segments,
+        src,
+        import_path,
+        reader,
+    )?;
     Ok(PackageResolvedPath {
         package: resolved.package,
         path: resolved_file.file,
@@ -1774,6 +2314,7 @@ fn package_module_path(
     module_segments: &[String],
     src: &NamedSource<Arc<String>>,
     import_path: &ModulePath,
+    fs: &dyn FileSystemReader,
 ) -> Result<ResolvedFilePath, CompileError> {
     for file_segment_count in (0..=module_segments.len()).rev() {
         let mut file_path = package_root
@@ -1783,7 +2324,7 @@ fn package_module_path(
             file_path = file_path.join(segment);
         }
         file_path.set_extension("gcl");
-        let Ok(canonical) = std::fs::canonicalize(&file_path) else {
+        let Ok(canonical) = fs.canonicalize(&file_path) else {
             continue;
         };
         let canonical = ensure_package_path(canonical, package_root, import_path, src)?;
@@ -1826,35 +2367,34 @@ fn ensure_package_path(
     }
 }
 
-fn source_root(
+fn source_root_candidate(
     project_root: &Path,
     cache_dir: &Path,
     package: &LockedPackage,
-) -> Result<PathBuf, CompileError> {
+) -> PathBuf {
     match &package.source {
-        PackageSource::Path { path } => {
-            let root = project_root.join(path);
-            std::fs::canonicalize(&root).map_err(|e| {
-                CompileError::Eval(GraphcalError::ManifestError {
-                    message: format!(
-                        "could not canonicalize locked path source `{}`: {e}",
-                        root.display()
-                    ),
-                })
-            })
-        }
+        PackageSource::Path { path } => project_root.join(path),
         PackageSource::Git { url, commit, .. } => {
-            let root = cache_dir.join("git").join(cache_key(url, commit));
-            std::fs::canonicalize(&root).map_err(|e| {
-                CompileError::Eval(GraphcalError::ManifestError {
-                    message: format!(
-                        "locked Git package `{}` is not materialized at `{}`; run `graphcal deps lock`: {e}",
-                        package.id,
-                        root.display()
-                    ),
-                })
-            })
+            cache_dir.join("git").join(cache_key(url, commit))
         }
+    }
+}
+
+fn source_root_error(
+    package: &LockedPackage,
+    candidate: &Path,
+    error: &std::io::Error,
+) -> CompileError {
+    match &package.source {
+        PackageSource::Path { .. } => loader_manifest_error(format!(
+            "could not canonicalize locked path source `{}`: {error}",
+            candidate.display()
+        )),
+        PackageSource::Git { .. } => loader_manifest_error(format!(
+            "locked Git package `{}` is not materialized at `{}`; run `graphcal deps lock`: {error}",
+            package.id,
+            candidate.display()
+        )),
     }
 }
 
@@ -1862,35 +2402,61 @@ fn verify_locked_source(
     root: &Path,
     package: &LockedPackage,
     manifest: &PackageManifest,
+    fs: &dyn FileSystemReader,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     let PackageSource::Git { tree_hashes, .. } = &package.source else {
         return Ok(());
     };
-    let actual = hash_source_tree(root, manifest)?;
-    if actual == tree_hashes.sha256 {
+    let cancellation_signal = || cancellation.is_cancelled();
+    let actual = hash_source_tree(
+        fs,
+        root,
+        &manifest.source_dir,
+        budget.source_tree_limits(),
+        &cancellation_signal,
+    )
+    .map_err(|error| {
+        if matches!(error, graphcal_io::SourceTreeHashError::Cancelled) {
+            cancellation
+                .checkpoint()
+                .map_or_else(CompileError::from, |()| loader_manifest_error(error))
+        } else {
+            loader_manifest_error(error)
+        }
+    })?;
+    budget
+        .account_source_tree(root, actual.entries(), actual.bytes())
+        .map_err(loader_manifest_error)?;
+    if actual.sha256() == tree_hashes.sha256 {
         Ok(())
     } else {
-        Err(CompileError::Eval(GraphcalError::ManifestError {
-            message: format!(
-                "cached package `{}` hash mismatch; expected {}, got {}; run `graphcal deps lock`",
-                package.id, tree_hashes.sha256, actual
-            ),
-        }))
+        Err(loader_manifest_error(format!(
+            "cached package `{}` hash mismatch; expected {}, got {}; run `graphcal deps lock`",
+            package.id,
+            tree_hashes.sha256,
+            actual.sha256()
+        )))
     }
 }
 
-fn read_package_manifest_from_path(root: &Path) -> Result<PackageManifest, CompileError> {
+fn read_package_manifest_from_path(
+    root: &Path,
+    fs: &dyn FileSystemReader,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<PackageManifest, CompileError> {
     let manifest_path = root.join("graphcal.toml");
-    let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        CompileError::Eval(GraphcalError::ManifestError {
-            message: format!("could not read `{}`: {e}", manifest_path.display()),
-        })
-    })?;
-    parse_manifest_str(&content).map_err(|e| {
-        CompileError::Eval(GraphcalError::ManifestError {
-            message: e.to_string(),
-        })
-    })
+    let content = budget
+        .read_text(fs, &manifest_path, LoaderArtifact::Manifest, cancellation)
+        .map_err(|error| {
+            loader_manifest_error(format!(
+                "could not read `{}`: {error}",
+                manifest_path.display()
+            ))
+        })?;
+    parse_manifest_str(&content).map_err(|error| loader_manifest_error(error.to_string()))
 }
 
 fn cache_dir() -> Result<PathBuf, String> {
@@ -1920,82 +2486,6 @@ fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
     hex_string(&hasher.finalize())
 }
 
-fn hash_source_tree(root: &Path, manifest: &PackageManifest) -> Result<String, CompileError> {
-    let mut files = BTreeMap::new();
-    collect_hash_files(root, Path::new("graphcal.toml"), &mut files)?;
-    collect_hash_files(root, &manifest.source_dir, &mut files)?;
-
-    let mut hasher = Sha256::new();
-    for (relative, path) in files {
-        hasher.update(relative.as_bytes());
-        hasher.update([0]);
-        let bytes = std::fs::read(&path).map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: format!("could not read `{}`: {e}", path.display()),
-            })
-        })?;
-        hasher.update(bytes.len().to_string().as_bytes());
-        hasher.update([0]);
-        hasher.update(bytes);
-        hasher.update([0]);
-    }
-    Ok(hex_string(&hasher.finalize()))
-}
-
-fn collect_hash_files(
-    root: &Path,
-    relative: &Path,
-    files: &mut BTreeMap<String, PathBuf>,
-) -> Result<(), CompileError> {
-    if relative.components().any(
-        |c| matches!(c, std::path::Component::Normal(name) if name == std::ffi::OsStr::new(".git")),
-    ) {
-        return Ok(());
-    }
-    let path = root.join(relative);
-    let metadata = std::fs::metadata(&path).map_err(|e| {
-        CompileError::Eval(GraphcalError::ManifestError {
-            message: format!("could not inspect `{}`: {e}", path.display()),
-        })
-    })?;
-    if metadata.is_file() {
-        files.insert(normalize_relative_path(relative), path);
-        return Ok(());
-    }
-    if metadata.is_dir() {
-        for entry in std::fs::read_dir(&path).map_err(|e| {
-            CompileError::Eval(GraphcalError::ManifestError {
-                message: format!("could not read directory `{}`: {e}", path.display()),
-            })
-        })? {
-            let entry = entry.map_err(|e| {
-                CompileError::Eval(GraphcalError::ManifestError {
-                    message: format!("could not read directory `{}`: {e}", path.display()),
-                })
-            })?;
-            collect_hash_files(root, &relative.join(entry.file_name()), files)?;
-        }
-        return Ok(());
-    }
-    Err(CompileError::Eval(GraphcalError::ManifestError {
-        message: format!("unsupported source entry `{}`", path.display()),
-    }))
-}
-
-fn normalize_relative_path(path: &Path) -> String {
-    let mut out = String::new();
-    for component in path.components() {
-        let std::path::Component::Normal(part) = component else {
-            continue;
-        };
-        if !out.is_empty() {
-            out.push('/');
-        }
-        out.push_str(&part.to_string_lossy());
-    }
-    out
-}
-
 fn hex_string(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len().saturating_mul(2));
     for byte in bytes {
@@ -2005,7 +2495,7 @@ fn hex_string(bytes: &[u8]) -> String {
 }
 
 struct PackageInlineLiftContext<'a> {
-    context: &'a PackageLoadContext,
+    context: &'a PackageLoadContext<'a>,
     package_id: &'a PackageInstanceId,
     file_dag_id: &'a DagId,
     same_file_dag_ids: &'a HashSet<DagId>,
@@ -2143,6 +2633,7 @@ fn load_file_dfs<F: FileSystemReader>(
     stack: &mut Vec<String>,
     manifest: Option<&PackageManifest>,
     fs: &F,
+    budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
@@ -2163,10 +2654,20 @@ fn load_file_dfs<F: FileSystemReader>(
     }
     stack.push(display_name.clone());
 
-    // Read the file via the filesystem abstraction.
-    let source_str = fs
-        .read_to_string(canonical_path)
-        .map_err(|_| io_not_found(canonical_path))?;
+    // Read through the bounded capability before allocating or parsing.
+    let source_str = budget
+        .read_text(fs, canonical_path, LoaderArtifact::SourceFile, cancellation)
+        .map_err(|error| match error {
+            LoaderReadError::Filesystem(filesystem)
+                if filesystem.io_kind() == Some(std::io::ErrorKind::NotFound) =>
+            {
+                io_not_found(canonical_path)
+            }
+            other => loader_manifest_error(format!(
+                "could not read source `{}`: {other}",
+                canonical_path.display()
+            )),
+        })?;
     let source = Arc::new(source_str);
 
     // Use the canonical path as the NamedSource name (not just the basename).
@@ -2245,6 +2746,7 @@ fn load_file_dfs<F: FileSystemReader>(
             stack,
             manifest,
             fs,
+            budget,
             cancellation,
         )?;
     }
@@ -2293,6 +2795,7 @@ fn load_file_dfs<F: FileSystemReader>(
             stack,
             manifest,
             fs,
+            budget,
             cancellation,
         )?;
     }
@@ -2773,21 +3276,23 @@ fn load_manifest_for_root<F: FileSystemReader>(
     project_root: &Path,
     root_canonical: &Path,
     fs: &F,
+    budget: &mut LoaderBudgetState,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Option<PackageManifest>, CompileError> {
     let manifest_path = project_root.join("graphcal.toml");
     if !fs.exists(&manifest_path) {
         return Ok(None);
     }
-    let manifest_content = fs.read_to_string(&manifest_path).map_err(|e| {
-        CompileError::Eval(GraphcalError::ManifestError {
-            message: e.to_string(),
-        })
-    })?;
-    let parsed = parse_manifest_str(&manifest_content).map_err(|e| {
-        CompileError::Eval(GraphcalError::ManifestError {
-            message: e.to_string(),
-        })
-    })?;
+    let manifest_content = budget
+        .read_text(fs, &manifest_path, LoaderArtifact::Manifest, cancellation)
+        .map_err(|error| {
+            loader_manifest_error(format!(
+                "could not read `{}`: {error}",
+                manifest_path.display()
+            ))
+        })?;
+    let parsed = parse_manifest_str(&manifest_content)
+        .map_err(|error| loader_manifest_error(error.to_string()))?;
 
     if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
         Ok(Some(parsed))
@@ -2970,7 +3475,7 @@ mod tests {
     use std::io;
 
     use graphcal_compiler::syntax::non_empty::NonEmpty;
-    use graphcal_io::RealFileSystem;
+    use graphcal_io::{CancellationSignal, EntryLimit, RealFileSystem};
 
     fn fs() -> RealFileSystem {
         RealFileSystem::default()
@@ -3005,7 +3510,12 @@ mod tests {
     }
 
     impl FileSystemReader for MutatingManifestFileSystem {
-        fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
+        fn read_bytes_bounded(
+            &self,
+            path: &Path,
+            limit: ByteLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<u8>, FileSystemReadError> {
             if path.file_name() == Some(std::ffi::OsStr::new("graphcal.toml")) {
                 let read = self
                     .manifest_reads
@@ -3014,18 +3524,31 @@ mod tests {
                     .ok_or_else(|| io::Error::other("manifest read counter overflow"))?;
                 self.manifest_reads.set(read);
                 if read > 1 {
-                    return Ok("[package]\nname = \"mutated\"\n".to_string());
+                    let bytes = b"[package]\nname = \"mutated\"\n";
+                    if bytes.len() as u64 > limit.get() {
+                        return Err(FileSystemReadError::ByteLimitExceeded { limit });
+                    }
+                    return Ok(bytes.to_vec());
                 }
             }
-            self.inner.read_to_string(path)
-        }
-
-        fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
-            self.inner.read_bytes(path)
+            self.inner.read_bytes_bounded(path, limit, cancellation)
         }
 
         fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
             self.inner.canonicalize(path)
+        }
+
+        fn entry_kind(&self, path: &Path) -> Result<FileSystemEntryKind, io::Error> {
+            self.inner.entry_kind(path)
+        }
+
+        fn read_directory_bounded(
+            &self,
+            path: &Path,
+            limit: EntryLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+            self.inner.read_directory_bounded(path, limit, cancellation)
         }
 
         fn is_file(&self, path: &Path) -> bool {
@@ -3499,8 +4022,9 @@ dag calc {
     struct LockedPackageFixture {
         root_file: PathBuf,
         root_helper: PathBuf,
+        dependency_root: PathBuf,
         _cache_directory: CacheDirectoryOverride,
-        _directory: tempfile::TempDir,
+        directory: tempfile::TempDir,
     }
 
     fn locked_package_fixture(root_source: &str, dependency_source: &str) -> LockedPackageFixture {
@@ -3542,7 +4066,17 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         .unwrap();
 
         let dependency_manifest = parse_manifest_str(dependency_manifest).unwrap();
-        let tree_hash = hash_source_tree(&dependency_root, &dependency_manifest).unwrap();
+        let dependency_reader = RealFileSystem::rooted(&dependency_root).unwrap();
+        let tree_hash = hash_source_tree(
+            &dependency_reader,
+            &dependency_root,
+            &dependency_manifest.source_dir,
+            SourceTreeHashLimits::unbounded(),
+            &graphcal_io::NeverCancel,
+        )
+        .unwrap()
+        .sha256()
+        .to_string();
         let root_id = PackageInstanceId::new("pkg-mission").unwrap();
         let dependency_id = PackageInstanceId::new("pkg-units-v1").unwrap();
         let lockfile = Lockfile {
@@ -3589,13 +4123,13 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         LockedPackageFixture {
             root_file,
             root_helper,
+            dependency_root,
             _cache_directory: cache_directory,
-            _directory: directory,
+            directory,
         }
     }
 
     #[test]
-    #[ignore = "fixed by #1259 in Phase 2"]
     fn dependency_enabled_loader_uses_overlay_for_root_file() {
         let fixture = locked_package_fixture(
             "node disk: Dimensionless = 1.0;",
@@ -3613,7 +4147,6 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
     }
 
     #[test]
-    #[ignore = "fixed by #1259 in Phase 2"]
     fn dependency_enabled_loader_uses_overlay_for_root_package_import() {
         let fixture = locked_package_fixture(
             "import mission.helper.{ local_value };\nnode result: Dimensionless = @local_value;",
@@ -3633,6 +4166,77 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
             .find(|file| file.path == fixture.root_helper.canonicalize().unwrap())
             .expect("loaded helper");
         assert_eq!(helper.source.as_str(), overlay_source);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn locked_source_verification_rejects_symlinks_before_reading_targets() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = locked_package_fixture(
+            "node root: Dimensionless = 1.0;",
+            "pub const node one: Dimensionless = 1.0;",
+        );
+        let outside = fixture.directory.path().join("outside.gcl");
+        std::fs::write(&outside, "outside").unwrap();
+        symlink(
+            &outside,
+            fixture.dependency_root.join("src/units/escape.gcl"),
+        )
+        .unwrap();
+
+        let error = load_project(&fixture.root_file, None, &RealFileSystem::default())
+            .expect_err("locked source verification must reject every symlink");
+        assert!(
+            error.to_string().contains("symbolic links are not allowed"),
+            "unexpected source-tree diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn aggregate_loader_file_budget_covers_manifest_and_source_reads() {
+        let directory = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+            (
+                "src/mission/main.gcl",
+                "import mission.helper.{ value };\nnode result: Dimensionless = @value;",
+            ),
+            (
+                "src/mission/helper.gcl",
+                "pub const node value: Dimensionless = 1.0;",
+            ),
+        ]);
+        let policy = LoaderBudget::new(LoaderArtifactByteLimits::default(), 2, 256 * MEBIBYTE);
+
+        let error = load_project_with_budget(
+            &directory.path().join("src/mission/main.gcl"),
+            None,
+            &RealFileSystem::default(),
+            policy,
+        )
+        .expect_err("third loader artifact must exceed the aggregate file budget");
+        assert!(
+            error.to_string().contains("file-count limit of 2"),
+            "unexpected loader budget diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn aggregate_loader_byte_budget_rejects_before_the_next_allocation() {
+        let directory = setup_temp_dir(&[("main.gcl", "node result: Dimensionless = 1.0;")]);
+        let policy = LoaderBudget::new(LoaderArtifactByteLimits::default(), 10, 8);
+
+        let error = load_project_with_budget(
+            &directory.path().join("main.gcl"),
+            None,
+            &RealFileSystem::default(),
+            policy,
+        )
+        .expect_err("source must exceed the aggregate byte budget");
+        assert!(
+            error.to_string().contains("aggregate byte limit of 8"),
+            "unexpected loader budget diagnostic: {error:?}"
+        );
     }
 
     #[test]
@@ -3659,7 +4263,6 @@ node result: Dimensionless = @calculation().out;
 
     #[cfg(unix)]
     #[test]
-    #[ignore = "fixed by #1260 in Phase 2"]
     fn unrooted_plugin_reader_rejects_symlink_escape() {
         use std::os::unix::fs::symlink;
 
@@ -3670,16 +4273,51 @@ node result: Dimensionless = @calculation().out;
         std::fs::write(&outside, b"outside module bytes").unwrap();
         symlink(&outside, package_root.join("plugins/escaped.wasm")).unwrap();
 
+        let mut budget = LoaderBudgetState::new(LoaderBudget::default());
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let result = read_plugin_file(
             &package_root,
             &graphcal_compiler::syntax::plugin::PluginPath::new("plugins/escaped.wasm"),
             &RealFileSystem::default(),
+            &mut budget,
+            &cancellation,
         );
         assert!(matches!(result, Err(PluginFileError::OutsideRoot)));
     }
 
+    #[cfg(unix)]
     #[test]
-    #[ignore = "fixed by #1262 in Phase 2"]
+    fn package_project_plugin_symlink_is_recorded_as_outside_root() {
+        use std::os::unix::fs::symlink;
+
+        let directory = setup_temp_dir(&[
+            ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+            (
+                "src/mission/main.gcl",
+                "import plugin \"plugins/escaped.wasm\" as plugin {\nfn value() -> Dimensionless;\n}",
+            ),
+        ]);
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::fs::create_dir_all(directory.path().join("plugins")).unwrap();
+        symlink(
+            outside.path(),
+            directory.path().join("plugins/escaped.wasm"),
+        )
+        .unwrap();
+
+        let project = load_project(
+            &directory.path().join("src/mission/main.gcl"),
+            None,
+            &RealFileSystem::default(),
+        )
+        .unwrap();
+        assert!(matches!(
+            project.plugins().values().next(),
+            Some(Err(PluginFileError::OutsideRoot))
+        ));
+    }
+
+    #[test]
     fn plugin_reader_rejects_oversized_module_before_loading() {
         const OVERSIZED_PLUGIN_BYTES: u64 = 16 * 1024 * 1024 + 1;
 
@@ -3688,10 +4326,14 @@ node result: Dimensionless = @calculation().out;
         let file = std::fs::File::create(&plugin_path).unwrap();
         file.set_len(OVERSIZED_PLUGIN_BYTES).unwrap();
 
+        let mut budget = LoaderBudgetState::new(LoaderBudget::default());
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let result = read_plugin_file(
             directory.path(),
             &graphcal_compiler::syntax::plugin::PluginPath::new("large.wasm"),
             &RealFileSystem::default(),
+            &mut budget,
+            &cancellation,
         );
         assert!(result.is_err(), "oversized plugin was read into memory");
     }
@@ -3699,22 +4341,37 @@ node result: Dimensionless = @calculation().out;
     struct LockReadFailureFileSystem(RealFileSystem);
 
     impl FileSystemReader for LockReadFailureFileSystem {
-        fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
+        fn read_bytes_bounded(
+            &self,
+            path: &Path,
+            limit: ByteLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<u8>, FileSystemReadError> {
             if path.file_name() == Some(std::ffi::OsStr::new("graphcal.lock")) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "lockfile denied by test filesystem",
-                ));
+                )
+                .into());
             }
-            self.0.read_to_string(path)
-        }
-
-        fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
-            self.0.read_bytes(path)
+            self.0.read_bytes_bounded(path, limit, cancellation)
         }
 
         fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
             self.0.canonicalize(path)
+        }
+
+        fn entry_kind(&self, path: &Path) -> Result<FileSystemEntryKind, io::Error> {
+            self.0.entry_kind(path)
+        }
+
+        fn read_directory_bounded(
+            &self,
+            path: &Path,
+            limit: EntryLimit,
+            cancellation: &dyn CancellationSignal,
+        ) -> Result<Vec<std::ffi::OsString>, FileSystemReadError> {
+            self.0.read_directory_bounded(path, limit, cancellation)
         }
 
         fn is_file(&self, path: &Path) -> bool {
@@ -3727,7 +4384,6 @@ node result: Dimensionless = @calculation().out;
     }
 
     #[test]
-    #[ignore = "fixed by #1261 in Phase 2"]
     fn unreadable_plugin_lockfile_is_not_treated_as_missing() {
         let directory = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"mission\"\n"),
