@@ -184,6 +184,46 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "fixed by #1258 in Phase 4"]
+    fn dot_ids_preserve_package_and_hierarchy_edge_identity() {
+        let package_a = DagId::root_in_package("package-a", "lib");
+        let package_b = DagId::root_in_package("package-b", "lib");
+        let hierarchy_parent = DagId::root_in_package("package-a", "model");
+        let source_child = hierarchy_parent.child("defaults");
+        let instance_child = hierarchy_parent.instance_child("defaults");
+        let root = DagId::root_in_package("root", "main");
+        let external = [package_a, package_b, source_child, instance_child]
+            .into_iter()
+            .map(|owner| GraphNode {
+                id: id(&owner, "value"),
+                kind: GraphNodeKind::External,
+                type_label: None,
+            })
+            .collect();
+        let ir = GraphIr {
+            root: GraphCluster {
+                dag_id: root,
+                nodes: Vec::new(),
+            },
+            children: Vec::new(),
+            external,
+            edges: Vec::new(),
+        };
+
+        let dot = render(&ir);
+        let statement_ids = dot
+            .lines()
+            .filter(|line| line.contains("shape=box, style=dashed"))
+            .filter_map(|line| line.trim().split_once(" [").map(|(id, _)| id))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            statement_ids.len(),
+            4,
+            "distinct typed IDs collapsed:\n{dot}"
+        );
+    }
+
+    #[test]
     fn escapes_quotes_and_backslashes() {
         assert_eq!(escape(r#"a"b\c"#), r#"a\"b\\c"#);
         assert_eq!(escape("a\nb"), r"a\nb");
