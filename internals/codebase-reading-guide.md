@@ -578,7 +578,7 @@ filesystem, cache, or CLI I/O; callers provide manifest text, lockfile text,
 source metadata, and materialized dependency manifests.
 
 The crate owns typed package identifiers (`PackageName`, `DependencyName`,
-`PackageInstanceId`, `GitCommitHash`, `GitUrl`), manifest parsing for
+`PackageInstanceId`, `GitCommitHash`, `GitUrl`, `GitSourceId`), manifest parsing for
 `graphcal.toml`, lockfile parsing/serialization for `graphcal.lock`, and
 validation of the locked package graph. Keep credentials, cache paths, and Git
 commands outside this crate; it should remain the functional core for package
@@ -609,8 +609,12 @@ Key files:
 - `lib.rs` exposes the reusable CLI library surface.
 - `format.rs` discovers `.gcl` files and classifies format status without printing.
 - `deps.rs` is the imperative shell for `graphcal deps lock`: root discovery,
-  Git/cache materialization, tree hashing, and writing `graphcal.lock` around
-  `graphcal-package`'s pure model.
+  validated-cache reuse, per-source writer locking, staged Git publication,
+  tree hashing, and writing `graphcal.lock` around `graphcal-package`'s pure
+  model.
+- `graphcal-eval/src/package_cache.rs` centralizes the absolute cache root and
+  typed source/generation path derivation shared by the lock producer and
+  read-only loader.
 - `json_input.rs` reads bounded JSON input for params.
 - `overrides.rs` parses `--set` and `--input` parameter overrides.
 - `display.rs` renders normal eval text output.
@@ -1028,9 +1032,11 @@ consults the desugared root AST.
 Package locking is adjacent to, not part of, this compile/eval pipeline. The
 `graphcal deps lock` shell materializes Git dependencies and writes
 `graphcal.lock`; the pure package facts and lock graph validation live in
-`graphcal-package`. The loader/project compiler should consume already-resolved
-filesystem/module inputs rather than run Git or parse lockfile conventions in
-the compiler core.
+`graphcal-package`. `GitSourceId` binds the canonical URL and immutable commit,
+while the shared `PackageCacheRoot` derives content-addressed checkout paths
+from that identity and the validated tree digest. The loader/project compiler
+should consume already-resolved filesystem/module inputs rather than run Git or
+parse lockfile conventions in the compiler core.
 
 ## 6. Errors
 
@@ -1380,36 +1386,37 @@ checked semantic facts to the direct HIR source interface;
 `eval/project/prepare.rs` is the only transition that consumes `CheckedProject`
 into an execution plan.
 
-1. `crates/graphcal-eval/src/eval/types.rs`
-2. `crates/graphcal-eval/src/eval/display.rs`
-3. `crates/graphcal-eval/src/loader.rs`
-4. `crates/graphcal-eval/src/inline_dag.rs`
-5. `crates/graphcal-eval/src/project_compiler/template.rs`
-6. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
-7. `crates/graphcal-eval/src/project_compiler/model.rs`
-8. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
-9. `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
-10. `crates/graphcal-eval/src/project_compiler/recursion.rs`
-11. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
-12. `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
-13. `crates/graphcal-eval/src/project_compiler/imports.rs`
-14. `crates/graphcal-eval/src/project_compiler/lowering.rs`
-15. `crates/graphcal-eval/src/project_compiler/checking.rs`
-16. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
-17. `crates/graphcal-eval/src/project_compiler/session.rs`
-18. `crates/graphcal-eval/src/project_compiler/mod.rs`
-19. `crates/graphcal-eval/src/eval/plot_data.rs`
-20. `crates/graphcal-eval/src/eval/public_projection.rs`
-21. `crates/graphcal-eval/src/eval/runtime.rs`
-22. `crates/graphcal-eval/src/eval/project/model_schema.rs`
-23. `crates/graphcal-eval/src/eval/project/output.rs`
-24. `crates/graphcal-eval/src/eval/project/prepared.rs`
-25. `crates/graphcal-eval/src/eval/project/prepare.rs`
-26. `crates/graphcal-eval/src/eval/project/mod.rs`
-27. `crates/graphcal-eval/src/eval/mod.rs`
-28. `crates/graphcal-eval/src/eval/tests.rs`
-29. `crates/graphcal-eval/src/graph_ir/mod.rs`
-30. `crates/graphcal-eval/src/graph_ir/dot.rs`
+1. `crates/graphcal-eval/src/package_cache.rs`
+2. `crates/graphcal-eval/src/eval/types.rs`
+3. `crates/graphcal-eval/src/eval/display.rs`
+4. `crates/graphcal-eval/src/loader.rs`
+5. `crates/graphcal-eval/src/inline_dag.rs`
+6. `crates/graphcal-eval/src/project_compiler/template.rs`
+7. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
+8. `crates/graphcal-eval/src/project_compiler/model.rs`
+9. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
+10. `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
+11. `crates/graphcal-eval/src/project_compiler/recursion.rs`
+12. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
+13. `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
+14. `crates/graphcal-eval/src/project_compiler/imports.rs`
+15. `crates/graphcal-eval/src/project_compiler/lowering.rs`
+16. `crates/graphcal-eval/src/project_compiler/checking.rs`
+17. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+18. `crates/graphcal-eval/src/project_compiler/session.rs`
+19. `crates/graphcal-eval/src/project_compiler/mod.rs`
+20. `crates/graphcal-eval/src/eval/plot_data.rs`
+21. `crates/graphcal-eval/src/eval/public_projection.rs`
+22. `crates/graphcal-eval/src/eval/runtime.rs`
+23. `crates/graphcal-eval/src/eval/project/model_schema.rs`
+24. `crates/graphcal-eval/src/eval/project/output.rs`
+25. `crates/graphcal-eval/src/eval/project/prepared.rs`
+26. `crates/graphcal-eval/src/eval/project/prepare.rs`
+27. `crates/graphcal-eval/src/eval/project/mod.rs`
+28. `crates/graphcal-eval/src/eval/mod.rs`
+29. `crates/graphcal-eval/src/eval/tests.rs`
+30. `crates/graphcal-eval/src/graph_ir/mod.rs`
+31. `crates/graphcal-eval/src/graph_ir/dot.rs`
 
 ### Stage 15 - Tenax Arrow transport (`graphcal-tenax`)
 

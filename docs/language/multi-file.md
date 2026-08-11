@@ -737,6 +737,22 @@ or update `graphcal.lock`; if the lockfile is missing, stale, version-mismatched
 or points at a missing or hash-mismatched cached source, they fail and ask you
 to run `graphcal deps lock`.
 
+`graphcal deps lock` reuses a cached checkout without fetching only after its
+source-tree digest matches the prior validated lock. Cache identity is typed:
+the canonical remote URL and immutable commit select a source directory, and
+the verified tree digest selects an immutable generation. Same-source writers
+serialize with an advisory lock, stage fetches inside that cache directory, and
+publish generations by rename. Valid older generations are not replaced, so a
+concurrent evaluator holding a rooted filesystem capability remains usable.
+`GRAPHCAL_CACHE_DIR` overrides the cache root; relative values are resolved to
+one absolute identity before producer and loader paths are derived.
+
+!!! note "Cache layout migration"
+    Existing lockfiles remain valid, but the content-addressed layout does not
+    reuse checkout directories written by older Graphcal versions. Run
+    `graphcal deps lock` once with network access to materialize the new cache
+    layout.
+
 Loading also binds every lock entry to exactly one materialized manifest before
 resolving modules. Package names, source directories, and dependency alias sets
 must match in both directions. This ensures the source directory used for

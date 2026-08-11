@@ -62,7 +62,9 @@ graphcal deps lock [OPTIONS]
 It reads `[dependencies]` from `graphcal.toml`, accepts only supported remote
 HTTPS or SSH Git URLs with a full commit-hash `rev`, fetches any missing
 sources, records a graph-shaped package-instance lockfile, and writes nothing
-when the deterministic lockfile contents are already up to date. Manifest,
+when the deterministic lockfile contents are already up to date. A checkout
+whose source-tree digest still matches the prior validated lock is reused
+without network access. Manifest,
 source, source-tree, plugin, and existing-lock reads use the same per-artifact
 and aggregate limits as ordinary project loading; lock generation therefore
 cannot produce a lock that the default loader rejects only for artifact size.
@@ -85,7 +87,11 @@ read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
 version, or references a missing or hash-mismatched cache entry, they fail and
-ask you to run `graphcal deps lock`. Lock creation and verification share one
+ask you to run `graphcal deps lock`. Cache entries are content-addressed by a
+typed canonical-URL/commit identity and the verified tree digest. Writers use a
+per-source advisory lock, fetch into a same-cache staging directory, and publish
+an immutable generation by rename; another process evaluating an older valid
+generation continues to use it. Lock creation and verification share one
 iterative hashing implementation; it rejects symlinks, special files,
 non-UTF-8 relative names, and canonical paths outside the package root instead
 of traversing them.
@@ -95,7 +101,14 @@ obtain credentials from the current environment. This is intentionally not a
 portable guarantee: SSH may work with a configured key/agent, while HTTPS may
 fail unless a compatible credential helper or non-interactive credential
 provider is available. Do not place credentials directly in `git` URLs in
-`graphcal.toml`.
+`graphcal.toml`. `GRAPHCAL_CACHE_DIR` overrides the cache root; a relative
+value is resolved to an absolute path once before producers and consumers
+derive checkout paths.
+
+!!! note "Cache layout migration"
+    The content-addressed checkout layout replaces the earlier single-directory
+    Git cache layout. Existing `graphcal.lock` files remain valid, but run
+    `graphcal deps lock` once with network access to populate the new layout.
 
 **Examples:**
 
