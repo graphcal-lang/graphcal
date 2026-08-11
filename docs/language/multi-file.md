@@ -737,7 +737,13 @@ Package trees may contain only ordinary directories and regular files: symbolic
 links and special files are rejected rather than followed, every canonical path
 must remain under its locked package root, and relative path names must be UTF-8.
 The root package continues to use editor overlays, while each cached dependency
-is read through its own immutable rooted filesystem capability.
+is read through its own immutable rooted filesystem capability. Overlay
+construction is itself capability-preserving: existing buffers use a canonical
+base identity, and unsaved buffers are accepted only after their nearest
+existing parent is canonicalized through the rooted base. Relative paths,
+paths outside that root, and file/directory collisions are rejected. Open
+buffers from unrelated workspace roots are not added to the active project's
+snapshot.
 
 Project ingestion is bounded before allocation. CLI and LSP loads accept at most
 16 MiB per `.gcl` source or source-tree file, 1 MiB per manifest, 4 MiB per
