@@ -156,7 +156,7 @@ pub(crate) fn resolve_unit_expr_impl(
         let Some(info) = units.get(&item.name.value) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
-        let exp = item.power.unwrap_or(Rational::ONE);
+        let exp = item.effective_power();
         let powered_dim = info.dimension.pow(exp)?;
         let Some(static_scale) = info.scale.as_static() else {
             return Err(UnitResolveError::DynamicScale(item.name.value.clone()));
@@ -192,7 +192,7 @@ pub(crate) fn resolve_unit_dimension_impl(
         let Some(info) = units.get(&item.name.value) else {
             return Err(UnitResolveError::UnknownUnit(item.name.value.clone()));
         };
-        let exp = item.power.unwrap_or(Rational::ONE);
+        let exp = item.effective_power();
         let powered_dim = info.dimension.pow(exp)?;
         dim = match item.op {
             MulDivOp::Mul => (dim * powered_dim)?,

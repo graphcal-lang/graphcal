@@ -271,7 +271,7 @@ fn resolve_hir_dim_expr_item(
     item: &hir::DimExprItem,
     ctx: HirTypeResolutionContext<'_>,
 ) -> Result<ResolvedDimTerm, GraphcalError> {
-    let power = item.term.power.unwrap_or(Rational::ONE);
+    let power = item.term.power;
     match &item.term.target {
         hir::DimTermTarget::Dimension(name) => Ok(ResolvedDimTerm::Concrete {
             dim: hir_dimension(&name.value, name.span, ctx)?,

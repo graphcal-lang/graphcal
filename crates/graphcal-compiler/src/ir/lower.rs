@@ -5635,7 +5635,7 @@ fn resolve_extern_dim_monomial(
     let mut fixed = crate::dimension::Dimension::dimensionless();
     for item in &dim_expr.terms {
         let term = &item.term;
-        let power = term.power.unwrap_or(Rational::ONE);
+        let power = term.effective_power();
         let path = &term.name.value;
         if let Some(atom) = path.as_bare()
             && let Some(var) = dim_vars.iter().find(|v| v.as_str() == atom.as_str())

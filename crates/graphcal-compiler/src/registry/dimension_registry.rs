@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use thiserror::Error;
 
 use crate::desugar::desugared_ast::{DimExpr, MulDivOp, TypeExpr, TypeExprKind};
-use crate::dimension::{BaseDimId, Dimension, MissingBaseDimensionName, Rational, RationalError};
+use crate::dimension::{BaseDimId, Dimension, MissingBaseDimensionName, RationalError};
 use crate::syntax::dimension::DimName;
 
 /// Error returned when resolving a `DimExpr` to a concrete [`Dimension`].
@@ -43,7 +43,7 @@ pub(crate) fn resolve_dim_expr_detailed_impl(
                     name: DimName::from_atom(name.clone()),
                 });
             };
-            let exp = item.term.power.unwrap_or(Rational::ONE);
+            let exp = item.term.effective_power();
             let powered = base.pow(exp)?;
             match item.op {
                 MulDivOp::Mul => acc * powered,

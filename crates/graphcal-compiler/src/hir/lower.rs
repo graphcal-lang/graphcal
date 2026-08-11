@@ -813,7 +813,7 @@ fn lower_dim_term(
         return match binding.constraint {
             GenericConstraint::Dim => Ok(DimTermRef {
                 target: DimTermTarget::GenericParam(binding.spanned_id(term.name.span)),
-                power: term.power,
+                power: term.effective_power(),
                 span: term.span,
             }),
             GenericConstraint::Index | GenericConstraint::Nat | GenericConstraint::Type => {
@@ -848,7 +848,7 @@ fn lower_dim_term(
 
     Ok(DimTermRef {
         target: DimTermTarget::Dimension(Spanned::new(resolved, term.name.span)),
-        power: term.power,
+        power: term.effective_power(),
         span: term.span,
     })
 }

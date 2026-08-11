@@ -581,7 +581,8 @@ impl std::fmt::Display for ResolvedUnitRef {
 pub struct ResolvedUnitExprItem {
     pub op: ast::MulDivOp,
     pub name: Spanned<ResolvedUnitRef>,
-    pub power: Option<crate::dimension::Rational>,
+    /// Exact semantic exponent, normalized at the AST-to-HIR boundary.
+    pub power: crate::dimension::Rational,
 }
 
 /// A unit expression whose terms retain canonical defining-module identities.
@@ -1675,7 +1676,7 @@ impl<'a> ExprLowerer<'a> {
                         ResolvedUnitRef::new(reference.clone(), resolved),
                         item.name.span,
                     ),
-                    power: item.power,
+                    power: item.effective_power(),
                 })
             })
             .collect::<Result<Vec<_>, ExprLowerError>>()?;

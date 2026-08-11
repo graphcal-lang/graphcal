@@ -642,7 +642,7 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
                     span: item.name.span.into(),
                 }
             })?;
-            let exponent = item.power.unwrap_or(Rational::ONE);
+            let exponent = item.power;
             let term_dimension =
                 info.dimension
                     .pow(exponent)
