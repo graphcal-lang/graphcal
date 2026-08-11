@@ -65,6 +65,10 @@ sources, records a graph-shaped package-instance lockfile, and writes nothing
 when the deterministic lockfile contents are already up to date. Local paths,
 `file://`, plain HTTP, unsupported schemes, embedded credentials, and malformed
 or option-shaped remote components fail validation before any fetch starts.
+In the generated lock graph, the unique root uses the fixed path source `.`,
+every dependency is Git-backed, and every package entry is reachable from that
+root. Loading rejects arbitrary path sources and orphan entries before deriving
+source-root filesystem capabilities.
 
 The command also scans the package's `.gcl` sources for
 [WASM plugin imports](language/extern-functions.md#trust-lockfile-pins) and
