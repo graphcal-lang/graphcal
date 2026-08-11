@@ -21,8 +21,8 @@ use graphcal_io::{
     SourceTreeHashLimits, hash_source_tree,
 };
 use graphcal_package::{
-    GitCommitHash, GitUrl, LockedPackage, PackageGraph, PackageInstanceId, PackageManifest,
-    PackageSource, STDLIB_VERSION, parse_lockfile_str, parse_manifest_str,
+    GitCommitHash, GitUrl, LockedPackage, PackageInstanceId, PackageManifest, PackageSource,
+    STDLIB_VERSION, ValidatedPackageGraph, parse_lockfile_str, parse_manifest_str,
     validate_lock_against_manifests,
 };
 
@@ -1899,7 +1899,7 @@ fn load_locked_package_project<F: FileSystemReader>(
 /// caller-supplied capability (and therefore LSP overlays), while every locked
 /// dependency receives its own immutable rooted capability.
 struct PackageLoadContext<'a> {
-    graph: PackageGraph,
+    graph: ValidatedPackageGraph,
     root_package: PackageInstanceId,
     root_reader: &'a dyn FileSystemReader,
     roots: BTreeMap<PackageInstanceId, PathBuf>,
@@ -1927,8 +1927,8 @@ impl<'a> PackageLoadContext<'a> {
             })?;
         let lockfile = parse_lockfile_str(&lockfile_text)
             .map_err(|error| loader_manifest_error(error.to_string()))?;
-        let graph = lockfile
-            .package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
+        lockfile
+            .validate(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
             .map_err(|error| loader_manifest_error(error.to_string()))?;
         let cache_dir = cache_dir().map_err(loader_manifest_error)?;
         let canonical_project_root = fs.canonicalize(project_root).map_err(|error| {
@@ -1989,7 +1989,7 @@ impl<'a> PackageLoadContext<'a> {
             manifests.insert(package.id.clone(), manifest);
         }
         manifests.insert(lockfile.root.clone(), root_manifest);
-        validate_lock_against_manifests(
+        let graph = validate_lock_against_manifests(
             &lockfile,
             &manifests,
             env!("CARGO_PKG_VERSION"),
@@ -2322,8 +2322,9 @@ fn package_module_path(
     fs: &dyn FileSystemReader,
 ) -> Result<ResolvedFilePath, CompileError> {
     for file_segment_count in (0..=module_segments.len()).rev() {
-        let mut file_path = package_root
-            .join(&package.source_dir)
+        let mut file_path = package
+            .source_dir
+            .join_to(package_root)
             .join(package.name.as_str());
         for segment in &module_segments[..file_segment_count] {
             file_path = file_path.join(segment);
@@ -2415,10 +2416,11 @@ fn verify_locked_source(
         return Ok(());
     };
     let cancellation_signal = || cancellation.is_cancelled();
+    let source_dir = manifest.source_dir.to_path_buf();
     let actual = hash_source_tree(
         fs,
         root,
-        &manifest.source_dir,
+        &source_dir,
         budget.source_tree_limits(),
         &cancellation_signal,
     )
@@ -3316,12 +3318,9 @@ fn root_in_package_namespace<F: FileSystemReader>(
     manifest: &PackageManifest,
     fs: &F,
 ) -> bool {
-    let pkg_dir = project_root
-        .join(&manifest.source_dir)
-        .join(manifest.name.as_str());
-    let pkg_file = project_root
-        .join(&manifest.source_dir)
-        .join(format!("{}.gcl", manifest.name));
+    let source_root = manifest.source_dir.join_to(project_root);
+    let pkg_dir = source_root.join(manifest.name.as_str());
+    let pkg_file = source_root.join(format!("{}.gcl", manifest.name));
 
     if let Ok(canon_pkg_dir) = fs.canonicalize(&pkg_dir)
         && root_canonical.starts_with(&canon_pkg_dir)
@@ -3407,7 +3406,7 @@ fn resolve_module_path<F: FileSystemReader>(
         // Choose the longest prefix that names a physical source file. Any
         // remaining segments are an exact nested inline-DAG path in that file.
         for file_segment_count in (1..=segments.len()).rev() {
-            let mut file_path = project_root.join(&m.source_dir);
+            let mut file_path = m.source_dir.join_to(project_root);
             for segment in &segments[..file_segment_count] {
                 file_path = file_path.join(segment.name.as_str());
             }
@@ -3711,18 +3710,24 @@ mod tests {
 
     #[test]
     fn load_circular_import_detected() {
-        // Manifest layout: `package = "a"`, files at `<root>/a.gcl` and
-        // `<root>/a/b.gcl`. `a` imports from `a.b` and `a.b` imports from
-        // `a` — yielding a cycle through dot-paths.
+        // Manifest layout: `package = "a"`, files at `<root>/src/a.gcl`
+        // and `<root>/src/a/b.gcl`. `a` imports from `a.b` and `a.b` imports
+        // from `a` — yielding a cycle through dot-paths.
         let dir = setup_temp_dir(&[
             (
                 "graphcal.toml",
-                "[package]\nname = \"a\"\nsource_dir = \".\"\n",
+                "[package]\nname = \"a\"\nsource_dir = \"src\"\n",
             ),
-            ("a.gcl", "import a.b.{y};\nparam x: Dimensionless = 1.0;"),
-            ("a/b.gcl", "import a.{x};\nparam y: Dimensionless = 2.0;"),
+            (
+                "src/a.gcl",
+                "import a.b.{y};\nparam x: Dimensionless = 1.0;",
+            ),
+            (
+                "src/a/b.gcl",
+                "import a.{x};\nparam y: Dimensionless = 2.0;",
+            ),
         ]);
-        let result = load_project(&dir.path().join("a.gcl"), None, &fs());
+        let result = load_project(&dir.path().join("src/a.gcl"), None, &fs());
         assert!(result.is_err());
         let err = format!("{:?}", result.unwrap_err());
         assert!(
@@ -3865,32 +3870,31 @@ dag calc {
         // A imports B and C; both B and C import D. D should only be
         // loaded once.
         //
-        // Manifest layout: `package = "graph"`, source_dir = ".". The
-        // four files live at `<root>/graph/{a,b,c,d}.gcl` so every
+        // The four files live at `<root>/src/graph/{a,b,c,d}.gcl` so every
         // import path starts with the package name.
         let dir = setup_temp_dir(&[
             (
                 "graphcal.toml",
-                "[package]\nname = \"graph\"\nsource_dir = \".\"\n",
+                "[package]\nname = \"graph\"\nsource_dir = \"src\"\n",
             ),
-            ("graph/d.gcl", "param w: Dimensionless = 4.0;"),
+            ("src/graph/d.gcl", "param w: Dimensionless = 4.0;"),
             (
-                "graph/b.gcl",
+                "src/graph/b.gcl",
                 "import graph.d.{w};\nparam x: Dimensionless = @w + 1.0;",
             ),
             (
-                "graph/c.gcl",
+                "src/graph/c.gcl",
                 "import graph.d.{w};\nparam y: Dimensionless = @w + 2.0;",
             ),
             (
-                "graph/a.gcl",
+                "src/graph/a.gcl",
                 "import graph.b.{x};\nimport graph.c.{y};\nnode z: Dimensionless = @x + @y;",
             ),
         ]);
-        let project = load_project(&dir.path().join("graph/a.gcl"), None, &fs()).unwrap();
+        let project = load_project(&dir.path().join("src/graph/a.gcl"), None, &fs()).unwrap();
         assert_eq!(project.files.len(), 4);
         // d should appear first in load order
-        let d_dag_id = DagId::new("graph", NonEmpty::new("graph", vec!["d"]));
+        let d_dag_id = DagId::new("graph", NonEmpty::new("src", vec!["graph", "d"]));
         assert_eq!(project.load_order[0], d_dag_id);
     }
 
@@ -4108,10 +4112,11 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
 
         let dependency_manifest = parse_manifest_str(dependency_manifest).unwrap();
         let dependency_reader = RealFileSystem::rooted(&dependency_root).unwrap();
+        let dependency_source_dir = dependency_manifest.source_dir.to_path_buf();
         let tree_hash = hash_source_tree(
             &dependency_reader,
             &dependency_root,
-            &dependency_manifest.source_dir,
+            &dependency_source_dir,
             SourceTreeHashLimits::unbounded(),
             &graphcal_io::NeverCancel,
         )
@@ -4131,7 +4136,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
                 LockedPackage {
                     id: root_id,
                     name: parsed_root_manifest.name.clone(),
-                    source_dir: PathBuf::from("src"),
+                    source_dir: parsed_root_manifest.source_dir.clone(),
                     source: PackageSource::Path {
                         path: ".".to_string(),
                     },
@@ -4143,7 +4148,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
                 LockedPackage {
                     id: dependency_id,
                     name: dependency_manifest.name,
-                    source_dir: PathBuf::from("src"),
+                    source_dir: dependency_manifest.source_dir,
                     source: PackageSource::Git {
                         url,
                         requested_rev: revision.clone(),
@@ -4156,7 +4161,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         };
         std::fs::write(
             project_root.join("graphcal.lock"),
-            lockfile.to_deterministic_toml().unwrap(),
+            lockfile.to_deterministic_toml(),
         )
         .unwrap();
         let cache_directory = CacheDirectoryOverride::set(cache_root);
@@ -4231,6 +4236,40 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         assert!(
             error.to_string().contains("symbolic links are not allowed"),
             "unexpected source-tree diagnostic: {error:?}"
+        );
+    }
+
+    #[test]
+    fn lock_source_directory_cannot_select_an_unhashed_tree() {
+        let fixture = locked_package_fixture(
+            "import units_v1.lib.{ value };\nnode result: Dimensionless = @value;",
+            "pub const node value: Dimensionless = 1.0;",
+        );
+        std::fs::create_dir_all(fixture.dependency_root.join("unhashed/units")).unwrap();
+        std::fs::write(
+            fixture.dependency_root.join("unhashed/units/lib.gcl"),
+            "pub const node value: Dimensionless = 999.0;",
+        )
+        .unwrap();
+
+        let lockfile_path = fixture.directory.path().join("project/graphcal.lock");
+        let mut lockfile = parse_lockfile_str(&std::fs::read_to_string(&lockfile_path).unwrap())
+            .expect("fixture lockfile parses");
+        let dependency = lockfile
+            .packages
+            .iter_mut()
+            .find(|package| matches!(package.source, PackageSource::Git { .. }))
+            .expect("fixture dependency lock entry");
+        dependency.source_dir = graphcal_package::PackageSourceDirectory::new("unhashed").unwrap();
+        std::fs::write(&lockfile_path, lockfile.to_deterministic_toml()).unwrap();
+
+        let error = load_project(&fixture.root_file, None, &RealFileSystem::default())
+            .expect_err("lock and manifest source directories must match before resolution");
+        assert!(
+            error
+                .to_string()
+                .contains("uses source_dir `unhashed`, but its manifest uses `src`"),
+            "unexpected lock/manifest diagnostic: {error:?}"
         );
     }
 

@@ -2887,11 +2887,11 @@ fn write_package_root_child_include_project(
     main_source: &str,
 ) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
-    let package_dir = dir.path().join("app");
+    let package_dir = dir.path().join("src/app");
     std::fs::create_dir_all(&package_dir).unwrap();
     std::fs::write(
         dir.path().join("graphcal.toml"),
-        "[package]\nname = \"app\"\nsource_dir = \".\"\n",
+        "[package]\nname = \"app\"\nsource_dir = \"src\"\n",
     )
     .unwrap();
     std::fs::write(
@@ -2899,7 +2899,7 @@ fn write_package_root_child_include_project(
         "pub node output: Dimensionless = 2.0;\n",
     )
     .unwrap();
-    let root = dir.path().join("app.gcl");
+    let root = dir.path().join("src/app.gcl");
     std::fs::write(&root, main_source).unwrap();
     (dir, root)
 }
@@ -2923,11 +2923,14 @@ fn aliased_include_does_not_bind_the_source_module_name() {
     );
 
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
-    assert!(matches!(
-        error,
-        CompileError::Eval(GraphcalError::EvalError { message, .. })
-            if message == "unknown module `app.defaults`"
-    ));
+    assert!(
+        matches!(
+            error,
+            CompileError::Eval(GraphcalError::EvalError { ref message, .. })
+                if message == "unknown module `src.app.defaults`"
+        ),
+        "unexpected alias-leak diagnostic: {error:?}"
+    );
 }
 
 #[test]

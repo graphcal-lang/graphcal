@@ -36,6 +36,19 @@ pub struct GitCommitHash(String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GitUrl(String);
 
+/// Portable package-relative source directory.
+///
+/// The directory is stored as validated `/`-separated components rather than
+/// a host [`PathBuf`]. This keeps manifest and lockfile identity independent of
+/// the operating system that parses them.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PackageSourceDirectory {
+    components: Vec<SourceDirectoryComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SourceDirectoryComponent(String);
+
 macro_rules! impl_string_newtype {
     ($ty:ty) => {
         impl $ty {
@@ -65,6 +78,80 @@ impl_string_newtype!(DependencyName);
 impl_string_newtype!(PackageInstanceId);
 impl_string_newtype!(GitCommitHash);
 impl_string_newtype!(GitUrl);
+
+impl PackageSourceDirectory {
+    /// Parse a non-empty portable relative directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageSourceDirectoryError`] for absolute paths, empty or
+    /// dot components, backslashes, control characters, or Windows-prefix
+    /// ambiguity.
+    pub fn new(value: &str) -> Result<Self, PackageSourceDirectoryError> {
+        let invalid = |reason| PackageSourceDirectoryError {
+            value: value.to_string(),
+            reason,
+        };
+        if value.is_empty() {
+            return Err(invalid(PackageSourceDirectoryErrorReason::Empty));
+        }
+        if value.starts_with('/') {
+            return Err(invalid(PackageSourceDirectoryErrorReason::Absolute));
+        }
+        if value.contains('\\') {
+            return Err(invalid(PackageSourceDirectoryErrorReason::Backslash));
+        }
+        if value.contains(':') {
+            return Err(invalid(PackageSourceDirectoryErrorReason::PrefixAmbiguity));
+        }
+        let components = value
+            .split('/')
+            .map(|component| {
+                if component.is_empty() {
+                    Err(invalid(PackageSourceDirectoryErrorReason::EmptyComponent))
+                } else if component == "." {
+                    Err(invalid(PackageSourceDirectoryErrorReason::CurrentDirectory))
+                } else if component == ".." {
+                    Err(invalid(PackageSourceDirectoryErrorReason::ParentDirectory))
+                } else if component.chars().any(char::is_control) {
+                    Err(invalid(PackageSourceDirectoryErrorReason::ControlCharacter))
+                } else {
+                    Ok(SourceDirectoryComponent(component.to_string()))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { components })
+    }
+
+    /// Materialize the validated components as a host relative path.
+    #[must_use]
+    pub fn to_path_buf(&self) -> PathBuf {
+        self.components
+            .iter()
+            .fold(PathBuf::new(), |mut path, component| {
+                path.push(&component.0);
+                path
+            })
+    }
+
+    /// Join these validated components below a host filesystem root.
+    #[must_use]
+    pub fn join_to(&self, root: &Path) -> PathBuf {
+        root.join(self.to_path_buf())
+    }
+}
+
+impl fmt::Display for PackageSourceDirectory {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, component) in self.components.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str("/")?;
+            }
+            formatter.write_str(&component.0)?;
+        }
+        Ok(())
+    }
+}
 
 impl PackageName {
     /// Construct a package name using Graphcal lower-snake package rules.
@@ -199,6 +286,50 @@ pub struct GitUrlError {
     reason: GitUrlErrorReason,
 }
 
+/// Portable source-directory validation error.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("invalid package source directory `{value}`: {reason}")]
+pub struct PackageSourceDirectoryError {
+    value: String,
+    reason: PackageSourceDirectoryErrorReason,
+}
+
+/// Failed invariant for a portable package source directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageSourceDirectoryErrorReason {
+    /// The spelling had no components.
+    Empty,
+    /// The spelling started at a filesystem root.
+    Absolute,
+    /// Repeated or trailing `/` introduced an empty component.
+    EmptyComponent,
+    /// A `.` component made normalization implicit.
+    CurrentDirectory,
+    /// A `..` component could escape the package root.
+    ParentDirectory,
+    /// A backslash would be a separator only on some hosts.
+    Backslash,
+    /// A colon could be interpreted as a platform path prefix.
+    PrefixAmbiguity,
+    /// A control character cannot be a portable directory component.
+    ControlCharacter,
+}
+
+impl fmt::Display for PackageSourceDirectoryErrorReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "must not be empty",
+            Self::Absolute => "must be relative",
+            Self::EmptyComponent => "must not contain empty components",
+            Self::CurrentDirectory => "must not contain `.` components",
+            Self::ParentDirectory => "must not contain `..` components",
+            Self::Backslash => "must use `/`, not backslash separators",
+            Self::PrefixAmbiguity => "must not contain a platform path prefix",
+            Self::ControlCharacter => "must not contain control characters",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GitUrlErrorReason {
     Empty,
@@ -253,7 +384,7 @@ pub struct PackageManifest {
     /// Real package name.
     pub name: PackageName,
     /// Source directory relative to the package root.
-    pub source_dir: PathBuf,
+    pub source_dir: PackageSourceDirectory,
     /// Direct dependencies keyed by local source-visible alias.
     pub dependencies: BTreeMap<DependencyName, DependencySpec>,
 }
@@ -317,9 +448,14 @@ pub enum ManifestError {
     /// Git URL is invalid.
     #[error(transparent)]
     GitUrl(#[from] GitUrlError),
-    /// Source directory escaped the package root.
-    #[error("invalid source_dir `{dir}`: must be a relative path inside the package root")]
-    InvalidSourceDir { dir: String },
+    /// Source directory is not a portable package-relative directory.
+    #[error("invalid source_dir `{dir}`: {reason}")]
+    InvalidSourceDir {
+        /// Rejected source spelling.
+        dir: String,
+        /// Portable-directory invariant that failed.
+        reason: PackageSourceDirectoryErrorReason,
+    },
     /// Unsupported or floating dependency field was present.
     #[error("unsupported dependency field `{field}` for dependency `{dependency}`")]
     UnsupportedDependencyField { dependency: String, field: String },
@@ -416,19 +552,11 @@ fn manifest_optional_string<'a>(
     }
 }
 
-fn parse_source_dir(value: &str) -> Result<PathBuf, ManifestError> {
-    let path = PathBuf::from(value);
-    let escapes_root = path.is_absolute()
-        || path
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir));
-    if escapes_root {
-        Err(ManifestError::InvalidSourceDir {
-            dir: value.to_string(),
-        })
-    } else {
-        Ok(path)
-    }
+fn parse_source_dir(value: &str) -> Result<PackageSourceDirectory, ManifestError> {
+    PackageSourceDirectory::new(value).map_err(|error| ManifestError::InvalidSourceDir {
+        dir: value.to_string(),
+        reason: error.reason,
+    })
 }
 
 fn parse_manifest_dependencies(
@@ -767,12 +895,8 @@ impl Lockfile {
     }
 
     /// Serialize the lockfile in deterministic TOML form.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LockfileSerializeError`] if a path cannot be represented
-    /// losslessly in the UTF-8 TOML lockfile format.
-    pub fn to_deterministic_toml(&self) -> Result<String, LockfileSerializeError> {
+    #[must_use]
+    pub fn to_deterministic_toml(&self) -> String {
         let mut out = String::new();
         push_kv_u64(&mut out, "lock_version", self.lock_version);
         push_kv_string(&mut out, "created_by", &self.created_by);
@@ -786,11 +910,7 @@ impl Lockfile {
             out.push_str("\n[[package]]\n");
             push_kv_string(&mut out, "id", package.id.as_str());
             push_kv_string(&mut out, "name", package.name.as_str());
-            push_kv_string(
-                &mut out,
-                "source_dir",
-                path_to_lockfile_str(&package.source_dir)?,
-            );
+            push_kv_string(&mut out, "source_dir", &package.source_dir.to_string());
             out.push_str("\n[package.source]\n");
             match &package.source {
                 PackageSource::Path { path } => {
@@ -829,23 +949,8 @@ impl Lockfile {
             push_kv_string(&mut out, "path", plugin.path());
             push_kv_string(&mut out, "sha256", plugin.sha256());
         }
-        Ok(out)
+        out
     }
-}
-
-fn path_to_lockfile_str(path: &Path) -> Result<&str, LockfileSerializeError> {
-    path.to_str()
-        .ok_or_else(|| LockfileSerializeError::NonUtf8Path {
-            path: path.to_path_buf(),
-        })
-}
-
-/// Lockfile serialization error.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum LockfileSerializeError {
-    /// `source_dir` cannot be represented as a TOML string without loss.
-    #[error("path `{}` is not valid UTF-8 and cannot be written to graphcal.lock", path.display())]
-    NonUtf8Path { path: PathBuf },
 }
 
 fn visit_lock_package_for_cycles<'a>(
@@ -875,7 +980,7 @@ fn visit_lock_package_for_cycles<'a>(
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct CanonicalPackageInstance {
     name: PackageName,
-    source_dir: PathBuf,
+    source_dir: PackageSourceDirectory,
     source: CanonicalPackageSource,
     dependencies: BTreeMap<DependencyName, PackageInstanceId>,
 }
@@ -887,7 +992,7 @@ pub struct LockedPackage {
     /// Locked real package name.
     pub name: PackageName,
     /// Locked source directory.
-    pub source_dir: PathBuf,
+    pub source_dir: PackageSourceDirectory,
     /// Source metadata.
     pub source: PackageSource,
     /// Direct dependency edges keyed by local aliases.
@@ -1000,9 +1105,39 @@ pub enum LockValidationError {
         /// The duplicated plugin path.
         path: String,
     },
+    /// A locked package has no materialized manifest to validate against.
+    #[error("locked package `{package}` has no materialized graphcal.toml manifest")]
+    MissingPackageManifest { package: PackageInstanceId },
+    /// A supplied manifest does not correspond to any locked package.
+    #[error("manifest for package `{package}` has no graphcal.lock package entry")]
+    ManifestWithoutLockedPackage { package: PackageInstanceId },
+    /// A lock entry and its materialized manifest disagree on package identity.
+    #[error(
+        "locked package `{package}` is named `{locked}`, but its manifest is named `{manifest}`"
+    )]
+    LockedManifestNameMismatch {
+        package: PackageInstanceId,
+        locked: PackageName,
+        manifest: PackageName,
+    },
+    /// A lock entry and its materialized manifest select different source trees.
+    #[error(
+        "locked package `{package}` uses source_dir `{locked}`, but its manifest uses `{manifest}`"
+    )]
+    LockedManifestSourceDirectoryMismatch {
+        package: PackageInstanceId,
+        locked: PackageSourceDirectory,
+        manifest: PackageSourceDirectory,
+    },
     /// A lock edge was not declared by the importing manifest.
     #[error("package `{package}` dependency `{dependency}` is not declared in its manifest")]
     UndeclaredDependencyEdge {
+        package: PackageInstanceId,
+        dependency: DependencyName,
+    },
+    /// A manifest dependency has no corresponding lock edge.
+    #[error("package `{package}` manifest dependency `{dependency}` is missing from graphcal.lock")]
+    MissingDependencyEdge {
         package: PackageInstanceId,
         dependency: DependencyName,
     },
@@ -1027,26 +1162,68 @@ pub enum LockValidationError {
     },
 }
 
-/// Validate a lockfile against each materialized package manifest.
+/// Validate and bind a lockfile to every materialized package manifest.
 ///
 /// # Errors
 ///
-/// Returns [`LockValidationError`] if the lock introduces undeclared edges or
-/// edges whose target source/name does not satisfy the importing manifest.
+/// Returns [`LockValidationError`] unless lock entries and manifests form a
+/// total bijection with identical package names, source directories, and
+/// dependency alias sets, and every dependency target satisfies its manifest
+/// source contract.
 pub fn validate_lock_against_manifests(
     lockfile: &Lockfile,
     manifests: &BTreeMap<PackageInstanceId, PackageManifest>,
     active_graphcal_version: &str,
     active_stdlib_version: &str,
-) -> Result<(), LockValidationError> {
+) -> Result<ValidatedPackageGraph, LockValidationError> {
     let graph = lockfile.package_graph(active_graphcal_version, active_stdlib_version)?;
-    for package in &lockfile.packages {
-        let Some(manifest) = manifests.get(&package.id) else {
-            continue;
-        };
-        for (dependency, target_id) in &package.dependencies {
-            let spec = manifest.dependencies.get(dependency).ok_or_else(|| {
-                LockValidationError::UndeclaredDependencyEdge {
+
+    for package in manifests.keys() {
+        if graph.package(package).is_none() {
+            return Err(LockValidationError::ManifestWithoutLockedPackage {
+                package: package.clone(),
+            });
+        }
+    }
+    let matched_packages = lockfile
+        .packages
+        .iter()
+        .map(|package| {
+            let manifest = manifests.get(&package.id).ok_or_else(|| {
+                LockValidationError::MissingPackageManifest {
+                    package: package.id.clone(),
+                }
+            })?;
+            if package.name != manifest.name {
+                return Err(LockValidationError::LockedManifestNameMismatch {
+                    package: package.id.clone(),
+                    locked: package.name.clone(),
+                    manifest: manifest.name.clone(),
+                });
+            }
+            if package.source_dir != manifest.source_dir {
+                return Err(LockValidationError::LockedManifestSourceDirectoryMismatch {
+                    package: package.id.clone(),
+                    locked: package.source_dir.clone(),
+                    manifest: manifest.source_dir.clone(),
+                });
+            }
+            Ok((package, manifest))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    for (package, manifest) in matched_packages {
+        for dependency in package.dependencies.keys() {
+            if !manifest.dependencies.contains_key(dependency) {
+                return Err(LockValidationError::UndeclaredDependencyEdge {
+                    package: package.id.clone(),
+                    dependency: dependency.clone(),
+                });
+            }
+        }
+        for (dependency, spec) in &manifest.dependencies {
+            let target_id = package.dependencies.get(dependency).ok_or_else(|| {
+                LockValidationError::MissingDependencyEdge {
                     package: package.id.clone(),
                     dependency: dependency.clone(),
                 }
@@ -1086,7 +1263,57 @@ pub fn validate_lock_against_manifests(
             }
         }
     }
-    Ok(())
+
+    Ok(ValidatedPackageGraph {
+        graph,
+        manifests: manifests.clone(),
+    })
+}
+
+/// A package graph whose lock entries are totally matched to materialized
+/// manifests.
+///
+/// Construction is only available through [`validate_lock_against_manifests`],
+/// so consumers cannot resolve modules through source metadata that differs
+/// from the manifest used for integrity verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedPackageGraph {
+    graph: PackageGraph,
+    manifests: BTreeMap<PackageInstanceId, PackageManifest>,
+}
+
+impl ValidatedPackageGraph {
+    /// Root package instance id.
+    #[must_use]
+    pub const fn root(&self) -> &PackageInstanceId {
+        self.graph.root()
+    }
+
+    /// Look up a locked package that has a matching manifest.
+    #[must_use]
+    pub fn package(&self, id: &PackageInstanceId) -> Option<&LockedPackage> {
+        self.graph.package(id)
+    }
+
+    /// Look up the manifest bound to a locked package.
+    #[must_use]
+    pub fn manifest(&self, id: &PackageInstanceId) -> Option<&PackageManifest> {
+        self.manifests.get(id)
+    }
+
+    /// Resolve a module path through the validated contextual lock graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PackageResolveError`] under the same conditions as
+    /// [`PackageGraph::resolve_module_path`].
+    pub fn resolve_module_path(
+        &self,
+        current: &PackageInstanceId,
+        segments: &[String],
+    ) -> Result<ResolvedPackageModule, PackageResolveError> {
+        self.graph.resolve_module_path(current, segments)
+    }
 }
 
 /// Contextual package-instance graph consumed by package-aware loaders.
@@ -1245,11 +1472,14 @@ pub enum LockfileParseError {
     /// Git URL validation failed.
     #[error(transparent)]
     GitUrl(#[from] GitUrlError),
-    /// Source directory escaped the package root.
-    #[error(
-        "invalid source_dir `{dir}` in graphcal.lock: must be a relative path inside the package root"
-    )]
-    InvalidSourceDir { dir: String },
+    /// Source directory is not a portable package-relative directory.
+    #[error("invalid source_dir `{dir}` in graphcal.lock: {reason}")]
+    InvalidSourceDir {
+        /// Rejected source spelling.
+        dir: String,
+        /// Portable-directory invariant that failed.
+        reason: PackageSourceDirectoryErrorReason,
+    },
     /// Package source type was not recognized.
     #[error("unsupported package source type `{source_type}` in graphcal.lock")]
     UnsupportedSourceType { source_type: String },
@@ -1360,9 +1590,10 @@ fn parse_locked_package(index: usize, item: &Value) -> Result<LockedPackage, Loc
     })
 }
 
-fn parse_lock_source_dir(value: &str) -> Result<PathBuf, LockfileParseError> {
-    parse_source_dir(value).map_err(|_| LockfileParseError::InvalidSourceDir {
+fn parse_lock_source_dir(value: &str) -> Result<PackageSourceDirectory, LockfileParseError> {
+    PackageSourceDirectory::new(value).map_err(|error| LockfileParseError::InvalidSourceDir {
         dir: value.to_string(),
+        reason: error.reason,
     })
 }
 
@@ -1523,6 +1754,10 @@ mod tests {
         GitUrl::new(value).unwrap()
     }
 
+    fn source_dir(value: &str) -> PackageSourceDirectory {
+        PackageSourceDirectory::new(value).unwrap()
+    }
+
     fn git_source(url_text: &str, rev_char: char) -> PackageSource {
         PackageSource::Git {
             url: url(url_text),
@@ -1549,7 +1784,7 @@ mod tests {
         LockedPackage {
             id: id(id_text),
             name: pkg(name),
-            source_dir: PathBuf::from("src"),
+            source_dir: source_dir("src"),
             source,
             dependencies,
         }
@@ -1565,6 +1800,45 @@ mod tests {
             plugins: Vec::new(),
             packages,
         }
+    }
+
+    fn matched_lock_and_manifests() -> (Lockfile, BTreeMap<PackageInstanceId, PackageManifest>) {
+        let root_dependencies = BTreeMap::from([(dep("units"), id("pkg-units"))]);
+        let lock = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), root_dependencies),
+            package(
+                "pkg-units",
+                "units",
+                git_source("https://github.com/acme/units.git", '1'),
+                BTreeMap::new(),
+            ),
+        ]);
+        let dependency_spec = DependencySpec {
+            package: None,
+            git: GitDependency {
+                url: url("https://github.com/acme/units.git"),
+                rev: hash('1'),
+            },
+        };
+        let manifests = BTreeMap::from([
+            (
+                id("pkg-mission"),
+                PackageManifest {
+                    name: pkg("mission"),
+                    source_dir: source_dir("src"),
+                    dependencies: BTreeMap::from([(dep("units"), dependency_spec)]),
+                },
+            ),
+            (
+                id("pkg-units"),
+                PackageManifest {
+                    name: pkg("units"),
+                    source_dir: source_dir("src"),
+                    dependencies: BTreeMap::new(),
+                },
+            ),
+        ]);
+        (lock, manifests)
     }
 
     const GRAPHICAL_VERSION: &str = GRAPHCAL_VERSION;
@@ -1587,6 +1861,54 @@ units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev =
         let spec = manifest.dependencies.get(&dep("units_v1")).unwrap();
         assert_eq!(spec.expected_package_name(&dep("units_v1")), pkg("units"));
         assert_eq!(spec.git.rev, hash('1'));
+    }
+
+    #[test]
+    fn source_directories_are_portable_non_empty_component_paths() {
+        let nested = PackageSourceDirectory::new("source/generated").unwrap();
+        assert_eq!(nested.to_string(), "source/generated");
+        assert_eq!(
+            nested.join_to(Path::new("package")),
+            PathBuf::from("package/source/generated")
+        );
+
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "/src",
+            "src/",
+            "src//generated",
+            "src/./generated",
+            "src/../outside",
+            "src\\..\\outside",
+            "C:/src",
+            "src\ngenerated",
+        ] {
+            assert!(
+                PackageSourceDirectory::new(invalid).is_err(),
+                "`{invalid}` must not have host-dependent path semantics"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_and_lock_reject_non_portable_source_directories() {
+        let manifest = "[package]\nname = \"mission\"\nsource_dir = \"src\\\\..\\\\outside\"\n";
+        assert!(matches!(
+            parse_manifest_str(manifest),
+            Err(ManifestError::InvalidSourceDir {
+                reason: PackageSourceDirectoryErrorReason::Backslash,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_lock_source_dir("src/../outside"),
+            Err(LockfileParseError::InvalidSourceDir {
+                reason: PackageSourceDirectoryErrorReason::ParentDirectory,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -1941,10 +2263,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             ),
         ]);
 
-        let toml = lock.to_deterministic_toml().unwrap();
+        let toml = lock.to_deterministic_toml();
         let reparsed = parse_lockfile_str(&toml).unwrap();
 
-        assert_eq!(reparsed.to_deterministic_toml().unwrap(), toml);
+        assert_eq!(reparsed.to_deterministic_toml(), toml);
         assert_eq!(reparsed.root, lock.root);
         assert!(
             toml.find("pkg-mission").unwrap() < toml.find("pkg-units-v1").unwrap()
@@ -1955,17 +2277,18 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
 
     #[test]
     fn lockfile_toml_escapes_control_characters() {
-        let mut package = package("pkg-mission", "mission", path_source(), BTreeMap::new());
-        package.source_dir = PathBuf::from("src/line\nfeed");
-        let lock = lockfile(vec![package]);
+        let mut lock = lockfile(vec![package(
+            "pkg-mission",
+            "mission",
+            path_source(),
+            BTreeMap::new(),
+        )]);
+        lock.created_by = "graphcal\nnightly".to_string();
 
-        let toml = lock.to_deterministic_toml().unwrap();
-        assert!(toml.contains("source_dir = \"src/line\\nfeed\""));
+        let toml = lock.to_deterministic_toml();
+        assert!(toml.contains("created_by = \"graphcal\\nnightly\""));
         let reparsed = parse_lockfile_str(&toml).unwrap();
-        assert_eq!(
-            reparsed.packages[0].source_dir,
-            PathBuf::from("src/line\nfeed")
-        );
+        assert_eq!(reparsed.created_by, "graphcal\nnightly");
     }
 
     #[test]
@@ -1983,7 +2306,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             LockedPlugin::new("plugins/alpha.wasm", sha_b.clone()).unwrap(),
         ];
 
-        let toml = lock.to_deterministic_toml().unwrap();
+        let toml = lock.to_deterministic_toml();
         let alpha_at = toml.find("plugins/alpha.wasm").unwrap();
         let zeta_at = toml.find("plugins/zeta.wasm").unwrap();
         assert!(alpha_at < zeta_at, "pins must serialize sorted by path");
@@ -2007,7 +2330,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             path_source(),
             BTreeMap::new(),
         )]);
-        let toml = lock.to_deterministic_toml().unwrap();
+        let toml = lock.to_deterministic_toml();
         assert!(!toml.contains("[[plugin]]"));
         assert!(parse_lockfile_str(&toml).unwrap().plugins.is_empty());
     }
@@ -2059,6 +2382,111 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn lockfile_manifest_validation_is_total_and_bijective() {
+        let (lock, manifests) = matched_lock_and_manifests();
+        let validated =
+            validate_lock_against_manifests(&lock, &manifests, GRAPHICAL_VERSION, STDLIB_VERSION)
+                .unwrap();
+        assert_eq!(validated.root(), &id("pkg-mission"));
+        assert_eq!(
+            validated.manifest(&id("pkg-units")).unwrap().name,
+            pkg("units")
+        );
+
+        let mut missing_manifest = manifests.clone();
+        missing_manifest.remove(&id("pkg-units"));
+        assert!(matches!(
+            validate_lock_against_manifests(
+                &lock,
+                &missing_manifest,
+                GRAPHICAL_VERSION,
+                STDLIB_VERSION
+            ),
+            Err(LockValidationError::MissingPackageManifest { package })
+                if package == id("pkg-units")
+        ));
+
+        let mut extra_manifest = manifests.clone();
+        extra_manifest.insert(
+            id("pkg-extra"),
+            PackageManifest {
+                name: pkg("extra"),
+                source_dir: source_dir("src"),
+                dependencies: BTreeMap::new(),
+            },
+        );
+        assert!(matches!(
+            validate_lock_against_manifests(
+                &lock,
+                &extra_manifest,
+                GRAPHICAL_VERSION,
+                STDLIB_VERSION
+            ),
+            Err(LockValidationError::ManifestWithoutLockedPackage { package })
+                if package == id("pkg-extra")
+        ));
+
+        let mut wrong_name = manifests.clone();
+        wrong_name.get_mut(&id("pkg-mission")).unwrap().name = pkg("other");
+        assert!(matches!(
+            validate_lock_against_manifests(
+                &lock,
+                &wrong_name,
+                GRAPHICAL_VERSION,
+                STDLIB_VERSION
+            ),
+            Err(LockValidationError::LockedManifestNameMismatch { package, .. })
+                if package == id("pkg-mission")
+        ));
+
+        let mut wrong_source_dir = manifests.clone();
+        wrong_source_dir
+            .get_mut(&id("pkg-units"))
+            .unwrap()
+            .source_dir = source_dir("unhashed");
+        assert!(matches!(
+            validate_lock_against_manifests(
+                &lock,
+                &wrong_source_dir,
+                GRAPHICAL_VERSION,
+                STDLIB_VERSION
+            ),
+            Err(LockValidationError::LockedManifestSourceDirectoryMismatch { package, .. })
+                if package == id("pkg-units")
+        ));
+
+        let mut missing_edge = lock.clone();
+        missing_edge.packages[0].dependencies.clear();
+        assert!(matches!(
+            validate_lock_against_manifests(
+                &missing_edge,
+                &manifests,
+                GRAPHICAL_VERSION,
+                STDLIB_VERSION
+            ),
+            Err(LockValidationError::MissingDependencyEdge { dependency, .. })
+                if dependency == dep("units")
+        ));
+
+        let mut undeclared_edge = manifests;
+        undeclared_edge
+            .get_mut(&id("pkg-mission"))
+            .unwrap()
+            .dependencies
+            .clear();
+        assert!(matches!(
+            validate_lock_against_manifests(
+                &lock,
+                &undeclared_edge,
+                GRAPHICAL_VERSION,
+                STDLIB_VERSION
+            ),
+            Err(LockValidationError::UndeclaredDependencyEdge { dependency, .. })
+                if dependency == dep("units")
+        ));
+    }
+
+    #[test]
     fn lockfile_manifest_validation_rejects_package_name_mismatch() {
         let mut root_deps = BTreeMap::new();
         root_deps.insert(dep("units_alias"), id("pkg-units"));
@@ -2082,14 +2510,24 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 },
             },
         );
-        let manifests = BTreeMap::from([(
-            id("pkg-mission"),
-            PackageManifest {
-                name: pkg("mission"),
-                source_dir: PathBuf::from("src"),
-                dependencies: manifest_deps,
-            },
-        )]);
+        let manifests = BTreeMap::from([
+            (
+                id("pkg-mission"),
+                PackageManifest {
+                    name: pkg("mission"),
+                    source_dir: source_dir("src"),
+                    dependencies: manifest_deps,
+                },
+            ),
+            (
+                id("pkg-units"),
+                PackageManifest {
+                    name: pkg("wrong_units"),
+                    source_dir: source_dir("src"),
+                    dependencies: BTreeMap::new(),
+                },
+            ),
+        ]);
 
         let err =
             validate_lock_against_manifests(&lock, &manifests, GRAPHICAL_VERSION, STDLIB_VERSION)
