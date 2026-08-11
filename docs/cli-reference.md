@@ -66,7 +66,10 @@ read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
 version, or references a missing or hash-mismatched cache entry, they fail and
-ask you to run `graphcal deps lock`.
+ask you to run `graphcal deps lock`. Lock creation and verification share one
+iterative hashing implementation; it rejects symlinks, special files,
+non-UTF-8 relative names, and canonical paths outside the package root instead
+of traversing them.
 
 Private Git repositories are supported only when the underlying Git fetch can
 obtain credentials from the current environment. This is intentionally not a

@@ -293,7 +293,12 @@ At load time the pin is enforced, hard errors and never prompts: a plugin
 without a pin fails with P009 ("run `graphcal deps lock`"), and a plugin
 whose bytes hash differently from the pin fails with P010. New or changed
 plugin code can therefore only enter the project through a reviewable
-`graphcal.lock` diff.
+`graphcal.lock` diff. The loader first canonicalizes the package root and
+artifact, requires the artifact itself to be a regular file (not a symlink),
+and checks canonical containment before reading and hashing the accepted path.
+This containment rule also applies to ad-hoc projects whose caller supplied an
+unrestricted filesystem. Plugin ingestion is rejected before allocation above
+16 MiB and also counts against the project-wide loader budget.
 
 Two boundary cases:
 
