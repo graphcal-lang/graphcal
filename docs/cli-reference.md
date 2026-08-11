@@ -178,7 +178,7 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 | Code | Meaning |
 |------|---------|
 | `0` | Module is a valid plugin (and the call, if any, succeeded) |
-| `1` | ABI validation failed, or the called function failed or returned a value violating its declared kind |
+| `1` | ABI validation failed, the manifest cannot be rendered as Graphcal source, or the called function failed or returned a value violating its declared kind |
 | `2` | Unreadable file, unknown function, or unusable call arguments |
 
 ```bash
@@ -201,7 +201,12 @@ may equivalently write derived names such as `Pressure` — verification is
 structural. Array arguments to `--call` are bracketed literals
 (`--call share [1.0,3.0]`) and array results render the same way; for
 struct-returning functions the import block is preceded by a suggested
-record declaration to paste alongside it.
+record declaration to paste alongside it. Because the block is source code,
+manifest function, parameter, generic, and result-field names must be valid
+Graphcal identifiers rather than reserved keywords. A module whose wire names
+cannot be represented safely is rejected instead of interpolating those names
+into the block. Graphcal string literals do not currently have an escape syntax,
+so a module path containing a quote or line break is likewise rejected.
 
 ---
 

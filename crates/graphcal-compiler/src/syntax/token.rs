@@ -354,6 +354,92 @@ impl std::fmt::Display for ContextualKeyword {
     }
 }
 
+/// Error returned when text is not one source-level Graphcal identifier.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SourceIdentifierError {
+    /// The spelling does not match the source `IDENT` lexical production.
+    #[error("must start with an ASCII letter and contain only ASCII letters, digits, or `_`")]
+    InvalidCharacters,
+    /// Hard keywords are separate lexer tokens and cannot occupy identifier positions.
+    #[error("is a reserved Graphcal keyword")]
+    ReservedKeyword,
+}
+
+/// A spelling proven safe to render in a Graphcal `IDENT` position.
+///
+/// This is deliberately narrower than
+/// [`NameAtom`](crate::syntax::names::NameAtom), because wire and generated
+/// names may contain characters that the source lexer cannot accept. Source
+/// generators should construct this type before writing identifier text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceIdentifier(String);
+
+impl SourceIdentifier {
+    /// Validate one source identifier spelling.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SourceIdentifierError`] for non-`IDENT` text or a hard keyword.
+    pub fn parse(spelling: impl Into<String>) -> Result<Self, SourceIdentifierError> {
+        let spelling = spelling.into();
+        let mut chars = spelling.chars();
+        let Some(first) = chars.next() else {
+            return Err(SourceIdentifierError::InvalidCharacters);
+        };
+        if !first.is_ascii_alphabetic()
+            || !chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
+        {
+            return Err(SourceIdentifierError::InvalidCharacters);
+        }
+        if is_hard_keyword(&spelling) {
+            return Err(SourceIdentifierError::ReservedKeyword);
+        }
+        Ok(Self(spelling))
+    }
+
+    /// Return the validated source spelling.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SourceIdentifier {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+fn is_hard_keyword(spelling: &str) -> bool {
+    matches!(
+        spelling,
+        "param"
+            | "node"
+            | "const"
+            | "if"
+            | "else"
+            | "true"
+            | "false"
+            | "base"
+            | "dim"
+            | "unit"
+            | "type"
+            | "index"
+            | "for"
+            | "import"
+            | "include"
+            | "dag"
+            | "match"
+            | "as"
+            | "assert"
+            | "table"
+            | "plot"
+            | "figure"
+            | "layer"
+            | "pub"
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Token {
     // Hard keywords
@@ -535,6 +621,34 @@ mod tests {
         assert_eq!(token, expected);
         assert_eq!(lexer.slice_at(span), input);
         assert_eq!(lexer.next_token(), None);
+    }
+
+    #[test]
+    fn source_identifier_matches_identifier_token_policy() {
+        for valid in ["x", "SolveOrbitResult2", "scan", "fn", "plugin"] {
+            let identifier = SourceIdentifier::parse(valid).unwrap();
+            assert_eq!(identifier.as_str(), valid);
+            assert!(lex_tokens(valid)[0].is_identifier(), "{valid}");
+        }
+        for keyword in [
+            "param", "node", "const", "if", "else", "true", "false", "base", "dim", "unit", "type",
+            "index", "for", "import", "include", "dag", "match", "as", "assert", "table", "plot",
+            "figure", "layer", "pub",
+        ] {
+            assert_eq!(
+                SourceIdentifier::parse(keyword).unwrap_err(),
+                SourceIdentifierError::ReservedKeyword,
+                "{keyword}"
+            );
+            assert!(!lex_tokens(keyword)[0].is_identifier(), "{keyword}");
+        }
+        for invalid in ["", "_", "3d", "a-b", "a.b", "x;\nnode injected"] {
+            assert_eq!(
+                SourceIdentifier::parse(invalid).unwrap_err(),
+                SourceIdentifierError::InvalidCharacters,
+                "{invalid:?}"
+            );
+        }
     }
 
     #[test]

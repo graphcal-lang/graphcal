@@ -147,6 +147,35 @@ fn write_test_module(dir: &Path) -> std::path::PathBuf {
     path
 }
 
+fn malicious_name_module_bytes() -> Vec<u8> {
+    const NAME: &str = "x;\n}\nnode injected: Int = 1;\n//";
+    let wat = r#"
+    (module
+      (memory (export "memory") 1)
+      (global $bump (mut i32) (i32.const 1024))
+      (func (export "graphcal_alloc") (param $size i32) (result i32)
+        (local $ptr i32)
+        (local.set $ptr (global.get $bump))
+        (global.set $bump (i32.add (global.get $bump) (local.get $size)))
+        (local.get $ptr))
+      (func (export "graphcal_free") (param i32 i32))
+      (func (export "x;\0a}\0anode injected: Int = 1;\0a//") (result f64)
+        (f64.const 1)))
+    "#;
+    let manifest = PluginManifest {
+        abi_version: graphcal_plugin_abi::ABI_VERSION,
+        functions: vec![ManifestFunction {
+            name: NAME.to_string(),
+            dim_vars: Vec::new(),
+            index_vars: Vec::new(),
+            params: Vec::new(),
+            result: dimensionless(),
+        }],
+    };
+    let wasm = wat::parse_str(wat).expect("malicious-name WAT compiles");
+    manifest.embed_into(&wasm).expect("manifest embeds")
+}
+
 #[test]
 fn plugin_test_reports_identity_and_import_block() {
     let dir = tempfile::tempdir().unwrap();
@@ -269,6 +298,29 @@ fn plugin_test_rejects_bad_calls_with_usage_errors() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("takes 3 argument(s), got 1"), "{stderr}");
+}
+
+#[test]
+fn plugin_test_rejects_manifest_names_that_cannot_be_graphcal_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("malicious.wasm");
+    std::fs::write(&path, malicious_name_module_bytes()).unwrap();
+
+    let output = graphcal_bin()
+        .args(["plugin", "test"])
+        .arg(&path)
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!stdout.contains("node injected"), "{stdout}");
+    assert!(stderr.contains("plugin function name"), "{stderr}");
+    assert!(
+        stderr.contains("must start with an ASCII letter"),
+        "{stderr}"
+    );
 }
 
 #[test]
