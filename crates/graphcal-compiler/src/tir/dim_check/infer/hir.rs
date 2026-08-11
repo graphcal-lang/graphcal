@@ -15,6 +15,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::builtin::{AggregationFn, BuiltinFnName};
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
@@ -2748,6 +2749,71 @@ fn infer_hir_for_comp(
     Ok(result)
 }
 
+fn finite_axis_form(
+    index: &InferredIndex,
+    declared_definition: Option<&crate::registry::types::IndexDef>,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Option<NatPolyForm>, GraphcalError> {
+    match index.type_ref() {
+        IndexTypeRef::Finite(reference) => Ok(Some(reference.form())),
+        IndexTypeRef::Declared(reference) => {
+            let definition = declared_definition.ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "declared indexed axis `{}` has no semantic index definition",
+                        reference.resolved()
+                    ),
+                    src,
+                    DiagnosticAnchor::Source(span),
+                )
+            })?;
+            Ok(definition
+                .finite_index_size()
+                .map(NatPolyForm::from_constant))
+        }
+    }
+}
+
+#[cfg(test)]
+mod finite_axis_form_tests {
+    use super::*;
+    use crate::dag_id::DagId;
+    use crate::syntax::index_name::{IndexName, ResolvedIndexName};
+    use std::path::Path;
+
+    #[test]
+    fn structural_finite_axis_does_not_require_a_registry_definition() {
+        let source = NamedSource::new("test.gcl", Arc::new(String::new()));
+        let form = NatPolyForm::from_constant(5);
+        let index = InferredIndex::from_finite_index_form(form.clone()).unwrap();
+
+        assert_eq!(
+            finite_axis_form(&index, None, &source, Span::new(0, 0)).unwrap(),
+            Some(form)
+        );
+    }
+
+    #[test]
+    fn declared_axis_without_a_semantic_definition_is_an_internal_error() {
+        let source = NamedSource::new("test.gcl", Arc::new("values[key]".to_string()));
+        let owner = DagId::from_virtual_relative_path(Path::new("test.gcl")).unwrap();
+        let resolved = ResolvedIndexName::from_def(owner, IndexName::expect_valid("Missing"));
+        let index = InferredIndex::from_resolved(resolved);
+
+        let error = finite_axis_form(&index, None, &source, Span::new(7, 3)).unwrap_err();
+        match error {
+            GraphcalError::InternalError { message, .. } => assert!(
+                message.contains(
+                    "declared indexed axis `test.Missing` has no semantic index definition"
+                ),
+                "{message}"
+            ),
+            other => panic!("expected internal error, got {other:?}"),
+        }
+    }
+}
+
 #[expect(clippy::too_many_arguments, reason = "index-access context")]
 fn infer_hir_index_access(
     expr: &hir::Expr,
@@ -2812,16 +2878,12 @@ fn infer_hir_index_access(
                     // Loop variables are keys of their axes: accept on axis
                     // identity, with Fin widening (`N <= M`).
                     InferredType::Key(key_index) => {
-                        let axis_form = super::index_def_for_inferred(&index, Some(dag), registry)
-                            .map_or_else(
-                                || index.finite_index_form(),
-                                |idx_def| {
-                                    if !idx_def.is_finite_index() {
-                                        return None;
-                                    }
-                                    idx_def.finite_index_size().map(NatPolyForm::from_constant)
-                                },
-                            );
+                        let axis_form = finite_axis_form(
+                            &index,
+                            super::index_def_for_inferred(&index, Some(dag), registry),
+                            src,
+                            local.span,
+                        )?;
                         let accepted = match (key_index.finite_index_form(), &axis_form) {
                             (Some(key_form), Some(axis_form)) => key_form.is_leq(axis_form),
                             _ => key_index == &index,
@@ -2869,16 +2931,12 @@ fn infer_hir_index_access(
                     builtin_fns,
                     src,
                 )?;
-                let index_form = super::index_def_for_inferred(&index, Some(dag), registry)
-                    .map_or_else(
-                        || index.finite_index_form(),
-                        |idx_def| {
-                            if !idx_def.is_finite_index() {
-                                return None;
-                            }
-                            idx_def.finite_index_size().map(NatPolyForm::from_constant)
-                        },
-                    );
+                let index_form = finite_axis_form(
+                    &index,
+                    super::index_def_for_inferred(&index, Some(dag), registry),
+                    src,
+                    index_expr.span,
+                )?;
                 // A key-typed expression selects by axis identity: exact for
                 // named and coordinate axes, widening (`N <= M`) for Fin.
                 if let InferredType::Key(key_index) = &expr_type {

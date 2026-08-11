@@ -268,7 +268,9 @@ node v_at_peak: Velocity[Maneuver] = for m: Maneuver {
 
 Access is governed by axis identity: `Key<Maneuver>` cannot index a `Phase`
 axis. The one widening is structural: `Key<Fin(N)>` is accepted where
-`Key<Fin(M)>` is expected when `N <= M`.
+`Key<Fin(M)>` is expected when `N <= M`. Structural `Fin` axes carry that
+cardinality form directly; a declared axis must retain its checked semantic
+definition rather than silently falling back to identity-only comparison.
 
 !!! note "Evaluation granularity"
     Access with a compile-time-constant key (a label, a loop variable, or

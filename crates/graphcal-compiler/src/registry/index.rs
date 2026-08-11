@@ -357,12 +357,6 @@ impl IndexDef {
         )
     }
 
-    /// Returns true if this is a structural `Fin(N)` index.
-    #[must_use]
-    pub(crate) const fn is_finite_index(&self) -> bool {
-        matches!(self.kind, IndexKind::Finite { .. })
-    }
-
     /// Returns the cardinality of a concrete structural `Fin(N)` index.
     #[must_use]
     pub const fn finite_index_size(&self) -> Option<u64> {
