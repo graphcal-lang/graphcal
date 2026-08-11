@@ -11,8 +11,9 @@
 
 mod format;
 
+use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::syntax::ast::{File, FormatEquivalent};
-use graphcal_compiler::syntax::parser::{ParseError, Parser};
+use graphcal_compiler::syntax::parser::{ParseError, ParseOperationError, Parser};
 
 /// Default line width for formatting.
 const LINE_WIDTH: usize = 100;
@@ -33,6 +34,9 @@ const DOC_STACK_SIZE: usize = 64 * 1024 * 1024;
 /// specifically instead of conflating them into a single "parse error".
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
+    /// Formatting was cooperatively cancelled by the embedding shell.
+    #[error(transparent)]
+    Cancelled(#[from] Cancelled),
     /// The source failed to parse.
     #[error(transparent)]
     Parse(#[from] ParseError),
@@ -70,6 +74,7 @@ pub enum FormatError {
 /// # Errors
 ///
 /// Returns [`FormatError::Parse`] if `source` cannot be parsed,
+/// [`FormatError::Cancelled`] if an embedding shell cancels the operation,
 /// [`FormatError::Render`] if rendering the formatted document fails,
 /// or [`FormatError::Utf8`] if the rendered bytes are not valid UTF-8.
 ///
@@ -78,9 +83,26 @@ pub enum FormatError {
 /// fails to parse, or [`FormatError::AstChanged`] if it parses into a different
 /// tree — both indicate a formatter bug, never invalid input.
 pub fn format_source(source: &str) -> Result<String, FormatError> {
+    format_source_with_cancellation(source, &CancellationToken::unbounded())
+}
+
+/// Format source while observing cooperative cancellation between each major
+/// parse, document, render, normalization, and verification phase.
+///
+/// A cancelled operation never returns partially formatted text.
+pub fn format_source_with_cancellation(
+    source: &str,
+    cancellation: &CancellationToken,
+) -> Result<String, FormatError> {
+    cancellation.checkpoint()?;
     let mut parser = Parser::new(source);
-    let file = parser.parse_file()?;
+    let file = match parser.parse_file_with_cancellation(cancellation) {
+        Ok(file) => file,
+        Err(ParseOperationError::Cancelled(error)) => return Err(error.into()),
+        Err(ParseOperationError::Parse(error)) => return Err(error.into()),
+    };
     let metadata = parser.into_source_metadata();
+    cancellation.checkpoint()?;
 
     // Build, render, AND drop the document inside the grown segment: the
     // drop is the deepest recursion (see `DOC_STACK_SIZE`).
@@ -90,16 +112,18 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
         doc.render(LINE_WIDTH, &mut output)?;
         Ok(output)
     })?;
+    cancellation.checkpoint()?;
     let mut result = String::from_utf8(output)?;
 
     strip_trailing_horizontal_whitespace(&mut result);
+    cancellation.checkpoint()?;
 
     // Ensure trailing newline
     if !result.ends_with('\n') {
         result.push('\n');
     }
 
-    verify_ast_preserved(&file, &result)?;
+    verify_ast_preserved(&file, &result, cancellation)?;
 
     Ok(result)
 }
@@ -111,10 +135,17 @@ pub fn format_source(source: &str) -> Result<String, FormatError> {
 /// [`FormatEquivalent`](graphcal_compiler::syntax::ast::FormatEquivalent)).
 /// Any divergence is a formatter bug, reported as a [`FormatError`] rather than
 /// silently returning text whose meaning may differ from the source.
-fn verify_ast_preserved(original: &File, formatted: &str) -> Result<(), FormatError> {
-    let reparsed = Parser::new(formatted)
-        .parse_file()
-        .map_err(FormatError::Reparse)?;
+fn verify_ast_preserved(
+    original: &File,
+    formatted: &str,
+    cancellation: &CancellationToken,
+) -> Result<(), FormatError> {
+    let mut parser = Parser::new(formatted);
+    let reparsed = match parser.parse_file_with_cancellation(cancellation) {
+        Ok(file) => file,
+        Err(ParseOperationError::Cancelled(error)) => return Err(error.into()),
+        Err(ParseOperationError::Parse(error)) => return Err(FormatError::Reparse(error)),
+    };
     if original.format_equivalent(&reparsed) {
         Ok(())
     } else {
@@ -134,4 +165,22 @@ fn strip_trailing_horizontal_whitespace(s: &mut String) {
         }
     }
     *s = stripped;
+}
+
+#[cfg(test)]
+mod tests {
+    use graphcal_compiler::cancellation::CancellationSource;
+
+    use super::*;
+
+    #[test]
+    fn cancellation_before_parse_returns_no_output() {
+        let source = CancellationSource::new();
+        source.cancel();
+
+        assert!(matches!(
+            format_source_with_cancellation("node x: Dimensionless = 1.0;\n", &source.token()),
+            Err(FormatError::Cancelled(_))
+        ));
+    }
 }

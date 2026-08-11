@@ -64,6 +64,12 @@ impl LoaderArtifactByteLimits {
             source_tree_file,
         }
     }
+
+    /// Maximum bytes accepted for one Graphcal source document.
+    #[must_use]
+    pub const fn source_file_bytes(self) -> u64 {
+        self.source_file
+    }
 }
 
 impl Default for LoaderArtifactByteLimits {
