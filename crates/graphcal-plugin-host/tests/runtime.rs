@@ -776,6 +776,96 @@ fn array_manifests_require_an_exported_memory() {
 }
 
 #[test]
+fn denied_allocator_growth_reports_allocation_failure_before_invoking_the_kernel() {
+    let wat = r#"
+    (module
+      (memory (export "memory") 1)
+      (func (export "graphcal_alloc") (param i32) (result i32)
+        (if (result i32)
+          (i32.eq (memory.grow (i32.const 1)) (i32.const -1))
+          (then (i32.const 0))
+          (else (i32.const 8))))
+      (func (export "graphcal_free") (param i32 i32))
+      (func (export "total") (param i32 i32) (result f64)
+        (unreachable)))
+    "#;
+    let manifest = manifest(vec![array_function(
+        "total",
+        &[("xs", array_kind("D", "I"))],
+        quantity_var("D"),
+    )]);
+    let host = PluginHost::with_limits(PluginLimits {
+        max_memory_bytes: 64 * 1024,
+        ..PluginLimits::default()
+    });
+    let module = host.load(&plugin(wat, &manifest)).unwrap();
+
+    assert_eq!(
+        module
+            .call(&fn_name("total"), &[vector(vec![1.0, 2.0, 3.0])])
+            .unwrap_err(),
+        PluginCallError::AllocationFailed { bytes: 24 }
+    );
+}
+
+#[test]
+fn misaligned_allocator_pointer_is_rejected_before_invoking_the_kernel() {
+    let wat = r#"
+    (module
+      (memory (export "memory") 1)
+      (func (export "graphcal_alloc") (param i32) (result i32) (i32.const 12))
+      (func (export "graphcal_free") (param i32 i32))
+      (func (export "total") (param i32 i32) (result f64)
+        (unreachable)))
+    "#;
+    let manifest = manifest(vec![array_function(
+        "total",
+        &[("xs", array_kind("D", "I"))],
+        quantity_var("D"),
+    )]);
+    let module = PluginHost::new().load(&plugin(wat, &manifest)).unwrap();
+
+    assert_eq!(
+        module
+            .call(&fn_name("total"), &[vector(vec![1.0])])
+            .unwrap_err(),
+        PluginCallError::MisalignedAllocatorPointer {
+            pointer: 12,
+            required_alignment: 8,
+        }
+    );
+}
+
+#[test]
+fn out_of_bounds_allocator_range_is_rejected_before_invoking_the_kernel() {
+    let wat = r#"
+    (module
+      (memory (export "memory") 1)
+      (func (export "graphcal_alloc") (param i32) (result i32) (i32.const 65528))
+      (func (export "graphcal_free") (param i32 i32))
+      (func (export "total") (param i32 i32) (result f64)
+        (unreachable)))
+    "#;
+    let manifest = manifest(vec![array_function(
+        "total",
+        &[("xs", array_kind("D", "I"))],
+        quantity_var("D"),
+    )]);
+    let module = PluginHost::new().load(&plugin(wat, &manifest)).unwrap();
+
+    assert_eq!(
+        module
+            .call(&fn_name("total"), &[vector(vec![1.0, 2.0])])
+            .unwrap_err(),
+        PluginCallError::AllocatorBufferOutOfBounds {
+            pointer: 0xFFF8,
+            bytes: 16,
+            memory_bytes: 0x0001_0000,
+        }
+    );
+}
+
+#[test]
 fn array_functions_with_single_value_wasm_types_are_rejected() {
     // The manifest declares an array parameter, but the export takes f64s.
     let wat = r#"
