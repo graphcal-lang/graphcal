@@ -1306,15 +1306,18 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 reader owns normalized `VirtualAbsolutePath` keys and one content variant per
 file; rooted real I/O traverses relative to a held directory handle, and
 overlay construction resolves identities without widening that base capability.
-Other reader implementations share capability types exposed by `lib.rs`, which
-comes last because it re-exports and ties the modules together.
+`ingestion.rs` defines the shared artifact/source-tree policy after the tree
+limit types it composes. Other reader implementations share capability types
+exposed by `lib.rs`, which comes last because it re-exports and ties the modules
+together.
 
 1. `crates/graphcal-io/src/atomic_write.rs`
 2. `crates/graphcal-io/src/in_memory_fs.rs`
 3. `crates/graphcal-io/src/real_fs.rs`
 4. `crates/graphcal-io/src/overlay_fs.rs`
 5. `crates/graphcal-io/src/source_tree.rs`
-6. `crates/graphcal-io/src/lib.rs`
+6. `crates/graphcal-io/src/ingestion.rs`
+7. `crates/graphcal-io/src/lib.rs`
 
 ### Stage 10 - Package domain model (`graphcal-package`)
 
