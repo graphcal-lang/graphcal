@@ -91,6 +91,12 @@ impl TraversalFailures {
         1 + self.rest.len()
     }
 
+    /// This collection is non-empty by construction.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
     /// Visit every failure in traversal order.
     pub fn iter(&self) -> impl Iterator<Item = &TraversalFailure> {
         std::iter::once(&self.first).chain(&self.rest)
