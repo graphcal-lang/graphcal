@@ -713,7 +713,10 @@ module segments, not a path string. Virtual single-file projects,
 manifest-backed packages, locked dependency instances, and synthetic test
 contexts all receive package ids at the loader/test boundary; there is no
 package-less DAG, and the compiler core does not inspect the package id's
-origin.
+origin. `DagId::rebase_descendant` returns typed `Rebased` versus
+`OutsideSubtree` outcomes. Include assembly preserves the latter only for
+known external references; declaration and concrete-instance owners must
+rebase successfully or produce an internal diagnostic at the include site.
 
 Examples:
 
