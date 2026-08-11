@@ -337,7 +337,12 @@ constructors written in Graphcal source remain term imports.
 
 The top-level JSON keys are still entry parameter names, and the same
 closed-value compiler recursively checks every field and indexed entry against
-that parameter's concrete type:
+that parameter's concrete type. Object keys must be unique at every nesting
+level; escaped spellings that decode to the same key are duplicates too.
+Integer-syntax tokens must fit exactly in Graphcal's signed 64-bit `Int` domain
+and are never reinterpreted as floating point. Tokens containing a decimal point
+or exponent are parsed as finite binary64 values; overflow and nonzero underflow
+are rejected, while ordinary binary64 rounding follows the JSON numeric policy.
 
 ```json
 {

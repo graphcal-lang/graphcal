@@ -18,8 +18,12 @@
 //! | `object` with `"type"` and `"fields"` | Single-variant struct |
 //! | `object` with `"index"` and `"entries"` | Named-label indexed param |
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+
+use serde::Deserialize;
+use serde::de::{MapAccess, SeqAccess, Visitor};
+use serde_json::value::RawValue;
 
 use graphcal_compiler::syntax::ast::{
     Expr, ExprKind, FieldInit, Ident, IdentPath, MapEntry, MapEntryIndex, MapEntryKey,
@@ -79,6 +83,296 @@ fn parse_name_atoms(
 }
 
 // ---------------------------------------------------------------------------
+// Exact JSON boundary
+// ---------------------------------------------------------------------------
+
+/// A structured location in the JSON input.
+///
+/// Keeping path segments typed lets duplicate-key and number diagnostics retain
+/// object/array structure without building and later splitting a composite key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsonPath {
+    segments: Vec<JsonPathSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum JsonPathSegment {
+    ObjectKey(String),
+    ArrayIndex(usize),
+}
+
+impl JsonPath {
+    const fn root() -> Self {
+        Self {
+            segments: Vec::new(),
+        }
+    }
+
+    fn object_key(&self, key: &str) -> Self {
+        let mut path = self.clone();
+        path.segments
+            .push(JsonPathSegment::ObjectKey(key.to_string()));
+        path
+    }
+
+    fn array_index(&self, index: usize) -> Self {
+        let mut path = self.clone();
+        path.segments.push(JsonPathSegment::ArrayIndex(index));
+        path
+    }
+}
+
+impl fmt::Display for JsonPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("$")?;
+        self.segments.iter().try_for_each(|segment| match segment {
+            JsonPathSegment::ObjectKey(key) => write!(formatter, "[{key:?}]"),
+            JsonPathSegment::ArrayIndex(index) => write!(formatter, "[{index}]"),
+        })
+    }
+}
+
+/// Why an exact JSON number cannot cross into Graphcal's numeric domain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JsonNumberError {
+    /// Integer-syntax JSON numbers are accepted only in Graphcal's signed range.
+    IntegerOutOfRange,
+    /// A decimal/exponent token overflowed or otherwise lacked a finite binary64 value.
+    FloatOutOfRange,
+    /// A nonzero decimal/exponent token underflowed to binary64 zero.
+    FloatUnderflow,
+}
+
+impl fmt::Display for JsonNumberError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::IntegerOutOfRange => "integer is outside the signed 64-bit range",
+            Self::FloatOutOfRange => "decimal/exponent value is outside the finite binary64 range",
+            Self::FloatUnderflow => "nonzero decimal/exponent value underflows to binary64 zero",
+        })
+    }
+}
+
+/// A number whose source syntax and target representation agree.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ExactJsonNumber {
+    Integer(i64),
+    FiniteFloat(f64),
+}
+
+/// JSON data after duplicate-key and exact-number validation.
+#[derive(Debug, Clone, PartialEq)]
+enum ExactJsonValue {
+    String(String),
+    Bool(bool),
+    Number(ExactJsonNumber),
+    Object(ExactJsonObject),
+    Null,
+    Array,
+}
+
+/// An object whose private constructor rejects duplicate keys.
+#[derive(Debug, Clone, PartialEq)]
+struct ExactJsonObject {
+    entries: Vec<(String, ExactJsonValue)>,
+}
+
+impl ExactJsonObject {
+    fn get(&self, key: &str) -> Option<&ExactJsonValue> {
+        self.entries
+            .iter()
+            .find_map(|(candidate, value)| (candidate == key).then_some(value))
+    }
+
+    fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.entries.iter().map(|(key, _)| key)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&String, &ExactJsonValue)> {
+        self.entries.iter().map(|(key, value)| (key, value))
+    }
+}
+
+impl ExactJsonValue {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value),
+            Self::Bool(_) | Self::Number(_) | Self::Object(_) | Self::Null | Self::Array => None,
+        }
+    }
+
+    const fn as_object(&self) -> Option<&ExactJsonObject> {
+        match self {
+            Self::Object(object) => Some(object),
+            Self::String(_) | Self::Bool(_) | Self::Number(_) | Self::Null | Self::Array => None,
+        }
+    }
+}
+
+/// Temporary object entries preserving every occurrence and raw value token.
+struct RawObjectEntries<'a>(Vec<(String, &'a RawValue)>);
+
+impl<'de> Deserialize<'de> for RawObjectEntries<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RawObjectVisitor;
+
+        impl<'de> Visitor<'de> for RawObjectVisitor {
+            type Value = RawObjectEntries<'de>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut entries = Vec::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    entries.push((key, map.next_value::<&'de RawValue>()?));
+                }
+                Ok(RawObjectEntries(entries))
+            }
+        }
+
+        deserializer.deserialize_map(RawObjectVisitor)
+    }
+}
+
+/// Temporary array entries used only to validate nested object keys/numbers.
+struct RawArrayEntries<'a>(Vec<&'a RawValue>);
+
+impl<'de> Deserialize<'de> for RawArrayEntries<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RawArrayVisitor;
+
+        impl<'de> Visitor<'de> for RawArrayVisitor {
+            type Value = RawArrayEntries<'de>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a JSON array")
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut entries = Vec::new();
+                while let Some(value) = sequence.next_element::<&'de RawValue>()? {
+                    entries.push(value);
+                }
+                Ok(RawArrayEntries(entries))
+            }
+        }
+
+        deserializer.deserialize_seq(RawArrayVisitor)
+    }
+}
+
+fn parse_exact_json(source: &str) -> Result<ExactJsonValue, JsonInputError> {
+    let raw: &RawValue = serde_json::from_str(source)?;
+    parse_exact_value(raw, &JsonPath::root())
+}
+
+fn parse_exact_value(raw: &RawValue, path: &JsonPath) -> Result<ExactJsonValue, JsonInputError> {
+    let source = raw.get().trim_start();
+    match source.as_bytes().first() {
+        Some(b'"') => serde_json::from_str(source)
+            .map(ExactJsonValue::String)
+            .map_err(JsonInputError::from),
+        Some(b'{') => parse_exact_object(source, path).map(ExactJsonValue::Object),
+        Some(b'[') => {
+            let entries: RawArrayEntries<'_> = serde_json::from_str(source)?;
+            entries
+                .0
+                .into_iter()
+                .enumerate()
+                .try_for_each(|(index, value)| {
+                    parse_exact_value(value, &path.array_index(index)).map(|_| ())
+                })?;
+            Ok(ExactJsonValue::Array)
+        }
+        Some(b't') => Ok(ExactJsonValue::Bool(true)),
+        Some(b'f') => Ok(ExactJsonValue::Bool(false)),
+        Some(b'n') => Ok(ExactJsonValue::Null),
+        Some(_) => parse_exact_number(source, path).map(ExactJsonValue::Number),
+        None => Err(JsonInputError::EmptyRawValue),
+    }
+}
+
+fn parse_exact_object(source: &str, path: &JsonPath) -> Result<ExactJsonObject, JsonInputError> {
+    let raw_entries: RawObjectEntries<'_> = serde_json::from_str(source)?;
+    if let Some(key) = duplicate_key(&raw_entries.0) {
+        return Err(JsonInputError::DuplicateKey {
+            path: path.clone(),
+            key,
+        });
+    }
+    let entries = raw_entries
+        .0
+        .into_iter()
+        .map(|(key, value)| {
+            let child_path = path.object_key(&key);
+            parse_exact_value(value, &child_path).map(|value| (key, value))
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(ExactJsonObject { entries })
+}
+
+fn duplicate_key(entries: &[(String, &RawValue)]) -> Option<String> {
+    let mut seen = HashSet::new();
+    entries
+        .iter()
+        .find_map(|(key, _)| (!seen.insert(key.as_str())).then(|| key.clone()))
+}
+
+fn parse_exact_number(source: &str, path: &JsonPath) -> Result<ExactJsonNumber, JsonInputError> {
+    if !source.contains(['.', 'e', 'E']) {
+        return source
+            .parse::<i64>()
+            .map(ExactJsonNumber::Integer)
+            .map_err(|_| JsonInputError::InvalidNumber {
+                path: path.clone(),
+                value: source.to_string(),
+                reason: JsonNumberError::IntegerOutOfRange,
+            });
+    }
+
+    let value = source
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| JsonInputError::InvalidNumber {
+            path: path.clone(),
+            value: source.to_string(),
+            reason: JsonNumberError::FloatOutOfRange,
+        })?;
+    let nonzero_significand = source.split(['e', 'E']).next().is_some_and(|significand| {
+        significand
+            .bytes()
+            .any(|digit| matches!(digit, b'1'..=b'9'))
+    });
+    if value == 0.0 && nonzero_significand {
+        return Err(JsonInputError::InvalidNumber {
+            path: path.clone(),
+            value: source.to_string(),
+            reason: JsonNumberError::FloatUnderflow,
+        });
+    }
+    Ok(ExactJsonNumber::FiniteFloat(value))
+}
+
+// ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
 
@@ -106,8 +400,24 @@ pub enum JsonInputError {
         param: String,
         source: Box<graphcal_compiler::syntax::parser::ParseError>,
     },
-    /// A JSON number is neither i64 nor f64.
-    InvalidNumber { param: String },
+    /// A duplicate object key would otherwise be collapsed by a map representation.
+    DuplicateKey {
+        /// The object containing the repeated key.
+        path: JsonPath,
+        /// The repeated decoded key.
+        key: String,
+    },
+    /// A JSON number cannot be represented under the explicit input policy.
+    InvalidNumber {
+        /// Structured location of the numeric token.
+        path: JsonPath,
+        /// Exact numeric source token.
+        value: String,
+        /// The failed numeric invariant.
+        reason: JsonNumberError,
+    },
+    /// An empty raw value escaped `serde_json`'s syntax validation.
+    EmptyRawValue,
     /// An unsupported JSON type was encountered (null or array).
     UnsupportedJsonType { param: String, kind: &'static str },
     /// The `"variant"` field is not a string.
@@ -146,9 +456,17 @@ impl fmt::Display for JsonInputError {
             Self::ParseFailed { param, source } => {
                 write!(f, "failed to parse value for `{param}`: {source}")
             }
-            Self::InvalidNumber { param } => {
-                write!(f, "invalid number for `{param}`")
+            Self::DuplicateKey { path, key } => {
+                write!(f, "duplicate JSON key {key:?} in object at {path}")
             }
+            Self::InvalidNumber {
+                path,
+                value,
+                reason,
+            } => {
+                write!(f, "invalid JSON number {value:?} at {path}: {reason}")
+            }
+            Self::EmptyRawValue => write!(f, "invalid JSON: empty raw value"),
             Self::UnsupportedJsonType { param, kind } => {
                 write!(f, "unsupported JSON type `{kind}` for `{param}`")
             }
@@ -220,11 +538,13 @@ impl From<serde_json::Error> for JsonInputError {
 /// Constructor and index spellings must be explicit in JSON. Concrete expected
 /// types, dimensions, completeness, and constraints are checked by the prepared evaluator.
 pub fn json_to_overrides(json_str: &str) -> Result<HashMap<DeclName, Expr>, JsonInputError> {
-    let json: serde_json::Value = serde_json::from_str(json_str)?;
-    let obj = json.as_object().ok_or(JsonInputError::TopLevelNotObject)?;
+    let json = parse_exact_json(json_str)?;
+    let ExactJsonValue::Object(obj) = json else {
+        return Err(JsonInputError::TopLevelNotObject);
+    };
 
     let mut overrides = HashMap::new();
-    for (name, value) in obj {
+    for (name, value) in obj.iter() {
         let expr = convert_value(value, name)?;
         let decl_name =
             DeclName::try_new(name.clone()).map_err(|reason| JsonInputError::InvalidName {
@@ -243,17 +563,17 @@ pub fn json_to_overrides(json_str: &str) -> Result<HashMap<DeclName, Expr>, Json
 // ---------------------------------------------------------------------------
 
 /// Convert a single JSON value into an AST `Expr`.
-fn convert_value(value: &serde_json::Value, param_name: &str) -> Result<Expr, JsonInputError> {
+fn convert_value(value: &ExactJsonValue, param_name: &str) -> Result<Expr, JsonInputError> {
     match value {
-        serde_json::Value::String(s) => convert_string(s, param_name),
-        serde_json::Value::Bool(b) => Ok(synth_expr(ExprKind::Bool(*b))),
-        serde_json::Value::Number(n) => convert_number(n, param_name),
-        serde_json::Value::Object(obj) => convert_object(obj, param_name),
-        serde_json::Value::Null => Err(JsonInputError::UnsupportedJsonType {
+        ExactJsonValue::String(value) => convert_string(value, param_name),
+        ExactJsonValue::Bool(value) => Ok(synth_expr(ExprKind::Bool(*value))),
+        ExactJsonValue::Number(number) => Ok(convert_number(*number)),
+        ExactJsonValue::Object(object) => convert_object(object, param_name),
+        ExactJsonValue::Null => Err(JsonInputError::UnsupportedJsonType {
             param: param_name.to_string(),
             kind: "null",
         }),
-        serde_json::Value::Array(_) => Err(JsonInputError::UnsupportedJsonType {
+        ExactJsonValue::Array => Err(JsonInputError::UnsupportedJsonType {
             param: param_name.to_string(),
             kind: "array",
         }),
@@ -271,43 +591,16 @@ fn convert_string(s: &str, param_name: &str) -> Result<Expr, JsonInputError> {
         })
 }
 
-/// Convert a JSON number to an integer or dimensionless float.
-///
-/// Tries, in order: `i64` → `u64` (converted to `i64`) → `f64`.
-/// Returns an error if no representation works, or if a `u64` value
-/// exceeds `i64::MAX` (which would lose precision when cast to `f64`).
-fn convert_number(n: &serde_json::Number, param_name: &str) -> Result<Expr, JsonInputError> {
-    // Try i64 first (most common integer case).
-    if let Some(i) = n.as_i64() {
-        return Ok(synth_expr(ExprKind::Integer(i)));
+/// Convert an already validated JSON number to an AST numeric literal.
+const fn convert_number(number: ExactJsonNumber) -> Expr {
+    match number {
+        ExactJsonNumber::Integer(value) => synth_expr(ExprKind::Integer(value)),
+        ExactJsonNumber::FiniteFloat(value) => synth_expr(ExprKind::Number(value)),
     }
-    // Try u64 for large unsigned integers (e.g., 9_999_999_999_999_999_999).
-    if let Some(u) = n.as_u64() {
-        return i64::try_from(u).map_or_else(
-            |_| {
-                Err(JsonInputError::InvalidNumber {
-                    param: param_name.to_string(),
-                })
-            },
-            |i| Ok(synth_expr(ExprKind::Integer(i))),
-        );
-    }
-    // Fall back to f64 for floating-point values.
-    n.as_f64().map_or_else(
-        || {
-            Err(JsonInputError::InvalidNumber {
-                param: param_name.to_string(),
-            })
-        },
-        |f| Ok(synth_expr(ExprKind::Number(f))),
-    )
 }
 
 /// Dispatch a JSON object to the appropriate converter.
-fn convert_object(
-    obj: &serde_json::Map<String, serde_json::Value>,
-    param_name: &str,
-) -> Result<Expr, JsonInputError> {
+fn convert_object(obj: &ExactJsonObject, param_name: &str) -> Result<Expr, JsonInputError> {
     let has_variant = obj.contains_key("variant");
     let has_type = obj.contains_key("type");
     let has_index = obj.contains_key("index");
@@ -342,7 +635,7 @@ fn convert_object(
 }
 
 fn reject_unknown_keys(
-    obj: &serde_json::Map<String, serde_json::Value>,
+    obj: &ExactJsonObject,
     param_name: &str,
     allowed: &[&str],
 ) -> Result<(), JsonInputError> {
@@ -359,12 +652,10 @@ fn reject_unknown_keys(
 /// Convert `{"variant": "Name", "fields": {...}}` to a `ConstructorCall` expr.
 ///
 /// Also handles bare variants: `{"variant": "Nominal"}`.
-fn convert_tagged_union(
-    obj: &serde_json::Map<String, serde_json::Value>,
-    param_name: &str,
-) -> Result<Expr, JsonInputError> {
-    let variant_name = obj["variant"]
-        .as_str()
+fn convert_tagged_union(obj: &ExactJsonObject, param_name: &str) -> Result<Expr, JsonInputError> {
+    let variant_name = obj
+        .get("variant")
+        .and_then(ExactJsonValue::as_str)
         .ok_or_else(|| JsonInputError::InvalidVariant {
             param: param_name.to_string(),
         })?;
@@ -390,18 +681,17 @@ fn convert_tagged_union(
 /// Convert `{"type": "TypeName", "fields": {"x": "...", ...}}` to a `ConstructorCall` expr.
 ///
 /// The struct type name is provided explicitly via the `"type"` key.
-fn convert_struct(
-    obj: &serde_json::Map<String, serde_json::Value>,
-    param_name: &str,
-) -> Result<Expr, JsonInputError> {
-    let type_name_str = obj["type"]
-        .as_str()
+fn convert_struct(obj: &ExactJsonObject, param_name: &str) -> Result<Expr, JsonInputError> {
+    let type_name_str = obj
+        .get("type")
+        .and_then(ExactJsonValue::as_str)
         .ok_or_else(|| JsonInputError::InvalidType {
             param: param_name.to_string(),
         })?;
 
-    let fields_obj = obj["fields"]
-        .as_object()
+    let fields_obj = obj
+        .get("fields")
+        .and_then(ExactJsonValue::as_object)
         .ok_or_else(|| JsonInputError::InvalidFields {
             param: param_name.to_string(),
         })?;
@@ -417,19 +707,18 @@ fn convert_struct(
 /// Convert `{"index": "IndexName", "entries": {"Variant": ..., ...}}` to a `MapLiteral` expr.
 ///
 /// The index name is provided explicitly via the `"index"` key.
-fn convert_indexed(
-    obj: &serde_json::Map<String, serde_json::Value>,
-    param_name: &str,
-) -> Result<Expr, JsonInputError> {
-    let index_name = obj["index"]
-        .as_str()
+fn convert_indexed(obj: &ExactJsonObject, param_name: &str) -> Result<Expr, JsonInputError> {
+    let index_name = obj
+        .get("index")
+        .and_then(ExactJsonValue::as_str)
         .ok_or_else(|| JsonInputError::InvalidIndex {
             param: param_name.to_string(),
         })?;
     let index_path = synth_name_path(index_name, param_name, "index")?;
 
-    let entries_obj = obj["entries"]
-        .as_object()
+    let entries_obj = obj
+        .get("entries")
+        .and_then(ExactJsonValue::as_object)
         .ok_or_else(|| JsonInputError::InvalidEntries {
             param: param_name.to_string(),
         })?;
@@ -470,7 +759,7 @@ fn convert_indexed(
 
 /// Convert a JSON fields object into `Vec<FieldInit>`.
 fn convert_field_inits(
-    fields_obj: &serde_json::Map<String, serde_json::Value>,
+    fields_obj: &ExactJsonObject,
     param_name: &str,
 ) -> Result<Vec<FieldInit>, JsonInputError> {
     fields_obj
@@ -686,6 +975,97 @@ mod tests {
             }
             other => panic!("expected MapLiteral, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn duplicate_keys_are_rejected_at_every_object_level() {
+        let top_level = json_to_overrides(r#"{"x": 1, "x": 2}"#).unwrap_err();
+        assert!(matches!(
+            top_level,
+            JsonInputError::DuplicateKey { path, key }
+                if path == JsonPath::root() && key == "x"
+        ));
+
+        let nested =
+            json_to_overrides(r#"{"record": {"type": "Pair", "fields": {"x": 1, "x": 2}}}"#)
+                .unwrap_err();
+        assert!(matches!(
+            nested,
+            JsonInputError::DuplicateKey { path, key }
+                if path.to_string() == "$[\"record\"][\"fields\"]" && key == "x"
+        ));
+
+        let decoded_duplicate = json_to_overrides(r#"{"x": 1, "\u0078": 2}"#).unwrap_err();
+        assert!(matches!(
+            decoded_duplicate,
+            JsonInputError::DuplicateKey { path, key }
+                if path == JsonPath::root() && key == "x"
+        ));
+    }
+
+    #[test]
+    fn integer_tokens_are_accepted_only_in_the_i64_domain() {
+        for (source, expected) in [
+            (r#"{"x": -9223372036854775808}"#, i64::MIN),
+            (r#"{"x": 9223372036854775807}"#, i64::MAX),
+        ] {
+            let overrides = json_to_overrides(source).unwrap();
+            assert!(
+                matches!(overrides[&DeclName::expect_valid("x")].kind, ExprKind::Integer(value) if value == expected)
+            );
+        }
+
+        for source in [
+            r#"{"x": -9223372036854775809}"#,
+            r#"{"x": 9223372036854775808}"#,
+            r#"{"x": 18446744073709551615}"#,
+            r#"{"x": -18446744073709551617}"#,
+        ] {
+            let error = json_to_overrides(source).unwrap_err();
+            assert!(matches!(
+                error,
+                JsonInputError::InvalidNumber {
+                    reason: JsonNumberError::IntegerOutOfRange,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn decimal_tokens_require_a_finite_non_underflowing_binary64_value() {
+        let rounded = json_to_overrides(r#"{"x": 9223372036854775808.0}"#).unwrap();
+        assert!(matches!(
+            rounded[&DeclName::expect_valid("x")].kind,
+            ExprKind::Number(value)
+                if value.to_bits() == 9_223_372_036_854_775_808.0_f64.to_bits()
+        ));
+
+        assert!(matches!(
+            json_to_overrides(r#"{"x": 1e309}"#).unwrap_err(),
+            JsonInputError::InvalidNumber {
+                reason: JsonNumberError::FloatOutOfRange,
+                ..
+            }
+        ));
+        assert!(matches!(
+            json_to_overrides(r#"{"x": 1e-400}"#).unwrap_err(),
+            JsonInputError::InvalidNumber {
+                reason: JsonNumberError::FloatUnderflow,
+                ..
+            }
+        ));
+        assert!(json_to_overrides(r#"{"x": 0e-400}"#).is_ok());
+    }
+
+    #[test]
+    fn duplicates_inside_an_unsupported_array_are_still_detected() {
+        let error = json_to_overrides(r#"{"x": [{"field": 1, "field": 2}]}"#).unwrap_err();
+        assert!(matches!(
+            error,
+            JsonInputError::DuplicateKey { path, key }
+                if path.to_string() == "$[\"x\"][0]" && key == "field"
+        ));
     }
 
     #[test]
