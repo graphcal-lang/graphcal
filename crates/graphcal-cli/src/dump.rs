@@ -15,7 +15,7 @@ use graphcal_eval::eval::{
     check_project_with_host_fns,
 };
 use graphcal_eval::loader::{build_rooted_filesystem, load_project};
-use graphcal_io::FileSystemReader;
+use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, NeverCancel};
 
 use crate::overrides::{OverrideParseError, ParsedOverrides, parse_overrides_with_sources};
 
@@ -99,15 +99,11 @@ pub enum DumpError {
         source: std::io::Error,
     },
     #[error(
-        "source file {} is {size} bytes, exceeding the dump safety limit of {limit} bytes",
+        "source file {} exceeds the dump safety limit of {limit} bytes",
         path.display()
     )]
     #[diagnostic(code(graphcal::dump::D002))]
-    SourceTooLarge {
-        path: PathBuf,
-        size: usize,
-        limit: usize,
-    },
+    SourceTooLarge { path: PathBuf, limit: usize },
     #[error("source file {} is not valid UTF-8", path.display())]
     #[diagnostic(code(graphcal::dump::D003))]
     SourceEncoding { path: PathBuf },
@@ -276,18 +272,17 @@ struct SourceUnit {
 fn read_source(file: &Path, root: Option<&Path>) -> Result<SourceUnit, DumpError> {
     let fs = build_rooted_filesystem(file, root);
     let bytes = fs
-        .read_bytes(file)
-        .map_err(|source| DumpError::SourceRead {
-            path: file.to_path_buf(),
-            source,
+        .read_bytes_bounded(file, ByteLimit::new(MAX_SOURCE_BYTES as u64), &NeverCancel)
+        .map_err(|error| match error {
+            FileSystemReadError::ByteLimitExceeded { .. } => DumpError::SourceTooLarge {
+                path: file.to_path_buf(),
+                limit: MAX_SOURCE_BYTES,
+            },
+            other => DumpError::SourceRead {
+                path: file.to_path_buf(),
+                source: std::io::Error::other(other),
+            },
         })?;
-    if bytes.len() > MAX_SOURCE_BYTES {
-        return Err(DumpError::SourceTooLarge {
-            path: file.to_path_buf(),
-            size: bytes.len(),
-            limit: MAX_SOURCE_BYTES,
-        });
-    }
     let text = String::from_utf8(bytes).map_err(|_| DumpError::SourceEncoding {
         path: file.to_path_buf(),
     })?;
