@@ -21,9 +21,9 @@ use graphcal_io::{
     SourceTreeHashLimits, hash_source_tree,
 };
 use graphcal_package::{
-    GitCommitHash, GitUrl, LockedPackage, PackageInstanceId, PackageManifest, PackageSource,
-    STDLIB_VERSION, ValidatedPackageGraph, parse_lockfile_str, parse_manifest_str,
-    validate_lock_against_manifests,
+    GitCommitHash, GitUrl, LockedPackage, LockfileParseLimits, PackageInstanceId, PackageManifest,
+    PackageSource, STDLIB_VERSION, ValidatedPackageGraph, parse_lockfile_str_with_limits,
+    parse_manifest_str, validate_lock_against_manifests,
 };
 
 #[cfg(test)]
@@ -223,6 +223,10 @@ impl LoaderBudgetState {
             files_read: 0,
             total_bytes: 0,
         }
+    }
+
+    fn lockfile_parse_limits(&self) -> LockfileParseLimits {
+        LockfileParseLimits::new(usize::try_from(self.policy.max_files).unwrap_or(usize::MAX))
     }
 
     fn exceeded(path: &Path, resource: LoaderResource, limit: u64) -> LoaderReadError {
@@ -1815,9 +1819,10 @@ fn load_plugin_pins(
                 )));
             }
         };
-    let lockfile = parse_lockfile_str(&lockfile_text).map_err(|e| {
+    let lockfile = parse_lockfile_str_with_limits(&lockfile_text, budget.lockfile_parse_limits())
+        .map_err(|error| {
         CompileError::Eval(GraphcalError::ManifestError {
-            message: e.to_string(),
+            message: error.to_string(),
         })
     })?;
     lockfile
@@ -1925,8 +1930,9 @@ impl<'a> PackageLoadContext<'a> {
                     "package dependencies require graphcal.lock; run `graphcal deps lock`: {error}"
                 ))
             })?;
-        let lockfile = parse_lockfile_str(&lockfile_text)
-            .map_err(|error| loader_manifest_error(error.to_string()))?;
+        let lockfile =
+            parse_lockfile_str_with_limits(&lockfile_text, budget.lockfile_parse_limits())
+                .map_err(|error| loader_manifest_error(error.to_string()))?;
         lockfile
             .validate(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
             .map_err(|error| loader_manifest_error(error.to_string()))?;
@@ -4262,8 +4268,9 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         .unwrap();
 
         let lockfile_path = fixture.directory.path().join("project/graphcal.lock");
-        let mut lockfile = parse_lockfile_str(&std::fs::read_to_string(&lockfile_path).unwrap())
-            .expect("fixture lockfile parses");
+        let mut lockfile =
+            graphcal_package::parse_lockfile_str(&std::fs::read_to_string(&lockfile_path).unwrap())
+                .expect("fixture lockfile parses");
         let dependency = lockfile
             .packages
             .iter_mut()
