@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 thiserror.workspace = true
 toml.workspace = true
+url = "2.5.8"
 
 [lints]
 workspace = true

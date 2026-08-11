@@ -2487,7 +2487,7 @@ fn cache_dir() -> Result<PathBuf, String> {
 fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"git\0");
-    hasher.update(url.as_str().as_bytes());
+    hasher.update(url.to_string().as_bytes());
     hasher.update([0]);
     hasher.update(rev.as_str().as_bytes());
     hex_string(&hasher.finalize())

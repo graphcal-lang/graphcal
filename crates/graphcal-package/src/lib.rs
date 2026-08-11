@@ -10,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 use toml::{Table, Value};
+use url::{Host, Url};
 
 /// Graphcal's first lockfile schema version.
 pub const LOCK_VERSION: u64 = 1;
@@ -32,9 +33,54 @@ pub struct PackageInstanceId(String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GitCommitHash(String);
 
-/// Git remote URL after credential validation.
+/// Parsed remote Git repository URL.
+///
+/// Only HTTPS, SSH URL, and SSH scp-like transports are representable. Local
+/// paths and arbitrary URL schemes cannot enter the package graph.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct GitUrl(String);
+pub struct GitUrl(GitUrlKind);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum GitUrlKind {
+    Https {
+        host: Host<String>,
+        port: Option<u16>,
+        path: GitRepositoryPath,
+    },
+    Ssh {
+        user: Option<SshUser>,
+        host: Host<String>,
+        port: Option<u16>,
+        path: GitRepositoryPath,
+    },
+    Scp {
+        user: SshUser,
+        host: Host<String>,
+        path: GitRepositoryPath,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SshUser(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct GitRepositoryPath {
+    components: Vec<GitRepositoryPathComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct GitRepositoryPathComponent(String);
+
+/// Supported transport of a validated remote Git URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitTransport {
+    /// TLS-protected HTTP Git transport.
+    Https,
+    /// Explicit `ssh://` URL.
+    Ssh,
+    /// SSH scp-like `user@host:path` syntax.
+    Scp,
+}
 
 /// Portable package-relative source directory.
 ///
@@ -77,7 +123,6 @@ impl_string_newtype!(PackageName);
 impl_string_newtype!(DependencyName);
 impl_string_newtype!(PackageInstanceId);
 impl_string_newtype!(GitCommitHash);
-impl_string_newtype!(GitUrl);
 
 impl PackageSourceDirectory {
     /// Parse a non-empty portable relative directory.
@@ -227,26 +272,226 @@ impl GitCommitHash {
 }
 
 impl GitUrl {
-    /// Construct a Git URL after rejecting embedded credentials.
+    /// Parse a supported remote Git URL into typed transport, authority, and
+    /// repository-path components.
     ///
     /// # Errors
     ///
-    /// Returns [`GitUrlError`] for empty URLs or URLs that include credentials.
+    /// Returns [`GitUrlError`] for malformed/local URLs, unsupported schemes,
+    /// credentials, empty repositories, or option-shaped components.
     fn new(value: impl Into<String>) -> Result<Self, GitUrlError> {
         let value = value.into();
-        if value.trim().is_empty() {
-            return Err(GitUrlError {
-                value,
-                reason: GitUrlErrorReason::Empty,
-            });
+        let invalid = |reason| GitUrlError {
+            value: value.clone(),
+            reason,
+        };
+        if value.is_empty() {
+            return Err(invalid(GitUrlErrorReason::Empty));
         }
-        if url_has_userinfo(&value) {
-            return Err(GitUrlError {
-                value,
-                reason: GitUrlErrorReason::Credentials,
-            });
+        if value.trim() != value
+            || value.chars().any(char::is_control)
+            || value.contains('\\')
+            || value.split('/').any(is_ambiguous_raw_path_component)
+        {
+            return Err(invalid(GitUrlErrorReason::Malformed));
         }
-        Ok(Self(value))
+        if value.starts_with('-') {
+            return Err(invalid(GitUrlErrorReason::OptionShaped));
+        }
+
+        if value.contains("://") {
+            parse_standard_git_url(&value).map(Self).map_err(invalid)
+        } else {
+            parse_scp_git_url(&value).map(Self).map_err(invalid)
+        }
+    }
+
+    /// Remote transport selected by this URL.
+    #[must_use]
+    pub const fn transport(&self) -> GitTransport {
+        match &self.0 {
+            GitUrlKind::Https { .. } => GitTransport::Https,
+            GitUrlKind::Ssh { .. } => GitTransport::Ssh,
+            GitUrlKind::Scp { .. } => GitTransport::Scp,
+        }
+    }
+}
+
+impl fmt::Display for GitUrl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            GitUrlKind::Https { host, port, path } => {
+                write!(formatter, "https://{host}")?;
+                if let Some(port) = port {
+                    write!(formatter, ":{port}")?;
+                }
+                formatter.write_str("/")?;
+                path.fmt(formatter)
+            }
+            GitUrlKind::Ssh {
+                user,
+                host,
+                port,
+                path,
+            } => {
+                formatter.write_str("ssh://")?;
+                if let Some(user) = user {
+                    write!(formatter, "{}@", user.0)?;
+                }
+                write!(formatter, "{host}")?;
+                if let Some(port) = port {
+                    write!(formatter, ":{port}")?;
+                }
+                formatter.write_str("/")?;
+                path.fmt(formatter)
+            }
+            GitUrlKind::Scp { user, host, path } => {
+                write!(formatter, "{}@{host}:", user.0)?;
+                path.fmt(formatter)
+            }
+        }
+    }
+}
+
+impl fmt::Display for GitRepositoryPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, component) in self.components.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str("/")?;
+            }
+            formatter.write_str(&component.0)?;
+        }
+        Ok(())
+    }
+}
+
+fn parse_standard_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> {
+    let parsed = Url::parse(value).map_err(|_| GitUrlErrorReason::Malformed)?;
+    if !matches!(parsed.scheme(), "https" | "ssh") {
+        return Err(GitUrlErrorReason::UnsupportedScheme(
+            parsed.scheme().to_string(),
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(GitUrlErrorReason::QueryOrFragment);
+    }
+    let host = parsed
+        .host()
+        .map(|host| host.to_owned())
+        .ok_or(GitUrlErrorReason::MissingHost)?;
+    reject_option_shaped(&host.to_string())?;
+    let path = parse_repository_path(
+        parsed
+            .path_segments()
+            .ok_or(GitUrlErrorReason::MissingRepositoryPath)?,
+    )?;
+
+    match parsed.scheme() {
+        "https" => {
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                return Err(GitUrlErrorReason::Credentials);
+            }
+            Ok(GitUrlKind::Https {
+                host,
+                port: parsed.port(),
+                path,
+            })
+        }
+        "ssh" => {
+            if parsed.password().is_some() {
+                return Err(GitUrlErrorReason::Credentials);
+            }
+            let user = parse_ssh_user(parsed.username())?;
+            Ok(GitUrlKind::Ssh {
+                user,
+                host,
+                port: parsed.port(),
+                path,
+            })
+        }
+        scheme => Err(GitUrlErrorReason::UnsupportedScheme(scheme.to_string())),
+    }
+}
+
+fn parse_scp_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> {
+    let (authority, path) = value.split_once(':').ok_or(GitUrlErrorReason::Malformed)?;
+    if authority.is_empty() || path.starts_with('/') {
+        return Err(GitUrlErrorReason::Malformed);
+    }
+    let (user, host_text) = match authority.rsplit_once('@') {
+        Some((user, host)) => (user, host),
+        None if path.contains('@') => return Err(GitUrlErrorReason::Credentials),
+        None => return Err(GitUrlErrorReason::Malformed),
+    };
+    if host_text.contains('@') {
+        return Err(GitUrlErrorReason::Malformed);
+    }
+    reject_option_shaped(host_text)?;
+    let host = Host::parse(host_text).map_err(|_| GitUrlErrorReason::Malformed)?;
+    let user = parse_required_ssh_user(user)?;
+    let path = parse_repository_path(path.split('/'))?;
+    Ok(GitUrlKind::Scp { user, host, path })
+}
+
+fn parse_ssh_user(value: &str) -> Result<Option<SshUser>, GitUrlErrorReason> {
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        parse_required_ssh_user(value).map(Some)
+    }
+}
+
+fn parse_required_ssh_user(value: &str) -> Result<SshUser, GitUrlErrorReason> {
+    if value.is_empty() || value.contains('@') {
+        return Err(GitUrlErrorReason::Malformed);
+    }
+    reject_option_shaped(value)?;
+    Ok(SshUser(value.to_string()))
+}
+
+fn is_ambiguous_raw_path_component(component: &str) -> bool {
+    let component = component
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(component)
+        .to_ascii_lowercase();
+    component.contains("%2f")
+        || component.contains("%5c")
+        || matches!(
+            component.as_str(),
+            "." | ".." | "%2e" | "%2e%2e" | ".%2e" | "%2e."
+        )
+}
+
+fn parse_repository_path<'a>(
+    components: impl IntoIterator<Item = &'a str>,
+) -> Result<GitRepositoryPath, GitUrlErrorReason> {
+    let mut components = components.into_iter().collect::<Vec<_>>();
+    if components.last() == Some(&"") {
+        components.pop();
+    }
+    if components.is_empty() {
+        return Err(GitUrlErrorReason::MissingRepositoryPath);
+    }
+    let components = components
+        .into_iter()
+        .map(|component| {
+            if component.is_empty() || is_ambiguous_raw_path_component(component) {
+                Err(GitUrlErrorReason::Malformed)
+            } else {
+                reject_option_shaped(component)?;
+                Ok(GitRepositoryPathComponent(component.to_string()))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(GitRepositoryPath { components })
+}
+
+fn reject_option_shaped(value: &str) -> Result<(), GitUrlErrorReason> {
+    if value.starts_with('-') {
+        Err(GitUrlErrorReason::OptionShaped)
+    } else {
+        Ok(())
     }
 }
 
@@ -330,17 +575,38 @@ impl fmt::Display for PackageSourceDirectoryErrorReason {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum GitUrlErrorReason {
     Empty,
+    Malformed,
+    UnsupportedScheme(String),
+    MissingHost,
+    MissingRepositoryPath,
     Credentials,
+    QueryOrFragment,
+    OptionShaped,
 }
 
 impl fmt::Display for GitUrlErrorReason {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Empty => f.write_str("must not be empty"),
-            Self::Credentials => f.write_str("must not include credentials"),
+            Self::Empty => formatter.write_str("must not be empty"),
+            Self::Malformed => formatter.write_str("must be a well-formed remote Git URL"),
+            Self::UnsupportedScheme(scheme) => write!(
+                formatter,
+                "unsupported scheme `{scheme}` (expected HTTPS or SSH)"
+            ),
+            Self::MissingHost => formatter.write_str("must name a remote host"),
+            Self::MissingRepositoryPath => {
+                formatter.write_str("must name a repository path on the remote host")
+            }
+            Self::Credentials => formatter.write_str("must not include embedded credentials"),
+            Self::QueryOrFragment => {
+                formatter.write_str("must not include a query string or fragment")
+            }
+            Self::OptionShaped => {
+                formatter.write_str("must not contain option-shaped authority or path components")
+            }
         }
     }
 }
@@ -351,31 +617,6 @@ fn is_valid_name(value: &str) -> bool {
         && value
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-}
-
-#[expect(
-    clippy::disallowed_methods,
-    reason = "str::split always yields the authority segment; an empty authority is conservatively treated as having no userinfo"
-)]
-fn url_has_userinfo(value: &str) -> bool {
-    if let Some(scheme_idx) = value.find("://") {
-        let scheme = &value[..scheme_idx];
-        let authority_start = scheme_idx + 3;
-        let authority = value[authority_start..]
-            .split(['/', '?', '#'])
-            .next()
-            .unwrap_or_default();
-        return authority.rsplit_once('@').is_some_and(|(userinfo, _)| {
-            userinfo.contains(':') || !(scheme == "ssh" && userinfo == "git")
-        });
-    }
-
-    value.split_once('@').is_some_and(|(userinfo, _)| {
-        let at_is_before_path = value
-            .find(['/', '?', '#'])
-            .is_none_or(|path_start| value.find('@').is_some_and(|at| at < path_start));
-        at_is_before_path && userinfo.contains(':')
-    })
 }
 
 /// Parsed `graphcal.toml` package section and direct dependencies.
@@ -924,7 +1165,7 @@ impl Lockfile {
                     tree_hashes,
                 } => {
                     push_kv_string(&mut out, "type", "git");
-                    push_kv_string(&mut out, "url", url.as_str());
+                    push_kv_string(&mut out, "url", &url.to_string());
                     push_kv_string(&mut out, "requested_rev", requested_rev.as_str());
                     push_kv_string(&mut out, "commit", commit.as_str());
                     push_kv_inline_table(
@@ -2012,9 +2253,67 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
     }
 
     #[test]
-    fn manifest_accepts_standard_ssh_git_user_url() {
-        GitUrl::new("ssh://git@github.com/acme/orbital.git").unwrap();
-        GitUrl::new("git@github.com:acme/orbital.git").unwrap();
+    fn git_urls_parse_into_supported_remote_transports() {
+        let https = GitUrl::new("HTTPS://GitHub.COM/acme/orbital.git/").unwrap();
+        assert_eq!(https.transport(), GitTransport::Https);
+        assert_eq!(https.to_string(), "https://github.com/acme/orbital.git");
+
+        let ssh = GitUrl::new("ssh://git@github.com:2222/acme/orbital.git").unwrap();
+        assert_eq!(ssh.transport(), GitTransport::Ssh);
+        assert_eq!(
+            ssh.to_string(),
+            "ssh://git@github.com:2222/acme/orbital.git"
+        );
+
+        let scp = GitUrl::new("git@github.com:acme/orbital.git").unwrap();
+        assert_eq!(scp.transport(), GitTransport::Scp);
+        assert_eq!(scp.to_string(), "git@github.com:acme/orbital.git");
+    }
+
+    #[test]
+    fn git_urls_reject_local_malformed_unsupported_and_option_shaped_inputs() {
+        let cases = [
+            (
+                "file:///etc",
+                GitUrlErrorReason::UnsupportedScheme("file".to_string()),
+            ),
+            ("../../private-repo", GitUrlErrorReason::Malformed),
+            (
+                "ftp://host/repo",
+                GitUrlErrorReason::UnsupportedScheme("ftp".to_string()),
+            ),
+            (
+                "http://host/repo",
+                GitUrlErrorReason::UnsupportedScheme("http".to_string()),
+            ),
+            ("not a URL", GitUrlErrorReason::Malformed),
+            ("https://host", GitUrlErrorReason::MissingRepositoryPath),
+            (
+                "https://host/repo?ref=main",
+                GitUrlErrorReason::QueryOrFragment,
+            ),
+            (
+                "https://host/repo#fragment",
+                GitUrlErrorReason::QueryOrFragment,
+            ),
+            ("https://host/org/../repo", GitUrlErrorReason::Malformed),
+            (
+                "ssh://git@host/-oProxyCommand=evil",
+                GitUrlErrorReason::OptionShaped,
+            ),
+            (
+                "git@-oProxyCommand=evil:org/repo",
+                GitUrlErrorReason::OptionShaped,
+            ),
+            ("git@host:../repo", GitUrlErrorReason::Malformed),
+        ];
+        for (invalid, expected_reason) in cases {
+            assert_eq!(
+                GitUrl::new(invalid).unwrap_err().reason,
+                expected_reason,
+                "wrong rejection reason for `{invalid}`"
+            );
+        }
     }
 
     #[test]
@@ -2025,6 +2324,10 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
 
     #[test]
     fn manifest_rejects_credential_url() {
+        let mixed_case_ssh =
+            GitUrl::new("SSH://git:secret@github.com/acme/orbital.git").unwrap_err();
+        assert_eq!(mixed_case_ssh.reason, GitUrlErrorReason::Credentials);
+
         let err = parse_manifest_str(
             r#"
 [package]

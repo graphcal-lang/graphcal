@@ -4,8 +4,57 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(unix)]
+use std::{os::unix::fs::PermissionsExt, sync::OnceLock};
+
 fn graphcal_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_graphcal"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_graphcal"));
+    #[cfg(unix)]
+    command.env("GIT_SSH", test_ssh_command());
+    command
+}
+
+#[cfg(unix)]
+fn test_ssh_command() -> &'static Path {
+    static COMMAND: OnceLock<PathBuf> = OnceLock::new();
+    COMMAND
+        .get_or_init(|| {
+            let directory = tempfile::tempdir().unwrap().keep();
+            let command = directory.join("ssh");
+            std::fs::write(
+                &command,
+                "#!/bin/sh\n\
+                 previous=\n\
+                 repository=\n\
+                 for argument in \"$@\"; do\n\
+                   if [ \"$previous\" = git-upload-pack ]; then\n\
+                     repository=$argument\n\
+                     break\n\
+                   fi\n\
+                   previous=$argument\n\
+                 done\n\
+                 repository=${repository#\\'}\n\
+                 repository=${repository%\\'}\n\
+                 exec git upload-pack \"$repository\"\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+            command
+        })
+        .as_path()
+}
+
+#[cfg(unix)]
+fn test_remote_git_url(repository: &Path) -> String {
+    format!(
+        "ssh://git@graphcal-test.invalid{}",
+        repository.to_str().unwrap()
+    )
+}
+
+#[cfg(not(unix))]
+fn test_remote_git_url(_repository: &Path) -> String {
+    "https://graphcal-test.invalid/repository.git".to_string()
 }
 
 #[test]
@@ -192,6 +241,7 @@ fn find_cached_file(root: &Path, suffix: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(unix)]
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -221,8 +271,8 @@ fn deps_lock_writes_deterministic_git_lockfile() {
              name = \"mission\"\n\
              source_dir = \"src\"\n\n\
              [dependencies]\n\
-             units_v1 = {{ package = \"units\", git = \"file://{}\", rev = \"{dep_rev}\" }}\n",
-            dep_repo.display()
+             units_v1 = {{ package = \"units\", git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
         ),
     )
     .unwrap();
@@ -346,6 +396,57 @@ fn deps_lock_rejects_floating_git_refs() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn deps_lock_rejects_transitive_local_git_before_materialization() {
+    let dir = tempfile::tempdir().unwrap();
+    let secret_repo = dir.path().join("secret-repo");
+    let secret_rev = create_git_package(
+        &secret_repo,
+        "secret",
+        "pub const node exposed_if_read: Dimensionless = 1.0;\n",
+    );
+    let parent_repo = dir.path().join("parent-repo");
+    let parent_rev = init_git_package(
+        &parent_repo,
+        "parent",
+        &format!(
+            "\n[dependencies]\n\
+             secret = {{ git = \"file://{}\", rev = \"{secret_rev}\" }}\n",
+            secret_repo.display()
+        ),
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             parent = {{ git = \"{}\", rev = \"{parent_rev}\" }}\n",
+            test_remote_git_url(&parent_repo)
+        ),
+        "import parent.lib.{ one };\nnode two: Dimensionless = @one + 1.0;\n",
+    );
+    let cache = dir.path().join("cache");
+
+    let output = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "stderr: {stderr}");
+    assert!(
+        stderr.contains("invalid Git URL") && stderr.contains("unsupported scheme `file`"),
+        "stderr: {stderr}"
+    );
+    assert!(!project.join("graphcal.lock").exists());
+    assert!(
+        find_cached_file(&cache, Path::new("src/secret/lib.gcl")).is_none(),
+        "the rejected local repository must not be materialized"
+    );
+}
+
 #[test]
 fn package_consumers_fail_without_lockfile() {
     let dir = tempfile::tempdir().unwrap();
@@ -360,8 +461,8 @@ fn package_consumers_fail_without_lockfile() {
         &project,
         &format!(
             "\n[dependencies]\n\
-             units = {{ git = \"file://{}\", rev = \"{dep_rev}\" }}\n",
-            dep_repo.display()
+             units = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
         ),
         "import units.lib.{ one };\n\
          node two: Dimensionless = @one + 1.0;\n",
@@ -385,6 +486,7 @@ fn package_consumers_fail_without_lockfile() {
     assert!(!cache.exists(), "consumer command must not create cache");
 }
 
+#[cfg(unix)]
 #[test]
 fn package_consumers_reject_cached_source_hash_mismatch() {
     let dir = tempfile::tempdir().unwrap();
@@ -399,8 +501,8 @@ fn package_consumers_reject_cached_source_hash_mismatch() {
         &project,
         &format!(
             "\n[dependencies]\n\
-             units = {{ git = \"file://{}\", rev = \"{dep_rev}\" }}\n",
-            dep_repo.display()
+             units = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
         ),
         "import units.lib.{ one };\n\
          node two: Dimensionless = @one + 1.0;\n",
@@ -436,6 +538,7 @@ fn package_consumers_reject_cached_source_hash_mismatch() {
     assert!(stderr.contains("graphcal deps lock"), "stderr: {stderr}");
 }
 
+#[cfg(unix)]
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -461,8 +564,8 @@ fn deps_lock_supports_contextual_transitive_resolution() {
         "orbital",
         &format!(
             "\n[dependencies]\n\
-             units = {{ git = \"file://{}\", rev = \"{units_rev1}\" }}\n",
-            units_repo.display()
+             units = {{ git = \"{}\", rev = \"{units_rev1}\" }}\n",
+            test_remote_git_url(&units_repo)
         ),
         "import units.lib.{ one as units_one };\n\
          pub const node one: Dimensionless = @units_one;\n",
@@ -473,8 +576,8 @@ fn deps_lock_supports_contextual_transitive_resolution() {
         "thermal",
         &format!(
             "\n[dependencies]\n\
-             units = {{ git = \"file://{}\", rev = \"{units_rev2}\" }}\n",
-            units_repo.display()
+             units = {{ git = \"{}\", rev = \"{units_rev2}\" }}\n",
+            test_remote_git_url(&units_repo)
         ),
         "import units.lib.{ one as units_one };\n\
          pub const node one: Dimensionless = @units_one;\n",
@@ -484,10 +587,10 @@ fn deps_lock_supports_contextual_transitive_resolution() {
         &project,
         &format!(
             "\n[dependencies]\n\
-             orbital = {{ git = \"file://{}\", rev = \"{orbital_rev}\" }}\n\
-             thermal = {{ git = \"file://{}\", rev = \"{thermal_rev}\" }}\n",
-            orbital_repo.display(),
-            thermal_repo.display()
+             orbital = {{ git = \"{}\", rev = \"{orbital_rev}\" }}\n\
+             thermal = {{ git = \"{}\", rev = \"{thermal_rev}\" }}\n",
+            test_remote_git_url(&orbital_repo),
+            test_remote_git_url(&thermal_repo)
         ),
         "import orbital.lib.{ one as orbital_one };\n\
          import thermal.lib.{ one as thermal_one };\n\
@@ -562,6 +665,7 @@ fn deps_lock_supports_contextual_transitive_resolution() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn package_instance_identities_distinguish_aliases_and_revisions() {
     let dir = tempfile::tempdir().unwrap();
@@ -587,12 +691,12 @@ fn package_instance_identities_distinguish_aliases_and_revisions() {
         &project,
         &format!(
             "\n[dependencies]\n\
-             units_a = {{ package = \"units\", git = \"file://{}\", rev = \"{units_rev1}\" }}\n\
-             units_b = {{ package = \"units\", git = \"file://{}\", rev = \"{units_rev1}\" }}\n\
-             units_v2 = {{ package = \"units\", git = \"file://{}\", rev = \"{units_rev2}\" }}\n",
-            units_repo.display(),
-            units_repo.display(),
-            units_repo.display()
+             units_a = {{ package = \"units\", git = \"{}\", rev = \"{units_rev1}\" }}\n\
+             units_b = {{ package = \"units\", git = \"{}\", rev = \"{units_rev1}\" }}\n\
+             units_v2 = {{ package = \"units\", git = \"{}\", rev = \"{units_rev2}\" }}\n",
+            test_remote_git_url(&units_repo),
+            test_remote_git_url(&units_repo),
+            test_remote_git_url(&units_repo)
         ),
         "import units_a.lib.{ dim Money as MoneyA, price as price_a };\n\
          import units_b.lib.{ price as price_b };\n\
