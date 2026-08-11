@@ -95,6 +95,14 @@ pub const FAIL_IMPORT_NAME: &str = "fail";
 /// [`FAIL_IMPORT_NAME`]; hosts truncate anything longer.
 pub const MAX_FAIL_MESSAGE_BYTES: usize = 4096;
 
+/// Maximum raw WebAssembly parameters in one exported plugin function.
+///
+/// A single-value Graphcal parameter occupies one slot. An array occupies one
+/// pointer plus one extent per axis, and an array or struct result adds one
+/// trailing out-pointer. This mirrors the malicious-module compilation policy
+/// used by the host, so accepted manifests remain compilable.
+pub const MAX_ABI_FUNCTION_PARAMS: usize = 32;
+
 /// Export name of the plugin allocator the host places array buffers with.
 ///
 /// Wasm type `(i32 size) -> i32`, returning a nonzero,

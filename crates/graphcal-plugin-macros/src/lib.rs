@@ -38,7 +38,7 @@ fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStre
 #[cfg(test)]
 mod tests {
     use graphcal_plugin_abi::{ManifestValueKind, PluginManifest};
-    use quote::quote;
+    use quote::{format_ident, quote};
 
     use super::*;
 
@@ -397,6 +397,60 @@ mod tests {
         });
         assert!(
             message.contains("generic binder `D` is declared more than once"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn raw_abi_parameter_limit_is_reported_at_the_function_name() {
+        let accepted: Vec<_> = (0..graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS)
+            .map(|index| format_ident!("p{index}"))
+            .collect();
+        let manifest = manifest_of(quote! {
+            fn exact_limit(#(#accepted: Dimensionless),*) -> Dimensionless { 0.0 }
+        });
+        assert_eq!(
+            manifest.functions[0].abi_parameter_slots(),
+            Some(graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS)
+        );
+
+        let overflow: Vec<_> = (0..=graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS)
+            .map(|index| format_ident!("p{index}"))
+            .collect();
+        let message = error_of(quote! {
+            fn over_limit(#(#overflow: Dimensionless),*) -> Dimensionless { 0.0 }
+        });
+        assert!(
+            message.contains("33 raw ABI parameter slots, exceeding the limit of 32"),
+            "got: {message}"
+        );
+    }
+
+    #[test]
+    fn raw_abi_parameter_limit_counts_array_rank_and_out_pointer() {
+        let accepted: Vec<_> = (0..graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS - 2)
+            .map(|index| format_ident!("I{index}"))
+            .collect();
+        let manifest = manifest_of(quote! {
+            fn exact_rank<#(#accepted: Index),*>(
+                xs: Dimensionless[#(#accepted),*]
+            ) -> Dimensionless[#(#accepted),*] { unreachable!() }
+        });
+        assert_eq!(
+            manifest.functions[0].abi_parameter_slots(),
+            Some(graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS)
+        );
+
+        let overflow: Vec<_> = (0..graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS - 1)
+            .map(|index| format_ident!("I{index}"))
+            .collect();
+        let message = error_of(quote! {
+            fn over_rank<#(#overflow: Index),*>(
+                xs: Dimensionless[#(#overflow),*]
+            ) -> Dimensionless[#(#overflow),*] { unreachable!() }
+        });
+        assert!(
+            message.contains("33 raw ABI parameter slots, exceeding the limit of 32"),
             "got: {message}"
         );
     }

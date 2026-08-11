@@ -52,6 +52,35 @@ pub struct ManifestFunction {
     pub result: ManifestValueKind,
 }
 
+impl ManifestFunction {
+    /// Count the raw WebAssembly parameters required by this signature.
+    ///
+    /// Returns `None` only if counts overflow the host's address-sized
+    /// arithmetic; such a manifest is invalid.
+    #[must_use]
+    pub fn abi_parameter_slots(&self) -> Option<usize> {
+        let params = self.params.iter().try_fold(0_usize, |slots, param| {
+            slots.checked_add(kind_abi_parameter_slots(&param.kind)?)
+        })?;
+        params.checked_add(match &self.result {
+            ManifestValueKind::Array { .. } | ManifestValueKind::Struct { .. } => 1,
+            ManifestValueKind::Quantity(_) | ManifestValueKind::Bool | ManifestValueKind::Int => 0,
+        })
+    }
+}
+
+const fn kind_abi_parameter_slots(kind: &ManifestValueKind) -> Option<usize> {
+    match kind {
+        ManifestValueKind::Quantity(_) | ManifestValueKind::Bool | ManifestValueKind::Int => {
+            Some(1)
+        }
+        ManifestValueKind::Array { indexes, .. } => indexes.len().checked_add(1),
+        // Structs are result-only after semantic conversion; retaining one
+        // pointer slot here keeps malformed wire values bounded as well.
+        ManifestValueKind::Struct { .. } => Some(1),
+    }
+}
+
 /// A named parameter and its value kind.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -321,7 +350,16 @@ fn validate_function(function: &ManifestFunction) -> Result<(), ManifestValidati
         validate_kind(function, &param.kind)?;
     }
 
-    validate_kind(function, &function.result)
+    validate_kind(function, &function.result)?;
+    let slots = function.abi_parameter_slots().unwrap_or(usize::MAX);
+    if slots > crate::MAX_ABI_FUNCTION_PARAMS {
+        return Err(ManifestValidationError::TooManyAbiParameters {
+            function: function.name.clone(),
+            slots,
+            max: crate::MAX_ABI_FUNCTION_PARAMS,
+        });
+    }
+    Ok(())
 }
 
 fn validate_kind(
@@ -585,6 +623,19 @@ pub enum ManifestValidationError {
         function: String,
         /// The offending field.
         field: String,
+    },
+    /// A function's lowered WebAssembly signature exceeds the host's
+    /// compilation limit.
+    #[error(
+        "function `{function}` requires {slots} raw ABI parameter slots, exceeding the limit of {max}"
+    )]
+    TooManyAbiParameters {
+        /// The declaring function.
+        function: String,
+        /// Raw WebAssembly parameter slots required by the signature.
+        slots: usize,
+        /// Maximum accepted raw parameter slots.
+        max: usize,
     },
     /// A function declares the same parameter name twice.
     #[error("function `{function}` declares parameter `{param}` more than once")]
@@ -1070,5 +1121,87 @@ mod tests {
                 role: NameRole::IndexVar,
             })
         );
+    }
+
+    #[test]
+    fn raw_abi_parameter_limit_counts_scalar_arity() {
+        let mut manifest = lerp_manifest();
+        {
+            let function = &mut manifest.functions[0];
+            function.params = (0..crate::MAX_ABI_FUNCTION_PARAMS)
+                .map(|index| ManifestParam {
+                    name: format!("p{index}"),
+                    kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
+                })
+                .collect();
+            assert_eq!(
+                function.abi_parameter_slots(),
+                Some(crate::MAX_ABI_FUNCTION_PARAMS)
+            );
+        }
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        manifest.functions[0].params.push(ManifestParam {
+            name: "overflow".to_string(),
+            kind: ManifestValueKind::Bool,
+        });
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyAbiParameters {
+                function: "lerp".to_string(),
+                slots: crate::MAX_ABI_FUNCTION_PARAMS + 1,
+                max: crate::MAX_ABI_FUNCTION_PARAMS,
+            })
+        );
+    }
+
+    #[test]
+    fn raw_abi_parameter_limit_counts_array_axes_and_result_pointer() {
+        let mut manifest = smooth_manifest();
+        let accepted_rank = crate::MAX_ABI_FUNCTION_PARAMS - 2;
+        let indexes: Vec<String> = (0..accepted_rank)
+            .map(|index| format!("I{index}"))
+            .collect();
+        {
+            let function = &mut manifest.functions[0];
+            function.index_vars.clone_from(&indexes);
+            function.params = vec![ManifestParam {
+                name: "xs".to_string(),
+                kind: ManifestValueKind::Array {
+                    element: ManifestMonomial::default(),
+                    indexes: indexes.clone(),
+                },
+            }];
+            function.result = ManifestValueKind::Array {
+                element: ManifestMonomial::default(),
+                indexes: indexes.clone(),
+            };
+            assert_eq!(
+                function.abi_parameter_slots(),
+                Some(crate::MAX_ABI_FUNCTION_PARAMS)
+            );
+        }
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        let overflow_index = format!("I{accepted_rank}");
+        let function = &mut manifest.functions[0];
+        function.index_vars.push(overflow_index.clone());
+        let ManifestValueKind::Array { indexes, .. } = &mut function.params[0].kind else {
+            panic!("test parameter must remain an array");
+        };
+        indexes.push(overflow_index);
+        let json = manifest.to_json().unwrap();
+        assert!(matches!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyAbiParameters {
+                slots,
+                max,
+                ..
+            }) if slots == crate::MAX_ABI_FUNCTION_PARAMS + 1
+                && max == crate::MAX_ABI_FUNCTION_PARAMS
+        ));
     }
 }
