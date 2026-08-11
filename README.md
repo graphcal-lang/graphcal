@@ -40,7 +40,7 @@ delta_v    = 3778.220768 m/s
 
 ## Why Graphcal?
 
-- **Unit-safe.** Physical dimensions—including generic field constraints, unit definitions, and runtime unit-scale expressions—are checked at compile time, conversions are explicit, and public values require matching checked type metadata.
+- **Unit-safe.** Physical dimensions—including generic field constraints, unit definitions, and runtime unit-scale expressions—are checked at compile time, conversions are explicit, and public values require matching checked type and constructor metadata instead of dropping field units.
 - **Reactive.** Change a parameter and every dependent value is recomputed automatically.
 - **Git-friendly.** Plain-text `.gcl` files diff and merge cleanly, with no hidden spreadsheet state.
 - **Built for engineering.** Typed axes, dimension-aware linear algebra, assertions with per-index expected-failure tracking, checked structured display provenance, unit-aware plotting, and reusable computation graphs are built in.

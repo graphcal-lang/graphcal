@@ -253,6 +253,9 @@ fn project_runtime_value(
                     src,
                 ));
             }
+            // Constructor lookup is a correctness boundary: losing it would
+            // discard each field's checked type and could render a quantity in
+            // the wrong unit. Any inconsistency must fail the projection.
             let model = graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
                 tir,
                 declared_identity,
@@ -578,6 +581,43 @@ mod tests {
             EvaluatedValue::new(&runtime, &declared).project(&tir, &src),
             Err(GraphcalError::InternalError { .. })
         ));
+    }
+
+    #[test]
+    fn missing_runtime_constructor_is_an_internal_projection_error() {
+        let source = "type Measurement { Reading(value: Length), } \
+                      node sample: Measurement = Reading(value: 1.0 m);";
+        let tir = crate::eval::compile_to_tir(source, "projection.gcl").unwrap();
+        let src = NamedSource::new("projection.gcl", Arc::new(source.to_string()));
+        let declared_types = tir.build_declared_types(&src).unwrap();
+        let declared = &declared_types[&graphcal_compiler::syntax::module_name::ScopedName::local(
+            graphcal_compiler::syntax::decl_name::DeclName::expect_valid("sample"),
+        )];
+        let DeclaredType::Struct(identity, generic_args) = declared else {
+            panic!("sample must have a concrete nominal type");
+        };
+        let runtime = RuntimeValue::Struct {
+            type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
+                graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Missing"),
+                identity.resolved().clone(),
+            ),
+            generic_args: generic_args.clone(),
+            fields: IndexMap::new(),
+        };
+
+        let error = EvaluatedValue::new(&runtime, declared)
+            .project(&tir, &src)
+            .unwrap_err();
+
+        match error {
+            GraphcalError::InternalError { message, .. } => {
+                assert!(
+                    message.contains("constructor `Missing` is absent"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected internal projection error, got {other:?}"),
+        }
     }
 
     #[test]
