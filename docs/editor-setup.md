@@ -38,7 +38,10 @@ Analysis is revision-aware and bounded. A new edit cancels superseded loading,
 compilation, and evaluation work; only the newest completed revision publishes
 diagnostics or inlay-hint data. If an analysis exceeds the server deadline, the
 LSP keeps the last completed result available rather than replacing source
-diagnostics with a server-timeout error.
+diagnostics with a server-timeout error. If analysis must fall back to an empty
+symbol table or module resolver, the server emits a warning through the LSP
+client log (`window/logMessage`) so unavailable navigation or completion can be
+diagnosed instead of appearing indistinguishable from an empty result.
 
 ## VS Code
 

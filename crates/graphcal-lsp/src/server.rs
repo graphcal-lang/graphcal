@@ -66,6 +66,44 @@ pub(crate) struct FnSignatureInfo {
     pub(crate) parameters: Vec<String>,
 }
 
+/// One deliberate editor-feature degradation produced by synchronous analysis.
+///
+/// The functional analysis core records the typed reason; the async LSP shell
+/// renders it through `window/logMessage`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AnalysisDegradation {
+    EmptySymbolTable { reason: String },
+    EmptyModuleResolver { reason: String },
+}
+
+impl AnalysisDegradation {
+    fn message(&self, uri: &Url) -> String {
+        match self {
+            Self::EmptySymbolTable { reason } => format!(
+                "analysis for {uri} could not build a fallback symbol table: {reason}; retaining previous symbol information when available"
+            ),
+            Self::EmptyModuleResolver { reason } => format!(
+                "analysis for {uri} is using an empty module resolver after resolver construction failed: {reason}; cross-module editor features may be unavailable"
+            ),
+        }
+    }
+}
+
+/// Transient output of one analysis pass.
+struct AnalysisRun {
+    analysis: AnalysisResult,
+    degradations: Vec<AnalysisDegradation>,
+}
+
+impl AnalysisRun {
+    const fn complete(analysis: AnalysisResult) -> Self {
+        Self {
+            analysis,
+            degradations: Vec::new(),
+        }
+    }
+}
+
 /// Cached analysis result for a document.
 pub(crate) struct AnalysisResult {
     /// The raw source text. Shared via `Arc` so hover, inlay-hint, and
@@ -568,8 +606,8 @@ async fn analyze_store_publish(
             &cancellation,
         )
     });
-    let analysis = match tokio::time::timeout(ANALYSIS_TIMEOUT, &mut task).await {
-        Ok(Ok(Ok(analysis))) => analysis,
+    let analysis_run = match tokio::time::timeout(ANALYSIS_TIMEOUT, &mut task).await {
+        Ok(Ok(Ok(analysis_run))) => analysis_run,
         Ok(Ok(Err(Cancelled))) => {
             scheduler.finish(&uri, generation);
             return;
@@ -600,6 +638,10 @@ async fn analyze_store_publish(
         }
     };
     scheduler.finish(&uri, generation);
+    let AnalysisRun {
+        analysis,
+        degradations,
+    } = analysis_run;
 
     // Hold the documents write lock across the generation re-check and
     // the insert: a newer-generation analysis completing between a
@@ -623,6 +665,11 @@ async fn analyze_store_publish(
     store_analysis(&mut docs, &uri, analysis);
     let publish = merged_diagnostics_for(&docs, &affected);
     drop(docs);
+    for degradation in degradations {
+        client
+            .log_message(MessageType::WARNING, degradation.message(&uri))
+            .await;
+    }
     for (target_uri, diags) in publish {
         client.publish_diagnostics(target_uri, diags, None).await;
     }
@@ -777,12 +824,12 @@ pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
 }
 
 #[cfg(test)]
-fn run_analysis(
+fn run_analysis_run(
     uri: &Url,
     text: &str,
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
-) -> AnalysisResult {
+) -> AnalysisRun {
     run_analysis_with_cancellation(
         uri,
         text,
@@ -791,6 +838,16 @@ fn run_analysis(
         &CancellationToken::unbounded(),
     )
     .expect("an unbounded analysis cannot be cancelled")
+}
+
+#[cfg(test)]
+fn run_analysis(
+    uri: &Url,
+    text: &str,
+    open_buffers: &[OpenBuffer],
+    plugin_host: &graphcal_plugin_host::PluginHost,
+) -> AnalysisResult {
+    run_analysis_run(uri, text, open_buffers, plugin_host).analysis
 }
 
 #[expect(
@@ -803,7 +860,7 @@ fn run_analysis_with_cancellation(
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
     cancellation: &CancellationToken,
-) -> std::result::Result<AnalysisResult, Cancelled> {
+) -> std::result::Result<AnalysisRun, Cancelled> {
     cancellation.checkpoint()?;
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
@@ -821,31 +878,38 @@ fn run_analysis_with_cancellation(
             // `None` when the buffer doesn't parse — the result is then a
             // diagnostics-only fallback and `store_analysis` retains the
             // previous symbol state (#834).
-            let parsed_buffer_table = match LoadedProject::from_source_with_cancellation(
-                text,
-                uri.as_str(),
-                cancellation,
-            ) {
-                Ok(single) => Some(symbol_table::build_for_buffer(
-                    single.root_file().ast(),
-                    text,
-                )),
-                Err(error) if error.is_cancelled() => return Err(Cancelled),
-                Err(_) => None,
-            };
+            let (symbol_table, buffer_parsed, degradations) =
+                match LoadedProject::from_source_with_cancellation(text, uri.as_str(), cancellation)
+                {
+                    Ok(single) => (
+                        symbol_table::build_for_buffer(single.root_file().ast(), text),
+                        true,
+                        Vec::new(),
+                    ),
+                    Err(error) if error.is_cancelled() => return Err(Cancelled),
+                    Err(error) => (
+                        SymbolTable::default(),
+                        false,
+                        vec![AnalysisDegradation::EmptySymbolTable {
+                            reason: error.to_string(),
+                        }],
+                    ),
+                };
             cancellation.checkpoint()?;
-            let buffer_parsed = parsed_buffer_table.is_some();
-            return Ok(AnalysisResult {
-                source: Arc::new(text.to_string()),
-                symbol_table: parsed_buffer_table.unwrap_or_default(),
-                imported_definitions: HashMap::new(),
-                import_surfaces: HashMap::new(),
-                diagnostics: Arc::new(diagnostics),
-                eval_values: HashMap::new(),
-                fn_signatures: build_fn_signatures(),
-                extern_fn_signatures: HashMap::new(),
-                import_links: Vec::new(),
-                buffer_parsed,
+            return Ok(AnalysisRun {
+                analysis: AnalysisResult {
+                    source: Arc::new(text.to_string()),
+                    symbol_table,
+                    imported_definitions: HashMap::new(),
+                    import_surfaces: HashMap::new(),
+                    diagnostics: Arc::new(diagnostics),
+                    eval_values: HashMap::new(),
+                    fn_signatures: build_fn_signatures(),
+                    extern_fn_signatures: HashMap::new(),
+                    import_links: Vec::new(),
+                    buffer_parsed,
+                },
+                degradations,
             });
         }
     };
@@ -898,7 +962,7 @@ fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default();
 
-            Ok(AnalysisResult {
+            Ok(AnalysisRun::complete(AnalysisResult {
                 source: Arc::new(text.to_string()),
                 symbol_table,
                 imported_definitions,
@@ -909,14 +973,22 @@ fn run_analysis_with_cancellation(
                 extern_fn_signatures,
                 import_links,
                 buffer_parsed: true,
-            })
+            }))
         }
         Err(error) if error.is_cancelled() => Err(Cancelled),
         Err(error) => {
             cancellation.checkpoint()?;
             // A failed session has no checked resolver continuation. Rebuild a
             // best-effort resolver only for partial editor information.
-            let module_resolver = project.build_module_resolver().unwrap_or_default();
+            let (module_resolver, degradations) = match project.build_module_resolver() {
+                Ok(module_resolver) => (module_resolver, Vec::new()),
+                Err(resolver_error) => (
+                    graphcal_compiler::syntax::module_resolve::ModuleResolver::default(),
+                    vec![AnalysisDegradation::EmptyModuleResolver {
+                        reason: resolver_error.to_string(),
+                    }],
+                ),
+            };
             let symbol_table =
                 symbol_table::build_from_ast(root_ast, text, project.root_id(), &module_resolver);
             cancellation.checkpoint()?;
@@ -925,17 +997,24 @@ fn run_analysis_with_cancellation(
             let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
 
-            Ok(AnalysisResult {
-                source: Arc::new(text.to_string()),
-                symbol_table,
-                imported_definitions,
-                import_surfaces: collect_import_surfaces(&project, &module_resolver, cancellation)?,
-                diagnostics: Arc::new(diagnostics),
-                eval_values: HashMap::new(),
-                fn_signatures: build_fn_signatures(),
-                extern_fn_signatures: HashMap::new(),
-                import_links,
-                buffer_parsed: true,
+            Ok(AnalysisRun {
+                analysis: AnalysisResult {
+                    source: Arc::new(text.to_string()),
+                    symbol_table,
+                    imported_definitions,
+                    import_surfaces: collect_import_surfaces(
+                        &project,
+                        &module_resolver,
+                        cancellation,
+                    )?,
+                    diagnostics: Arc::new(diagnostics),
+                    eval_values: HashMap::new(),
+                    fn_signatures: build_fn_signatures(),
+                    extern_fn_signatures: HashMap::new(),
+                    import_links,
+                    buffer_parsed: true,
+                },
+                degradations,
             })
         }
     }
@@ -2279,6 +2358,48 @@ mod tests {
         static HOST: std::sync::OnceLock<graphcal_plugin_host::PluginHost> =
             std::sync::OnceLock::new();
         HOST.get_or_init(graphcal_plugin_host::PluginHost::new)
+    }
+
+    #[test]
+    fn parse_fallback_records_empty_symbol_table_degradation() {
+        let uri = Url::parse("file:///degraded-symbols.gcl").unwrap();
+        let run = run_analysis_run(
+            &uri,
+            "node broken: Dimensionless = @",
+            &[],
+            test_plugin_host(),
+        );
+
+        assert!(!run.analysis.buffer_parsed);
+        let [degradation] = run.degradations.as_slice() else {
+            panic!("expected one degradation, got {:?}", run.degradations);
+        };
+        assert!(matches!(
+            degradation,
+            AnalysisDegradation::EmptySymbolTable { .. }
+        ));
+        assert!(degradation.message(&uri).contains("fallback symbol table"));
+    }
+
+    #[test]
+    fn failed_resolver_rebuild_records_empty_resolver_degradation() {
+        let uri = Url::parse("file:///degraded-resolver.gcl").unwrap();
+        let run = run_analysis_run(
+            &uri,
+            "node duplicate: Dimensionless = 1.0;\nnode duplicate: Dimensionless = 2.0;",
+            &[],
+            test_plugin_host(),
+        );
+
+        assert!(run.analysis.buffer_parsed);
+        let [degradation] = run.degradations.as_slice() else {
+            panic!("expected one degradation, got {:?}", run.degradations);
+        };
+        assert!(matches!(
+            degradation,
+            AnalysisDegradation::EmptyModuleResolver { .. }
+        ));
+        assert!(degradation.message(&uri).contains("empty module resolver"));
     }
 
     fn empty_symbols() -> BTreeMap<graphcal_compiler::dimension::BaseDimId, String> {
