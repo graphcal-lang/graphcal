@@ -3672,6 +3672,36 @@ node bad: Mass = mass + length;
     }
 
     #[test]
+    fn workspace_rename_refuses_stale_open_project_document() {
+        let uri = Url::parse("file:///open.gcl").unwrap();
+        let project = ProjectSymbolIndex::loaded_dependency_closure(
+            uri.clone(),
+            [ProjectDocumentSymbols::new(
+                uri.clone(),
+                Arc::new("old".to_string()),
+                SymbolTable::default(),
+                Vec::new(),
+            )],
+        );
+        let edit = WorkspaceEdit {
+            changes: Some(HashMap::from([(uri.clone(), Vec::new())])),
+            document_changes: None,
+            change_annotations: None,
+        };
+        let snapshots = HashMap::from([(
+            uri,
+            OpenDocumentSnapshot {
+                text: Arc::new("new".to_string()),
+                version: 2,
+            },
+        )]);
+
+        assert!(!workspace_edit_matches_open_snapshots(
+            &edit, &project, &snapshots
+        ));
+    }
+
+    #[test]
     fn workspace_rename_edits_carry_open_document_versions() {
         let open_uri = Url::parse("file:///open.gcl").unwrap();
         let closed_uri = Url::parse("file:///closed.gcl").unwrap();
