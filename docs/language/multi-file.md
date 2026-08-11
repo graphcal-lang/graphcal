@@ -702,6 +702,19 @@ or update `graphcal.lock`; if the lockfile is missing, stale, version-mismatched
 or points at a missing or hash-mismatched cached source, they fail and ask you
 to run `graphcal deps lock`.
 
+Lock creation and loading use the same deterministic source-tree algorithm.
+Package trees may contain only ordinary directories and regular files: symbolic
+links and special files are rejected rather than followed, every canonical path
+must remain under its locked package root, and relative path names must be UTF-8.
+The root package continues to use editor overlays, while each cached dependency
+is read through its own immutable rooted filesystem capability.
+
+Project ingestion is bounded before allocation. CLI and LSP loads accept at most
+16 MiB per `.gcl` source or source-tree file, 1 MiB per manifest, 4 MiB per
+lockfile, and 16 MiB per WASM plugin, with a shared ceiling of 10,000 loaded
+artifacts/source-tree entries and 256 MiB. Exceeding a limit is a loader error;
+evaluator work budgets do not replace these earlier I/O bounds.
+
 ### Dependency Visibility
 
 Dependency names are local to the package instance currently being compiled.

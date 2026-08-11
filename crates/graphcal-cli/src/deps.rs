@@ -2,13 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
-use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use graphcal_eval::loader::discover_project_root;
-use graphcal_io::RealFileSystem;
+use graphcal_io::{
+    NeverCancel, RealFileSystem, SourceTreeHashLimits, hash_source_tree as hash_package_source_tree,
+};
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitUrl, LOCK_VERSION, LockedPackage,
     LockedPlugin, LockedPluginError, Lockfile, LockfileSerializeError, PackageGraph,
@@ -525,73 +526,18 @@ fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
 
 fn hash_source_tree(root: &Path) -> Result<String, DepsError> {
     let manifest = read_manifest(root)?;
-    let mut files = BTreeMap::new();
-    collect_hash_files(root, Path::new("graphcal.toml"), &mut files)?;
-    collect_hash_files(root, &manifest.source_dir, &mut files)?;
-
-    let mut hasher = Sha256::new();
-    for (relative, path) in files {
-        hasher.update(relative.as_bytes());
-        hasher.update([0]);
-        let bytes =
-            std::fs::read(&path).map_err(|source| DepsError::ReadFileBytes { path, source })?;
-        hasher.update(bytes.len().to_string().as_bytes());
-        hasher.update([0]);
-        hasher.update(bytes);
-        hasher.update([0]);
-    }
-    Ok(hex_string(&hasher.finalize()))
-}
-
-fn collect_hash_files(
-    root: &Path,
-    relative: &Path,
-    files: &mut BTreeMap<String, PathBuf>,
-) -> Result<(), DepsError> {
-    if relative
-        .components()
-        .any(|c| matches!(c, std::path::Component::Normal(name) if name == OsStr::new(".git")))
-    {
-        return Ok(());
-    }
-    let path = root.join(relative);
-    let metadata = std::fs::symlink_metadata(&path).map_err(|source| DepsError::Metadata {
-        path: path.clone(),
+    let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
+        path: root.to_path_buf(),
         source,
     })?;
-    if metadata.is_file() {
-        files.insert(normalize_relative_path(relative), path);
-        return Ok(());
-    }
-    if metadata.is_dir() {
-        for entry in std::fs::read_dir(&path).map_err(|source| DepsError::ReadDir {
-            path: path.clone(),
-            source,
-        })? {
-            let entry = entry.map_err(|source| DepsError::ReadDir {
-                path: path.clone(),
-                source,
-            })?;
-            let child = relative.join(entry.file_name());
-            collect_hash_files(root, &child, files)?;
-        }
-        return Ok(());
-    }
-    Err(DepsError::UnsupportedSourceEntry { path })
-}
-
-fn normalize_relative_path(path: &Path) -> String {
-    let mut out = String::new();
-    for component in path.components() {
-        let std::path::Component::Normal(part) = component else {
-            continue;
-        };
-        if !out.is_empty() {
-            out.push('/');
-        }
-        out.push_str(&part.to_string_lossy());
-    }
-    out
+    let hash = hash_package_source_tree(
+        &fs,
+        root,
+        &manifest.source_dir,
+        SourceTreeHashLimits::unbounded(),
+        &NeverCancel,
+    )?;
+    Ok(hash.sha256().to_string())
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -641,12 +587,9 @@ pub enum DepsError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// File byte read failed.
-    #[error("could not read `{}`: {source}", path.display())]
-    ReadFileBytes {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    /// Deterministic source-tree traversal or hashing failed.
+    #[error(transparent)]
+    SourceTreeHash(#[from] graphcal_io::SourceTreeHashError),
     /// Directory read failed.
     #[error("could not read directory `{}`: {source}", path.display())]
     ReadDir {
@@ -845,7 +788,8 @@ import plugin "plugins/nope.wasm" as demo {
         let err = hash_source_tree(&root).unwrap_err();
         assert!(matches!(
             err,
-            DepsError::UnsupportedSourceEntry { path } if path.ends_with("src/evil.gcl")
+            DepsError::SourceTreeHash(graphcal_io::SourceTreeHashError::Symlink { path })
+                if path.ends_with("src/evil.gcl")
         ));
 
         let _ = std::fs::remove_dir_all(&root);

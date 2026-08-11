@@ -1,59 +1,36 @@
 //! Overlay filesystem that layers in-memory files over a base reader.
 
+use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use crate::FileSystemReader;
+use crate::{
+    ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind, FileSystemReadError,
+    FileSystemReader,
+};
 
-/// One overlaid file: its identity (canonical when possible) plus the
-/// in-memory content served instead of the on-disk bytes.
 struct OverlayEntry {
-    /// The canonical form of the overlay path (or the raw form if the base
-    /// reader could not canonicalize it).
     canonical_path: PathBuf,
-    /// `true` if the base reader successfully canonicalized the overlay path
-    /// at construction time. When `false`, the overlay file does not exist
-    /// on disk yet and we match strictly on the raw path.
     base_canonicalized: bool,
     content: String,
 }
 
-/// A filesystem reader that intercepts reads to a set of overlaid paths,
-/// returning in-memory content instead of delegating to the base reader.
-///
-/// Used by the LSP to serve unsaved editor buffers — the analyzed document
-/// plus every other open document, so cross-file analysis sees what the
-/// user sees rather than stale disk content.
-///
-/// # Path identity
-///
-/// Each overlay is identified by its canonical path. The constructor attempts
-/// to canonicalize the incoming path using the base reader; if that succeeds,
-/// every subsequent operation first canonicalizes the incoming path and
-/// compares canonical forms. This makes equivalent spellings (`./main.gcl`,
-/// `/tmp/../tmp/main.gcl`, symlinks) all resolve to the overlay.
-///
-/// If canonicalization fails — for example, when the overlay file has never
-/// been saved to disk yet — the stored path is kept verbatim and matching
-/// falls back to strict path equality. In that mode the reader also reports
-/// the overlay path as its own canonical form, so callers that pass the raw
-/// path continue to find it.
+/// Filesystem reader that serves in-memory editor buffers before delegating to
+/// a base capability.
 pub struct OverlayFileSystem<F> {
     base: F,
     overlays: Vec<OverlayEntry>,
 }
 
 impl<F: FileSystemReader> OverlayFileSystem<F> {
-    /// Create an overlay filesystem serving a single in-memory file.
+    /// Create an overlay filesystem serving one in-memory UTF-8 file.
     pub fn new(base: F, overlay_path: PathBuf, overlay_content: String) -> Self {
         Self::with_overlays(base, [(overlay_path, overlay_content)])
     }
 
-    /// Create an overlay filesystem serving several in-memory files.
-    ///
-    /// Paths may be any spelling that identifies the files; they do not need
-    /// to be pre-canonicalized. When two overlays identify the same file, the
-    /// first one wins.
+    /// Create an overlay filesystem serving several in-memory files. The first
+    /// overlay for one canonical identity wins.
     pub fn with_overlays(base: F, overlays: impl IntoIterator<Item = (PathBuf, String)>) -> Self {
         let overlays = overlays
             .into_iter()
@@ -71,7 +48,6 @@ impl<F: FileSystemReader> OverlayFileSystem<F> {
         Self { base, overlays }
     }
 
-    /// The overlay entry `path` refers to, if any.
     fn overlay(&self, path: &Path) -> Option<&OverlayEntry> {
         if let Some(entry) = self
             .overlays
@@ -85,55 +61,107 @@ impl<F: FileSystemReader> OverlayFileSystem<F> {
             .iter()
             .find(|entry| entry.base_canonicalized && entry.canonical_path == canonical)
     }
+
+    fn overlay_child_names(&self, directory: &Path) -> BTreeSet<OsString> {
+        self.overlays
+            .iter()
+            .filter_map(|entry| {
+                let relative = entry.canonical_path.strip_prefix(directory).ok()?;
+                match relative.components().next() {
+                    Some(Component::Normal(name)) => Some(name.to_os_string()),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    fn has_overlay_descendant(&self, path: &Path) -> bool {
+        self.overlays
+            .iter()
+            .any(|entry| entry.canonical_path.starts_with(path) && entry.canonical_path != path)
+    }
 }
 
 impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
-    fn read_to_string(&self, path: &Path) -> Result<String, io::Error> {
-        self.overlay(path).map_or_else(
-            || self.base.read_to_string(path),
-            |entry| Ok(entry.content.clone()),
-        )
-    }
-
-    fn read_bytes(&self, path: &Path) -> Result<Vec<u8>, io::Error> {
-        // Overlays hold UTF-8 editor buffers; binary reads normally fall
-        // through to disk, but an overlaid path still serves its buffer so
-        // the two read methods never disagree about a file's existence.
-        self.overlay(path).map_or_else(
-            || self.base.read_bytes(path),
-            |entry| Ok(entry.content.clone().into_bytes()),
-        )
+    fn read_bytes_bounded(
+        &self,
+        path: &Path,
+        limit: ByteLimit,
+        cancellation: &dyn CancellationSignal,
+    ) -> Result<Vec<u8>, FileSystemReadError> {
+        if let Some(entry) = self.overlay(path) {
+            if cancellation.is_cancelled() {
+                return Err(FileSystemReadError::Cancelled);
+            }
+            if entry.content.len() as u64 > limit.get() {
+                return Err(FileSystemReadError::ByteLimitExceeded { limit });
+            }
+            Ok(entry.content.as_bytes().to_vec())
+        } else {
+            self.base.read_bytes_bounded(path, limit, cancellation)
+        }
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
-        // Short-circuit for overlays so unsaved buffers (which do not exist
-        // on disk) still resolve to a stable identity.
         if let Some(entry) = self.overlay(path) {
             return Ok(entry.canonical_path.clone());
+        }
+        if self.has_overlay_descendant(path) {
+            return Ok(path.to_path_buf());
         }
         self.base.canonicalize(path)
     }
 
-    fn is_file(&self, path: &Path) -> bool {
+    fn entry_kind(&self, path: &Path) -> Result<FileSystemEntryKind, io::Error> {
         if self.overlay(path).is_some() {
-            return true;
+            Ok(FileSystemEntryKind::File)
+        } else if self.has_overlay_descendant(path) {
+            Ok(FileSystemEntryKind::Directory)
+        } else {
+            self.base.entry_kind(path)
         }
-        self.base.is_file(path)
+    }
+
+    fn read_directory_bounded(
+        &self,
+        path: &Path,
+        limit: EntryLimit,
+        cancellation: &dyn CancellationSignal,
+    ) -> Result<Vec<OsString>, FileSystemReadError> {
+        if cancellation.is_cancelled() {
+            return Err(FileSystemReadError::Cancelled);
+        }
+        let canonical = self.canonicalize(path)?;
+        let mut names = match self.base.read_directory_bounded(path, limit, cancellation) {
+            Ok(names) => names.into_iter().collect::<BTreeSet<_>>(),
+            Err(FileSystemReadError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                BTreeSet::new()
+            }
+            Err(error) => return Err(error),
+        };
+        names.extend(self.overlay_child_names(&canonical));
+        if names.len() as u64 > limit.get() {
+            return Err(FileSystemReadError::EntryLimitExceeded { limit });
+        }
+        Ok(names.into_iter().collect())
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        self.overlay(path).is_some() || self.base.is_file(path)
     }
 
     fn exists(&self, path: &Path) -> bool {
-        if self.overlay(path).is_some() {
-            return true;
-        }
-        self.base.exists(path)
+        self.overlay(path).is_some() || self.has_overlay_descendant(path) || self.base.exists(path)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::InMemoryFileSystem;
+    use crate::{InMemoryFileSystem, NeverCancel};
 
     use super::*;
+
+    const TEST_LIMIT: ByteLimit = ByteLimit::new(1024);
 
     #[test]
     fn overlay_intercepts_read() {
@@ -150,7 +178,8 @@ mod tests {
         );
 
         assert_eq!(
-            fs.read_to_string(Path::new("/project/main.gcl")).unwrap(),
+            fs.read_to_string_bounded(Path::new("/project/main.gcl"), TEST_LIMIT, &NeverCancel,)
+                .unwrap(),
             "overlay content"
         );
     }
@@ -166,7 +195,6 @@ mod tests {
             PathBuf::from("/project/helper.gcl"),
             "helper content".to_string(),
         );
-
         let fs = OverlayFileSystem::new(
             base,
             PathBuf::from("/project/main.gcl"),
@@ -174,7 +202,8 @@ mod tests {
         );
 
         assert_eq!(
-            fs.read_to_string(Path::new("/project/helper.gcl")).unwrap(),
+            fs.read_to_string_bounded(Path::new("/project/helper.gcl"), TEST_LIMIT, &NeverCancel,)
+                .unwrap(),
             "helper content"
         );
     }
@@ -187,7 +216,6 @@ mod tests {
             PathBuf::from("/project/main.gcl"),
             "content".to_string(),
         );
-
         assert!(fs.is_file(Path::new("/project/main.gcl")));
     }
 
@@ -200,7 +228,6 @@ mod tests {
             PathBuf::from("/project/other.gcl"),
             "other disk".to_string(),
         );
-
         let fs = OverlayFileSystem::with_overlays(
             base,
             [
@@ -210,24 +237,24 @@ mod tests {
         );
 
         assert_eq!(
-            fs.read_to_string(Path::new("/project/main.gcl")).unwrap(),
+            fs.read_to_string_bounded(Path::new("/project/main.gcl"), TEST_LIMIT, &NeverCancel,)
+                .unwrap(),
             "main buf"
         );
         assert_eq!(
-            fs.read_to_string(Path::new("/project/lib.gcl")).unwrap(),
+            fs.read_to_string_bounded(Path::new("/project/lib.gcl"), TEST_LIMIT, &NeverCancel,)
+                .unwrap(),
             "lib buf"
         );
         assert_eq!(
-            fs.read_to_string(Path::new("/project/other.gcl")).unwrap(),
+            fs.read_to_string_bounded(Path::new("/project/other.gcl"), TEST_LIMIT, &NeverCancel,)
+                .unwrap(),
             "other disk"
         );
     }
 
     #[test]
     fn canonicalize_on_overlay_path_succeeds_when_file_not_on_disk() {
-        // B7: unsaved LSP buffer — the file does not exist via the base reader,
-        // but canonicalize on the overlay path must still succeed so the
-        // loader can identify the buffer.
         let base = InMemoryFileSystem::new();
         let fs = OverlayFileSystem::new(
             base,
@@ -239,7 +266,7 @@ mod tests {
         assert_eq!(canonical, PathBuf::from("/project/unsaved.gcl"));
         assert!(fs.exists(Path::new("/project/unsaved.gcl")));
         assert_eq!(
-            fs.read_to_string(Path::new("/project/unsaved.gcl"))
+            fs.read_to_string_bounded(Path::new("/project/unsaved.gcl"), TEST_LIMIT, &NeverCancel,)
                 .unwrap(),
             "unsaved"
         );

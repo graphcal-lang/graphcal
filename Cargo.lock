@@ -1843,7 +1843,9 @@ dependencies = [
 name = "graphcal-io"
 version = "0.0.1-alpha.22"
 dependencies = [
+ "sha2",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

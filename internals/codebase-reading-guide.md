@@ -1248,12 +1248,13 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 
 ### Stage 9 - Filesystem abstraction (`graphcal-io`)
 
-Note: all four files are mutually dependent; `lib.rs` comes last because it re-exports and ties together the implementations.
+Note: all five files are mutually dependent; `lib.rs` comes last because it re-exports and ties together the implementations.
 
 1. `crates/graphcal-io/src/in_memory_fs.rs`
 2. `crates/graphcal-io/src/real_fs.rs`
 3. `crates/graphcal-io/src/overlay_fs.rs`
-4. `crates/graphcal-io/src/lib.rs`
+4. `crates/graphcal-io/src/source_tree.rs`
+5. `crates/graphcal-io/src/lib.rs`
 
 ### Stage 10 - Package domain model (`graphcal-package`)
 
