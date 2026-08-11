@@ -2,6 +2,7 @@
 //!
 //! This crate owns the [`FileSystemReader`] boundary and provides concrete
 //! implementations:
+//! - atomic same-directory replacement for mutating shells
 //! - [`RealFileSystem`] — delegates to `std::fs`
 //! - [`InMemoryFileSystem`] — for tests and WASM
 //! - [`OverlayFileSystem`] — layers in-memory editor buffers over a base reader
@@ -10,11 +11,15 @@
 //! keeps callers from accidentally allocating an unbounded file before they
 //! can enforce a policy.
 
+mod atomic_write;
 mod in_memory_fs;
 mod overlay_fs;
 mod real_fs;
 mod source_tree;
 
+pub use atomic_write::{
+    AtomicWriteError, create_file_atomically, replace_file_atomically_if_unchanged,
+};
 pub use in_memory_fs::InMemoryFileSystem;
 pub use overlay_fs::OverlayFileSystem;
 pub use real_fs::RealFileSystem;

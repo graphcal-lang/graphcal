@@ -37,6 +37,7 @@ use graphcal_eval::eval::{
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
+use graphcal_io::replace_file_atomically_if_unchanged;
 
 use graphcal::format::{
     FileDiscovery, FormatStatus, TraversalFailures, collect_gcl_files, format_status,
@@ -825,11 +826,20 @@ fn run_format(paths: &[PathBuf], check: bool) {
                     println!("Would reformat: {}", file.display());
                     unformatted_count += 1;
                 } else {
-                    std::fs::write(file, &formatted).unwrap_or_else(|e| {
-                        eprintln!("error: cannot write {}: {e}", file.display());
-                        process::exit(1);
-                    });
-                    println!("Formatted: {}", file.display());
+                    match replace_file_atomically_if_unchanged(
+                        file,
+                        source.as_bytes(),
+                        formatted.as_bytes(),
+                    ) {
+                        Ok(()) => println!("Formatted: {}", file.display()),
+                        Err(error) => {
+                            eprintln!(
+                                "error: cannot atomically replace {}: {error}",
+                                file.display()
+                            );
+                            error_count += 1;
+                        }
+                    }
                 }
             }
         }
@@ -843,7 +853,7 @@ fn run_format(paths: &[PathBuf], check: bool) {
         process::exit(2);
     }
     if error_count > 0 {
-        eprintln!("{error_count} file(s) could not be read or formatted");
+        eprintln!("{error_count} file(s) could not be read, formatted, or replaced");
         process::exit(1);
     }
     if check && unformatted_count > 0 {
