@@ -245,11 +245,13 @@ required and must be supplied.
 Values are recursively **closed**. Accepted forms include finite quantities,
 `Int`, `Bool`, `datetime(...)`, `epoch<S>(...)`, Cartesian `complex(...)`,
 named/key literals, complete algebraic constructors, and complete fixed-axis
-map literals, with arbitrary nesting. Graph references, arithmetic such as
-`2 * PI`, constants, ordinary function/plugin calls, dynamic units,
-conditionals, comprehensions, matches, scans, and unfolds are rejected. This
-keeps CLI input as typed data rather than injecting a second computation into
-the prepared DAG.
+map literals, with arbitrary nesting. A map entry cannot contain more key
+levels than its declared indexed value permits; an over-nested entry is a shape
+error and is never lowered without its schema. Graph references,
+arithmetic such as `2 * PI`, constants, ordinary function/plugin calls, dynamic
+units, conditionals, comprehensions, matches, scans, and unfolds are rejected.
+This keeps CLI input as typed data rather than injecting a second computation
+into the prepared DAG.
 
 Semantic errors while validating a structured value supplied by `--input` are
 reported against the JSON input file and include the affected entry parameter

@@ -1511,14 +1511,14 @@ impl PreparedProject {
                     ));
                 };
                 let entry_schema =
-                    (0..entry.keys.len()).try_fold(expected, |schema, _| match schema {
-                        ModelValueSchema::Indexed { element, .. } => Some(element.as_ref()),
-                        _ => None,
-                    });
-                let value = entry_schema.map_or_else(
-                    || self.lower_binding_expr_in_owner(&entry.value, owner),
-                    |schema| self.lower_closed_binding_expr(&entry.value, schema, owner),
-                )?;
+                    map_entry_value_schema(expected, entry.keys.len()).map_err(|message| {
+                        CompileError::Eval(GraphcalError::EvalError {
+                            message: format!("invalid external map binding: {message}"),
+                            src: self.source.clone(),
+                            span: entry.value.span.into(),
+                        })
+                    })?;
+                let value = self.lower_closed_binding_expr(&entry.value, entry_schema, owner)?;
                 Ok(graphcal_compiler::hir::expr::MapEntry {
                     keys: lowered_entry.keys,
                     value,
@@ -1702,6 +1702,16 @@ fn normalize_binding_literal(
     Ok(expr)
 }
 
+fn map_entry_value_schema(
+    expected: &ModelValueSchema,
+    key_count: usize,
+) -> Result<&ModelValueSchema, &'static str> {
+    (0..key_count).try_fold(expected, |schema, _| match schema {
+        ModelValueSchema::Indexed { element, .. } => Ok(element.as_ref()),
+        _ => Err("map entry has more keys than the declared value has indexed axes"),
+    })
+}
+
 #[expect(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -1774,13 +1784,7 @@ fn normalize_binding_literal_in_place(
         }
         (AstExprKind::MapLiteral { entries }, ModelValueSchema::Indexed { .. }) => {
             for entry in entries {
-                let mut entry_schema = expected;
-                for _ in 0..entry.keys.len() {
-                    let ModelValueSchema::Indexed { element, .. } = entry_schema else {
-                        break;
-                    };
-                    entry_schema = element;
-                }
+                let entry_schema = map_entry_value_schema(expected, entry.keys.len())?;
                 normalize_binding_literal_in_place(&mut entry.value, entry_schema, schemas)?;
             }
         }
