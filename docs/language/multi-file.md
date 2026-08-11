@@ -644,6 +644,12 @@ source_dir = "lib"
 Now `import myproject.helpers` resolves to
 `<project_root>/lib/myproject/helpers.gcl`.
 
+`source_dir` is a portable relative directory, not a host-native path. It must
+contain one or more normal `/`-separated components. Empty spellings,
+`.`/`..` components, absolute paths, repeated or trailing separators,
+backslashes, control characters, and platform path prefixes are rejected. Use
+a named directory such as `src` or `lib`; `source_dir = "."` is not supported.
+
 ## Package Dependencies
 
 A real package may depend on other Graphcal packages fetched from Git. The MVP
@@ -707,6 +713,12 @@ lockfile and locally materialized cache entries. They do not fetch dependencies
 or update `graphcal.lock`; if the lockfile is missing, stale, version-mismatched,
 or points at a missing or hash-mismatched cached source, they fail and ask you
 to run `graphcal deps lock`.
+
+Loading also binds every lock entry to exactly one materialized manifest before
+resolving modules. Package names, source directories, and dependency alias sets
+must match in both directions. This ensures the source directory used for
+module resolution is exactly the directory covered by integrity verification;
+a stale or hand-edited lockfile cannot redirect imports to an unhashed tree.
 
 Lock creation and loading use the same deterministic source-tree algorithm.
 Package trees may contain only ordinary directories and regular files: symbolic
