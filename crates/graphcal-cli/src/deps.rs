@@ -8,7 +8,8 @@ use std::sync::atomic::AtomicBool;
 
 use graphcal_eval::loader::discover_project_root;
 use graphcal_io::{
-    NeverCancel, RealFileSystem, SourceTreeHashLimits, hash_source_tree as hash_package_source_tree,
+    NeverCancel, RealFileSystem, SourceTreeHashLimits, create_file_atomically,
+    hash_source_tree as hash_package_source_tree, replace_file_atomically_if_unchanged,
 };
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitTransport, GitUrl, LOCK_VERSION,
@@ -68,9 +69,23 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let lockfile_path = root.join("graphcal.lock");
     let changed = match std::fs::read_to_string(&lockfile_path) {
         Ok(existing) if existing == content => false,
-        Ok(_) | Err(_) => {
-            write_file_atomic(&root, &lockfile_path, content.as_bytes())?;
+        Ok(existing) => {
+            replace_file_atomically_if_unchanged(
+                &lockfile_path,
+                existing.as_bytes(),
+                content.as_bytes(),
+            )?;
             true
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+            create_file_atomically(&lockfile_path, content.as_bytes())?;
+            true
+        }
+        Err(source) => {
+            return Err(DepsError::ReadFile {
+                path: lockfile_path,
+                source,
+            });
         }
     };
 
@@ -151,33 +166,6 @@ fn resolve_plugin_pins(
             LockedPlugin::new(path, sha256).map_err(DepsError::PluginPin)
         })
         .collect()
-}
-
-fn write_file_atomic(root: &Path, final_path: &Path, bytes: &[u8]) -> Result<(), DepsError> {
-    let mut tmp = tempfile::Builder::new()
-        .prefix(".graphcal-lock-")
-        .tempfile_in(root)
-        .map_err(|source| DepsError::CreateTempDir {
-            path: root.to_path_buf(),
-            source,
-        })?;
-    std::io::Write::write_all(&mut tmp, bytes).map_err(|source| DepsError::WriteFile {
-        path: tmp.path().to_path_buf(),
-        source,
-    })?;
-    tmp.as_file()
-        .sync_all()
-        .map_err(|source| DepsError::WriteFile {
-            path: tmp.path().to_path_buf(),
-            source,
-        })?;
-    let tmp_path = tmp.path().to_path_buf();
-    tmp.persist(final_path).map_err(|err| DepsError::Rename {
-        from: tmp_path,
-        to: final_path.to_path_buf(),
-        source: err.error,
-    })?;
-    Ok(())
 }
 
 fn ensure_lock_graph_loadable(graph: &PackageGraph) -> Result<(), DepsError> {
@@ -624,12 +612,9 @@ pub enum DepsError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// Lockfile write failed.
-    #[error("could not write `{}`: {source}", path.display())]
-    WriteFile {
-        path: PathBuf,
-        source: std::io::Error,
-    },
+    /// Atomic lockfile replacement failed.
+    #[error(transparent)]
+    AtomicWrite(#[from] graphcal_io::AtomicWriteError),
     /// A source file failed to parse while scanning for plugin imports.
     #[error("could not scan `{}` for plugin imports: {message}", path.display())]
     PluginScanParse { path: PathBuf, message: String },
