@@ -15,6 +15,7 @@ mod formatting;
 mod goto_definition;
 mod hover;
 mod inlay_hints;
+mod nominal_type_index;
 mod references;
 mod rename;
 mod resolve;

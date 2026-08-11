@@ -317,6 +317,7 @@ pub enum UnresolvedSymbol {
     Unit(SourceSymbolPath),
     StructType(SourceSymbolPath),
     Index(SourceSymbolPath),
+    Field(FieldName),
     Function(SourceSymbolPath),
     /// Generic syntax whose expected sort is determined only after resolving
     /// the generic parameter declaration.
@@ -325,7 +326,7 @@ pub enum UnresolvedSymbol {
 
 impl UnresolvedSymbol {
     #[must_use]
-    pub const fn path(&self) -> &SourceSymbolPath {
+    pub const fn path(&self) -> Option<&SourceSymbolPath> {
         match self {
             Self::Term(path)
             | Self::Declaration(path)
@@ -335,7 +336,8 @@ impl UnresolvedSymbol {
             | Self::StructType(path)
             | Self::Index(path)
             | Self::Function(path)
-            | Self::GenericArgument(path) => path,
+            | Self::GenericArgument(path) => Some(path),
+            Self::Field(_) => None,
         }
     }
 
@@ -352,6 +354,7 @@ impl UnresolvedSymbol {
             Self::Unit(_) => matches!(target, SymbolId::Unit(_)),
             Self::StructType(_) => matches!(target, SymbolId::StructType(_)),
             Self::Index(_) => matches!(target, SymbolId::Index(_)),
+            Self::Field(_) => matches!(target, SymbolId::Field(_)),
             Self::Function(_) => matches!(
                 target,
                 SymbolId::BuiltinFunction(_) | SymbolId::ExternFunction(_)
@@ -411,6 +414,10 @@ impl VisibleBinding {
 
     #[must_use]
     pub fn resolves(&self, unresolved: &UnresolvedSymbol) -> bool {
-        unresolved.accepts(&self.target) && unresolved.path() == &self.spelling
+        unresolved.accepts(&self.target)
+            && match unresolved {
+                UnresolvedSymbol::Field(field) => self.target.leaf_name() == field.as_str(),
+                _ => unresolved.path().is_some_and(|path| path == &self.spelling),
+            }
     }
 }

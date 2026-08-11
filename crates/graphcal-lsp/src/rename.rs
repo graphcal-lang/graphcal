@@ -8,7 +8,7 @@ use crate::convert::LineIndex;
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::server::AnalysisResult;
 use crate::symbol_identity::{FieldId, GenericParamId, IndexVariantId};
-use crate::symbol_table::{SymbolCategory, SymbolKey};
+use crate::symbol_table::SymbolKey;
 use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
 use graphcal_compiler::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName};
 use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexName};
@@ -39,17 +39,20 @@ fn is_valid_identifier(name: &str) -> bool {
 /// and alias. Until that is implemented, refusing is safer than producing
 /// a partial workspace edit that breaks the defining file or other
 /// importers.
-fn is_renameable(resolved: &ResolvedSymbol<'_>) -> bool {
+fn is_renameable(analysis: &AnalysisResult, resolved: &ResolvedSymbol<'_>) -> bool {
     let SymbolLocation::Local(def) = &resolved.location else {
         return false;
     };
-    !def.is_builtin() && def.category != SymbolCategory::Field
+    !def.is_builtin()
+        && !analysis
+            .symbol_table
+            .has_ambiguous_reference_to(&resolved.key)
 }
 
 /// Validate a rename and return the current name's range and placeholder.
 pub fn prepare_rename(analysis: &AnalysisResult, offset: usize) -> Option<PrepareRenameResponse> {
     let resolved = resolve_symbol_at(analysis, offset)?;
-    if !is_renameable(&resolved) {
+    if !is_renameable(analysis, &resolved) {
         return None;
     }
 
@@ -197,7 +200,7 @@ pub fn rename(
     let Some(resolved) = resolve_symbol_at(analysis, offset) else {
         return Ok(None);
     };
-    if !is_renameable(&resolved) {
+    if !is_renameable(analysis, &resolved) {
         return Ok(None);
     }
     let SymbolLocation::Local(def) = &resolved.location else {
@@ -278,6 +281,78 @@ mod tests {
             extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
+        }
+    }
+
+    #[test]
+    fn rename_field_access_isolated_by_owning_constructor() {
+        let source = r"
+type Item { Item(mass: Dimensionless), }
+type Other { Other(mass: Dimensionless), }
+param item: Item = Item(mass: 1.0);
+param other: Other = Other(mass: 2.0);
+node item_mass: Dimensionless = @item.mass;
+node other_mass: Dimensionless = @other.mass;
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let definition = source.find("Item(mass").unwrap() + "Item(".len();
+        let edit = rename(&analysis, &uri, definition, "weight")
+            .unwrap()
+            .expect("record field should be renameable");
+        let edits = &edit.changes.unwrap()[&uri];
+
+        let lines = LineIndex::new(source);
+        let mut actual: Vec<_> = edits
+            .iter()
+            .map(|edit| (edit.range.start.line, edit.range.start.character))
+            .collect();
+        let mut expected: Vec<_> = [
+            definition,
+            source.find("= Item(mass").unwrap() + "= Item(".len(),
+            source.find("@item.mass").unwrap() + "@item.".len(),
+        ]
+        .into_iter()
+        .map(|offset| {
+            let position = lines.position(offset);
+            (position.line, position.character)
+        })
+        .collect();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn rename_covers_nested_dag_include_and_composition_occurrences() {
+        let source = r"
+param outer: Dimensionless = 2.0;
+dag d {
+    param inner: Dimensionless;
+    node doubled: Dimensionless = @inner * 2.0;
+}
+include d(inner: @outer).{ doubled as result };
+plot p = { mark: point, encode: { x: @outer } };
+figure f = { plots: [p] };
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+
+        for (needle, new_name, expected_edits) in [
+            ("param outer", "outside", 3),
+            ("param inner", "inside", 3),
+            ("node doubled", "twice", 2),
+            ("plot p", "chart", 2),
+        ] {
+            let offset = source.find(needle).unwrap() + needle.rfind(' ').unwrap() + 1;
+            let edit = rename(&analysis, &uri, offset, new_name)
+                .unwrap()
+                .unwrap_or_else(|| panic!("`{needle}` should be renameable"));
+            assert_eq!(
+                edit.changes.unwrap()[&uri].len(),
+                expected_edits,
+                "partial rename for `{needle}`"
+            );
         }
     }
 

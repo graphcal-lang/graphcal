@@ -1912,7 +1912,7 @@ impl ModuleResolver {
     /// an imported module alias. That binding is itself callable regardless of
     /// whether its canonical target is a file root or an inline DAG; remaining
     /// path segments descend through child DAG modules uniformly.
-    pub(crate) fn resolve_module_path(
+    pub fn resolve_module_path(
         &self,
         owner: &DagId,
         path: &ModulePath,
