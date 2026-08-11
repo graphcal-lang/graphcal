@@ -394,6 +394,11 @@ mod tests {
             ),
         );
         AnalysisResult {
+            inputs: crate::workspace_revision::AnalysisInputs::untracked_for_test(
+                crate::workspace_revision::DocumentIdentity::virtual_uri(
+                    Url::parse("file:///test.gcl").unwrap(),
+                ),
+            ),
             source,
             symbol_table,
             project_symbols,
