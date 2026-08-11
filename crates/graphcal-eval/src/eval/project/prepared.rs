@@ -683,11 +683,13 @@ impl PreparedProject {
         let empty_locals = HirLocalValueMap::root();
         let ctx = EvalContext {
             cancellation,
+            work_budget: crate::eval_expr::fresh_work_budget(),
             builtin_fns,
             registry: self.tir.registry(),
             src: &self.source,
             tir: &self.tir,
             current_dag: Some(self.tir.root()),
+            current_decl: None,
             root_values: Some(&values),
             checked_execution_facts: Some(&self.plan.checked_execution_facts),
             struct_field_constraints: Some(&self.plan.struct_field_constraints),
@@ -700,7 +702,7 @@ impl PreparedProject {
                 self.plan.expected_fail.get(&assertion.name),
                 &values,
                 &empty_locals,
-                &ctx,
+                &ctx.for_decl(&self.tir.root().resolved_decl_key_for_local(&assertion.name)),
             );
             match result {
                 AssertResult::Pass => {}
@@ -1667,11 +1669,13 @@ impl PreparedProject {
         let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
         let context = EvalContext {
             cancellation,
+            work_budget: crate::eval_expr::fresh_work_budget(),
             builtin_fns,
             registry: self.tir.registry(),
             src: &self.source,
             tir: &self.tir,
             current_dag: Some(self.tir.root()),
+            current_decl: None,
             root_values: Some(&values),
             checked_execution_facts: Some(&self.plan.checked_execution_facts),
             struct_field_constraints: Some(&self.plan.struct_field_constraints),

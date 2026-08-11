@@ -159,6 +159,53 @@ pub fn scaled_mean(
     ScaledSum::from_values(values, context.clone())?.mean(values.len(), context)
 }
 
+/// Incremental scaled root-sum-square accumulator.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct RootSumSquare {
+    scale: f64,
+    sum_squares: f64,
+}
+
+impl RootSumSquare {
+    pub(super) const fn new() -> Self {
+        Self {
+            scale: 0.0,
+            sum_squares: 1.0,
+        }
+    }
+
+    pub(super) fn add(
+        &mut self,
+        value: f64,
+        context: impl Into<String>,
+    ) -> Result<(), QuantityValidationError> {
+        let context = context.into();
+        finite_quantity(value, context)?;
+        if value == 0.0 {
+            return Ok(());
+        }
+        let magnitude = value.abs();
+        if self.scale < magnitude {
+            let ratio = self.scale / magnitude;
+            self.sum_squares = (self.sum_squares * ratio).mul_add(ratio, 1.0);
+            self.scale = magnitude;
+        } else {
+            let ratio = magnitude / self.scale;
+            self.sum_squares = ratio.mul_add(ratio, self.sum_squares);
+        }
+        Ok(())
+    }
+
+    pub(super) fn finish(self, context: impl Into<String>) -> Result<f64, QuantityValidationError> {
+        let result = if self.scale == 0.0 {
+            0.0
+        } else {
+            self.scale * self.sum_squares.sqrt()
+        };
+        computed_finite_quantity(result, context)
+    }
+}
+
 /// Compute a root-sum-square with scaled accumulation to avoid intermediate
 /// overflow and underflow.
 pub(super) fn root_sum_square(
@@ -166,29 +213,14 @@ pub(super) fn root_sum_square(
     context: impl Into<String>,
 ) -> Result<f64, QuantityValidationError> {
     let context = context.into();
-    let (scale, sum_squares) =
+    let accumulator =
         values
             .into_iter()
-            .try_fold((0.0_f64, 1.0_f64), |(scale, sum_squares), value| {
-                finite_quantity(value, context.clone())?;
-                if value == 0.0 {
-                    return Ok((scale, sum_squares));
-                }
-                let magnitude = value.abs();
-                Ok(if scale < magnitude {
-                    let ratio = scale / magnitude;
-                    (magnitude, (sum_squares * ratio).mul_add(ratio, 1.0))
-                } else {
-                    let ratio = magnitude / scale;
-                    (scale, ratio.mul_add(ratio, sum_squares))
-                })
+            .try_fold(RootSumSquare::new(), |mut accumulator, value| {
+                accumulator.add(value, context.clone())?;
+                Ok::<_, QuantityValidationError>(accumulator)
             })?;
-    let result = if scale == 0.0 {
-        0.0
-    } else {
-        scale * sum_squares.sqrt()
-    };
-    computed_finite_quantity(result, context)
+    accumulator.finish(context)
 }
 
 /// Validate the result of a computation whose non-finite output indicates an error.

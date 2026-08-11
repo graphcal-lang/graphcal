@@ -3761,11 +3761,13 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        work_budget: crate::eval_expr::fresh_work_budget(),
         builtin_fns,
         registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),
+        current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,
         struct_field_constraints: None,
@@ -3822,11 +3824,13 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        work_budget: crate::eval_expr::fresh_work_budget(),
         builtin_fns,
         registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),
+        current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,
         struct_field_constraints: None,
@@ -4697,11 +4701,13 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        work_budget: crate::eval_expr::fresh_work_budget(),
         builtin_fns,
         registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),
+        current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,
         struct_field_constraints: None,
@@ -4759,11 +4765,13 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let src = &project.files[&project.root].named_source;
     let ctx = crate::eval_expr::EvalContext {
         cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
+        work_budget: crate::eval_expr::fresh_work_budget(),
         builtin_fns,
         registry: tir.registry(),
         src,
         tir: &tir,
         current_dag: Some(tir.root()),
+        current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,
         struct_field_constraints: None,

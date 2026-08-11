@@ -430,6 +430,12 @@ a result. These failures are explicit evaluation errors; they never return
 zero. Because a determinant's physical dimension is `D` raised to the matrix
 order, `det` requires a concrete axis cardinality.
 
+Dense kernels share a checked budget of 10,000,000 estimated arithmetic
+operations per declaration evaluation. Work such as an oversized matrix
+multiplication or cubic factorization fails explicitly before the expensive
+kernel runs. Long kernels also observe cooperative cancellation at bounded
+intervals, which keeps LSP and browser evaluation responsive.
+
 ## Prelude Base Dimensions
 
 | Dimension | Description |

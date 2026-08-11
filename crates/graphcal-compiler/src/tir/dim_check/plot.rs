@@ -14,7 +14,6 @@ use crate::registry::error::GraphcalError;
 
 use super::{
     DimCheckContext, InferredType, check_ineffective_conversions, helpers::format_inferred_type,
-    infer,
 };
 
 /// Check every plot/figure/layer declaration of one DAG.
@@ -25,8 +24,9 @@ pub(super) fn check_plot_properties_dag(
     check_plot_references(ctx, dag)?;
     for entry in &dag.plots {
         let body = &entry.body;
+        let owner = dag.resolved_decl_key_for_local(&entry.name);
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
-        check_plot_encodings(&entry_ctx, dag, body)?;
+        check_plot_encodings(&entry_ctx, &owner, body)?;
         for field in &body.mark_properties {
             let Some(prop) = MarkProperty::from_name(field.name.as_str()) else {
                 return Err(invalid_property(
@@ -36,7 +36,7 @@ pub(super) fn check_plot_properties_dag(
                     &valid_names(MarkProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
         for field in &body.properties {
             let Some(prop) = PlotProperty::from_name(field.name.as_str()) else {
@@ -47,10 +47,11 @@ pub(super) fn check_plot_properties_dag(
                     &valid_names(PlotProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
     }
     for entry in &dag.figures {
+        let owner = dag.resolved_decl_key_for_local(&entry.name);
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
         for field in &entry.fields {
             let prop = CompositionProperty::from_name(field.name.as_str())
@@ -72,10 +73,11 @@ pub(super) fn check_plot_properties_dag(
                     ),
                 ));
             };
-            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
     }
     for entry in &dag.layers {
+        let owner = dag.resolved_decl_key_for_local(&entry.name);
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
         for field in &entry.fields {
             let Some(prop) = CompositionProperty::from_name(field.name.as_str()) else {
@@ -86,7 +88,7 @@ pub(super) fn check_plot_properties_dag(
                     &valid_names(CompositionProperty::ALL.iter().map(|p| p.name())),
                 ));
             };
-            check_property_value(&entry_ctx, dag, prop.name(), prop.value_type(), field)?;
+            check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
     }
     Ok(())
@@ -154,7 +156,7 @@ fn check_plot_references(
 
 fn check_plot_encodings(
     ctx: &DimCheckContext<'_>,
-    dag: &crate::tir::typed::DagTIR,
+    owner: &crate::syntax::decl_name::ResolvedDeclName,
     body: &crate::ir::lower::LoweredPlotBody,
 ) -> Result<(), GraphcalError> {
     let shapes = body
@@ -169,7 +171,7 @@ fn check_plot_encodings(
                     PlotLeafKind::ContextualString,
                 ));
             }
-            let inferred = infer_expression_type(ctx, dag, expr)?;
+            let inferred = infer_expression_type(ctx, owner, expr)?;
             plot_channel_shape(&inferred).ok_or_else(|| GraphcalError::PlotEncodingTypeMismatch {
                 channel: *channel,
                 found: format_inferred_type(&inferred, ctx.registry),
@@ -270,7 +272,7 @@ fn invalid_property(
 /// Check one property value against its expected type.
 fn check_property_value(
     ctx: &DimCheckContext<'_>,
-    dag: &crate::tir::typed::DagTIR,
+    owner: &crate::syntax::decl_name::ResolvedDeclName,
     property: &'static str,
     expected: PlotPropertyType,
     field: &LoweredPlotField,
@@ -298,7 +300,7 @@ fn check_property_value(
             if is_string_literal {
                 return Err(mismatch("a string literal".to_string()));
             }
-            match infer_expression_type(ctx, dag, &field.value)? {
+            match infer_expression_type(ctx, owner, &field.value)? {
                 InferredType::Int => Ok(()),
                 InferredType::Quantity(d) if d.is_dimensionless() => Ok(()),
                 InferredType::Quantity(d) => Err(GraphcalError::PlotPropertyDimensioned {
@@ -314,7 +316,7 @@ fn check_property_value(
             if is_string_literal {
                 return Err(mismatch("a string literal".to_string()));
             }
-            match infer_expression_type(ctx, dag, &field.value)? {
+            match infer_expression_type(ctx, owner, &field.value)? {
                 InferredType::Bool => Ok(()),
                 other => Err(mismatch(format_inferred_type(&other, ctx.registry))),
             }
@@ -324,18 +326,8 @@ fn check_property_value(
 
 fn infer_expression_type(
     ctx: &DimCheckContext<'_>,
-    dag: &crate::tir::typed::DagTIR,
+    owner: &crate::syntax::decl_name::ResolvedDeclName,
     expr: &crate::hir::Expr,
 ) -> Result<InferredType, GraphcalError> {
-    infer::hir::infer_hir_type_with_owner_and_cancellation(
-        expr,
-        None,
-        ctx.declared_types,
-        dag,
-        ctx.tir,
-        ctx.registry,
-        ctx.builtin_fns,
-        ctx.src,
-        ctx.cancellation,
-    )
+    ctx.infer_hir(expr, owner)
 }

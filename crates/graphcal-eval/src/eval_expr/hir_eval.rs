@@ -136,7 +136,7 @@ fn eval_hir_expr_inner(
             eval_hir_map_literal(entries, values, local_values, ctx)
         }
         hir::ExprKind::ForComp { bindings, body } => {
-            eval_hir_for_comp(bindings, body, values, local_values, ctx)
+            eval_hir_for_comp(expr.span, bindings, body, values, local_values, ctx)
         }
         hir::ExprKind::IndexAccess { expr: inner, args } => {
             eval_hir_index_access(expr.span, inner, args.as_slice(), values, local_values, ctx)
@@ -564,12 +564,17 @@ fn eval_hir_fn_call(
                 .iter()
                 .map(|argument| eval_hir_expr(argument, values, local_values, ctx))
                 .collect::<Result<Vec<_>, _>>()?;
-            super::linear_algebra::evaluate(function, arguments).map_err(|error| {
-                if error.is_internal_invariant() {
-                    ctx.internal_error(error.to_string(), expr.span)
-                } else {
-                    ctx.eval_error(error.to_string(), expr.span)
-                }
+            super::linear_algebra::evaluate(function, arguments, ctx).map_err(|error| {
+                error.cancellation().map_or_else(
+                    || {
+                        if error.is_internal_invariant() {
+                            ctx.internal_error(error.to_string(), expr.span)
+                        } else {
+                            ctx.eval_error(error.to_string(), expr.span)
+                        }
+                    },
+                    GraphcalError::from,
+                )
             })
         }
         EvalBuiltinRule::TypeConversion(kind) => {
@@ -1877,6 +1882,28 @@ fn eval_hir_nat_expr(expr: &hir::NatExpr, ctx: &EvalContext<'_>) -> Result<u64, 
 }
 
 fn eval_hir_for_comp(
+    span: Span,
+    bindings: &[hir::expr::ForBinding],
+    body: &hir::Expr,
+    values: &RuntimeValueMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    if let Some(owner) = &ctx.current_decl {
+        let dag = ctx.current_dag.ok_or_else(|| {
+            ctx.internal_error("materialized expression has no current checked DAG", span)
+        })?;
+        dag.materialized_shape(owner, span).ok_or_else(|| {
+            ctx.internal_error(
+                format!("materialized expression in `{owner}` has no checked shape fact"),
+                span,
+            )
+        })?;
+    }
+    eval_hir_for_comp_bindings(bindings, body, values, local_values, ctx)
+}
+
+fn eval_hir_for_comp_bindings(
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
@@ -1961,7 +1988,7 @@ fn eval_hir_for_comp(
         let val = if remaining.is_empty() {
             eval_hir_expr(body, values, &inner_locals, ctx)?
         } else {
-            eval_hir_for_comp(remaining, body, values, &inner_locals, ctx)?
+            eval_hir_for_comp_bindings(remaining, body, values, &inner_locals, ctx)?
         };
         entries.insert(variant.clone(), val);
     }
@@ -2374,11 +2401,13 @@ fn eval_hir_dag_call(
 
     let dag_ctx = EvalContext {
         cancellation: ctx.cancellation.clone(),
+        work_budget: ctx.work_budget.clone(),
         builtin_fns: ctx.builtin_fns,
         registry: ctx.registry,
         src: dag_facts.source(),
         tir: ctx.tir,
         current_dag: Some(dag_tir),
+        current_decl: None,
         root_values: ctx.root_values,
         checked_execution_facts: ctx.checked_execution_facts,
         struct_field_constraints: ctx.struct_field_constraints,
@@ -2397,7 +2426,12 @@ fn eval_hir_dag_call(
                 output.span,
             )
         })?;
-        let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
+        let value = eval_hir_expr(
+            hir_expr,
+            &dag_values,
+            &empty_hir_locals,
+            &dag_ctx.for_decl(key.as_resolved()),
+        )?;
         check_called_dag_domain_constraint(key, &value, dag_facts, hir_expr, &dag_ctx)?;
         dag_values.insert(key.clone(), value);
     }
@@ -2485,7 +2519,7 @@ fn check_inline_dag_asserts(
             ef,
             dag_values,
             &empty_hir_locals,
-            dag_ctx,
+            &dag_ctx.for_decl(&key),
         );
         match result {
             crate::eval::AssertResult::Pass => {}

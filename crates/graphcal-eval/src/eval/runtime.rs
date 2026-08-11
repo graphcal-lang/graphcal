@@ -341,11 +341,13 @@ pub(super) fn run_eval_loop_with_bindings(
 
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
+            work_budget: crate::eval_expr::fresh_work_budget(),
             builtin_fns,
             registry: tir.registry(),
             src,
             tir,
             current_dag: Some(tir.root()),
+            current_decl: Some(name.as_resolved().clone()),
             root_values: Some(&values),
             checked_execution_facts: Some(&plan.checked_execution_facts),
             struct_field_constraints: Some(&plan.struct_field_constraints),
@@ -477,11 +479,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     cancellation.checkpoint()?;
     let ctx = EvalContext {
         cancellation: cancellation.clone(),
+        work_budget: crate::eval_expr::fresh_work_budget(),
         builtin_fns,
         registry: tir.registry(),
         src,
         tir,
         current_dag: Some(tir.root()),
+        current_decl: None,
         root_values: Some(&values),
         checked_execution_facts: Some(&plan.checked_execution_facts),
         struct_field_constraints: Some(&plan.struct_field_constraints),
@@ -603,6 +607,8 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .asserts()
         .iter()
         .map(|entry| {
+            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
+            let entry_ctx = ctx.for_decl(&owner);
             let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
                 || {
                     let ef = plan.expected_fail.get(&entry.name);
@@ -611,7 +617,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                         ef,
                         &values,
                         &empty_hir_locals,
-                        &ctx,
+                        &entry_ctx,
                     )
                 },
                 |message| AssertResult::Error { message },
@@ -630,14 +636,21 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .plots()
         .iter()
         .filter_map(|entry| {
-            evaluate_plot(entry, &values, &errors, &ctx, declared_types)
-                .map_err(|message| {
-                    plot_errors.push(super::types::PlotError {
-                        name: entry.name.clone(),
-                        message,
-                    });
-                })
-                .ok()
+            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
+            evaluate_plot(
+                entry,
+                &values,
+                &errors,
+                &ctx.for_decl(&owner),
+                declared_types,
+            )
+            .map_err(|message| {
+                plot_errors.push(super::types::PlotError {
+                    name: entry.name.clone(),
+                    message,
+                });
+            })
+            .ok()
         })
         .collect();
     cancellation.checkpoint()?;
@@ -649,7 +662,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .figures()
         .iter()
         .filter_map(|entry| {
-            match eval_composition_fields(&entry.fields, &entry.plot_names, &values, &ctx) {
+            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
+            match eval_composition_fields(
+                &entry.fields,
+                &entry.plot_names,
+                &values,
+                &ctx.for_decl(&owner),
+            ) {
                 Ok(evaluated) => Some(super::types::FigureSpec {
                     name: entry.name.clone(),
                     plot_names: evaluated.plot_names,
@@ -672,7 +691,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .layers()
         .iter()
         .filter_map(|entry| {
-            match eval_composition_fields(&entry.fields, &entry.plot_names, &values, &ctx) {
+            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
+            match eval_composition_fields(
+                &entry.fields,
+                &entry.plot_names,
+                &values,
+                &ctx.for_decl(&owner),
+            ) {
                 Ok(evaluated) => Some(super::types::LayerSpec {
                     name: entry.name.clone(),
                     plot_names: evaluated.plot_names,

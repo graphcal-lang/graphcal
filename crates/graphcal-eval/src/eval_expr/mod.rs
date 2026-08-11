@@ -9,6 +9,7 @@ mod linear_algebra;
 mod linear_algebra_lu;
 pub mod numeric;
 mod unit_scale;
+mod work_budget;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,6 +34,10 @@ pub use hir_eval::{HirLocalValueMap, eval_hir_expr};
 pub use unit_scale::resolve_unit_scale;
 pub(in crate::eval_expr) use unit_scale::{checked_finite_quantity, checked_unit_scaled_value};
 
+pub fn fresh_work_budget() -> work_budget::WorkBudget {
+    work_budget::WorkBudget::default()
+}
+
 /// Immutable evaluation environment shared across all expression evaluations.
 ///
 /// Bundles built-in functions, the type/unit registry, and source information
@@ -41,6 +46,7 @@ pub(in crate::eval_expr) use unit_scale::{checked_finite_quantity, checked_unit_
 pub struct EvalContext<'a> {
     /// Cooperative cancellation for recursive expression evaluation.
     pub cancellation: graphcal_compiler::cancellation::CancellationToken,
+    pub(super) work_budget: work_budget::WorkBudget,
     pub builtin_fns: &'a BuiltinFunctions,
     pub registry: &'a SemanticRegistry,
     pub src: &'a NamedSource<Arc<String>>,
@@ -53,6 +59,9 @@ pub struct EvalContext<'a> {
     /// DAG calls can use HIR-derived canonical `DagId` / `ResolvedName<Decl>`
     /// identities instead of resolving source paths again at eval time.
     pub current_dag: Option<&'a graphcal_compiler::tir::typed::DagTIR>,
+    /// Canonical declaration whose expression is currently being evaluated.
+    /// Together with the expression span, this selects checked materialized-shape facts.
+    pub current_decl: Option<graphcal_compiler::syntax::decl_name::ResolvedDeclName>,
     /// Root-file values visible to nested inline DAG calls. This lets DAG-body
     /// self-imports route by their canonical source `DagId` rather than by a
     /// same-leaf name in the immediate caller's local value map.
@@ -127,11 +136,36 @@ impl<'a> EvalContext<'a> {
     {
         EvalContext {
             cancellation: self.cancellation.clone(),
+            work_budget: self.work_budget.clone(),
             builtin_fns: self.builtin_fns,
             registry: self.registry,
             src,
             tir: self.tir,
             current_dag: self.current_dag,
+            current_decl: self.current_decl.clone(),
+            root_values: self.root_values,
+            checked_execution_facts: self.checked_execution_facts,
+            struct_field_constraints: self.struct_field_constraints,
+            generic_nat_bindings: self.generic_nat_bindings,
+            host_fns: self.host_fns,
+        }
+    }
+
+    /// Borrow this environment while evaluating one canonical declaration body.
+    #[must_use]
+    pub fn for_decl(
+        &self,
+        declaration: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+    ) -> Self {
+        Self {
+            cancellation: self.cancellation.clone(),
+            work_budget: self.work_budget.clone(),
+            builtin_fns: self.builtin_fns,
+            registry: self.registry,
+            src: self.src,
+            tir: self.tir,
+            current_dag: self.current_dag,
+            current_decl: Some(declaration.clone()),
             root_values: self.root_values,
             checked_execution_facts: self.checked_execution_facts,
             struct_field_constraints: self.struct_field_constraints,

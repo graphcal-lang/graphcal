@@ -81,8 +81,8 @@ fn check(source: &str) -> Result<HashMap<ScopedName, DeclaredType>, GraphcalErro
         &file.declarations,
         &parent_registry,
     )?;
-    let tir = builder.finish();
-    check_dimensions_tir(&tir, &src)?;
+    let mut tir = builder.finish();
+    check_dimensions_tir(&mut tir, &src)?;
     tir.build_declared_types(&src)
 }
 
@@ -236,8 +236,8 @@ param wrapped: Wrapper<Record, Axis> =
 param fixed_wrapped: Wrapper<Fixed, FixedAxis> =
     Wrapper<Fixed, FixedAxis>(value: @fixed, values: @fixed_values);
 ";
-    let (tir, src) = module_aware_tir(source);
-    check_dimensions_tir(&tir, &src).unwrap();
+    let (mut tir, src) = module_aware_tir(source);
+    check_dimensions_tir(&mut tir, &src).unwrap();
 
     let summary = collect_override_dependency_summary(&tir, &src).unwrap();
     let owner = test_dag_id();
@@ -314,7 +314,7 @@ fn cycle_detection_uses_semantic_dependencies() {
 
     tir.root_mut().semantic.dependencies = resolved;
 
-    check_dimensions_tir(&tir, &src).unwrap();
+    check_dimensions_tir(&mut tir, &src).unwrap();
 }
 
 #[test]
@@ -323,7 +323,7 @@ fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     tir.root_mut().nodes[0].expr.kind =
         crate::hir::ExprKind::StringLiteral("not dimensionless".to_string());
 
-    assert!(check_dimensions_tir(&tir, &src).is_err());
+    assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
     tir.root_mut().nodes[0].expr.kind =
         crate::hir::ExprKind::StringLiteral("not indexed".to_string());
 
-    assert!(check_dimensions_tir(&tir, &src).is_err());
+    assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
 
 #[test]
@@ -347,7 +347,7 @@ fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
         span,
     ));
 
-    assert!(check_dimensions_tir(&tir, &src).is_err());
+    assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
 
 #[test]
@@ -680,7 +680,7 @@ Maneuver.Insertion: 1.8 km / s,
 fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
     use std::fmt::Write as _;
 
-    const AXIS_COUNT: usize = 30;
+    const AXIS_COUNT: usize = 19;
     let mut source = String::new();
     for axis in 0..AXIS_COUNT {
         writeln!(source, "pub index A{axis} = {{ X, Y }};").unwrap();
@@ -702,15 +702,15 @@ fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
     let error = check(&source).unwrap_err();
     assert!(
         matches!(&error, GraphcalError::EvalError { message, .. }
-            if message.contains("missing 1073741823 entries")
+            if message.contains("missing 524287 entries")
                 && message.contains("first missing entry")
-                && message.contains("A29.Y")),
+                && message.contains("A18.Y")),
         "got: {error:?}"
     );
 }
 
 #[test]
-fn map_key_space_cardinality_overflow_is_rejected() {
+fn map_key_space_overflow_is_preempted_by_the_eager_shape_policy() {
     use std::fmt::Write as _;
 
     let axis_count = usize::BITS as usize;
@@ -734,8 +734,13 @@ fn map_key_space_cardinality_overflow_is_rejected() {
 
     let error = check(&source).unwrap_err();
     assert!(
-        matches!(&error, GraphcalError::EvalError { message, .. }
-            if message.contains("key-space cardinality exceeds supported size")),
+        matches!(
+            &error,
+            GraphcalError::MaterializedShapeTooLarge {
+                maximum: 1_000_000,
+                ..
+            }
+        ),
         "got: {error:?}"
     );
 }

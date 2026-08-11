@@ -730,6 +730,19 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("materialized indexed value exceeds the eager limit of {maximum} scalar values")]
+    #[diagnostic(
+        code(graphcal::D035),
+        help("reduce one or more axis cardinalities so their product is at most {maximum}")
+    )]
+    MaterializedShapeTooLarge {
+        maximum: usize,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this indexed expression would materialize too many values")]
+        span: SourceSpan,
+    },
+
     #[error("type annotation mismatch: declared {declared}, inferred {inferred}")]
     #[diagnostic(
         code(graphcal::D002),
@@ -2136,6 +2149,7 @@ impl GraphcalError {
             | Self::MultiAxisAggregation { src, .. }
             | Self::MultiAxisScanSource { src, .. }
             | Self::AggregationCardinalityUnknown { src, .. }
+            | Self::MaterializedShapeTooLarge { src, .. }
             | Self::DimensionMismatchInAnnotation { src, .. }
             | Self::UnitDefinitionDimensionMismatch { src, .. }
             | Self::DynamicUnitScaleTypeMismatch { src, .. }
@@ -2295,6 +2309,7 @@ mod tests {
             ("InvalidSourcePath", "M023"),
             ("LinearAlgebraShapeMismatch", "D022"),
             ("AggregationCardinalityUnknown", "D027"),
+            ("MaterializedShapeTooLarge", "D035"),
             ("InvalidDatetimeLiteral", "D028"),
             ("EpochTimeScaleArgumentCount", "D023"),
             ("InvalidEpochTimeScaleArgument", "D029"),

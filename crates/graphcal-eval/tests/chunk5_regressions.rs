@@ -227,6 +227,99 @@ plot p = {
 }
 
 #[test]
+fn oversized_composite_shapes_are_rejected_before_evaluation() {
+    let error = compile_and_eval(
+        r"
+node grid: Dimensionless[Fin(1000000), Fin(1000000)] =
+    for row: Fin(1000000), column: Fin(1000000) { 1.0 };
+",
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        graphcal_eval::eval::CompileError::Eval(
+            graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+                maximum: 1_000_000,
+                ..
+            }
+        )
+    ));
+}
+
+#[test]
+fn nested_concrete_generic_field_shapes_obey_the_total_limit() {
+    let error = compile_and_eval(
+        r"
+pub type Matrix<N: Nat> {
+    Matrix(values: Dimensionless[Fin(N), Fin(N)])
+}
+param matrix: Matrix<1000000>;
+",
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        graphcal_eval::eval::CompileError::Eval(
+            graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+                maximum: 1_000_000,
+                ..
+            }
+        )
+    ));
+}
+
+#[test]
+fn instantiated_index_bindings_obey_the_total_shape_limit() {
+    let error = compile_and_eval(
+        r"
+dag grid {
+    pub(bind) index Row;
+    pub(bind) index Column;
+    pub node values: Dimensionless[Row, Column] =
+        for row: Row, column: Column { 1.0 };
+}
+include grid(Row: Fin(1000000), Column: Fin(1000000)) as giant;
+node unreachable: Dimensionless = count(@giant.values);
+",
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        graphcal_eval::eval::CompileError::Eval(
+            graphcal_compiler::registry::error::GraphcalError::MaterializedShapeTooLarge {
+                maximum: 1_000_000,
+                ..
+            }
+        )
+    ));
+}
+
+#[test]
+fn cubic_kernel_work_is_rejected_before_the_kernel_runs() {
+    let result = compile_and_eval(
+        r"
+node lhs: Dimensionless[Fin(216), Fin(216)] =
+    for row: Fin(216), column: Fin(216) { 1.0 };
+node rhs: Dimensionless[Fin(216), Fin(216)] =
+    for row: Fin(216), column: Fin(216) { 1.0 };
+node product: Dimensionless[Fin(216), Fin(216)] = matmul(@lhs, @rhs);
+",
+    )
+    .unwrap();
+
+    let (_, product) = result
+        .nodes
+        .iter()
+        .find(|(name, _)| name.to_string() == "product")
+        .unwrap();
+    let error = product.as_ref().unwrap_err().to_string();
+    assert!(error.contains("evaluation budget"), "{error}");
+}
+
+#[test]
 fn datetime_plot_data_preserves_nanoseconds() {
     let result = compile_and_eval(
         r#"

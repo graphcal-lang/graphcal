@@ -7,6 +7,8 @@
 
 use thiserror::Error;
 
+use super::work_budget::KernelCheckpoint;
+
 #[derive(Debug, Error)]
 pub(super) enum LuError {
     #[error("linear-algebra runtime shape invariant failed: {0}")]
@@ -30,11 +32,24 @@ pub(super) enum LuError {
         residual: f64,
         tolerance: f64,
     },
+    #[error(transparent)]
+    Cancelled(#[from] graphcal_compiler::cancellation::Cancelled),
 }
 
 impl LuError {
     pub(super) const fn is_internal_invariant(&self) -> bool {
         matches!(self, Self::ShapeInvariant(_))
+    }
+
+    pub(super) const fn cancellation(&self) -> Option<graphcal_compiler::cancellation::Cancelled> {
+        match self {
+            Self::Cancelled(cancelled) => Some(*cancelled),
+            Self::ShapeInvariant(_)
+            | Self::Singular { .. }
+            | Self::IllConditioned { .. }
+            | Self::NonFinite { .. }
+            | Self::ResidualTooLarge { .. } => None,
+        }
     }
 }
 
@@ -109,7 +124,12 @@ fn numerical_threshold(order: usize) -> f64 {
 }
 
 impl LuDecomposition {
-    fn factor(matrix: &[f64], order: usize) -> Result<Factorization, LuError> {
+    fn factor(
+        matrix: &[f64],
+        order: usize,
+        control: &mut KernelCheckpoint<'_>,
+    ) -> Result<Factorization, LuError> {
+        control.boundary()?;
         if order == 0 {
             return Err(LuError::ShapeInvariant(
                 "LU requires a nonempty square matrix".to_string(),
@@ -129,13 +149,15 @@ impl LuDecomposition {
         }
 
         let mut factors = matrix.to_vec();
-        let mut scales = (0..order)
-            .map(|row| {
-                (0..order).try_fold(0.0_f64, |scale, column| {
-                    dense_value(&factors, order, row, column).map(|value| scale.max(value.abs()))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut scales = Vec::with_capacity(order);
+        for row in 0..order {
+            let mut scale = 0.0_f64;
+            for column in 0..order {
+                control.step()?;
+                scale = scale.max(dense_value(&factors, order, row, column)?.abs());
+            }
+            scales.push(scale);
+        }
         if scales.contains(&0.0) {
             return Ok(Factorization::Singular);
         }
@@ -147,6 +169,7 @@ impl LuDecomposition {
         for pivot_column in 0..order {
             let mut best: Option<(usize, f64)> = None;
             for (row, scale) in scales.iter().copied().enumerate().skip(pivot_column) {
+                control.step()?;
                 let ratio = dense_value(&factors, order, row, pivot_column)?.abs() / scale;
                 match best {
                     Some((_, best_ratio)) if ratio <= best_ratio => {}
@@ -162,6 +185,7 @@ impl LuDecomposition {
 
             if pivot_row != pivot_column {
                 for column in 0..order {
+                    control.step()?;
                     let lhs = dense_position(order, pivot_row, column)?;
                     let rhs = dense_position(order, pivot_column, column)?;
                     factors.swap(lhs, rhs);
@@ -174,12 +198,14 @@ impl LuDecomposition {
             let pivot = dense_value(&factors, order, pivot_column, pivot_column)?;
             minimum_scaled_pivot = minimum_scaled_pivot.min(pivot.abs() / scales[pivot_column]);
             for row in pivot_column.saturating_add(1)..order {
+                control.step()?;
                 let multiplier = finite(
                     dense_value(&factors, order, row, pivot_column)? / pivot,
                     "LU factorization",
                 )?;
                 set_dense_value(&mut factors, order, row, pivot_column, multiplier)?;
                 for column in pivot_column.saturating_add(1)..order {
+                    control.step()?;
                     let current = dense_value(&factors, order, row, column)?;
                     let upper = dense_value(&factors, order, pivot_column, column)?;
                     let updated =
@@ -209,7 +235,12 @@ impl LuDecomposition {
         }
     }
 
-    fn solve_raw(&self, rhs: &[f64], operation: &'static str) -> Result<Vec<f64>, LuError> {
+    fn solve_raw(
+        &self,
+        rhs: &[f64],
+        operation: &'static str,
+        control: &mut KernelCheckpoint<'_>,
+    ) -> Result<Vec<f64>, LuError> {
         self.ensure_conditioned(operation)?;
         if rhs.len() != self.order {
             return Err(LuError::ShapeInvariant(format!(
@@ -235,39 +266,39 @@ impl LuDecomposition {
             .collect::<Result<Vec<_>, _>>()?;
 
         for row in 0..self.order {
-            let value = solution.iter().copied().enumerate().take(row).try_fold(
-                solution[row],
-                |value, (column, solved)| {
-                    finite(
-                        (-dense_value(&self.factors, self.order, row, column)?)
-                            .mul_add(solved, value),
-                        operation,
-                    )
-                },
-            )?;
+            let mut value = solution[row];
+            for (column, solved) in solution.iter().copied().enumerate().take(row) {
+                control.step()?;
+                value = finite(
+                    (-dense_value(&self.factors, self.order, row, column)?).mul_add(solved, value),
+                    operation,
+                )?;
+            }
             solution[row] = value;
         }
         for row in (0..self.order).rev() {
-            let value = solution
+            let mut value = solution[row];
+            for (column, solved) in solution
                 .iter()
                 .copied()
                 .enumerate()
                 .skip(row.saturating_add(1))
-                .try_fold(solution[row], |value, (column, solved)| {
-                    finite(
-                        (-dense_value(&self.factors, self.order, row, column)?)
-                            .mul_add(solved, value),
-                        operation,
-                    )
-                })?;
+            {
+                control.step()?;
+                value = finite(
+                    (-dense_value(&self.factors, self.order, row, column)?).mul_add(solved, value),
+                    operation,
+                )?;
+            }
             let diagonal = dense_value(&self.factors, self.order, row, row)?;
             solution[row] = finite(value / diagonal, operation)?;
         }
         Ok(solution)
     }
 
-    fn determinant(&self) -> Result<f64, LuError> {
+    fn determinant(&self, control: &mut KernelCheckpoint<'_>) -> Result<f64, LuError> {
         (0..self.order).try_fold(self.parity, |determinant, diagonal| {
+            control.step()?;
             finite(
                 determinant * dense_value(&self.factors, self.order, diagonal, diagonal)?,
                 "det()",
@@ -282,6 +313,7 @@ fn checked_residual(
     rhs: &[f64],
     solution: &[f64],
     operation: &'static str,
+    control: &mut KernelCheckpoint<'_>,
 ) -> Result<(), LuError> {
     let mut matrix_norm = 0.0_f64;
     let mut residual_norm = 0.0_f64;
@@ -289,6 +321,7 @@ fn checked_residual(
         let mut row_norm = 0.0_f64;
         let mut product = 0.0_f64;
         for column in 0..order {
+            control.step()?;
             let coefficient = dense_value(matrix, order, row, column)?;
             row_norm = finite(row_norm + coefficient.abs(), operation)?;
             let value = solution.get(column).copied().ok_or_else(|| {
@@ -325,50 +358,86 @@ fn require_nonsingular(
     matrix: &[f64],
     order: usize,
     operation: &'static str,
+    control: &mut KernelCheckpoint<'_>,
 ) -> Result<LuDecomposition, LuError> {
-    match LuDecomposition::factor(matrix, order)? {
+    match LuDecomposition::factor(matrix, order, control)? {
         Factorization::Singular => Err(LuError::Singular { operation }),
         Factorization::Nonsingular(decomposition) => Ok(decomposition),
     }
 }
 
-pub(super) fn solve(matrix: &[f64], order: usize, rhs: &[f64]) -> Result<Vec<f64>, LuError> {
+pub(super) fn solve_with_control(
+    matrix: &[f64],
+    order: usize,
+    rhs: &[f64],
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<Vec<f64>, LuError> {
     let operation = "solved";
-    let decomposition = require_nonsingular(matrix, order, operation)?;
-    let solution = decomposition.solve_raw(rhs, operation)?;
-    checked_residual(matrix, order, rhs, &solution, operation)?;
+    let decomposition = require_nonsingular(matrix, order, operation, control)?;
+    let solution = decomposition.solve_raw(rhs, operation, control)?;
+    checked_residual(matrix, order, rhs, &solution, operation, control)?;
     Ok(solution)
 }
 
-pub(super) fn inverse(matrix: &[f64], order: usize) -> Result<Vec<f64>, LuError> {
+pub(super) fn inverse_with_control(
+    matrix: &[f64],
+    order: usize,
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<Vec<f64>, LuError> {
     let operation = "inverted";
-    let decomposition = require_nonsingular(matrix, order, operation)?;
+    let decomposition = require_nonsingular(matrix, order, operation, control)?;
     decomposition.ensure_conditioned(operation)?;
     let length = matrix_len(order)?;
     let mut inverse = vec![0.0; length];
     for column in 0..order {
+        control.boundary()?;
         let rhs = (0..order)
             .map(|row| if row == column { 1.0 } else { 0.0 })
             .collect::<Vec<_>>();
-        let solution = decomposition.solve_raw(&rhs, operation)?;
-        checked_residual(matrix, order, &rhs, &solution, operation)?;
+        let solution = decomposition.solve_raw(&rhs, operation, control)?;
+        checked_residual(matrix, order, &rhs, &solution, operation, control)?;
         for (row, value) in solution.into_iter().enumerate() {
+            control.step()?;
             set_dense_value(&mut inverse, order, row, column, value)?;
         }
     }
     Ok(inverse)
 }
 
-pub(super) fn determinant(matrix: &[f64], order: usize) -> Result<f64, LuError> {
-    match LuDecomposition::factor(matrix, order)? {
+pub(super) fn determinant_with_control(
+    matrix: &[f64],
+    order: usize,
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<f64, LuError> {
+    match LuDecomposition::factor(matrix, order, control)? {
         Factorization::Singular => Ok(0.0),
-        Factorization::Nonsingular(decomposition) => decomposition.determinant(),
+        Factorization::Nonsingular(decomposition) => decomposition.determinant(control),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn solve(matrix: &[f64], order: usize, rhs: &[f64]) -> Result<Vec<f64>, LuError> {
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        solve_with_control(
+            matrix,
+            order,
+            rhs,
+            &mut KernelCheckpoint::new(&cancellation),
+        )
+    }
+
+    fn inverse(matrix: &[f64], order: usize) -> Result<Vec<f64>, LuError> {
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        inverse_with_control(matrix, order, &mut KernelCheckpoint::new(&cancellation))
+    }
+
+    fn determinant(matrix: &[f64], order: usize) -> Result<f64, LuError> {
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        determinant_with_control(matrix, order, &mut KernelCheckpoint::new(&cancellation))
+    }
 
     const MATRIX: &[f64] = &[3.0, 1.0, 1.0, 2.0];
 

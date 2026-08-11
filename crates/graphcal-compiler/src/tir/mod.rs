@@ -2,4 +2,5 @@
 
 #[warn(clippy::arithmetic_side_effects)]
 pub mod dim_check;
+pub mod materialized_shape;
 pub mod typed;
