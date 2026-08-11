@@ -237,9 +237,12 @@ at load time before any plugin code runs:
   the result — a plugin never retains a buffer across calls.
 - **No imports.** The module may import nothing — with one exception:
   `graphcal::fail(ptr: i32, len: i32)`, the host-provided failure
-  reporter. The import ban is what makes plugins pure and I/O-free by
-  construction; a module importing WASI or other host APIs is rejected
-  with a dedicated diagnostic (P007). A module importing `graphcal::fail`
+  reporter. The import ban makes plugins I/O-free, and the host creates a
+  fresh instance for each logical call so mutable globals, tables, linear
+  memory, allocator state, and `start` side effects cannot carry history from
+  one graph node or re-evaluation into another. Together these rules make the
+  boundary pure by construction. A module importing WASI or other host APIs is
+  rejected with a dedicated diagnostic (P007). A module importing `graphcal::fail`
   must export its linear memory as `"memory"` so the failure message can
   be read.
 - **Resource bounds.** The host rejects an encoded module over 16 MiB by
@@ -267,8 +270,9 @@ plugin calls `graphcal::fail` with a UTF-8 message; the call is aborted
 and the message surfaces in the node's diagnostic. Traps and exhausted
 fuel are reported the same way, without a custom message.
 
-Compiled modules are cached by content hash, so re-analysis in the
-language server does not recompile unchanged plugins.
+Immutable compiled modules and validated metadata are cached by content hash,
+so re-analysis in the language server does not recompile unchanged plugins.
+Live instances are deliberately never cached or pooled.
 
 ### Authoring
 
