@@ -1443,17 +1443,18 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 4. `crates/graphcal-lsp/src/symbol_identity.rs`
 5. `crates/graphcal-lsp/src/nominal_type_index.rs`
 6. `crates/graphcal-lsp/src/symbol_table.rs`
-7. `crates/graphcal-lsp/src/formatting.rs`
-8. `crates/graphcal-cli/src/display.rs`
-9. `crates/graphcal-cli/src/plot.rs`
-10. `crates/graphcal-cli/src/format.rs`
-11. `crates/graphcal-cli/src/json_input.rs`
-12. `crates/graphcal-cli/src/overrides.rs`
-13. `crates/graphcal-cli/src/model.rs`
-14. `crates/graphcal-cli/src/main.rs`
-15. `crates/graphcal-cli/src/dump.rs`
-16. `crates/graphcal-cli/src/deps.rs`
-17. `crates/graphcal-cli/src/lib.rs`
+7. `crates/graphcal-lsp/src/project_symbols.rs`
+8. `crates/graphcal-lsp/src/formatting.rs`
+9. `crates/graphcal-cli/src/display.rs`
+10. `crates/graphcal-cli/src/plot.rs`
+11. `crates/graphcal-cli/src/format.rs`
+12. `crates/graphcal-cli/src/json_input.rs`
+13. `crates/graphcal-cli/src/overrides.rs`
+14. `crates/graphcal-cli/src/model.rs`
+15. `crates/graphcal-cli/src/main.rs`
+16. `crates/graphcal-cli/src/dump.rs`
+17. `crates/graphcal-cli/src/deps.rs`
+18. `crates/graphcal-cli/src/lib.rs`
 
 ### Stage 20 - Language server (`graphcal-lsp`)
 
