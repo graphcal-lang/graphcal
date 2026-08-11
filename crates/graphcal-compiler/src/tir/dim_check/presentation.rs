@@ -6,6 +6,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::{self, ExprKind};
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::error::GraphcalError;
@@ -59,15 +60,13 @@ pub(super) fn collect_presentation_facts(
         .map(|(dag_id, _)| dag_id.clone())
         .map(|dag_id| {
             cancellation.checkpoint()?;
-            let shapes = plot_shapes
-                .get(&dag_id)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "checked plot shapes are missing for presentation DAG `{dag_id}`"
-                    ),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                })?;
+            let shapes = plot_shapes.get(&dag_id).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("checked plot shapes are missing for presentation DAG `{dag_id}`"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
             resolver
                 .facts_for_dag(&dag_id, shapes)
                 .map(|facts| (dag_id, facts))
@@ -89,7 +88,7 @@ impl PresentationResolver<'_> {
         dag_id: &crate::dag_id::DagId,
         checked_plot_shapes: &super::plot::CheckedPlotChannelShapes,
     ) -> Result<DagPresentationFacts, GraphcalError> {
-        let dag = self.dag(dag_id, Span::new(0, 0))?;
+        let dag = self.dag(dag_id, DiagnosticAnchor::WholeFile)?;
         // Materialize keys to release the immutable DAG borrow before the
         // recursive resolver mutates its memo/visiting sets.
         let declaration_keys = presentation_declaration_keys(dag);
@@ -112,14 +111,13 @@ impl PresentationResolver<'_> {
 
         let mut plot_channels = HashMap::new();
         for (plot, body, body_src) in plot_entries {
-            let shapes =
-                checked_plot_shapes
-                    .get(&plot)
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!("checked channel shapes are missing for plot `{plot}`"),
-                        src: body_src.clone(),
-                        span: Span::new(0, 0).into(),
-                    })?;
+            let shapes = checked_plot_shapes.get(&plot).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("checked channel shapes are missing for plot `{plot}`"),
+                    &body_src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
             let channels = body
                 .encodings
                 .into_iter()
@@ -149,31 +147,31 @@ impl PresentationResolver<'_> {
     fn dag(
         &self,
         dag_id: &crate::dag_id::DagId,
-        span: Span,
+        anchor: DiagnosticAnchor,
     ) -> Result<&crate::tir::typed::DagTIR, GraphcalError> {
-        self.tir
-            .dag_registry()
-            .get(dag_id)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("presentation owner `{dag_id}` has no checked DAG"),
-                src: self.fallback_src.clone(),
-                span: span.into(),
-            })
+        self.tir.dag_registry().get(dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("presentation owner `{dag_id}` has no checked DAG"),
+                self.fallback_src,
+                anchor,
+            )
+        })
     }
 
     fn declaration_dag(
         &self,
         declaration: &ResolvedDeclName,
-        span: Span,
     ) -> Result<&crate::tir::typed::DagTIR, GraphcalError> {
         self.tir
             .dag_containing_declaration(declaration)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "presentation declaration `{declaration}` has no containing checked DAG"
-                ),
-                src: self.fallback_src.clone(),
-                span: span.into(),
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "presentation declaration `{declaration}` has no containing checked DAG"
+                    ),
+                    self.fallback_src,
+                    DiagnosticAnchor::WholeFile,
+                )
             })
     }
 
@@ -186,7 +184,7 @@ impl PresentationResolver<'_> {
             return Ok(presentation.clone());
         }
         let (checked, body, dag_id) = {
-            let dag = self.declaration_dag(key, Span::new(0, 0))?;
+            let dag = self.declaration_dag(key)?;
             (
                 dag.declaration_presentation(key).cloned(),
                 declaration_body(dag, key, self.fallback_src),
@@ -197,13 +195,11 @@ impl PresentationResolver<'_> {
             return Ok(presentation);
         }
         if !self.visiting.insert(key.clone()) {
-            return Err(GraphcalError::InternalError {
-                message: format!(
-                    "presentation dependency cycle reached `{key}` after value-cycle checking"
-                ),
-                src: self.fallback_src.clone(),
-                span: Span::new(0, 0).into(),
-            });
+            return Err(GraphcalError::internal_error(
+                format!("presentation dependency cycle reached `{key}` after value-cycle checking"),
+                self.fallback_src,
+                DiagnosticAnchor::WholeFile,
+            ));
         }
         let presentation = match body {
             Some((expr, body_src)) => self.expression(key, &dag_id, &expr, &body_src)?,
@@ -268,7 +264,7 @@ impl PresentationResolver<'_> {
             }
             ExprKind::ConstructorCall { callee, fields, .. } => {
                 let owning_type = {
-                    let dag = self.dag(dag_id, expr.span)?;
+                    let dag = self.dag(dag_id, DiagnosticAnchor::Source(expr.span))?;
                     let target = dag
                         .semantic()
                         .constructor_refs
@@ -366,7 +362,7 @@ impl PresentationResolver<'_> {
                             }
                             hir::expr::MatchPattern::Constructor { constructor, .. } => {
                                 let (owning_type, constructor) = {
-                                    let dag = self.dag(dag_id, expr.span)?;
+                                    let dag = self.dag(dag_id, DiagnosticAnchor::Source(expr.span))?;
                                     let target = dag
                                         .semantic()
                                         .constructor_refs

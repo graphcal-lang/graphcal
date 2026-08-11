@@ -1,5 +1,7 @@
 //! Frontend registry seeding and concrete-instance registry composition.
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
@@ -47,16 +49,13 @@ pub(super) fn seed_imported_type_system(
 ) -> Result<(), GraphcalError> {
     for (dep_dag_id, names) in imported_type_system_names {
         let dep_loaded = &project.files()[dep_dag_id];
-        let artifact =
-            module_artifacts
-                .get(dep_dag_id)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "HIR interface for imported module `{dep_dag_id}` is unavailable"
-                    ),
-                    src: file_src.clone(),
-                    span: Span::new(0, 0).into(),
-                })?;
+        let artifact = module_artifacts.get(dep_dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("HIR interface for imported module `{dep_dag_id}` is unavailable"),
+                file_src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         register_selected_resolved_dimensions_and_units(
             builder,
             artifact.frontend_registry(),
@@ -122,12 +121,12 @@ fn register_selected_resolved_dimensions_and_units(
             .dimensions
             .get_dimension(name.as_str())
             .cloned()
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "resolved dependency registry is missing selected dimension `{name}`"
-                ),
-                src: dep_src.clone(),
-                span: Span::new(0, 0).into(),
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("resolved dependency registry is missing selected dimension `{name}`"),
+                    dep_src,
+                    DiagnosticAnchor::WholeFile,
+                )
             })?;
         register_base_dimension_metadata(builder, dep_registry, &dimension);
         builder.register_dimension(name.clone(), dimension);
@@ -141,10 +140,12 @@ fn register_selected_resolved_dimensions_and_units(
             .units
             .get_unit(&unit_ref)
             .cloned()
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("resolved dependency registry is missing selected unit `{name}`"),
-                src: dep_src.clone(),
-                span: Span::new(0, 0).into(),
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("resolved dependency registry is missing selected unit `{name}`"),
+                    dep_src,
+                    DiagnosticAnchor::WholeFile,
+                )
             })?;
         register_base_dimension_metadata(builder, dep_registry, &info.dimension);
         builder.register_unit_with_scale(unit_ref, info.dimension, info.scale, info.constness);

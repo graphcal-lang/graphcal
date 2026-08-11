@@ -11,6 +11,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 use thiserror::Error;
 
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::error::GraphcalError;
 use crate::registry::type_def::{
     StructField as FrontendStructField, TypeDef as FrontendTypeDef, TypeDefKind,
@@ -378,10 +379,10 @@ pub(crate) fn lower_nominal_type_registry(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<NominalTypeRegistry, GraphcalError> {
     let symbols = resolver.modules().get(owner).ok_or_else(|| {
-        invariant_error(
+        GraphcalError::internal_error(
             format!("module resolver is missing HIR DAG `{owner}`"),
             src,
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         )
     })?;
     let mut declarations = symbols.struct_types().iter().collect::<Vec<_>>();

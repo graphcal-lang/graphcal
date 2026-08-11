@@ -1,5 +1,6 @@
 //! Transition from a checked semantic project to a reusable runtime plan.
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 
 use crate::eval::types::CompileError;
@@ -19,15 +20,21 @@ pub(super) fn prepare_checked_project(
         source,
         module_resolver,
     } = checked.into_runtime_parts();
-    if let Some((name, span)) = compiled
-        .entry_interface
-        .required_index()
-        .map(|index| (index.name().to_string(), index.span().into()))
-    {
+    if let Some(index) = compiled.entry_interface.required_index() {
+        let Some(span) = index.anchor().resolve(source.inner().len()) else {
+            return Err(CompileError::Eval(GraphcalError::internal_error(
+                format!(
+                    "required index `{}` has no diagnostic source anchor",
+                    index.name()
+                ),
+                &source,
+                DiagnosticAnchor::Builtin,
+            )));
+        };
         return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-            name,
+            name: index.name().to_string(),
             src: source,
-            span,
+            span: span.into(),
         }));
     }
 

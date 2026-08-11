@@ -10,13 +10,14 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::function_signature::{DimMonomial, DimMonomialEvalError, FunctionSignature, ValueKind};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::SemanticRegistry;
 use crate::syntax::dimension::DimVarName;
 use crate::syntax::function_name::FnName;
-use crate::syntax::span::Span;
+use crate::syntax::span::{Span, Spanned};
 
 /// Check quantity argument dimensions against `sig` and compute the result
 /// dimension.
@@ -25,86 +26,64 @@ use crate::syntax::span::Span;
 /// ([`ValueKind::Bool`]/[`ValueKind::Int`]) before reaching this walk. All
 /// built-in registry signatures are all-quantity, so built-in inference calls
 /// this directly.
-pub(super) fn infer_fn_dim_from_spans(
+pub(super) fn infer_fn_dim(
     fn_name: &str,
     sig: &FunctionSignature,
-    arg_dims: &[Dimension],
-    arg_spans: &[Span],
+    args: &[Spanned<Dimension>],
+    call_span: Span,
     registry: &SemanticRegistry,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Dimension, GraphcalError> {
-    if arg_dims.len() != sig.arity() {
+    if args.len() != sig.arity() {
+        let error_span = args
+            .get(sig.arity())
+            .or_else(|| args.last())
+            .map_or(call_span, |arg| arg.span);
         return Err(GraphcalError::WrongArity {
             name: FnName::expect_valid(fn_name),
             expected: sig.arity(),
-            got: arg_dims.len(),
+            got: args.len(),
             src: src.clone(),
-            span: arg_spans
-                .get(sig.arity())
-                .or_else(|| arg_spans.last())
-                .copied()
-                .unwrap_or_else(|| Span::new(0, 0))
-                .into(),
+            span: error_span.into(),
         });
     }
 
     let mut bindings: HashMap<DimVarName, Dimension> = HashMap::new();
 
-    for (i, param) in sig.params().iter().enumerate() {
-        let Some(arg_dim) = arg_dims.get(i) else {
-            return Err(GraphcalError::InternalError {
-                message: format!("dimension signature for `{fn_name}` saw missing argument {i}"),
-                src: src.clone(),
-                span: arg_spans
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| Span::new(0, 0))
-                    .into(),
-            });
-        };
-        let arg_span = arg_spans.get(i).copied().unwrap_or_else(|| {
-            arg_spans
-                .first()
-                .copied()
-                .unwrap_or_else(|| Span::new(0, 0))
-        });
+    for (param, arg) in sig.params().iter().zip(args) {
         let ValueKind::Quantity(monomial) = &param.kind else {
-            return Err(GraphcalError::InternalError {
-                message: format!(
+            return Err(GraphcalError::internal_error(
+                format!(
                     "signature for `{fn_name}` has a non-quantity parameter `{}` in the quantity checking path",
                     param.name
                 ),
-                src: src.clone(),
-                span: arg_span.into(),
-            });
+                src,
+                DiagnosticAnchor::Source(arg.span),
+            ));
         };
         check_quantity_param(
             fn_name,
             sig,
             &param.name,
             monomial,
-            arg_dim,
+            &arg.value,
             &mut bindings,
             registry,
             src,
-            arg_span,
+            arg.span,
         )?;
     }
 
-    let result_span = arg_spans
-        .first()
-        .copied()
-        .unwrap_or_else(|| Span::new(0, 0));
     let ValueKind::Quantity(result) = sig.result() else {
-        return Err(GraphcalError::InternalError {
-            message: format!(
+        return Err(GraphcalError::internal_error(
+            format!(
                 "signature for `{fn_name}` has a non-quantity result in the quantity checking path"
             ),
-            src: src.clone(),
-            span: result_span.into(),
-        });
+            src,
+            DiagnosticAnchor::Source(call_span),
+        ));
     };
-    eval_result_monomial(fn_name, result, &bindings, src, result_span)
+    eval_result_monomial(fn_name, result, &bindings, src, call_span)
 }
 
 /// Check one quantity argument against its parameter monomial, binding or
@@ -125,7 +104,15 @@ pub(super) fn check_quantity_param(
     if let Some(var) = monomial.as_bare_var() {
         if let Some(bound) = bindings.get(var) {
             if arg_dim != bound {
-                let bind_param_name = first_binding_param(sig, var).map_or("?", |name| name);
+                let bind_param_name = first_binding_param(sig, var).ok_or_else(|| {
+                    GraphcalError::internal_error(
+                        format!(
+                            "signature for `{fn_name}` lost the parameter that binds dimension variable `{var}`"
+                        ),
+                        src,
+                        DiagnosticAnchor::Source(arg_span),
+                    )
+                })?;
                 return Err(GraphcalError::DimensionMismatch {
                     expected: registry.dimensions.format_dimension(bound),
                     found: registry.dimensions.format_dimension(arg_dim),
@@ -184,13 +171,13 @@ fn eval_monomial(
             // use or result without a matching bare binding occurrence) — the
             // signature validator rejects that shape, so surface an internal
             // error rather than panicking.
-            DimMonomialEvalError::UnboundVar { var } => GraphcalError::InternalError {
-                message: format!(
+            DimMonomialEvalError::UnboundVar { var } => GraphcalError::internal_error(
+                format!(
                     "builtin `{fn_name}` references unbound dim variable `{var}` in its signature"
                 ),
-                src: src.clone(),
-                span: span.into(),
-            },
+                src,
+                DiagnosticAnchor::Source(span),
+            ),
             DimMonomialEvalError::Overflow(_) => GraphcalError::DimensionOverflow {
                 src: src.clone(),
                 span: span.into(),
@@ -207,4 +194,30 @@ fn first_binding_param<'a>(sig: &'a FunctionSignature, var: &DimVarName) -> Opti
         }
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::types::RegistryBuilder;
+    use crate::syntax::function_name::FnParamName;
+
+    #[test]
+    fn zero_argument_arity_error_uses_the_explicit_call_span() {
+        let signature = FunctionSignature::fixed_to_fixed(
+            FnParamName::expect_valid("value"),
+            Dimension::dimensionless(),
+            Dimension::dimensionless(),
+        );
+        let registry = RegistryBuilder::new().try_build().unwrap().into_semantic();
+        let source = NamedSource::new("test.gcl", Arc::new("f()".to_string()));
+        let call_span = Span::new(0, 3);
+
+        let error = infer_fn_dim("f", &signature, &[], call_span, &registry, &source).unwrap_err();
+        let GraphcalError::WrongArity { span, .. } = error else {
+            panic!("expected wrong-arity diagnostic");
+        };
+        assert_eq!(span.offset(), call_span.offset());
+        assert_eq!(span.len(), call_span.len());
+    }
 }

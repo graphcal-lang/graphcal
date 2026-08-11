@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use crate::builtin::BuiltinFnName;
 use crate::datetime_literal::CivilDateTimeLiteral;
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
@@ -13,6 +14,7 @@ use crate::syntax::import_category::ImportItemCategoryMismatch;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NameAtom;
+use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
 fn format_index_entry_keys(keys: &[IndexEntryKey]) -> String {
@@ -609,7 +611,7 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unexpected state here")]
-        span: SourceSpan,
+        span: Option<Span>,
     },
 
     #[error("dimension exponent overflow")]
@@ -2068,6 +2070,20 @@ pub enum GraphcalError {
 }
 
 impl GraphcalError {
+    /// Construct an internal diagnostic with an explicit source-anchor policy.
+    #[must_use]
+    pub fn internal_error(
+        message: impl Into<String>,
+        src: &NamedSource<Arc<String>>,
+        anchor: DiagnosticAnchor,
+    ) -> Self {
+        Self::InternalError {
+            message: message.into(),
+            src: src.clone(),
+            span: anchor.resolve(src.inner().len()),
+        }
+    }
+
     /// Whether this outcome represents cooperative cancellation rather than a
     /// Graphcal source error.
     #[must_use]
@@ -2244,6 +2260,12 @@ impl GraphcalError {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use miette::{Diagnostic as _, NamedSource};
+
+    use super::GraphcalError;
+    use crate::diagnostic_anchor::DiagnosticAnchor;
 
     fn diagnostic_code_catalog() -> BTreeMap<String, String> {
         let source = include_str!("error.rs");
@@ -2291,6 +2313,30 @@ mod tests {
 
         assert!(pending_code.is_none(), "diagnostic code without a variant");
         catalog
+    }
+
+    #[test]
+    fn internal_error_renders_whole_file_and_builtin_anchors_honestly() {
+        let source = NamedSource::new("test.gcl", Arc::new("node x".to_string()));
+
+        let whole_file =
+            GraphcalError::internal_error("whole file", &source, DiagnosticAnchor::WholeFile);
+        let whole_file_labels = whole_file
+            .labels()
+            .expect("internal diagnostics expose a label iterator")
+            .collect::<Vec<_>>();
+        assert_eq!(whole_file_labels.len(), 1);
+        assert_eq!(whole_file_labels[0].offset(), 0);
+        assert_eq!(whole_file_labels[0].len(), source.inner().len());
+
+        let builtin = GraphcalError::internal_error("builtin", &source, DiagnosticAnchor::Builtin);
+        assert_eq!(
+            builtin
+                .labels()
+                .expect("internal diagnostics expose a label iterator")
+                .count(),
+            0
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod complex_value;
 pub mod dag_id;
 pub mod datetime_literal;
 pub mod desugar;
+pub mod diagnostic_anchor;
 pub mod dimension;
 pub mod exact_rational;
 pub mod function_signature;

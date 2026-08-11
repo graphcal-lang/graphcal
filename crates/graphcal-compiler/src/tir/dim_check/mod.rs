@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::registry::declared_type::{IndexTypeRef, StructTypeRef};
 use crate::registry::resolve_types::{ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart};
@@ -396,10 +397,12 @@ fn validate_decl_concrete_type_obligations(
 }
 
 fn validate_hir_concrete_type_obligations(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
-        message: "semantic DAG missing while validating constructor applications".to_string(),
-        src: ctx.src.clone(),
-        span: Span::new(0, 0).into(),
+    let dag = ctx.dag.ok_or_else(|| {
+        GraphcalError::internal_error(
+            "semantic DAG missing while validating constructor applications",
+            ctx.src,
+            DiagnosticAnchor::WholeFile,
+        )
     })?;
     for application in concrete_constructor_applications(ctx.tir, dag, ctx.src)? {
         ctx.checkpoint()?;
@@ -418,7 +421,7 @@ fn validate_hir_concrete_type_obligations(ctx: &DimCheckContext<'_>) -> Result<(
             ctx.registry,
             ctx.builtin_fns,
             ctx.src,
-            Span::new(0, 0),
+            application.span(),
             ctx.cancellation,
         )?;
     }
@@ -839,11 +842,19 @@ fn statically_known_tolerance(expr: &crate::hir::Expr) -> Option<f64> {
     }
 }
 
-fn expected_fail_key_span(key: &ExpectedFailKey) -> crate::syntax::span::Span {
-    key.iter()
-        .map(ExpectedFailKeyPart::span)
-        .reduce(crate::syntax::span::Span::merge)
-        .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0))
+fn expected_fail_key_span(
+    key: &ExpectedFailKey,
+    src: &NamedSource<Arc<String>>,
+) -> Result<Span, GraphcalError> {
+    let mut parts = key.iter().map(ExpectedFailKeyPart::span);
+    let first = parts.next().ok_or_else(|| {
+        GraphcalError::internal_error(
+            "resolved expected-fail key is empty",
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    Ok(parts.fold(first, Span::merge))
 }
 
 fn expected_fail_key_signature(
@@ -864,7 +875,7 @@ fn validate_expected_fail_key(
             expected: shape.rank(),
             found: key.len(),
             src: src.clone(),
-            span: expected_fail_key_span(key).into(),
+            span: expected_fail_key_span(key, src)?.into(),
         });
     }
 
@@ -921,12 +932,13 @@ fn validate_expected_fail(
         }),
         ExpectedFail::All => Ok(()),
         ExpectedFail::Variants(keys) if !shape.is_indexed() => {
+            let span = match keys.first() {
+                Some(key) => expected_fail_key_span(key, src)?,
+                None => attribute_span,
+            };
             Err(GraphcalError::ExpectedFailNotIndexed {
                 src: src.clone(),
-                span: keys
-                    .first()
-                    .map_or(attribute_span, expected_fail_key_span)
-                    .into(),
+                span: span.into(),
             })
         }
         ExpectedFail::Variants(keys) => {
@@ -936,7 +948,7 @@ fn validate_expected_fail(
                 if !seen.insert(expected_fail_key_signature(key)) {
                     return Err(GraphcalError::ExpectedFailDuplicateKey {
                         src: src.clone(),
-                        span: expected_fail_key_span(key).into(),
+                        span: expected_fail_key_span(key, src)?.into(),
                     });
                 }
             }
@@ -1007,14 +1019,13 @@ pub fn check_dimensions_tir_with_cancellation(
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let mut checked_plot_shapes = HashMap::new();
     for (dag_id, shapes, plot_shapes) in checked_dag_facts {
-        let dag = tir
-            .dags
-            .get_mut(&dag_id)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("checked DAG `{dag_id}` disappeared while installing shape facts"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked DAG `{dag_id}` disappeared while installing shape facts"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         dag.semantic.materialized_shapes = shapes;
         checked_plot_shapes.insert(dag_id, plot_shapes);
     }
@@ -1031,16 +1042,13 @@ pub fn check_dimensions_tir_with_cancellation(
     let presentation_facts =
         presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
     for (dag_id, facts) in presentation_facts {
-        let dag = tir
-            .dags
-            .get_mut(&dag_id)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "checked DAG `{dag_id}` disappeared while installing presentation facts"
-                ),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked DAG `{dag_id}` disappeared while installing presentation facts"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         dag.semantic.presentation = facts;
     }
 
@@ -1197,6 +1205,7 @@ fn is_bindable_nominal(
 pub struct ConcreteNominalTypeApplication {
     identity: StructTypeRef,
     generic_args: Vec<crate::registry::declared_type::DeclaredGenericArg>,
+    span: Span,
 }
 
 impl ConcreteNominalTypeApplication {
@@ -1208,6 +1217,11 @@ impl ConcreteNominalTypeApplication {
     #[must_use]
     pub fn generic_args(&self) -> &[crate::registry::declared_type::DeclaredGenericArg] {
         &self.generic_args
+    }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
     }
 }
 
@@ -1223,7 +1237,7 @@ pub fn concrete_constructor_applications(
     dag: &crate::tir::typed::DagTIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<Vec<ConcreteNominalTypeApplication>, GraphcalError> {
-    let mut applications = HashSet::new();
+    let mut applications = HashMap::new();
     let mut error = None;
     dag.visit_expressions(&mut |expr| {
         if error.is_some() {
@@ -1272,15 +1286,31 @@ pub fn concrete_constructor_applications(
                     });
                     return;
                 };
-                applications.insert(ConcreteNominalTypeApplication {
-                    identity: StructTypeRef::from_resolved(target.owning_type.clone()),
-                    generic_args,
-                });
+                applications
+                    .entry((
+                        StructTypeRef::from_resolved(target.owning_type.clone()),
+                        generic_args,
+                    ))
+                    .or_insert(expr.span);
             }
             Err(diagnostic) => error = Some(diagnostic),
         }
     });
-    error.map_or_else(|| Ok(applications.into_iter().collect()), Err)
+    error.map_or_else(
+        || {
+            Ok(applications
+                .into_iter()
+                .map(
+                    |((identity, generic_args), span)| ConcreteNominalTypeApplication {
+                        identity,
+                        generic_args,
+                        span,
+                    },
+                )
+                .collect())
+        },
+        Err,
+    )
 }
 
 /// Resolve one HIR constructor call's complete concrete generic identity.
@@ -1514,10 +1544,12 @@ enum ExpectedBound {
 /// Other targets (e.g., `Bool`) are rejected by
 /// [`check_domain_constraint_targets_dag`] before this bound check runs.
 fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
-        message: "domain-bound checking requires semantic DAG context".to_string(),
-        src: ctx.src.clone(),
-        span: Span::new(0, 0).into(),
+    let dag = ctx.dag.ok_or_else(|| {
+        GraphcalError::internal_error(
+            "domain-bound checking requires semantic DAG context",
+            ctx.src,
+            DiagnosticAnchor::WholeFile,
+        )
     })?;
     // A merged dependency declaration's domain bounds keep the dependency
     // file's spans, so they are checked against that body's source (#868).
@@ -1650,6 +1682,23 @@ fn invalid_domain_target_kind(resolved: &crate::tir::typed::ResolvedTypeExpr) ->
 /// constrainable value families. This mirrors
 /// [`check_domain_constraint_targets_dag`] using the field's resolved semantic
 /// type rather than reclassifying source names.
+fn first_constrained_field_bound<'a>(
+    key: &crate::tir::typed::ResolvedStructFieldTypeKey,
+    field: &'a crate::tir::typed::ResolvedStructFieldSemantics,
+    src: &NamedSource<Arc<String>>,
+) -> Result<&'a crate::tir::typed::ResolvedDomainBound, GraphcalError> {
+    field.domain_bounds().first().ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!(
+                "constrained field `{}.{}` has no domain bounds",
+                key.owning_type, key.field
+            ),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })
+}
+
 fn check_field_domain_constraint_targets(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
@@ -1664,19 +1713,12 @@ fn check_field_domain_constraint_targets(
             else {
                 continue;
             };
-            let bounds = field_semantics.domain_bounds();
-            let span = field_type_annotation(dag, key).map_or_else(
-                || {
-                    bounds
-                        .first()
-                        .map_or_else(|| Span::new(0, 0), |bound| bound.span)
-                },
-                |field| field.type_annotation().span,
-            );
-            let diagnostic_src = bounds.first().map_or(src, |bound| &bound.src);
+            let first_bound = first_constrained_field_bound(key, field_semantics, src)?;
+            let span = field_type_annotation(dag, key)
+                .map_or(first_bound.span, |field| field.type_annotation().span);
             return Err(GraphcalError::InvalidDomainTarget {
                 type_kind,
-                src: diagnostic_src.clone(),
+                src: first_bound.src.clone(),
                 span: span.into(),
             });
         }
@@ -1738,9 +1780,9 @@ fn check_field_domain_constraint_dimensions(
             if !seen.insert(key) {
                 continue;
             }
-            let diagnostic_bound = field_semantics.domain_bounds().first();
-            let diagnostic_src = diagnostic_bound.map_or(src, |bound| &bound.src);
-            let diagnostic_span = diagnostic_bound.map_or(Span::new(0, 0), |bound| bound.span);
+            let diagnostic_bound = first_constrained_field_bound(key, field_semantics, src)?;
+            let diagnostic_src = &diagnostic_bound.src;
+            let diagnostic_span = diagnostic_bound.span;
             let type_def = dag
                 .semantic
                 .type_defs
@@ -1974,18 +2016,21 @@ fn strip_indexed(
 /// cycle detection, so the same check applies whether the cycle is within
 /// a single file or spans multiple files.
 enum DagCycleFrame {
-    Enter(crate::dag_id::DagId),
+    Enter {
+        dag_id: crate::dag_id::DagId,
+        call_span: Option<Span>,
+    },
     Leave(crate::dag_id::DagId),
 }
 
-/// Collect DAG-call targets directly from every semantic HIR root.
+/// Collect DAG-call targets and the first source span for each call edge.
 fn collect_dag_call_targets_from_dag(
     dag: &crate::tir::typed::DagTIR,
-    out: &mut std::collections::BTreeSet<crate::dag_id::DagId>,
+    out: &mut std::collections::BTreeMap<crate::dag_id::DagId, Span>,
 ) {
     dag.visit_expressions(&mut |expr| {
         if let crate::hir::ExprKind::DagCall { target, .. } = &expr.kind {
-            out.insert(target.value.clone());
+            out.entry(target.value.clone()).or_insert(target.span);
         }
     });
 }
@@ -2043,17 +2088,20 @@ fn detect_decl_cycles(
         }
         toposort(&graph, None).map(|_| ()).map_err(|cycle| {
             let cycle_node = &graph[cycle.node_id()];
-            let span = span_by_key
-                .get(cycle_node)
-                .copied()
-                .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
-            let name = local_name_by_key
-                .get(cycle_node)
-                .map_or_else(|| cycle_node.to_string(), std::string::ToString::to_string);
-            GraphcalError::CyclicDependency {
-                name,
-                src: src.clone(),
-                span: span.into(),
+            match (
+                span_by_key.get(cycle_node).copied(),
+                local_name_by_key.get(cycle_node),
+            ) {
+                (Some(span), Some(name)) => GraphcalError::CyclicDependency {
+                    name: name.to_string(),
+                    src: src.clone(),
+                    span: span.into(),
+                },
+                _ => GraphcalError::internal_error(
+                    format!("cycle node `{cycle_node}` is missing declaration metadata"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                ),
             }
         })
     }
@@ -2083,25 +2131,15 @@ fn detect_cross_dag_cycles(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
-    use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::collections::{BTreeMap, HashSet};
 
     use crate::dag_id::DagId;
 
-    let mut edges: BTreeMap<DagId, BTreeSet<DagId>> = BTreeMap::new();
-    let mut spans: HashMap<DagId, crate::syntax::span::Span> = HashMap::new();
+    let mut edges: BTreeMap<DagId, BTreeMap<DagId, Span>> = BTreeMap::new();
     for (key, dag_tir) in &tir.dags {
-        let mut targets = BTreeSet::new();
+        let mut targets = BTreeMap::new();
         collect_dag_call_targets_from_dag(dag_tir, &mut targets);
         edges.insert(key.clone(), targets);
-        // HIR retains child declaration spans under canonical identities, so
-        // cycle diagnostics never need to recover them from a syntax registry.
-        let span = key
-            .parent()
-            .and_then(|parent| tir.dags.get(&parent))
-            .and_then(|parent| parent.child_dag_spans.get(key))
-            .copied()
-            .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
-        spans.insert(key.clone(), span);
     }
 
     let mut visited: HashSet<DagId> = HashSet::new();
@@ -2111,37 +2149,46 @@ fn detect_cross_dag_cycles(
         if visited.contains(start) {
             continue;
         }
-        let mut work: Vec<DagCycleFrame> = vec![DagCycleFrame::Enter(start.clone())];
+        let mut work = vec![DagCycleFrame::Enter {
+            dag_id: start.clone(),
+            call_span: None,
+        }];
         while let Some(frame) = work.pop() {
             match frame {
-                DagCycleFrame::Enter(key) => {
-                    if visited.contains(&key) {
+                DagCycleFrame::Enter { dag_id, call_span } => {
+                    if visited.contains(&dag_id) {
                         continue;
                     }
-                    if on_stack.contains(&key) {
-                        let span = spans
-                            .get(&key)
-                            .copied()
-                            .unwrap_or_else(|| crate::syntax::span::Span::new(0, 0));
+                    if on_stack.contains(&dag_id) {
+                        let Some(span) = call_span else {
+                            return Err(GraphcalError::internal_error(
+                                format!("cycle entry `{dag_id}` has no incoming call span"),
+                                src,
+                                DiagnosticAnchor::WholeFile,
+                            ));
+                        };
                         return Err(GraphcalError::CyclicDependency {
-                            name: key.to_string(),
+                            name: dag_id.to_string(),
                             src: src.clone(),
                             span: span.into(),
                         });
                     }
-                    on_stack.insert(key.clone());
-                    work.push(DagCycleFrame::Leave(key.clone()));
-                    if let Some(targets) = edges.get(&key) {
-                        for t in targets {
-                            if edges.contains_key(t) {
-                                work.push(DagCycleFrame::Enter(t.clone()));
+                    on_stack.insert(dag_id.clone());
+                    work.push(DagCycleFrame::Leave(dag_id.clone()));
+                    if let Some(targets) = edges.get(&dag_id) {
+                        for (target, span) in targets {
+                            if edges.contains_key(target) {
+                                work.push(DagCycleFrame::Enter {
+                                    dag_id: target.clone(),
+                                    call_span: Some(*span),
+                                });
                             }
                         }
                     }
                 }
-                DagCycleFrame::Leave(key) => {
-                    on_stack.remove(&key);
-                    visited.insert(key);
+                DagCycleFrame::Leave(dag_id) => {
+                    on_stack.remove(&dag_id);
+                    visited.insert(dag_id);
                 }
             }
         }

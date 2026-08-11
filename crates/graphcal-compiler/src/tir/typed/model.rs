@@ -1575,8 +1575,6 @@ pub struct DagTIR {
     pub(super) declaration_index: DagDeclarationIndex,
     pub(crate) semantic: DagSemanticBody,
     pub(crate) source_order: Vec<(ScopedName, DeclCategory)>,
-    /// Canonical child-DAG identities and their HIR-retained name spans.
-    pub(crate) child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     pub(crate) expected_fail: HashMap<ScopedName, ResolvedExpectedFailMetadata>,
     pub(crate) resolved_decl_types: HashMap<ScopedName, ResolvedTypeExpr>,

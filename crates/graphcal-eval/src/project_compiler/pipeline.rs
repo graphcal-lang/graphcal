@@ -7,6 +7,7 @@
 )]
 use super::*;
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 
 /// Validate inline-DAG recursion before constructing project-wide scopes.
 ///
@@ -91,14 +92,14 @@ fn lower_single_file_to_hir(
     let mut interfaces = vec![(file_dag_id.clone(), root_interface)];
     for inline in loaded_file.inline_dags() {
         let template = module_templates.get(inline.dag_id()).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: format!(
+            CompileError::Eval(GraphcalError::internal_error(
+                format!(
                     "inline module template `{}` was not retained",
                     inline.dag_id()
                 ),
-                src: file_src.clone(),
-                span: Span::new(0, 0).into(),
-            })
+                file_src,
+                DiagnosticAnchor::WholeFile,
+            ))
         })?;
         interfaces.push((
             inline.dag_id().clone(),
@@ -144,11 +145,11 @@ fn store_module_artifact(
                 .checked_execution_facts
                 .for_dag(dag_id)
                 .ok_or_else(|| {
-                    CompileError::Eval(GraphcalError::InternalError {
-                        message: format!("checked module artifact is missing DAG `{dag_id}`"),
-                        src: file_src.clone(),
-                        span: Span::new(0, 0).into(),
-                    })
+                    CompileError::Eval(GraphcalError::internal_error(
+                        format!("checked module artifact is missing DAG `{dag_id}`"),
+                        file_src,
+                        DiagnosticAnchor::WholeFile,
+                    ))
                 })?;
             Ok((dag_id.clone(), dag_const_values(dag, &facts.const_values)))
         })
@@ -214,11 +215,12 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
     }
 
     if !files.contains_key(project.root_id()) {
-        return Err(CompileError::Eval(GraphcalError::InternalError {
-            message: "root file not found in project load order".to_string(),
-            src: NamedSource::new("internal", Arc::new(String::new())),
-            span: Span::new(0, 0).into(),
-        }));
+        let internal_source = NamedSource::new("internal", Arc::new(String::new()));
+        return Err(CompileError::Eval(GraphcalError::internal_error(
+            "root file not found in project load order",
+            &internal_source,
+            DiagnosticAnchor::Builtin,
+        )));
     }
 
     let exported_dynamic_units = module_interfaces
@@ -242,20 +244,20 @@ fn build_project_type_store(
 ) -> Result<graphcal_compiler::tir::typed::ProjectTypeStore, CompileError> {
     let root_source = &hir.files[&hir.root].source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
-    project_types
-        .insert_graphcal_prelude()
-        .map_err(|error| GraphcalError::InternalError {
-            message: format!("failed to build prelude project type store: {error}"),
-            src: root_source.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
+    project_types.insert_graphcal_prelude().map_err(|error| {
+        GraphcalError::internal_error(
+            format!("failed to build prelude project type store: {error}"),
+            root_source,
+            DiagnosticAnchor::Builtin,
+        )
+    })?;
     for file_dag_id in &hir.load_order {
         let file = hir.files.get(file_dag_id).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: format!("HIR module `{file_dag_id}` is unavailable"),
-                src: root_source.clone(),
-                span: Span::new(0, 0).into(),
-            })
+            CompileError::Eval(GraphcalError::internal_error(
+                format!("HIR module `{file_dag_id}` is unavailable"),
+                root_source,
+                DiagnosticAnchor::WholeFile,
+            ))
         })?;
         let source = &file.source;
         std::iter::once(&file.root)
@@ -263,10 +265,12 @@ fn build_project_type_store(
             .try_for_each(|dag| {
                 project_types
                     .insert_resolver_module(dag, &hir.module_resolver)
-                    .map_err(|error| GraphcalError::InternalError {
-                        message: format!("cannot build project type store: {error}"),
-                        src: source.clone(),
-                        span: Span::new(0, 0).into(),
+                    .map_err(|error| {
+                        GraphcalError::internal_error(
+                            format!("cannot build project type store: {error}"),
+                            source,
+                            DiagnosticAnchor::WholeFile,
+                        )
                     })
             })?;
     }
@@ -293,22 +297,23 @@ pub(in crate::project_compiler) fn check_hir_project(
         .get(&root)
         .map(|file| file.source.clone())
         .ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: "root HIR module is unavailable before checking".to_string(),
-                src: NamedSource::new("internal", Arc::new(String::new())),
-                span: Span::new(0, 0).into(),
-            })
+            let internal_source = NamedSource::new("internal", Arc::new(String::new()));
+            CompileError::Eval(GraphcalError::internal_error(
+                "root HIR module is unavailable before checking",
+                &internal_source,
+                DiagnosticAnchor::Builtin,
+            ))
         })?;
     let mut module_artifacts = HashMap::new();
 
     for file_dag_id in &load_order {
         cancellation.checkpoint()?;
         let hir_file = files.remove(file_dag_id).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: format!("HIR module `{file_dag_id}` was already consumed or is missing"),
-                src: root_source.clone(),
-                span: Span::new(0, 0).into(),
-            })
+            CompileError::Eval(GraphcalError::internal_error(
+                format!("HIR module `{file_dag_id}` was already consumed or is missing"),
+                &root_source,
+                DiagnosticAnchor::WholeFile,
+            ))
         })?;
         let file_src = hir_file.source.clone();
         let compiled = checking::check_hir_file(
@@ -346,11 +351,11 @@ pub(in crate::project_compiler) fn check_hir_project(
         )?;
     }
 
-    Err(CompileError::Eval(GraphcalError::InternalError {
-        message: "root HIR module was not checked".to_string(),
-        src: root_source,
-        span: Span::new(0, 0).into(),
-    }))
+    Err(CompileError::Eval(GraphcalError::internal_error(
+        "root HIR module was not checked",
+        &root_source,
+        DiagnosticAnchor::WholeFile,
+    )))
 }
 
 /// Load-time verification of every extern function declared by a file.

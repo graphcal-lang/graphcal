@@ -224,13 +224,9 @@ impl<'a> EvalContext<'a> {
     pub fn internal_error(
         &self,
         message: impl Into<String>,
-        span: graphcal_compiler::syntax::span::Span,
+        anchor: impl Into<graphcal_compiler::diagnostic_anchor::DiagnosticAnchor>,
     ) -> GraphcalError {
-        GraphcalError::InternalError {
-            message: message.into(),
-            src: self.src.clone(),
-            span: span.into(),
-        }
+        GraphcalError::internal_error(message, self.src, anchor.into())
     }
 }
 

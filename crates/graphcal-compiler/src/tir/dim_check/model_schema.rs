@@ -6,13 +6,13 @@ use miette::NamedSource;
 use thiserror::Error;
 
 use super::InferredGenericArg;
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::{NominalConstructor, NominalTypeDef, NominalTypeKind};
 use crate::registry::declared_type::{
     DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::type_def::TypeGenericConstraint;
-use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
 /// Failure to validate a nominal application for model-schema expansion.
@@ -72,11 +72,9 @@ impl ConcreteModelTypeError {
     pub fn into_graphcal_error(self, src: &NamedSource<Arc<String>>) -> GraphcalError {
         match self {
             Self::Compiler(error) => error,
-            invariant => GraphcalError::InternalError {
-                message: invariant.to_string(),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            },
+            invariant => {
+                GraphcalError::internal_error(invariant.to_string(), src, DiagnosticAnchor::Builtin)
+            }
         }
     }
 }
@@ -118,7 +116,7 @@ impl<'tir> ValidatedModelType<'tir> {
         src: &NamedSource<Arc<String>>,
     ) -> Result<Self, ConcreteModelTypeError> {
         let definition = validate_model_type_definition(tir, identity, generic_args)?;
-        validate_application_obligations(tir, identity, generic_args, src)?;
+        validate_application_obligations(tir, identity, generic_args, &definition, src)?;
         Ok(Self {
             tir,
             identity: identity.clone(),
@@ -144,7 +142,7 @@ impl<'tir> ValidatedModelType<'tir> {
     /// Returns a compiler diagnostic if checked TIR field metadata is missing.
     pub fn constructors(
         &self,
-        src: &NamedSource<Arc<String>>,
+        _src: &NamedSource<Arc<String>>,
     ) -> Result<Vec<ConcreteModelConstructor>, GraphcalError> {
         let inferred_args = self
             .generic_args
@@ -167,8 +165,8 @@ impl<'tir> ValidatedModelType<'tir> {
                             &inferred_args,
                             self.tir.root(),
                             &self.tir.registry,
-                            src,
-                            Span::new(0, 0),
+                            self.definition.type_def.source(),
+                            field.type_annotation().span,
                         )
                         .map(|inferred| ConcreteModelField {
                             name: field.name().clone(),
@@ -240,7 +238,8 @@ fn validate_application_obligations(
     tir: &crate::tir::typed::TIR,
     identity: &StructTypeRef,
     generic_args: &[DeclaredGenericArg],
-    src: &NamedSource<Arc<String>>,
+    definition: &ModelTypeDefinition<'_>,
+    _src: &NamedSource<Arc<String>>,
 ) -> Result<(), ConcreteModelTypeError> {
     let inferred_args = generic_args
         .iter()
@@ -256,8 +255,8 @@ fn validate_application_obligations(
         tir,
         &tir.registry,
         crate::registry::builtins::builtin_functions(),
-        src,
-        Span::new(0, 0),
+        definition.type_def.source(),
+        definition.type_def.span(),
         &crate::cancellation::CancellationToken::unbounded(),
     )?;
     Ok(())

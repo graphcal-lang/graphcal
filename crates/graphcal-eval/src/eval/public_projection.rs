@@ -6,12 +6,12 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::types::{FiniteIndex, IndexDef};
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use graphcal_compiler::syntax::span::Span;
 
 use super::display::{format_coordinate, format_coordinate_exact};
 use super::types::{DisplayUnit, Value};
@@ -49,16 +49,16 @@ fn projection_error(
     tir: &graphcal_compiler::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
-    GraphcalError::InternalError {
-        message: format!(
+    GraphcalError::internal_error(
+        format!(
             "runtime/public projection invariant failed for {} as `{}`: {}",
             runtime.kind(),
             declared_type.format(&tir.registry().dimensions),
             message.into()
         ),
-        src: src.clone(),
-        span: Span::new(0, 0).into(),
-    }
+        src,
+        DiagnosticAnchor::WholeFile,
+    )
 }
 
 #[derive(Debug, Clone, Copy)]

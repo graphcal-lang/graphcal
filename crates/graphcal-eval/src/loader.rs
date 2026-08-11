@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use crate::eval::CompileError;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -1056,14 +1057,12 @@ impl LoadedProject {
             (true, Some(file_name)) => Path::new(file_name),
             _ => path.as_path(),
         };
-        let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|e| {
-            CompileError::Eval(
-                graphcal_compiler::registry::error::GraphcalError::EvalError {
-                    message: format!("invalid source name `{name}`: {e}"),
-                    src: named_source.clone(),
-                    span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
-                },
-            )
+        let dag_id = DagId::from_virtual_relative_path(semantic_path).map_err(|error| {
+            CompileError::Eval(GraphcalError::internal_error(
+                format!("invalid source name `{name}`: {error}"),
+                &named_source,
+                DiagnosticAnchor::WholeFile,
+            ))
         })?;
         // No project root or manifest in single-file mode — only the
         // file-stem self-reference (Concept 7) can be detected here.
@@ -2226,12 +2225,12 @@ fn package_dag_id(
     relative_path: &Path,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagId, CompileError> {
-    DagId::from_relative_path(package_id.as_str(), relative_path).map_err(|e| {
-        CompileError::Eval(GraphcalError::EvalError {
-            message: format!("invalid module path `{}`: {e}", relative_path.display()),
-            src: src.clone(),
-            span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
-        })
+    DagId::from_relative_path(package_id.as_str(), relative_path).map_err(|error| {
+        CompileError::Eval(GraphcalError::internal_error(
+            format!("invalid module path `{}`: {error}", relative_path.display()),
+            src,
+            DiagnosticAnchor::WholeFile,
+        ))
     })
 }
 
@@ -2805,14 +2804,12 @@ fn load_file_dfs<F: FileSystemReader>(
     let relative_path = canonical_path
         .strip_prefix(project_root)
         .unwrap_or(canonical_path);
-    let dag_id = DagId::from_relative_path(package_id.clone(), relative_path).map_err(|e| {
-        CompileError::Eval(
-            graphcal_compiler::registry::error::GraphcalError::EvalError {
-                message: format!("invalid module path `{}`: {e}", relative_path.display()),
-                src: named_source.clone(),
-                span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
-            },
-        )
+    let dag_id = DagId::from_relative_path(package_id.clone(), relative_path).map_err(|error| {
+        CompileError::Eval(GraphcalError::internal_error(
+            format!("invalid module path `{}`: {error}", relative_path.display()),
+            &named_source,
+            DiagnosticAnchor::WholeFile,
+        ))
     })?;
 
     // Convert resolved import paths to DagIds. A self-import resolves to

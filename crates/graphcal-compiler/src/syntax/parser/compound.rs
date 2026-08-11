@@ -51,7 +51,7 @@ impl Parser<'_> {
                     return Err(self.unexpected_token(
                         "`,` between match arms or `}` after the final arm",
                         "EOF",
-                        Span::new(0, 0),
+                        Span::new(self.lexer.source_len(), 0),
                     ));
                 }
             }

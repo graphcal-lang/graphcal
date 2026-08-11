@@ -7,6 +7,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use miette::NamedSource;
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -166,10 +167,12 @@ pub(super) fn run_eval_loop_with_bindings(
         let result = tir
             .root()
             .runtime_expr(name.as_resolved())
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("TIR runtime declaration missing for `{name}`"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("TIR runtime declaration missing for `{name}`"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
             })
             .and_then(|hir_expr| eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx));
 
@@ -321,23 +324,22 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             .get(&runtime_key)
             .map(|binding| &binding.presentation)
             .or_else(|| tir.root().declaration_presentation(declaration))
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "checked presentation facts are missing for declaration `{declaration}`"
-                ),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
-        let declared_type =
-            declared_types
-                .get(name)
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!(
-                        "checked declared type is missing for public declaration `{declaration}`"
+            .ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "checked presentation facts are missing for declaration `{declaration}`"
                     ),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                })?;
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+        let declared_type = declared_types.get(name).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked declared type is missing for public declaration `{declaration}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         let mut value = EvaluatedValue::new(runtime, declared_type).project(tir, src)?;
         // Authored display metadata either applies successfully or makes this
         // declaration fail; structural projection failures remain X001.
@@ -363,11 +365,11 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             || {
                 values.get(&key).map_or_else(
                     || {
-                        Err(GraphcalError::InternalError {
-                            message: format!("successful declaration `{key}` has no runtime value"),
-                            src: src.clone(),
-                            span: Span::new(0, 0).into(),
-                        })
+                        Err(GraphcalError::internal_error(
+                            format!("successful declaration `{key}` has no runtime value"),
+                            src,
+                            DiagnosticAnchor::WholeFile,
+                        ))
                     },
                     |runtime| make_value(name, runtime),
                 )
@@ -426,13 +428,13 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                     let key = local_key(name);
                     plan.const_values.get(&key).map_or_else(
                         || {
-                            Err(GraphcalError::InternalError {
-                                message: format!(
+                            Err(GraphcalError::internal_error(
+                                format!(
                                     "checked source-order constant `{key}` has no runtime value"
                                 ),
-                                src: src.clone(),
-                                span: Span::new(0, 0).into(),
-                            })
+                                src,
+                                DiagnosticAnchor::WholeFile,
+                            ))
                         },
                         |runtime| {
                             make_value(name, runtime).map(|value| (name.clone(), value, decl_type))
@@ -1281,18 +1283,19 @@ fn evaluate_plot(
     let owner = ctx.current_decl.as_ref().ok_or_else(|| {
         PlotEvaluationError::Fatal(ctx.internal_error(
             "plot evaluation has no canonical declaration owner",
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         ))
     })?;
     let dag = ctx.current_dag.ok_or_else(|| {
-        PlotEvaluationError::Fatal(
-            ctx.internal_error("plot evaluation has no checked DAG", Span::new(0, 0)),
-        )
+        PlotEvaluationError::Fatal(ctx.internal_error(
+            "plot evaluation has no checked DAG",
+            DiagnosticAnchor::WholeFile,
+        ))
     })?;
     let channel_facts = dag.plot_channel_presentations(owner).ok_or_else(|| {
         PlotEvaluationError::Fatal(ctx.internal_error(
             format!("checked presentation facts are missing for plot `{owner}`"),
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         ))
     })?;
     let mut encoding_meta = Vec::new();

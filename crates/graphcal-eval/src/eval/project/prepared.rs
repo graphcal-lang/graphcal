@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use graphcal_compiler::builtin::BuiltinFnName;
 use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::{
     ConstRef, ExprKind as HirExprKind, ExprLoweringContext, FunctionRef, GenericScope,
     PreludeTypeScope,
@@ -758,11 +759,11 @@ impl PreparedProject {
         if row.plan_id == self.plan_id {
             Ok(())
         } else {
-            Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "parameter binding row belongs to another prepared project".to_string(),
-                src: self.source.clone(),
-                span: Span::new(0, 0).into(),
-            }))
+            Err(CompileError::Eval(GraphcalError::internal_error(
+                "parameter binding row belongs to another prepared project",
+                &self.source,
+                DiagnosticAnchor::Builtin,
+            )))
         }
     }
 
@@ -897,11 +898,11 @@ impl ParameterBindingBuilder<'_> {
     /// Bind an already validated opaque parameter value.
     pub fn bind_value(&mut self, value: ParameterValue) -> Result<(), CompileError> {
         if value.plan_id != self.project.plan_id {
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "parameter value belongs to another prepared project".to_string(),
-                src: self.project.source.clone(),
-                span: Span::new(0, 0).into(),
-            }));
+            return Err(CompileError::Eval(GraphcalError::internal_error(
+                "parameter value belongs to another prepared project",
+                &self.project.source,
+                DiagnosticAnchor::Builtin,
+            )));
         }
         self.insert(value.position, value.binding)
     }
@@ -1283,18 +1284,18 @@ impl PreparedProject {
 
     fn port_at(&self, position: ParameterPosition) -> Result<&ParameterPort, CompileError> {
         if position.plan_id != self.plan_id {
-            return Err(CompileError::Eval(GraphcalError::EvalError {
-                message: "parameter position belongs to another prepared project".to_string(),
-                src: self.source.clone(),
-                span: Span::new(0, 0).into(),
-            }));
+            return Err(CompileError::Eval(GraphcalError::internal_error(
+                "parameter position belongs to another prepared project",
+                &self.source,
+                DiagnosticAnchor::Builtin,
+            )));
         }
         self.parameter_ports.get(position.index).ok_or_else(|| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: format!("parameter position {} is out of bounds", position.index),
-                src: self.source.clone(),
-                span: Span::new(0, 0).into(),
-            })
+            CompileError::Eval(GraphcalError::internal_error(
+                format!("parameter position {} is out of bounds", position.index),
+                &self.source,
+                DiagnosticAnchor::Builtin,
+            ))
         })
     }
 

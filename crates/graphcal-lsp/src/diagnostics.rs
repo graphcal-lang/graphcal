@@ -286,8 +286,13 @@ fn compile_error_to_diagnostics_in_source(
     }
 
     if diagnostics.is_empty() {
+        let range = if source.is_empty() {
+            Range::default()
+        } else {
+            LineIndex::new(source).offset_len_to_range(0, source.len())
+        };
         diagnostics.push(Diagnostic {
-            range: Range::default(),
+            range,
             severity: Some(DiagnosticSeverity::ERROR),
             code,
             source: Some("graphcal".to_string()),
@@ -313,10 +318,15 @@ fn compile_error_to_diagnostics(error: &CompileError) -> Vec<Diagnostic> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
+    use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+    use graphcal_compiler::registry::error::GraphcalError;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_eval::eval::{compile_and_eval_named, compile_and_eval_project};
     use graphcal_io::RealFileSystem;
+    use miette::NamedSource;
+    use tower_lsp::lsp_types::Position;
 
     use super::*;
     use crate::symbol_table::build_for_buffer;
@@ -340,6 +350,25 @@ mod tests {
             Ok(result) => eval_result_to_diagnostics(&result, source, &symbol_table),
             Err(e) => compile_error_to_diagnostics(&e),
         }
+    }
+
+    #[test]
+    fn source_less_internal_anchor_uses_the_whole_document_range() {
+        let source = "node x";
+        let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+        let error = CompileError::Eval(GraphcalError::internal_error(
+            "synthetic failure",
+            &named_source,
+            DiagnosticAnchor::Builtin,
+        ));
+
+        let diagnostics = compile_error_to_diagnostics(&error);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].range.start, Position::new(0, 0));
+        assert_eq!(
+            diagnostics[0].range.end,
+            Position::new(0, u32::try_from(source.len()).unwrap())
+        );
     }
 
     fn produce_diagnostics_for_file(path: &std::path::Path, source: &str) -> Vec<Diagnostic> {

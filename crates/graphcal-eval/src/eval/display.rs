@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::format::{format_number, format_unit_terms_canonical};
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
@@ -80,7 +81,7 @@ fn attach_presentation_with_locals(
                                 format!(
                                     "checked presentation field `{field}` is absent from runtime struct `{type_name}`"
                                 ),
-                                Span::new(0, 0),
+                                DiagnosticAnchor::WholeFile,
                             ))
                         },
                         |field_value| {
@@ -101,12 +102,12 @@ fn attach_presentation_with_locals(
                 format!(
                     "checked presentation type `{owning_type}` does not match runtime struct `{type_name}`"
                 ),
-                Span::new(0, 0),
+                DiagnosticAnchor::WholeFile,
             )),
             _ => Err(presentation_error(
                 ctx,
                 "checked struct presentation was paired with a non-struct runtime value",
-                Span::new(0, 0),
+                DiagnosticAnchor::WholeFile,
             )),
         },
         PresentationProvenance::Indexed { index, elements } => {
@@ -115,19 +116,19 @@ fn attach_presentation_with_locals(
         PresentationProvenance::DagCall { key, output } => {
             let invocation = state
                 .next_call(key)
-                .map_err(|message| presentation_error(ctx, message, Span::new(0, 0)))?;
+                .map_err(|message| presentation_error(ctx, message, key.span()))?;
             let calls = ctx.presentation_calls.ok_or_else(|| {
                 presentation_error(
                     ctx,
                     "checked DAG-call presentation has no evaluated call store",
-                    Span::new(0, 0),
+                    key.span(),
                 )
             })?;
             let call_values = calls.invocation(key, invocation).map_err(|error| {
                 presentation_error(
                     ctx,
                     format!("checked DAG-call presentation values are unavailable: {error}"),
-                    Span::new(0, 0),
+                    key.span(),
                 )
             })?;
             attach_presentation_with_locals(
@@ -187,7 +188,7 @@ fn attach_indexed(
                                 format!(
                                     "checked presentation key `{key}` is absent from runtime indexed value"
                                 ),
-                                Span::new(0, 0),
+                                DiagnosticAnchor::WholeFile,
                             ))
                         },
                         |entry| {
@@ -208,12 +209,12 @@ fn attach_indexed(
             format!(
                 "checked presentation index `{index}` does not match runtime index `{index_name}`"
             ),
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         )),
         _ => Err(presentation_error(
             ctx,
             "checked indexed presentation was paired with a non-indexed runtime value",
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         )),
     }
 }
@@ -268,7 +269,7 @@ fn attach_leaf(
         (_, LeafPresentation::Timezone(_)) => Err(presentation_error(
             ctx,
             "checked timezone presentation was paired with a non-datetime runtime value",
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         )),
     }
 }
@@ -293,7 +294,7 @@ fn presentation_index_binding(
         presentation_error(
             ctx,
             format!("checked presentation index `{index}` has no definition"),
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         )
     })?;
     match (&definition.kind, key) {
@@ -308,7 +309,7 @@ fn presentation_index_binding(
                 presentation_error(
                     ctx,
                     "coordinate presentation position exceeds the platform index range",
-                    Span::new(0, 0),
+                    DiagnosticAnchor::WholeFile,
                 )
             })?;
             Ok(RuntimeValue::CoordinateLabel {
@@ -323,20 +324,20 @@ fn presentation_index_binding(
                 presentation_error(
                     ctx,
                     "finite presentation position exceeds the Int range",
-                    Span::new(0, 0),
+                    DiagnosticAnchor::WholeFile,
                 )
             }),
         (IndexKind::RequiredCoordinate { .. }, _) => Err(presentation_error(
             ctx,
             "unbound required coordinate index reached presentation",
-            Span::new(0, 0),
+            DiagnosticAnchor::WholeFile,
         )),
         (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Position(_))
         | (IndexKind::Coordinate(_) | IndexKind::Finite { .. }, IndexEntryKey::Named(_)) => {
             Err(presentation_error(
                 ctx,
                 "checked presentation key does not match its index kind",
-                Span::new(0, 0),
+                DiagnosticAnchor::WholeFile,
             ))
         }
     }
@@ -474,13 +475,9 @@ fn resolve_unit_to_display(
 fn presentation_error(
     ctx: &EvalContext<'_>,
     message: impl Into<String>,
-    span: Span,
+    anchor: impl Into<DiagnosticAnchor>,
 ) -> GraphcalError {
-    GraphcalError::InternalError {
-        message: message.into(),
-        src: ctx.src.clone(),
-        span: span.into(),
-    }
+    ctx.internal_error(message, anchor)
 }
 
 fn format_coordinate_impl(

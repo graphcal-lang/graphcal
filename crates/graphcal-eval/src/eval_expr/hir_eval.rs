@@ -133,7 +133,7 @@ fn eval_hir_expr_inner(
             fields,
         } => eval_hir_constructor_call(callee, generic_args, fields, values, local_values, ctx),
         hir::ExprKind::MapLiteral { entries } => {
-            eval_hir_map_literal(entries, values, local_values, ctx)
+            eval_hir_map_literal(expr.span, entries, values, local_values, ctx)
         }
         hir::ExprKind::ForComp { bindings, body } => {
             eval_hir_for_comp(expr.span, bindings, body, values, local_values, ctx)
@@ -1759,7 +1759,15 @@ fn map_entry_index_def<'a>(
     }
 }
 
+fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
+    match key {
+        hir::expr::MapEntryKey::IndexVariant(variant) => variant.path_span(),
+        hir::expr::MapEntryKey::FinitePosition { position, .. } => position.span,
+    }
+}
+
 fn eval_hir_map_literal(
+    map_span: Span,
     entries: &[hir::expr::MapEntry],
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
@@ -1767,14 +1775,17 @@ fn eval_hir_map_literal(
 ) -> Result<RuntimeValue, GraphcalError> {
     let first = entries
         .first()
-        .ok_or_else(|| ctx.internal_error("empty map literal", Span::new(0, 0)))?;
+        .ok_or_else(|| ctx.internal_error("empty map literal", map_span))?;
     let first_key = first.keys.first();
     let arity = first.keys.len();
     let idx_name = map_entry_index_ref(first_key, ctx)?;
 
     if arity == 1 {
         let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
-            ctx.internal_error(format!("unknown index `{idx_name}`"), Span::new(0, 0))
+            ctx.internal_error(
+                format!("unknown index `{idx_name}`"),
+                map_entry_key_span(first_key),
+            )
         })?;
         let mut evaluated = IndexMap::new();
         for entry in entries {
@@ -1790,7 +1801,7 @@ fn eval_hir_map_literal(
                     format!(
                         "map literal for index `{idx_name}` is missing entry for variant `{variant}`"
                     ),
-                    Span::new(0, 0),
+                    map_span,
                 )
             })?;
             result.insert(variant, val);
@@ -1802,7 +1813,10 @@ fn eval_hir_map_literal(
     }
 
     let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
-        ctx.internal_error(format!("unknown index `{idx_name}`"), Span::new(0, 0))
+        ctx.internal_error(
+            format!("unknown index `{idx_name}`"),
+            map_entry_key_span(first_key),
+        )
     })?;
     let variants = idx_def.entry_keys();
     let mut outer = IndexMap::new();
@@ -1832,10 +1846,10 @@ fn eval_hir_map_literal(
                 format!(
                     "map literal for index `{idx_name}` is missing entries for variant `{variant}`"
                 ),
-                Span::new(0, 0),
+                map_span,
             ));
         }
-        let inner = eval_hir_map_literal(&sub_entries, values, local_values, ctx)?;
+        let inner = eval_hir_map_literal(map_span, &sub_entries, values, local_values, ctx)?;
         outer.insert(variant.clone(), inner);
     }
     Ok(RuntimeValue::Indexed {
