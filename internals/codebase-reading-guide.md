@@ -983,6 +983,11 @@ source-facing prefixes are lookup/presentation names, not the source of semantic
 identity. Runtime-dependent units are deliberately excluded from this include
 composition model rather than fabricating instance-qualified unit definitions.
 
+Generic-leakage analysis carries bare signature references as typed
+index/type/dimension categories. It checks importer visibility only after an
+explicit include substitution; an unsubstituted name remains dependency-local
+or builtin, while a missing required-port substitution is an internal error.
+
 `ProjectCompiler` builds the `ModuleResolver` once and lowers every loaded
 module into `HirProject` using HIR-only dependency interfaces. HIR import
 bindings contain canonical targets but cannot express checked types or values.
