@@ -21,7 +21,7 @@ use graphcal_io::{
     RealFileSystem, SourceTreeHashLimits, hash_source_tree,
 };
 use graphcal_package::{
-    GitCommitHash, GitUrl, LockedPackage, LockfileParseLimits, PackageInstanceId, PackageManifest,
+    GitSourceId, LockedPackage, LockfileParseLimits, PackageInstanceId, PackageManifest,
     PackageSource, STDLIB_VERSION, ValidatedPackageGraph, parse_lockfile_str_with_limits,
     parse_manifest_str,
 };
@@ -1942,7 +1942,7 @@ impl<'a> PackageLoadContext<'a> {
         let validated = lockfile
             .validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)
             .map_err(|error| loader_manifest_error(error.to_string()))?;
-        let cache_dir = cache_dir().map_err(loader_manifest_error)?;
+        let cache_root = package_cache_root().map_err(loader_manifest_error)?;
         let canonical_project_root = fs.canonicalize(project_root).map_err(|error| {
             loader_manifest_error(format!(
                 "could not canonicalize root package `{}`: {error}",
@@ -1954,7 +1954,7 @@ impl<'a> PackageLoadContext<'a> {
 
         for package in validated.packages() {
             cancellation.checkpoint()?;
-            let candidate = source_root_candidate(project_root, &cache_dir, package);
+            let candidate = source_root_candidate(project_root, &cache_root, package);
             if &package.id == validated.root() {
                 let canonical = fs
                     .canonicalize(&candidate)
@@ -2382,14 +2382,20 @@ fn ensure_package_path(
 
 fn source_root_candidate(
     project_root: &Path,
-    cache_dir: &Path,
+    cache_root: &crate::package_cache::PackageCacheRoot,
     package: &LockedPackage,
 ) -> PathBuf {
     match &package.source {
         PackageSource::Root => project_root.to_path_buf(),
-        PackageSource::Git { url, commit, .. } => {
-            cache_dir.join("git").join(cache_key(url, commit))
-        }
+        PackageSource::Git {
+            url,
+            commit,
+            tree_hashes,
+            ..
+        } => cache_root.git_checkout(
+            &GitSourceId::new(url.clone(), commit.clone()),
+            &tree_hashes.sha256,
+        ),
     }
 }
 
@@ -2473,31 +2479,13 @@ fn read_package_manifest_from_path(
     parse_manifest_str(&content).map_err(|error| loader_manifest_error(error.to_string()))
 }
 
-fn cache_dir() -> Result<PathBuf, String> {
+fn package_cache_root() -> Result<crate::package_cache::PackageCacheRoot, String> {
     #[cfg(test)]
     if let Some(path) = TEST_CACHE_DIR.with(|slot| slot.borrow().clone()) {
-        return Ok(path);
+        return crate::package_cache::PackageCacheRoot::from_path(path)
+            .map_err(|error| error.to_string());
     }
-    if let Some(path) = std::env::var_os("GRAPHCAL_CACHE_DIR") {
-        return Ok(PathBuf::from(path));
-    }
-    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
-        return Ok(PathBuf::from(path).join("graphcal"));
-    }
-    std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
-        .ok_or_else(|| {
-            "could not determine Graphcal cache directory; set GRAPHCAL_CACHE_DIR".to_string()
-        })
-}
-
-fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"git\0");
-    hasher.update(url.to_string().as_bytes());
-    hasher.update([0]);
-    hasher.update(rev.as_str().as_bytes());
-    hex_string(&hasher.finalize())
+    crate::package_cache::PackageCacheRoot::from_environment().map_err(|error| error.to_string())
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -3488,6 +3476,7 @@ mod tests {
 
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_io::{CancellationSignal, EntryLimit, NeverCancel, RealFileSystem};
+    use graphcal_package::Sha256Digest;
 
     fn fs() -> RealFileSystem {
         RealFileSystem::default()
@@ -4205,10 +4194,41 @@ dag calc {
         directory: tempfile::TempDir,
     }
 
+    fn install_dependency_cache_generation(
+        cache_root: &Path,
+        source: &GitSourceId,
+        dependency_source: &str,
+    ) -> (PathBuf, PackageManifest, Sha256Digest) {
+        let staging = cache_root.join("dependency-staging");
+        std::fs::create_dir_all(staging.join("src/units")).unwrap();
+        let manifest_text = "[package]\nname = \"units\"\n";
+        std::fs::write(staging.join("graphcal.toml"), manifest_text).unwrap();
+        std::fs::write(staging.join("src/units/lib.gcl"), dependency_source).unwrap();
+        let manifest = parse_manifest_str(manifest_text).unwrap();
+        let reader = RealFileSystem::rooted(&staging).unwrap();
+        let tree_hash = Sha256Digest::new(
+            hash_source_tree(
+                &reader,
+                &staging,
+                &manifest.source_dir.to_path_buf(),
+                SourceTreeHashLimits::unbounded(),
+                &graphcal_io::NeverCancel,
+            )
+            .unwrap()
+            .sha256(),
+        )
+        .unwrap();
+        drop(reader);
+        let dependency_root = crate::package_cache::PackageCacheRoot::from_path(cache_root)
+            .unwrap()
+            .git_checkout(source, &tree_hash);
+        std::fs::create_dir_all(dependency_root.parent().unwrap()).unwrap();
+        std::fs::rename(staging, &dependency_root).unwrap();
+        (dependency_root, manifest, tree_hash)
+    }
+
     fn locked_package_fixture(root_source: &str, dependency_source: &str) -> LockedPackageFixture {
-        use graphcal_package::{
-            LOCK_VERSION, Lockfile, PackageInstanceId, Sha256Digest, SourceTreeHashes,
-        };
+        use graphcal_package::{LOCK_VERSION, Lockfile, PackageInstanceId, SourceTreeHashes};
 
         let directory = tempfile::tempdir().unwrap();
         let project_root = directory.path().join("project");
@@ -4229,12 +4249,10 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
             .expect("fixture dependency");
         let revision = dependency_spec.git.rev.clone();
         let url = dependency_spec.git.url.clone();
-        let dependency_root = cache_root.join("git").join(cache_key(&url, &revision));
-        std::fs::create_dir_all(dependency_root.join("src/units")).unwrap();
-        let dependency_manifest = "[package]\nname = \"units\"\n";
+        let source = GitSourceId::new(url.clone(), revision.clone());
+        let (dependency_root, dependency_manifest, tree_hash) =
+            install_dependency_cache_generation(&cache_root, &source, dependency_source);
         std::fs::write(project_root.join("graphcal.toml"), root_manifest).unwrap();
-        std::fs::write(dependency_root.join("graphcal.toml"), dependency_manifest).unwrap();
-        std::fs::write(dependency_root.join("src/units/lib.gcl"), dependency_source).unwrap();
 
         let root_file = root_source_dir.join("main.gcl");
         let root_helper = root_source_dir.join("helper.gcl");
@@ -4245,19 +4263,6 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         )
         .unwrap();
 
-        let dependency_manifest = parse_manifest_str(dependency_manifest).unwrap();
-        let dependency_reader = RealFileSystem::rooted(&dependency_root).unwrap();
-        let dependency_source_dir = dependency_manifest.source_dir.to_path_buf();
-        let tree_hash = hash_source_tree(
-            &dependency_reader,
-            &dependency_root,
-            &dependency_source_dir,
-            SourceTreeHashLimits::unbounded(),
-            &graphcal_io::NeverCancel,
-        )
-        .unwrap()
-        .sha256()
-        .to_string();
         let root_id = PackageInstanceId::new("pkg-mission").unwrap();
         let dependency_id = PackageInstanceId::new("pkg-units-v1").unwrap();
         let lockfile = Lockfile {
@@ -4286,9 +4291,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
                         url,
                         requested_rev: revision.clone(),
                         commit: revision,
-                        tree_hashes: SourceTreeHashes {
-                            sha256: Sha256Digest::new(tree_hash).unwrap(),
-                        },
+                        tree_hashes: SourceTreeHashes { sha256: tree_hash },
                     },
                     dependencies: BTreeMap::new(),
                 },

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use graphcal_eval::loader::discover_project_root;
+use graphcal_eval::package_cache::{PackageCacheRoot, PackageCacheRootError};
 use graphcal_io::{
     ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, NeverCancel,
     ProjectIngestionPolicy, RealFileSystem, SourceTreeHash, SourceTreeHashLimits,
@@ -14,16 +15,15 @@ use graphcal_io::{
     replace_file_atomically_if_unchanged,
 };
 use graphcal_package::{
-    DependencyName, DependencySpec, GitCommitHash, GitTransport, GitUrl, LOCK_VERSION,
-    LockedPackage, LockedPlugin, Lockfile, PackageGraph, PackageInstanceId, PackageManifest,
-    PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
+    DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl, LOCK_VERSION,
+    LockedPackage, LockedPlugin, Lockfile, LockfileParseLimits, PackageGraph, PackageInstanceId,
+    PackageManifest, PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
     PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError, SourceTreeHashes,
-    parse_manifest_str,
+    parse_lockfile_str_with_limits, parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-const CACHE_ENV: &str = "GRAPHCAL_CACHE_DIR";
 const FETCHED_COMMIT_REF: &str = "refs/remotes/origin/graphcal-lock";
 
 type BoxError = Box<dyn StdError + Send + Sync>;
@@ -279,14 +279,13 @@ pub struct LockOutcome {
 /// materialization, tree hashing, or lockfile writing fails.
 pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let root = resolve_root(root_override)?;
-    let cache = cache_dir()?;
-    std::fs::create_dir_all(&cache).map_err(|source| DepsError::CreateDir {
-        path: cache.clone(),
-        source,
-    })?;
-
-    let resolver = LockResolver::new(cache);
     let mut budget = PackageIngestionBudget::default();
+    let prior_lock = read_prior_lock(&root, &mut budget)?;
+    let package_cache = PackageCache::new(
+        PackageCacheRoot::from_environment()?,
+        prior_lock.trusted_sources(),
+    );
+    let mut resolver = LockResolver::new(package_cache);
     let resolved_lock = resolver.resolve_root(&root, &mut budget)?;
     let plugins = resolve_plugin_pins(&root, &resolved_lock.source_dir, &mut budget)?;
     let lockfile = Lockfile {
@@ -304,13 +303,13 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
 
     let content = lockfile.to_deterministic_toml();
     let lockfile_path = root.join("graphcal.lock");
-    let root_fs = RealFileSystem::rooted(&root).map_err(|source| DepsError::Canonicalize {
-        path: root.clone(),
-        source,
-    })?;
-    let changed = match budget.read_text(&root_fs, &lockfile_path, IngestionArtifact::Lockfile) {
-        Ok(existing) if existing == content => false,
-        Ok(existing) => {
+    let changed = match prior_lock {
+        PriorLock::Present {
+            content: existing, ..
+        } if existing == content => false,
+        PriorLock::Present {
+            content: existing, ..
+        } => {
             replace_file_atomically_if_unchanged(
                 &lockfile_path,
                 existing.as_bytes(),
@@ -318,13 +317,10 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
             )?;
             true
         }
-        Err(DepsError::ArtifactRead { source, .. })
-            if source.io_kind() == Some(std::io::ErrorKind::NotFound) =>
-        {
+        PriorLock::Missing => {
             create_file_atomically(&lockfile_path, content.as_bytes())?;
             true
         }
-        Err(error) => return Err(error),
     };
 
     Ok(LockOutcome {
@@ -491,16 +487,79 @@ fn resolve_root(root_override: Option<&Path>) -> Result<PathBuf, DepsError> {
     discover_project_root(&current_dir, &fs).ok_or(DepsError::NoProjectRoot { start: current_dir })
 }
 
-fn cache_dir() -> Result<PathBuf, DepsError> {
-    if let Some(path) = std::env::var_os(CACHE_ENV) {
-        return Ok(PathBuf::from(path));
+enum PriorLock {
+    Missing,
+    Present {
+        content: String,
+        trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+    },
+}
+
+impl PriorLock {
+    fn trusted_sources(&self) -> BTreeMap<GitSourceId, Sha256Digest> {
+        match self {
+            Self::Missing => BTreeMap::new(),
+            Self::Present {
+                trusted_sources, ..
+            } => trusted_sources.clone(),
+        }
     }
-    if let Some(path) = std::env::var_os("XDG_CACHE_HOME") {
-        return Ok(PathBuf::from(path).join("graphcal"));
+}
+
+fn read_prior_lock(
+    root: &Path,
+    budget: &mut PackageIngestionBudget,
+) -> Result<PriorLock, DepsError> {
+    let path = root.join("graphcal.lock");
+    let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    match budget.read_text(&fs, &path, IngestionArtifact::Lockfile) {
+        Ok(content) => {
+            let trusted_sources = trusted_sources_from_lock(&content, budget.policy.max_entries());
+            Ok(PriorLock::Present {
+                content,
+                trusted_sources,
+            })
+        }
+        Err(DepsError::ArtifactRead { source, .. })
+            if source.io_kind() == Some(std::io::ErrorKind::NotFound) =>
+        {
+            Ok(PriorLock::Missing)
+        }
+        Err(error) => Err(error),
     }
-    std::env::var_os("HOME")
-        .map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
-        .ok_or(DepsError::CacheDirUnavailable)
+}
+
+fn trusted_sources_from_lock(
+    content: &str,
+    max_packages: u64,
+) -> BTreeMap<GitSourceId, Sha256Digest> {
+    let max_packages = usize::try_from(max_packages).unwrap_or(usize::MAX);
+    let Ok(lockfile) =
+        parse_lockfile_str_with_limits(content, LockfileParseLimits::new(max_packages))
+    else {
+        return BTreeMap::new();
+    };
+    let Ok(validated) = lockfile.validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION) else {
+        return BTreeMap::new();
+    };
+    validated
+        .packages()
+        .filter_map(|package| match &package.source {
+            PackageSource::Root => None,
+            PackageSource::Git {
+                url,
+                commit,
+                tree_hashes,
+                ..
+            } => Some((
+                GitSourceId::new(url.clone(), commit.clone()),
+                tree_hashes.sha256,
+            )),
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -511,16 +570,16 @@ struct ResolvedLock {
 }
 
 struct LockResolver {
-    cache_dir: PathBuf,
+    package_cache: PackageCache,
 }
 
 impl LockResolver {
-    const fn new(cache_dir: PathBuf) -> Self {
-        Self { cache_dir }
+    const fn new(package_cache: PackageCache) -> Self {
+        Self { package_cache }
     }
 
     fn resolve_root(
-        &self,
+        &mut self,
         root: &Path,
         budget: &mut PackageIngestionBudget,
     ) -> Result<ResolvedLock, DepsError> {
@@ -546,7 +605,7 @@ impl LockResolver {
     }
 
     fn resolve_package(
-        &self,
+        &mut self,
         id: PackageInstanceId,
         manifest: PackageManifest,
         source: PackageSource,
@@ -578,14 +637,15 @@ impl LockResolver {
     }
 
     fn resolve_dependency(
-        &self,
+        &mut self,
         parent: &PackageInstanceId,
         alias: &DependencyName,
         spec: &DependencySpec,
         state: &mut ResolveState,
         budget: &mut PackageIngestionBudget,
     ) -> Result<ResolvedDependency, DepsError> {
-        let materialized = self.materialize_git(&spec.git.url, &spec.git.rev, budget)?;
+        let source_id = GitSourceId::new(spec.git.url.clone(), spec.git.rev.clone());
+        let materialized = self.package_cache.materialize(&source_id, budget)?;
         let manifest = materialized.manifest;
         let expected = spec.expected_package_name(alias);
         if manifest.name != expected {
@@ -608,72 +668,6 @@ impl LockResolver {
         let package = self.resolve_package(id.clone(), manifest, source, state, budget)?;
         state.insert(package);
         Ok(ResolvedDependency { id })
-    }
-
-    fn materialize_git(
-        &self,
-        url: &GitUrl,
-        rev: &GitCommitHash,
-        budget: &mut PackageIngestionBudget,
-    ) -> Result<MaterializedGit, DepsError> {
-        let path = self.cache_dir.join("git").join(cache_key(url, rev));
-        remove_existing_cache_checkout(&path)?;
-
-        let parent = path.parent().ok_or_else(|| {
-            DepsError::Internal(format!("cache path {} has no parent", path.display()))
-        })?;
-        std::fs::create_dir_all(parent).map_err(|source| DepsError::CreateDir {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-        let tmp = tempfile::Builder::new()
-            .prefix("graphcal-git-")
-            .tempdir_in(parent)
-            .map_err(|source| DepsError::CreateTempDir {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        let tmp_path = tmp.path().to_path_buf();
-        materialize_git_revision(url, rev, &tmp_path)?;
-        let inspected = inspect_materialized_package(&tmp_path, budget)?;
-        match std::fs::rename(&tmp_path, &path) {
-            Ok(()) => Ok(MaterializedGit {
-                sha256: inspected.sha256,
-                manifest: inspected.manifest,
-            }),
-            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
-                let inspected = inspect_materialized_package(&path, budget)?;
-                Ok(MaterializedGit {
-                    sha256: inspected.sha256,
-                    manifest: inspected.manifest,
-                })
-            }
-            Err(source) => Err(DepsError::Rename {
-                from: tmp_path,
-                to: path.clone(),
-                source,
-            }),
-        }
-    }
-}
-
-fn remove_existing_cache_checkout(path: &Path) -> Result<(), DepsError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => {
-            std::fs::remove_dir_all(path).map_err(|source| DepsError::RemoveDir {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            Ok(())
-        }
-        Ok(_) => Err(DepsError::UnsupportedSourceEntry {
-            path: path.to_path_buf(),
-        }),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(DepsError::Metadata {
-            path: path.to_path_buf(),
-            source,
-        }),
     }
 }
 
@@ -792,15 +786,251 @@ struct ResolvedDependency {
     id: PackageInstanceId,
 }
 
-#[derive(Debug)]
+struct PackageCache {
+    root: PackageCacheRoot,
+    trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+    session: BTreeMap<GitSourceId, MaterializedGit>,
+}
+
+impl PackageCache {
+    const fn new(
+        root: PackageCacheRoot,
+        trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+    ) -> Self {
+        Self {
+            root,
+            trusted_sources,
+            session: BTreeMap::new(),
+        }
+    }
+
+    fn materialize(
+        &mut self,
+        source: &GitSourceId,
+        budget: &mut PackageIngestionBudget,
+    ) -> Result<MaterializedGit, DepsError> {
+        self.materialize_with(source, budget, |path| {
+            materialize_git_revision(source.url(), source.commit(), path)
+        })
+    }
+
+    fn materialize_with(
+        &mut self,
+        source: &GitSourceId,
+        budget: &mut PackageIngestionBudget,
+        fetch: impl FnOnce(&Path) -> Result<(), DepsError>,
+    ) -> Result<MaterializedGit, DepsError> {
+        if let Some(materialized) = self.session.get(source) {
+            return Ok(materialized.clone());
+        }
+
+        let _writer_lock = CacheWriterLock::acquire(&self.root, source)?;
+        let expected = self.trusted_sources.get(source).copied();
+        let trusted_checkout = match expected {
+            Some(expected) => {
+                let path = self.root.git_checkout(source, &expected);
+                let existing = inspect_existing_checkout(&path, budget)?;
+                if let Some(inspected) = &existing
+                    && inspected.sha256 == expected
+                {
+                    let materialized = inspected.clone().into_materialized();
+                    self.session.insert(source.clone(), materialized.clone());
+                    return Ok(materialized);
+                }
+                existing
+            }
+            None => None,
+        };
+
+        let parent = self.root.git_source_directory(source);
+        std::fs::create_dir_all(&parent).map_err(|source| DepsError::CreateDir {
+            path: parent.clone(),
+            source,
+        })?;
+        let temporary = tempfile::Builder::new()
+            .prefix("graphcal-git-")
+            .tempdir_in(&parent)
+            .map_err(|source| DepsError::CreateTempDir {
+                path: parent.clone(),
+                source,
+            })?;
+        fetch(temporary.path())?;
+        let fetched = inspect_materialized_package(temporary.path(), budget)?;
+        if let Some(expected) = expected
+            && fetched.sha256 != expected
+        {
+            return Err(DepsError::CacheIntegrity {
+                url: source.url().to_string(),
+                commit: source.commit().as_str().to_string(),
+                expected,
+                actual: fetched.sha256,
+            });
+        }
+
+        let path = self.root.git_checkout(source, &fetched.sha256);
+        let destination_checkout = if expected == Some(fetched.sha256) {
+            trusted_checkout
+        } else {
+            inspect_existing_checkout(&path, budget)?
+        };
+        let materialized = match destination_checkout {
+            Some(existing) if existing.sha256 == fetched.sha256 => existing.into_materialized(),
+            Some(_) | None => {
+                publish_checkout(&temporary, &path)?;
+                fetched.into_materialized()
+            }
+        };
+        self.session.insert(source.clone(), materialized.clone());
+        Ok(materialized)
+    }
+}
+
+struct CacheWriterLock {
+    file: std::fs::File,
+}
+
+impl CacheWriterLock {
+    fn acquire(root: &PackageCacheRoot, source: &GitSourceId) -> Result<Self, DepsError> {
+        let path = root.git_writer_lock(source);
+        let parent = path.parent().ok_or_else(|| {
+            DepsError::Internal(format!("cache lock path {} has no parent", path.display()))
+        })?;
+        std::fs::create_dir_all(parent).map_err(|source| DepsError::CreateDir {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| DepsError::CacheLock {
+                path: path.clone(),
+                source,
+            })?;
+        fs2::FileExt::lock_exclusive(&file)
+            .map_err(|source| DepsError::CacheLock { path, source })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for CacheWriterLock {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.file);
+    }
+}
+
+fn inspect_existing_checkout(
+    path: &Path,
+    budget: &mut PackageIngestionBudget,
+) -> Result<Option<InspectedPackage>, DepsError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => match inspect_materialized_package(path, budget) {
+            Ok(inspected) => Ok(Some(inspected)),
+            Err(error) if is_ingestion_policy_error(&error) => Err(error),
+            Err(_) => Ok(None),
+        },
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(DepsError::Metadata {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+const fn is_ingestion_policy_error(error: &DepsError) -> bool {
+    matches!(
+        error,
+        DepsError::IngestionLimit { .. }
+            | DepsError::SourceTreeHash(
+                graphcal_io::SourceTreeHashError::ResourceLimit { .. }
+                    | graphcal_io::SourceTreeHashError::ReadFile {
+                        source: FileSystemReadError::ByteLimitExceeded { .. },
+                        ..
+                    }
+            )
+    )
+}
+
+fn publish_checkout(temporary: &tempfile::TempDir, destination: &Path) -> Result<(), DepsError> {
+    let temporary_path = temporary.path().to_path_buf();
+    let parent = destination.parent().ok_or_else(|| {
+        DepsError::Internal(format!(
+            "cache checkout path {} has no parent",
+            destination.display()
+        ))
+    })?;
+    match std::fs::symlink_metadata(destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::rename(&temporary_path, destination).map_err(|source| DepsError::Rename {
+                from: temporary_path,
+                to: destination.to_path_buf(),
+                source,
+            })?;
+            Ok(())
+        }
+        Err(source) => Err(DepsError::Metadata {
+            path: destination.to_path_buf(),
+            source,
+        }),
+        Ok(_) => {
+            let backup = tempfile::Builder::new()
+                .prefix("graphcal-cache-backup-")
+                .tempdir_in(parent)
+                .map_err(|source| DepsError::CreateTempDir {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            let backup_checkout = backup.path().join("checkout");
+            std::fs::rename(destination, &backup_checkout).map_err(|source| DepsError::Rename {
+                from: destination.to_path_buf(),
+                to: backup_checkout.clone(),
+                source,
+            })?;
+            match std::fs::rename(&temporary_path, destination) {
+                Ok(()) => Ok(()),
+                Err(publish) => match std::fs::rename(&backup_checkout, destination) {
+                    Ok(()) => Err(DepsError::Rename {
+                        from: temporary_path,
+                        to: destination.to_path_buf(),
+                        source: publish,
+                    }),
+                    Err(rollback) => {
+                        let preserved = backup.keep().join("checkout");
+                        Err(DepsError::CacheRollback {
+                            destination: destination.to_path_buf(),
+                            preserved,
+                            publish,
+                            rollback,
+                        })
+                    }
+                },
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct MaterializedGit {
     sha256: Sha256Digest,
     manifest: PackageManifest,
 }
 
+#[derive(Clone)]
 struct InspectedPackage {
     sha256: Sha256Digest,
     manifest: PackageManifest,
+}
+
+impl InspectedPackage {
+    fn into_materialized(self) -> MaterializedGit {
+        MaterializedGit {
+            sha256: self.sha256,
+            manifest: self.manifest,
+        }
+    }
 }
 
 fn inspect_materialized_package(
@@ -859,15 +1089,6 @@ fn git_package_id(
         .map_err(DepsError::PackageId)
 }
 
-fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"git\0");
-    hasher.update(url.to_string().as_bytes());
-    hasher.update([0]);
-    hasher.update(rev.as_str().as_bytes());
-    hex_string(&hasher.finalize())
-}
-
 fn hash_source_tree(
     root: &Path,
     source_dir: &PackageSourceDirectory,
@@ -914,9 +1135,9 @@ pub enum DepsError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// No cache directory could be derived.
-    #[error("could not determine Graphcal cache directory; set {CACHE_ENV}")]
-    CacheDirUnavailable,
+    /// Package cache root discovery failed.
+    #[error(transparent)]
+    CacheRoot(#[from] PackageCacheRootError),
     /// Directory creation failed.
     #[error("could not create directory `{}`: {source}", path.display())]
     CreateDir {
@@ -976,11 +1197,34 @@ pub enum DepsError {
         to: PathBuf,
         source: std::io::Error,
     },
-    /// Directory removal failed.
-    #[error("could not remove directory `{}`: {source}", path.display())]
-    RemoveDir {
+    /// A refetched immutable source contradicted the prior validated lock.
+    #[error(
+        "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the prior lock requires `{expected}`"
+    )]
+    CacheIntegrity {
+        url: String,
+        commit: String,
+        expected: Sha256Digest,
+        actual: Sha256Digest,
+    },
+    /// Per-source cache writer lock failed.
+    #[error("could not lock package cache key at `{}`: {source}", path.display())]
+    CacheLock {
         path: PathBuf,
         source: std::io::Error,
+    },
+    /// Publishing and rolling back a replacement both failed; the prior
+    /// checkout is retained at `preserved` rather than deleted.
+    #[error(
+        "could not publish cache checkout `{}` ({publish}) or restore it ({rollback}); prior checkout preserved at `{}`",
+        destination.display(),
+        preserved.display()
+    )]
+    CacheRollback {
+        destination: PathBuf,
+        preserved: PathBuf,
+        publish: std::io::Error,
+        rollback: std::io::Error,
     },
     /// Unsupported file type in source hash input.
     #[error("unsupported source entry `{}`", path.display())]
@@ -1045,6 +1289,53 @@ mod tests {
         ))
     }
 
+    fn test_git_source() -> GitSourceId {
+        let manifest = parse_manifest_str(
+            r#"
+[package]
+name = "root"
+
+[dependencies]
+units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+"#,
+        )
+        .unwrap();
+        let dependency = manifest.dependencies.into_values().next().unwrap();
+        GitSourceId::new(dependency.git.url, dependency.git.rev)
+    }
+
+    fn write_cached_package(root: &Path, source: &str) {
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("graphcal.toml"),
+            "[package]\nname = \"units\"\nsource_dir = \"src\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/units.gcl"), source).unwrap();
+    }
+
+    fn inspect_for_test(root: &Path) -> InspectedPackage {
+        inspect_materialized_package(root, &mut PackageIngestionBudget::default()).unwrap()
+    }
+
+    fn install_cached_package(
+        root: &PackageCacheRoot,
+        source: &GitSourceId,
+        content: &str,
+    ) -> (PathBuf, InspectedPackage) {
+        let parent = root.git_source_directory(source);
+        std::fs::create_dir_all(&parent).unwrap();
+        let temporary = tempfile::Builder::new()
+            .prefix("package-test-")
+            .tempdir_in(parent)
+            .unwrap();
+        write_cached_package(temporary.path(), content);
+        let inspected = inspect_for_test(temporary.path());
+        let checkout = root.git_checkout(source, &inspected.sha256);
+        std::fs::rename(temporary.path(), &checkout).unwrap();
+        (checkout, inspected)
+    }
+
     fn unique_temp_dir() -> PathBuf {
         // Parallel test threads can observe the same wall-clock tick, so a
         // monotonically increasing counter makes the directory unique even
@@ -1059,6 +1350,177 @@ mod tests {
             "graphcal-deps-test-{}-{nanos}-{sequence}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn package_cache_reuses_a_trusted_checkout_without_network_access() {
+        use std::cell::Cell;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let (_checkout, inspected) =
+            install_cached_package(&root, &source, "node x: Dimensionless = 1.0;\n");
+        let mut cache =
+            PackageCache::new(root, BTreeMap::from([(source.clone(), inspected.sha256)]));
+        let fetches = Cell::new(0_u8);
+
+        let materialized = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |_path| {
+                fetches.set(fetches.get().saturating_add(1));
+                Err(DepsError::Internal("network must stay offline".to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(fetches.get(), 0);
+        assert_eq!(materialized.sha256, inspected.sha256);
+        assert_eq!(materialized.manifest.name.as_str(), "units");
+    }
+
+    #[test]
+    fn package_cache_materializes_a_diamond_source_once_per_session() {
+        use std::cell::Cell;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let mut cache = PackageCache::new(root, BTreeMap::new());
+        let fetches = Cell::new(0_u8);
+        let mut budget = PackageIngestionBudget::default();
+
+        let first = cache
+            .materialize_with(&source, &mut budget, |path| {
+                fetches.set(fetches.get().saturating_add(1));
+                write_cached_package(path, "node x: Dimensionless = 1.0;\n");
+                Ok(())
+            })
+            .unwrap();
+        let second = cache
+            .materialize_with(&source, &mut budget, |_path| {
+                fetches.set(fetches.get().saturating_add(1));
+                Err(DepsError::Internal("duplicate fetch".to_string()))
+            })
+            .unwrap();
+
+        assert_eq!(fetches.get(), 1);
+        assert_eq!(first.sha256, second.sha256);
+    }
+
+    #[test]
+    fn failed_cache_refresh_preserves_the_previous_checkout() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let old_source = "node old: Dimensionless = 1.0;\n";
+        let (checkout, _inspected) = install_cached_package(&root, &source, old_source);
+        let contradictory = Sha256Digest::new("f".repeat(64)).unwrap();
+        let mut cache = PackageCache::new(root, BTreeMap::from([(source.clone(), contradictory)]));
+
+        let error = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |_path| {
+                Err(DepsError::Internal("offline".to_string()))
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, DepsError::Internal(message) if message == "offline"));
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("src/units.gcl")).unwrap(),
+            old_source
+        );
+    }
+
+    #[test]
+    fn refetched_immutable_source_must_match_the_prior_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let (checkout, inspected) =
+            install_cached_package(&root, &source, "node old: Dimensionless = 1.0;\n");
+        let corrupted = "node corrupt: Dimensionless = 99.0;\n";
+        std::fs::write(checkout.join("src/units.gcl"), corrupted).unwrap();
+        let mut cache =
+            PackageCache::new(root, BTreeMap::from([(source.clone(), inspected.sha256)]));
+
+        let error = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_cached_package(path, "node changed: Dimensionless = 2.0;\n");
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            DepsError::CacheIntegrity {
+                expected,
+                actual,
+                ..
+            } if expected == inspected.sha256 && actual != expected
+        ));
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("src/units.gcl")).unwrap(),
+            corrupted
+        );
+    }
+
+    #[test]
+    fn cache_refresh_keeps_existing_rooted_readers_alive() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let old_source = "node old: Dimensionless = 1.0;\n";
+        let new_source = "node new: Dimensionless = 2.0;\n";
+        let (checkout, _inspected) = install_cached_package(&root, &source, old_source);
+        let existing_reader = RealFileSystem::rooted(&checkout).unwrap();
+        let mut cache = PackageCache::new(root, BTreeMap::new());
+
+        let materialized = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_cached_package(path, new_source);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            existing_reader
+                .read_to_string_bounded(
+                    &checkout.join("src/units.gcl"),
+                    ByteLimit::new(1024),
+                    &NeverCancel,
+                )
+                .unwrap(),
+            old_source
+        );
+        let published = PackageCacheRoot::from_path(directory.path())
+            .unwrap()
+            .git_checkout(&source, &materialized.sha256);
+        assert_eq!(
+            std::fs::read_to_string(published.join("src/units.gcl")).unwrap(),
+            new_source
+        );
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("src/units.gcl")).unwrap(),
+            old_source
+        );
+    }
+
+    #[test]
+    fn package_cache_serializes_writers_per_source_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let first = CacheWriterLock::acquire(&root, &source).unwrap();
+        let lock_path = root.git_writer_lock(&source);
+        let second = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .unwrap();
+
+        let contention = fs2::FileExt::try_lock_exclusive(&second).unwrap_err();
+        assert_eq!(contention.kind(), std::io::ErrorKind::WouldBlock);
+        drop(first);
+        fs2::FileExt::try_lock_exclusive(&second).unwrap();
+        fs2::FileExt::unlock(&second).unwrap();
     }
 
     #[test]

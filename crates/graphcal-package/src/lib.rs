@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use toml::{Table, Value};
 use url::{Host, Url};
@@ -32,6 +33,13 @@ pub struct PackageInstanceId(String);
 /// Full immutable Git commit hash.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GitCommitHash(String);
+
+/// Identity of one immutable remote Git source.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GitSourceId {
+    url: GitUrl,
+    commit: GitCommitHash,
+}
 
 /// Canonical SHA-256 digest stored as exactly 32 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -272,6 +280,37 @@ impl GitCommitHash {
         } else {
             Err(GitRevError { value })
         }
+    }
+}
+
+impl GitSourceId {
+    /// Construct an immutable source identity from already validated parts.
+    #[must_use]
+    pub const fn new(url: GitUrl, commit: GitCommitHash) -> Self {
+        Self { url, commit }
+    }
+
+    /// Canonical remote repository URL.
+    #[must_use]
+    pub const fn url(&self) -> &GitUrl {
+        &self.url
+    }
+
+    /// Exact immutable commit.
+    #[must_use]
+    pub const fn commit(&self) -> &GitCommitHash {
+        &self.commit
+    }
+
+    /// Stable typed key for the on-disk checkout cache.
+    #[must_use]
+    pub fn cache_key(&self) -> Sha256Digest {
+        let url = self.url.to_string();
+        let mut hasher = Sha256::new();
+        hasher.update(b"graphcal-git-source-v1\0");
+        hasher.update(Sha256::digest(url.as_bytes()));
+        hasher.update(self.commit.as_str().as_bytes());
+        Sha256Digest::from_bytes(hasher.finalize().into())
     }
 }
 
@@ -2835,6 +2874,32 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
         let scp = GitUrl::new("git@github.com:acme/orbital.git").unwrap();
         assert_eq!(scp.transport(), GitTransport::Scp);
         assert_eq!(scp.to_string(), "git@github.com:acme/orbital.git");
+    }
+
+    #[test]
+    fn git_source_cache_keys_bind_canonical_url_and_immutable_commit() {
+        let source = GitSourceId::new(
+            GitUrl::new("HTTPS://GitHub.COM/acme/orbital.git/").unwrap(),
+            GitCommitHash::new("a".repeat(40)).unwrap(),
+        );
+        let equivalent = GitSourceId::new(
+            GitUrl::new("https://github.com/acme/orbital.git").unwrap(),
+            GitCommitHash::new("a".repeat(40)).unwrap(),
+        );
+        let other_commit = GitSourceId::new(
+            equivalent.url().clone(),
+            GitCommitHash::new("b".repeat(40)).unwrap(),
+        );
+        let other_url = GitSourceId::new(
+            GitUrl::new("https://github.com/acme/thermal.git").unwrap(),
+            equivalent.commit().clone(),
+        );
+
+        assert_eq!(source, equivalent);
+        assert_eq!(source.cache_key(), equivalent.cache_key());
+        assert_ne!(source.cache_key(), other_commit.cache_key());
+        assert_ne!(source.cache_key(), other_url.cache_key());
+        assert_eq!(source.cache_key().to_string().len(), 64);
     }
 
     #[test]
