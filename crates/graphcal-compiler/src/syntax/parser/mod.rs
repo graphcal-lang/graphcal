@@ -55,8 +55,8 @@ pub enum ParseError {
     #[error("table row has {got} value(s), but the header has {expected} column(s)")]
     #[diagnostic(code(graphcal::P004))]
     TableRowLengthMismatch {
-        expected: usize,
-        got: usize,
+        expected: u64,
+        got: u64,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("this row has {got} value(s)")]

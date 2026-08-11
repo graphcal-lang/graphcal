@@ -14,20 +14,6 @@ enum TableColumnKeys {
 }
 
 impl TableColumnKeys {
-    fn expected_len(&self) -> usize {
-        match self {
-            Self::Named(keys) => keys.len(),
-            Self::Finite { cardinality, .. } => usize::try_from(*cardinality).unwrap_or(usize::MAX),
-        }
-    }
-
-    fn matches_len(&self, actual: usize) -> bool {
-        match self {
-            Self::Named(keys) => keys.len() == actual,
-            Self::Finite { cardinality, .. } => u64::try_from(actual) == Ok(*cardinality),
-        }
-    }
-
     fn key_at(&self, position: usize) -> Option<Spanned<IndexEntryKey>> {
         match self {
             Self::Named(keys) => keys.get(position).cloned(),
@@ -166,6 +152,21 @@ impl Parser<'_> {
         Spanned::new(IndexEntryKey::position(position), span)
     }
 
+    pub(super) fn table_count_from_len(&self, count: usize, span: Span) -> Result<u64, ParseError> {
+        u64::try_from(count).map_err(|_| ParseError::InvalidNumber {
+            reason: "table value count does not fit in u64".to_string(),
+            src: self.named_source(),
+            span: span.into(),
+        })
+    }
+
+    fn table_column_count(&self, columns: &TableColumnKeys, span: Span) -> Result<u64, ParseError> {
+        match columns {
+            TableColumnKeys::Named(keys) => self.table_count_from_len(keys.len(), span),
+            TableColumnKeys::Finite { cardinality, .. } => Ok(*cardinality),
+        }
+    }
+
     /// Parse a 1D table body.
     ///
     /// Named index: `Label: expr; ...`
@@ -210,7 +211,7 @@ impl Parser<'_> {
         while self.lexer.peek() != Some(&Token::RBrace) {
             let value = self.parse_expr()?;
             self.expect(Token::Semicolon)?;
-            let i = entries.len() as u64;
+            let i = self.table_count_from_len(entries.len(), value.span)?;
             entries.push(MapEntry {
                 keys: NonEmpty::singleton(MapEntryKey {
                     index: index.clone(),
@@ -220,15 +221,16 @@ impl Parser<'_> {
                 value,
             });
         }
-        if entries.len() as u64 != n {
+        let got = self.table_count_from_len(entries.len(), span)?;
+        if got != n {
             let end_span = self.lexer.peek_with_span().map_or(span, |(_, s)| s);
             let body_span = Span::new(
                 start_offset,
                 end_span.offset() + end_span.len() - start_offset,
             );
             return Err(ParseError::TableRowLengthMismatch {
-                expected: usize::try_from(n).unwrap_or(usize::MAX),
-                got: entries.len(),
+                expected: n,
+                got,
                 src: self.named_source(),
                 span: body_span.into(),
             });
@@ -336,10 +338,12 @@ impl Parser<'_> {
             let row_span = row_label_span.merge(row_end_span);
             self.expect(Token::Semicolon)?;
 
-            if !col_labels.matches_len(row_values.len()) {
+            let expected = self.table_column_count(&col_labels, row_span)?;
+            let got = self.table_count_from_len(row_values.len(), row_span)?;
+            if got != expected {
                 return Err(ParseError::TableRowLengthMismatch {
-                    expected: col_labels.expected_len(),
-                    got: row_values.len(),
+                    expected,
+                    got,
                     src: self.named_source(),
                     span: row_span.into(),
                 });
@@ -375,8 +379,8 @@ impl Parser<'_> {
             && row_index_counter != *cardinality
         {
             return Err(ParseError::TableRowLengthMismatch {
-                expected: usize::try_from(*cardinality).unwrap_or(usize::MAX),
-                got: usize::try_from(row_index_counter).unwrap_or(usize::MAX),
+                expected: *cardinality,
+                got: row_index_counter,
                 src: self.named_source(),
                 span: (*span).into(),
             });
@@ -1011,10 +1015,15 @@ mod tests {
     fn huge_finite_column_cardinality_is_rejected_without_materializing_keys() {
         let source = "param m: Dimensionless[Fin(1), Fin(18446744073709551615)] = table[Fin(1), Fin(18446744073709551615)] { 1.0; };";
         let error = Parser::new(source).parse_file().unwrap_err();
-        assert!(
-            matches!(error, ParseError::TableRowLengthMismatch { got: 1, .. }),
-            "unexpected error: {error:?}"
-        );
+        match error {
+            ParseError::TableRowLengthMismatch { expected, got, .. } => {
+                let expected: u64 = expected;
+                let got: u64 = got;
+                assert_eq!(expected, u64::MAX);
+                assert_eq!(got, 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

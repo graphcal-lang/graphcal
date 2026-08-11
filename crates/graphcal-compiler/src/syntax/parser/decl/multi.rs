@@ -527,8 +527,8 @@ impl Parser<'_> {
             && u64::try_from(row_values.len()) != Ok(*cardinality)
         {
             return Err(ParseError::TableRowLengthMismatch {
-                expected: usize::try_from(*cardinality).unwrap_or(usize::MAX),
-                got: row_values.len(),
+                expected: *cardinality,
+                got: self.table_count_from_len(row_values.len(), header_span)?,
                 src: self.named_source(),
                 span: header_span.into(),
             });
@@ -754,6 +754,28 @@ param y: Dimensionless[Fin(2)]
 
         let expanded = expand_multi_decl(multi);
         assert_eq!(expanded.len(), 2);
+    }
+
+    #[test]
+    fn huge_finite_multi_row_cardinality_preserves_u64_diagnostic_count() {
+        let source = r"
+param x: Dimensionless[Fin(18446744073709551615)],
+param y: Dimensionless[Fin(18446744073709551615)]
+  = table[Fin(18446744073709551615), (_, _)] {
+      : _, _;
+      1.0, 2.0;
+  };
+";
+        let error = Parser::new(source).parse_file().unwrap_err();
+        match error {
+            ParseError::TableRowLengthMismatch { expected, got, .. } => {
+                let expected: u64 = expected;
+                let got: u64 = got;
+                assert_eq!(expected, u64::MAX);
+                assert_eq!(got, 1);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

@@ -23,6 +23,27 @@ fn in_memory_project_evaluates_on_bare_wasm() {
 }
 
 #[wasm_bindgen_test]
+fn table_cardinality_diagnostic_preserves_u64_count_on_wasm() {
+    let outcome = evaluate(PlaygroundRequest {
+        entry: "main.gcl".to_string(),
+        files: vec![PlaygroundFile {
+            path: "main.gcl".to_string(),
+            content: "param m: Dimensionless[Fin(1), Fin(18446744073709551615)] = table[Fin(1), Fin(18446744073709551615)] { 1.0; };".to_string(),
+        }],
+    });
+
+    let PlaygroundOutcome::CompileError { diagnostics } = outcome else {
+        panic!("expected compile error, got {outcome:?}");
+    };
+    assert_eq!(diagnostics.len(), 1);
+    assert!(
+        diagnostics[0].message.contains("18446744073709551615"),
+        "{}",
+        diagnostics[0].message
+    );
+}
+
+#[wasm_bindgen_test]
 fn multi_file_project_evaluates_on_bare_wasm() {
     let outcome = evaluate(PlaygroundRequest {
         entry: "src/demo/main.gcl".to_string(),
