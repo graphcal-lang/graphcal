@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(unix)]
-use std::{os::unix::fs::PermissionsExt, sync::OnceLock};
+use std::{os::unix::fs::PermissionsExt, process::Stdio, sync::OnceLock};
 
 fn graphcal_bin() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_graphcal"));
@@ -346,6 +346,8 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     let stdout = String::from_utf8(eval.stdout).unwrap();
     assert!(stdout.contains("two = 2"), "stdout: {stdout}");
 
+    let offline_repo = dep_repo.with_extension("offline");
+    std::fs::rename(&dep_repo, &offline_repo).unwrap();
     let second = graphcal_bin()
         .args(["deps", "lock", "--root", project.to_str().unwrap()])
         .env("GRAPHCAL_CACHE_DIR", &cache)
@@ -358,6 +360,85 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     );
     let stdout = String::from_utf8(second.stdout).unwrap();
     assert!(stdout.contains("up to date"), "stdout: {stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn concurrent_lock_commands_publish_one_shared_source_safely() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let dependency = format!(
+        "\n[dependencies]\n\
+         units = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
+        test_remote_git_url(&dep_repo)
+    );
+    let project_a = dir.path().join("mission-a");
+    let project_b = dir.path().join("mission-b");
+    let main_a = write_package_project(
+        &project_a,
+        &dependency,
+        "import units.lib.{ one };\nnode a: Dimensionless = @one;\n",
+    );
+    let main_b = write_package_project(
+        &project_b,
+        &dependency,
+        "import units.lib.{ one };\nnode b: Dimensionless = @one;\n",
+    );
+    let cache = dir.path().join("cache");
+
+    let mut command_a = graphcal_bin();
+    command_a
+        .args(["deps", "lock", "--root", project_a.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut command_b = graphcal_bin();
+    command_b
+        .args(["deps", "lock", "--root", project_b.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let child_a = command_a
+        .spawn()
+        .expect("failed to start first lock command");
+    let child_b = command_b
+        .spawn()
+        .expect("failed to start second lock command");
+    let status_a = child_a.wait_with_output().unwrap();
+    let status_b = child_b.wait_with_output().unwrap();
+    assert!(
+        status_a.status.success(),
+        "first stderr: {}",
+        String::from_utf8_lossy(&status_a.stderr)
+    );
+    assert!(
+        status_b.status.success(),
+        "second stderr: {}",
+        String::from_utf8_lossy(&status_b.stderr)
+    );
+
+    for (project, main) in [(&project_a, &main_a), (&project_b, &main_b)] {
+        let check = graphcal_bin()
+            .args([
+                "check",
+                main.to_str().unwrap(),
+                "--root",
+                project.to_str().unwrap(),
+            ])
+            .env("GRAPHCAL_CACHE_DIR", &cache)
+            .output()
+            .expect("failed to run graphcal check");
+        assert!(
+            check.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+    }
 }
 
 #[test]
@@ -536,6 +617,32 @@ fn package_consumers_reject_cached_source_hash_mismatch() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("hash mismatch"), "stderr: {stderr}");
     assert!(stderr.contains("graphcal deps lock"), "stderr: {stderr}");
+
+    let repair = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        repair.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&repair.stderr)
+    );
+    let repaired = graphcal_bin()
+        .args([
+            "check",
+            main.to_str().unwrap(),
+            "--root",
+            project.to_str().unwrap(),
+        ])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        repaired.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&repaired.stderr)
+    );
 }
 
 #[cfg(unix)]

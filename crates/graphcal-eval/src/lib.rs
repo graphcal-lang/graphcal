@@ -18,4 +18,5 @@ pub mod host_fns;
 pub(crate) mod import_surface;
 pub(crate) mod inline_dag;
 pub mod loader;
+pub mod package_cache;
 pub mod project_compiler;
