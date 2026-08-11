@@ -165,7 +165,7 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 | Argument | Description |
 |----------|-------------|
 | `<MODULE>` | Path to the `.wasm` plugin module |
-| `[ARGS]...` | Arguments for `--call`: numbers in SI base units for quantity parameters, `true`/`false` for `Bool`, integers for `Int` |
+| `[ARGS]...` | Arguments for `--call`: finite numbers in SI base units for quantity parameters, `true`/`false` for `Bool`, integers exactly representable by the binary64 plugin ABI for `Int` |
 
 **Options:**
 
@@ -180,6 +180,12 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 | `0` | Module is a valid plugin (and the call, if any, succeeded) |
 | `1` | ABI validation failed, the manifest cannot be rendered as Graphcal source, or the called function failed or returned a value violating its declared kind |
 | `2` | Unreadable file, unknown function, or unusable call arguments |
+
+Calls use the same ABI value policy as normal Graphcal evaluation. Quantity
+arguments and results (including array elements and record fields) must be
+finite; `Int` slots must convert exactly; and `Bool` slots must be numeric zero
+or one. Numeric `-0.0` returned by a plugin is accepted as `false` or integer
+zero rather than treated as a distinct encoding.
 
 ```bash
 $ graphcal plugin test plugins/fluid_props.wasm --call lerp 1.0 3.0 0.5

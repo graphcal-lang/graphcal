@@ -2,23 +2,28 @@ use thiserror::Error;
 
 /// Failure to project an `i64` into binary64 without changing its value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("integer {value} is outside the exactly representable binary64 range")]
+#[error("integer {value} cannot be represented exactly as binary64")]
 pub struct ExactI64ToF64Error {
     value: i64,
 }
 
 /// Convert an integer to binary64 only when the conversion is exact.
 pub const fn exact_i64_to_f64(value: i64) -> Result<f64, ExactI64ToF64Error> {
-    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
-    if value.unsigned_abs() > MAX_EXACT_F64_INT {
-        return Err(ExactI64ToF64Error { value });
-    }
     #[expect(
         clippy::cast_precision_loss,
-        reason = "integer magnitude is checked to be exactly representable before casting"
+        reason = "the following wider-integer round trip proves whether this specific value is exact"
     )]
-    {
-        Ok(value as f64)
+    let converted = value as f64;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "i128 contains every rounded binary64 value reachable from an i64"
+    )]
+    let round_trip = converted as i128;
+    let original = value as i128;
+    if round_trip == original {
+        Ok(converted)
+    } else {
+        Err(ExactI64ToF64Error { value })
     }
 }
 

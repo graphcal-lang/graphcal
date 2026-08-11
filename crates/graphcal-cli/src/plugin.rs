@@ -16,6 +16,10 @@ use graphcal_compiler::function_signature::{
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
 use graphcal_eval::eval::format_number;
+use graphcal_eval::host_abi::{
+    ValidatedHostFieldValue, ValidatedHostResult, decode_result, encode_bool, encode_int,
+    validate_quantity,
+};
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_host::PluginModule;
 use thiserror::Error;
@@ -744,10 +748,11 @@ pub enum CallArgError {
 fn parse_dense_array(text: &str, rank: usize) -> Result<HostArray, String> {
     fn flatten(value: &serde_json::Value, rank: usize) -> Result<(Vec<usize>, Vec<f64>), String> {
         if rank == 0 {
-            return value
+            let value = value
                 .as_f64()
-                .map(|value| (Vec::new(), vec![value]))
-                .ok_or_else(|| "array leaves must be JSON numbers".to_string());
+                .ok_or_else(|| "array leaves must be JSON numbers".to_string())?;
+            let finite = validate_quantity(value).map_err(|error| error.to_string())?;
+            return Ok((Vec::new(), vec![finite.get()]));
         }
         let items = value
             .as_array()
@@ -839,20 +844,24 @@ pub fn parse_call_args(
             };
             match &param.kind {
                 ValueKind::Bool => match text.as_str() {
-                    "true" => Ok(HostFnValue::F64(1.0)),
-                    "false" => Ok(HostFnValue::F64(0.0)),
+                    "true" => Ok(HostFnValue::F64(encode_bool(true))),
+                    "false" => Ok(HostFnValue::F64(encode_bool(false))),
                     _ => Err(invalid("expected `true` or `false`")),
                 },
                 ValueKind::Int => {
                     let value: i64 = text.parse().map_err(|_| invalid("expected an integer"))?;
-                    int_to_abi(value)
+                    encode_int(value)
                         .map(HostFnValue::F64)
-                        .ok_or_else(|| invalid("integer is not exactly representable as an f64"))
+                        .map_err(|error| invalid(&error.to_string()))
                 }
-                ValueKind::Quantity(_) => text
-                    .parse::<f64>()
-                    .map(HostFnValue::F64)
-                    .map_err(|_| invalid("expected a number (in SI base units)")),
+                ValueKind::Quantity(_) => {
+                    let value = text
+                        .parse::<f64>()
+                        .map_err(|_| invalid("expected a number (in SI base units)"))?;
+                    validate_quantity(value)
+                        .map(|value| HostFnValue::F64(value.get()))
+                        .map_err(|error| invalid(&error.to_string()))
+                }
                 // Struct parameters never pass signature validation.
                 ValueKind::Struct(_) => Err(invalid("struct parameters are not supported")),
                 ValueKind::Indexed { indexes, .. } => parse_dense_array(text, indexes.len())
@@ -868,98 +877,42 @@ pub fn parse_call_args(
 /// Returns `Err` with a description when the value violates the declared
 /// kind's encoding (a plugin bug worth surfacing, not reinterpreting).
 pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Result<String, String> {
-    let abi_f64 = |value: &HostFnValue| match value {
-        HostFnValue::F64(raw) => Ok(*raw),
-        HostFnValue::Array(_) | HostFnValue::Record(_) => {
-            Err("declared a single-value result but returned a composite value".to_string())
-        }
-    };
-    match signature.result() {
-        ValueKind::Bool => {
-            let raw = abi_f64(value)?;
-            if raw.to_bits() == 1.0_f64.to_bits() {
-                Ok("true".to_string())
-            } else if raw.to_bits() == 0.0_f64.to_bits() {
-                Ok("false".to_string())
-            } else {
-                Err(format!(
-                    "declared Bool result is not encoded as 1.0/0.0: got {raw}"
-                ))
-            }
-        }
-        ValueKind::Int => {
-            let raw = abi_f64(value)?;
-            int_from_abi(raw)
-                .map(|value| value.to_string())
-                .ok_or_else(|| {
-                    format!(
-                        "declared Int result is not an exactly-representable integer: got {raw}"
-                    )
-                })
-        }
-        ValueKind::Quantity(monomial) => {
-            let rendered = format_number(abi_f64(value)?);
-            let dim = render_quantity_result_dimension(monomial);
+    match decode_result(signature.result(), value).map_err(|error| error.to_string())? {
+        ValidatedHostResult::Bool(value) => Ok(value.to_string()),
+        ValidatedHostResult::Int(value) => Ok(value.to_string()),
+        ValidatedHostResult::Quantity { dimension, value } => {
+            let rendered = format_number(value.get());
+            let dim = render_quantity_result_dimension(&dimension);
             Ok(match dim {
                 Some(dim) => format!("{rendered} [{dim}, SI base units]"),
                 None => rendered,
             })
         }
-        ValueKind::Indexed { element, .. } => {
-            let HostFnValue::Array(array) = value else {
-                return Err("declared an array result but returned a non-array value".to_string());
-            };
-            let rendered = render_dense_array(array.shape(), array.values())?;
-            let dim = render_quantity_result_dimension(element);
-            Ok(match dim {
-                Some(dim) => format!("{rendered} [{dim}, SI base units]"),
-                None => rendered,
-            })
-        }
-        ValueKind::Struct(shape) => {
-            use graphcal_compiler::function_signature::StructFieldKind;
-
-            let HostFnValue::Record(slots) = value else {
-                return Err("declared a struct result but returned an f64 ABI slot".to_string());
-            };
-            if slots.len() != shape.fields().len() {
-                return Err(format!(
-                    "declared a struct result with {} field(s) but returned {} slot(s)",
-                    shape.fields().len(),
-                    slots.len()
-                ));
-            }
-            let fields = shape
-                .fields()
+        ValidatedHostResult::Array(array) => {
+            let values = array
+                .values()
                 .iter()
-                .zip(slots)
-                .map(|(field, slot)| {
-                    let rendered = match &field.kind {
-                        StructFieldKind::Bool => {
-                            if slot.to_bits() == 1.0_f64.to_bits() {
-                                "true".to_string()
-                            } else if slot.to_bits() == 0.0_f64.to_bits() {
-                                "false".to_string()
-                            } else {
-                                return Err(format!(
-                                    "field `{}`: declared Bool is not encoded as 1.0/0.0: got {slot}",
-                                    field.name
-                                ));
-                            }
-                        }
-                        StructFieldKind::Int => int_from_abi(*slot)
-                            .map(|value| value.to_string())
-                            .ok_or_else(|| {
-                                format!(
-                                    "field `{}`: declared Int is not an exactly-representable integer: got {slot}",
-                                    field.name
-                                )
-                            })?,
-                        StructFieldKind::Quantity(_) => format_number(*slot),
+                .map(|value| value.get())
+                .collect::<Vec<_>>();
+            let rendered = render_dense_array(array.shape(), &values)?;
+            let dim = render_quantity_result_dimension(array.element());
+            Ok(match dim {
+                Some(dim) => format!("{rendered} [{dim}, SI base units]"),
+                None => rendered,
+            })
+        }
+        ValidatedHostResult::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    let rendered = match field.value() {
+                        ValidatedHostFieldValue::Bool(value) => value.to_string(),
+                        ValidatedHostFieldValue::Int(value) => value.to_string(),
+                        ValidatedHostFieldValue::Quantity(value) => format_number(value.get()),
                     };
-                    Ok(format!("{}: {rendered}", field.name))
+                    format!("{}: {rendered}", field.name())
                 })
-                .collect::<Result<Vec<_>, String>>()?;
+                .collect::<Vec<_>>();
             Ok(format!("{{ {} }} [SI base units]", fields.join(", ")))
         }
     }
@@ -977,27 +930,6 @@ fn render_quantity_result_dimension(
         return None;
     }
     Some(render_dimension(&monomial.fixed))
-}
-
-#[expect(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    reason = "round-trip through i128 proves exactness"
-)]
-fn int_to_abi(value: i64) -> Option<f64> {
-    let raw = value as f64;
-    (raw as i128 == i128::from(value)).then_some(raw)
-}
-
-#[expect(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    reason = "round-trip comparison proves exactness"
-)]
-fn int_from_abi(raw: f64) -> Option<i64> {
-    i64::try_from(raw as i128)
-        .ok()
-        .filter(|value| (*value as f64).to_bits() == raw.to_bits())
 }
 
 #[cfg(test)]
@@ -1259,6 +1191,26 @@ mod tests {
             parse_call_args("step", &step_signature(), &["5".into(), "yes".into()]).unwrap_err(),
             CallArgError::InvalidArgument { .. }
         ));
+        assert!(matches!(
+            parse_call_args(
+                "step",
+                &step_signature(),
+                &["9007199254740993".into(), "true".into()]
+            )
+            .unwrap_err(),
+            CallArgError::InvalidArgument { .. }
+        ));
+        for non_finite in ["NaN", "inf", "-inf"] {
+            assert!(matches!(
+                parse_call_args(
+                    "lerp",
+                    &lerp_signature(),
+                    &[non_finite.into(), "3.0".into(), "0.5".into()]
+                )
+                .unwrap_err(),
+                CallArgError::InvalidArgument { .. }
+            ));
+        }
     }
 
     #[test]
@@ -1280,7 +1232,13 @@ mod tests {
             render_result(&step_signature(), &HostFnValue::F64(42.0)).unwrap(),
             "42"
         );
-        assert!(render_result(&step_signature(), &HostFnValue::F64(42.5)).is_err());
+        assert_eq!(
+            render_result(&step_signature(), &HostFnValue::F64(-0.0)).unwrap(),
+            "0"
+        );
+        for invalid in [42.5, 2.0_f64.powi(63), f64::INFINITY, f64::NAN] {
+            assert!(render_result(&step_signature(), &HostFnValue::F64(invalid)).is_err());
+        }
 
         let bool_result = FunctionSignature::try_new(
             Vec::new(),
@@ -1300,7 +1258,13 @@ mod tests {
             render_result(&bool_result, &HostFnValue::F64(0.0)).unwrap(),
             "false"
         );
-        assert!(render_result(&bool_result, &HostFnValue::F64(0.5)).is_err());
+        assert_eq!(
+            render_result(&bool_result, &HostFnValue::F64(-0.0)).unwrap(),
+            "false"
+        );
+        for invalid in [0.5, f64::INFINITY, f64::NAN] {
+            assert!(render_result(&bool_result, &HostFnValue::F64(invalid)).is_err());
+        }
 
         let velocity = prelude_base_dimension("Length")
             .unwrap()
@@ -1320,5 +1284,8 @@ mod tests {
             render_result(&quantity_result, &HostFnValue::F64(2.5)).unwrap(),
             "2.5 [Length * Time^-1, SI base units]"
         );
+        for invalid in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(render_result(&quantity_result, &HostFnValue::F64(invalid)).is_err());
+        }
     }
 }

@@ -147,6 +147,26 @@ fn write_test_module(dir: &Path) -> std::path::PathBuf {
     path
 }
 
+fn non_finite_result_module_bytes() -> Vec<u8> {
+    let wat = r#"
+    (module
+      (func (export "non_finite") (result f64)
+        (f64.const nan)))
+    "#;
+    let manifest = PluginManifest {
+        abi_version: graphcal_plugin_abi::ABI_VERSION,
+        functions: vec![ManifestFunction {
+            name: "non_finite".to_string(),
+            dim_vars: Vec::new(),
+            index_vars: Vec::new(),
+            params: Vec::new(),
+            result: dimensionless(),
+        }],
+    };
+    let wasm = wat::parse_str(wat).expect("non-finite-result WAT compiles");
+    manifest.embed_into(&wasm).expect("manifest embeds")
+}
+
 fn malicious_name_module_bytes() -> Vec<u8> {
     const NAME: &str = "x;\n}\nnode injected: Int = 1;\n//";
     let wat = r#"
@@ -258,6 +278,36 @@ fn plugin_test_calls_functions_with_typed_arguments() {
         stdout.contains("twice([1.5,2.0,-3.0]) = [3, 4, -6]"),
         "{stdout}"
     );
+}
+
+#[test]
+fn plugin_test_and_evaluator_policy_reject_non_finite_quantities() {
+    let dir = tempfile::tempdir().unwrap();
+    let module = write_test_module(dir.path());
+
+    for argument in ["NaN", "inf"] {
+        let output = graphcal_bin()
+            .args(["plugin", "test"])
+            .arg(&module)
+            .args(["--call", "lerp", argument, "3.0", "0.5"])
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("quantity must be finite"), "{stderr}");
+    }
+
+    let module = dir.path().join("non-finite.wasm");
+    std::fs::write(&module, non_finite_result_module_bytes()).unwrap();
+    let output = graphcal_bin()
+        .args(["plugin", "test"])
+        .arg(&module)
+        .args(["--call", "non_finite"])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("quantity must be finite"), "{stderr}");
 }
 
 #[test]
