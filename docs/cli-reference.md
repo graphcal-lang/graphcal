@@ -56,10 +56,12 @@ graphcal deps lock [OPTIONS]
 | `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 
 `graphcal deps lock` is the only public package-management command in the MVP.
-It reads `[dependencies]` from `graphcal.toml`, accepts only Git dependencies
-with a full commit-hash `rev`, fetches any missing sources, records a
-graph-shaped package-instance lockfile, and writes nothing when the deterministic
-lockfile contents are already up to date.
+It reads `[dependencies]` from `graphcal.toml`, accepts only supported remote
+HTTPS or SSH Git URLs with a full commit-hash `rev`, fetches any missing
+sources, records a graph-shaped package-instance lockfile, and writes nothing
+when the deterministic lockfile contents are already up to date. Local paths,
+`file://`, plain HTTP, unsupported schemes, embedded credentials, and malformed
+or option-shaped remote components fail validation before any fetch starts.
 
 The command also scans the package's `.gcl` sources for
 [WASM plugin imports](language/extern-functions.md#trust-lockfile-pins) and

@@ -673,19 +673,31 @@ Rules:
 - Branches, tags, version ranges, `latest`, registries, archives, publishing,
   and implicit package discovery inside a Git repository are not part of this
   MVP.
-- Public Git repositories are expected to work with ordinary HTTPS or SSH Git
-  URLs. Private repositories require whatever credentials the underlying Git
-  fetch implementation can obtain in the current environment, so support is
+- `git` accepts only parsed remote HTTPS URLs, `ssh://` URLs, and SSH scp-like
+  `user@host:path` URLs. Every source must include a host and non-empty repository
+  path. Local paths, `file://`, plain HTTP, other URL schemes, embedded
+  credentials, query strings, fragments, dotted/ambiguous paths, and
+  option-shaped authority or path components are rejected before fetching.
+- Private repositories require whatever credentials the underlying Git fetch
+  implementation can obtain in the current environment, so support is
   environment-dependent. For example, SSH may work when an SSH key/agent is
   available, while HTTPS may fail unless a compatible credential helper or
-  non-interactive credential provider is configured. Graphcal manifests must not
-  embed credentials in dependency URLs.
+  non-interactive credential provider is configured. The SSH username in an SSH
+  URL is allowed; passwords, tokens, and other secrets must not be embedded in
+  the URL.
 - The dependency table key is the source-visible dependency name used in
   `import` and `include` paths.
 - If `package` is omitted, the fetched package's `[package].name` must match
   the dependency key.
 - If `package` is present, the dependency key is a local alias and `package`
   names the fetched package's real package name.
+
+!!! warning "Migration from local or unsupported Git sources"
+    Manifests and lockfiles that used a filesystem path, `file://`, `http://`,
+    or another previously accepted spelling must switch to a reachable HTTPS or
+    SSH remote and then regenerate `graphcal.lock` with `graphcal deps lock`.
+    Graphcal currently has no local-path dependency form; local development
+    repositories must be served through a supported remote transport.
 
 ```toml
 [dependencies]
