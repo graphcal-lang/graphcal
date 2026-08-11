@@ -782,14 +782,14 @@ pub dag mid {
         &root,
         r"
 import pkg.lib as lib;
-node m: Length = @lib.mid(a: 1.0 m, b: 3.0 m).m;
+node midpoint: Length = @lib.mid(a: 1.0 m, b: 3.0 m).m;
 ",
     )
     .unwrap();
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_or_else(|err| panic!("cross-file extern call failed to compile/eval: {err:?}"));
-    let value = value_for(&result, "m");
+    let value = value_for(&result, "midpoint");
     assert!(
         (value.si_value().unwrap() - 2.0).abs() < 1e-12,
         "expected lerp midpoint 2 m, got {value:?}"
