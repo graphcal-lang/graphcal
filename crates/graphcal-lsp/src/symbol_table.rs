@@ -1004,6 +1004,50 @@ impl SymbolTable {
         &self.owner
     }
 
+    /// Whether a source-defined identity can be referenced outside this file.
+    /// Attached members inherit their nominal declaration's visibility, while
+    /// symbols inside a private enclosing DAG remain file-local even when the
+    /// port itself is bindable.
+    #[must_use]
+    pub fn is_externally_visible(&self, key: &SymbolKey) -> bool {
+        if matches!(
+            key,
+            SymbolKey::Local(_)
+                | SymbolKey::ExternFunction(_)
+                | SymbolKey::BuiltinFunction(_)
+                | SymbolKey::BuiltinConstant(_)
+                | SymbolKey::TimeScale(_)
+        ) {
+            return false;
+        }
+        let Some(definition) = self.definitions.get(key) else {
+            return true;
+        };
+        if definition.visibility == Some(BindableVisibility::Private) {
+            return false;
+        }
+
+        let mut owner = key.owner().cloned();
+        while let Some(current) = owner {
+            if current == self.owner {
+                return true;
+            }
+            let Some(parent) = current.parent() else {
+                return true;
+            };
+            let dag_key = SymbolKey::Declaration(ResolvedDeclName::from_def(
+                parent.clone(),
+                DeclName::expect_valid(current.name()),
+            ));
+            match self.definitions.get(&dag_key) {
+                Some(dag) if dag.visibility == Some(BindableVisibility::Private) => return false,
+                Some(_) => owner = Some(parent),
+                None => return true,
+            }
+        }
+        true
+    }
+
     /// Find the reference at a given byte offset, if any.
     pub fn find_reference_at(&self, offset: usize) -> Option<&ReferenceInfo> {
         // Binary search for a reference whose span contains the offset.
@@ -1166,6 +1210,12 @@ impl SymbolTable {
                 visibility: Some(visibility),
             },
         );
+    }
+
+    /// Every indexed reference occurrence in source order.
+    #[must_use]
+    pub fn references(&self) -> &[ReferenceInfo] {
+        &self.references
     }
 
     /// Resolve a reference target against definitions declared in this table.
@@ -1717,7 +1767,7 @@ fn collect_type_decl(
                     decl_span: param.name.span,
                     type_description: Some(generic_constraint_name(param.constraint).to_string()),
                     detail: Some(format!("generic parameter of {}", t.name.value)),
-                    visibility: None,
+                    visibility: Some(t.visibility),
                 },
             );
             (param.name.value.clone(), key)
@@ -1769,7 +1819,7 @@ fn collect_type_decl(
                             decl_span: field.name.span,
                             type_description: None,
                             detail: Some(format!("field of {constructor_name}")),
-                            visibility: None,
+                            visibility: Some(t.visibility),
                         },
                     );
                     collect_type_expr_refs_in_scope(
@@ -1829,7 +1879,7 @@ fn collect_index_decl(
                         decl_span: variant.span,
                         type_description: None,
                         detail: Some(format!("label/value variant of index {name}")),
-                        visibility: None,
+                        visibility: Some(visibility),
                     },
                 );
             }

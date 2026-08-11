@@ -61,8 +61,14 @@ pub fn resolve_symbol_at(analysis: &AnalysisResult, offset: usize) -> Option<Res
     if let Some(reference) = analysis.symbol_table.find_reference_at(offset) {
         let span = reference.span;
         let key = analysis
-            .symbol_table
-            .resolve_local_target(&reference.target)
+            .project_symbols
+            .complete()
+            .and_then(|project| project.resolve_root_reference(reference))
+            .or_else(|| {
+                analysis
+                    .symbol_table
+                    .resolve_local_target(&reference.target)
+            })
             .or_else(|| match &reference.target {
                 ReferenceTarget::Resolved(target) => Some(target.clone()),
                 ReferenceTarget::Unresolved(unresolved) => {
