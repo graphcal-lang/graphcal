@@ -13,8 +13,9 @@
 //!   when failure messages need reading, and every manifest function exported
 //!   with the wasm parameter/result types required by its signature;
 //! - execute plugin functions under mandatory resource bounds
-//!   ([`PluginLimits`]: per-call fuel plus a linear-memory cap), mapping
-//!   failure messages, traps, and fuel exhaustion to [`PluginCallError`];
+//!   ([`PluginLimits`]: per-call fuel plus per-instance linear-memory and
+//!   table-element caps), mapping failure messages, traps, and fuel exhaustion
+//!   to [`PluginCallError`];
 //! - cache compiled modules by content hash ([`PluginHost`]), so the
 //!   language server's keystroke-frequency re-evaluation never recompiles
 //!   an unchanged plugin.

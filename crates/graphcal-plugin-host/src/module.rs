@@ -271,7 +271,8 @@ impl PluginModule {
 
     fn instantiate(&self) -> Result<LiveInstance, PluginCallError> {
         let limiter = wasmi::StoreLimitsBuilder::new()
-            .memory_size(self.limits.max_memory_bytes)
+            .memory_size(self.limits.max_memory_bytes())
+            .table_elements(self.limits.max_table_elements())
             .memories(1)
             .tables(1)
             .instances(1)
@@ -285,7 +286,7 @@ impl PluginModule {
         );
         store.limiter(|state| &mut state.limits);
         // The start function (if any) is plugin code: meter it like a call.
-        set_fuel(&mut store, self.limits.fuel_per_call)?;
+        set_fuel(&mut store, self.limits.fuel_per_call())?;
 
         let mut linker = wasmi::Linker::new(&self.engine);
         linker
@@ -296,7 +297,7 @@ impl PluginModule {
 
         let instance = linker
             .instantiate_and_start(&mut store, &self.module)
-            .map_err(|err| error_from_wasm(&mut store, &err, self.limits.fuel_per_call))?;
+            .map_err(|err| error_from_wasm(&mut store, &err, self.limits.fuel_per_call()))?;
         Ok(LiveInstance { store, instance })
     }
 
@@ -326,7 +327,7 @@ impl PluginModule {
 
         // One fuel budget covers the whole logical call: the allocator
         // round-trips below and the function body itself.
-        set_fuel(&mut live.store, self.limits.fuel_per_call)?;
+        set_fuel(&mut live.store, self.limits.fuel_per_call())?;
         live.store.data_mut().fail_message = None;
 
         let mut buffers = if signature_uses_buffers(signature) {
@@ -344,7 +345,7 @@ impl PluginModule {
             vec![wasmi::Val::F64(0.0.into())]
         };
         func.call(&mut live.store, &params, &mut results)
-            .map_err(|err| error_from_wasm(&mut live.store, &err, self.limits.fuel_per_call))?;
+            .map_err(|err| error_from_wasm(&mut live.store, &err, self.limits.fuel_per_call()))?;
 
         let value = match (out_buffer, buffers.as_ref()) {
             (Some(out), Some(buffers)) => {
@@ -385,7 +386,7 @@ impl PluginModule {
         // instance does not leak across calls. A failing free damages the
         // instance like any other trap; the caller discards it.
         if let Some(buffers) = buffers {
-            buffers.free_all(live, self.limits.fuel_per_call)?;
+            buffers.free_all(live, self.limits.fuel_per_call())?;
         }
         Ok(value)
     }
@@ -447,7 +448,7 @@ impl PluginModule {
                     }
                     let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
                     let pointer =
-                        buffers.write_buffer(live, self.limits.fuel_per_call, array.values())?;
+                        buffers.write_buffer(live, self.limits.fuel_per_call(), array.values())?;
                     params.push(wasmi::Val::I32(pointer.as_abi_i32()));
                     for extent in array.shape() {
                         let extent = u32::try_from(*extent)
@@ -520,7 +521,7 @@ impl PluginModule {
             ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => return Ok(None),
         };
         let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-        let allocation = buffers.alloc(live, self.limits.fuel_per_call, len)?;
+        let allocation = buffers.alloc(live, self.limits.fuel_per_call(), len)?;
         Ok(Some(OutBuffer { allocation, kind }))
     }
 }
