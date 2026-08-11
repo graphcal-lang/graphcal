@@ -276,12 +276,9 @@ fn eval_hir_nullary_constructor(
 ) -> Result<RuntimeValue, GraphcalError> {
     let target = constructor_target(ctx, constructor)
         .ok_or_else(|| ctx.eval_error(format!("unknown constructor `{constructor}`"), span))?;
-    let dag = ctx
-        .current_dag
-        .ok_or_else(|| ctx.internal_error("constructor evaluation has no semantic DAG", span))?;
     let generic_args = graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
         ctx.tir,
-        dag,
+        ctx.current_dag,
         constructor,
         &[],
         ctx.src,
@@ -1613,8 +1610,10 @@ fn constructor_target<'a>(
     constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
 ) -> Option<&'a ResolvedConstructorTarget> {
     ctx.current_dag
-        .map(|dag| &dag.semantic().constructor_refs)
-        .and_then(|refs| refs.constructor_defs.get(constructor))
+        .semantic()
+        .constructor_refs
+        .constructor_defs
+        .get(constructor)
 }
 
 fn eval_hir_constructor_call(
@@ -1635,13 +1634,10 @@ fn eval_hir_constructor_call(
     })?;
     let constructor_name = target.variant.name();
     let owning_type = StructTypeRef::from_resolved(target.owning_type.clone());
-    let dag = ctx.current_dag.ok_or_else(|| {
-        ctx.internal_error("constructor evaluation has no semantic DAG", callee.span)
-    })?;
     let concrete_generic_args =
         graphcal_compiler::tir::dim_check::concrete_constructor_generic_args(
             ctx.tir,
-            dag,
+            ctx.current_dag,
             &callee.value,
             applied_generic_args,
             ctx.src,
@@ -1904,15 +1900,14 @@ fn eval_hir_for_comp(
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
     if let Some(owner) = &ctx.current_decl {
-        let dag = ctx.current_dag.ok_or_else(|| {
-            ctx.internal_error("materialized expression has no current checked DAG", span)
-        })?;
-        dag.materialized_shape(owner, span).ok_or_else(|| {
-            ctx.internal_error(
-                format!("materialized expression in `{owner}` has no checked shape fact"),
-                span,
-            )
-        })?;
+        ctx.current_dag
+            .materialized_shape(owner, span)
+            .ok_or_else(|| {
+                ctx.internal_error(
+                    format!("materialized expression in `{owner}` has no checked shape fact"),
+                    span,
+                )
+            })?;
     }
     eval_hir_for_comp_bindings(bindings, body, values, local_values, ctx)
 }
@@ -2421,7 +2416,7 @@ fn eval_hir_dag_call(
         registry: ctx.registry,
         src: dag_facts.source(),
         tir: ctx.tir,
-        current_dag: Some(dag_tir),
+        current_dag: dag_tir,
         current_decl: None,
         root_values: ctx.root_values,
         checked_execution_facts: ctx.checked_execution_facts,

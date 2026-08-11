@@ -273,6 +273,8 @@ fn pure_module_import_can_call_an_instance_with_dynamic_units() {
 
 #[test]
 fn repeated_dag_calls_keep_dynamic_unit_scales_instance_scoped() {
+    // Regression: expression evaluation must retain each concrete DAG scope;
+    // resolving these scales against the root DAG would either fail or conflate calls.
     let (_directory, root) = write_pipeline_project(
         &[
             (
@@ -3889,7 +3891,7 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         registry: tir.registry(),
         src,
         tir: &tir,
-        current_dag: Some(tir.root()),
+        current_dag: tir.root(),
         current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,
@@ -3955,7 +3957,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         registry: tir.registry(),
         src,
         tir: &tir,
-        current_dag: Some(tir.root()),
+        current_dag: tir.root(),
         current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,
@@ -4838,7 +4840,7 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         registry: tir.registry(),
         src,
         tir: &tir,
-        current_dag: Some(tir.root()),
+        current_dag: tir.root(),
         current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,
@@ -4907,7 +4909,7 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         registry: tir.registry(),
         src,
         tir: &tir,
-        current_dag: Some(tir.root()),
+        current_dag: tir.root(),
         current_decl: Some(expr_key.clone()),
         root_values: Some(&values),
         checked_execution_facts: None,

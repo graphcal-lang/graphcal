@@ -23,7 +23,7 @@ use graphcal_compiler::registry::builtins::BuiltinFunctions;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, IndexTypeRef, StructTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::types::SemanticRegistry;
-use graphcal_compiler::tir::typed::StructFieldConstraintKey;
+use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::ResolvedDomainConstraint;
@@ -54,11 +54,12 @@ pub struct EvalContext<'a> {
     ///
     /// Used by [`eval_inline_dag_call`] to reach the file's flat per-DAG body
     /// map after semantic call metadata has selected a canonical DAG id.
-    pub tir: &'a graphcal_compiler::tir::typed::TIR,
-    /// DAG whose expression is currently being evaluated. When present, inline
-    /// DAG calls can use HIR-derived canonical `DagId` / `ResolvedName<Decl>`
-    /// identities instead of resolving source paths again at eval time.
-    pub current_dag: Option<&'a graphcal_compiler::tir::typed::DagTIR>,
+    pub tir: &'a TIR,
+    /// DAG whose expression is currently being evaluated.
+    ///
+    /// Every evaluation has an explicit semantic scope. Root expressions use
+    /// [`TIR::root`], while inline calls use their concrete [`DagTIR`].
+    pub current_dag: &'a DagTIR,
     /// Canonical declaration whose expression is currently being evaluated.
     /// Together with the expression span, this selects checked materialized-shape facts.
     pub current_decl: Option<graphcal_compiler::syntax::decl_name::ResolvedDeclName>,
@@ -158,7 +159,7 @@ impl<'a> EvalContext<'a> {
     #[must_use]
     pub fn for_checked_decl<'b>(
         &'b self,
-        dag: &'b graphcal_compiler::tir::typed::DagTIR,
+        dag: &'b DagTIR,
         src: &'b NamedSource<Arc<String>>,
         declaration: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
     ) -> EvalContext<'b>
@@ -172,7 +173,7 @@ impl<'a> EvalContext<'a> {
             registry: self.registry,
             src,
             tir: self.tir,
-            current_dag: Some(dag),
+            current_dag: dag,
             current_decl: Some(declaration.clone()),
             root_values: self.root_values,
             checked_execution_facts: self.checked_execution_facts,
@@ -242,11 +243,11 @@ fn imported_binding_value<'a>(
     ctx: &'a EvalContext<'_>,
 ) -> Option<&'a RuntimeValue> {
     let key = RuntimeDeclKey::resolved(target.clone());
-    match ctx.current_dag {
-        Some(caller_dag) if target.owner() == caller_dag.dag_id() => caller_values.get(&key),
-        _ if target.owner() == ctx.tir.root_dag_id() => {
-            ctx.root_values.and_then(|values| values.get(&key))
-        }
-        _ => None,
+    if target.owner() == ctx.current_dag.dag_id() {
+        caller_values.get(&key)
+    } else if target.owner() == ctx.tir.root_dag_id() {
+        ctx.root_values.and_then(|values| values.get(&key))
+    } else {
+        None
     }
 }

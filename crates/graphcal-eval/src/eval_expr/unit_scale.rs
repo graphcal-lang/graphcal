@@ -80,7 +80,6 @@ pub fn resolve_unit_scale(
             } => {
                 let scale_hir = ctx
                     .current_dag
-                    .unwrap_or_else(|| ctx.tir.root())
                     .semantic()
                     .dynamic_unit_scales
                     .get(item.name.value.resolved())
