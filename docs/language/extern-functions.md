@@ -69,8 +69,11 @@ fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 
 At each call site, `D` binds to the actual argument dimension, every
 other `D` parameter must match it, and the result dimension is computed
-from the binding. Result types may combine several variables with
-rational powers — full cross-variable dimension algebra:
+from the binding. A mismatch diagnostic names the earlier parameter that
+established the binding; Graphcal does not substitute placeholder parameter
+names if validated signature metadata is inconsistent. Result types may
+combine several variables with rational powers — full cross-variable dimension
+algebra:
 
 ```
 fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);

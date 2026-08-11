@@ -199,8 +199,48 @@ fn first_binding_param<'a>(sig: &'a FunctionSignature, var: &DimVarName) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dimension::{BaseDimId, PreludeBaseDimension};
     use crate::registry::types::RegistryBuilder;
     use crate::syntax::function_name::FnParamName;
+
+    #[test]
+    fn missing_dimension_binding_parameter_is_an_internal_error() {
+        let signature = FunctionSignature::fixed_to_fixed(
+            FnParamName::expect_valid("declared"),
+            Dimension::dimensionless(),
+            Dimension::dimensionless(),
+        );
+        let registry = RegistryBuilder::new().try_build().unwrap().into_semantic();
+        let source = NamedSource::new("test.gcl", Arc::new("f(1.0, 2.0)".to_string()));
+        let argument_span = Span::new(7, 3);
+        let variable = DimVarName::expect_valid("D");
+        let mut bindings = HashMap::from([(
+            variable.clone(),
+            Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Length)),
+        )]);
+        let argument_dimension = Dimension::base(BaseDimId::Prelude(PreludeBaseDimension::Time));
+
+        let error = check_quantity_param(
+            "f",
+            &signature,
+            &FnParamName::expect_valid("value"),
+            &DimMonomial::var(variable),
+            &argument_dimension,
+            &mut bindings,
+            &registry,
+            &source,
+            argument_span,
+        )
+        .unwrap_err();
+
+        match error {
+            GraphcalError::InternalError { message, .. } => assert!(
+                message.contains("lost the parameter that binds dimension variable `D`"),
+                "{message}"
+            ),
+            other => panic!("expected internal error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn zero_argument_arity_error_uses_the_explicit_call_span() {
