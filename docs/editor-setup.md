@@ -48,9 +48,15 @@ reverting an imported file invalidates and reanalyzes every transitive open
 importer, so diagnostics, navigation, completion, and evaluated inlay hints stay
 project-coherent without touching the importer. A new edit cancels superseded
 loading, compilation, and evaluation work; only a result whose full dependency
-snapshot is still current can publish. If an analysis exceeds the server deadline, the
-LSP keeps the last completed result available rather than replacing source
-diagnostics with a server-timeout error. If analysis must fall back to an empty
+snapshot is still current can publish. During a temporarily unparsable edit,
+features that return source coordinates (hover, navigation, references, document
+symbols, and inlay hints) return no stale result rather than interpreting the
+new cursor against old spans. Inlay hints are refreshed immediately. Completion
+and signature help can still reuse coordinate-free semantic candidates: their
+context and nested-DAG scope are tokenized from the current buffer. If an
+analysis exceeds the server deadline, the LSP keeps the last completed result
+available rather than replacing source diagnostics with a server-timeout error.
+If analysis must fall back to an empty
 symbol table or module resolver, the server emits a warning through the LSP
 client log (`window/logMessage`) so unavailable navigation or completion can be
 diagnosed instead of appearing indistinguishable from an empty result.
