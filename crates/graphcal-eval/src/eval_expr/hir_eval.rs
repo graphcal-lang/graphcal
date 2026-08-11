@@ -1225,6 +1225,10 @@ fn eval_hir_extern_fn(
 ) -> Result<RuntimeValue, GraphcalError> {
     use graphcal_compiler::function_signature::ValueKind;
 
+    use crate::host_abi::{
+        ValidatedHostFieldValue, ValidatedHostResult, decode_result, encode_bool, encode_int,
+        validate_quantity,
+    };
     use crate::host_fns::{HostArray, HostFnValue};
 
     let Some(registry) = ctx.host_fns else {
@@ -1269,14 +1273,34 @@ fn eval_hir_extern_fn(
     for (param, arg) in signature.params().iter().zip(args) {
         let value = eval_hir_expr(arg, values, local_values, ctx)?;
         let converted = match (&param.kind, value) {
-            (ValueKind::Quantity(_), value) => value
-                .expect_quantity("extern function argument")
-                .map(HostFnValue::F64)
-                .map_err(|e| ctx.eval_error(e.to_string(), arg.span))?,
-            (ValueKind::Int, RuntimeValue::Int(i)) => {
-                HostFnValue::F64(exact_numeric_extern_arg(i, ext, arg.span, ctx)?)
+            (ValueKind::Quantity(_), value) => {
+                let value = value
+                    .expect_quantity("extern function argument")
+                    .map_err(|error| ctx.eval_error(error.to_string(), arg.span))?;
+                let value = validate_quantity(value).map_err(|error| {
+                    ctx.eval_error(
+                        format!(
+                            "extern function `{ext}` received an invalid quantity for parameter `{}`: {error}",
+                            param.name
+                        ),
+                        arg.span,
+                    )
+                })?;
+                HostFnValue::F64(value.get())
             }
-            (ValueKind::Bool, RuntimeValue::Bool(b)) => HostFnValue::F64(if b { 1.0 } else { 0.0 }),
+            (ValueKind::Int, RuntimeValue::Int(value)) => {
+                let value = encode_int(value).map_err(|error| {
+                    ctx.eval_error(
+                        format!(
+                            "extern function `{ext}` received an invalid Int for parameter `{}`: {error}",
+                            param.name
+                        ),
+                        arg.span,
+                    )
+                })?;
+                HostFnValue::F64(value)
+            }
+            (ValueKind::Bool, RuntimeValue::Bool(value)) => HostFnValue::F64(encode_bool(value)),
             (ValueKind::Indexed { indexes, .. }, value) => {
                 let flattened = flatten_extern_array(&value, ctx, arg.span)?;
                 if flattened.axes.len() != indexes.len() {
@@ -1309,7 +1333,24 @@ fn eval_hir_extern_fn(
                     }
                 }
                 let shape = flattened.axes.iter().map(|axis| axis.keys.len()).collect();
-                let array = HostArray::try_new(shape, flattened.values).map_err(|error| {
+                let encoded_values = flattened
+                    .values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        let value = validate_quantity(value).map_err(|error| {
+                            ctx.eval_error(
+                                format!(
+                                    "extern function `{ext}` parameter `{}` has an invalid quantity at flat array index {index}: {error}",
+                                    param.name
+                                ),
+                                arg.span,
+                            )
+                        })?;
+                        Ok::<_, GraphcalError>(value.get())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let array = HostArray::try_new(shape, encoded_values).map_err(|error| {
                     ctx.internal_error(
                         format!("failed to flatten extern array argument: {error}"),
                         arg.span,
@@ -1340,65 +1381,20 @@ fn eval_hir_extern_fn(
         )
     })?;
 
-    let abi_f64_result = |result: &HostFnValue| -> Result<f64, GraphcalError> {
-        match result {
-            HostFnValue::F64(value) => Ok(*value),
-            HostFnValue::Array(_) | HostFnValue::Record(_) => Err(ctx.eval_error(
-                format!(
-                    "extern function `{ext}` declared a single-value result but returned a composite value"
-                ),
-                expr.span,
-            )),
-        }
-    };
+    let decoded = decode_result(signature.result(), &result).map_err(|error| {
+        ctx.eval_error(
+            format!("extern function `{ext}` returned an invalid ABI result: {error}"),
+            expr.span,
+        )
+    })?;
 
-    match signature.result() {
-        ValueKind::Quantity(_) => {
-            let display = ext.to_string();
-            Ok(RuntimeValue::Quantity(super::arithmetic::check_finite(
-                abi_f64_result(&result)?,
-                &display,
-                ctx,
-                expr.span,
-            )?))
-        }
-        ValueKind::Int => super::conversions::exact_f64_to_i64(abi_f64_result(&result)?)
-            .map(RuntimeValue::Int)
-            .map_err(|error| {
-                ctx.eval_error(
-                    format!("extern function `{ext}` returned an invalid Int value that {error}"),
-                    expr.span,
-                )
-            }),
-        ValueKind::Bool => {
-            let result = abi_f64_result(&result)?;
-            #[expect(
-                clippy::float_cmp,
-                reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"
-            )]
-            if result == 0.0 {
-                Ok(RuntimeValue::Bool(false))
-            } else if result == 1.0 {
-                Ok(RuntimeValue::Bool(true))
-            } else {
-                Err(ctx.eval_error(
-                    format!(
-                        "extern function `{ext}` declared a Bool result but returned {result} (expected 0.0 or 1.0)"
-                    ),
-                    expr.span,
-                ))
-            }
-        }
-        ValueKind::Indexed { indexes, .. } => {
-            let HostFnValue::Array(array) = result else {
-                return Err(ctx.eval_error(
-                    format!(
-                        "extern function `{ext}` declared an array result but returned a non-array value"
-                    ),
-                    expr.span,
-                ));
-            };
-            let axes = indexes
+    match decoded {
+        ValidatedHostResult::Quantity { value, .. } => Ok(RuntimeValue::Quantity(value.get())),
+        ValidatedHostResult::Int(value) => Ok(RuntimeValue::Int(value)),
+        ValidatedHostResult::Bool(value) => Ok(RuntimeValue::Bool(value)),
+        ValidatedHostResult::Array(array) => {
+            let axes = array
+                .indexes()
                 .iter()
                 .map(|index| {
                     bound_indexes.get(index).cloned().ok_or_else(|| {
@@ -1421,26 +1417,16 @@ fn eval_hir_extern_fn(
                     expr.span,
                 ));
             }
-            let display = ext.to_string();
             let values = array
                 .values()
                 .iter()
-                .map(|element| super::arithmetic::check_finite(*element, &display, ctx, expr.span))
-                .collect::<Result<Vec<_>, _>>()?;
+                .map(|value| value.get())
+                .collect::<Vec<_>>();
             rebuild_extern_array(&axes, &values, ctx, expr.span)
         }
-        ValueKind::Struct(shape) => {
-            use graphcal_compiler::function_signature::StructFieldKind;
+        ValidatedHostResult::Struct(fields) => {
             use graphcal_compiler::registry::declared_type::StructTypeRef;
 
-            let HostFnValue::Record(buffer) = result else {
-                return Err(ctx.eval_error(
-                    format!(
-                        "extern function `{ext}` declared a struct result but returned an f64 ABI slot"
-                    ),
-                    expr.span,
-                ));
-            };
             let Some(result_struct) = &function.result_struct else {
                 return Err(ctx.internal_error(
                     format!(
@@ -1449,60 +1435,19 @@ fn eval_hir_extern_fn(
                     expr.span,
                 ));
             };
-            if buffer.len() != shape.fields().len() {
-                return Err(ctx.eval_error(
-                    format!(
-                        "extern function `{ext}` returned {} field slot(s), expected {}",
-                        buffer.len(),
-                        shape.fields().len()
-                    ),
-                    expr.span,
-                ));
-            }
-            let display = ext.to_string();
-            let fields = shape
-                .fields()
+            let fields = fields
                 .iter()
-                .zip(buffer)
-                .map(|(field, slot)| {
-                    let value = match &field.kind {
-                        StructFieldKind::Quantity(_) => RuntimeValue::Quantity(
-                            super::arithmetic::check_finite(slot, &display, ctx, expr.span)?,
-                        ),
-                        StructFieldKind::Int => super::conversions::exact_f64_to_i64(slot)
-                            .map(RuntimeValue::Int)
-                            .map_err(|error| {
-                                ctx.eval_error(
-                                    format!(
-                                        "extern function `{ext}` returned an invalid Int value for field `{}` that {error}",
-                                        field.name
-                                    ),
-                                    expr.span,
-                                )
-                            })?,
-                        StructFieldKind::Bool => {
-                            #[expect(
-                                clippy::float_cmp,
-                                reason = "the Bool host ABI is exactly 0.0/1.0; anything else is a plugin bug"
-                            )]
-                            if slot == 0.0 {
-                                RuntimeValue::Bool(false)
-                            } else if slot == 1.0 {
-                                RuntimeValue::Bool(true)
-                            } else {
-                                return Err(ctx.eval_error(
-                                    format!(
-                                        "extern function `{ext}` returned {slot} for Bool field `{}` (expected 0.0 or 1.0)",
-                                        field.name
-                                    ),
-                                    expr.span,
-                                ));
-                            }
+                .map(|field| {
+                    let value = match field.value() {
+                        ValidatedHostFieldValue::Bool(value) => RuntimeValue::Bool(*value),
+                        ValidatedHostFieldValue::Int(value) => RuntimeValue::Int(*value),
+                        ValidatedHostFieldValue::Quantity(value) => {
+                            RuntimeValue::Quantity(value.get())
                         }
                     };
-                    Ok((field.name.clone(), value))
+                    (field.name().clone(), value)
                 })
-                .collect::<Result<indexmap::IndexMap<_, _>, GraphcalError>>()?;
+                .collect::<indexmap::IndexMap<_, _>>();
             Ok(RuntimeValue::Struct {
                 type_name: StructTypeRef::from_resolved(result_struct.resolved.clone()),
                 generic_args: Vec::new(),
@@ -1510,24 +1455,6 @@ fn eval_hir_extern_fn(
             })
         }
     }
-}
-
-/// Convert an Int argument to the single-value f64 host ABI, rejecting magnitudes that
-/// are not exactly representable in `f64`.
-fn exact_numeric_extern_arg(
-    value: i64,
-    ext: &hir::ExternFnRef,
-    span: Span,
-    ctx: &EvalContext<'_>,
-) -> Result<f64, GraphcalError> {
-    super::numeric::exact_i64_to_f64(value).map_err(|_| {
-        ctx.eval_error(
-            format!(
-                "extern function `{ext}` integer argument {value} is too large for exact conversion"
-            ),
-            span,
-        )
-    })
 }
 
 fn eval_hir_builtin_fn(
