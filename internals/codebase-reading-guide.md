@@ -389,7 +389,10 @@ Dimension = BTreeMap<BaseDimId, Rational>
 
 Dimension inference is split by expression families under
 `tir/dim_check/infer/` and operates on HIR expressions, consulting the semantic
-body for canonical index/constructor/inline-DAG ownership.
+body for canonical index/constructor/inline-DAG ownership. Function-signature
+checking treats a missing parameter for an already-bound dimension variable as
+an internal invariant failure; mismatch help never fabricates a parameter
+name.
 
 ### 1.7 Execution and Runtime Evaluation
 
