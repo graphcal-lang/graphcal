@@ -2405,6 +2405,41 @@ fn prepared_bindings_reject_computations_and_cross_plan_positions() {
 }
 
 #[test]
+fn external_map_bindings_reject_entries_deeper_than_the_declared_schema() {
+    let project = crate::loader::LoadedProject::from_source(
+        "pub index Axis = { X }; pub index Extra = { Only }; param samples: Int[Axis];",
+        "model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let input = miette::NamedSource::new(
+        "input.json",
+        std::sync::Arc::new("{\n  \"samples\": {}\n}".to_string()),
+    );
+    let mut bindings = prepared.binding_builder();
+
+    let error = bindings
+        .bind_external_expression(
+            &DeclName::expect_valid("samples"),
+            &parse_expr("{ (Axis.X, Extra.Only): 1 }"),
+            &input,
+            (4usize, 9usize).into(),
+        )
+        .unwrap_err();
+
+    match error {
+        CompileError::ExternalBinding { name, reason, .. } => {
+            assert_eq!(name.as_str(), "samples");
+            assert!(
+                reason.contains("map entry has more keys than the declared value has indexed axes"),
+                "unexpected reason: {reason}"
+            );
+        }
+        other => panic!("expected external binding diagnostic, got {other:?}"),
+    }
+}
+
+#[test]
 fn external_binding_errors_retain_boundary_source_and_parameter() {
     let project =
         crate::loader::LoadedProject::from_source("param count: Int;", "model.gcl").unwrap();
