@@ -221,7 +221,10 @@ a `DeclKind<Raw>`, and a source span. Reference positions that may be qualified
 are parsed as `IdentPath`/`NamePath`, not as namespace-specific leaf names.
 Match arms start as `MatchPattern::Path`; semantic categorization into
 constructor patterns versus index-label patterns happens only when a resolver
-has enough information to prove the kind.
+has enough information to prove the kind. Quoted datetime arguments remain
+string syntax until `datetime_literal.rs` classifies them; civil coordinates
+must carry an explicit time, so the semantic boundary never synthesizes
+midnight.
 
 ### 1.3 Desugaring
 

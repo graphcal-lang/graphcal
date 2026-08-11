@@ -679,6 +679,24 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn date_only_civil_datetime_literals_require_an_explicit_time() {
+        for source in [
+            "node bad: Datetime<TT> = epoch<TT>(\"2024-11-05\");",
+            "node bad: Datetime = datetime(\"2024-11-05\", \"UTC\");",
+        ] {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            assert!(diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    &diagnostic.code,
+                    Some(NumberOrString::String(code)) if code == "graphcal::D028"
+                ) && diagnostic
+                    .message
+                    .contains("explicit local time is required")
+            }));
+        }
+    }
+
+    #[test]
     fn dst_gap_and_fold_have_distinct_check_diagnostics() {
         let cases = [
             (

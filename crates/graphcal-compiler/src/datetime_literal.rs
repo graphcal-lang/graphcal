@@ -84,6 +84,8 @@ pub enum ParseCivilDateTimeLiteralError {
     Invalid(#[from] jiff::Error),
     #[error("an offset is not allowed in a local civil datetime literal")]
     Offset,
+    #[error("an explicit local time is required; write `T00:00:00` for midnight")]
+    MissingTime,
     #[error("a timezone annotation is not allowed in a local civil datetime literal")]
     TimeZoneAnnotation,
 }
@@ -178,9 +180,10 @@ impl CivilDateTimeLiteral {
         if pieces.time_zone_annotation().is_some() {
             return Err(ParseCivilDateTimeLiteralError::TimeZoneAnnotation);
         }
-        Ok(Self(pieces.date().to_datetime(
-            pieces.time().unwrap_or_else(jiff::civil::Time::midnight),
-        )))
+        let time = pieces
+            .time()
+            .ok_or(ParseCivilDateTimeLiteralError::MissingTime)?;
+        Ok(Self(pieces.date().to_datetime(time)))
     }
 
     /// The parsed Gregorian civil coordinate represented by this literal.
@@ -360,6 +363,15 @@ mod tests {
             assert!(CivilDateTimeLiteral::parse(&source).is_err());
         }
         assert!(CivilDateTimeLiteral::parse("2024-11-05T12:00:00[Asia/Tokyo]").is_err());
+    }
+
+    #[test]
+    fn civil_literal_requires_an_explicit_time() {
+        assert!(matches!(
+            CivilDateTimeLiteral::parse("2024-11-05"),
+            Err(ParseCivilDateTimeLiteralError::MissingTime)
+        ));
+        assert!(CivilDateTimeLiteral::parse("2024-11-05T00:00:00").is_ok());
     }
 
     #[test]
