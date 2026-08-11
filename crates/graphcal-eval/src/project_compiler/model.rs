@@ -101,6 +101,7 @@ pub(super) struct HirFile {
 
 /// Checked compile-time artifact made available to downstream modules.
 pub(super) struct ModuleArtifact {
+    pub(super) checked_execution_facts: crate::execution_facts::CheckedExecutionFacts,
     pub(super) const_values: HashMap<DeclName, RuntimeValue>,
     pub(super) declared_types: HashMap<ScopedName, DeclaredType>,
     pub(super) declared_types_by_dag:
@@ -116,7 +117,7 @@ pub(super) struct ModuleArtifact {
 /// Result of checking one file in project context.
 pub struct CompiledFile {
     pub(crate) tir: graphcal_compiler::tir::typed::TIR,
-    pub(crate) checked_execution_facts: crate::exec_plan::CheckedExecutionFacts,
+    pub(crate) checked_execution_facts: crate::execution_facts::CheckedExecutionFacts,
     pub(crate) entry_interface: super::CheckedEntryInterface,
     pub(crate) declared_types: HashMap<ScopedName, DeclaredType>,
     pub(crate) imported_values: HashMap<ScopedName, (RuntimeValue, DeclaredType)>,

@@ -9,7 +9,6 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
-use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 use graphcal_compiler::tir::typed::{DagTIR, ResolvedConstructorTarget};
@@ -17,6 +16,7 @@ use indexmap::IndexMap;
 use miette::NamedSource;
 
 use crate::decl_key::RuntimeDeclKey;
+use crate::execution_facts::CheckedDagExecutionFacts;
 
 use super::builtin_call::{
     DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, EvalBuiltinRule,
@@ -26,7 +26,6 @@ use super::{
     EvalContext, RuntimeValueMap, checked_finite_quantity, checked_unit_scaled_value,
     constructor_fields_for_runtime_struct, find_struct_field_constraint, imported_binding_value,
     index_ref_matches_resolved, resolve_unit_scale, runtime_struct_type_def,
-    topo_order_for_dag_body,
 };
 
 pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
@@ -2332,9 +2331,20 @@ fn eval_hir_match(
     }
 }
 
-fn hir_expr_for_dag_body_name<'a>(dag_tir: &'a DagTIR, name: &ScopedName) -> Option<&'a hir::Expr> {
-    let key = dag_tir.resolved_decl_key_for_local(name);
-    dag_tir.value_expr(&key)
+fn check_called_dag_domain_constraint(
+    key: &RuntimeDeclKey,
+    value: &RuntimeValue,
+    facts: &CheckedDagExecutionFacts,
+    expr: &hir::Expr,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
+    facts
+        .domain_constraints
+        .get(key)
+        .map_or(Ok(()), |constraint| {
+            crate::domain_check::check_domain_constraint(value, constraint)
+                .map_err(|violation| ctx.eval_error(violation.message, expr.span))
+        })
 }
 
 fn eval_hir_dag_call(
@@ -2354,74 +2364,65 @@ fn eval_hir_dag_call(
             target.span,
         )
     })?;
-
-    let mut dag_values = RuntimeValueMap::new();
-    for binding in args {
-        let value = eval_hir_expr(&binding.value, caller_values, caller_locals, ctx)?;
-        dag_values.insert(super::dag_decl_runtime_key(&binding.target.value), value);
+    let checked = ctx.checked_execution_facts.ok_or_else(|| {
+        ctx.internal_error(
+            "runtime DAG call has no checked execution-fact store",
+            target.span,
+        )
+    })?;
+    let dag_facts = checked.for_dag(&target.value).ok_or_else(|| {
+        ctx.internal_error(
+            format!("dag `{}` has no checked execution facts", target.value),
+            target.span,
+        )
+    })?;
+    if dag_facts.dag_id != target.value {
+        return Err(ctx.internal_error(
+            format!(
+                "checked execution facts for `{}` were paired with DAG `{}`",
+                dag_facts.dag_id, target.value
+            ),
+            target.span,
+        ));
     }
 
+    let mut dag_values = dag_facts.const_values.as_ref().clone();
+    for binding in args {
+        let key = super::dag_decl_runtime_key(&binding.target.value);
+        let value = eval_hir_expr(&binding.value, caller_values, caller_locals, ctx)?;
+        check_called_dag_domain_constraint(&key, &value, dag_facts, &binding.value, ctx)?;
+        dag_values.insert(key, value);
+    }
     seed_inline_dag_imported_values(dag_tir, &mut dag_values, caller_values, ctx);
 
     let dag_ctx = EvalContext {
         cancellation: ctx.cancellation.clone(),
         builtin_fns: ctx.builtin_fns,
         registry: ctx.registry,
-        src: ctx.src,
+        src: dag_facts.source(),
         tir: ctx.tir,
         current_dag: Some(dag_tir),
         root_values: ctx.root_values,
+        checked_execution_facts: ctx.checked_execution_facts,
         struct_field_constraints: ctx.struct_field_constraints,
         generic_nat_bindings: ctx.generic_nat_bindings,
         host_fns: ctx.host_fns,
     };
     let empty_hir_locals = HirLocalValueMap::root();
 
-    let topo = topo_order_for_dag_body(dag_tir).map_err(|remaining| {
-        ctx.internal_error(
-            format!(
-                "dag body dependency cycle involving: {}",
-                remaining
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            output.span,
-        )
-    })?;
-    let categories: std::collections::HashMap<&ScopedName, DeclCategory> = dag_tir
-        .source_order()
-        .iter()
-        .map(|(name, cat)| (name, *cat))
-        .collect();
-    for name in topo {
-        // Only value declarations evaluate in the topo order. Asserts are
-        // checked after every value is available (the dag-body dependency
-        // graph carries no edges for them), and plots/figures/layers have
-        // no runtime value in an expression context.
-        match categories.get(&name) {
-            Some(
-                DeclCategory::Assert
-                | DeclCategory::Plot
-                | DeclCategory::Figure
-                | DeclCategory::Layer,
-            ) => continue,
-            Some(DeclCategory::Const | DeclCategory::Param | DeclCategory::Node) | None => {}
-        }
-        let local_key = RuntimeDeclKey::for_local_decl(dag_tir, &name);
-        if dag_values.contains_key(&local_key) {
+    for key in dag_facts.topo_order.iter() {
+        if dag_values.contains_key(key) {
             continue;
         }
-        if let Some(hir_expr) = hir_expr_for_dag_body_name(dag_tir, &name) {
-            let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
-            dag_values.insert(local_key, value);
-        } else {
-            return Err(ctx.internal_error(
-                format!("DAG schedule references missing value declaration `{name}`"),
+        let hir_expr = dag_tir.runtime_expr(key.as_resolved()).ok_or_else(|| {
+            ctx.internal_error(
+                format!("DAG schedule references missing value declaration `{key}`"),
                 output.span,
-            ));
-        }
+            )
+        })?;
+        let value = eval_hir_expr(hir_expr, &dag_values, &empty_hir_locals, &dag_ctx)?;
+        check_called_dag_domain_constraint(key, &value, dag_facts, hir_expr, &dag_ctx)?;
+        dag_values.insert(key.clone(), value);
     }
 
     check_inline_dag_asserts(dag_tir, &dag_values, &dag_ctx, target, output.span, ctx)?;

@@ -11,6 +11,7 @@ pub(crate) mod domain_check;
 pub mod eval;
 pub(crate) mod eval_expr;
 pub(crate) mod exec_plan;
+pub(crate) mod execution_facts;
 pub mod graph_ir;
 pub mod host_fns;
 pub(crate) mod import_surface;

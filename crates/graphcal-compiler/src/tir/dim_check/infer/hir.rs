@@ -3218,7 +3218,6 @@ impl<'a> ConcreteStructApplication<'a> {
 }
 
 struct ConcreteObligationContext<'a> {
-    declared_types: &'a HashMap<ScopedName, DeclaredType>,
     dag: &'a crate::tir::typed::DagTIR,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a SemanticRegistry,
@@ -3230,7 +3229,6 @@ struct ConcreteObligationContext<'a> {
 
 pub(in crate::tir::dim_check) fn validate_concrete_type_obligations(
     inferred: &InferredType,
-    declared_types: &HashMap<ScopedName, DeclaredType>,
     dag: &crate::tir::typed::DagTIR,
     tir: &crate::tir::typed::TIR,
     registry: &SemanticRegistry,
@@ -3240,7 +3238,6 @@ pub(in crate::tir::dim_check) fn validate_concrete_type_obligations(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     let ctx = ConcreteObligationContext {
-        declared_types,
         dag,
         tir,
         registry,
@@ -3414,15 +3411,28 @@ fn validate_instantiated_field_bounds(
         )
     };
 
+    let definition_dag = ctx
+        .tir
+        .dag_registry()
+        .get(application.key.type_name.resolved().owner())
+        .ok_or_else(|| GraphcalError::InternalError {
+            message: format!(
+                "field-constraint owner `{}` has no checked DAG",
+                application.key.type_name.resolved().owner()
+            ),
+            src: ctx.src.clone(),
+            span: ctx.span.into(),
+        })?;
     for bound in bounds {
         ctx.cancellation.checkpoint()?;
+        let definition_types = definition_dag.build_declared_types(&bound.src)?;
         let locals = HirLocalTypes::root(ctx.cancellation, Some(application.substitutions.clone()));
         let inferred = infer_hir_type(
             &bound.value,
             None,
-            ctx.declared_types,
+            &definition_types,
             &locals,
-            ctx.dag,
+            definition_dag,
             ctx.tir,
             ctx.registry,
             ctx.builtin_fns,
