@@ -427,7 +427,10 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
     };
 
     let path_hint = module_path.display().to_string().replace('\\', "/");
-    let alias = plugin::suggest_alias(module_path);
+    let alias = plugin::suggest_alias(module_path).unwrap_or_else(|e| {
+        eprintln!("error: cannot derive a Graphcal import alias: {e}");
+        process::exit(1);
+    });
     let import_block =
         plugin::render_import_block(&path_hint, &alias, &module).unwrap_or_else(|e| {
             eprintln!("error: cannot render a Graphcal import for this plugin: {e}");

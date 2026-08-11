@@ -344,6 +344,20 @@ pub enum ImportBlockRenderError {
         /// Why source rendering rejected it.
         reason: SourceIdentifierError,
     },
+    /// A source-valid function unexpectedly could not produce a result type name.
+    #[error("could not derive a result type name from plugin function {function:?}: {reason}")]
+    InvalidGeneratedResultTypeName {
+        /// The containing function.
+        function: String,
+        /// Why the derived source name was rejected.
+        reason: SourceIdentifierError,
+    },
+    /// The finite set of generated result names was unexpectedly exhausted.
+    #[error("could not allocate a unique result type name for plugin function {function:?}")]
+    ResultTypeNameExhausted {
+        /// The containing function.
+        function: String,
+    },
 }
 
 /// A Graphcal string-literal payload proven representable by the current lexer.
@@ -393,10 +407,11 @@ impl<'a> RenderableImport<'a> {
             .map(|(function, signature)| {
                 let function_name = parse_function_name(function.as_str())?;
                 validate_signature_names(function.as_str(), signature)?;
-                let result_type_name =
-                    matches!(signature.result(), ValueKind::Struct(_)).then(|| {
+                let result_type_name = matches!(signature.result(), ValueKind::Struct(_))
+                    .then(|| {
                         allocate_result_type_name(function_name.as_str(), &mut used_result_names)
-                    });
+                    })
+                    .transpose()?;
                 Ok(RenderableFunction {
                     name: function_name,
                     signature,
@@ -457,8 +472,12 @@ pub fn render_import_block(
 }
 
 /// Derive a source-valid import alias from the module's file name.
-#[must_use]
-pub fn suggest_alias(module_path: &Path) -> SourceIdentifier {
+///
+/// # Errors
+///
+/// Returns [`SourceIdentifierError`] if the sanitized alias cannot be represented
+/// by the source identifier grammar.
+pub fn suggest_alias(module_path: &Path) -> Result<SourceIdentifier, SourceIdentifierError> {
     let stem = module_path
         .file_stem()
         .map(|stem| stem.to_string_lossy())
@@ -473,10 +492,10 @@ pub fn suggest_alias(module_path: &Path) -> SourceIdentifier {
             }
         })
         .collect();
-    if SourceIdentifier::parse(alias.clone()).is_err() {
+    SourceIdentifier::parse(alias.clone()).or_else(|_| {
         alias.insert_str(0, "plugin_");
-    }
-    SourceIdentifier::parse(alias).expect("sanitized plugin alias must be a source identifier")
+        SourceIdentifier::parse(alias)
+    })
 }
 
 fn parse_function_name(name: &str) -> Result<SourceIdentifier, ImportBlockRenderError> {
@@ -531,22 +550,29 @@ fn validate_signature_names(
     Ok(())
 }
 
-fn allocate_result_type_name(function: &str, used: &mut HashSet<String>) -> SourceIdentifier {
+fn allocate_result_type_name(
+    function: &str,
+    used: &mut HashSet<String>,
+) -> Result<SourceIdentifier, ImportBlockRenderError> {
     let base = suggest_result_type_name(function);
-    let mut suffix = 1_u32;
-    let candidate = std::iter::from_fn(|| {
-        let candidate = if suffix == 1 {
+    for collision_index in 0..=used.len() {
+        let candidate = if collision_index == 0 {
             base.clone()
         } else {
-            format!("{base}{suffix}")
+            format!("{base}{}", collision_index + 1)
         };
-        suffix += 1;
-        Some(candidate)
+        if used.insert(candidate.clone()) {
+            return SourceIdentifier::parse(candidate).map_err(|reason| {
+                ImportBlockRenderError::InvalidGeneratedResultTypeName {
+                    function: function.to_string(),
+                    reason,
+                }
+            });
+        }
+    }
+    Err(ImportBlockRenderError::ResultTypeNameExhausted {
+        function: function.to_string(),
     })
-    .find(|candidate| used.insert(candidate.clone()))
-    .expect("result type suffix space is unbounded");
-    SourceIdentifier::parse(candidate)
-        .expect("a result type derived from a source identifier must remain valid")
 }
 
 fn suggest_result_type_name(function: &str) -> String {
@@ -576,6 +602,8 @@ fn render_result_type_decl(
 }
 
 fn render_declaration(function: &RenderableFunction<'_>) -> String {
+    use std::fmt::Write as _;
+
     let signature = function.signature;
     let mut out = format!("fn {}", function.name);
     if !signature.dim_vars().is_empty() || !signature.index_vars().is_empty() {
@@ -591,7 +619,7 @@ fn render_declaration(function: &RenderableFunction<'_>) -> String {
             )
             .collect::<Vec<_>>()
             .join(", ");
-        out.push_str(&format!("<{binders}>"));
+        let _ = write!(out, "<{binders}>");
     }
     let parameters = signature
         .params()
@@ -599,7 +627,7 @@ fn render_declaration(function: &RenderableFunction<'_>) -> String {
         .map(|parameter| format!("{}: {}", parameter.name, render_value_kind(&parameter.kind)))
         .collect::<Vec<_>>()
         .join(", ");
-    out.push_str(&format!("({parameters}) -> "));
+    let _ = write!(out, "({parameters}) -> ");
     match (&function.result_type_name, signature.result()) {
         (Some(type_name), ValueKind::Struct(_)) => out.push_str(type_name.as_str()),
         (_, result) => out.push_str(&render_value_kind(result)),
@@ -1151,11 +1179,15 @@ mod tests {
     fn result_type_names_are_collision_free() {
         let mut used = HashSet::new();
         assert_eq!(
-            allocate_result_type_name("solve_orbit", &mut used).as_str(),
+            allocate_result_type_name("solve_orbit", &mut used)
+                .unwrap()
+                .as_str(),
             "SolveOrbitResult"
         );
         assert_eq!(
-            allocate_result_type_name("solve__orbit", &mut used).as_str(),
+            allocate_result_type_name("solve__orbit", &mut used)
+                .unwrap()
+                .as_str(),
             "SolveOrbitResult2"
         );
     }
@@ -1175,12 +1207,17 @@ mod tests {
     #[test]
     fn aliases_are_derived_from_file_names() {
         assert_eq!(
-            suggest_alias(Path::new("plugins/fluid-props.wasm")).as_str(),
+            suggest_alias(Path::new("plugins/fluid-props.wasm"))
+                .unwrap()
+                .as_str(),
             "fluid_props"
         );
-        assert_eq!(suggest_alias(Path::new("x/3d.wasm")).as_str(), "plugin_3d");
         assert_eq!(
-            suggest_alias(Path::new("x/node.wasm")).as_str(),
+            suggest_alias(Path::new("x/3d.wasm")).unwrap().as_str(),
+            "plugin_3d"
+        );
+        assert_eq!(
+            suggest_alias(Path::new("x/node.wasm")).unwrap().as_str(),
             "plugin_node"
         );
     }
