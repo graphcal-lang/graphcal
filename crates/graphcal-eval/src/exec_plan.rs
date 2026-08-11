@@ -225,6 +225,20 @@ fn freeze_checked_execution_facts(
     }
 }
 
+fn initialized_const_pool(
+    const_pools: &HashMap<graphcal_compiler::dag_id::DagId, RuntimeValueMap>,
+    dag_id: &graphcal_compiler::dag_id::DagId,
+    src: &NamedSource<Arc<String>>,
+) -> Result<RuntimeValueMap, GraphcalError> {
+    const_pools.get(dag_id).cloned().ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("checked DAG `{dag_id}` has no initialized const pool"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })
+}
+
 fn check_dag_execution_facts(
     tir: &TIR,
     inherited: &CheckedExecutionFacts,
@@ -255,7 +269,7 @@ fn check_dag_execution_facts(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-        let const_values = const_pools.get(dag_id).cloned().unwrap_or_default();
+        let const_values = initialized_const_pool(&const_pools, dag_id, src)?;
         dag_facts.insert(
             dag_id.clone(),
             CheckedDagExecutionFacts {

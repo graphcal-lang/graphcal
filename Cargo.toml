@@ -76,6 +76,7 @@ complexity = { level = "warn", priority = -1 }
 correctness = { level = "deny", priority = -1 }  # deny-by-default
 dbg_macro = { level = "warn", priority = 1 }
 decimal_literal_representation = { level = "warn", priority = 1 }
+disallowed_methods = { level = "warn", priority = 1 }
 derive_partial_eq_without_eq = { level = "allow", priority = 1 }  # We implement `Eq` only when necessary
 else_if_without_else = { level = "warn", priority = 1 }
 expect_used = { level = "warn", priority = 1 }

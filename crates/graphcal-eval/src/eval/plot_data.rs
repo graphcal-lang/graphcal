@@ -176,7 +176,7 @@ pub(super) fn channel_data_from_runtime_with_display_unit(
         index: index_name.clone(),
         entry_keys,
     }];
-    axes.extend(inner_axes.unwrap_or_default());
+    axes.extend(inner_axes.into_iter().flatten());
     Ok(ChannelData { axes, values })
 }
 
@@ -245,7 +245,7 @@ pub(super) fn channel_data_from_presented_value(
         index: index_name.clone(),
         entry_keys,
     }];
-    axes.extend(inner_axes.unwrap_or_default());
+    axes.extend(inner_axes.into_iter().flatten());
     Ok(ChannelData { axes, values })
 }
 

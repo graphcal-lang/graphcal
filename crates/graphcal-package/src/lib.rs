@@ -222,6 +222,10 @@ fn is_valid_name(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "str::split always yields the authority segment; an empty authority is conservatively treated as having no userinfo"
+)]
 fn url_has_userinfo(value: &str) -> bool {
     if let Some(scheme_idx) = value.find("://") {
         let scheme = &value[..scheme_idx];
@@ -1281,11 +1285,10 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
         .enumerate()
         .map(|(index, package)| parse_locked_package(index, package))
         .collect::<Result<Vec<_>, _>>()?;
-    let plugins = root
-        .get("plugin")
-        .map(parse_locked_plugins)
-        .transpose()?
-        .unwrap_or_default();
+    let plugins = match root.get("plugin") {
+        Some(plugin) => parse_locked_plugins(plugin)?,
+        None => Vec::new(),
+    };
 
     Ok(Lockfile {
         lock_version,
@@ -1343,11 +1346,10 @@ fn parse_locked_package(index: usize, item: &Value) -> Result<LockedPackage, Loc
                 field: "package.source",
             })?;
     let source = parse_package_source(source_table)?;
-    let dependencies = table
-        .get("dependencies")
-        .map(parse_package_dependencies)
-        .transpose()?
-        .unwrap_or_default();
+    let dependencies = match table.get("dependencies") {
+        Some(dependencies) => parse_package_dependencies(dependencies)?,
+        None => BTreeMap::new(),
+    };
 
     Ok(LockedPackage {
         id,

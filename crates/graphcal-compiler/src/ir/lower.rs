@@ -4267,7 +4267,10 @@ fn register_type_decl(
             let members = type_members
                 .iter()
                 .map(|member| {
-                    let payload = member.payload.as_deref().unwrap_or_default();
+                    let payload = match &member.payload {
+                        Some(fields) => fields.as_slice(),
+                        None => &[],
+                    };
                     let fields = payload
                         .iter()
                         .map(|field| {

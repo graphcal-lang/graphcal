@@ -219,22 +219,30 @@ fn eval_failed_node_error(e: &GraphcalError) -> NodeError {
     NodeError::EvalFailed { message }
 }
 
+#[expect(
+    clippy::option_if_let_else,
+    reason = "explicit branches document that a declaration absent from the dependency map has no failed dependencies"
+)]
 fn failed_runtime_dependencies(
     dag: &graphcal_compiler::tir::typed::DagTIR,
     name: &RuntimeDeclKey,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
 ) -> Vec<DeclName> {
-    dag.semantic()
+    match dag
+        .semantic()
         .dependencies
         .runtime_deps
         .get(name.as_resolved())
-        .map(|deps| {
-            deps.iter()
-                .filter(|dep| errors.contains_key(&RuntimeDeclKey::resolved((*dep).clone())))
-                .map(|dep| DeclName::from_atom(dep.atom().clone()))
-                .collect()
-        })
-        .unwrap_or_default()
+    {
+        Some(dependencies) => dependencies
+            .iter()
+            .filter(|dependency| {
+                errors.contains_key(&RuntimeDeclKey::resolved((*dependency).clone()))
+            })
+            .map(|dependency| DeclName::from_atom(dependency.atom().clone()))
+            .collect(),
+        None => Vec::new(),
+    }
 }
 
 /// Evaluate using immutable TIR plus one plan and validated runtime bindings.

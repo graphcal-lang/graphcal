@@ -296,7 +296,9 @@ impl PresentationResolver<'_> {
                 let inner = self.expression(owner, dag_id, inner, src)?;
                 Ok(project_field(inner, &field.value))
             }
-            ExprKind::MapLiteral { entries } => self.map_literal(owner, dag_id, entries, src),
+            ExprKind::MapLiteral { entries } => {
+                self.map_literal(owner, dag_id, entries, src, expr.span)
+            }
             ExprKind::ForComp { bindings, body } => {
                 let body = self.expression(owner, dag_id, body, src)?;
                 bindings.iter().rev().try_fold(body, |inner, binding| {
@@ -432,6 +434,7 @@ impl PresentationResolver<'_> {
         dag_id: &crate::dag_id::DagId,
         entries: &[hir::expr::MapEntry],
         src: &NamedSource<Arc<String>>,
+        span: Span,
     ) -> Result<PresentationProvenance, GraphcalError> {
         let mut result = None;
         for entry in entries {
@@ -444,7 +447,13 @@ impl PresentationResolver<'_> {
             let nested = singleton_indexed_path(&path, leaf);
             merge_indexed_presentation(&mut result, nested, src, entry.value.span)?;
         }
-        Ok(result.unwrap_or_default())
+        result.ok_or_else(|| {
+            GraphcalError::internal_error(
+                "checked map presentation has no entries",
+                src,
+                DiagnosticAnchor::Source(span),
+            )
+        })
     }
 }
 
@@ -600,7 +609,14 @@ fn merge_indexed_presentation(
                     indexmap::map::Entry::Occupied(mut entry) => {
                         let mut nested = Some(entry.get().clone());
                         merge_indexed_presentation(&mut nested, incoming, src, span)?;
-                        *entry.get_mut() = nested.unwrap_or_default();
+                        let Some(merged) = nested else {
+                            return Err(GraphcalError::internal_error(
+                                "indexed presentation merge lost its merged value",
+                                src,
+                                DiagnosticAnchor::Source(span),
+                            ));
+                        };
+                        *entry.get_mut() = merged;
                     }
                 }
             }
@@ -614,14 +630,19 @@ fn merge_indexed_presentation(
     }
 }
 
+#[expect(
+    clippy::option_if_let_else,
+    reason = "explicit branches document that a missing field has no authored presentation"
+)]
 fn project_field(
     provenance: PresentationProvenance,
     field: &crate::syntax::type_name::FieldName,
 ) -> PresentationProvenance {
     match provenance {
-        PresentationProvenance::Struct { mut fields, .. } => {
-            fields.remove(field).unwrap_or_default()
-        }
+        PresentationProvenance::Struct { mut fields, .. } => match fields.remove(field) {
+            Some(presentation) => presentation,
+            None => PresentationProvenance::None,
+        },
         PresentationProvenance::DagCall { key, output } => PresentationProvenance::DagCall {
             key,
             output: Box::new(project_field(*output, field)),
@@ -666,6 +687,10 @@ fn project_field(
     }
 }
 
+#[expect(
+    clippy::option_if_let_else,
+    reason = "explicit branches document that an unresolved static key has no authored presentation"
+)]
 fn project_indexes(
     provenance: PresentationProvenance,
     args: &[hir::expr::IndexArg],
@@ -683,9 +708,12 @@ fn project_indexes(
         provenance = match provenance {
             PresentationProvenance::Indexed { elements, .. } => match elements {
                 IndexedPresentation::Uniform { element, .. } => *element,
-                IndexedPresentation::Entries(mut entries) => static_index_key(arg)
-                    .and_then(|key| entries.swap_remove(&key))
-                    .unwrap_or_default(),
+                IndexedPresentation::Entries(mut entries) => {
+                    match static_index_key(arg).and_then(|key| entries.swap_remove(&key)) {
+                        Some(presentation) => presentation,
+                        None => PresentationProvenance::None,
+                    }
+                }
             },
             _ => return PresentationProvenance::None,
         };

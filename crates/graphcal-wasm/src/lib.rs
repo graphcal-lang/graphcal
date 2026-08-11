@@ -3,6 +3,10 @@
 //! The compiler and evaluator remain platform-neutral functional cores. This
 //! crate validates an in-memory browser project, invokes those cores, and
 //! converts their typed results into a JavaScript-facing transport model.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the browser adapter is an imperative shell where absent transport metadata may intentionally render as empty"
+)]
 
 mod diagnostics;
 mod output;
