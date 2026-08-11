@@ -1,4 +1,5 @@
 use graphcal_fmt::format_source;
+use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
 // Idempotency: format(format(x)) == format(x)
@@ -142,6 +143,171 @@ param speed: Velocity = 3.0 m/s;\n"
         .parse_file()
         .expect("formatted quantity literals should parse");
     assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TestExpressionContext {
+    Prefix,
+    InfixLeft,
+    InfixRight,
+    PostfixField,
+    PostfixIndex,
+    Conversion,
+    CallArgument,
+    Delimiter,
+}
+
+impl TestExpressionContext {
+    fn nest(self, expression: &str) -> String {
+        match self {
+            Self::Prefix => format!("-({expression})"),
+            Self::InfixLeft => format!("({expression}) + 3.0"),
+            Self::InfixRight => format!("3.0 + ({expression})"),
+            Self::PostfixField => format!("({expression}).field"),
+            Self::PostfixIndex => format!("({expression})[0]"),
+            Self::Conversion => format!("({expression}) -> m"),
+            Self::CallArgument => format!("sink(({expression}))"),
+            Self::Delimiter => format!("if true {{ ({expression}) }} else {{ 0.0 }}"),
+        }
+    }
+}
+
+#[test]
+fn exhaustive_expression_context_matrix_preserves_ast_and_is_idempotent() {
+    let expressions = [
+        ("number", "1.5"),
+        ("integer", "2"),
+        ("boolean", "true"),
+        ("string", "\"UTC\""),
+        ("graph reference", "@value"),
+        ("inline DAG reference", "@compute().output"),
+        ("unresolved reference", "value"),
+        ("binary", "1.0 + 2.0"),
+        ("unary", "-1.0"),
+        ("function call", "sqrt(1.0)"),
+        ("conditional", "if true { 1.0 } else { 2.0 }"),
+        ("quantity", "1.0 m"),
+        ("conversion", "1.0 -> m"),
+        ("timezone display", "@time -> \"UTC\""),
+        ("field access", "@value.field"),
+        ("constructor", "Result(value: 1.0)"),
+        ("map", "{ Axis.A: 1.0 }"),
+        ("table", "table[Fin(1)] { 1.0; }"),
+        ("comprehension", "for i: Fin(1) { 1.0 }"),
+        ("index access", "@value[0]"),
+        ("scan", "scan(@value, 0.0, |acc, item| acc)"),
+        (
+            "unfold",
+            "unfold(Axis, 0.0, |state, previous, current| state)",
+        ),
+        ("key form", "key(Axis, @value)"),
+        ("match", "match @value { Axis.A => 1.0, }"),
+    ];
+    let contexts = [
+        TestExpressionContext::Prefix,
+        TestExpressionContext::InfixLeft,
+        TestExpressionContext::InfixRight,
+        TestExpressionContext::PostfixField,
+        TestExpressionContext::PostfixIndex,
+        TestExpressionContext::Conversion,
+        TestExpressionContext::CallArgument,
+        TestExpressionContext::Delimiter,
+    ];
+
+    for (form, expression) in expressions {
+        for context in contexts {
+            let source = format!(
+                "node result: Dimensionless = {};\n",
+                context.nest(expression)
+            );
+            let formatted = format_source(&source)
+                .unwrap_or_else(|error| panic!("failed for {form} in {context:?}: {error}"));
+            assert_eq!(
+                format_source(&formatted).unwrap(),
+                formatted,
+                "not idempotent for {form} in {context:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn associativity_and_non_chaining_operators_preserve_their_tree() {
+    let expressions = [
+        "(1.0 + 2.0) * 3.0",
+        "1.0 * (2.0 + 3.0)",
+        "(1.0 ^ 2.0) ^ 3.0",
+        "1.0 ^ (2.0 ^ 3.0)",
+        "1.0 ^ -2.0",
+        "(1.0 < 2.0) == true",
+        "true == (1.0 < 2.0)",
+        "(1.0 == 2.0) < true",
+    ];
+    for expression in expressions {
+        let source = format!("node result: Dimensionless = {expression};\n");
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("failed to preserve `{expression}`: {error}"));
+        assert_eq!(format_source(&formatted).unwrap(), formatted);
+    }
+}
+
+#[test]
+fn load_bearing_parentheses_are_preserved() {
+    let source = "node field: Dimensionless = (1.0 + 2.0).field;\n\
+                  node indexed: Dimensionless = (1.0 + 2.0)[0];\n\
+                  node converted: Dimensionless = -(1.0 -> m);\n";
+    let formatted = format_source(source).expect("all parenthesized contexts should format");
+    assert!(formatted.contains("(1.0 + 2.0).field"));
+    assert!(formatted.contains("(1.0 + 2.0)[0]"));
+    assert!(formatted.contains("-(1.0 -> m)"));
+    assert_eq!(format_source(&formatted).unwrap(), formatted);
+}
+
+fn generated_expression() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("1.0".to_string()),
+        Just("2".to_string()),
+        Just("true".to_string()),
+        Just("@value".to_string()),
+        Just("value".to_string()),
+        Just("sqrt(1.0)".to_string()),
+    ]
+    .prop_recursive(4, 128, 4, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(|expr| format!("-({expr})")),
+            inner.clone().prop_map(|expr| format!("({expr}).field")),
+            inner.clone().prop_map(|expr| format!("({expr})[0]")),
+            inner.clone().prop_map(|expr| format!("({expr}) -> m")),
+            inner.clone().prop_map(|expr| format!("sink(({expr}))")),
+            (
+                inner.clone(),
+                inner.clone(),
+                prop::sample::select(&["+", "-", "*", "/", "^", "==", "&&", "||"])
+            )
+                .prop_map(|(lhs, rhs, op)| format!("({lhs}) {op} ({rhs})")),
+            (inner.clone(), inner.clone(), inner).prop_map(
+                |(condition, then_branch, else_branch)| format!(
+                    "if ({condition}) {{ {then_branch} }} else {{ {else_branch} }}"
+                )
+            ),
+        ]
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn generated_expressions_preserve_ast_and_are_idempotent(expression in generated_expression()) {
+        let source = format!("node result: Dimensionless = {expression};\n");
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("generated source failed: {source}\n{error}"));
+        prop_assert_eq!(format_source(&formatted).unwrap(), formatted);
+    }
 }
 
 #[test]

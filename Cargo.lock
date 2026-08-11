@@ -1834,6 +1834,7 @@ dependencies = [
  "graphcal-compiler",
  "insta",
  "pretty",
+ "proptest",
  "stacker",
  "thiserror",
  "unicode-width 0.2.2",
