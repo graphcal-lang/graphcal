@@ -16,7 +16,7 @@ pub fn serve(file: &Path, outputs: &[String], root: Option<&Path>) -> Result<(),
         .iter()
         .map(|name| DeclName::try_new(name.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    let fs = build_rooted_filesystem(file, root);
+    let fs = build_rooted_filesystem(file, root)?;
     let project = load_project(file, root, &fs)?;
     let mut host_fns = graphcal_eval::host_fns::demo_registry();
     graphcal_plugin_host::register_project_plugins(
