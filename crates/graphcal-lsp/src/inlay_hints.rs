@@ -28,9 +28,9 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
         };
 
         // Build the label: prefer computed value, fall back to type.
-        let label = if let Some(value_str) = entry
-            .key
-            .to_scoped_name()
+        let label = if let Some(value_str) = analysis
+            .symbol_table
+            .scoped_name_for_decl(entry.key.as_ref())
             .and_then(|name| analysis.eval_values.get(&name))
         {
             format!(" = {value_str}")

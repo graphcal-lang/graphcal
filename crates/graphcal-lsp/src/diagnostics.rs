@@ -10,7 +10,7 @@ use tower_lsp::lsp_types::{
 use graphcal_eval::eval::CompileError;
 
 use crate::convert::LineIndex;
-use crate::symbol_table::{SymbolKey, SymbolTable};
+use crate::symbol_table::SymbolTable;
 
 /// Typed LSP payload category for an unknown-name auto-import repair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -72,8 +72,7 @@ pub fn eval_result_to_diagnostics(
         .filter_map(|(name, r, _)| match r {
             Err(err) => {
                 let range = symbol_table
-                    .definitions
-                    .get(&SymbolKey::from_scoped_name(name))
+                    .definition_for_scoped_decl(name)
                     .map_or_else(Range::default, |def| lines.span_to_range(def.name_span));
                 Some(Diagnostic {
                     range,

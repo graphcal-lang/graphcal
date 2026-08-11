@@ -24,6 +24,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
+use crate::symbol_identity::{SourceSymbolPath, UnresolvedSymbol, VisibleBinding};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
@@ -31,6 +32,7 @@ use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
 use graphcal_compiler::function_signature::{DimMonomial, FunctionSignature, ValueKind};
 use graphcal_compiler::registry::builtins::builtin_functions;
 use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_eval::eval::{
     CheckedProject, CompileError, EvalResult, Value, check_project_with_host_fns_and_cancellation,
 };
@@ -113,6 +115,10 @@ pub(crate) struct AnalysisResult {
     pub(crate) symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
     pub(crate) imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
+    /// Source-visible aliases/qualifiers for imported canonical definitions.
+    /// Several bindings may target one identity; no alias is chosen as the
+    /// semantic key.
+    pub(crate) imported_bindings: Vec<VisibleBinding>,
     /// Public symbols of each loader-resolved import path, categorized by the
     /// exact marker required in a selective import item.
     pub(crate) import_surfaces: HashMap<
@@ -343,6 +349,18 @@ pub struct Backend {
     analysis_scheduler: Arc<AnalysisScheduler>,
 }
 
+impl AnalysisResult {
+    pub(crate) fn resolve_imported_target(
+        &self,
+        unresolved: &UnresolvedSymbol,
+    ) -> Option<SymbolKey> {
+        self.imported_bindings
+            .iter()
+            .find(|binding| binding.resolves(unresolved))
+            .map(|binding| binding.target().clone())
+    }
+}
+
 #[cfg(test)]
 impl AnalysisResult {
     /// True when no diagnostics are present across any URI.
@@ -361,6 +379,7 @@ impl std::fmt::Debug for AnalysisResult {
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
             .field("imported_defs", &self.imported_definitions.len())
+            .field("imported_bindings", &self.imported_bindings.len())
             .field("import_surfaces", &self.import_surfaces.len())
             .field(
                 "diagnostics_count",
@@ -901,6 +920,7 @@ fn run_analysis_with_cancellation(
                     source: Arc::new(text.to_string()),
                     symbol_table,
                     imported_definitions: HashMap::new(),
+                    imported_bindings: Vec::new(),
                     import_surfaces: HashMap::new(),
                     diagnostics: Arc::new(diagnostics),
                     eval_values: HashMap::new(),
@@ -939,7 +959,7 @@ fn run_analysis_with_cancellation(
             symbol_table::enrich_from_tir(&mut symbol_table, tir, project.root_id());
 
             cancellation.checkpoint()?;
-            let imported_definitions = collect_imported_definitions(
+            let imported_symbols = collect_imported_definitions(
                 uri,
                 &project,
                 Some(tir),
@@ -965,7 +985,8 @@ fn run_analysis_with_cancellation(
             Ok(AnalysisRun::complete(AnalysisResult {
                 source: Arc::new(text.to_string()),
                 symbol_table,
-                imported_definitions,
+                imported_definitions: imported_symbols.definitions,
+                imported_bindings: imported_symbols.bindings,
                 import_surfaces,
                 diagnostics: Arc::new(diagnostics),
                 eval_values,
@@ -992,7 +1013,7 @@ fn run_analysis_with_cancellation(
             let symbol_table =
                 symbol_table::build_from_ast(root_ast, text, project.root_id(), &module_resolver);
             cancellation.checkpoint()?;
-            let imported_definitions =
+            let imported_symbols =
                 collect_imported_definitions(uri, &project, None, &module_resolver, cancellation)?;
             let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
             diagnostics.entry(uri.clone()).or_default();
@@ -1001,7 +1022,8 @@ fn run_analysis_with_cancellation(
                 analysis: AnalysisResult {
                     source: Arc::new(text.to_string()),
                     symbol_table,
-                    imported_definitions,
+                    imported_definitions: imported_symbols.definitions,
+                    imported_bindings: imported_symbols.bindings,
                     import_surfaces: collect_import_surfaces(
                         &project,
                         &module_resolver,
@@ -1591,15 +1613,23 @@ fn collect_import_surfaces(
 /// Selective items are keyed by their **local name** (alias if present,
 /// otherwise the original name), so that references using the alias resolve
 /// correctly in LSP features.
+struct ImportedSymbols {
+    definitions: HashMap<SymbolKey, ImportedDefinition>,
+    bindings: Vec<VisibleBinding>,
+}
+
 fn collect_imported_definitions(
     root_uri: &Url,
     project: &graphcal_eval::loader::LoadedProject,
     tir: Option<&graphcal_compiler::tir::typed::TIR>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     cancellation: &CancellationToken,
-) -> std::result::Result<HashMap<SymbolKey, ImportedDefinition>, Cancelled> {
+) -> std::result::Result<ImportedSymbols, Cancelled> {
     cancellation.checkpoint()?;
-    let mut result = HashMap::new();
+    let mut result = ImportedSymbols {
+        definitions: HashMap::new(),
+        bindings: Vec::new(),
+    };
 
     let root_file = project.root_file();
 
@@ -1623,11 +1653,6 @@ fn collect_imported_definitions(
         let Some(loaded_file) = project.file(source_file_id) else {
             continue;
         };
-        let Some(target_prefix) = module_target_prefix(source_file_id, resolved_module.target())
-        else {
-            continue;
-        };
-
         let (imported_table, imported_uri, source) = table_cache
             .entry(resolved_module.target().clone())
             .or_insert_with(|| {
@@ -1665,54 +1690,30 @@ fn collect_imported_definitions(
 
         match kind {
             graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
-                for import_item in items {
-                    cancellation.checkpoint()?;
-                    let original_name = import_item.name.name.clone();
-                    let local_name = import_item.local_name().to_string();
-                    // Bring across the named definition itself plus every
-                    // related entry that "belongs to" that name in the
-                    // imported file's table: variants of an index/union,
-                    // fields of a struct, and qualified body members of a
-                    // DAG. Without this, goto-def / hover / find-references
-                    // on tokens like `Color.Red` (variant) or `@scale(...).out`
-                    // (DAG body member) miss because their non-TopLevel keys
-                    // would never travel with the selective import.
-                    for (key, def) in &imported_table.definitions {
-                        cancellation.checkpoint()?;
-                        let Some(local_key) = rekey_selective_import(
-                            key,
-                            def.category,
-                            import_item.namespace,
-                            original_name.as_str(),
-                            &local_name,
-                        ) else {
-                            continue;
-                        };
-                        insert_imported_def(&mut result, local_key, imported_uri, source, def);
-                    }
-                }
+                collect_selective_import_definitions(
+                    &mut result,
+                    imported_table,
+                    items,
+                    resolved_module.target(),
+                    imported_uri,
+                    source,
+                    cancellation,
+                )?;
             }
             graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
-                // The local module qualifier is the alias when written,
-                // otherwise the import path's leaf segment (`lib` for
-                // `import gotom.lib;`). The structured path is used directly:
-                // feeding its dotted display form to a *filesystem*-path
-                // helper used to truncate `gotom.lib` to `gotom`, keying
-                // every imported definition under a qualifier no reference
-                // could ever produce (#830).
                 let module_name = alias.as_ref().map_or_else(
-                    || path.leaf().name.to_string(),
-                    |alias_ident| alias_ident.value.to_string(),
+                    || path.leaf().name.clone(),
+                    |alias_ident| alias_ident.value.atom().clone(),
                 );
-                for (key, def) in &imported_table.definitions {
-                    cancellation.checkpoint()?;
-                    let Some(qualified_key) =
-                        rekey_module_target_import(key, &module_name, &target_prefix)
-                    else {
-                        continue;
-                    };
-                    insert_imported_def(&mut result, qualified_key, imported_uri, source, def);
-                }
+                collect_module_import_definitions(
+                    &mut result,
+                    imported_table,
+                    &module_name,
+                    resolved_module.target(),
+                    imported_uri,
+                    source,
+                    cancellation,
+                )?;
             }
         }
     }
@@ -1720,66 +1721,117 @@ fn collect_imported_definitions(
     Ok(result)
 }
 
-/// Re-key an imported-file table entry for a selective import (`import lib.{X};`).
+fn collect_selective_import_definitions(
+    result: &mut ImportedSymbols,
+    imported_table: &SymbolTable,
+    items: &[graphcal_compiler::syntax::ast::ImportItem],
+    target_module: &graphcal_compiler::dag_id::DagId,
+    imported_uri: &Url,
+    source: &Arc<String>,
+    cancellation: &CancellationToken,
+) -> std::result::Result<(), Cancelled> {
+    for import_item in items {
+        cancellation.checkpoint()?;
+        for (key, definition) in &imported_table.definitions {
+            cancellation.checkpoint()?;
+            let Some(spelling) = selective_import_spelling(
+                key,
+                definition.category,
+                import_item.namespace,
+                target_module,
+                import_item.name.name.as_str(),
+                import_item.local_name_atom(),
+            ) else {
+                continue;
+            };
+            insert_imported_def(
+                &mut result.definitions,
+                key.clone(),
+                imported_uri,
+                source,
+                definition,
+            );
+            result
+                .bindings
+                .push(VisibleBinding::new(key.clone(), spelling));
+        }
+    }
+    Ok(())
+}
+
+fn collect_module_import_definitions(
+    result: &mut ImportedSymbols,
+    imported_table: &SymbolTable,
+    module_name: &NameAtom,
+    target_module: &graphcal_compiler::dag_id::DagId,
+    imported_uri: &Url,
+    source: &Arc<String>,
+    cancellation: &CancellationToken,
+) -> std::result::Result<(), Cancelled> {
+    for (key, definition) in &imported_table.definitions {
+        cancellation.checkpoint()?;
+        let Some(spelling) = module_import_spelling(key, module_name, target_module) else {
+            continue;
+        };
+        insert_imported_def(
+            &mut result.definitions,
+            key.clone(),
+            imported_uri,
+            source,
+            definition,
+        );
+        result
+            .bindings
+            .push(VisibleBinding::new(key.clone(), spelling));
+    }
+    Ok(())
+}
+
+/// Source-visible spelling contributed by one selective import.
 ///
-/// Returns `Some(local_key)` if `key` denotes the imported name `original` or
-/// something semantically attached to it (its variants, fields, qualified body
-/// members) — with the parent / qualifier rewritten to the local alias `local`.
-/// Returns `None` for unrelated entries or entries in a namespace the import
-/// item did not request (for example, `import lib.{type Student}` must not also
-/// import the `Student` constructor).
-fn rekey_selective_import(
+/// The returned spelling is deliberately separate from `key`: aliases are
+/// lexical bindings, not semantic identity. Attached members (index variants,
+/// constructor fields, generic parameters, and DAG body declarations) retain
+/// their parent as a structured qualifier.
+fn selective_import_spelling(
     key: &SymbolKey,
     category: SymbolCategory,
     namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
+    target_module: &graphcal_compiler::dag_id::DagId,
     original: &str,
-    local: &str,
-) -> Option<SymbolKey> {
+    local: &NameAtom,
+) -> Option<SourceSymbolPath> {
     if !selective_import_allows_category(namespace, category) {
         return None;
     }
 
-    match key {
-        SymbolKey::TopLevel(name) if name == original => {
-            Some(SymbolKey::TopLevel(local.to_string()))
+    let primary = key.owner() == Some(target_module) && key.leaf_name() == original;
+    if primary {
+        return Some(SourceSymbolPath::local(local.clone()));
+    }
+
+    let attached = match key {
+        SymbolKey::IndexVariant(id) => {
+            id.index().owner() == target_module && id.index().as_str() == original
         }
-        SymbolKey::Constructor(path) => path
-            .rekey_first_segment(original, local)
-            .map(SymbolKey::Constructor),
-        SymbolKey::Variant { parent, variant } => {
-            parent
-                .rekey_first_segment(original, local)
-                .map(|parent| SymbolKey::Variant {
-                    parent,
-                    variant: variant.clone(),
-                })
+        SymbolKey::Field(id) => {
+            id.owner().owner() == target_module && id.owner().as_str() == original
         }
-        SymbolKey::Field { owner, field_name } => {
-            owner
-                .rekey_first_segment(original, local)
-                .map(|owner| SymbolKey::Field {
-                    owner,
-                    field_name: field_name.clone(),
-                })
+        SymbolKey::GenericParam(id) => {
+            id.owner().owner() == target_module && id.owner().as_str() == original
         }
-        SymbolKey::GenericParam { owner, name } => {
-            owner
-                .rekey_first_segment(original, local)
-                .map(|owner| SymbolKey::GenericParam {
-                    owner,
-                    name: name.clone(),
-                })
+        SymbolKey::Declaration(name) => {
+            name.owner().parent().as_ref() == Some(target_module) && name.owner().name() == original
         }
-        SymbolKey::Qualified { module, name } if module.first().is_some_and(|m| m == original) => {
-            let mut rekeyed = Vec::with_capacity(module.len());
-            rekeyed.push(local.to_string());
-            rekeyed.extend(module.iter().skip(1).cloned());
-            Some(SymbolKey::Qualified {
-                module: rekeyed,
-                name: name.clone(),
-            })
-        }
-        _ => None,
+        _ => false,
+    };
+    if attached {
+        Some(SourceSymbolPath::qualified(
+            vec![local.clone()],
+            NameAtom::parse(key.leaf_name()).ok()?,
+        ))
+    } else {
+        None
     }
 }
 
@@ -1821,129 +1873,60 @@ const fn selective_import_allows_category(
     }
 }
 
-/// Return the exact target module's path relative to its loaded source file.
-///
-/// A file-root import has an empty prefix. Importing an inline DAG directly
-/// yields the child segments that must be stripped when the defining file's
-/// symbol table is re-keyed under the local alias.
-fn module_target_prefix(
-    source_file: &graphcal_compiler::dag_id::DagId,
-    target: &graphcal_compiler::dag_id::DagId,
-) -> Option<Vec<String>> {
-    if source_file.package() != target.package()
-        || source_file.segments().len() > target.segments().len()
-        || !source_file
-            .segments()
-            .iter()
-            .zip(target.segments().iter())
-            .all(|(source, target)| source == target)
+/// Source-visible spelling contributed by a module import.
+fn module_import_spelling(
+    key: &SymbolKey,
+    module_name: &NameAtom,
+    target_module: &graphcal_compiler::dag_id::DagId,
+) -> Option<SourceSymbolPath> {
+    // Importing an inline DAG makes the DAG declaration itself callable by the
+    // local module alias (`@alias(...)`).
+    if let SymbolKey::Declaration(name) = key
+        && target_module.parent().as_ref() == Some(name.owner())
+        && name.as_str() == target_module.name()
     {
+        return Some(SourceSymbolPath::local(module_name.clone()));
+    }
+
+    let owner = key.owner()?;
+    let mut qualifier = module_relative_qualifier(module_name, owner, target_module)?;
+    match key {
+        SymbolKey::IndexVariant(id) => {
+            qualifier.push(NameAtom::parse(id.index().as_str()).ok()?);
+        }
+        SymbolKey::Field(id) => {
+            qualifier.push(NameAtom::parse(id.owner().as_str()).ok()?);
+        }
+        SymbolKey::GenericParam(id) => {
+            qualifier.push(NameAtom::parse(id.owner().as_str()).ok()?);
+        }
+        _ => {}
+    }
+    Some(SourceSymbolPath::qualified(
+        qualifier,
+        NameAtom::parse(key.leaf_name()).ok()?,
+    ))
+}
+
+fn module_relative_qualifier(
+    module_name: &NameAtom,
+    owner: &graphcal_compiler::dag_id::DagId,
+    target_module: &graphcal_compiler::dag_id::DagId,
+) -> Option<Vec<NameAtom>> {
+    if owner != target_module && !owner.is_descendant_of(target_module) {
         return None;
     }
-    Some(
-        target
-            .segments()
-            .iter()
-            .skip(source_file.segments().len())
-            .map(ToString::to_string)
-            .collect(),
-    )
-}
-
-/// Re-key a module import relative to the exact file-root or inline-DAG target.
-fn rekey_module_target_import(
-    key: &SymbolKey,
-    module_name: &str,
-    target_prefix: &[String],
-) -> Option<SymbolKey> {
-    if target_prefix.is_empty() {
-        return Some(rekey_module_import(key, module_name));
-    }
-
-    match key {
-        // The imported inline DAG declaration itself becomes the bare callable
-        // alias (`import lib.helper as h; @h(...).out`).
-        SymbolKey::TopLevel(name) if target_prefix.len() == 1 && name == &target_prefix[0] => {
-            Some(SymbolKey::TopLevel(module_name.to_string()))
-        }
-        // Members under the exact target drop its defining-file prefix and are
-        // rooted at the local alias (`helper.out` → `h.out`).
-        SymbolKey::Qualified { module, name } if module.starts_with(target_prefix) => {
-            let mut rekeyed = Vec::with_capacity(module.len() - target_prefix.len() + 1);
-            rekeyed.push(module_name.to_string());
-            rekeyed.extend(module.iter().skip(target_prefix.len()).cloned());
-            Some(SymbolKey::Qualified {
-                module: rekeyed,
-                name: name.clone(),
-            })
-        }
-        _ => None,
-    }
-}
-
-/// Re-key an imported-file table entry for a file-root module import (`import lib as m;`).
-///
-/// `TopLevel(x)` becomes `Qualified { module: [m], name: x }`. `Qualified` keys
-/// nest the module alias as a new outer segment so `Qualified { module: [dag], name: out }`
-/// in the imported file becomes `Qualified { module: [m, dag], name: out }` here —
-/// matching the call-site key produced for `@m.dag(args).out`. Variant,
-/// constructor, and field parents are re-keyed structurally, so
-/// `module.Index.Variant` and `module.Constructor(field: ...)` navigate to the
-/// declaration that owns the imported module rather than a same-leaf local item.
-fn rekey_module_import(key: &SymbolKey, module_name: &str) -> SymbolKey {
-    match key {
-        SymbolKey::TopLevel(name) => SymbolKey::Qualified {
-            module: vec![module_name.to_string()],
-            name: name.clone(),
-        },
-        SymbolKey::Qualified { module, name } => SymbolKey::Qualified {
-            module: crate::symbol_table::prepend_segment(module_name, module),
-            name: name.clone(),
-        },
-        SymbolKey::Constructor(path) => SymbolKey::Constructor(path.prepend_module(module_name)),
-        SymbolKey::Variant { parent, variant } => SymbolKey::Variant {
-            parent: parent.prepend_module(module_name),
-            variant: variant.clone(),
-        },
-        SymbolKey::Field { owner, field_name } => SymbolKey::Field {
-            owner: owner.prepend_module(module_name),
-            field_name: field_name.clone(),
-        },
-        SymbolKey::GenericParam { owner, name } => SymbolKey::GenericParam {
-            owner: owner.prepend_module(module_name),
-            name: name.clone(),
-        },
-        other @ SymbolKey::ExprScoped { .. } => other.clone(),
-    }
-}
-
-/// Record a symbol from an imported file as visible in the current file under
-/// `key`. Both `ImportKind` branches use this so the insertion semantics stay
-/// identical — only the key derivation differs between them.
-/// Render the *local* spelling of an imported symbol from its re-keyed
-/// [`SymbolKey`], for completion labels and hover titles. The defining
-/// file's spelling (`def.name`) is wrong once the import renames
-/// (`import lib.{y as renamed};`) or module-qualifies (`import lib as m;`)
-/// the symbol — offering `y` instead of `renamed` produces an identifier
-/// that does not resolve in the importing file.
-fn local_display_name(key: &SymbolKey) -> Option<String> {
-    match key {
-        SymbolKey::TopLevel(name) => Some(name.clone()),
-        SymbolKey::Qualified { module, name } => {
-            let mut rendered = module.join(".");
-            rendered.push('.');
-            rendered.push_str(name);
-            Some(rendered)
-        }
-        // Constructors, variants, fields, and expression locals keep the
-        // definition's spelling: their display contexts render the parent
-        // path separately.
-        SymbolKey::Constructor(_)
-        | SymbolKey::Variant { .. }
-        | SymbolKey::Field { .. }
-        | SymbolKey::GenericParam { .. }
-        | SymbolKey::ExprScoped { .. } => None,
-    }
+    let relative = owner
+        .segments()
+        .iter()
+        .skip(target_module.segments().len())
+        .map(|segment| NameAtom::parse(segment.to_string()))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    let mut qualifier = Vec::with_capacity(relative.len() + 1);
+    qualifier.push(module_name.clone());
+    qualifier.extend(relative);
+    Some(qualifier)
 }
 
 fn insert_imported_def(
@@ -1953,16 +1936,12 @@ fn insert_imported_def(
     source: &Arc<String>,
     def: &DefinitionInfo,
 ) {
-    let mut definition = def.clone();
-    if let Some(local) = local_display_name(&key) {
-        definition.name = local;
-    }
     result.insert(
         key,
         ImportedDefinition {
             uri: uri.clone(),
             source: Arc::clone(source),
-            definition,
+            definition: def.clone(),
         },
     );
 }
@@ -2285,6 +2264,17 @@ mod tests {
     use tower_lsp::lsp_types::{Position, Range};
 
     use super::*;
+
+    fn imported_target_for_spelling<'a>(
+        analysis: &'a AnalysisResult,
+        spelling: &str,
+    ) -> Option<&'a SymbolKey> {
+        analysis
+            .imported_bindings
+            .iter()
+            .find(|binding| binding.spelling().to_string() == spelling)
+            .map(VisibleBinding::target)
+    }
 
     #[test]
     fn scheduler_cancels_registered_document_work() {
@@ -2919,9 +2909,10 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        let doubled_key = crate::symbol_table::SymbolKey::TopLevel("doubled".to_string());
+        let doubled_key = imported_target_for_spelling(&analysis, "doubled")
+            .expect("expected a visible binding for selective include `doubled`");
         assert!(
-            analysis.imported_definitions.contains_key(&doubled_key),
+            analysis.imported_definitions.contains_key(doubled_key),
             "expected imported definition for selective include `doubled`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
@@ -3134,12 +3125,55 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        let renamed_key = crate::symbol_table::SymbolKey::TopLevel("renamed".to_string());
+        let renamed_key = imported_target_for_spelling(&analysis, "renamed")
+            .expect("expected imported binding under local alias `renamed`");
         assert!(
-            analysis.imported_definitions.contains_key(&renamed_key),
-            "expected imported definition keyed by local alias `renamed`, got: {:?}",
+            analysis.imported_definitions.contains_key(renamed_key),
+            "expected canonical imported definition for local alias `renamed`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
+
+        let cursor = text.find("@renamed").unwrap() + 1;
+        let resolved = crate::resolve::resolve_symbol_at(&analysis, cursor)
+            .expect("selective alias reference should resolve");
+        assert_eq!(&resolved.key, renamed_key);
+        assert!(matches!(
+            resolved.location,
+            crate::resolve::SymbolLocation::Imported(_)
+        ));
+    }
+
+    #[test]
+    fn multiple_aliases_preserve_each_visible_binding_for_one_identity() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"helper\"\n"),
+            (
+                "src/helper/lib.gcl",
+                "pub const node y: Dimensionless = 2.0;",
+            ),
+            (
+                "src/helper/main.gcl",
+                "import helper.lib.{y as first};\n\
+                 import helper.lib.{y as second};\n\
+                 node z: Dimensionless = @first + @second;",
+            ),
+        ]);
+        let main_path = dir.path().join("src/helper/main.gcl");
+        let uri = Url::from_file_path(&main_path).unwrap();
+        let text = std::fs::read_to_string(&main_path).unwrap();
+        let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+
+        let first = imported_target_for_spelling(&analysis, "first").unwrap();
+        let second = imported_target_for_spelling(&analysis, "second").unwrap();
+        assert_eq!(first, second);
+        for spelling in ["@first", "@second"] {
+            let offset = text.find(spelling).unwrap() + 1;
+            assert_eq!(
+                crate::resolve::resolve_symbol_at(&analysis, offset).map(|resolved| resolved.key),
+                Some(first.clone())
+            );
+        }
     }
 
     /// Issue #631 case 1+2: `@module.dag(args).out` — both the DAG name and
@@ -3377,12 +3411,10 @@ node bad: Mass = mass + length;
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
 
-        let palette_red_key = crate::symbol_table::SymbolKey::Variant {
-            parent: crate::symbol_table::SymbolPath::local("Palette"),
-            variant: "Red".to_string(),
-        };
+        let palette_red_key = imported_target_for_spelling(&analysis, "Palette.Red")
+            .expect("expected imported binding under local alias `Palette.Red`");
         assert!(
-            analysis.imported_definitions.contains_key(&palette_red_key),
+            analysis.imported_definitions.contains_key(palette_red_key),
             "expected imported variant under local alias `Palette.Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
@@ -3439,6 +3471,7 @@ node bad: Mass = mass + length;
             source: Arc::new(String::new()),
             symbol_table: SymbolTable::default(),
             imported_definitions: HashMap::new(),
+            imported_bindings: Vec::new(),
             import_surfaces: HashMap::new(),
             diagnostics: Arc::new(diags),
             eval_values: HashMap::new(),
@@ -3579,7 +3612,8 @@ node momentum: Force * Time = @mass * @velocity;
                 cached
                     .symbol_table
                     .definitions
-                    .contains_key(&SymbolKey::TopLevel(name.to_string())),
+                    .values()
+                    .any(|definition| definition.name == name),
                 "symbol `{name}` must survive the parse failure"
             );
         }
@@ -3666,16 +3700,12 @@ node momentum: Force * Time = @mass * @velocity;
             analysis.diagnostics,
         );
 
-        for key in [
-            SymbolKey::TopLevel("g0".to_string()),
-            SymbolKey::Qualified {
-                module: vec!["m".to_string()],
-                name: "g0".to_string(),
-            },
-        ] {
+        for spelling in ["g0", "m.g0"] {
+            let key = imported_target_for_spelling(&analysis, spelling)
+                .unwrap_or_else(|| panic!("expected imported binding for {spelling}"));
             let imported = analysis
                 .imported_definitions
-                .get(&key)
+                .get(key)
                 .unwrap_or_else(|| panic!("expected imported definition for {key:?}"));
             let type_description = imported
                 .definition

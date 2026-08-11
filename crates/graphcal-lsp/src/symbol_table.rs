@@ -11,15 +11,15 @@ use graphcal_compiler::desugar::desugared_ast::{
 };
 use graphcal_compiler::hir;
 use graphcal_compiler::syntax::attribute::AttributeName;
-use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName};
-use graphcal_compiler::syntax::index_name::{IndexName, ResolvedIndexName};
+use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
+use graphcal_compiler::syntax::dimension::{ResolvedDimName, ResolvedUnitName};
+use graphcal_compiler::syntax::index_name::ResolvedIndexName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopedName};
 use graphcal_compiler::syntax::module_resolve::{ModuleResolveError, ModuleResolver};
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{
-    GenericParamName, ResolvedStructTypeName, StructTypeName,
+    ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
 };
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFnName};
@@ -32,6 +32,10 @@ use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
 
 use crate::convert::LineIndex;
+use crate::symbol_identity::{
+    ExternFunctionId, FieldId, GenericParamId, IndexVariantId, LocalSymbolId, ReferenceTarget,
+    SourceSymbolPath, UnresolvedSymbol,
+};
 
 /// The kind of expression scope that introduces local variables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,127 +46,11 @@ pub enum ExprScopeKind {
     Match,
 }
 
-/// A structured source path used by symbol-table keys.
+/// Canonical typed key for symbol-table definitions.
 ///
-/// This is deliberately not a dotted string. Source qualifier segments remain
-/// available for editor-boundary lookups, while the leaf remains distinct from
-/// the qualifier so callers never have to split display text to recover
-/// structure.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SymbolPath {
-    /// A same-scope leaf name.
-    Local(String),
-    /// A module-qualified name (`module.name`, possibly with nested module
-    /// qualifier segments).
-    Qualified { module: Vec<String>, name: String },
-}
-
-impl SymbolPath {
-    pub(crate) fn local(name: impl Into<String>) -> Self {
-        Self::Local(name.into())
-    }
-
-    fn qualified(module: Vec<String>, name: impl Into<String>) -> Self {
-        Self::Qualified {
-            module,
-            name: name.into(),
-        }
-    }
-
-    fn from_name_path(path: &NamePath) -> Self {
-        match path.qualifier_and_leaf() {
-            None => Self::local(path.leaf().to_string()),
-            Some((qualifier, leaf)) => Self::qualified(
-                qualifier.iter().map(ToString::to_string).collect(),
-                leaf.to_string(),
-            ),
-        }
-    }
-
-    pub(crate) fn prepend_module(&self, module_name: &str) -> Self {
-        match self {
-            Self::Local(name) => Self::qualified(vec![module_name.to_string()], name.clone()),
-            Self::Qualified { module, name } => {
-                Self::qualified(prepend_segment(module_name, module), name.clone())
-            }
-        }
-    }
-
-    pub(crate) fn rekey_first_segment(&self, original: &str, local: &str) -> Option<Self> {
-        match self {
-            Self::Local(name) if name == original => Some(Self::local(local.to_string())),
-            Self::Qualified { module, name } if module.first().is_some_and(|m| m == original) => {
-                let mut rekeyed = Vec::with_capacity(module.len());
-                rekeyed.push(local.to_string());
-                rekeyed.extend(module.iter().skip(1).cloned());
-                Some(Self::qualified(rekeyed, name.clone()))
-            }
-            _ => None,
-        }
-    }
-}
-
-/// Prepend a module segment to a qualifier path. Shared by
-/// [`SymbolPath::prepend_module`] and the key-rekeying in `server.rs`.
-pub fn prepend_segment(module_name: &str, module: &[String]) -> Vec<String> {
-    let mut nested = Vec::with_capacity(module.len() + 1);
-    nested.push(module_name.to_string());
-    nested.extend(module.iter().cloned());
-    nested
-}
-
-impl std::fmt::Display for SymbolPath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Local(name) => f.write_str(name),
-            Self::Qualified { module, name } => {
-                for (i, seg) in module.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(".")?;
-                    }
-                    f.write_str(seg)?;
-                }
-                write!(f, ".{name}")
-            }
-        }
-    }
-}
-
-/// A typed key for symbol table entries.
-///
-/// Replaces ad-hoc `String` keys like `"fn_name::param"` or `"field::name"`
-/// with a structured enum that can be pattern-matched.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SymbolKey {
-    /// Top-level declaration: param, node, const, dim, unit, type, index,
-    /// assert, plot, figure, builtins.
-    TopLevel(String),
-    /// Module-qualified reference: e.g., `@params::dry_mass` or `a.b.c::PI`.
-    /// `module` carries the structured path segments rather than a flat
-    /// formatted string, so two callers that build the same logical path
-    /// always produce equal keys without depending on a shared join format.
-    Qualified { module: Vec<String>, name: String },
-    /// Tagged-union constructor. Constructors are separate from type names, so
-    /// a record-like `type Student { Student(...) }` needs a distinct key from
-    /// the `StructType` definition that shares its spelling.
-    Constructor(SymbolPath),
-    /// Variant of an index: e.g., `Season.Winter` or `module.Season.Winter`.
-    Variant { parent: SymbolPath, variant: String },
-    /// Field of a struct or union variant. `owner` distinguishes fields with
-    /// the same name across different types/constructors.
-    Field {
-        owner: SymbolPath,
-        field_name: String,
-    },
-    /// A generic parameter scoped to one type declaration.
-    GenericParam { owner: SymbolPath, name: String },
-    /// Expression-scoped local variable (block, for, scan, unfold, match).
-    ExprScoped {
-        kind: ExprScopeKind,
-        offset: usize,
-        local: String,
-    },
-}
+/// Re-exported under the historical name while callers migrate; unlike the
+/// previous spelling-shaped enum, every value is a resolved semantic identity.
+pub use crate::symbol_identity::SymbolId as SymbolKey;
 
 /// Build a symbol table for a standalone buffer with no project context.
 ///
@@ -209,116 +97,37 @@ struct HirRefCollector<'a> {
     dag_id: &'a DagId,
     resolver: &'a ModuleResolver,
     time_zones: TimeZoneRegistry,
-    /// Canonical DAG module → the whole-module or selective alias that calls it.
-    alias_of: HashMap<DagId, String>,
     /// Lexical local definitions of the current body, keyed by HIR identity.
     locals: HashMap<hir::LocalId, SymbolKey>,
+    /// Span of the expression currently being lowered. Together with the DAG
+    /// owner it scopes HIR-local IDs, which are only body-local identities.
+    body_span: Span,
 }
 
 impl<'a> HirRefCollector<'a> {
     fn new(dag_id: &'a DagId, resolver: &'a ModuleResolver) -> Self {
-        let mut alias_of: HashMap<DagId, String> = HashMap::new();
-        if let Some(scope) = resolver.scope(dag_id) {
-            for (alias, target) in scope.module_aliases() {
-                let alias = alias.to_string();
-                // One module can be imported under several names (bare +
-                // `as` alias). HIR references carry only the canonical
-                // identity, so pick the smallest alias deterministically
-                // for the spelling-domain key; the imported-definition map
-                // registers every alias, so lookups succeed either way.
-                alias_of
-                    .entry(target.target().clone())
-                    .and_modify(|existing| {
-                        if alias < *existing {
-                            existing.clone_from(&alias);
-                        }
-                    })
-                    .or_insert(alias);
-            }
-        }
-        if let Ok(selected_dags) = resolver.selected_dag_imports(dag_id) {
-            for (local, target) in selected_dags {
-                let alias = local.to_string();
-                alias_of
-                    .entry(target)
-                    .and_modify(|existing| {
-                        if alias < *existing {
-                            existing.clone_from(&alias);
-                        }
-                    })
-                    .or_insert(alias);
-            }
-        }
         Self {
             dag_id,
             resolver,
             time_zones: TimeZoneRegistry::bundled(),
-            alias_of,
             locals: HashMap::new(),
+            body_span: Span::new(0, 0),
         }
     }
 
-    /// Spelling-domain qualifier for a canonical owner: empty for this file,
-    /// the dag name for the file's own dag bodies, the import alias (plus
-    /// dag name) for imported modules. `None` when the owner reaches this
-    /// file without a module qualifier (selective imports).
-    fn module_segments(&self, owner: &DagId) -> Option<Vec<String>> {
-        if owner == self.dag_id {
-            return Some(Vec::new());
-        }
-        if owner.parent().as_ref() == Some(self.dag_id) {
-            return Some(vec![owner.name().to_string()]);
-        }
-        if let Some(alias) = self.alias_of.get(owner) {
-            return Some(vec![alias.clone()]);
-        }
-        if let Some(parent) = owner.parent()
-            && let Some(alias) = self.alias_of.get(&parent)
-        {
-            return Some(vec![alias.clone(), owner.name().to_string()]);
-        }
-        None
-    }
-
-    fn name_key(&self, owner: &DagId, leaf: &str) -> SymbolKey {
-        match self.module_segments(owner) {
-            Some(module) if module.is_empty() => SymbolKey::TopLevel(leaf.to_string()),
-            Some(module) => SymbolKey::Qualified {
-                module,
-                name: leaf.to_string(),
-            },
-            None => SymbolKey::TopLevel(leaf.to_string()),
-        }
-    }
-
-    fn path_for(&self, owner: &DagId, leaf: &str) -> SymbolPath {
-        match self.module_segments(owner) {
-            Some(module) if module.is_empty() => SymbolPath::local(leaf.to_string()),
-            Some(module) => SymbolPath::qualified(module, leaf.to_string()),
-            None => SymbolPath::local(leaf.to_string()),
-        }
-    }
-
-    fn collect_unit_expr_refs(&self, unit: &hir::ResolvedUnitExpr, table: &mut SymbolTable) {
+    fn collect_resolved_unit_expr_refs(unit: &hir::ResolvedUnitExpr, table: &mut SymbolTable) {
         for item in &unit.terms {
             table.references.push(ReferenceInfo {
                 span: item.name.span,
-                target: self.name_key(
-                    item.name.value.resolved().owner(),
-                    item.name.value.resolved().as_str(),
-                ),
+                target: SymbolKey::Unit(item.name.value.resolved().clone()).into(),
             });
         }
     }
 
     fn variant_key(
-        &self,
         variant: &graphcal_compiler::syntax::index_name::ResolvedIndexVariant,
     ) -> SymbolKey {
-        SymbolKey::Variant {
-            parent: self.path_for(variant.index().owner(), variant.index().as_str()),
-            variant: variant.variant().as_str().to_string(),
-        }
+        SymbolKey::IndexVariant(IndexVariantId::from_resolved(variant))
     }
 
     /// Lower one declaration body and record its references.
@@ -338,6 +147,7 @@ impl<'a> HirRefCollector<'a> {
         .with_prelude(&prelude);
         let (lowered, diagnostics) = hir::lower_expr_tolerant(expr, ctx);
         self.locals.clear();
+        self.body_span = expr.span;
         self.walk(&lowered, table);
         for diagnostic in &diagnostics {
             Self::record_unresolved(diagnostic, table);
@@ -347,59 +157,72 @@ impl<'a> HirRefCollector<'a> {
     /// Record a reference for an unresolved name from a lowering diagnostic,
     /// keyed by its written spelling so IDE features answer on broken code.
     fn record_unresolved(err: &hir::ExprLowerError, table: &mut SymbolTable) {
-        use graphcal_compiler::syntax::names::NameAtom;
         let (target, span) = match err {
             hir::ExprLowerError::UnknownGraphRef { name, span } => {
-                let target = if name.is_qualified() {
-                    SymbolKey::Qualified {
-                        module: name.qualifier().iter().map(ToString::to_string).collect(),
-                        name: name.member().to_string(),
-                    }
-                } else {
-                    SymbolKey::TopLevel(name.member().to_string())
-                };
-                (target, *span)
-            }
-            hir::ExprLowerError::UnknownLocalRef { name, span } => {
-                (SymbolKey::TopLevel(name.to_string()), *span)
-            }
-            hir::ExprLowerError::UnknownUnit { name, span } => {
-                let target = name.qualifier().map_or_else(
-                    || SymbolKey::TopLevel(name.name().to_string()),
-                    |qualifier| SymbolKey::Qualified {
-                        module: vec![qualifier.to_string()],
-                        name: name.name().to_string(),
-                    },
+                let path = SourceSymbolPath::qualified(
+                    name.qualifier()
+                        .iter()
+                        .map(|segment| segment.atom().clone())
+                        .collect(),
+                    name.member().atom().clone(),
                 );
-                (target, *span)
+                (UnresolvedSymbol::Declaration(path), *span)
             }
-            hir::ExprLowerError::UnknownFunction { path, span }
-                if NameAtom::parse(path).is_ok() =>
-            {
-                (SymbolKey::TopLevel(path.clone()), *span)
+            hir::ExprLowerError::UnknownLocalRef { name, span } => (
+                UnresolvedSymbol::Declaration(SourceSymbolPath::local(name.atom().clone())),
+                *span,
+            ),
+            hir::ExprLowerError::UnknownUnit { name, span } => {
+                let qualifier = name
+                    .qualifier()
+                    .into_iter()
+                    .map(|segment| segment.atom().clone())
+                    .collect();
+                let path = SourceSymbolPath::qualified(qualifier, name.name().atom().clone());
+                (UnresolvedSymbol::Unit(path), *span)
+            }
+            hir::ExprLowerError::UnknownFunction { path, span } => {
+                let Ok(name) = NameAtom::parse(path) else {
+                    return;
+                };
+                (
+                    UnresolvedSymbol::Function(SourceSymbolPath::local(name)),
+                    *span,
+                )
             }
             hir::ExprLowerError::ModuleResolve {
                 source: ModuleResolveError::UnknownName { name, .. },
                 span,
-            } if NameAtom::parse(name).is_ok() => (SymbolKey::TopLevel(name.clone()), *span),
+            } => {
+                let Ok(name) = NameAtom::parse(name) else {
+                    return;
+                };
+                (
+                    UnresolvedSymbol::Declaration(SourceSymbolPath::local(name)),
+                    *span,
+                )
+            }
             _ => return,
         };
-        table.references.push(ReferenceInfo { span, target });
+        table.references.push(ReferenceInfo {
+            span,
+            target: ReferenceTarget::Unresolved(target),
+        });
     }
 
     fn define_local(
         &mut self,
         local: &hir::LocalDef,
-        kind: ExprScopeKind,
-        offset: usize,
+        _kind: ExprScopeKind,
+        _offset: usize,
         detail: String,
         table: &mut SymbolTable,
     ) {
-        let key = SymbolKey::ExprScoped {
-            kind,
-            offset,
-            local: local.name.to_string(),
-        };
+        let key = SymbolKey::Local(LocalSymbolId::new(
+            self.dag_id.clone(),
+            self.body_span,
+            local.id,
+        ));
         table.insert_definition(
             key.clone(),
             DefinitionInfo {
@@ -416,7 +239,10 @@ impl<'a> HirRefCollector<'a> {
     }
 
     fn reference(table: &mut SymbolTable, span: Span, target: SymbolKey) {
-        table.references.push(ReferenceInfo { span, target });
+        table.references.push(ReferenceInfo {
+            span,
+            target: target.into(),
+        });
     }
 
     /// Record references for an index-variant reference: the variant segment
@@ -425,11 +251,11 @@ impl<'a> HirRefCollector<'a> {
     /// `table[...]` for desugared table rows) targets the index declaration.
     /// Keeping the two segments separate makes rename edits and goto-def
     /// segment-precise instead of splicing whole qualified paths.
-    fn variant_reference(&self, variant: &hir::expr::IndexVariantRef, table: &mut SymbolTable) {
-        let target = self.variant_key(&variant.variant);
+    fn variant_reference(variant: &hir::expr::IndexVariantRef, table: &mut SymbolTable) {
+        let target = Self::variant_key(&variant.variant);
         Self::reference(table, variant.variant_span, target);
         let index = variant.variant.index();
-        let key = self.name_key(index.owner(), index.as_str());
+        let key = SymbolKey::Index(index.clone());
         for index_span in variant.index_spans() {
             Self::reference(table, index_span, key.clone());
         }
@@ -459,19 +285,18 @@ impl<'a> HirRefCollector<'a> {
             | hir::ExprKind::ZonedDateTimeLiteral(_)
             | hir::ExprKind::IanaTimeZoneLiteral(_) => {}
             hir::ExprKind::GraphRef(target) => {
-                let key = self.name_key(target.value.owner(), target.value.as_str());
-                Self::reference(table, target.span, key);
+                Self::reference(
+                    table,
+                    target.span,
+                    SymbolKey::Declaration(target.value.clone()),
+                );
             }
             hir::ExprKind::ConstRef(const_ref) => {
                 let target = match &const_ref.value {
-                    hir::ConstRef::Decl(name) => self.name_key(name.owner(), name.as_str()),
-                    hir::ConstRef::Constructor(name) => {
-                        SymbolKey::Constructor(self.path_for(name.owner(), name.as_str()))
-                    }
-                    hir::ConstRef::Builtin(builtin) => {
-                        SymbolKey::TopLevel(builtin.as_str().to_string())
-                    }
-                    hir::ConstRef::TimeScale(scale) => SymbolKey::TopLevel(scale.to_string()),
+                    hir::ConstRef::Decl(name) => SymbolKey::Declaration(name.clone()),
+                    hir::ConstRef::Constructor(name) => SymbolKey::Constructor(name.clone()),
+                    hir::ConstRef::Builtin(builtin) => SymbolKey::BuiltinConstant(*builtin),
+                    hir::ConstRef::TimeScale(scale) => SymbolKey::TimeScale(*scale),
                     hir::ConstRef::GenericNatParam(_) => return,
                 };
                 Self::reference(table, const_ref.span, target);
@@ -483,21 +308,15 @@ impl<'a> HirRefCollector<'a> {
             }
             hir::ExprKind::TypeSystemRef(type_ref) => {
                 let target = match &type_ref.value {
-                    hir::expr::TypeSystemRef::Type(name) => {
-                        self.name_key(name.owner(), name.as_str())
-                    }
-                    hir::expr::TypeSystemRef::Dimension(name) => {
-                        self.name_key(name.owner(), name.as_str())
-                    }
-                    hir::expr::TypeSystemRef::Index(name) => {
-                        self.name_key(name.owner(), name.as_str())
-                    }
-                    hir::expr::TypeSystemRef::IndexVariant(variant) => self.variant_key(variant),
+                    hir::expr::TypeSystemRef::Type(name) => SymbolKey::StructType(name.clone()),
+                    hir::expr::TypeSystemRef::Dimension(name) => SymbolKey::Dimension(name.clone()),
+                    hir::expr::TypeSystemRef::Index(name) => SymbolKey::Index(name.clone()),
+                    hir::expr::TypeSystemRef::IndexVariant(variant) => Self::variant_key(variant),
                 };
                 Self::reference(table, type_ref.span, target);
             }
             hir::ExprKind::VariantLiteral(variant) => {
-                self.variant_reference(variant, table);
+                Self::variant_reference(variant, table);
             }
             hir::ExprKind::BinOp { lhs, rhs, .. } => {
                 self.walk(lhs, table);
@@ -513,30 +332,25 @@ impl<'a> HirRefCollector<'a> {
             }
             hir::ExprKind::FnCall { callee, args } => {
                 match &callee.value {
-                    hir::FunctionRef::Builtin(builtin) => Self::reference(
-                        table,
-                        callee.span,
-                        SymbolKey::TopLevel(builtin.as_str().to_string()),
-                    ),
+                    hir::FunctionRef::Builtin(builtin) => {
+                        Self::reference(table, callee.span, SymbolKey::BuiltinFunction(*builtin));
+                    }
                     hir::FunctionRef::Epoch { scale } => {
                         Self::reference(
                             table,
                             callee.span,
-                            SymbolKey::TopLevel(BuiltinFnName::Epoch.as_str().to_string()),
+                            SymbolKey::BuiltinFunction(BuiltinFnName::Epoch),
                         );
-                        Self::reference(
-                            table,
-                            scale.span,
-                            SymbolKey::TopLevel(scale.value.to_string()),
-                        );
+                        Self::reference(table, scale.span, SymbolKey::TimeScale(scale.value));
                     }
                     hir::FunctionRef::External(ext) => Self::reference(
                         table,
                         callee.span,
-                        SymbolKey::Qualified {
-                            module: vec![ext.alias.to_string()],
-                            name: ext.name.to_string(),
-                        },
+                        SymbolKey::ExternFunction(ExternFunctionId::new(
+                            self.dag_id.clone(),
+                            ext.alias.clone(),
+                            ext.name.clone(),
+                        )),
                     ),
                 }
                 for arg in args {
@@ -553,25 +367,25 @@ impl<'a> HirRefCollector<'a> {
                 self.walk(else_branch, table);
             }
             hir::ExprKind::QuantityLiteral { unit, .. } => {
-                self.collect_unit_expr_refs(unit, table);
+                Self::collect_resolved_unit_expr_refs(unit, table);
             }
             hir::ExprKind::Convert {
                 expr: inner,
                 target,
             } => {
                 self.walk(inner, table);
-                self.collect_unit_expr_refs(target, table);
+                Self::collect_resolved_unit_expr_refs(target, table);
             }
             hir::ExprKind::ConstructorCall {
                 callee,
                 generic_args,
                 fields,
             } => {
-                let constructor_path = self.path_for(callee.value.owner(), callee.value.as_str());
+                let constructor = callee.value.clone();
                 Self::reference(
                     table,
                     callee.span,
-                    SymbolKey::Constructor(constructor_path.clone()),
+                    SymbolKey::Constructor(constructor.clone()),
                 );
                 for generic_arg in generic_args {
                     self.walk_generic_arg(generic_arg, table);
@@ -580,10 +394,10 @@ impl<'a> HirRefCollector<'a> {
                     Self::reference(
                         table,
                         field.name.span,
-                        SymbolKey::Field {
-                            owner: constructor_path.clone(),
-                            field_name: field.name.value.to_string(),
-                        },
+                        SymbolKey::Field(FieldId::new(
+                            constructor.clone(),
+                            field.name.value.clone(),
+                        )),
                     );
                     self.walk(&field.value, table);
                 }
@@ -592,7 +406,7 @@ impl<'a> HirRefCollector<'a> {
                 for entry in entries {
                     for key in &entry.keys {
                         if let hir::expr::MapEntryKey::IndexVariant(variant) = key {
-                            self.variant_reference(variant, table);
+                            Self::variant_reference(variant, table);
                         }
                     }
                     self.walk(&entry.value, table);
@@ -602,8 +416,11 @@ impl<'a> HirRefCollector<'a> {
                 for binding in bindings {
                     let detail = match &binding.index {
                         hir::expr::ForBindingIndex::Named(index) => {
-                            let key = self.name_key(index.value.owner(), index.value.as_str());
-                            Self::reference(table, index.span, key);
+                            Self::reference(
+                                table,
+                                index.span,
+                                SymbolKey::Index(index.value.clone()),
+                            );
                             format!("loop variable over {}", index.value.as_str())
                         }
                         hir::expr::ForBindingIndex::Finite { cardinality, .. } => {
@@ -625,7 +442,7 @@ impl<'a> HirRefCollector<'a> {
                 for arg in args {
                     match arg {
                         hir::expr::IndexArg::Variant(variant) => {
-                            self.variant_reference(variant, table);
+                            Self::variant_reference(variant, table);
                         }
                         hir::expr::IndexArg::Var(local) => {
                             if let Some(key) = self.locals.get(&local.value) {
@@ -662,8 +479,7 @@ impl<'a> HirRefCollector<'a> {
                 body,
             } => {
                 let axis = &recurrence.axis;
-                let axis_key = self.name_key(axis.value.owner(), axis.value.as_str());
-                Self::reference(table, axis.span, axis_key);
+                Self::reference(table, axis.span, SymbolKey::Index(axis.value.clone()));
                 self.walk(init, table);
                 let offset = expr.span.offset();
                 self.define_local(
@@ -691,8 +507,7 @@ impl<'a> HirRefCollector<'a> {
             }
             hir::ExprKind::KeyForm { axis, arg, .. } => {
                 if let hir::expr::ForBindingIndex::Named(axis) = axis {
-                    let axis_key = self.name_key(axis.value.owner(), axis.value.as_str());
-                    Self::reference(table, axis.span, axis_key);
+                    Self::reference(table, axis.span, SymbolKey::Index(axis.value.clone()));
                 }
                 self.walk(arg, table);
             }
@@ -705,12 +520,11 @@ impl<'a> HirRefCollector<'a> {
                             bindings,
                             ..
                         } => {
-                            let constructor_path = self
-                                .path_for(constructor.value.owner(), constructor.value.as_str());
+                            let constructor_id = constructor.value.clone();
                             Self::reference(
                                 table,
                                 constructor.span,
-                                SymbolKey::Constructor(constructor_path.clone()),
+                                SymbolKey::Constructor(constructor_id.clone()),
                             );
                             for binding in bindings {
                                 match binding {
@@ -718,16 +532,16 @@ impl<'a> HirRefCollector<'a> {
                                         Self::reference(
                                             table,
                                             field.span,
-                                            SymbolKey::Field {
-                                                owner: constructor_path.clone(),
-                                                field_name: field.value.to_string(),
-                                            },
+                                            SymbolKey::Field(FieldId::new(
+                                                constructor_id.clone(),
+                                                field.value.clone(),
+                                            )),
                                         );
                                         self.define_local(
                                             local,
                                             ExprScopeKind::Match,
                                             arm.span.offset(),
-                                            format!("bound from {constructor_path}"),
+                                            format!("bound from {}", constructor.value),
                                             table,
                                         );
                                     }
@@ -735,17 +549,17 @@ impl<'a> HirRefCollector<'a> {
                                         Self::reference(
                                             table,
                                             field.span,
-                                            SymbolKey::Field {
-                                                owner: constructor_path.clone(),
-                                                field_name: field.value.to_string(),
-                                            },
+                                            SymbolKey::Field(FieldId::new(
+                                                constructor_id.clone(),
+                                                field.value.clone(),
+                                            )),
                                         );
                                     }
                                 }
                             }
                         }
                         hir::expr::MatchPattern::IndexLabel { variant, .. } => {
-                            self.variant_reference(variant, table);
+                            Self::variant_reference(variant, table);
                         }
                     }
                     self.walk(&arm.body, table);
@@ -756,20 +570,20 @@ impl<'a> HirRefCollector<'a> {
                 args,
                 output,
             } => {
-                let dag_key = self.alias_of.get(&target.value).map_or_else(
-                    || {
-                        target.value.parent().map_or_else(
-                            || SymbolKey::TopLevel(target.value.name().to_string()),
-                            |parent| self.name_key(&parent, target.value.name()),
-                        )
-                    },
-                    |alias| SymbolKey::TopLevel(alias.clone()),
-                );
-                Self::reference(table, target.span, dag_key);
+                if let Some(parent) = target.value.parent() {
+                    Self::reference(
+                        table,
+                        target.span,
+                        SymbolKey::Declaration(ResolvedDeclName::from_def(
+                            parent,
+                            DeclName::expect_valid(target.value.name()),
+                        )),
+                    );
+                }
                 Self::reference(
                     table,
                     output.span,
-                    self.name_key(output.value.owner(), output.value.as_str()),
+                    SymbolKey::Declaration(output.value.clone()),
                 );
                 for arg in args {
                     self.walk(&arg.value, table);
@@ -785,8 +599,11 @@ impl<'a> HirRefCollector<'a> {
                 if let hir::DimArg::Expr(dim_expr) = dimension {
                     for item in &dim_expr.terms {
                         if let hir::DimTermTarget::Dimension(name) = &item.term.target {
-                            let key = self.name_key(name.value.owner(), name.value.as_str());
-                            Self::reference(table, name.span, key);
+                            Self::reference(
+                                table,
+                                name.span,
+                                SymbolKey::Dimension(name.value.clone()),
+                            );
                         }
                     }
                 }
@@ -794,33 +611,28 @@ impl<'a> HirRefCollector<'a> {
             hir::TypeExprKind::DimExpr(dim_expr) => {
                 for item in &dim_expr.terms {
                     if let hir::DimTermTarget::Dimension(name) = &item.term.target {
-                        let key = self.name_key(name.value.owner(), name.value.as_str());
-                        Self::reference(table, name.span, key);
+                        Self::reference(table, name.span, SymbolKey::Dimension(name.value.clone()));
                     }
                 }
             }
             hir::TypeExprKind::Index(index) | hir::TypeExprKind::Key(index) => {
                 if let hir::IndexRef::Concrete(name) = index {
-                    let key = self.name_key(name.value.owner(), name.value.as_str());
-                    Self::reference(table, name.span, key);
+                    Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
                 }
             }
             hir::TypeExprKind::Struct(name) => {
-                let key = self.name_key(name.value.owner(), name.value.as_str());
-                Self::reference(table, name.span, key);
+                Self::reference(table, name.span, SymbolKey::StructType(name.value.clone()));
             }
             hir::TypeExprKind::Indexed { base, indexes } => {
                 self.walk_type(base, table);
                 for index in indexes {
                     if let hir::IndexRef::Concrete(name) = index {
-                        let key = self.name_key(name.value.owner(), name.value.as_str());
-                        Self::reference(table, name.span, key);
+                        Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
                     }
                 }
             }
             hir::TypeExprKind::TypeApplication { name, generic_args } => {
-                let key = self.name_key(name.value.owner(), name.value.as_str());
-                Self::reference(table, name.span, key);
+                Self::reference(table, name.span, SymbolKey::StructType(name.value.clone()));
                 for arg in generic_args {
                     self.walk_generic_arg(arg, table);
                 }
@@ -836,14 +648,12 @@ impl<'a> HirRefCollector<'a> {
             hir::GenericArg::Dim(hir::DimArg::Expr(dim_expr)) => {
                 for item in &dim_expr.terms {
                     if let hir::DimTermTarget::Dimension(name) = &item.term.target {
-                        let key = self.name_key(name.value.owner(), name.value.as_str());
-                        Self::reference(table, name.span, key);
+                        Self::reference(table, name.span, SymbolKey::Dimension(name.value.clone()));
                     }
                 }
             }
             hir::GenericArg::Index(hir::IndexRef::Concrete(name)) => {
-                let key = self.name_key(name.value.owner(), name.value.as_str());
-                Self::reference(table, name.span, key);
+                Self::reference(table, name.span, SymbolKey::Index(name.value.clone()));
             }
             hir::GenericArg::Type(type_expr) => self.walk_type(type_expr, table),
         }
@@ -860,53 +670,70 @@ fn nat_expr_label(nat_expr: &hir::NatExpr) -> String {
     }
 }
 
-fn symbol_key_for_name_path(path: &NamePath) -> SymbolKey {
-    match SymbolPath::from_name_path(path) {
-        SymbolPath::Local(name) => SymbolKey::TopLevel(name),
-        SymbolPath::Qualified { module, name } => SymbolKey::Qualified { module, name },
+/// A source declaration identity whose syntactic kind and canonical namespace
+/// agree by construction.
+///
+/// This private builder type prevents callers from pairing, for example, a
+/// unit key with `SymbolCategory::Const`. The presentation category and
+/// semantic ID are derived together in [`TopLevelDefinition::into_parts`].
+enum TopLevelDefinition {
+    Param(ResolvedDeclName),
+    Node(ResolvedDeclName),
+    Const(ResolvedDeclName),
+    Dimension(ResolvedDimName),
+    Unit(ResolvedUnitName),
+    StructType(ResolvedStructTypeName),
+    Index(ResolvedIndexName),
+    Assert(ResolvedDeclName),
+    Plot(ResolvedDeclName),
+    Figure(ResolvedDeclName),
+    Layer(ResolvedDeclName),
+    Dag(ResolvedDeclName),
+}
+
+impl TopLevelDefinition {
+    fn into_parts(self) -> (SymbolKey, SymbolCategory, String) {
+        match self {
+            Self::Param(name) => {
+                definition_parts(SymbolKey::Declaration(name), SymbolCategory::Param)
+            }
+            Self::Node(name) => {
+                definition_parts(SymbolKey::Declaration(name), SymbolCategory::Node)
+            }
+            Self::Const(name) => {
+                definition_parts(SymbolKey::Declaration(name), SymbolCategory::Const)
+            }
+            Self::Dimension(name) => {
+                definition_parts(SymbolKey::Dimension(name), SymbolCategory::Dimension)
+            }
+            Self::Unit(name) => definition_parts(SymbolKey::Unit(name), SymbolCategory::Unit),
+            Self::StructType(name) => {
+                definition_parts(SymbolKey::StructType(name), SymbolCategory::StructType)
+            }
+            Self::Index(name) => definition_parts(SymbolKey::Index(name), SymbolCategory::Index),
+            Self::Assert(name) => {
+                definition_parts(SymbolKey::Declaration(name), SymbolCategory::Assert)
+            }
+            Self::Plot(name) => {
+                definition_parts(SymbolKey::Declaration(name), SymbolCategory::Plot)
+            }
+            Self::Figure(name) => {
+                definition_parts(SymbolKey::Declaration(name), SymbolCategory::Figure)
+            }
+            Self::Layer(name) => {
+                definition_parts(SymbolKey::Declaration(name), SymbolCategory::Layer)
+            }
+            Self::Dag(name) => definition_parts(SymbolKey::Declaration(name), SymbolCategory::Dag),
+        }
     }
 }
 
-impl SymbolKey {
-    pub fn from_scoped_name(name: &ScopedName) -> Self {
-        if name.qualifier().is_empty() {
-            Self::TopLevel(name.member().to_string())
-        } else {
-            Self::Qualified {
-                module: name.qualifier().iter().map(ToString::to_string).collect(),
-                name: name.member().to_string(),
-            }
-        }
-    }
-
-    pub fn to_scoped_name(&self) -> Option<ScopedName> {
-        match self {
-            Self::TopLevel(name) => DeclName::try_new(name.clone()).ok().map(ScopedName::local),
-            Self::Qualified { module, name } => {
-                let qualifier = module
-                    .iter()
-                    .cloned()
-                    .map(ModuleAliasName::try_new)
-                    .collect::<Result<Vec<_>, _>>()
-                    .ok()?;
-                let member = DeclName::try_new(name.clone()).ok()?;
-                Some(ScopedName::qualified_path(qualifier, member))
-            }
-            Self::Constructor(_)
-            | Self::Variant { .. }
-            | Self::Field { .. }
-            | Self::GenericParam { .. }
-            | Self::ExprScoped { .. } => None,
-        }
-    }
-
-    /// Returns the top-level name if this is a `TopLevel` key.
-    pub fn top_level_name(&self) -> Option<&str> {
-        match self {
-            Self::TopLevel(name) => Some(name),
-            _ => None,
-        }
-    }
+fn definition_parts(
+    key: SymbolKey,
+    category: SymbolCategory,
+) -> (SymbolKey, SymbolCategory, String) {
+    let name = key.leaf_name().to_string();
+    (key, category, name)
 }
 
 /// The category of a symbol.
@@ -977,8 +804,9 @@ impl DefinitionInfo {
 pub struct ReferenceInfo {
     /// Byte-offset span of this reference in the current file.
     pub span: Span,
-    /// Key into `definitions` that this reference points to.
-    pub target: SymbolKey,
+    /// Canonical target, or a namespace-aware unresolved spelling retained
+    /// while the user is editing incomplete code.
+    pub target: ReferenceTarget,
 }
 
 /// A precomputed inlay-hint candidate: a declaration that could produce a hint.
@@ -999,11 +827,100 @@ pub struct InlayHintEntry {
     pub name_end: Position,
 }
 
-/// The complete symbol table for one file.
+/// A duplicate canonical definition rejected by [`DefinitionIndex`].
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("duplicate editor definition for {key:?}")]
+pub struct DuplicateDefinition {
+    pub key: SymbolKey,
+    pub first_span: Span,
+    pub duplicate_span: Span,
+}
+
+/// Invariant-preserving definition map.
+///
+/// Mutation is private and fallible: a canonical ID can never silently replace
+/// another definition. Consumers receive only read APIs.
 #[derive(Debug, Default)]
+pub struct DefinitionIndex {
+    entries: HashMap<SymbolKey, DefinitionInfo>,
+}
+
+impl DefinitionIndex {
+    fn insert(
+        &mut self,
+        key: SymbolKey,
+        definition: DefinitionInfo,
+    ) -> Result<(), Box<DuplicateDefinition>> {
+        use std::collections::hash_map::Entry;
+        match self.entries.entry(key.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(definition);
+                Ok(())
+            }
+            Entry::Occupied(entry) => Err(Box::new(DuplicateDefinition {
+                key,
+                first_span: entry.get().name_span,
+                duplicate_span: definition.name_span,
+            })),
+        }
+    }
+
+    pub fn get(&self, key: &SymbolKey) -> Option<&DefinitionInfo> {
+        self.entries.get(key)
+    }
+
+    fn get_mut(&mut self, key: &SymbolKey) -> Option<&mut DefinitionInfo> {
+        self.entries.get_mut(key)
+    }
+
+    pub fn contains_key(&self, key: &SymbolKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
+    pub fn values(&self) -> std::collections::hash_map::Values<'_, SymbolKey, DefinitionInfo> {
+        self.entries.values()
+    }
+
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, SymbolKey, DefinitionInfo> {
+        self.entries.iter()
+    }
+
+    pub fn keys(&self) -> std::collections::hash_map::Keys<'_, SymbolKey, DefinitionInfo> {
+        self.entries.keys()
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+impl<'a> IntoIterator for &'a DefinitionIndex {
+    type Item = (&'a SymbolKey, &'a DefinitionInfo);
+    type IntoIter = std::collections::hash_map::Iter<'a, SymbolKey, DefinitionInfo>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.entries.iter()
+    }
+}
+
+impl std::ops::Index<&SymbolKey> for DefinitionIndex {
+    type Output = DefinitionInfo;
+
+    fn index(&self, index: &SymbolKey) -> &Self::Output {
+        &self.entries[index]
+    }
+}
+
+/// The complete symbol table for one file.
+#[derive(Debug)]
 pub struct SymbolTable {
+    /// Canonical module owning source definitions in this table.
+    owner: DagId,
     /// All symbol definitions keyed by a typed `SymbolKey`.
-    pub(crate) definitions: HashMap<SymbolKey, DefinitionInfo>,
+    pub(crate) definitions: DefinitionIndex,
+    /// Duplicate IDs rejected while tolerantly indexing invalid source.
+    definition_conflicts: Vec<DuplicateDefinition>,
     /// All reference occurrences sorted by span offset.
     references: Vec<ReferenceInfo>,
     /// Secondary index: name-span byte offset → `SymbolKey`.
@@ -1030,7 +947,29 @@ pub struct SymbolTable {
     inlay_hint_entries: Vec<InlayHintEntry>,
 }
 
+impl Default for SymbolTable {
+    fn default() -> Self {
+        Self::new(DagId::root_in_package("__graphcal_lsp__", "empty"))
+    }
+}
+
 impl SymbolTable {
+    fn new(owner: DagId) -> Self {
+        Self {
+            owner,
+            definitions: DefinitionIndex::default(),
+            definition_conflicts: Vec::new(),
+            references: Vec::new(),
+            name_span_to_key: HashMap::new(),
+            defs_by_name_span: Vec::new(),
+            inlay_hint_entries: Vec::new(),
+        }
+    }
+
+    pub(crate) const fn owner(&self) -> &DagId {
+        &self.owner
+    }
+
     /// Find the reference at a given byte offset, if any.
     pub fn find_reference_at(&self, offset: usize) -> Option<&ReferenceInfo> {
         // Binary search for a reference whose span contains the offset.
@@ -1141,38 +1080,48 @@ impl SymbolTable {
     }
 
     /// Insert a definition and update the secondary `name_span_to_key` index.
-    fn insert_definition(&mut self, key: SymbolKey, definition: DefinitionInfo) {
-        // Only index non-empty spans (builtins and fields have empty spans).
-        if !definition.name_span.is_empty() {
-            self.name_span_to_key
-                .insert(definition.name_span.offset(), key.clone());
+    ///
+    /// The operation is atomic: duplicate semantic IDs return a typed error and
+    /// leave both indices unchanged.
+    fn try_insert_definition(
+        &mut self,
+        key: SymbolKey,
+        definition: DefinitionInfo,
+    ) -> Result<(), Box<DuplicateDefinition>> {
+        let name_span = definition.name_span;
+        self.definitions.insert(key.clone(), definition)?;
+        if !name_span.is_empty() {
+            self.name_span_to_key.insert(name_span.offset(), key);
         }
-        self.definitions.insert(key, definition);
+        Ok(())
     }
 
-    /// Register a top-level definition from a named declaration.
-    ///
-    /// This is a convenience helper that handles the common pattern of:
-    /// 1. Converting the name to a `String`
-    /// 2. Creating a `SymbolKey::TopLevel`
-    /// 3. Inserting a `DefinitionInfo` with the given category and spans
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "declaration fields line up with DefinitionInfo — splitting would just shuffle them across a struct"
-    )]
-    fn register_top_level(
+    /// Tolerant builder boundary: preserve the first valid definition and
+    /// retain every typed duplicate error for diagnostics/debugging.
+    fn insert_definition(&mut self, key: SymbolKey, definition: DefinitionInfo) {
+        if let Err(conflict) = self.try_insert_definition(key, definition) {
+            self.definition_conflicts.push(*conflict);
+        }
+    }
+
+    #[cfg(test)]
+    fn definition_conflicts(&self) -> &[DuplicateDefinition] {
+        &self.definition_conflicts
+    }
+
+    /// Register a source definition under its canonical semantic identity.
+    fn register_definition(
         &mut self,
-        name: impl AsRef<str>,
+        identity: TopLevelDefinition,
         name_span: Span,
         decl_span: Span,
-        category: SymbolCategory,
         type_description: Option<String>,
         detail: Option<String>,
         visibility: BindableVisibility,
     ) {
-        let name = name.as_ref().to_string();
+        let (key, category, name) = identity.into_parts();
         self.insert_definition(
-            SymbolKey::TopLevel(name.clone()),
+            key,
             DefinitionInfo {
                 name,
                 category,
@@ -1185,12 +1134,98 @@ impl SymbolTable {
         );
     }
 
+    /// Resolve a reference target against definitions declared in this table.
+    /// Qualified unresolved spellings belong to an import binding and are
+    /// intentionally left for the workspace analysis layer.
+    pub fn resolve_local_target(&self, target: &ReferenceTarget) -> Option<SymbolKey> {
+        match target {
+            ReferenceTarget::Resolved(target) => Some(target.clone()),
+            ReferenceTarget::Unresolved(unresolved) => {
+                let path = unresolved.path();
+                if !path.is_local() {
+                    return None;
+                }
+                self.definitions
+                    .keys()
+                    .find(|candidate| {
+                        candidate.owner() == Some(&self.owner)
+                            && candidate.leaf_name() == path.leaf().as_str()
+                            && unresolved.accepts(candidate)
+                    })
+                    .cloned()
+            }
+        }
+    }
+
     /// Find all references that point to the given target key.
     pub fn find_all_references(&self, target: &SymbolKey) -> Vec<&ReferenceInfo> {
         self.references
             .iter()
-            .filter(|r| &r.target == target)
+            .filter(|reference| {
+                self.resolve_local_target(&reference.target).as_ref() == Some(target)
+            })
             .collect()
+    }
+
+    pub fn unique_definition_named(&self, name: &str) -> Option<&DefinitionInfo> {
+        let mut matches = self.definitions.values().filter(|definition| {
+            definition.name == name
+                && !definition.name_span.is_empty()
+                && !matches!(
+                    definition.category,
+                    SymbolCategory::Constructor
+                        | SymbolCategory::Field
+                        | SymbolCategory::GenericParam
+                        | SymbolCategory::LocalVar
+                        | SymbolCategory::BuiltinFn
+                        | SymbolCategory::BuiltinConst
+                        | SymbolCategory::ExternFn
+                )
+        });
+        let definition = matches.next()?;
+        matches.next().is_none().then_some(definition)
+    }
+
+    pub fn scoped_name_for_decl(&self, key: &SymbolKey) -> Option<ScopedName> {
+        let SymbolKey::Declaration(name) = key else {
+            return None;
+        };
+        let member = name.to_unowned_def_name();
+        if name.owner() == &self.owner {
+            return Some(ScopedName::local(member));
+        }
+        if !name.owner().is_descendant_of(&self.owner) {
+            return None;
+        }
+        let qualifier = name
+            .owner()
+            .segments()
+            .iter()
+            .skip(self.owner.segments().len())
+            .map(|segment| ModuleAliasName::try_new(segment.to_string()))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        Some(ScopedName::qualified_path(qualifier, member))
+    }
+
+    pub fn definition_for_scoped_decl(&self, name: &ScopedName) -> Option<&DefinitionInfo> {
+        self.definitions.iter().find_map(|(key, definition)| {
+            let SymbolKey::Declaration(resolved) = key else {
+                return None;
+            };
+            let owner_matches = if name.qualifier().is_empty() {
+                resolved.owner() == &self.owner
+            } else {
+                let qualifier = name.qualifier();
+                let owner_segments = resolved.owner().segments().as_slice();
+                owner_segments.len() >= qualifier.len()
+                    && owner_segments[owner_segments.len() - qualifier.len()..]
+                        .iter()
+                        .zip(qualifier)
+                        .all(|(segment, qualifier)| segment.as_ref() == qualifier.as_str())
+            };
+            (owner_matches && resolved.as_str() == name.member().as_str()).then_some(definition)
+        })
     }
 
     /// The name of the innermost `dag` declaration whose body contains
@@ -1220,7 +1255,7 @@ pub fn build_from_ast(
     dag_id: &DagId,
     resolver: &ModuleResolver,
 ) -> SymbolTable {
-    let mut table = SymbolTable::default();
+    let mut table = SymbolTable::new(dag_id.clone());
     let mut refs = HirRefCollector::new(dag_id, resolver);
 
     register_builtins(&mut table);
@@ -1300,7 +1335,7 @@ fn register_builtins(table: &mut SymbolTable) {
     for constant in BuiltinConst::ALL {
         let name = constant.as_str();
         table.insert_definition(
-            SymbolKey::TopLevel(name.to_string()),
+            SymbolKey::BuiltinConstant(*constant),
             DefinitionInfo {
                 name: name.to_string(),
                 category: SymbolCategory::BuiltinConst,
@@ -1332,7 +1367,7 @@ fn register_builtins(table: &mut SymbolTable) {
             |function| format!("builtin, arity {}", function.arity()),
         );
         table.insert_definition(
-            SymbolKey::TopLevel(spelling.to_string()),
+            SymbolKey::BuiltinFunction(*name),
             DefinitionInfo {
                 name: spelling.to_string(),
                 category: SymbolCategory::BuiltinFn,
@@ -1358,7 +1393,11 @@ fn collect_attribute_refs(
                         let ident = segments.first();
                         table.references.push(ReferenceInfo {
                             span: ident.span,
-                            target: SymbolKey::TopLevel(ident.name.to_string()),
+                            target: SymbolKey::Declaration(ResolvedDeclName::from_def(
+                                table.owner.clone(),
+                                DeclName::from_atom(ident.name.clone()),
+                            ))
+                            .into(),
                         });
                     }
                     AttributeArg::Path { .. }
@@ -1377,11 +1416,13 @@ fn collect_param_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &p.name.value,
+    table.register_definition(
+        TopLevelDefinition::Param(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            p.name.value.clone(),
+        )),
         p.name.span,
         decl_span,
-        SymbolCategory::Param,
         None,
         None,
         visibility,
@@ -1399,11 +1440,13 @@ fn collect_node_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &n.name.value,
+    table.register_definition(
+        TopLevelDefinition::Node(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            n.name.value.clone(),
+        )),
         n.name.span,
         decl_span,
-        SymbolCategory::Node,
         None,
         None,
         visibility,
@@ -1419,11 +1462,13 @@ fn collect_const_node_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &c.name.value,
+    table.register_definition(
+        TopLevelDefinition::Const(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            c.name.value.clone(),
+        )),
         c.name.span,
         decl_span,
-        SymbolCategory::Const,
         None,
         None,
         visibility,
@@ -1438,11 +1483,13 @@ fn collect_base_dim_decl(
     visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
-    table.register_top_level(
-        &d.name.value,
+    table.register_definition(
+        TopLevelDefinition::Dimension(ResolvedDimName::from_def(
+            table.owner.clone(),
+            d.name.value.clone(),
+        )),
         d.name.span,
         decl_span,
-        SymbolCategory::Dimension,
         None,
         None,
         visibility,
@@ -1455,11 +1502,13 @@ fn collect_dim_decl(
     visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
-    table.register_top_level(
-        &d.name.value,
+    table.register_definition(
+        TopLevelDefinition::Dimension(ResolvedDimName::from_def(
+            table.owner.clone(),
+            d.name.value.clone(),
+        )),
         d.name.span,
         decl_span,
-        SymbolCategory::Dimension,
         None,
         None,
         visibility,
@@ -1476,11 +1525,13 @@ fn collect_unit_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &u.name.value,
+    table.register_definition(
+        TopLevelDefinition::Unit(ResolvedUnitName::from_def(
+            table.owner.clone(),
+            u.name.value.clone(),
+        )),
         u.name.span,
         decl_span,
-        SymbolCategory::Unit,
         None,
         None,
         visibility,
@@ -1498,25 +1549,24 @@ fn collect_type_decl(
     visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
-    table.register_top_level(
-        &t.name.value,
+    let type_id = ResolvedStructTypeName::from_def(table.owner.clone(), t.name.value.clone());
+    table.register_definition(
+        TopLevelDefinition::StructType(type_id.clone()),
         t.name.span,
         decl_span,
-        SymbolCategory::StructType,
         None,
         None,
         visibility,
     );
 
-    let type_path = SymbolPath::local(t.name.value.to_string());
     let generic_scope = t
         .generic_params
         .iter()
         .map(|param| {
-            let key = SymbolKey::GenericParam {
-                owner: type_path.clone(),
-                name: param.name.value.to_string(),
-            };
+            let key = SymbolKey::GenericParam(GenericParamId::new(
+                type_id.clone(),
+                param.name.value.clone(),
+            ));
             table.insert_definition(
                 key.clone(),
                 DefinitionInfo {
@@ -1550,8 +1600,10 @@ fn collect_type_decl(
     if let TypeDeclBody::Constructors(members) = &t.body {
         for member in members {
             let constructor_name = member.name.value.to_string();
+            let constructor_id =
+                ResolvedConstructorName::from_def(table.owner.clone(), member.name.value.clone());
             table.insert_definition(
-                SymbolKey::Constructor(SymbolPath::local(constructor_name.clone())),
+                SymbolKey::Constructor(constructor_id.clone()),
                 DefinitionInfo {
                     name: constructor_name.clone(),
                     category: SymbolCategory::Constructor,
@@ -1565,10 +1617,10 @@ fn collect_type_decl(
             if let Some(fields) = &member.payload {
                 for field in fields {
                     table.insert_definition(
-                        SymbolKey::Field {
-                            owner: SymbolPath::local(constructor_name.clone()),
-                            field_name: field.name.value.to_string(),
-                        },
+                        SymbolKey::Field(FieldId::new(
+                            constructor_id.clone(),
+                            field.name.value.clone(),
+                        )),
                         DefinitionInfo {
                             name: field.name.value.to_string(),
                             category: SymbolCategory::Field,
@@ -1604,11 +1656,11 @@ fn collect_index_decl(
     table: &mut SymbolTable,
 ) {
     let name = idx.name.value.to_string();
-    table.register_top_level(
-        &name,
+    let index_id = ResolvedIndexName::from_def(table.owner.clone(), idx.name.value.clone());
+    table.register_definition(
+        TopLevelDefinition::Index(index_id.clone()),
         idx.name.span,
         decl_span,
-        SymbolCategory::Index,
         None,
         None,
         visibility,
@@ -1617,10 +1669,10 @@ fn collect_index_decl(
         IndexDeclKind::Named { variants } => {
             for variant in variants {
                 let vname = variant.value.to_string();
-                let key = SymbolKey::Variant {
-                    parent: SymbolPath::local(name.clone()),
-                    variant: vname.clone(),
-                };
+                let key = SymbolKey::IndexVariant(IndexVariantId::new(
+                    index_id.clone(),
+                    variant.value.clone(),
+                ));
                 table.insert_definition(
                     key,
                     DefinitionInfo {
@@ -1651,11 +1703,13 @@ fn collect_assert_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &a.name.value,
+    table.register_definition(
+        TopLevelDefinition::Assert(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            a.name.value.clone(),
+        )),
         a.name.span,
         decl_span,
-        SymbolCategory::Assert,
         Some("Bool".to_string()),
         Some("assert".to_string()),
         visibility,
@@ -1684,11 +1738,13 @@ fn collect_plot_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &p.name.value,
+    table.register_definition(
+        TopLevelDefinition::Plot(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            p.name.value.clone(),
+        )),
         p.name.span,
         decl_span,
-        SymbolCategory::Plot,
         Some(format!("plot (mark: {})", p.mark.mark_type)),
         Some("plot".to_string()),
         visibility,
@@ -1711,11 +1767,13 @@ fn collect_figure_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &f.name.value,
+    table.register_definition(
+        TopLevelDefinition::Figure(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            f.name.value.clone(),
+        )),
         f.name.span,
         decl_span,
-        SymbolCategory::Figure,
         Some("figure".to_string()),
         Some("figure".to_string()),
         visibility,
@@ -1732,11 +1790,13 @@ fn collect_layer_decl(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    table.register_top_level(
-        &l.name.value,
+    table.register_definition(
+        TopLevelDefinition::Layer(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            l.name.value.clone(),
+        )),
         l.name.span,
         decl_span,
-        SymbolCategory::Layer,
         Some("layer".to_string()),
         Some("layer".to_string()),
         visibility,
@@ -1752,11 +1812,13 @@ fn collect_dag_decl(
     visibility: BindableVisibility,
     table: &mut SymbolTable,
 ) {
-    table.register_top_level(
-        d.name.value.as_str(),
+    table.register_definition(
+        TopLevelDefinition::Dag(ResolvedDeclName::from_def(
+            table.owner.clone(),
+            d.name.value.clone(),
+        )),
         d.name.span,
         decl_span,
-        SymbolCategory::Dag,
         None,
         None,
         visibility,
@@ -1764,7 +1826,7 @@ fn collect_dag_decl(
     // Register the DAG body's value declarations as qualified members so
     // inline-call projections (`@dag(...).out`), including projectable param
     // input ports, resolve to their definitions inside the DAG body.
-    let dag_name = d.name.value.to_string();
+    let dag_id = table.owner.child(d.name.value.as_str());
     for body_decl in &d.body {
         let (member_name, member_span, category) = match &body_decl.kind {
             graphcal_compiler::desugar::desugared_ast::DeclKind::Param(p) => {
@@ -1778,11 +1840,10 @@ fn collect_dag_decl(
             }
             _ => continue,
         };
+        let member_id =
+            ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid(member_name.clone()));
         table.insert_definition(
-            SymbolKey::Qualified {
-                module: vec![dag_name.clone()],
-                name: member_name.clone(),
-            },
+            SymbolKey::Declaration(member_id),
             DefinitionInfo {
                 name: member_name,
                 category,
@@ -1825,10 +1886,11 @@ fn collect_plugin_import_decl(
             .get(function.span.offset()..function.span.offset() + function.span.len())
             .map(|text| text.trim_end_matches(';').trim().to_string());
         table.insert_definition(
-            SymbolKey::Qualified {
-                module: vec![p.alias.value.to_string()],
-                name: function.name.value.to_string(),
-            },
+            SymbolKey::ExternFunction(ExternFunctionId::new(
+                table.owner.clone(),
+                p.alias.value.clone(),
+                function.name.value.clone(),
+            )),
             DefinitionInfo {
                 name: format!("{}.{}", p.alias.value, function.name.value),
                 category: SymbolCategory::ExternFn,
@@ -1859,15 +1921,33 @@ fn collect_import_or_include_names(
 ) {
     if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) = kind {
         for import_item in names {
+            let path = SourceSymbolPath::local(import_item.local_name_atom().clone());
+            let unresolved = match import_item.namespace {
+                graphcal_compiler::syntax::ast::ImportItemNamespace::Term => {
+                    UnresolvedSymbol::Term(path)
+                }
+                graphcal_compiler::syntax::ast::ImportItemNamespace::Type => {
+                    UnresolvedSymbol::StructType(path)
+                }
+                graphcal_compiler::syntax::ast::ImportItemNamespace::Dimension => {
+                    UnresolvedSymbol::Dimension(path)
+                }
+                graphcal_compiler::syntax::ast::ImportItemNamespace::Unit => {
+                    UnresolvedSymbol::Unit(path)
+                }
+                graphcal_compiler::syntax::ast::ImportItemNamespace::Index => {
+                    UnresolvedSymbol::Index(path)
+                }
+            };
+            let target = ReferenceTarget::Unresolved(unresolved);
             table.references.push(ReferenceInfo {
                 span: import_item.name.span,
-                target: SymbolKey::TopLevel(import_item.name.name.to_string()),
+                target: target.clone(),
             });
-            // If aliased, the alias also resolves to the same target.
             if let Some(alias) = &import_item.alias {
                 table.references.push(ReferenceInfo {
                     span: alias.span,
-                    target: SymbolKey::TopLevel(import_item.name.name.to_string()),
+                    target,
                 });
             }
         }
@@ -1898,7 +1978,12 @@ fn collect_type_expr_refs_in_scope(
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
         TypeExprKind::DimExpr(dim_expr) => {
-            collect_dim_expr_refs_in_scope(dim_expr, generic_scope, table);
+            collect_dim_expr_refs_in_scope(
+                dim_expr,
+                generic_scope,
+                UnresolvedSymbol::TypeExpression,
+                table,
+            );
         }
         TypeExprKind::Indexed { base, indexes } => {
             collect_type_expr_refs_in_scope(base, generic_scope, table);
@@ -1907,9 +1992,10 @@ fn collect_type_expr_refs_in_scope(
                     graphcal_compiler::desugar::desugared_ast::IndexExpr::Name(path) => {
                         table.references.push(ReferenceInfo {
                             span: path.span,
-                            target: symbol_key_for_path_in_generic_scope(
+                            target: reference_target_in_generic_scope(
                                 &path.value,
                                 generic_scope,
+                                UnresolvedSymbol::Index,
                             ),
                         });
                     }
@@ -1926,7 +2012,11 @@ fn collect_type_expr_refs_in_scope(
         TypeExprKind::TypeApplication { name, generic_args } => {
             table.references.push(ReferenceInfo {
                 span: name.span,
-                target: symbol_key_for_name_path(&name.value),
+                target: reference_target_in_generic_scope(
+                    &name.value,
+                    generic_scope,
+                    UnresolvedSymbol::StructType,
+                ),
             });
             for arg in generic_args {
                 collect_generic_arg_refs(arg, generic_scope, table);
@@ -1966,7 +2056,11 @@ fn collect_generic_arg_refs(
             graphcal_compiler::syntax::ast::IndexExpr::Name(path) => {
                 table.references.push(ReferenceInfo {
                     span: path.span,
-                    target: symbol_key_for_path_in_generic_scope(&path.value, generic_scope),
+                    target: reference_target_in_generic_scope(
+                        &path.value,
+                        generic_scope,
+                        UnresolvedSymbol::Index,
+                    ),
                 });
             }
             graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. }
@@ -1992,8 +2086,14 @@ fn collect_ambiguous_generic_arg_refs(
         graphcal_compiler::syntax::ast::AmbiguousGenericArg::Name(ident) => {
             table.references.push(ReferenceInfo {
                 span: ident.span,
-                target: generic_param_symbol(&ident.name, generic_scope)
-                    .unwrap_or_else(|| SymbolKey::TopLevel(ident.name.to_string())),
+                target: generic_param_symbol(&ident.name, generic_scope).map_or_else(
+                    || {
+                        ReferenceTarget::Unresolved(UnresolvedSymbol::GenericArgument(
+                            SourceSymbolPath::local(ident.name.clone()),
+                        ))
+                    },
+                    ReferenceTarget::Resolved,
+                ),
             });
         }
         graphcal_compiler::syntax::ast::AmbiguousGenericArg::Mul(operands, _) => {
@@ -2015,7 +2115,7 @@ fn collect_nat_generic_param_refs(
             if let Some(target) = generic_param_symbol(&ident.name, generic_scope) {
                 table.references.push(ReferenceInfo {
                     span: ident.span,
-                    target,
+                    target: target.into(),
                 });
             }
         }
@@ -2037,16 +2137,17 @@ fn generic_param_symbol(
         .cloned()
 }
 
-fn symbol_key_for_path_in_generic_scope(
+fn reference_target_in_generic_scope(
     path: &NamePath,
     generic_scope: Option<&GenericParamSymbolScope>,
-) -> SymbolKey {
+    unresolved: fn(SourceSymbolPath) -> UnresolvedSymbol,
+) -> ReferenceTarget {
     if path.qualifier_and_leaf().is_none()
         && let Some(target) = generic_param_symbol(path.leaf(), generic_scope)
     {
-        return target;
+        return ReferenceTarget::Resolved(target);
     }
-    symbol_key_for_name_path(path)
+    ReferenceTarget::Unresolved(unresolved(SourceSymbolPath::from_name_path(path)))
 }
 
 /// Collect references from a constraint bound expression (limited walk for unit names).
@@ -2067,18 +2168,23 @@ fn collect_constraint_expr_refs(
 
 /// Collect references from a dimension expression.
 fn collect_dim_expr_refs(dim_expr: &DimExpr, table: &mut SymbolTable) {
-    collect_dim_expr_refs_in_scope(dim_expr, None, table);
+    collect_dim_expr_refs_in_scope(dim_expr, None, UnresolvedSymbol::Dimension, table);
 }
 
 fn collect_dim_expr_refs_in_scope(
     dim_expr: &DimExpr,
     generic_scope: Option<&GenericParamSymbolScope>,
+    unresolved: fn(SourceSymbolPath) -> UnresolvedSymbol,
     table: &mut SymbolTable,
 ) {
     for item in &dim_expr.terms {
         table.references.push(ReferenceInfo {
             span: item.term.span,
-            target: symbol_key_for_path_in_generic_scope(&item.term.name.value, generic_scope),
+            target: reference_target_in_generic_scope(
+                &item.term.name.value,
+                generic_scope,
+                unresolved,
+            ),
         });
     }
 }
@@ -2086,9 +2192,17 @@ fn collect_dim_expr_refs_in_scope(
 /// Collect references from a syntax-layer unit expression.
 fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
     for item in &unit_expr.terms {
+        let qualifier = item
+            .name
+            .value
+            .qualifier()
+            .into_iter()
+            .map(|segment| segment.atom().clone())
+            .collect();
+        let path = SourceSymbolPath::qualified(qualifier, item.name.value.name().atom().clone());
         table.references.push(ReferenceInfo {
             span: item.name.span,
-            target: SymbolKey::TopLevel(item.name.value.to_string()),
+            target: ReferenceTarget::Unresolved(UnresolvedSymbol::Unit(path)),
         });
     }
 }
@@ -2178,18 +2292,17 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
     if let Some(dag) = tir.dag_registry().get(dag_id) {
         // Enrich param/node/const declarations with resolved types + constraints.
         for (name, resolved_type) in dag.resolved_decl_types() {
-            let name_str = name.to_string();
-            let key = SymbolKey::TopLevel(name_str);
+            let Some(identity) = dag.bound_decl_identity(name) else {
+                continue;
+            };
+            let key = SymbolKey::Declaration(identity.clone());
             if let Some(def) = table.definitions.get_mut(&key) {
-                let type_desc = dag
-                    .bound_decl_identity(name)
-                    .and_then(|identity| dag.semantic().domain_bounds.get(identity))
-                    .map_or_else(
-                        || resolved_type.format(registry),
-                        |constraints| {
-                            format_type_with_constraints(resolved_type, constraints, registry)
-                        },
-                    );
+                let type_desc = dag.semantic().domain_bounds.get(identity).map_or_else(
+                    || resolved_type.format(registry),
+                    |constraints| {
+                        format_type_with_constraints(resolved_type, constraints, registry)
+                    },
+                );
                 def.type_description = Some(type_desc);
             }
         }
@@ -2203,14 +2316,10 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
         .map(|(k, d)| (k.clone(), d.category))
         .collect();
     for (key, category) in &definition_keys {
-        let Some(name) = key.top_level_name() else {
-            continue;
-        };
-        match category {
-            SymbolCategory::Dimension => {
-                let resolved =
-                    ResolvedDimName::from_def(dag_id.clone(), DimName::expect_valid(name));
-                if let Some(dim) = tir.dimension(&resolved)
+        match (key, category) {
+            (SymbolKey::Dimension(resolved), SymbolCategory::Dimension) => {
+                let name = resolved.as_str();
+                if let Some(dim) = tir.dimension(resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     def_mut.type_description = Some(format!(
@@ -2219,10 +2328,8 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                     ));
                 }
             }
-            SymbolCategory::Unit => {
-                let resolved =
-                    ResolvedUnitName::from_def(dag_id.clone(), UnitName::expect_valid(name));
-                if let Some(unit_info) = tir.unit_info(&resolved)
+            (SymbolKey::Unit(resolved), SymbolCategory::Unit) => {
+                if let Some(unit_info) = tir.unit_info(resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     let scale_str = match &unit_info.scale {
@@ -2240,10 +2347,8 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                     ));
                 }
             }
-            SymbolCategory::Index => {
-                let resolved =
-                    ResolvedIndexName::from_def(dag_id.clone(), IndexName::expect_valid(name));
-                if let Some(idx_def) = tir.declared_index_def(&resolved)
+            (SymbolKey::Index(resolved), SymbolCategory::Index) => {
+                if let Some(idx_def) = tir.declared_index_def(resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     match &idx_def.kind {
@@ -2286,12 +2391,8 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                     }
                 }
             }
-            SymbolCategory::StructType => {
-                let resolved = ResolvedStructTypeName::from_def(
-                    dag_id.clone(),
-                    StructTypeName::expect_valid(name),
-                );
-                if let Some(type_def) = tir.struct_type_def(&resolved)
+            (SymbolKey::StructType(resolved), SymbolCategory::StructType) => {
+                if let Some(type_def) = tir.struct_type_def(resolved)
                     && let Some(def_mut) = table.definitions.get_mut(key)
                 {
                     let desc = type_def.union_members().map_or_else(
@@ -2335,10 +2436,14 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
         };
         for member in members {
             for field in member.fields() {
-                let field_key = SymbolKey::Field {
-                    owner: SymbolPath::local(member.name().to_string()),
-                    field_name: field.name().to_string(),
-                };
+                let constructor = ResolvedConstructorName::from_def(
+                    dag_id.clone(),
+                    ConstructorName::expect_valid(member.name().to_string()),
+                );
+                let field_key = SymbolKey::Field(FieldId::new(
+                    constructor,
+                    FieldName::expect_valid(field.name().to_string()),
+                ));
                 if !table.definitions.contains_key(&field_key) {
                     table.insert_definition(
                         field_key,
@@ -2362,6 +2467,41 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
 mod tests {
     use super::*;
 
+    fn definition_key(table: &SymbolTable, category: SymbolCategory, name: &str) -> SymbolKey {
+        table
+            .definitions
+            .iter()
+            .find_map(|(key, definition)| {
+                (definition.category == category && definition.name == name).then(|| key.clone())
+            })
+            .unwrap_or_else(|| panic!("missing {category:?} definition `{name}`"))
+    }
+
+    fn reference_key(table: &SymbolTable, offset: usize) -> Option<SymbolKey> {
+        table
+            .find_reference_at(offset)
+            .and_then(|reference| table.resolve_local_target(&reference.target))
+    }
+
+    #[test]
+    fn duplicate_semantic_identity_is_rejected_without_replacement() {
+        let source = "const node x: Dimensionless = 1.0;\n\
+                      const node x: Dimensionless = 2.0;";
+        let table = table_for(source);
+        let definitions = table
+            .definitions
+            .values()
+            .filter(|definition| definition.name == "x")
+            .collect::<Vec<_>>();
+
+        assert_eq!(definitions.len(), 1);
+        assert_eq!(table.definition_conflicts().len(), 1);
+        assert_eq!(
+            table.definition_conflicts()[0].first_span,
+            definitions[0].name_span
+        );
+    }
+
     #[test]
     fn build_symbol_table_basic() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;";
@@ -2372,8 +2512,8 @@ mod tests {
         let file = desugared;
         let table = build_for_buffer(&file, source);
 
-        let x_key = SymbolKey::TopLevel("x".to_string());
-        let y_key = SymbolKey::TopLevel("y".to_string());
+        let x_key = definition_key(&table, SymbolCategory::Param, "x");
+        let y_key = definition_key(&table, SymbolCategory::Node, "y");
         assert!(table.definitions.contains_key(&x_key));
         assert!(table.definitions.contains_key(&y_key));
         assert_eq!(table.definitions[&x_key].category, SymbolCategory::Param);
@@ -2381,7 +2521,11 @@ mod tests {
 
         // @x is a reference
         assert!(
-            table.references.iter().any(|r| r.target == x_key),
+            table
+                .references
+                .iter()
+                .any(|reference| table.resolve_local_target(&reference.target)
+                    == Some(x_key.clone())),
             "expected @x reference"
         );
     }
@@ -2404,10 +2548,8 @@ node y: Dimensionless[Step] = unfold(
 
         let axis_offset = source.find("unfold(\n    Step").unwrap() + "unfold(\n    ".len();
         assert_eq!(
-            table
-                .find_reference_at(axis_offset)
-                .map(|reference| &reference.target),
-            Some(&SymbolKey::TopLevel("Step".to_string()))
+            reference_key(&table, axis_offset),
+            Some(definition_key(&table, SymbolCategory::Index, "Step"))
         );
         for local in ["prev_y", "prev_t", "t"] {
             let key = table
@@ -2438,15 +2580,8 @@ type Sized<N: Nat, I: Index = Component, M: Nat = N + 1> {
             .unwrap();
         let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_file);
         let table = build_for_buffer(&file, source);
-        let owner = SymbolPath::local("Sized");
-        let n_key = SymbolKey::GenericParam {
-            owner: owner.clone(),
-            name: "N".to_string(),
-        };
-        let i_key = SymbolKey::GenericParam {
-            owner,
-            name: "I".to_string(),
-        };
+        let n_key = definition_key(&table, SymbolCategory::GenericParam, "N");
+        let i_key = definition_key(&table, SymbolCategory::GenericParam, "I");
 
         assert_eq!(
             table.definitions[&n_key].category,
@@ -2456,7 +2591,7 @@ type Sized<N: Nat, I: Index = Component, M: Nat = N + 1> {
         assert_eq!(table.find_all_references(&i_key).len(), 1);
         assert_eq!(
             table
-                .find_all_references(&SymbolKey::TopLevel("Component".to_string()))
+                .find_all_references(&definition_key(&table, SymbolCategory::Index, "Component",))
                 .len(),
             1
         );
@@ -2485,8 +2620,8 @@ param q: Int[I]
         let file = desugared;
         let table = build_for_buffer(&file, source);
 
-        let p_key = SymbolKey::TopLevel("p".to_string());
-        let q_key = SymbolKey::TopLevel("q".to_string());
+        let p_key = definition_key(&table, SymbolCategory::Param, "p");
+        let q_key = definition_key(&table, SymbolCategory::Param, "q");
         assert!(
             table.definitions.contains_key(&p_key),
             "expected slot `p` in symbol table",
@@ -2525,24 +2660,24 @@ param q: Int[I]
         let reference = table.find_reference_at(at_x_offset);
         assert!(reference.is_some(), "expected to find reference at @x");
         assert_eq!(
-            reference.unwrap().target,
-            SymbolKey::TopLevel("x".to_string())
+            table.resolve_local_target(&reference.unwrap().target),
+            Some(definition_key(&table, SymbolCategory::Param, "x"))
         );
     }
     #[test]
-    fn symbol_key_helpers() {
-        assert_eq!(
-            SymbolKey::TopLevel("x".to_string()).top_level_name(),
-            Some("x")
-        );
-        assert_eq!(
-            SymbolKey::Field {
-                owner: SymbolPath::local("Rocket"),
-                field_name: "x".to_string(),
-            }
-            .top_level_name(),
-            None
-        );
+    fn same_spelling_in_distinct_namespaces_has_distinct_identity() {
+        let source = "pub const node scale: Dimensionless = 2.0;\n\
+                      pub const unit scale: Length = 1.0 m;\n\
+                      node value: Length = scale * 1.0 scale;";
+        let table = table_for(source);
+        let constant = definition_key(&table, SymbolCategory::Const, "scale");
+        let unit = definition_key(&table, SymbolCategory::Unit, "scale");
+
+        assert_ne!(constant, unit);
+        assert!(matches!(constant, SymbolKey::Declaration(_)));
+        assert!(matches!(unit, SymbolKey::Unit(_)));
+        assert_eq!(table.find_all_references(&constant).len(), 1);
+        assert_eq!(table.find_all_references(&unit).len(), 1);
     }
     // --- Inline DAG invocation LSP coverage (issue #451) ---
 
@@ -2575,22 +2710,20 @@ node total: Velocity = @dv[Maneuver.Departure];
                       node out: Dimensionless = mystery(@known + also_missing);";
         let table = table_for(source);
 
-        for (spelling, expected) in [
-            ("mystery", SymbolKey::TopLevel("mystery".to_string())),
-            ("@known", SymbolKey::TopLevel("known".to_string())),
-            (
-                "also_missing",
-                SymbolKey::TopLevel("also_missing".to_string()),
-            ),
-        ] {
+        let known = definition_key(&table, SymbolCategory::Param, "known");
+        for spelling in ["mystery", "@known", "also_missing"] {
             let offset = source.find(spelling).unwrap() + usize::from(spelling.starts_with('@'));
-            assert_eq!(
-                table
-                    .find_reference_at(offset)
-                    .map(|reference| &reference.target),
-                Some(&expected),
-                "missing retained reference at `{spelling}`"
-            );
+            let reference = table
+                .find_reference_at(offset)
+                .unwrap_or_else(|| panic!("missing retained reference at `{spelling}`"));
+            if spelling == "@known" {
+                assert_eq!(
+                    table.resolve_local_target(&reference.target),
+                    Some(known.clone())
+                );
+            } else {
+                assert!(matches!(reference.target, ReferenceTarget::Unresolved(_)));
+            }
         }
     }
 
@@ -2600,10 +2733,7 @@ node total: Velocity = @dv[Maneuver.Departure];
     fn table_row_key_references_are_label_precise() {
         let source = TABLE_SOURCE;
         let table = table_for(source);
-        let departure_key = SymbolKey::Variant {
-            parent: SymbolPath::local("Maneuver"),
-            variant: "Departure".to_string(),
-        };
+        let departure_key = definition_key(&table, SymbolCategory::IndexVariant, "Departure");
         let refs = table.find_all_references(&departure_key);
         assert!(!refs.is_empty(), "expected references to `Departure`");
         for r in refs {
@@ -2628,11 +2758,12 @@ node total: Velocity = @dv[Maneuver.Departure];
                 .find_reference_at(row_offset)
                 .unwrap_or_else(|| panic!("expected reference at `{variant}` row key"));
             assert_eq!(
-                reference.target,
-                SymbolKey::Variant {
-                    parent: SymbolPath::local("Maneuver"),
-                    variant: variant.to_string(),
-                },
+                table.resolve_local_target(&reference.target),
+                Some(definition_key(
+                    &table,
+                    SymbolCategory::IndexVariant,
+                    variant,
+                )),
                 "row key must resolve to its own variant"
             );
         }
@@ -2651,8 +2782,8 @@ node total: Velocity = @dv[Maneuver.Departure];
                 .find_reference_at(offset)
                 .expect("expected index reference at index segment");
             assert_eq!(
-                reference.target,
-                SymbolKey::TopLevel("Maneuver".to_string())
+                table.resolve_local_target(&reference.target),
+                Some(definition_key(&table, SymbolCategory::Index, "Maneuver"))
             );
         }
     }
@@ -2669,11 +2800,12 @@ node total: Velocity = @dv[Maneuver.Departure];
             .find_reference_at(departure_offset)
             .expect("expected variant reference at `Departure` segment");
         assert_eq!(
-            reference.target,
-            SymbolKey::Variant {
-                parent: SymbolPath::local("Maneuver"),
-                variant: "Departure".to_string(),
-            }
+            table.resolve_local_target(&reference.target),
+            Some(definition_key(
+                &table,
+                SymbolCategory::IndexVariant,
+                "Departure",
+            ))
         );
         assert_eq!(slice(source, reference.span), "Departure");
     }
@@ -2688,10 +2820,7 @@ node pick: Season = Season.Winter;
 node out: Dimensionless = match @pick { Season.Winter => 1.0, Season.Summer => 2.0 };
 ";
         let table = table_for(source);
-        let winter_key = SymbolKey::Variant {
-            parent: SymbolPath::local("Season"),
-            variant: "Winter".to_string(),
-        };
+        let winter_key = definition_key(&table, SymbolCategory::IndexVariant, "Winter");
         let refs = table.find_all_references(&winter_key);
         assert_eq!(
             refs.len(),
