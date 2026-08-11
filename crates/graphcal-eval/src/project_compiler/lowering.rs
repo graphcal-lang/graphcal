@@ -1289,7 +1289,9 @@ fn effective_index_binding_contract(
                         CompileError::Eval(match error {
                             DimensionResolveError::UnknownDimension { name } => {
                                 GraphcalError::UnknownDimension {
-                                    name,
+                                    name: graphcal_compiler::syntax::names::NamePath::from(
+                                        name.atom().clone(),
+                                    ),
                                     src: importer_src.clone(),
                                     span: binding_span.into(),
                                 }

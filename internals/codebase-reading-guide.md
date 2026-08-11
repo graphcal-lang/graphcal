@@ -665,7 +665,9 @@ core owner-qualified identity: a canonical `DagId` owner plus a namespace-typed
 leaf atom. `DagId` keeps package identity, path segments, and each typed
 `DagHierarchyEdge` (`SourceModule` versus `ConcreteInstance`) structurally;
 its dotted `Display` output is not canonical identity. `ResolvedIndexVariant`
-stores the resolved index identity plus the variant leaf.
+stores the resolved index identity plus the variant leaf. Diagnostics for
+unresolved qualified dimensions also retain `NamePath`; dotted rendering occurs
+only at the diagnostic boundary and is never smuggled through `DimName`.
 
 The graph IR preserves these typed identities through projection. Its DOT
 renderer assigns deterministic opaque local ids to node and cluster statements,

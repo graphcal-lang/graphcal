@@ -3698,7 +3698,7 @@ fn selectively_imported_unit_does_not_expose_its_backing_dimension_name() {
 
     match compile_to_tir_project(&root, None, &fs()) {
         Err(CompileError::Eval(GraphcalError::UnknownDimension { name, .. })) => {
-            assert_eq!(name.as_str(), "Score");
+            assert_eq!(name.to_string(), "Score");
         }
         other => panic!("expected UnknownDimension for Score, got {other:?}"),
     }

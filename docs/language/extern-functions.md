@@ -56,7 +56,9 @@ without the binary. At load time, each declaration is **verified
 structurally against the manifest embedded in the `.wasm` module** —
 renaming dimension variables or parameters is fine, but any difference in
 dimensional shape is a compile error (P005), so drift between source and
-binary can never be silently reinterpreted.
+binary can never be silently reinterpreted. If a dimensional signature names an
+unknown qualified path, the diagnostic preserves that complete path instead of
+flattening it into a dimension leaf.
 
 ## Dimension Variables
 

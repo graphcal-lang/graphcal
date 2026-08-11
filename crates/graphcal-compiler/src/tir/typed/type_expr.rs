@@ -13,6 +13,7 @@ use crate::registry::types::TypeGenericConstraint;
 use crate::syntax::dimension::ResolvedDimName;
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_resolve::ModuleResolveError;
+use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{GenericParamName, ResolvedStructTypeName};
 
@@ -173,7 +174,7 @@ fn hir_dimension(
         .get_dimension(name)
         .cloned()
         .ok_or_else(|| GraphcalError::UnknownDimension {
-            name: name.to_unowned_def_name(),
+            name: NamePath::from(name.atom().clone()),
             src: ctx.src.clone(),
             span: span.into(),
         })
