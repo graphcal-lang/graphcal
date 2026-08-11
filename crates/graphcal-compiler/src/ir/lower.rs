@@ -3755,7 +3755,7 @@ fn dimension_resolve_error(
 ) -> GraphcalError {
     match err {
         DimensionResolveError::UnknownDimension { name } => GraphcalError::UnknownDimension {
-            name,
+            name: NamePath::from(name.into_atom()),
             src: src.clone(),
             span: span.into(),
         },
@@ -5447,7 +5447,14 @@ fn resolve_extern_result_kind(
         && registry.dimensions.get_dimension(atom.as_str()).is_none()
     {
         // Not a dimension: the only remaining reading is a record type.
-        return resolve_extern_struct_return(&item.term, registry, owner, resolver, src);
+        return resolve_extern_struct_return(
+            &item.term.name.value,
+            item.term.name.span,
+            registry,
+            owner,
+            resolver,
+            src,
+        );
     }
     if let TypeExprKind::TypeApplication { .. } = &type_ann.kind {
         return Err(GraphcalError::InvalidExternSignature {
@@ -5465,7 +5472,8 @@ fn resolve_extern_result_kind(
 /// Resolve a record-type extern result: nominal identity through the
 /// module resolver, flattened field shape from the registry's definition.
 fn resolve_extern_struct_return(
-    term: &crate::desugar::desugared_ast::DimTerm,
+    path: &NamePath,
+    span: Span,
     registry: &Registry,
     owner: &crate::dag_id::DagId,
     resolver: &crate::syntax::module_resolve::ModuleResolver,
@@ -5479,20 +5487,16 @@ fn resolve_extern_struct_return(
 > {
     use crate::function_signature::{StructShape, StructShapeField, ValueKind};
 
-    let span = term.name.span;
     let invalid = |message: String| GraphcalError::InvalidExternSignature {
         message,
         src: src.clone(),
         span: span.into(),
     };
-    let path = &term.name.value;
     let Ok(resolved_type) = resolver.resolve_struct_type_path(owner, path) else {
         // Neither a dimension nor a type in scope: report it the way any
         // other unknown dimension-position name is reported.
         return Err(GraphcalError::UnknownDimension {
-            name: DimName::from_atom(path.as_bare().cloned().unwrap_or_else(|| {
-                crate::syntax::names::NameAtom::new_unchecked_for_parser(path.display_path())
-            })),
+            name: path.clone(),
             src: src.clone(),
             span: span.into(),
         });
@@ -5709,7 +5713,7 @@ fn resolve_extern_dim_monomial(
         };
         let Some(dim) = registry.dimensions.get_dimension(leaf.as_str()) else {
             return Err(GraphcalError::UnknownDimension {
-                name: DimName::from_atom(leaf.clone()),
+                name: NamePath::from(leaf.clone()),
                 src: src.clone(),
                 span: term.name.span.into(),
             });
@@ -5915,7 +5919,7 @@ mod tests {
         let err = parse_and_lower("unit foo: Blah = 1.0 m;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::UnknownDimension { name, .. } if name.as_str() == "Blah"
+            GraphcalError::UnknownDimension { name, .. } if name.to_string() == "Blah"
         ));
     }
 
@@ -5924,8 +5928,42 @@ mod tests {
         let err = parse_and_lower("dim Foo = Bar * Baz;").unwrap_err();
         assert!(matches!(
             err,
-            GraphcalError::UnknownDimension { name, .. } if name.as_str() == "Bar"
+            GraphcalError::UnknownDimension { name, .. } if name.to_string() == "Bar"
         ));
+    }
+
+    #[test]
+    fn unknown_qualified_extern_dimension_preserves_its_path() {
+        let path = NamePath::qualified_path(
+            [NameAtom::parse("missing").unwrap()],
+            NameAtom::parse("Dimension").unwrap(),
+        );
+        let registry = RegistryBuilder::new().try_build().unwrap();
+        let owner =
+            crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl"))
+                .unwrap();
+        let resolver = crate::syntax::module_resolve::ModuleResolver::default();
+        let source = make_src("missing.Dimension");
+
+        let error = resolve_extern_struct_return(
+            &path,
+            Span::new(0, source.inner().len()),
+            &registry,
+            &owner,
+            &resolver,
+            &source,
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                &error,
+                GraphcalError::UnknownDimension { name, .. }
+                    if name.segments().iter().map(NameAtom::as_str).collect::<Vec<_>>()
+                        == ["missing", "Dimension"]
+            ),
+            "{error:?}"
+        );
     }
 
     #[test]

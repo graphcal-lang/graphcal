@@ -13,7 +13,7 @@ use crate::syntax::function_name::{FnName, FnParamName};
 use crate::syntax::import_category::ImportItemCategoryMismatch;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::names::NameAtom;
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
@@ -813,7 +813,7 @@ pub enum GraphcalError {
         help("dimension must be declared or part of the prelude")
     )]
     UnknownDimension {
-        name: DimName,
+        name: NamePath,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("unknown dimension")]

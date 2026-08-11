@@ -207,9 +207,9 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
             replacement: Some(replacement),
             ..
         } => Some(serde_json::json!({ "replacement": replacement })),
-        GraphcalError::UnknownDimension { name, .. } => {
-            auto_import_data(name.as_str(), AutoImportCategory::Dimension)
-        }
+        GraphcalError::UnknownDimension { name, .. } => name
+            .as_bare()
+            .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
         GraphcalError::UnknownUnit { name, .. } if !name.is_qualified() => {
             auto_import_data(name.name().as_str(), AutoImportCategory::Unit)
         }
@@ -322,7 +322,10 @@ mod tests {
 
     use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
     use graphcal_compiler::registry::error::GraphcalError;
+    use graphcal_compiler::syntax::names::{NameAtom, NamePath};
+    use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::parser::Parser;
+    use graphcal_compiler::syntax::span::Span;
     use graphcal_eval::eval::{compile_and_eval_named, compile_and_eval_project};
     use graphcal_io::RealFileSystem;
     use miette::NamedSource;
@@ -368,6 +371,54 @@ mod tests {
         assert_eq!(
             diagnostics[0].range.end,
             Position::new(0, u32::try_from(source.len()).unwrap())
+        );
+    }
+
+    #[test]
+    fn qualified_unknown_dimension_retains_its_path_without_auto_import_data() {
+        let source = "missing.Dimension";
+        let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
+        let path = NamePath::new(NonEmpty::new(
+            NameAtom::parse("missing").unwrap(),
+            vec![NameAtom::parse("Dimension").unwrap()],
+        ));
+        let error = CompileError::Eval(GraphcalError::UnknownDimension {
+            name: path,
+            src: named_source,
+            span: Span::new(0, source.len()).into(),
+        });
+        let diagnostics = compile_error_to_diagnostics(&error);
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one unknown-dimension diagnostic");
+        };
+
+        assert!(diagnostic.message.contains("missing.Dimension"));
+        assert_eq!(diagnostic.data, None);
+    }
+
+    #[test]
+    fn bare_unknown_dimension_keeps_auto_import_data() {
+        let diagnostics = produce_diagnostics("param value: Missing;", "test.gcl");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code.as_ref().is_some_and(
+                    |code| matches!(code, NumberOrString::String(value) if value == "graphcal::D004"),
+                )
+            })
+            .expect("expected unknown-dimension diagnostic");
+        let auto_import: AutoImportDiagnosticData = serde_json::from_value(
+            diagnostic
+                .data
+                .clone()
+                .expect("expected bare-name auto-import payload"),
+        )
+        .unwrap();
+
+        assert_eq!(auto_import.auto_import_name, "Missing");
+        assert_eq!(
+            auto_import.auto_import_category,
+            AutoImportCategory::Dimension
         );
     }
 

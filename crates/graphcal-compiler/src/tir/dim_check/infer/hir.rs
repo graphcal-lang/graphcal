@@ -25,6 +25,7 @@ use crate::registry::types::{IndexCardinality, SemanticRegistry, TypeGenericCons
 use crate::syntax::ast::UnaryOp;
 use crate::syntax::index_name::{IndexEntryKey, ResolvedIndexVariant};
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{FieldName, GenericParamName};
@@ -3917,7 +3918,7 @@ fn infer_hir_dim_expr_arg(
                 hir::DimTermTarget::Dimension(target) => {
                     let dim = tir.dimension(&target.value).cloned().ok_or_else(|| {
                         GraphcalError::UnknownDimension {
-                            name: target.value.to_unowned_def_name(),
+                            name: NamePath::from(target.value.atom().clone()),
                             src: src.clone(),
                             span: target.span.into(),
                         }

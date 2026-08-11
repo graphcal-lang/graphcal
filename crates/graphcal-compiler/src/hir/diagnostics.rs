@@ -12,7 +12,7 @@ use crate::registry::error::GraphcalError;
 use crate::syntax::dimension::DimName;
 use crate::syntax::index_name::IndexName;
 use crate::syntax::module_resolve::ModuleResolveError;
-use crate::syntax::names::NameNamespace;
+use crate::syntax::names::{NameNamespace, NamePath};
 use crate::syntax::span::Span;
 
 /// Reject source-only type syntax that has no valid HIR representation.
@@ -87,7 +87,7 @@ pub fn type_lower_error_to_graphcal(
             && let Ok(name) = DimName::try_new(path.clone())
         {
             return GraphcalError::UnknownDimension {
-                name,
+                name: NamePath::from(name.into_atom()),
                 src: src.clone(),
                 span: (*span).into(),
             };
