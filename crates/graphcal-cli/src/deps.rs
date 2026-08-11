@@ -224,14 +224,8 @@ impl LockResolver {
         let manifest = read_manifest(root)?;
         let root_id = root_package_id(&manifest.name)?;
         let mut state = ResolveState::default();
-        let root_package = self.resolve_package(
-            root_id.clone(),
-            manifest,
-            PackageSource::Path {
-                path: ".".to_string(),
-            },
-            &mut state,
-        )?;
+        let root_package =
+            self.resolve_package(root_id.clone(), manifest, PackageSource::Root, &mut state)?;
         state.insert(root_package);
         let mut packages = state.packages.into_values().collect::<Vec<_>>();
         packages.sort_by(|a, b| a.id.cmp(&b.id));

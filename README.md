@@ -96,7 +96,9 @@ lockfile schema rejects unknown fields and requires canonical lowercase SHA-256
 pins; hand-edited lockfiles with custom fields or non-canonical hashes must be
 regenerated with `graphcal deps lock`. Lock dependency cycles are checked with
 an explicit work stack rather than recursive calls, and bounded loaders cap the
-number of package entries before validating the graph. See the
+number of package entries before validating the graph. Only the root lock entry
+may use the fixed path source `.`; every dependency must be Git-backed and
+reachable from that root. See the
 [package dependency guide](https://graphcal.org/docs/language/multi-file/#package-dependencies)
 for supported forms and migration guidance.
 

@@ -397,9 +397,7 @@ fn eval_package_project(
                 id: graphcal_package::PackageInstanceId::new("pkg-proj").unwrap(),
                 name: graphcal_package::PackageName::new("proj").unwrap(),
                 source_dir: graphcal_package::PackageSourceDirectory::new("src").unwrap(),
-                source: graphcal_package::PackageSource::Path {
-                    path: ".".to_string(),
-                },
+                source: graphcal_package::PackageSource::Root,
                 dependencies: std::collections::BTreeMap::new(),
             }],
             plugins: vec![graphcal_package::LockedPlugin::new("plugins/demo.wasm", sha).unwrap()],

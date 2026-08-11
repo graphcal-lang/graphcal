@@ -726,7 +726,10 @@ lowercase hexadecimal digits. Entries for the same canonical Git URL and commit
 must agree on the source-tree digest. Cycle validation uses an explicit typed
 work stack, so a deeply nested acyclic dependency graph cannot exhaust the Rust
 or WebAssembly call stack; cycle diagnostics retain the package-instance path
-that closes the cycle.
+that closes the cycle. The only path source is the root package itself, fixed
+to `.`; every dependency entry must be Git-backed, and every package entry must
+be reachable from the declared root. Arbitrary absolute/parent paths and orphan
+entries are rejected before the loader derives or canonicalizes source roots.
 
 `graphcal check`, `graphcal eval`, `graphcal graph`, and the LSP read only the
 lockfile and locally materialized cache entries. They do not fetch dependencies
@@ -740,10 +743,10 @@ must match in both directions. This ensures the source directory used for
 module resolution is exactly the directory covered by integrity verification;
 a stale or hand-edited lockfile cannot redirect imports to an unhashed tree.
 
-Existing hand-edited lockfiles with custom fields, uppercase hashes, or malformed
-hashes must remove those fields and run `graphcal deps lock` to regenerate
-canonical pins. Do not preserve private metadata inside `graphcal.lock`; keep it
-in a separate file.
+Existing hand-edited lockfiles with custom fields, uppercase hashes, malformed
+hashes, non-root path sources, or unreachable package entries must remove those
+fields/entries and run `graphcal deps lock` to regenerate canonical pins. Do not
+preserve private metadata inside `graphcal.lock`; keep it in a separate file.
 
 Lock creation and loading use the same deterministic source-tree algorithm.
 Package trees may contain only ordinary directories and regular files: symbolic
