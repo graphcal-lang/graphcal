@@ -52,7 +52,7 @@ pub struct ResolvedModuleTarget {
 }
 
 impl ResolvedModuleTarget {
-    fn in_file(source_file: DagId, target: DagId) -> Self {
+    const fn in_file(source_file: DagId, target: DagId) -> Self {
         Self {
             source_file,
             target,
@@ -263,7 +263,9 @@ impl LoadedDag {
     }
 
     #[must_use]
-    pub(crate) fn resolved_imports(&self) -> &HashMap<ModulePathKey, InlineBodyImportResolution> {
+    pub(crate) const fn resolved_imports(
+        &self,
+    ) -> &HashMap<ModulePathKey, InlineBodyImportResolution> {
         &self.resolved_imports
     }
 
@@ -322,7 +324,7 @@ impl LoadedFile {
 
     /// Raw source text parsed into this immutable loader artifact.
     #[must_use]
-    pub fn source(&self) -> &Arc<String> {
+    pub const fn source(&self) -> &Arc<String> {
         &self.source
     }
 
@@ -642,7 +644,7 @@ impl LoadedProject {
 
     /// Validated plugin artifacts and deferred plugin-loading errors.
     #[must_use]
-    pub fn plugins(
+    pub const fn plugins(
         &self,
     ) -> &HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry> {
         &self.plugins

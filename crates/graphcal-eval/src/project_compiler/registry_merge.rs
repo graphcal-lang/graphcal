@@ -61,12 +61,12 @@ pub(super) fn seed_imported_type_system(
             builder,
             artifact.frontend_registry(),
             names,
-            &dep_loaded.named_source(),
+            dep_loaded.named_source(),
         )?;
         graphcal_compiler::ir::lower::register_selected_declarations(
-            &dep_loaded.ast(),
+            dep_loaded.ast(),
             builder,
-            &dep_loaded.named_source(),
+            dep_loaded.named_source(),
             &names.without_resolved_dimensions_and_units(),
             dep_dag_id,
         )?;

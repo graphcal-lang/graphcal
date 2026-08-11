@@ -315,7 +315,7 @@ fn lower_inline_dag_modules<'a>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
     let loaded_file = &project.files()[file_dag_id];
-    let parent_values = crate::inline_dag::classify_value_decls_in_ast(&loaded_file.ast());
+    let parent_values = crate::inline_dag::classify_value_decls_in_ast(loaded_file.ast());
 
     loaded_file
         .inline_dags()
@@ -357,10 +357,10 @@ fn compile_loaded_dag_module_ir<'a>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::ir::lower::HirDag, CompileError> {
     cancellation.checkpoint()?;
-    if let Some(template) = module_templates.get(&loaded_dag.dag_id()) {
+    if let Some(template) = module_templates.get(loaded_dag.dag_id()) {
         return freeze_inline_module_template(
             &template,
-            &loaded_dag.dag_id(),
+            loaded_dag.dag_id(),
             module_resolver,
             file_src,
             cancellation,
@@ -370,7 +370,7 @@ fn compile_loaded_dag_module_ir<'a>(
     let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
         dag_body,
         loaded_dag.parent_dag_id(),
-        &parent_loaded.ast(),
+        parent_loaded.ast(),
         parent_values,
         loaded_dag.resolved_imports(),
         file_src,
@@ -436,14 +436,14 @@ fn compile_loaded_dag_module_ir<'a>(
             &ctx.imported_names,
             ctx.imported_bindings,
             file_src,
-            &loaded_dag.dag_id(),
+            loaded_dag.dag_id(),
             Some(&mut registry_seed),
             cancellation,
         )?;
 
     elaborate_include_instances(
         project,
-        &loaded_dag.dag_id(),
+        loaded_dag.dag_id(),
         &ctx.include_instances,
         module_artifacts,
         module_templates,
@@ -460,7 +460,7 @@ fn compile_loaded_dag_module_ir<'a>(
         .map_err(|err| registry_build_compile_error(&err, file_src))?;
     store_and_freeze_module_template(
         module_templates,
-        &loaded_dag.dag_id(),
+        loaded_dag.dag_id(),
         unfrozen,
         registry,
         module_resolver,
@@ -802,7 +802,7 @@ fn elaborate_include_instances(
                     cancellation,
                 )?;
                 let rewritten_body = rewrite_qualified_refs_in_compilation_body(
-                    &dep_loaded.ast(),
+                    dep_loaded.ast(),
                     &body_ctx.imported_names,
                     &mut body_ctx.include_instances,
                 );
@@ -872,12 +872,12 @@ fn elaborate_include_instances(
                         })
                     })?;
                 let parent_values =
-                    crate::inline_dag::classify_value_decls_in_ast(&parent_loaded.ast());
+                    crate::inline_dag::classify_value_decls_in_ast(parent_loaded.ast());
                 let inline_body = loaded_inline.body(parent_loaded);
                 let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
                     inline_body,
                     parent_dag_id,
-                    &parent_loaded.ast(),
+                    parent_loaded.ast(),
                     &parent_values,
                     loaded_inline.resolved_imports(),
                     importer_src,

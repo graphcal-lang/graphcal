@@ -213,7 +213,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         files.insert(file_dag_id.clone(), hir);
     }
 
-    if !files.contains_key(&project.root_id()) {
+    if !files.contains_key(project.root_id()) {
         return Err(CompileError::Eval(GraphcalError::InternalError {
             message: "root file not found in project load order".to_string(),
             src: NamedSource::new("internal", Arc::new(String::new())),
@@ -230,7 +230,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         root: project.root_id().clone(),
         load_order: project.load_order().to_vec(),
         files,
-        plugins: &project.plugins(),
+        plugins: project.plugins(),
         exported_dynamic_units,
         module_resolver,
         cancellation: cancellation.clone(),

@@ -667,7 +667,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                 let local = DeclName::from_atom(import_item.local_name_atom().clone());
 
                 ensure_include_item_selectable(
-                    &dep_loaded.ast(),
+                    dep_loaded.ast(),
                     orig_name,
                     import_item.namespace,
                     IncludeVisibilityBoundary::CrossModule,
