@@ -392,7 +392,10 @@ Dimension inference is split by expression families under
 body for canonical index/constructor/inline-DAG ownership. Function-signature
 checking treats a missing parameter for an already-bound dimension variable as
 an internal invariant failure; mismatch help never fabricates a parameter
-name.
+name. Index-access checking classifies structural `Fin` identities separately
+from declared axes: structural cardinality forms need no registry entry, while
+a declared axis missing its semantic definition is an internal error instead of
+disabling `Fin(N) <= Fin(M)` widening.
 
 ### 1.7 Execution and Runtime Evaluation
 
