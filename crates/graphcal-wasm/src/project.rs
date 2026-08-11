@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
-use graphcal_io::InMemoryFileSystem;
+use graphcal_io::{InMemoryFileSystem, VirtualAbsolutePath};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -39,6 +39,7 @@ enum ProjectFileKind {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ProjectFilePath {
     relative: PathBuf,
+    absolute: VirtualAbsolutePath,
     kind: ProjectFileKind,
 }
 
@@ -72,15 +73,25 @@ impl ProjectFilePath {
             });
         };
 
-        Ok(Self { relative, kind })
+        let absolute =
+            VirtualAbsolutePath::new(Path::new(PROJECT_ROOT).join(&relative)).map_err(|_| {
+                ProjectValidationError::UnsafePath {
+                    path: raw.to_string(),
+                }
+            })?;
+        Ok(Self {
+            relative,
+            absolute,
+            kind,
+        })
     }
 
     fn display(&self) -> String {
         self.relative.to_string_lossy().into_owned()
     }
 
-    fn absolute(&self) -> PathBuf {
-        Path::new(PROJECT_ROOT).join(&self.relative)
+    const fn absolute(&self) -> &VirtualAbsolutePath {
+        &self.absolute
     }
 }
 
@@ -95,7 +106,7 @@ struct VirtualFile {
 #[derive(Debug, Clone)]
 pub struct VirtualProject {
     entry: ProjectFilePath,
-    files: Vec<VirtualFile>,
+    filesystem: InMemoryFileSystem,
 }
 
 impl TryFrom<PlaygroundRequest> for VirtualProject {
@@ -165,14 +176,22 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
         }
 
         validate_manifest_capabilities(&files)?;
+        let mut filesystem = InMemoryFileSystem::new();
+        for file in files {
+            filesystem
+                .add_file(file.path.absolute().clone(), file.content)
+                .map_err(|_| ProjectValidationError::UnsafePath {
+                    path: file.path.display(),
+                })?;
+        }
 
-        Ok(Self { entry, files })
+        Ok(Self { entry, filesystem })
     }
 }
 
 impl VirtualProject {
     pub fn entry_path(&self) -> PathBuf {
-        self.entry.absolute()
+        self.entry.absolute().clone().into_path_buf()
     }
 
     pub fn root_path() -> &'static Path {
@@ -184,12 +203,7 @@ impl VirtualProject {
     }
 
     pub fn filesystem(&self) -> InMemoryFileSystem {
-        self.files
-            .iter()
-            .fold(InMemoryFileSystem::new(), |mut filesystem, file| {
-                filesystem.add_file(file.path.absolute(), file.content.clone());
-                filesystem
-            })
+        self.filesystem.clone()
     }
 
     pub fn relative_source_name(source_name: &str) -> Option<String> {
@@ -466,6 +480,25 @@ mod tests {
             error,
             ProjectValidationError::DuplicatePath { .. }
         ));
+    }
+
+    #[test]
+    fn rejects_file_and_directory_path_conflicts() {
+        let error = VirtualProject::try_from(request(
+            "main.gcl",
+            &[
+                ("main.gcl", ""),
+                ("module.gcl", ""),
+                ("module.gcl/child.gcl", ""),
+            ],
+        ))
+        .unwrap_err();
+        assert_eq!(
+            error,
+            ProjectValidationError::UnsafePath {
+                path: "module.gcl/child.gcl".to_string(),
+            }
+        );
     }
 
     #[test]
