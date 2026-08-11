@@ -91,7 +91,10 @@ See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full c
 
 Git package dependencies must be pinned to full commit hashes and use parsed
 remote HTTPS or SSH URLs. Local paths, `file://`, plain HTTP, unsupported
-schemes, and embedded credentials are rejected before fetching; see the
+schemes, and embedded credentials are rejected before fetching. The current
+lockfile schema rejects unknown fields and requires canonical lowercase SHA-256
+pins; hand-edited lockfiles with custom fields or non-canonical hashes must be
+regenerated with `graphcal deps lock`. See the
 [package dependency guide](https://graphcal.org/docs/language/multi-file/#package-dependencies)
 for supported forms and migration guidance.
 
