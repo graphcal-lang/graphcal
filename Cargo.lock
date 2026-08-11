@@ -1874,6 +1874,7 @@ version = "0.0.1-alpha.22"
 dependencies = [
  "thiserror",
  "toml",
+ "url",
 ]
 
 [[package]]

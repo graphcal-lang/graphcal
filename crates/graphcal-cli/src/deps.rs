@@ -11,10 +11,10 @@ use graphcal_io::{
     NeverCancel, RealFileSystem, SourceTreeHashLimits, hash_source_tree as hash_package_source_tree,
 };
 use graphcal_package::{
-    DependencyName, DependencySpec, GitCommitHash, GitUrl, LOCK_VERSION, LockedPackage,
-    LockedPlugin, LockedPluginError, Lockfile, PackageGraph, PackageInstanceId, PackageManifest,
-    PackageName, PackageSource, PackageSourceDirectory, STDLIB_VERSION, SourceTreeHashes,
-    parse_manifest_str,
+    DependencyName, DependencySpec, GitCommitHash, GitTransport, GitUrl, LOCK_VERSION,
+    LockedPackage, LockedPlugin, LockedPluginError, Lockfile, PackageGraph, PackageInstanceId,
+    PackageManifest, PackageName, PackageSource, PackageSourceDirectory, STDLIB_VERSION,
+    SourceTreeHashes, parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -381,21 +381,23 @@ fn materialize_git_revision(
     rev: &GitCommitHash,
     path: &Path,
 ) -> Result<(), DepsError> {
+    let url_text = url.to_string();
     let commit_id = gix::hash::ObjectId::from_hex(rev.as_str().as_bytes()).map_err(|source| {
         DepsError::GitMaterialize {
-            url: url.as_str().to_string(),
+            url: url_text.clone(),
             rev: rev.as_str().to_string(),
             source: Box::new(source),
         }
     })?;
     let fetch_refspec = format!("+{}:{FETCHED_COMMIT_REF}", rev.as_str());
     let should_interrupt = AtomicBool::new(false);
+    let open_options = isolated_git_open_options(url.transport());
     let mut prepare_fetch = gix::clone::PrepareFetch::new(
-        url.as_str(),
+        url_text.as_str(),
         path,
         gix::create::Kind::WithWorktree,
         gix::create::Options::default(),
-        gix::open::Options::isolated().strict_config(true),
+        open_options,
     )
     .map_err(|source| git_materialize_error(url, rev, source))?
     .configure_remote(move |remote| {
@@ -409,10 +411,26 @@ fn materialize_git_revision(
         .map_err(|source| git_materialize_error(url, rev, source))?;
 
     checkout_git_commit(&repo, commit_id).map_err(|source| DepsError::GitMaterialize {
-        url: url.as_str().to_string(),
+        url: url_text,
         rev: rev.as_str().to_string(),
         source,
     })
+}
+
+fn isolated_git_open_options(transport: GitTransport) -> gix::open::Options {
+    let overrides = match transport {
+        GitTransport::Https => None,
+        GitTransport::Ssh | GitTransport::Scp => std::env::var_os("GIT_SSH").map(|command| {
+            format!(
+                "gitoxide.ssh.commandWithoutShellFallback={}",
+                command.to_string_lossy()
+            )
+        }),
+    }
+    .into_iter();
+    gix::open::Options::isolated()
+        .config_overrides(overrides)
+        .strict_config(true)
 }
 
 fn checkout_git_commit(
@@ -450,7 +468,7 @@ fn git_materialize_error(
     source: impl StdError + Send + Sync + 'static,
 ) -> DepsError {
     DepsError::GitMaterialize {
-        url: url.as_str().to_string(),
+        url: url.to_string(),
         rev: rev.as_str().to_string(),
         source: Box::new(source),
     }
@@ -507,7 +525,7 @@ fn git_package_id(
     let mut key_hash = Sha256::new();
     key_hash.update(name.as_str().as_bytes());
     key_hash.update([0]);
-    key_hash.update(url.as_str().as_bytes());
+    key_hash.update(url.to_string().as_bytes());
     key_hash.update([0]);
     key_hash.update(rev.as_str().as_bytes());
     let key = hex_string(&key_hash.finalize());
@@ -521,7 +539,7 @@ fn git_package_id(
 fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"git\0");
-    hasher.update(url.as_str().as_bytes());
+    hasher.update(url.to_string().as_bytes());
     hasher.update([0]);
     hasher.update(rev.as_str().as_bytes());
     hex_string(&hasher.finalize())
