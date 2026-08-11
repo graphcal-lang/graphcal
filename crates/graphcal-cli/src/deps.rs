@@ -15,7 +15,7 @@ use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitTransport, GitUrl, LOCK_VERSION,
     LockedPackage, LockedPlugin, LockedPluginError, Lockfile, PackageGraph, PackageInstanceId,
     PackageManifest, PackageName, PackageSource, PackageSourceDirectory, STDLIB_VERSION,
-    SourceTreeHashes, parse_manifest_str,
+    Sha256Digest, Sha256DigestError, SourceTreeHashes, parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -482,7 +482,7 @@ struct ResolvedDependency {
 #[derive(Debug)]
 struct MaterializedGit {
     root: PathBuf,
-    sha256: String,
+    sha256: Sha256Digest,
 }
 
 fn read_manifest(root: &Path) -> Result<PackageManifest, DepsError> {
@@ -533,7 +533,7 @@ fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
     hex_string(&hasher.finalize())
 }
 
-fn hash_source_tree(root: &Path) -> Result<String, DepsError> {
+fn hash_source_tree(root: &Path) -> Result<Sha256Digest, DepsError> {
     let manifest = read_manifest(root)?;
     let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
         path: root.to_path_buf(),
@@ -547,7 +547,7 @@ fn hash_source_tree(root: &Path) -> Result<String, DepsError> {
         SourceTreeHashLimits::unbounded(),
         &NeverCancel,
     )?;
-    Ok(hash.sha256().to_string())
+    Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -600,6 +600,9 @@ pub enum DepsError {
     /// Deterministic source-tree traversal or hashing failed.
     #[error(transparent)]
     SourceTreeHash(#[from] graphcal_io::SourceTreeHashError),
+    /// A generated source-tree digest was not canonical.
+    #[error(transparent)]
+    Sha256Digest(#[from] Sha256DigestError),
     /// Directory read failed.
     #[error("could not read directory `{}`: {source}", path.display())]
     ReadDir {
@@ -729,7 +732,10 @@ node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
         let pins = resolve_plugin_pins(&root, &source_dir).unwrap();
         assert_eq!(pins.len(), 1, "host-registry identities get no pins");
         assert_eq!(pins[0].path(), "plugins/demo.wasm");
-        assert_eq!(pins[0].sha256(), hex_string(&Sha256::digest(plugin_bytes)));
+        assert_eq!(
+            pins[0].sha256().to_string(),
+            hex_string(&Sha256::digest(plugin_bytes))
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

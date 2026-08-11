@@ -718,7 +718,12 @@ tool-maintained lockfile that records package instances, exact Git commits,
 source tree hashes, direct dependency edges, and the Graphcal/standard-library
 versions used for resolution. The lockfile records dependency graph edges
 between package instances; it is not a flat "one version per package name" map,
-so multiple revisions of the same package can coexist.
+so multiple revisions of the same package can coexist. For the current lock
+version, every fixed table is a closed schema: unknown root, package, source,
+tree-hash, and plugin fields are rejected rather than ignored and then dropped
+by reserialization. Source-tree and plugin SHA-256 values must be exactly 64
+lowercase hexadecimal digits. Entries for the same canonical Git URL and commit
+must agree on the source-tree digest.
 
 `graphcal check`, `graphcal eval`, `graphcal graph`, and the LSP read only the
 lockfile and locally materialized cache entries. They do not fetch dependencies
@@ -731,6 +736,11 @@ resolving modules. Package names, source directories, and dependency alias sets
 must match in both directions. This ensures the source directory used for
 module resolution is exactly the directory covered by integrity verification;
 a stale or hand-edited lockfile cannot redirect imports to an unhashed tree.
+
+Existing hand-edited lockfiles with custom fields, uppercase hashes, or malformed
+hashes must remove those fields and run `graphcal deps lock` to regenerate
+canonical pins. Do not preserve private metadata inside `graphcal.lock`; keep it
+in a separate file.
 
 Lock creation and loading use the same deterministic source-tree algorithm.
 Package trees may contain only ordinary directories and regular files: symbolic
