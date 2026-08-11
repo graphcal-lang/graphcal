@@ -9,17 +9,21 @@ use graphcal_compiler::syntax::decl_name::DeclName;
 use crate::eval::types::{CompileError, EvalResult};
 use crate::project_compiler::check_project_with_host_fns_and_cancellation;
 
+mod model_schema;
 mod output;
 mod prepare;
 mod prepared;
 
+pub use model_schema::{
+    ModelAlgebraicTypeSchema, ModelConstructorSchema, ModelFieldSchema, ModelIndexKind,
+    ModelIndexSchema, ModelQuantitySchema, ModelSchemaGraph, ModelTypeId, ModelUnitSchema,
+    ModelValueSchema,
+};
 pub use prepared::{
-    InclusiveBounds, ModelConstructorSchema, ModelDefinitionError, ModelExecutionError,
-    ModelFieldSchema, ModelIndexKind, ModelIndexSchema, ModelOutputPort, ModelQuantitySchema,
-    ModelRowFailure, ModelRowOutcome, ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder,
-    ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition, ParameterValue,
-    PreparedModel, PreparedProject, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
-    TenaxV2RowOutcome,
+    InclusiveBounds, ModelDefinitionError, ModelExecutionError, ModelOutputPort, ModelRowFailure,
+    ModelRowOutcome, ParameterBindingBuilder, ParameterBindingRow, ParameterDomain, ParameterPort,
+    ParameterPosition, ParameterValue, PreparedModel, PreparedProject, TenaxV2Input,
+    TenaxV2InputKind, TenaxV2Model, TenaxV2Output, TenaxV2RowOutcome,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.

@@ -508,6 +508,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `project_compiler/qualified_refs.rs` | Module-aware ambiguous reference classification             |
 | `project_compiler/registry_merge.rs` | Frontend-only registry composition                          |
 | `eval/project/prepare.rs`         | Checked-project to runtime-plan transition                      |
+| `eval/project/model_schema.rs`    | Finite typed arena for recursive model-value definitions        |
 | `eval/project/prepared.rs`        | Reusable typed binding and evaluation API                       |
 | `eval/project/output.rs`          | Presentation-only output projection                            |
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
@@ -1337,14 +1338,15 @@ into an execution plan.
 19. `crates/graphcal-eval/src/eval/plot_data.rs`
 20. `crates/graphcal-eval/src/eval/public_projection.rs`
 21. `crates/graphcal-eval/src/eval/runtime.rs`
-22. `crates/graphcal-eval/src/eval/project/output.rs`
-23. `crates/graphcal-eval/src/eval/project/prepared.rs`
-24. `crates/graphcal-eval/src/eval/project/prepare.rs`
-25. `crates/graphcal-eval/src/eval/project/mod.rs`
-26. `crates/graphcal-eval/src/eval/mod.rs`
-27. `crates/graphcal-eval/src/eval/tests.rs`
-28. `crates/graphcal-eval/src/graph_ir/mod.rs`
-29. `crates/graphcal-eval/src/graph_ir/dot.rs`
+22. `crates/graphcal-eval/src/eval/project/model_schema.rs`
+23. `crates/graphcal-eval/src/eval/project/output.rs`
+24. `crates/graphcal-eval/src/eval/project/prepared.rs`
+25. `crates/graphcal-eval/src/eval/project/prepare.rs`
+26. `crates/graphcal-eval/src/eval/project/mod.rs`
+27. `crates/graphcal-eval/src/eval/mod.rs`
+28. `crates/graphcal-eval/src/eval/tests.rs`
+29. `crates/graphcal-eval/src/graph_ir/mod.rs`
+30. `crates/graphcal-eval/src/graph_ir/dot.rs`
 
 ### Stage 15 - Tenax Arrow transport (`graphcal-tenax`)
 

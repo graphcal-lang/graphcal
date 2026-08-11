@@ -144,9 +144,13 @@ Each selected value must be a directly declared, explicitly public, scalar
 the complete input/output interface.
 
 Graphcal's prepared evaluator itself also supports Boolean, datetime, complex,
-algebraic, key, and recursively indexed bindings and outputs. Those richer
-families are not silently forced through schema v2; they require the planned
-recursive Arrow protocol.
+algebraic, key, and recursively indexed bindings and outputs. Directly and
+mutually recursive algebraic types are retained as a finite typed definition
+graph, so ordinary evaluation and finite parameter values do not depend on an
+Arrow schema. Those richer families are not silently forced through schema v2:
+a recursive input receives a typed model-definition error during Tenax model
+projection, while the already prepared Graphcal project remains valid. Encoding
+them requires a future recursive Arrow protocol.
 
 ## Failure behavior
 
@@ -185,7 +189,8 @@ Common errors include:
 
 - a numeric parameter has no `min`, no `max`, or a one-sided/non-finite range;
 - an input is `Bool`, datetime, complex, algebraic, indexed, a coordinate key,
-  or a finite key, none of which schema v2 can represent;
+  or a finite key, none of which schema v2 can represent (recursive algebraic
+  inputs are reported explicitly as a recursive-schema capability mismatch);
 - the selected output is unknown, private, duplicated, or not scalar `Bool`;
 - an input and output share a field name;
 - project dependencies or WASM plugins fail normal Graphcal loading checks.

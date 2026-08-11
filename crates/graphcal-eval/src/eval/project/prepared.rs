@@ -11,11 +11,11 @@ use graphcal_compiler::hir::{
     PreludeTypeScope,
 };
 use graphcal_compiler::registry::builtins::builtin_functions;
-use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
+use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::registry::time_scale::TimeScale;
-use graphcal_compiler::registry::types::{IndexDef, IndexKind};
+use graphcal_compiler::registry::types::IndexKind;
 use graphcal_compiler::syntax::ast::UnaryOp;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
@@ -34,6 +34,9 @@ use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_
 
 use crate::project_compiler::{CheckedEntryInterface, CompiledFile, IncludeDebugNameMap};
 
+use super::model_schema::{
+    ModelSchemaGraph, ModelSchemaGraphBuilder, ModelValueSchema, index_def_for_ref,
+};
 use super::output::{
     apply_include_debug_names, output_decl_type, push_output_value, remap_include_debug_name,
 };
@@ -74,140 +77,6 @@ impl<T> InclusiveBounds<T> {
     pub const fn upper(&self) -> Option<&T> {
         self.upper.as_ref()
     }
-}
-
-/// Concrete fixed-axis schema retained by the generic model interface.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelIndexSchema {
-    identity: IndexTypeRef,
-    kind: ModelIndexKind,
-}
-
-impl ModelIndexSchema {
-    /// Owner-qualified or structural index identity.
-    #[must_use]
-    pub const fn identity(&self) -> &IndexTypeRef {
-        &self.identity
-    }
-
-    /// Closed concrete axis representation.
-    #[must_use]
-    pub const fn kind(&self) -> &ModelIndexKind {
-        &self.kind
-    }
-}
-
-/// Concrete index families supported by recursive Graphcal values.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ModelIndexKind {
-    Named {
-        variants: Vec<IndexVariantName>,
-    },
-    Coordinate {
-        coordinates_si: Vec<f64>,
-        dimension: graphcal_compiler::dimension::Dimension,
-        display_label: Option<String>,
-        display_scale: f64,
-    },
-    Finite {
-        cardinality: usize,
-    },
-}
-
-/// One recursively typed algebraic constructor field.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelFieldSchema {
-    name: graphcal_compiler::syntax::type_name::FieldName,
-    value: ModelValueSchema,
-}
-
-impl ModelFieldSchema {
-    #[must_use]
-    pub const fn name(&self) -> &graphcal_compiler::syntax::type_name::FieldName {
-        &self.name
-    }
-
-    #[must_use]
-    pub const fn value(&self) -> &ModelValueSchema {
-        &self.value
-    }
-}
-
-/// One constructor in a concrete recursive algebraic schema.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelConstructorSchema {
-    name: graphcal_compiler::syntax::type_name::ConstructorName,
-    fields: Vec<ModelFieldSchema>,
-}
-
-impl ModelConstructorSchema {
-    #[must_use]
-    pub const fn name(&self) -> &graphcal_compiler::syntax::type_name::ConstructorName {
-        &self.name
-    }
-
-    #[must_use]
-    pub fn fields(&self) -> &[ModelFieldSchema] {
-        &self.fields
-    }
-}
-
-/// Canonical boundary unit attached to a recursive quantity schema.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelUnitSchema {
-    label: String,
-    scale_to_si: f64,
-}
-
-impl ModelUnitSchema {
-    #[must_use]
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
-    #[must_use]
-    pub const fn scale_to_si(&self) -> f64 {
-        self.scale_to_si
-    }
-}
-
-/// One real or complex physical quantity family.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelQuantitySchema {
-    dimension: graphcal_compiler::dimension::Dimension,
-    canonical_unit: Option<ModelUnitSchema>,
-}
-
-impl ModelQuantitySchema {
-    #[must_use]
-    pub const fn dimension(&self) -> &graphcal_compiler::dimension::Dimension {
-        &self.dimension
-    }
-
-    #[must_use]
-    pub const fn canonical_unit(&self) -> Option<&ModelUnitSchema> {
-        self.canonical_unit.as_ref()
-    }
-}
-
-/// Transport-independent recursive schema for one concrete Graphcal value.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ModelValueSchema {
-    Quantity(ModelQuantitySchema),
-    Complex(ModelQuantitySchema),
-    Bool,
-    Int,
-    Datetime(TimeScale),
-    Key(ModelIndexSchema),
-    Algebraic {
-        identity: graphcal_compiler::registry::declared_type::StructTypeRef,
-        generic_args: Vec<graphcal_compiler::registry::declared_type::DeclaredGenericArg>,
-        constructors: Vec<ModelConstructorSchema>,
-    },
-    Indexed {
-        element: Box<Self>,
-        axis: ModelIndexSchema,
-    },
 }
 
 /// Resolved sampling-domain information on a Graphcal parameter.
@@ -319,6 +188,7 @@ pub struct PreparedModel {
     plan_id: u64,
     inputs: Vec<ParameterPort>,
     outputs: Vec<ModelOutputPort>,
+    schema_graph: Arc<ModelSchemaGraph>,
 }
 
 impl PreparedModel {
@@ -332,6 +202,12 @@ impl PreparedModel {
     #[must_use]
     pub fn outputs(&self) -> &[ModelOutputPort] {
         &self.outputs
+    }
+
+    /// Algebraic definitions referenced by every input and output schema.
+    #[must_use]
+    pub fn schema_graph(&self) -> &ModelSchemaGraph {
+        &self.schema_graph
     }
 }
 
@@ -354,6 +230,7 @@ pub struct PreparedProject {
     parameter_ports: Vec<ParameterPort>,
     parameter_lookup: HashMap<DeclName, usize>,
     output_ports: Vec<ModelOutputPort>,
+    schema_graph: Arc<ModelSchemaGraph>,
     output_assembly: ProjectOutputAssembly,
 }
 
@@ -389,14 +266,16 @@ impl PreparedProject {
         } = compiled;
         let tir = tir.with_external_value_constructors();
 
+        let mut schema_builder = ModelSchemaGraphBuilder::new(&tir, &source);
         let parameter_ports =
-            build_parameter_ports(plan_id, &entry_interface, &tir, &plan, &source)?;
+            build_parameter_ports(plan_id, &entry_interface, &plan, &mut schema_builder)?;
         let parameter_lookup = parameter_ports
             .iter()
             .enumerate()
             .map(|(index, port)| (port.name.clone(), index))
             .collect();
-        let output_ports = build_output_ports(&entry_interface, &tir, &source)?;
+        let output_ports = build_output_ports(&entry_interface, &mut schema_builder)?;
+        let schema_graph = Arc::new(schema_builder.finish());
 
         Ok(Self {
             plan_id,
@@ -409,6 +288,7 @@ impl PreparedProject {
             parameter_ports,
             parameter_lookup,
             output_ports,
+            schema_graph,
             output_assembly: ProjectOutputAssembly {
                 output_surface,
                 include_debug_names,
@@ -428,6 +308,12 @@ impl PreparedProject {
     #[must_use]
     pub fn output_ports(&self) -> &[ModelOutputPort] {
         &self.output_ports
+    }
+
+    /// Algebraic definitions referenced by every prepared boundary schema.
+    #[must_use]
+    pub fn schema_graph(&self) -> &ModelSchemaGraph {
+        &self.schema_graph
     }
 
     /// Borrow the internal execution plan for unstable debugging output.
@@ -457,13 +343,14 @@ impl PreparedProject {
     ) -> Result<ParameterValue, CompileError> {
         let port = self.port_at(position)?;
         let normalized =
-            normalize_binding_literal(expr.clone(), &port.value_schema).map_err(|message| {
-                CompileError::Eval(GraphcalError::EvalError {
-                    message: format!("invalid binding for `{}`: {message}", port.name),
-                    src: self.source.clone(),
-                    span: expr.span.into(),
-                })
-            })?;
+            normalize_binding_literal(expr.clone(), &port.value_schema, &self.schema_graph)
+                .map_err(|message| {
+                    CompileError::Eval(GraphcalError::EvalError {
+                        message: format!("invalid binding for `{}`: {message}", port.name),
+                        src: self.source.clone(),
+                        span: expr.span.into(),
+                    })
+                })?;
         let hir = self.lower_closed_binding(port, &normalized)?;
         let value = self.evaluate_closed_binding(&hir)?;
         let presentation = graphcal_compiler::tir::dim_check::checked_expression_presentation(
@@ -602,6 +489,7 @@ impl PreparedProject {
                 .filter(|port| requested.contains(&port.name))
                 .cloned()
                 .collect(),
+            schema_graph: Arc::clone(&self.schema_graph),
         })
     }
 
@@ -769,6 +657,15 @@ impl PreparedProject {
     }
 
     fn tenax_v2_input(&self, port: &ParameterPort) -> Result<TenaxV2Input, ModelDefinitionError> {
+        if self
+            .schema_graph
+            .contains_recursive_type(&port.value_schema)
+        {
+            return Err(ModelDefinitionError::RecursiveInputTypeUnsupported {
+                name: port.name.clone(),
+                actual: port.declared_type.format(&self.tir.registry().dimensions),
+            });
+        }
         let kind = match (&port.declared_type, &port.domain) {
             (DeclaredType::Quantity(dimension), Some(ParameterDomain::Quantity(bounds))) => {
                 let (Some(lower), Some(upper)) = (bounds.lower, bounds.upper) else {
@@ -1347,6 +1244,8 @@ pub enum ModelDefinitionError {
     MissingClosedDomain { name: DeclName },
     #[error("input `{name}` has an invalid finite continuous domain")]
     InvalidContinuousDomain { name: DeclName },
+    #[error("input `{name}` has recursive type `{actual}`, which Tenax schema v2 cannot represent")]
+    RecursiveInputTypeUnsupported { name: DeclName, actual: String },
     #[error("input `{name}` has unsupported Tenax v2 type `{actual}`")]
     UnsupportedInputType { name: DeclName, actual: String },
     #[error("categorical input `{name}` has an empty domain")]
@@ -1441,7 +1340,7 @@ impl PreparedProject {
         owner: &graphcal_compiler::dag_id::DagId,
     ) -> Result<graphcal_compiler::hir::Expr, CompileError> {
         match (&expr.kind, expected) {
-            (AstExprKind::ConstructorCall { callee, .. }, ModelValueSchema::Algebraic { .. })
+            (AstExprKind::ConstructorCall { callee, .. }, ModelValueSchema::Algebraic(_))
                 if callee.as_bare().is_some() =>
             {
                 self.lower_canonical_constructor_binding(expr, expected, owner)
@@ -1450,11 +1349,17 @@ impl PreparedProject {
                 AstExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(
                     path,
                 )),
-                ModelValueSchema::Algebraic { constructors, .. },
+                ModelValueSchema::Algebraic(type_id),
             ) if path.as_bare().is_some()
-                && constructors.iter().any(|constructor| {
-                    constructor.name.atom() == &path.leaf().name && constructor.fields.is_empty()
-                }) =>
+                && self
+                    .schema_graph
+                    .definition(type_id)
+                    .is_some_and(|definition| {
+                        definition.constructors().iter().any(|constructor| {
+                            constructor.name().atom() == &path.leaf().name
+                                && constructor.fields().is_empty()
+                        })
+                    }) =>
             {
                 let constructor_expr = Expr::new(
                     AstExprKind::ConstructorCall {
@@ -1490,24 +1395,26 @@ impl PreparedProject {
                 expr.span,
             ));
         };
-        let ModelValueSchema::Algebraic {
-            identity,
-            constructors,
-            ..
-        } = expected
-        else {
+        let ModelValueSchema::Algebraic(type_id) = expected else {
             return Err(self.binding_internal_error(
                 "canonical external constructor has a non-algebraic schema",
                 expr.span,
             ));
         };
-        let Some(constructor) = constructors
+        let Some(definition) = self.schema_graph.definition(type_id) else {
+            return Err(self.binding_internal_error(
+                "canonical external constructor references a missing algebraic definition",
+                expr.span,
+            ));
+        };
+        let Some(constructor) = definition
+            .constructors()
             .iter()
-            .find(|constructor| constructor.name.atom() == &callee.leaf().name)
+            .find(|constructor| constructor.name().atom() == &callee.leaf().name)
         else {
             return self.lower_binding_expr_in_owner(expr, owner);
         };
-        let constructor_owner = identity.resolved().owner();
+        let constructor_owner = type_id.identity().resolved().owner();
         let signature_expr = Expr::new(
             AstExprKind::ConstructorCall {
                 callee: callee.clone(),
@@ -1532,15 +1439,15 @@ impl PreparedProject {
             .iter()
             .map(|field| {
                 let value = constructor
-                    .fields
+                    .fields()
                     .iter()
-                    .find(|schema| schema.name == field.name.value)
+                    .find(|schema| schema.name() == &field.name.value)
                     .map_or_else(
                         || self.lower_binding_expr_in_owner(&field.value, constructor_owner),
                         |schema| {
                             self.lower_closed_binding_expr(
                                 &field.value,
-                                &schema.value,
+                                schema.value(),
                                 constructor_owner,
                             )
                         },
@@ -1709,9 +1616,8 @@ impl PreparedProject {
 fn build_parameter_ports(
     plan_id: u64,
     entry_interface: &CheckedEntryInterface,
-    tir: &graphcal_compiler::tir::typed::TIR,
     plan: &crate::exec_plan::ExecPlan,
-    source: &NamedSource<Arc<String>>,
+    schemas: &mut ModelSchemaGraphBuilder<'_>,
 ) -> Result<Vec<ParameterPort>, CompileError> {
     entry_interface
         .parameters()
@@ -1719,7 +1625,9 @@ fn build_parameter_ports(
         .enumerate()
         .map(|(index, parameter)| {
             let declared_type = parameter.declared_type().clone();
-            let value_schema = model_value_schema(&declared_type, tir, source)?;
+            let value_schema = schemas
+                .value_schema(&declared_type)
+                .map_err(CompileError::Eval)?;
             let runtime_key = parameter.runtime_key().clone();
             let domain = plan
                 .domain_constraints
@@ -1741,15 +1649,16 @@ fn build_parameter_ports(
 
 fn build_output_ports(
     entry_interface: &CheckedEntryInterface,
-    tir: &graphcal_compiler::tir::typed::TIR,
-    source: &NamedSource<Arc<String>>,
+    schemas: &mut ModelSchemaGraphBuilder<'_>,
 ) -> Result<Vec<ModelOutputPort>, CompileError> {
     entry_interface
         .outputs()
         .iter()
         .map(|output| {
             let declared_type = output.declared_type().clone();
-            let value_schema = model_value_schema(&declared_type, tir, source)?;
+            let value_schema = schemas
+                .value_schema(&declared_type)
+                .map_err(CompileError::Eval)?;
             Ok(ModelOutputPort {
                 name: output.name().clone(),
                 declared_type,
@@ -1759,169 +1668,6 @@ fn build_output_ports(
             })
         })
         .collect()
-}
-
-fn model_value_schema(
-    declared_type: &DeclaredType,
-    tir: &graphcal_compiler::tir::typed::TIR,
-    source: &NamedSource<Arc<String>>,
-) -> Result<ModelValueSchema, CompileError> {
-    model_value_schema_inner(declared_type, tir, source, &mut HashSet::new())
-        .map_err(CompileError::Eval)
-}
-
-fn model_value_schema_inner(
-    declared_type: &DeclaredType,
-    tir: &graphcal_compiler::tir::typed::TIR,
-    source: &NamedSource<Arc<String>>,
-    visiting: &mut HashSet<graphcal_compiler::registry::declared_type::StructTypeRef>,
-) -> Result<ModelValueSchema, GraphcalError> {
-    match declared_type {
-        DeclaredType::Quantity(dimension) => Ok(ModelValueSchema::Quantity(model_quantity_schema(
-            dimension, tir,
-        ))),
-        DeclaredType::Complex(dimension) => Ok(ModelValueSchema::Complex(model_quantity_schema(
-            dimension, tir,
-        ))),
-        DeclaredType::Bool => Ok(ModelValueSchema::Bool),
-        DeclaredType::Int => Ok(ModelValueSchema::Int),
-        DeclaredType::Datetime(scale) => Ok(ModelValueSchema::Datetime(*scale)),
-        DeclaredType::Key(index) => {
-            model_index_schema(index, tir, source).map(ModelValueSchema::Key)
-        }
-        DeclaredType::Indexed { element, index } => Ok(ModelValueSchema::Indexed {
-            element: Box::new(model_value_schema_inner(element, tir, source, visiting)?),
-            axis: model_index_schema(index, tir, source)?,
-        }),
-        DeclaredType::Struct(identity, generic_args) => {
-            if !visiting.insert(identity.clone()) {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
-                        "recursive model type `{identity}` cannot be represented as a finite schema"
-                    ),
-                    src: source.clone(),
-                    span: Span::new(0, 0).into(),
-                });
-            }
-            let result = (|| {
-                let model_type = graphcal_compiler::tir::dim_check::ConcreteModelType::try_new(
-                    tir,
-                    identity,
-                    generic_args,
-                    source,
-                )
-                .map_err(|error| error.into_graphcal_error(source))?;
-                model_type
-                    .constructors(source)?
-                    .into_iter()
-                    .map(|constructor| {
-                        let fields = constructor
-                            .fields()
-                            .iter()
-                            .map(|field| {
-                                Ok(ModelFieldSchema {
-                                    name: field.name().clone(),
-                                    value: model_value_schema_inner(
-                                        field.declared_type(),
-                                        tir,
-                                        source,
-                                        visiting,
-                                    )?,
-                                })
-                            })
-                            .collect::<Result<Vec<_>, GraphcalError>>()?;
-                        Ok(ModelConstructorSchema {
-                            name: constructor.name().clone(),
-                            fields,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, GraphcalError>>()
-                    .map(|constructors| ModelValueSchema::Algebraic {
-                        identity: identity.clone(),
-                        generic_args: generic_args.clone(),
-                        constructors,
-                    })
-            })();
-            visiting.remove(identity);
-            result
-        }
-        DeclaredType::IndexArg(index) => Err(GraphcalError::InternalError {
-            message: format!(
-                "unresolved index argument `{index}` cannot be a concrete model value port"
-            ),
-            src: source.clone(),
-            span: Span::new(0, 0).into(),
-        }),
-    }
-}
-
-fn model_quantity_schema(
-    dimension: &graphcal_compiler::dimension::Dimension,
-    tir: &graphcal_compiler::tir::typed::TIR,
-) -> ModelQuantitySchema {
-    let canonical_unit = (!dimension.is_dimensionless())
-        .then(|| {
-            crate::eval::types::default_unit_label(
-                dimension,
-                tir.registry().dimensions.base_dim_symbols(),
-            )
-        })
-        .flatten()
-        .map(|label| ModelUnitSchema {
-            label,
-            scale_to_si: 1.0,
-        });
-    ModelQuantitySchema {
-        dimension: dimension.clone(),
-        canonical_unit,
-    }
-}
-
-fn model_index_schema(
-    index: &IndexTypeRef,
-    tir: &graphcal_compiler::tir::typed::TIR,
-    source: &NamedSource<Arc<String>>,
-) -> Result<ModelIndexSchema, GraphcalError> {
-    if let Some(finite) = index.finite_index() {
-        return Ok(ModelIndexSchema {
-            identity: index.clone(),
-            kind: ModelIndexKind::Finite {
-                cardinality: finite.cardinality().get(),
-            },
-        });
-    }
-    let definition = index_def_for_ref(index, tir).ok_or_else(|| GraphcalError::InternalError {
-        message: format!("concrete model index definition is unavailable for `{index}`"),
-        src: source.clone(),
-        span: Span::new(0, 0).into(),
-    })?;
-    let kind = match &definition.kind {
-        IndexKind::Named { variants } => ModelIndexKind::Named {
-            variants: variants.clone(),
-        },
-        IndexKind::Coordinate(data) => ModelIndexKind::Coordinate {
-            coordinates_si: (0..data.cardinality())
-                .map(|position| data.coordinate_value(position))
-                .collect(),
-            dimension: data.dimension.clone(),
-            display_label: data.display_label.clone(),
-            display_scale: data.display_scale,
-        },
-        IndexKind::Finite { cardinality } => ModelIndexKind::Finite {
-            cardinality: cardinality.get(),
-        },
-        IndexKind::RequiredNamed | IndexKind::RequiredCoordinate { .. } => {
-            return Err(GraphcalError::InternalError {
-                message: format!("required model index `{index}` was not concretely bound"),
-                src: source.clone(),
-                span: Span::new(0, 0).into(),
-            });
-        }
-    };
-    Ok(ModelIndexSchema {
-        identity: index.clone(),
-        kind,
-    })
 }
 
 fn parameter_domain(constraint: &ResolvedDomainConstraint) -> ParameterDomain {
@@ -1946,21 +1692,12 @@ fn parameter_domain(constraint: &ResolvedDomainConstraint) -> ParameterDomain {
     }
 }
 
-fn index_def_for_ref<'tir>(
-    index: &IndexTypeRef,
-    tir: &'tir graphcal_compiler::tir::typed::TIR,
-) -> Option<&'tir IndexDef> {
-    index.finite_index().map_or_else(
-        || tir.declared_index_def(index.declared_resolved()?),
-        |finite| tir.registry().indexes.get_finite_index(finite),
-    )
-}
-
 fn normalize_binding_literal(
     mut expr: Expr,
     expected: &ModelValueSchema,
+    schemas: &ModelSchemaGraph,
 ) -> Result<Expr, &'static str> {
-    normalize_binding_literal_in_place(&mut expr, expected)?;
+    normalize_binding_literal_in_place(&mut expr, expected, schemas)?;
     Ok(expr)
 }
 
@@ -1973,10 +1710,11 @@ fn normalize_binding_literal(
 fn normalize_binding_literal_in_place(
     expr: &mut Expr,
     expected: &ModelValueSchema,
+    schemas: &ModelSchemaGraph,
 ) -> Result<(), &'static str> {
     match (&mut expr.kind, expected) {
         (AstExprKind::Integer(value), ModelValueSchema::Quantity(quantity))
-            if quantity.dimension.is_dimensionless() =>
+            if quantity.dimension().is_dimensionless() =>
         {
             const MAX_EXACT_INTEGER: u64 = 1_u64 << f64::MANTISSA_DIGITS;
             if value.unsigned_abs() > MAX_EXACT_INTEGER {
@@ -2000,29 +1738,35 @@ fn normalize_binding_literal_in_place(
             expr.kind = AstExprKind::Integer(integer);
         }
         (AstExprKind::UnaryOp { operand, .. }, _) => {
-            normalize_binding_literal_in_place(operand, expected)?;
+            normalize_binding_literal_in_place(operand, expected, schemas)?;
         }
         (AstExprKind::FnCall { args, .. }, ModelValueSchema::Complex(quantity)) => {
             let component = ModelValueSchema::Quantity(quantity.clone());
             for argument in args {
-                normalize_binding_literal_in_place(argument, &component)?;
+                normalize_binding_literal_in_place(argument, &component, schemas)?;
             }
         }
         (
             AstExprKind::ConstructorCall { callee, fields, .. },
-            ModelValueSchema::Algebraic { constructors, .. },
+            ModelValueSchema::Algebraic(type_id),
         ) => {
-            if let Some(constructor) = constructors
-                .iter()
-                .find(|constructor| constructor.name.atom() == &callee.leaf().name)
-            {
+            if let Some(constructor) = schemas.definition(type_id).and_then(|definition| {
+                definition
+                    .constructors()
+                    .iter()
+                    .find(|constructor| constructor.name().atom() == &callee.leaf().name)
+            }) {
                 for field in fields {
                     if let Some(field_schema) = constructor
-                        .fields
+                        .fields()
                         .iter()
-                        .find(|schema| schema.name == field.name.value)
+                        .find(|schema| schema.name() == &field.name.value)
                     {
-                        normalize_binding_literal_in_place(&mut field.value, &field_schema.value)?;
+                        normalize_binding_literal_in_place(
+                            &mut field.value,
+                            field_schema.value(),
+                            schemas,
+                        )?;
                     }
                 }
             }
@@ -2036,7 +1780,7 @@ fn normalize_binding_literal_in_place(
                     };
                     entry_schema = element;
                 }
-                normalize_binding_literal_in_place(&mut entry.value, entry_schema)?;
+                normalize_binding_literal_in_place(&mut entry.value, entry_schema, schemas)?;
             }
         }
         _ => {}

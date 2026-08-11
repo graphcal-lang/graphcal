@@ -12,7 +12,6 @@ use graphcal_eval::loader::load_project;
 use graphcal_io::RealFileSystem;
 
 #[test]
-#[ignore = "fixed by #1257 in Phase 3"]
 fn recursive_algebraic_values_evaluate_after_checking() {
     let result = compile_and_eval(
         r"

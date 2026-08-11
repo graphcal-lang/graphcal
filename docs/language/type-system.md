@@ -646,6 +646,29 @@ Field access is rejected when a type has multiple constructors because no
 single payload shape is guaranteed. Destructure the value through `match`
 instead.
 
+#### Recursive Algebraic Types
+
+Payload fields may refer directly or mutually to algebraic types, so finite
+recursive values are ordinary checked values:
+
+```graphcal
+type List {
+    Nil,
+    Cons(head: Int, tail: List),
+}
+
+node one: List = Cons(head: 1, tail: Nil);
+```
+
+The type is recursive; each runtime value is still a finite constructor tree.
+`graphcal check` and `graphcal eval` accept such outputs, and prepared-project
+parameter bindings may provide complete finite values such as
+`Cons(head: 1, tail: Cons(head: 2, tail: Nil))`. The model API exposes these
+types through a finite definition graph with typed references rather than by
+infinitely expanding a tree schema. A transport that lacks recursive schemas
+must reject the type explicitly at that transport boundary; Tenax schema v2 is
+one such transport.
+
 ### Declaration Types (Level 3)
 
 A DeclType is a possibly-constrained ValueType, optionally indexed by one or

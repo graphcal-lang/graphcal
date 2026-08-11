@@ -21,11 +21,12 @@ pub use crate::project_compiler::{
 pub(crate) use crate::project_compiler::{compile_to_tir, compile_to_tir_project};
 pub use graphcal_compiler::registry::format::format_number;
 pub use project::{
-    InclusiveBounds, ModelConstructorSchema, ModelDefinitionError, ModelExecutionError,
-    ModelFieldSchema, ModelIndexKind, ModelIndexSchema, ModelOutputPort, ModelQuantitySchema,
-    ModelRowFailure, ModelRowOutcome, ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder,
-    ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition, ParameterValue,
-    PreparedModel, PreparedProject, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
+    InclusiveBounds, ModelAlgebraicTypeSchema, ModelConstructorSchema, ModelDefinitionError,
+    ModelExecutionError, ModelFieldSchema, ModelIndexKind, ModelIndexSchema, ModelOutputPort,
+    ModelQuantitySchema, ModelRowFailure, ModelRowOutcome, ModelSchemaGraph, ModelTypeId,
+    ModelUnitSchema, ModelValueSchema, ParameterBindingBuilder, ParameterBindingRow,
+    ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
+    PreparedProject, TenaxV2Input, TenaxV2InputKind, TenaxV2Model, TenaxV2Output,
     TenaxV2RowOutcome, compile_and_eval_from_project,
     compile_and_eval_from_project_with_cancellation, compile_and_eval_from_project_with_host_fns,
     compile_and_eval_from_project_with_host_fns_and_cancellation, compile_and_eval_project,
