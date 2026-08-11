@@ -399,6 +399,52 @@ fn plugin_test_rejects_invalid_modules() {
 }
 
 #[test]
+fn plugin_test_rejects_oversized_sparse_module_before_loading() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized.wasm");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(16 * 1024 * 1024 + 1)
+        .unwrap();
+
+    let output = graphcal_bin()
+        .args(["plugin", "test"])
+        .arg(&path)
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("read limit of 16777216 bytes"), "{stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_test_rejects_symlink_and_special_file_modules() {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target.wasm");
+    let linked = dir.path().join("linked.wasm");
+    let socket = dir.path().join("socket.wasm");
+    std::fs::write(&target, test_module_bytes()).unwrap();
+    symlink(&target, &linked).unwrap();
+    let _listener = UnixListener::bind(&socket).unwrap();
+
+    for path in [linked, socket] {
+        let output = graphcal_bin()
+            .args(["plugin", "test"])
+            .arg(&path)
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("must be a regular file"), "{stderr}");
+    }
+}
+
+#[test]
 fn plugin_new_scaffolds_a_buildable_crate_layout() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("fluid-props");

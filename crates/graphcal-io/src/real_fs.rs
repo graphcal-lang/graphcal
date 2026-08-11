@@ -10,12 +10,13 @@ use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use cap_std::{ambient_authority, fs::Dir};
+use sha2::{Digest, Sha256};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::VirtualAbsolutePath;
 use crate::{
-    ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind, FileSystemReadError,
-    FileSystemReader,
+    BoundedFileHash, ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind,
+    FileSystemReadError, FileSystemReader,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -153,6 +154,36 @@ impl RealFileSystem {
         }
     }
 
+    fn hash_file_bounded(
+        mut file: impl Read,
+        declared_len: u64,
+        limit: ByteLimit,
+        cancellation: &dyn CancellationSignal,
+    ) -> Result<BoundedFileHash, FileSystemReadError> {
+        if declared_len > limit.get() {
+            return Err(FileSystemReadError::ByteLimitExceeded { limit });
+        }
+        let mut hasher = Sha256::new();
+        let mut bytes = 0_u64;
+        let mut chunk = [0_u8; 8 * 1024];
+        loop {
+            if cancellation.is_cancelled() {
+                return Err(FileSystemReadError::Cancelled);
+            }
+            let read = file.read(&mut chunk)?;
+            if read == 0 {
+                return Ok(BoundedFileHash::new(hasher.finalize().into(), bytes));
+            }
+            bytes = bytes.checked_add(read as u64).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::FileTooLarge, "file byte count overflow")
+            })?;
+            if bytes > limit.get() {
+                return Err(FileSystemReadError::ByteLimitExceeded { limit });
+            }
+            hasher.update(&chunk[..read]);
+        }
+    }
+
     fn read_bytes_bounded_with_hook(
         &self,
         path: &Path,
@@ -271,6 +302,52 @@ impl FileSystemReader for RealFileSystem {
         cancellation: &dyn CancellationSignal,
     ) -> Result<Vec<u8>, FileSystemReadError> {
         self.read_bytes_bounded_with_hook(path, limit, cancellation, || {})
+    }
+
+    fn hash_file_sha256_bounded(
+        &self,
+        path: &Path,
+        limit: ByteLimit,
+        cancellation: &dyn CancellationSignal,
+    ) -> Result<BoundedFileHash, FileSystemReadError> {
+        if cancellation.is_cancelled() {
+            return Err(FileSystemReadError::Cancelled);
+        }
+        if self.entry_kind(path)? != FileSystemEntryKind::File {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("cannot hash non-regular file `{}`", path.display()),
+            )
+            .into());
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(root) = &self.root {
+            let relative = Self::rooted_relative_path(root, path)?;
+            let file = root
+                .directory
+                .open(relative)
+                .map_err(normalize_rooted_error)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("cannot hash non-regular file `{}`", path.display()),
+                )
+                .into());
+            }
+            return Self::hash_file_bounded(file, metadata.len(), limit, cancellation);
+        }
+
+        let file = File::open(path)?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("cannot hash non-regular file `{}`", path.display()),
+            )
+            .into());
+        }
+        Self::hash_file_bounded(file, metadata.len(), limit, cancellation)
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
@@ -392,6 +469,85 @@ mod tests {
             error,
             FileSystemReadError::ByteLimitExceeded { .. }
         ));
+    }
+
+    #[test]
+    fn bounded_hash_streams_regular_file_and_matches_sha256() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plugin.wasm");
+        fs::write(&file, b"streamed plugin bytes").unwrap();
+
+        let hash = RealFileSystem::rooted(dir.path())
+            .unwrap()
+            .hash_file_sha256_bounded(&file, TEST_LIMIT, &NeverCancel)
+            .unwrap();
+
+        assert_eq!(hash.bytes(), 21);
+        let expected: [u8; 32] = Sha256::digest(b"streamed plugin bytes").into();
+        assert_eq!(hash.sha256(), expected);
+    }
+
+    #[test]
+    fn bounded_hash_rejects_sparse_file_from_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("large.wasm");
+        let handle = File::create(&file).unwrap();
+        handle.set_len(TEST_LIMIT.get() + 1).unwrap();
+
+        assert!(matches!(
+            RealFileSystem::rooted(dir.path())
+                .unwrap()
+                .hash_file_sha256_bounded(&file, TEST_LIMIT, &NeverCancel),
+            Err(FileSystemReadError::ByteLimitExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn bounded_hash_observes_cancellation_before_streaming_completes() {
+        use std::cell::Cell;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("plugin.wasm");
+        fs::write(&file, vec![7_u8; 32 * 1024]).unwrap();
+        let checks = Cell::new(0_u8);
+        let cancellation = || {
+            let next = checks.get().saturating_add(1);
+            checks.set(next);
+            next > 2
+        };
+
+        assert!(matches!(
+            RealFileSystem::rooted(dir.path())
+                .unwrap()
+                .hash_file_sha256_bounded(&file, ByteLimit::new(64 * 1024), &cancellation),
+            Err(FileSystemReadError::Cancelled)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_hash_rejects_symlinks_and_special_files_before_open() {
+        use std::os::unix::fs::symlink;
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.wasm");
+        let linked = dir.path().join("linked.wasm");
+        let socket = dir.path().join("socket.wasm");
+        fs::write(&target, b"secret").unwrap();
+        symlink(&target, &linked).unwrap();
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let reader = RealFileSystem::rooted(dir.path()).unwrap();
+
+        for rejected in [linked, socket] {
+            assert_eq!(
+                reader
+                    .hash_file_sha256_bounded(&rejected, TEST_LIMIT, &NeverCancel)
+                    .unwrap_err()
+                    .io_kind(),
+                Some(io::ErrorKind::InvalidInput)
+            );
+        }
     }
 
     #[test]

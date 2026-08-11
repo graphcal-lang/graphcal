@@ -17,8 +17,8 @@ use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
 use graphcal_io::{
-    ByteLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, RealFileSystem,
-    SourceTreeHashLimits, hash_source_tree,
+    ByteLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy,
+    RealFileSystem, SourceTreeHashLimits, hash_source_tree,
 };
 use graphcal_package::{
     GitCommitHash, GitUrl, LockedPackage, LockfileParseLimits, PackageInstanceId, PackageManifest,
@@ -33,6 +33,7 @@ thread_local! {
     };
 }
 
+#[cfg(test)]
 const MEBIBYTE: u64 = 1024 * 1024;
 
 /// Per-artifact byte limits for one project load.
@@ -74,12 +75,13 @@ impl LoaderArtifactByteLimits {
 
 impl Default for LoaderArtifactByteLimits {
     fn default() -> Self {
+        let policy = ProjectIngestionPolicy::default();
         Self::new(
-            16 * MEBIBYTE,
-            MEBIBYTE,
-            4 * MEBIBYTE,
-            16 * MEBIBYTE,
-            16 * MEBIBYTE,
+            policy.source_file().get(),
+            policy.manifest().get(),
+            policy.lockfile().get(),
+            policy.plugin().get(),
+            policy.source_tree_file().get(),
         )
     }
 }
@@ -115,7 +117,12 @@ impl LoaderBudget {
 
 impl Default for LoaderBudget {
     fn default() -> Self {
-        Self::new(LoaderArtifactByteLimits::default(), 10_000, 256 * MEBIBYTE)
+        let policy = ProjectIngestionPolicy::default();
+        Self::new(
+            LoaderArtifactByteLimits::default(),
+            policy.max_entries(),
+            policy.max_total_bytes(),
+        )
     }
 }
 

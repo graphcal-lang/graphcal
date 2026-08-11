@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 use toml::{Table, Value};
@@ -1023,6 +1023,76 @@ impl ValidatedLockfile<'_> {
     }
 }
 
+/// A validated root-relative path to one WASM plugin artifact.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PluginArtifactPath {
+    components: Vec<PluginPathComponent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct PluginPathComponent(String);
+
+impl PluginArtifactPath {
+    /// Parse a portable, plain relative `.wasm` path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginArtifactPathError`] for absolute, empty, dotted,
+    /// backslash-containing, or non-WASM paths.
+    #[expect(
+        clippy::case_sensitive_file_extension_comparisons,
+        reason = "deliberately matches the loader's case-sensitive `.wasm` plugin-path classification"
+    )]
+    pub fn new(path: impl Into<String>) -> Result<Self, PluginArtifactPathError> {
+        let path = path.into();
+        let components = path
+            .split('/')
+            .map(|component| PluginPathComponent(component.to_string()))
+            .collect::<Vec<_>>();
+        let valid_components = !path.contains('\\')
+            && !path.contains(':')
+            && !path.chars().any(char::is_control)
+            && components.iter().all(|component| {
+                !component.0.is_empty() && component.0 != "." && component.0 != ".."
+            });
+        if !valid_components || !path.ends_with(".wasm") {
+            return Err(PluginArtifactPathError { path });
+        }
+        Ok(Self { components })
+    }
+
+    /// Materialize the portable path below a filesystem root.
+    #[must_use]
+    pub fn join_to(&self, root: &Path) -> PathBuf {
+        self.components
+            .iter()
+            .fold(root.to_path_buf(), |path, component| {
+                path.join(&component.0)
+            })
+    }
+}
+
+impl fmt::Display for PluginArtifactPath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, component) in self.components.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str("/")?;
+            }
+            formatter.write_str(&component.0)?;
+        }
+        Ok(())
+    }
+}
+
+/// Invalid plugin artifact path spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error(
+    "invalid plugin path `{path}`: must be a plain relative path to a `.wasm` file inside the package root"
+)]
+pub struct PluginArtifactPathError {
+    path: String,
+}
+
 /// One pinned wasm plugin artifact: the root-package-relative path exactly
 /// as spelled by `import plugin "…"`, plus the SHA-256 of the file bytes.
 ///
@@ -1031,7 +1101,7 @@ impl ValidatedLockfile<'_> {
 /// pin diff, and a mismatch at load time is a hard error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockedPlugin {
-    path: String,
+    path: PluginArtifactPath,
     sha256: Sha256Digest,
 }
 
@@ -1043,32 +1113,24 @@ impl LockedPlugin {
     /// Returns [`LockedPluginError`] when `path` is not a plain relative
     /// `.wasm` path (no `.`/`..`/absolute/prefix components, `/` separators
     /// only) or `sha256` is not 64 lowercase hex digits.
-    #[expect(
-        clippy::case_sensitive_file_extension_comparisons,
-        reason = "deliberately matches the loader's case-sensitive `.wasm` plugin-path classification"
-    )]
     pub fn new(
         path: impl Into<String>,
         sha256: impl Into<String>,
     ) -> Result<Self, LockedPluginError> {
-        let path = path.into();
-        let plain_relative = !path.contains('\\')
-            && Path::new(&path)
-                .components()
-                .any(|component| matches!(component, Component::Normal(_)))
-            && Path::new(&path)
-                .components()
-                .all(|component| matches!(component, Component::Normal(_)));
-        if !plain_relative || !path.ends_with(".wasm") {
-            return Err(LockedPluginError::InvalidPath { path });
-        }
+        let path = PluginArtifactPath::new(path).map_err(LockedPluginError::InvalidPath)?;
         let sha256 = Sha256Digest::new(sha256).map_err(LockedPluginError::InvalidSha256)?;
         Ok(Self { path, sha256 })
     }
 
+    /// Construct a pin from independently validated path and digest values.
+    #[must_use]
+    pub const fn from_parts(path: PluginArtifactPath, sha256: Sha256Digest) -> Self {
+        Self { path, sha256 }
+    }
+
     /// The root-package-relative plugin path, exactly as imported.
     #[must_use]
-    pub fn path(&self) -> &str {
+    pub const fn path(&self) -> &PluginArtifactPath {
         &self.path
     }
 
@@ -1083,13 +1145,8 @@ impl LockedPlugin {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LockedPluginError {
     /// The path is not a plain relative `.wasm` path.
-    #[error(
-        "invalid plugin path `{path}`: must be a plain relative path to a `.wasm` file inside the package root"
-    )]
-    InvalidPath {
-        /// The rejected path.
-        path: String,
-    },
+    #[error(transparent)]
+    InvalidPath(PluginArtifactPathError),
     /// The digest is not 64 lowercase hex digits.
     #[error("invalid plugin sha256: {0}")]
     InvalidSha256(Sha256DigestError),
@@ -1195,9 +1252,9 @@ impl Lockfile {
 
         let mut plugin_paths = BTreeSet::new();
         for plugin in &self.plugins {
-            if !plugin_paths.insert(plugin.path.as_str()) {
+            if !plugin_paths.insert(&plugin.path) {
                 return Err(LockValidationError::DuplicatePluginPath {
-                    path: plugin.path.clone(),
+                    path: plugin.path.to_string(),
                 });
             }
         }
@@ -1423,7 +1480,7 @@ impl Lockfile {
         plugins.sort_by(|a, b| a.path.cmp(&b.path));
         for plugin in plugins {
             out.push_str("\n[[plugin]]\n");
-            push_kv_string(&mut out, "path", plugin.path());
+            push_kv_string(&mut out, "path", &plugin.path().to_string());
             push_kv_string(&mut out, "sha256", &plugin.sha256().to_string());
         }
         out
@@ -3403,9 +3460,9 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             .validate(GRAPHICAL_VERSION, STDLIB_VERSION)
             .unwrap();
         assert_eq!(reparsed.plugins.len(), 2);
-        assert_eq!(reparsed.plugins[0].path(), "plugins/alpha.wasm");
+        assert_eq!(reparsed.plugins[0].path().to_string(), "plugins/alpha.wasm");
         assert_eq!(reparsed.plugins[0].sha256().to_string(), sha_b);
-        assert_eq!(reparsed.plugins[1].path(), "plugins/zeta.wasm");
+        assert_eq!(reparsed.plugins[1].path().to_string(), "plugins/zeta.wasm");
         assert_eq!(reparsed.plugins[1].sha256().to_string(), sha_a);
     }
 
@@ -3431,12 +3488,14 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             "./dotted.wasm",
             "not-wasm.dll",
             "back\\slash.wasm",
+            "C:/prefix.wasm",
+            "control\nname.wasm",
             "",
         ] {
             assert!(
                 matches!(
                     LockedPlugin::new(bad_path, sha.clone()),
-                    Err(LockedPluginError::InvalidPath { .. })
+                    Err(LockedPluginError::InvalidPath(_))
                 ),
                 "path `{bad_path}` must be rejected"
             );
