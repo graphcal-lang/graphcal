@@ -2754,7 +2754,19 @@ impl LanguageServer for Backend {
         else {
             return Ok(None);
         };
-        Ok(crate::formatting::format_document(&text))
+        match crate::formatting::format_document(&text) {
+            Ok(edits) => Ok(edits),
+            Err(error) if matches!(*error, graphcal_fmt::FormatError::Parse(_)) => Ok(None),
+            Err(error) => {
+                let message = error.to_string();
+                self.client
+                    .log_message(MessageType::ERROR, message.clone())
+                    .await;
+                let mut response = tower_lsp::jsonrpc::Error::internal_error();
+                response.message = message.into();
+                Err(response)
+            }
+        }
     }
 }
 
