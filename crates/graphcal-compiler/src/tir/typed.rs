@@ -576,6 +576,7 @@ fn type_resolve_dag(
         type_defs,
         decl_bindings: HashMap::new(),
         materialized_shapes: HashMap::new(),
+        presentation: crate::tir::presentation::DagPresentationFacts::default(),
     };
 
     Ok(DagTIRSeed {

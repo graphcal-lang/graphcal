@@ -1,18 +1,67 @@
 //! Immutable checked facts required to execute canonical DAG bodies.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
+use graphcal_compiler::tir::presentation::PresentationCallKey;
 use graphcal_compiler::tir::typed::StructFieldConstraintKey;
+use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::ResolvedDomainConstraint;
 
 pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
+
+/// Runtime environments retained for presentation-relevant inline DAG calls.
+#[derive(Debug, Default)]
+pub struct EvaluatedPresentationCalls {
+    by_call: Mutex<HashMap<PresentationCallKey, Vec<Arc<RuntimeValueMap>>>>,
+}
+
+/// Failure to retain or retrieve one evaluated call environment.
+#[derive(Debug, Error)]
+pub enum PresentationCallValuesError {
+    #[error("evaluated presentation-call storage is poisoned")]
+    Poisoned,
+    #[error("evaluated presentation-call invocation {invocation} is missing")]
+    Missing { invocation: usize },
+}
+
+impl EvaluatedPresentationCalls {
+    /// Retain one invocation in deterministic evaluation order.
+    pub fn record(
+        &self,
+        key: PresentationCallKey,
+        values: RuntimeValueMap,
+    ) -> Result<(), PresentationCallValuesError> {
+        self.by_call
+            .lock()
+            .map_err(|_| PresentationCallValuesError::Poisoned)?
+            .entry(key)
+            .or_default()
+            .push(Arc::new(values));
+        Ok(())
+    }
+
+    /// Retrieve one invocation by its deterministic presentation traversal index.
+    pub fn invocation(
+        &self,
+        key: &PresentationCallKey,
+        invocation: usize,
+    ) -> Result<Arc<RuntimeValueMap>, PresentationCallValuesError> {
+        self.by_call
+            .lock()
+            .map_err(|_| PresentationCallValuesError::Poisoned)?
+            .get(key)
+            .and_then(|invocations| invocations.get(invocation))
+            .cloned()
+            .ok_or(PresentationCallValuesError::Missing { invocation })
+    }
+}
 
 /// Checked execution facts for one canonical DAG.
 ///

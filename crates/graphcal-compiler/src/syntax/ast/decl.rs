@@ -172,7 +172,7 @@ impl std::fmt::Display for MarkType {
 }
 
 /// An encoding channel in a plot declaration (Vega-Lite grammar).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EncodingChannel {
     X,
     Y,

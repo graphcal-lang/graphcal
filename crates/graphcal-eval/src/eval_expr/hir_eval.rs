@@ -166,7 +166,7 @@ fn eval_hir_expr_inner(
             target,
             args,
             output,
-        } => eval_hir_dag_call(target, args, output, values, local_values, ctx),
+        } => eval_hir_dag_call(expr.span, target, args, output, values, local_values, ctx),
     }
 }
 
@@ -2352,6 +2352,7 @@ fn check_called_dag_domain_constraint(
 }
 
 fn eval_hir_dag_call(
+    call_span: Span,
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclKey>,
@@ -2410,6 +2411,7 @@ fn eval_hir_dag_call(
         current_decl: None,
         root_values: ctx.root_values,
         checked_execution_facts: ctx.checked_execution_facts,
+        presentation_calls: ctx.presentation_calls,
         struct_field_constraints: ctx.struct_field_constraints,
         generic_nat_bindings: ctx.generic_nat_bindings,
         host_fns: ctx.host_fns,
@@ -2439,7 +2441,7 @@ fn eval_hir_dag_call(
     check_inline_dag_asserts(dag_tir, &dag_values, &dag_ctx, target, output.span, ctx)?;
 
     let output_key = super::dag_decl_runtime_key(&output.value);
-    dag_values.get(&output_key).cloned().ok_or_else(|| {
+    let output_value = dag_values.get(&output_key).cloned().ok_or_else(|| {
         ctx.internal_error(
             format!(
                 "dag `{}` has no projected value `{}` after evaluation (should have been caught by dim-check)",
@@ -2448,7 +2450,40 @@ fn eval_hir_dag_call(
             ),
             output.span,
         )
-    })
+    })?;
+    retain_called_dag_presentation_values(dag_tir, &output.value, call_span, dag_values, ctx)?;
+    Ok(output_value)
+}
+
+fn retain_called_dag_presentation_values(
+    dag: &DagTIR,
+    output: &ResolvedDeclKey,
+    call_span: Span,
+    values: RuntimeValueMap,
+    ctx: &EvalContext<'_>,
+) -> Result<(), GraphcalError> {
+    let requires_values = dag.declaration_presentation(output).is_some_and(
+        graphcal_compiler::tir::presentation::PresentationProvenance::requires_runtime_values,
+    );
+    if requires_values
+        && let (Some(calls), Some(owner)) = (ctx.presentation_calls, &ctx.current_decl)
+    {
+        calls
+            .record(
+                graphcal_compiler::tir::presentation::PresentationCallKey::new(
+                    owner.clone(),
+                    call_span,
+                ),
+                values,
+            )
+            .map_err(|error| {
+                ctx.internal_error(
+                    format!("failed to retain inline-call presentation values: {error}"),
+                    call_span,
+                )
+            })?;
+    }
+    Ok(())
 }
 
 /// Seed an inline DAG instance with imported compile-time constants and

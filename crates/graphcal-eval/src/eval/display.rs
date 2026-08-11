@@ -1,322 +1,485 @@
-//! Display unit resolution: attaching human-readable unit labels to computed values,
-//! formatting coordinate labels, and converting unit expressions to strings.
+//! Checked presentation application, coordinate formatting, and display-unit rendering.
 
-use graphcal_compiler::hir::ExprKind;
-use graphcal_compiler::hir::expr::{ConstRef, IndexArg, MapEntry, MapEntryKey, MatchPattern};
-use graphcal_compiler::registry::declared_type::StructTypeRef;
+use std::collections::HashMap;
+
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::format::{format_number, format_unit_terms_canonical};
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use graphcal_compiler::tir::typed::ResolvedConstructorTarget;
-use indexmap::IndexMap;
+use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
+use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::tir::presentation::{
+    IndexedPresentation, LeafPresentation, PresentationCallKey, PresentationMatchPattern,
+    PresentationProvenance, PresentationSelection, UnitPresentation,
+};
 
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
 
 use super::types::{DisplayUnit, Value};
-use graphcal_compiler::registry::format::{format_number, format_unit_terms_canonical};
 
-/// Maximum number of value reads (`@x`, field/index access, if/match
-/// selection) followed when propagating display metadata. Read chains track
-/// the acyclic value graph, so this is insurance, not a semantic limit.
-const MAX_READ_DEPTH: usize = 64;
+#[derive(Default)]
+struct PresentationApplicationState {
+    call_invocations: HashMap<PresentationCallKey, usize>,
+}
 
-/// Attach display units to a computed value based on its defining expression.
+impl PresentationApplicationState {
+    fn next_call(&mut self, key: &PresentationCallKey) -> Result<usize, &'static str> {
+        let invocation = self.call_invocations.entry(key.clone()).or_default();
+        let current = *invocation;
+        *invocation = invocation
+            .checked_add(1)
+            .ok_or("presentation-call invocation counter overflow")?;
+        Ok(current)
+    }
+}
+
+/// Apply checked, owner-qualified presentation facts to a public value.
 ///
 /// # Errors
 ///
-/// Returns a [`GraphcalError`] when a display unit's scale cannot be resolved
-/// (unknown unit, non-positive or non-finite scale, dynamic scale evaluation
-/// failure). A conversion the user wrote must either take effect or fail
-/// loudly — silently falling back to the base unit would misreport the value.
-pub(super) fn attach_display_units<'a>(
+/// Returns an error when dynamic metadata cannot be evaluated or when checked
+/// presentation structure does not match the evaluated value.
+pub(super) fn attach_presentation(
     value: &mut Value,
-    expr: &'a graphcal_compiler::hir::Expr,
-    ctx: &EvalContext<'a>,
+    presentation: &PresentationProvenance,
+    ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Result<(), GraphcalError> {
-    attach_display_units_depth(value, expr, ctx, values, MAX_READ_DEPTH)
+    attach_presentation_with_locals(
+        value,
+        presentation,
+        ctx,
+        values,
+        &HirLocalValueMap::root(),
+        &mut PresentationApplicationState::default(),
+    )
 }
 
-fn attach_display_units_depth<'a>(
+fn attach_presentation_with_locals(
     value: &mut Value,
-    expr: &'a graphcal_compiler::hir::Expr,
-    ctx: &EvalContext<'a>,
+    presentation: &PresentationProvenance,
+    ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-    depth: usize,
+    locals: &HirLocalValueMap<'_>,
+    state: &mut PresentationApplicationState,
 ) -> Result<(), GraphcalError> {
-    match (&mut *value, &expr.kind) {
-        (Value::Quantity { display_unit, .. }, ExprKind::QuantityLiteral { unit, .. }) => {
-            *display_unit = Some(resolve_unit_to_display(unit, ctx, values)?);
-        }
-        (Value::Quantity { display_unit, .. }, ExprKind::Convert { target, .. })
-        | (Value::Complex { display_unit, .. }, ExprKind::Convert { target, .. }) => {
-            *display_unit = Some(resolve_unit_to_display(target, ctx, values)?);
-        }
-        // Element-wise conversion on indexed values (#648 U1): apply the
-        // target uniformly to every quantity entry, through nested axes.
-        (Value::Indexed { entries, .. }, ExprKind::Convert { target, .. }) => {
-            let du = resolve_unit_to_display(target, ctx, values)?;
-            for entry_val in entries.values_mut() {
-                set_quantity_display_unit_deep(entry_val, &du);
-            }
-        }
-        // Constructor call: recurse into each field initializer.
-        (Value::Struct { fields, .. }, ExprKind::ConstructorCall { fields: inits, .. }) => {
-            for init in inits {
-                if let Some(field_val) = fields.get_mut(&init.name.value) {
-                    attach_display_units_depth(field_val, &init.value, ctx, values, depth)?;
-                }
-            }
-        }
-        // Map/table literal: recurse into each entry, walking through nested
-        // Indexed values for multi-axis maps.
-        (
-            Value::Indexed { entries, .. },
-            ExprKind::MapLiteral {
-                entries: map_entries,
-            },
-        ) => {
-            for map_entry in map_entries {
-                if let Some(target) = walk_indexed_keys(entries, map_entry.keys.as_slice()) {
-                    attach_display_units_depth(target, &map_entry.value, ctx, values, depth)?;
-                }
-            }
-        }
-        // For comprehension: extract a single display unit from body, apply uniformly
-        (Value::Indexed { entries, .. }, ExprKind::ForComp { body, .. }) => {
-            if let Some(du) = extract_flat_display_unit(body, ctx, values)? {
-                for entry_val in entries.values_mut() {
-                    set_quantity_display_unit(entry_val, &du);
-                }
-            }
-        }
-        // Scan: extract a single display unit from init, apply uniformly
-        (Value::Indexed { entries, .. }, ExprKind::Scan { init, .. })
-        | (Value::Indexed { entries, .. }, ExprKind::Unfold { init, .. }) => {
-            if let Some(du) = extract_flat_display_unit(init, ctx, values)? {
-                for entry_val in entries.values_mut() {
-                    set_quantity_display_unit(entry_val, &du);
-                }
-            }
-        }
-        // Timezone display: set display_tz on Datetime values
-        (Value::Datetime { display_tz, .. }, ExprKind::DisplayTimezone { timezone, .. }) => {
-            *display_tz = Some(timezone.clone());
-        }
-        // Value reads propagate the source's display metadata (#648 B1/N5):
-        // follow `@x`, const refs, field/index access, inline-dag projections,
-        // and runtime-selected if/match branches back to the constructing
-        // expression, then attach from that expression instead.
-        _ => {
-            if depth > 0
-                && let Some(src_expr) = resolve_defining_expr(expr, ctx, values, depth)?
+    match presentation {
+        PresentationProvenance::None => Ok(()),
+        PresentationProvenance::Leaf(leaf) => attach_leaf(value, leaf, ctx, values),
+        PresentationProvenance::Struct {
+            owning_type,
+            fields: presentations,
+        } => match value {
+            Value::Struct { type_name, fields }
+                if type_name.resolved() == owning_type.resolved() =>
             {
-                attach_display_units_depth(value, src_expr, ctx, values, depth.saturating_sub(1))?;
+                presentations.iter().try_for_each(|(field, presentation)| {
+                    fields.get_mut(field).map_or_else(
+                        || {
+                            Err(presentation_error(
+                                ctx,
+                                format!(
+                                    "checked presentation field `{field}` is absent from runtime struct `{type_name}`"
+                                ),
+                                Span::new(0, 0),
+                            ))
+                        },
+                        |field_value| {
+                            attach_presentation_with_locals(
+                                field_value,
+                                presentation,
+                                ctx,
+                                values,
+                                locals,
+                                state,
+                            )
+                        },
+                    )
+                })
             }
+            Value::Struct { type_name, .. } => Err(presentation_error(
+                ctx,
+                format!(
+                    "checked presentation type `{owning_type}` does not match runtime struct `{type_name}`"
+                ),
+                Span::new(0, 0),
+            )),
+            _ => Err(presentation_error(
+                ctx,
+                "checked struct presentation was paired with a non-struct runtime value",
+                Span::new(0, 0),
+            )),
+        },
+        PresentationProvenance::Indexed { index, elements } => {
+            attach_indexed(value, index, elements, ctx, values, locals, state)
+        }
+        PresentationProvenance::DagCall { key, output } => {
+            let invocation = state
+                .next_call(key)
+                .map_err(|message| presentation_error(ctx, message, Span::new(0, 0)))?;
+            let calls = ctx.presentation_calls.ok_or_else(|| {
+                presentation_error(
+                    ctx,
+                    "checked DAG-call presentation has no evaluated call store",
+                    Span::new(0, 0),
+                )
+            })?;
+            let call_values = calls.invocation(key, invocation).map_err(|error| {
+                presentation_error(
+                    ctx,
+                    format!("checked DAG-call presentation values are unavailable: {error}"),
+                    Span::new(0, 0),
+                )
+            })?;
+            attach_presentation_with_locals(
+                value,
+                output,
+                ctx,
+                &call_values,
+                locals,
+                state,
+            )
+        }
+        PresentationProvenance::Select(selection) => {
+            let selected = select_presentation(selection, ctx, values, locals)?;
+            attach_presentation_with_locals(value, selected, ctx, values, locals, state)
         }
     }
-    Ok(())
 }
 
-/// Follow a value-read expression back to the expression that constructed the
-/// value it reads (#648 B1/N5).
-///
-/// Returns `Ok(None)` when the expression is not a read (arithmetic, function
-/// calls, literals without units, …) or the source cannot be determined
-/// statically — display metadata is simply not propagated in that case.
-///
-/// `if`/`match` selections and conditions are evaluated against the final
-/// value map to pick the live branch; evaluation failures fall back to `None`
-/// (the read target itself reports its own error).
-fn resolve_defining_expr<'a>(
-    expr: &'a graphcal_compiler::hir::Expr,
-    ctx: &EvalContext<'a>,
+fn attach_indexed(
+    value: &mut Value,
+    index: &graphcal_compiler::registry::declared_type::IndexTypeRef,
+    elements: &IndexedPresentation,
+    ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-    depth: usize,
-) -> Result<Option<&'a graphcal_compiler::hir::Expr>, GraphcalError> {
-    if depth == 0 {
-        return Ok(None);
-    }
-    let dag = ctx.current_dag.unwrap_or_else(|| ctx.tir.root());
-    let decl_expr =
-        |name: &graphcal_compiler::syntax::decl_name::ResolvedDeclName| dag.value_expr(name);
-    let resolved = match &expr.kind {
-        ExprKind::GraphRef(target) => decl_expr(&target.value),
-        ExprKind::ConstRef(target) => match &target.value {
-            ConstRef::Decl(name) => dag.value_expr(name),
-            _ => None,
-        },
-        ExprKind::DagCall { output, .. } => decl_expr(&output.value),
-        ExprKind::FieldAccess { expr: inner, field } => {
-            let Some(ctor) = resolve_defining_expr(inner, ctx, values, depth.saturating_sub(1))?
-            else {
-                return Ok(None);
-            };
-            let ExprKind::ConstructorCall { fields, .. } = &ctor.kind else {
-                return Ok(None);
-            };
-            fields
+    locals: &HirLocalValueMap<'_>,
+    state: &mut PresentationApplicationState,
+) -> Result<(), GraphcalError> {
+    match value {
+        Value::Indexed {
+            index_name,
+            entries,
+            ..
+        } if index_name.matches_ref(index) => match elements {
+            IndexedPresentation::Uniform { local, element } => {
+                entries.iter_mut().try_for_each(|(key, entry)| match local {
+                    Some(local) => {
+                        let binding = presentation_index_binding(index, key, ctx)?;
+                        let child = locals.child(vec![(*local, binding)]);
+                        attach_presentation_with_locals(
+                            entry, element, ctx, values, &child, state,
+                        )
+                    }
+                    None => {
+                        attach_presentation_with_locals(
+                            entry, element, ctx, values, locals, state,
+                        )
+                    }
+                })
+            }
+            IndexedPresentation::Entries(presentations) => presentations
                 .iter()
-                .find(|init| init.name.value == field.value)
-                .map(|init| &init.value)
+                .try_for_each(|(key, presentation)| {
+                    entries.get_mut(key).map_or_else(
+                        || {
+                            Err(presentation_error(
+                                ctx,
+                                format!(
+                                    "checked presentation key `{key}` is absent from runtime indexed value"
+                                ),
+                                Span::new(0, 0),
+                            ))
+                        },
+                        |entry| {
+                            attach_presentation_with_locals(
+                                entry,
+                                presentation,
+                                ctx,
+                                values,
+                                locals,
+                                state,
+                            )
+                        },
+                    )
+                }),
+        },
+        Value::Indexed { index_name, .. } => Err(presentation_error(
+            ctx,
+            format!(
+                "checked presentation index `{index}` does not match runtime index `{index_name}`"
+            ),
+            Span::new(0, 0),
+        )),
+        _ => Err(presentation_error(
+            ctx,
+            "checked indexed presentation was paired with a non-indexed runtime value",
+            Span::new(0, 0),
+        )),
+    }
+}
+
+fn attach_leaf(
+    value: &mut Value,
+    leaf: &LeafPresentation,
+    ctx: &EvalContext<'_>,
+    values: &RuntimeValueMap,
+) -> Result<(), GraphcalError> {
+    match (value, leaf) {
+        (
+            Value::Quantity {
+                dimension,
+                display_unit,
+                ..
+            }
+            | Value::Complex {
+                dimension,
+                display_unit,
+                ..
+            },
+            LeafPresentation::Unit(unit),
+        ) if dimension == unit.dimension() => {
+            *display_unit = Some(resolve_unit_to_display(unit, ctx, values)?);
+            Ok(())
         }
-        ExprKind::IndexAccess { expr: inner, args } => {
-            let Some(map_expr) =
-                resolve_defining_expr(inner, ctx, values, depth.saturating_sub(1))?
-            else {
-                return Ok(None);
-            };
-            let ExprKind::MapLiteral { entries } = &map_expr.kind else {
-                return Ok(None);
-            };
-            find_static_map_entry(entries, args.as_slice())
+        (Value::Indexed { entries, .. }, LeafPresentation::Unit(_))
+        | (Value::Indexed { entries, .. }, LeafPresentation::Timezone(_)) => entries
+            .values_mut()
+            .try_for_each(|entry| attach_leaf(entry, leaf, ctx, values)),
+        (Value::Datetime { display_tz, .. }, LeafPresentation::Timezone(timezone)) => {
+            *display_tz = Some(timezone.clone());
+            Ok(())
         }
-        ExprKind::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            let cond = eval_hir_expr(condition, values, &HirLocalValueMap::root(), ctx).ok();
-            let Some(RuntimeValue::Bool(b)) = cond else {
-                return Ok(None);
-            };
-            Some(if b {
-                then_branch.as_ref()
-            } else {
-                else_branch.as_ref()
+        (
+            Value::Quantity { dimension, .. } | Value::Complex { dimension, .. },
+            LeafPresentation::Unit(unit),
+        ) => Err(presentation_error(
+            ctx,
+            format!(
+                "checked display dimension `{:?}` does not match runtime dimension `{dimension:?}`",
+                unit.dimension()
+            ),
+            unit.unit().span,
+        )),
+        (_, LeafPresentation::Unit(unit)) => Err(presentation_error(
+            ctx,
+            "checked unit presentation was paired with a non-quantity runtime value",
+            unit.unit().span,
+        )),
+        (_, LeafPresentation::Timezone(_)) => Err(presentation_error(
+            ctx,
+            "checked timezone presentation was paired with a non-datetime runtime value",
+            Span::new(0, 0),
+        )),
+    }
+}
+
+fn presentation_index_binding(
+    index: &graphcal_compiler::registry::declared_type::IndexTypeRef,
+    key: &graphcal_compiler::syntax::index_name::IndexEntryKey,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::registry::types::IndexKind;
+    use graphcal_compiler::syntax::index_name::IndexEntryKey;
+
+    let definition = index.finite_index().map_or_else(
+        || {
+            index
+                .declared_resolved()
+                .and_then(|resolved| ctx.tir.declared_index_def(resolved))
+        },
+        |finite| ctx.registry.indexes.get_finite_index(finite),
+    );
+    let definition = definition.ok_or_else(|| {
+        presentation_error(
+            ctx,
+            format!("checked presentation index `{index}` has no definition"),
+            Span::new(0, 0),
+        )
+    })?;
+    match (&definition.kind, key) {
+        (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Named(variant)) => {
+            Ok(RuntimeValue::Label {
+                index_name: index.clone(),
+                variant: variant.clone(),
             })
         }
-        ExprKind::Match { scrutinee, arms } => {
-            let scrut = eval_hir_expr(scrutinee, values, &HirLocalValueMap::root(), ctx).ok();
-            match scrut {
-                Some(RuntimeValue::Label { variant, .. }) => arms
-                    .iter()
-                    .find(|arm| {
-                        matches!(
-                            &arm.pattern,
-                            MatchPattern::IndexLabel { variant: pat, .. }
-                                if *pat.variant.variant() == variant
-                        )
-                    })
-                    .map(|arm| &arm.body),
-                Some(RuntimeValue::Struct { type_name, .. }) => arms
-                    .iter()
-                    .find(|arm| match &arm.pattern {
-                        MatchPattern::Constructor { constructor, .. } => {
-                            constructor_target(ctx, &constructor.value).is_some_and(|target| {
-                                runtime_struct_matches_resolved_constructor(&type_name, target)
-                            })
-                        }
-                        MatchPattern::IndexLabel { .. } => false,
-                    })
-                    .map(|arm| &arm.body),
-                _ => return Ok(None),
+        (IndexKind::Coordinate(data), IndexEntryKey::Position(position)) => {
+            let position = usize::try_from(*position).map_err(|_| {
+                presentation_error(
+                    ctx,
+                    "coordinate presentation position exceeds the platform index range",
+                    Span::new(0, 0),
+                )
+            })?;
+            Ok(RuntimeValue::CoordinateLabel {
+                index_name: index.clone(),
+                position,
+                value: data.coordinate_value(position),
+            })
+        }
+        (IndexKind::Finite { .. }, IndexEntryKey::Position(position)) => i64::try_from(*position)
+            .map(RuntimeValue::Int)
+            .map_err(|_| {
+                presentation_error(
+                    ctx,
+                    "finite presentation position exceeds the Int range",
+                    Span::new(0, 0),
+                )
+            }),
+        (IndexKind::RequiredCoordinate { .. }, _) => Err(presentation_error(
+            ctx,
+            "unbound required coordinate index reached presentation",
+            Span::new(0, 0),
+        )),
+        (IndexKind::Named { .. } | IndexKind::RequiredNamed, IndexEntryKey::Position(_))
+        | (IndexKind::Coordinate(_) | IndexKind::Finite { .. }, IndexEntryKey::Named(_)) => {
+            Err(presentation_error(
+                ctx,
+                "checked presentation key does not match its index kind",
+                Span::new(0, 0),
+            ))
+        }
+    }
+}
+
+fn select_presentation<'a>(
+    selection: &'a PresentationSelection,
+    ctx: &EvalContext<'_>,
+    values: &RuntimeValueMap,
+    locals: &HirLocalValueMap<'_>,
+) -> Result<&'a PresentationProvenance, GraphcalError> {
+    match selection {
+        PresentationSelection::If {
+            defining_dag,
+            owner,
+            condition,
+            then_presentation,
+            else_presentation,
+        } => {
+            let owner_ctx = checked_owner_context(ctx, defining_dag, owner, condition.span)?;
+            match eval_hir_expr(condition, values, locals, &owner_ctx)? {
+                RuntimeValue::Bool(true) => Ok(then_presentation),
+                RuntimeValue::Bool(false) => Ok(else_presentation),
+                other => Err(presentation_error(
+                    &owner_ctx,
+                    format!(
+                        "checked presentation condition evaluated to {}, expected Bool",
+                        other.kind()
+                    ),
+                    condition.span,
+                )),
             }
         }
-        _ => None,
-    };
-    Ok(resolved)
-}
-
-fn constructor_target<'a>(
-    ctx: &'a EvalContext<'_>,
-    constructor: &graphcal_compiler::syntax::type_name::ResolvedConstructorName,
-) -> Option<&'a ResolvedConstructorTarget> {
-    ctx.current_dag
-        .map(|dag| &dag.semantic().constructor_refs)
-        .and_then(|refs| refs.constructor_defs.get(constructor))
-}
-
-fn runtime_struct_matches_resolved_constructor(
-    scrutinee_type: &StructTypeRef,
-    target: &ResolvedConstructorTarget,
-) -> bool {
-    scrutinee_type.name().as_str() == target.variant.name().as_str()
-        && scrutinee_type.resolved() == &target.owning_type
-}
-
-/// Find the map-literal entry selected by statically known index variants.
-///
-/// Only fully static accesses resolve (`@x[R.A]`, `@grid[R.A, C.X]`); a
-/// dynamic key or a partial multi-axis access returns `None`.
-fn find_static_map_entry<'a>(
-    entries: &'a [MapEntry],
-    args: &[IndexArg],
-) -> Option<&'a graphcal_compiler::hir::Expr> {
-    entries.iter().find_map(|entry| {
-        if entry.keys.len() != args.len() {
-            return None;
+        PresentationSelection::Match {
+            defining_dag,
+            owner,
+            scrutinee,
+            arms,
+        } => {
+            let owner_ctx = checked_owner_context(ctx, defining_dag, owner, scrutinee.span)?;
+            let scrutinee_value = eval_hir_expr(scrutinee, values, locals, &owner_ctx)?;
+            arms.iter()
+                .find(|arm| presentation_pattern_matches(&arm.pattern, &scrutinee_value))
+                .map(|arm| &arm.presentation)
+                .ok_or_else(|| {
+                    presentation_error(
+                        &owner_ctx,
+                        "checked presentation match has no arm for its runtime scrutinee",
+                        scrutinee.span,
+                    )
+                })
         }
-        let all_match = entry.keys.iter().zip(args).all(|(key, arg)| {
-            matches!(
-                (key, arg),
-                (MapEntryKey::IndexVariant(k), IndexArg::Variant(a))
-                    if k.variant.variant() == a.variant.variant()
-            )
-        });
-        all_match.then_some(&entry.value)
-    })
+    }
 }
 
-/// Resolve a `UnitExpr` to a `DisplayUnit`.
-///
-/// Handles both static and dynamic unit scales. For dynamic units, the scale
-/// expression is evaluated using the provided evaluation context and value map.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when the scale cannot be resolved; see
-/// [`attach_display_units`].
+fn presentation_pattern_matches(pattern: &PresentationMatchPattern, value: &RuntimeValue) -> bool {
+    match (pattern, value) {
+        (
+            PresentationMatchPattern::IndexLabel(expected),
+            RuntimeValue::Label {
+                index_name,
+                variant,
+            },
+        ) => {
+            index_name.declared_resolved() == Some(expected.index())
+                && variant == expected.variant()
+        }
+        (
+            PresentationMatchPattern::Constructor {
+                owning_type,
+                constructor,
+            },
+            RuntimeValue::Struct { type_name, .. },
+        ) => {
+            type_name.resolved() == owning_type.resolved()
+                && type_name.as_str() == constructor.as_str()
+        }
+        _ => false,
+    }
+}
+
+fn checked_owner_context<'a, 'ctx>(
+    ctx: &'a EvalContext<'ctx>,
+    defining_dag: &graphcal_compiler::dag_id::DagId,
+    owner: &ResolvedDeclName,
+    span: Span,
+) -> Result<EvalContext<'a>, GraphcalError>
+where
+    'ctx: 'a,
+{
+    let dag = ctx.tir.dag_registry().get(defining_dag).ok_or_else(|| {
+        presentation_error(
+            ctx,
+            format!("checked presentation owner `{defining_dag}` has no runtime DAG"),
+            span,
+        )
+    })?;
+    let source = ctx
+        .checked_execution_facts
+        .and_then(|facts| facts.for_dag(defining_dag))
+        .map_or(ctx.src, |facts| facts.source());
+    Ok(ctx.for_checked_decl(dag, source, owner))
+}
+
+/// Resolve a checked unit expression in its defining declaration environment.
 fn resolve_unit_to_display(
-    unit: &graphcal_compiler::hir::ResolvedUnitExpr,
+    presentation: &UnitPresentation,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Result<DisplayUnit, GraphcalError> {
-    let scale = crate::eval_expr::resolve_unit_scale(unit, values, ctx)?;
+    let unit = presentation.unit();
+    let owner_ctx = checked_owner_context(
+        ctx,
+        presentation.defining_dag(),
+        presentation.owner(),
+        unit.span,
+    )?;
+    let scale = crate::eval_expr::resolve_unit_scale(unit, values, &owner_ctx)?;
     let label = format_unit_terms_canonical(
         unit.terms
             .iter()
             .map(|item| (item.op, item.name.value.to_string(), item.power)),
     )
     .map_err(|_| GraphcalError::DimensionOverflow {
-        src: ctx.src.clone(),
+        src: owner_ctx.src.clone(),
         span: unit.span.into(),
     })?;
     DisplayUnit::try_new(label, scale).map_err(|error| GraphcalError::InternalError {
         message: format!("validated display-unit scale violated its invariant: {error}"),
-        src: ctx.src.clone(),
+        src: owner_ctx.src.clone(),
         span: unit.span.into(),
     })
 }
 
-/// Extract a single display unit from a quantity-producing expression.
-///
-/// Used for indexed collections (for comprehensions, scan) where all entries
-/// share the same display unit. `Ok(None)` means the expression carries no
-/// display unit; `Err` means it carries one that failed to resolve.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] when a present display unit's scale cannot be
-/// resolved; see [`attach_display_units`].
-pub(super) fn extract_flat_display_unit(
-    expr: &graphcal_compiler::hir::Expr,
+fn presentation_error(
     ctx: &EvalContext<'_>,
-    values: &RuntimeValueMap,
-) -> Result<Option<DisplayUnit>, GraphcalError> {
-    match &expr.kind {
-        ExprKind::QuantityLiteral { unit, .. } => {
-            resolve_unit_to_display(unit, ctx, values).map(Some)
-        }
-        ExprKind::Convert { target, .. } => resolve_unit_to_display(target, ctx, values).map(Some),
-        ExprKind::MapLiteral { entries } => entries.first().map_or(Ok(None), |e| {
-            extract_flat_display_unit(&e.value, ctx, values)
-        }),
-        ExprKind::ForComp { body, .. } => extract_flat_display_unit(body, ctx, values),
-        ExprKind::Scan { init, .. } | ExprKind::Unfold { init, .. } => {
-            extract_flat_display_unit(init, ctx, values)
-        }
-        _ => Ok(None),
+    message: impl Into<String>,
+    span: Span,
+) -> GraphcalError {
+    GraphcalError::InternalError {
+        message: message.into(),
+        src: ctx.src.clone(),
+        span: span.into(),
     }
 }
 
@@ -357,55 +520,4 @@ pub(super) fn format_coordinate_exact(
     position: usize,
 ) -> String {
     format_coordinate_impl(idx_def, position, true)
-}
-
-/// Set display unit on a quantity value. No-op for non-quantity values.
-fn set_quantity_display_unit(value: &mut Value, du: &DisplayUnit) {
-    match value {
-        Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } => {
-            *display_unit = Some(du.clone());
-        }
-        _ => {}
-    }
-}
-
-/// Set display unit on every quantity leaf, descending through nested
-/// `Indexed` layers (multi-axis values).
-fn set_quantity_display_unit_deep(value: &mut Value, du: &DisplayUnit) {
-    match value {
-        Value::Quantity { display_unit, .. } | Value::Complex { display_unit, .. } => {
-            *display_unit = Some(du.clone());
-        }
-        Value::Indexed { entries, .. } => {
-            for entry in entries.values_mut() {
-                set_quantity_display_unit_deep(entry, du);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Walk through nested `Indexed` entries using successive map entry keys.
-///
-/// For a single-axis map (`keys.len() == 1`), returns the entry matching `keys[0]`.
-/// For multi-axis maps, drills into nested `Value::Indexed` using each key in turn.
-fn walk_indexed_keys<'a>(
-    entries: &'a mut IndexMap<IndexEntryKey, Value>,
-    keys: &[MapEntryKey],
-) -> Option<&'a mut Value> {
-    let (first, rest) = keys.split_first()?;
-    let entry_key = match first {
-        MapEntryKey::IndexVariant(resolved) => {
-            IndexEntryKey::named(resolved.variant.variant().clone())
-        }
-        MapEntryKey::FinitePosition { position, .. } => IndexEntryKey::position(position.value),
-    };
-    let value = entries.get_mut(&entry_key)?;
-    if rest.is_empty() {
-        Some(value)
-    } else if let Value::Indexed { entries: inner, .. } = value {
-        walk_indexed_keys(inner, rest)
-    } else {
-        None
-    }
 }

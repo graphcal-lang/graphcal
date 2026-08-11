@@ -69,6 +69,8 @@ pub struct EvalContext<'a> {
     /// Checked facts for every runtime-callable DAG. Compile-time expression
     /// contexts use `None` because DAG calls are statically forbidden there.
     pub checked_execution_facts: Option<&'a crate::execution_facts::CheckedExecutionFacts>,
+    /// Evaluated inline-call environments required only by checked presentation facts.
+    pub presentation_calls: Option<&'a crate::execution_facts::EvaluatedPresentationCalls>,
     /// Resolved domain constraints declared on struct/union member fields,
     /// keyed by owner-qualified struct/constructor/field identity. Looked up at
     /// every `ExprKind::ConstructorCall` to validate field values immediately.
@@ -145,6 +147,36 @@ impl<'a> EvalContext<'a> {
             current_decl: self.current_decl.clone(),
             root_values: self.root_values,
             checked_execution_facts: self.checked_execution_facts,
+            presentation_calls: self.presentation_calls,
+            struct_field_constraints: self.struct_field_constraints,
+            generic_nat_bindings: self.generic_nat_bindings,
+            host_fns: self.host_fns,
+        }
+    }
+
+    /// Borrow this environment in a canonical declaration's checked DAG/source.
+    #[must_use]
+    pub fn for_checked_decl<'b>(
+        &'b self,
+        dag: &'b graphcal_compiler::tir::typed::DagTIR,
+        src: &'b NamedSource<Arc<String>>,
+        declaration: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
+    ) -> EvalContext<'b>
+    where
+        'a: 'b,
+    {
+        EvalContext {
+            cancellation: self.cancellation.clone(),
+            work_budget: self.work_budget.clone(),
+            builtin_fns: self.builtin_fns,
+            registry: self.registry,
+            src,
+            tir: self.tir,
+            current_dag: Some(dag),
+            current_decl: Some(declaration.clone()),
+            root_values: self.root_values,
+            checked_execution_facts: self.checked_execution_facts,
+            presentation_calls: self.presentation_calls,
             struct_field_constraints: self.struct_field_constraints,
             generic_nat_bindings: self.generic_nat_bindings,
             host_fns: self.host_fns,
@@ -168,6 +200,7 @@ impl<'a> EvalContext<'a> {
             current_decl: Some(declaration.clone()),
             root_values: self.root_values,
             checked_execution_facts: self.checked_execution_facts,
+            presentation_calls: self.presentation_calls,
             struct_field_constraints: self.struct_field_constraints,
             generic_nat_bindings: self.generic_nat_bindings,
             host_fns: self.host_fns,

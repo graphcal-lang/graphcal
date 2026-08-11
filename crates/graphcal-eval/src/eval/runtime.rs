@@ -21,11 +21,9 @@ use graphcal_compiler::ir::resolve::{DeclCategory, ExpectedFail, ExpectedFailKey
 use graphcal_compiler::registry::builtins::{BuiltinFunctions, builtin_functions};
 use graphcal_compiler::registry::declared_type::{DeclaredType, IndexTypeRef};
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::registry::types::{IndexDef, SemanticRegistry};
+use graphcal_compiler::registry::types::IndexDef;
 
-use super::display::{
-    attach_display_units, extract_flat_display_unit, format_coordinate, format_coordinate_exact,
-};
+use super::display::{attach_presentation, format_coordinate, format_coordinate_exact};
 use super::types::{
     AssertResult, AxisMeta, DeclType, DisplayUnit, EvalResult, NodeError, PlotFieldValue, PlotSpec,
     Value, validate_display_projection,
@@ -228,6 +226,7 @@ pub(super) fn runtime_to_value(
 pub(super) struct EvalLoopResult {
     pub values: RuntimeValueMap,
     pub errors: HashMap<RuntimeDeclKey, NodeError>,
+    pub presentation_calls: crate::execution_facts::EvaluatedPresentationCalls,
 }
 
 /// One completed runtime evaluation before project-level public output assembly.
@@ -290,6 +289,7 @@ pub(super) fn run_eval_loop_with_bindings(
 
     let mut values: RuntimeValueMap = HashMap::new();
     let mut errors: HashMap<RuntimeDeclKey, NodeError> = HashMap::new();
+    let presentation_calls = crate::execution_facts::EvaluatedPresentationCalls::default();
 
     // Insert imported compile-time constants into the lookup table.
     // They keep their original `ScopedName` qualification.
@@ -350,6 +350,7 @@ pub(super) fn run_eval_loop_with_bindings(
             current_decl: Some(name.as_resolved().clone()),
             root_values: Some(&values),
             checked_execution_facts: Some(&plan.checked_execution_facts),
+            presentation_calls: Some(&presentation_calls),
             struct_field_constraints: Some(&plan.struct_field_constraints),
             generic_nat_bindings: None,
             host_fns: Some(host_fns),
@@ -391,7 +392,11 @@ pub(super) fn run_eval_loop_with_bindings(
         }
     }
 
-    Ok(EvalLoopResult { values, errors })
+    Ok(EvalLoopResult {
+        values,
+        errors,
+        presentation_calls,
+    })
 }
 
 /// Convert a runtime `GraphcalError` into a per-node `EvalFailed` error,
@@ -466,7 +471,11 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     let builtin_fns = builtin_functions();
     let empty_hir_locals = HirLocalValueMap::root();
 
-    let EvalLoopResult { values, errors } = run_eval_loop_with_bindings(
+    let EvalLoopResult {
+        values,
+        errors,
+        presentation_calls,
+    } = run_eval_loop_with_bindings(
         plan,
         bindings,
         tir,
@@ -488,45 +497,31 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         current_decl: None,
         root_values: Some(&values),
         checked_execution_facts: Some(&plan.checked_execution_facts),
+        presentation_calls: Some(&presentation_calls),
         struct_field_constraints: Some(&plan.struct_field_constraints),
         generic_nat_bindings: None,
         host_fns: Some(host_fns),
     };
 
-    // Build a map from name -> HIR expression for display unit extraction.
-    // Top-level decls are always `Local`-form names.
-    let hir_expr_for = |name: &ScopedName| -> Option<&graphcal_compiler::hir::Expr> {
-        let runtime_key = RuntimeDeclKey::for_local_decl(tir.root(), name);
-        if let Some(expr) = bindings
-            .get(&runtime_key)
-            .and_then(|binding| binding.display_expr.as_ref())
-        {
-            return Some(expr);
-        }
-        let key = tir.root().resolved_decl_key_for_local(name);
-        tir.root().value_expr(&key)
-    };
-    let expr_map: HashMap<ScopedName, &graphcal_compiler::hir::Expr> = tir
-        .root()
-        .consts()
-        .iter()
-        .map(|e| &e.name)
-        .chain(tir.root().params().iter().map(|e| &e.name))
-        .chain(tir.root().nodes().iter().map(|e| &e.name))
-        .filter_map(|name| hir_expr_for(name).map(|expr| (name.clone(), expr)))
-        .collect();
-
     let local_key = |name: &ScopedName| RuntimeDeclKey::for_local_decl(tir.root(), name);
 
     let make_value = |name: &ScopedName, rv: &RuntimeValue| -> Result<Value, NodeError> {
+        let runtime_key = local_key(name);
+        let declaration = runtime_key.as_resolved();
+        let presentation = bindings
+            .get(&runtime_key)
+            .map(|binding| &binding.presentation)
+            .or_else(|| tir.root().declaration_presentation(declaration))
+            .ok_or_else(|| NodeError::EvalFailed {
+                message: format!(
+                    "checked presentation facts are missing for declaration `{declaration}`"
+                ),
+            })?;
         let mut value = runtime_to_value(rv, declared_types.get(name), tir, src);
-        if let Some(expr) = expr_map.get(name) {
-            // A display unit that fails to resolve (e.g. a dynamic conversion
-            // target whose scale became non-positive) is a per-node error, not
-            // a silent fallback to the base unit.
-            attach_display_units(&mut value, expr, &ctx, &values)
-                .map_err(|e| eval_failed_node_error(&e))?;
-        }
+        // Authored display metadata either applies successfully or makes this
+        // declaration fail; presentation never silently falls back to SI.
+        attach_presentation(&mut value, presentation, &ctx, &values)
+            .map_err(|error| eval_failed_node_error(&error))?;
         validate_display_projection(&value).map_err(|error| NodeError::EvalFailed {
             message: error.to_string(),
         })?;
@@ -637,20 +632,14 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .iter()
         .filter_map(|entry| {
             let owner = tir.root().resolved_decl_key_for_local(&entry.name);
-            evaluate_plot(
-                entry,
-                &values,
-                &errors,
-                &ctx.for_decl(&owner),
-                declared_types,
-            )
-            .map_err(|message| {
-                plot_errors.push(super::types::PlotError {
-                    name: entry.name.clone(),
-                    message,
-                });
-            })
-            .ok()
+            evaluate_plot(entry, &values, &errors, &ctx.for_decl(&owner))
+                .map_err(|message| {
+                    plot_errors.push(super::types::PlotError {
+                        name: entry.name.clone(),
+                        message,
+                    });
+                })
+                .ok()
         })
         .collect();
     cancellation.checkpoint()?;
@@ -1399,7 +1388,6 @@ fn evaluate_plot(
     values: &RuntimeValueMap,
     errors: &HashMap<RuntimeDeclKey, NodeError>,
     ctx: &EvalContext<'_>,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
 ) -> Result<PlotSpec, String> {
     // A reference to a failed declaration must report the root cause, not a
     // generic lookup failure on the missing value.
@@ -1414,42 +1402,68 @@ fn evaluate_plot(
         return Err(message);
     }
 
+    let owner = ctx.current_decl.as_ref().ok_or_else(|| {
+        "internal: plot evaluation has no canonical declaration owner".to_string()
+    })?;
+    let dag = ctx
+        .current_dag
+        .ok_or_else(|| "internal: plot evaluation has no checked DAG".to_string())?;
+    let channel_facts = dag.plot_channel_presentations(owner).ok_or_else(|| {
+        format!("internal: checked presentation facts are missing for plot `{owner}`")
+    })?;
     let mut encoding_meta = Vec::new();
 
-    // Evaluate encoding channels to axes-aware data, then align them onto
-    // one shared row set (cross-product flattening with broadcasting); see
-    // `plot_data` for the rules (#840, #841).
+    // Evaluate channels and apply their checked structured presentation before
+    // row alignment. Numeric projection and axis labels consume the same fact.
     let empty_locals = HirLocalValueMap::root();
     let mut channel_data = Vec::new();
     for (channel, expr) in &lowered.encodings {
-        // A rendering conversion is part of the channel's data contract, not
-        // only axis decoration. Resolve it once, fail loudly if its dynamic
-        // scale is invalid, and use the same metadata for values and labels.
-        let display_unit = extract_flat_display_unit(expr, ctx, values).map_err(|e| {
-            format!(
-                "encoding channel `{channel}`: {}",
-                eval_failed_node_error(&e)
-            )
+        let fact = channel_facts.get(channel).ok_or_else(|| {
+            format!("internal: checked presentation is missing channel `{channel}`")
         })?;
-        let data = if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
-            super::plot_data::ChannelData::unindexed_label(s.clone())
-        } else {
-            let rv = eval_hir_expr(expr, values, &empty_locals, ctx).map_err(|e| {
-                format!(
-                    "encoding channel `{channel}`: {}",
-                    eval_failed_node_error(&e)
+        let (data, unit_label) =
+            if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &expr.kind {
+                (
+                    super::plot_data::ChannelData::unindexed_label(s.clone()),
+                    None,
                 )
-            })?;
-            super::plot_data::channel_data_from_runtime_with_display_unit(
-                &rv,
-                display_unit.as_ref(),
-            )
-            .map_err(|e| format!("encoding channel `{channel}`: {e}"))?
-        };
+            } else {
+                let rv = eval_hir_expr(expr, values, &empty_locals, ctx).map_err(|error| {
+                    format!(
+                        "encoding channel `{channel}`: {}",
+                        eval_failed_node_error(&error)
+                    )
+                })?;
+                let declared_type = plot_runtime_declared_type(&rv, fact.dimension())?;
+                let mut presented = runtime_to_value(&rv, declared_type.as_ref(), ctx.tir, ctx.src);
+                attach_presentation(&mut presented, fact.provenance(), ctx, values).map_err(
+                    |error| {
+                        format!(
+                            "encoding channel `{channel}`: {}",
+                            eval_failed_node_error(&error)
+                        )
+                    },
+                )?;
+                validate_display_projection(&presented)
+                    .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
+                let unit_label = super::plot_data::uniform_quantity_unit_label(&presented)
+                    .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
+                let data = super::plot_data::channel_data_from_presented_value(&rv, &presented)
+                    .map_err(|error| format!("encoding channel `{channel}`: {error}"))?;
+                (data, unit_label)
+            };
 
-        let meta = extract_encoding_axis_meta(expr, declared_types, ctx, display_unit.as_ref());
-        encoding_meta.push((*channel, meta));
-
+        let dimension_label = fact.dimension().and_then(|dimension| {
+            (!dimension.is_dimensionless())
+                .then(|| ctx.registry.dimensions.format_dimension(dimension))
+        });
+        encoding_meta.push((
+            *channel,
+            AxisMeta {
+                dimension_label,
+                unit_label,
+            },
+        ));
         channel_data.push((*channel, data));
     }
     let encodings = super::plot_data::align_encoding_channels(&channel_data)?;
@@ -1490,85 +1504,49 @@ fn evaluate_plot(
     })
 }
 
-/// Extract axis metadata (dimension name + display unit) from an encoding expression.
-///
-/// Walks the expression tree to find `@`-references (graph refs) and looks up
-/// their declared type for the dimension. Also extracts display unit info from
-/// quantity literals and conversion targets.
-fn extract_encoding_axis_meta(
-    expr: &graphcal_compiler::hir::Expr,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    ctx: &EvalContext<'_>,
-    display_unit: Option<&DisplayUnit>,
-) -> AxisMeta {
-    let dimension_label =
-        extract_dimension_from_expr(expr, declared_types, ctx.registry, ctx.tir.root());
-    AxisMeta {
-        dimension_label,
-        unit_label: display_unit.map(|unit| unit.label.clone()),
-    }
-}
-
-/// Walk an expression tree to find the first `@`-reference and extract its dimension name.
-fn extract_dimension_from_expr(
-    expr: &graphcal_compiler::hir::Expr,
-    declared_types: &HashMap<ScopedName, graphcal_compiler::registry::declared_type::DeclaredType>,
-    registry: &SemanticRegistry,
-    dag: &graphcal_compiler::tir::typed::DagTIR,
-) -> Option<String> {
-    use graphcal_compiler::hir::ExprKind;
-    match &expr.kind {
-        ExprKind::GraphRef(target) => {
-            // Resolve the canonical HIR identity back to the typed source key.
-            // This preserves qualification for imported declarations instead
-            // of guessing from the leaf name.
-            let declared_type = dag
-                .semantic()
-                .decl_bindings
-                .iter()
-                .find_map(|(source_name, resolved)| {
-                    (resolved == &target.value).then(|| declared_types.get(source_name))
-                })
-                .flatten()
-                .or_else(|| {
-                    declared_types.get(&ScopedName::local(target.value.to_unowned_def_name()))
-                })?;
-            dimension_label_from_declared_type(declared_type, registry)
+/// Reconstruct only the checked declared shape needed to project plot runtime
+/// values into presentation-bearing public values.
+fn plot_runtime_declared_type(
+    value: &RuntimeValue,
+    dimension: Option<&Dimension>,
+) -> Result<Option<DeclaredType>, String> {
+    let declared = match value {
+        RuntimeValue::Quantity(_) | RuntimeValue::CoordinateLabel { .. } => {
+            DeclaredType::Quantity(dimension.cloned().ok_or_else(|| {
+                "internal: checked quantity plot channel has no inferred dimension".to_string()
+            })?)
         }
-        ExprKind::ForComp { body, .. } => {
-            extract_dimension_from_expr(body, declared_types, registry, dag)
+        RuntimeValue::Complex(_) => DeclaredType::Complex(dimension.cloned().ok_or_else(|| {
+            "internal: checked complex plot channel has no inferred dimension".to_string()
+        })?),
+        RuntimeValue::Bool(_) => DeclaredType::Bool,
+        RuntimeValue::Int(_) => DeclaredType::Int,
+        RuntimeValue::Label { index_name, .. } => DeclaredType::Key(index_name.clone()),
+        RuntimeValue::Struct {
+            type_name,
+            generic_args,
+            ..
+        } => DeclaredType::Struct(type_name.clone(), generic_args.clone()),
+        RuntimeValue::Datetime(_) => {
+            DeclaredType::Datetime(graphcal_compiler::registry::time_scale::TimeScale::UTC)
         }
-        ExprKind::IndexAccess { expr: inner, .. } | ExprKind::Convert { expr: inner, .. } => {
-            extract_dimension_from_expr(inner, declared_types, registry, dag)
-        }
-        ExprKind::BinOp { lhs, .. } => {
-            // For binary ops like `@x[m] * @x[m]`, try left first
-            extract_dimension_from_expr(lhs, declared_types, registry, dag)
-        }
-        _ => None,
-    }
-}
-
-/// Convert a `DeclaredType` to a human-readable dimension label.
-///
-/// Returns `None` for dimensionless, bool, int, etc.
-fn dimension_label_from_declared_type(
-    dt: &graphcal_compiler::registry::declared_type::DeclaredType,
-    registry: &SemanticRegistry,
-) -> Option<String> {
-    match dt {
-        graphcal_compiler::registry::declared_type::DeclaredType::Quantity(dim) => {
-            if dim.is_dimensionless() {
-                None
-            } else {
-                Some(registry.dimensions.format_dimension(dim))
+        RuntimeValue::Indexed {
+            index_name,
+            entries,
+        } => {
+            let first = entries.values().next().ok_or_else(|| {
+                "plot channel cannot infer the element type of an empty indexed value".to_string()
+            })?;
+            let element = plot_runtime_declared_type(first, dimension)?.ok_or_else(|| {
+                "internal: checked indexed plot value has no element type".to_string()
+            })?;
+            DeclaredType::Indexed {
+                element: Box::new(element),
+                index: index_name.clone(),
             }
         }
-        graphcal_compiler::registry::declared_type::DeclaredType::Indexed { element, .. } => {
-            dimension_label_from_declared_type(element, registry)
-        }
-        _ => None,
-    }
+    };
+    Ok(Some(declared))
 }
 
 /// Evaluated fields of a figure/layer declaration.

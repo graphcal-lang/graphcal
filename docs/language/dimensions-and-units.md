@@ -197,7 +197,7 @@ The source and target must share the same dimension. Attempting to convert betwe
 
 Compound targets support the `1/unit` reciprocal shorthand, matching how unit labels are displayed: `@f -> 1/min` is equivalent to `@f -> min^-1`. Only a literal `1` is allowed as the numerator.
 
-The conversion sets the value's *display* unit; values are always stored in SI internally. Display metadata follows value reads: a value converted at its construction site renders the same way when read back through `@x`, an algebraic payload field, an index entry, a dag output projection, a `const`, or the branch of an `if`/`match` selected at runtime. The same applies to timezone displays on `Datetime` values.
+The conversion sets the value's *display* unit; values are always stored in SI internally. Display metadata follows value reads: a value converted at its construction site renders the same way when read back through `@x`, an algebraic payload field, an index entry, a dag output projection, a `const`, or the branch of an `if`/`match` selected at runtime. This provenance is checked and retained structurally for every index axis and struct field, so multi-axis values and read chains have no fixed presentation-depth limit. A dag output keeps the unit environment of the dag that defined it rather than being reinterpreted in the caller. The same applies to timezone displays on `Datetime` values.
 
 `->` is non-chaining: an expression carries at most one conversion target. Both the bare chain `@alt -> km -> m` (a parse error) and the parenthesized form `(@alt -> km) -> m` (a `D012` dimension-check error) are rejected — only the outermost target could ever take effect, so an inner conversion is either a typo or dead code.
 
