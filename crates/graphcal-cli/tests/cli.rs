@@ -2206,6 +2206,37 @@ fn eval_input_json_invalid_json() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn eval_input_json_rejects_duplicate_keys_and_out_of_range_integer_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", "param x: Dimensionless = 0.0;\n");
+    let input = dir.path().join("input.json");
+
+    for (json, expected) in [
+        (r#"{"x": 1, "x": 2}"#, "duplicate JSON key \"x\""),
+        (
+            r#"{"x": -18446744073709551617}"#,
+            "integer is outside the signed 64-bit range",
+        ),
+    ] {
+        std::fs::write(&input, json).unwrap();
+        let output = graphcal_bin()
+            .args([
+                "eval",
+                model.to_str().unwrap(),
+                "--input",
+                input.to_str().unwrap(),
+            ])
+            .output()
+            .expect("failed to run graphcal");
+
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains(expected), "stderr: {stderr}");
+    }
+}
+
 // --- Assertion tests ---
 
 #[test]
