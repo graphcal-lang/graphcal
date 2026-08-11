@@ -15,7 +15,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::builtin::{AggregationFn, BuiltinFnName};
-use crate::dimension::{Dimension, Rational};
+use crate::dimension::Dimension;
 use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
@@ -3864,11 +3864,7 @@ fn infer_hir_dim_expr_arg(
                             span: target.span.into(),
                         }
                     })?;
-                    (
-                        dim,
-                        item.term.power.unwrap_or(Rational::ONE),
-                        item.term.span,
-                    )
+                    (dim, item.term.power, item.term.span)
                 }
                 hir::DimTermTarget::GenericParam(param) => {
                     let dim = substitutions
@@ -3884,11 +3880,7 @@ fn infer_hir_dim_expr_arg(
                             src: src.clone(),
                             span: param.span.into(),
                         })?;
-                    (
-                        dim,
-                        item.term.power.unwrap_or(Rational::ONE),
-                        item.term.span,
-                    )
+                    (dim, item.term.power, item.term.span)
                 }
             };
             let powered = dim

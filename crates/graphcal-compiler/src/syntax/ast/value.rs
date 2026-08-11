@@ -469,9 +469,21 @@ pub struct DimExprItem {
 #[derive(Debug, Clone)]
 pub struct DimTerm {
     pub name: Spanned<NamePath>,
-    /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
+    /// Source-written exponent; `None` preserves omission for formatting.
     pub power: Option<Rational>,
     pub span: Span,
+}
+
+impl DimTerm {
+    /// Return the semantic exponent, normalizing an omitted suffix to one.
+    #[must_use]
+    pub fn effective_power(&self) -> Rational {
+        effective_power(self.power)
+    }
+}
+
+fn effective_power(source_power: Option<Rational>) -> Rational {
+    source_power.unwrap_or(Rational::ONE)
 }
 
 // --- Unit expressions ---
@@ -490,8 +502,16 @@ pub struct UnitExprItem {
     /// `Mul` for the first term and for `*`, `Div` for `/`.
     pub op: MulDivOp,
     pub name: Spanned<UnitRef>,
-    /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
+    /// Source-written exponent; `None` preserves omission for formatting.
     pub power: Option<Rational>,
+}
+
+impl UnitExprItem {
+    /// Return the semantic exponent, normalizing an omitted suffix to one.
+    #[must_use]
+    pub fn effective_power(&self) -> Rational {
+        effective_power(self.power)
+    }
 }
 
 /// Multiply or divide operator used in dimension/unit expressions.

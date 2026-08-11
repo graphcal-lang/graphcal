@@ -316,7 +316,7 @@ impl Parser<'_> {
                 .terms
                 .into_iter()
                 .map(|item| {
-                    let inner_power = item.term.power.unwrap_or(Rational::ONE);
+                    let inner_power = item.term.effective_power();
                     let combined =
                         (inner_power * outer_power).map_err(|_| ParseError::InvalidNumber {
                             reason: "dimension exponent overflows `i32`".to_string(),
@@ -539,12 +539,13 @@ impl Parser<'_> {
                 .terms
                 .into_iter()
                 .map(|item| {
-                    let combined_power = (item.power.unwrap_or(Rational::ONE) * outer_power)
-                        .map_err(|_| ParseError::InvalidNumber {
+                    let combined_power = (item.effective_power() * outer_power).map_err(|_| {
+                        ParseError::InvalidNumber {
                             reason: "unit exponent overflows `i32`".to_string(),
                             src: self.named_source(),
                             span: item.name.span.into(),
-                        })?;
+                        }
+                    })?;
                     Ok(UnitExprItem {
                         op: Self::combine_ops(outer_op, item.op),
                         name: item.name,

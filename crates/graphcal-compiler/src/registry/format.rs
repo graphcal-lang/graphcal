@@ -178,7 +178,7 @@ pub fn format_unit_expr_with_config(
     format_unit_terms_with_config(
         expr.terms
             .iter()
-            .map(|item| (item.op, item.name.value.to_string(), item.power)),
+            .map(|item| (item.op, item.name.value.to_string(), item.effective_power())),
         parenthesize_multi_denom,
     )
 }
@@ -189,7 +189,7 @@ pub fn format_unit_expr_with_config(
 /// callers without making either semantic layer depend on the other.
 #[must_use]
 pub fn format_unit_terms_with_config(
-    terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Option<Rational>)>,
+    terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Rational)>,
     parenthesize_multi_denom: bool,
 ) -> String {
     use crate::syntax::ast::MulDivOp;
@@ -199,9 +199,7 @@ pub fn format_unit_terms_with_config(
 
     for (op, name, power) in terms {
         let mut part = name;
-        if let Some(power) = power
-            && power != Rational::ONE
-        {
+        if power != Rational::ONE {
             part = format!("{part}{}", format_exponent(power));
         }
         match op {
@@ -249,13 +247,13 @@ pub fn format_unit_expr_canonical(
     format_unit_terms_canonical(
         expr.terms
             .iter()
-            .map(|item| (item.op, item.name.value.to_string(), item.power)),
+            .map(|item| (item.op, item.name.value.to_string(), item.effective_power())),
     )
 }
 
 /// Normalize and format already-selected unit term spellings.
 pub fn format_unit_terms_canonical(
-    terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Option<Rational>)>,
+    terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Rational)>,
 ) -> Result<String, CanonicalUnitFormatError> {
     use crate::syntax::ast::MulDivOp;
     use std::collections::BTreeMap;
@@ -263,7 +261,7 @@ pub fn format_unit_terms_canonical(
     let exponents = terms.into_iter().try_fold(
         BTreeMap::<String, WideRational>::new(),
         |mut exponents, (op, name, power)| {
-            let power = WideRational::from_rational(power.unwrap_or(Rational::ONE));
+            let power = WideRational::from_rational(power);
             let signed = match op {
                 MulDivOp::Mul => power,
                 MulDivOp::Div => power.checked_neg()?,
@@ -375,11 +373,7 @@ mod tests {
 
     #[test]
     fn canonical_preserves_min_i32_exponent_magnitude() {
-        let terms = [(
-            MulDivOp::Mul,
-            "m".to_string(),
-            Some(Rational::from(i32::MIN)),
-        )];
+        let terms = [(MulDivOp::Mul, "m".to_string(), Rational::from(i32::MIN))];
 
         assert_eq!(
             format_unit_terms_canonical(terms).unwrap(),
@@ -400,7 +394,7 @@ mod tests {
             (
                 MulDivOp::Mul,
                 "m".to_string(),
-                Some(Rational::try_new(1, denominator).unwrap()),
+                Rational::try_new(1, denominator).unwrap(),
             )
         });
 

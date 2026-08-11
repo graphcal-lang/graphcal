@@ -195,8 +195,8 @@ pub struct DimExprItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DimTermRef {
     pub target: DimTermTarget,
-    /// `None` means exponent 1. Rational exponents (`^(1/2)`) are kept exact.
-    pub(crate) power: Option<Rational>,
+    /// Exact semantic exponent, normalized at the AST-to-HIR boundary.
+    pub(crate) power: Rational,
     pub(crate) span: Span,
 }
 
