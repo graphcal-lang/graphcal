@@ -1138,10 +1138,62 @@ impl Lockfile {
             .iter()
             .map(|package| (&package.id, package))
             .collect::<BTreeMap<_, _>>();
-        let mut visiting = BTreeSet::new();
         let mut visited = BTreeSet::new();
+        let mut visiting_positions = BTreeMap::new();
+        let mut stack = Vec::<LockDfsFrame<'_>>::new();
+
         for package in &self.packages {
-            visit_lock_package_for_cycles(&package.id, &packages, &mut visiting, &mut visited)?;
+            if visited.contains(&package.id) {
+                continue;
+            }
+            visiting_positions.insert(&package.id, 0);
+            stack.push(LockDfsFrame::new(package));
+
+            while !stack.is_empty() {
+                let next_edge = stack.last_mut().and_then(|frame| {
+                    frame
+                        .dependencies
+                        .next()
+                        .map(|(dependency, target)| (frame.package, dependency, target))
+                });
+                match next_edge {
+                    Some((_current, _dependency, target)) if visited.contains(target) => {}
+                    Some((current, dependency, target)) => match visiting_positions.get(target) {
+                        Some(cycle_start) => {
+                            return Err(LockValidationError::DependencyCycle {
+                                cycle: LockedDependencyCycle {
+                                    start: target.clone(),
+                                    successors: stack
+                                        .iter()
+                                        .skip(*cycle_start + 1)
+                                        .map(|frame| frame.package.clone())
+                                        .collect(),
+                                },
+                            });
+                        }
+                        None => match packages.get(target) {
+                            Some(target_package) => {
+                                visiting_positions.insert(target, stack.len());
+                                stack.push(LockDfsFrame::new(target_package));
+                            }
+                            None => {
+                                return Err(LockValidationError::MissingDependencyTarget {
+                                    package: current.clone(),
+                                    dependency: dependency.clone(),
+                                    target: target.clone(),
+                                });
+                            }
+                        },
+                    },
+                    None => match stack.pop() {
+                        Some(completed) => {
+                            visiting_positions.remove(completed.package);
+                            visited.insert(completed.package);
+                        }
+                        None => break,
+                    },
+                }
+            }
         }
         Ok(())
     }
@@ -1287,28 +1339,18 @@ impl Lockfile {
     }
 }
 
-fn visit_lock_package_for_cycles<'a>(
-    id: &'a PackageInstanceId,
-    packages: &BTreeMap<&'a PackageInstanceId, &'a LockedPackage>,
-    visiting: &mut BTreeSet<&'a PackageInstanceId>,
-    visited: &mut BTreeSet<&'a PackageInstanceId>,
-) -> Result<(), LockValidationError> {
-    if visited.contains(id) {
-        return Ok(());
-    }
-    if !visiting.insert(id) {
-        return Err(LockValidationError::DependencyCycle {
-            package: id.clone(),
-        });
-    }
-    if let Some(package) = packages.get(id) {
-        for target in package.dependencies.values() {
-            visit_lock_package_for_cycles(target, packages, visiting, visited)?;
+struct LockDfsFrame<'a> {
+    package: &'a PackageInstanceId,
+    dependencies: std::collections::btree_map::Iter<'a, DependencyName, PackageInstanceId>,
+}
+
+impl<'a> LockDfsFrame<'a> {
+    fn new(package: &'a LockedPackage) -> Self {
+        Self {
+            package: &package.id,
+            dependencies: package.dependencies.iter(),
         }
     }
-    visiting.remove(id);
-    visited.insert(id);
-    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -1387,6 +1429,37 @@ struct CanonicalGitSource {
     commit: GitCommitHash,
 }
 
+/// A non-empty, typed path through one dependency cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockedDependencyCycle {
+    start: PackageInstanceId,
+    successors: Vec<PackageInstanceId>,
+}
+
+impl LockedDependencyCycle {
+    /// First package in the reported cycle.
+    #[must_use]
+    pub const fn start(&self) -> &PackageInstanceId {
+        &self.start
+    }
+
+    /// Packages after [`Self::start`] and before the closing edge back to it.
+    #[must_use]
+    pub fn successors(&self) -> impl ExactSizeIterator<Item = &PackageInstanceId> {
+        self.successors.iter()
+    }
+}
+
+impl fmt::Display for LockedDependencyCycle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.start)?;
+        for package in &self.successors {
+            write!(formatter, " -> {package}")?;
+        }
+        write!(formatter, " -> {}", self.start)
+    }
+}
+
 /// Lockfile validation error.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LockValidationError {
@@ -1419,8 +1492,8 @@ pub enum LockValidationError {
         dependency: DependencyName,
     },
     /// The locked dependency graph contains a cycle.
-    #[error("dependency cycle involving package `{package}` in graphcal.lock")]
-    DependencyCycle { package: PackageInstanceId },
+    #[error("dependency cycle in graphcal.lock: {cycle}")]
+    DependencyCycle { cycle: LockedDependencyCycle },
     /// The same immutable Git source is pinned to contradictory tree digests.
     #[error(transparent)]
     ConflictingGitSourceDigest(Box<GitSourceDigestConflict>),
@@ -1773,6 +1846,27 @@ pub enum PackageResolveError {
     },
 }
 
+/// Structural limits applied while converting parsed TOML into a lock graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockfileParseLimits {
+    max_packages: usize,
+}
+
+impl LockfileParseLimits {
+    /// Construct an explicit package-entry limit. Zero rejects every lockfile
+    /// because the schema requires a root package entry.
+    #[must_use]
+    pub const fn new(max_packages: usize) -> Self {
+        Self { max_packages }
+    }
+
+    /// Permit any package count representable by this process.
+    #[must_use]
+    pub const fn unbounded() -> Self {
+        Self::new(usize::MAX)
+    }
+}
+
 /// Lockfile parse error.
 #[derive(Debug, Error)]
 pub enum LockfileParseError {
@@ -1791,6 +1885,9 @@ pub enum LockfileParseError {
     /// A table contains a field outside the current lock schema.
     #[error("unknown field `{field}` in `{table}` in graphcal.lock")]
     UnknownField { table: String, field: String },
+    /// The lock graph contains more package entries than the caller permits.
+    #[error("graphcal.lock contains {actual} package entries, exceeding the limit of {limit}")]
+    PackageLimitExceeded { limit: usize, actual: usize },
     /// Package name validation failed.
     #[error(transparent)]
     PackageName(#[from] PackageNameError),
@@ -1831,6 +1928,19 @@ pub enum LockfileParseError {
 ///
 /// Returns [`LockfileParseError`] for TOML, type, and field validation errors.
 pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError> {
+    parse_lockfile_str_with_limits(content, LockfileParseLimits::unbounded())
+}
+
+/// Parse a lockfile from TOML text under an explicit package-count limit.
+///
+/// # Errors
+///
+/// Returns [`LockfileParseError`] for TOML, type, field, digest, or package
+/// count validation errors.
+pub fn parse_lockfile_str_with_limits(
+    content: &str,
+    limits: LockfileParseLimits,
+) -> Result<Lockfile, LockfileParseError> {
     let root = content
         .parse::<Table>()
         .map_err(|e| LockfileParseError::TomlParseError {
@@ -1862,6 +1972,12 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
         .get("package")
         .and_then(Value::as_array)
         .ok_or(LockfileParseError::MissingField { field: "package" })?;
+    if package_array.len() > limits.max_packages {
+        return Err(LockfileParseError::PackageLimitExceeded {
+            limit: limits.max_packages,
+            actual: package_array.len(),
+        });
+    }
     let packages = package_array
         .iter()
         .enumerate()
@@ -2238,6 +2354,43 @@ mod tests {
             plugins: Vec::new(),
             packages,
         }
+    }
+
+    fn deep_lockfile(package_count: usize, back_edge: Option<usize>) -> Lockfile {
+        let package_id = |index: usize| {
+            if index == 0 {
+                id("pkg-mission")
+            } else {
+                id(&format!("pkg-node-{index}"))
+            }
+        };
+        let root_dependencies = BTreeMap::from([(dep("next"), package_id(1))]);
+        let mut packages = Vec::with_capacity(package_count);
+        packages.push(package(
+            "pkg-mission",
+            "mission",
+            path_source(),
+            root_dependencies,
+        ));
+        packages.extend((1..package_count).map(|index| {
+            let dependencies = if index + 1 < package_count {
+                BTreeMap::from([(dep("next"), package_id(index + 1))])
+            } else {
+                back_edge.map_or_else(BTreeMap::new, |target| {
+                    BTreeMap::from([(dep("back"), package_id(target))])
+                })
+            };
+            package(
+                &format!("pkg-node-{index}"),
+                &format!("node_{index}"),
+                git_source(
+                    &format!("https://example.com/packages/node-{index}.git"),
+                    'a',
+                ),
+                dependencies,
+            )
+        }));
+        lockfile(packages)
     }
 
     fn matched_lock_and_manifests() -> (Lockfile, BTreeMap<PackageInstanceId, PackageManifest>) {
@@ -2636,6 +2789,41 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn deep_acyclic_lock_validation_uses_bounded_call_stack() {
+        let lock = deep_lockfile(8_000, None);
+        let validation = std::thread::Builder::new()
+            .name("deep-lock-validation".to_string())
+            .stack_size(64 * 1024)
+            .spawn(move || lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION))
+            .unwrap()
+            .join()
+            .unwrap();
+
+        validation.unwrap();
+    }
+
+    #[test]
+    fn deep_back_edge_reports_typed_cycle_path_on_a_small_stack() {
+        let package_count = 8_000;
+        let cycle_start = package_count - 2;
+        let lock = deep_lockfile(package_count, Some(cycle_start));
+        let error = std::thread::Builder::new()
+            .name("deep-lock-cycle".to_string())
+            .stack_size(64 * 1024)
+            .spawn(move || lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION).unwrap_err())
+            .unwrap()
+            .join()
+            .unwrap();
+
+        assert!(matches!(
+            error,
+            LockValidationError::DependencyCycle { cycle }
+                if cycle.start() == &id(&format!("pkg-node-{cycle_start}"))
+                    && cycle.successors().cloned().eq(std::iter::once(id("pkg-node-7999")))
+        ));
+    }
+
+    #[test]
     fn lockfile_rejects_duplicate_canonical_package_instances() {
         let lock = lockfile(vec![
             package("pkg-mission", "mission", path_source(), BTreeMap::new()),
@@ -2796,6 +2984,20 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 && toml.find("pkg-units-v1").unwrap() < toml.find("pkg-units-v2").unwrap()
         );
         assert!(toml.contains("units_v1 = \"pkg-units-v1\"\nunits_v2 = \"pkg-units-v2\""));
+    }
+
+    #[test]
+    fn lockfile_parsing_enforces_an_explicit_package_count_limit() {
+        let content = deep_lockfile(2, None).to_deterministic_toml();
+
+        assert!(matches!(
+            parse_lockfile_str_with_limits(&content, LockfileParseLimits::new(1)),
+            Err(LockfileParseError::PackageLimitExceeded {
+                limit: 1,
+                actual: 2
+            })
+        ));
+        parse_lockfile_str_with_limits(&content, LockfileParseLimits::new(2)).unwrap();
     }
 
     #[test]
