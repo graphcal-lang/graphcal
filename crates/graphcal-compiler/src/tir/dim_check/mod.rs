@@ -315,8 +315,8 @@ impl DimCheckContext<'_> {
         name: &crate::syntax::module_name::ScopedName,
     ) -> Option<&crate::hir::Expr> {
         let dag = self.dag?;
-        let key = dag.resolved_decl_key_for_local(name);
-        dag.value_expr(&key)
+        let key = dag.bound_decl_identity(name)?;
+        dag.value_expr(key)
     }
 
     /// Look up the module-aware HIR assertion body for a local assertion.
@@ -330,7 +330,8 @@ impl DimCheckContext<'_> {
             src: self.src.clone(),
             span: span.into(),
         })?;
-        let key = dag.resolved_decl_key_for_local(name);
+        let key =
+            dag.require_bound_decl_identity(name, self.src, DiagnosticAnchor::Source(span))?;
         dag.assert_body(&key)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!("TIR assertion entry missing for `{name}`"),
@@ -457,7 +458,11 @@ fn check_decl_expr_type(
                 src: body_ctx.src.clone(),
                 span: (*type_ann_span).into(),
             })?;
-    let owner = dag.resolved_decl_key_for_local(name);
+    let owner = dag.require_bound_decl_identity(
+        name,
+        body_ctx.src,
+        DiagnosticAnchor::Source(*type_ann_span),
+    )?;
     let inferred = infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
         hir_expr,
         Some(&owner),
@@ -1163,7 +1168,11 @@ pub fn collect_override_dependency_summary_with_cancellation(
                         span: param.span.into(),
                     })?;
             let body_src = default_src.resolve(src);
-            let owner = dag.resolved_decl_key_for_local(&param.name);
+            let owner = dag.require_bound_decl_identity(
+                &param.name,
+                body_src,
+                DiagnosticAnchor::Source(param.span),
+            )?;
             let (_, mut dependencies) =
                 infer::hir::infer_hir_type_with_nominal_dependencies_and_cancellation(
                     default_expr,
@@ -1481,7 +1490,11 @@ fn check_dimensions_dag(
         let body_src = entry.body_src.resolve(src);
         let entry_ctx = ctx.for_body(body_src);
         let body = entry_ctx.hir_assert_body(&entry.name, entry.span)?;
-        let owner = dag.resolved_decl_key_for_local(&entry.name);
+        let owner = dag.require_bound_decl_identity(
+            &entry.name,
+            body_src,
+            DiagnosticAnchor::Source(entry.span),
+        )?;
         let shape = check_hir_assert_body(&entry_ctx, &owner, body, entry.span)?;
         if let Some(metadata) = dag.expected_fail.get(&entry.name) {
             validate_expected_fail(
@@ -1561,12 +1574,12 @@ fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(
         .chain(dag.nodes.iter().map(|e| (&e.name, &e.type_src)));
 
     for (name, signature_provenance) in decl_iter {
-        let key = dag.resolved_decl_key_for_local(name);
+        let body_src = signature_provenance.resolve(ctx.src);
+        let key = dag.require_bound_decl_identity(name, body_src, DiagnosticAnchor::WholeFile)?;
         let bounds = dag.semantic.domain_bounds.get(&key);
         let Some(bounds) = bounds else {
             continue;
         };
-        let body_src = signature_provenance.resolve(ctx.src);
 
         let resolved = dag.resolved_decl_types.get(name);
         let base_resolved = resolved.map(strip_indexed);
@@ -1633,7 +1646,8 @@ fn check_domain_constraint_targets_dag(
         .chain(dag.nodes.iter().map(|entry| (&entry.name, entry.span)));
 
     for (name, decl_span) in decl_iter {
-        let key = dag.resolved_decl_key_for_local(name);
+        let key =
+            dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(decl_span))?;
         if !dag.semantic.domain_bounds.contains_key(&key) {
             continue;
         }
@@ -2067,7 +2081,7 @@ fn detect_decl_cycles(
         let mut local_name_by_key: HashMap<ResolvedDeclKey, ScopedName> = HashMap::new();
         let mut span_by_key: HashMap<ResolvedDeclKey, crate::syntax::span::Span> = HashMap::new();
         for (name, span) in names_with_spans {
-            let key = dag.resolved_decl_key_for_local(name);
+            let key = dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(span))?;
             let idx = graph.add_node(key.clone());
             index_map.insert(key.clone(), idx);
             local_name_by_key.insert(key.clone(), name.clone());

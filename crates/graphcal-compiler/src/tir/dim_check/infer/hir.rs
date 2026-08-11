@@ -5133,7 +5133,11 @@ fn infer_hir_dag_call(
             .params
             .iter()
             .map(|param| {
-                let key = dag_tir.resolved_decl_key_for_local(&param.name);
+                let key = dag_tir.require_bound_decl_identity(
+                    &param.name,
+                    src,
+                    DiagnosticAnchor::Source(param.span),
+                )?;
                 if param.default_expr.is_none() {
                     required_param_keys.insert(key.clone());
                 }
@@ -5156,7 +5160,11 @@ fn infer_hir_dag_call(
             .nodes
             .iter()
             .map(|node| {
-                let key = dag_tir.resolved_decl_key_for_local(&node.name);
+                let key = dag_tir.require_bound_decl_identity(
+                    &node.name,
+                    src,
+                    DiagnosticAnchor::Source(node.span),
+                )?;
                 let resolved = dag_tir.resolved_decl_types.get(&node.name).ok_or_else(|| {
                     GraphcalError::InternalError {
                         message: format!("semantic type missing for DAG-call node `{}`", node.name),

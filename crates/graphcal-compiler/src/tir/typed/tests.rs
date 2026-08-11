@@ -64,6 +64,35 @@ fn resolved_param_type(program: &str, name: &str) -> Result<ResolvedTypeExpr, Gr
 }
 
 #[test]
+fn declaration_identity_lookup_keeps_unknown_names_as_typed_probes() {
+    let tir =
+        parse_and_type_resolve("node known: Dimensionless = 1.0;\nassert valid = @known == 1.0;")
+            .unwrap();
+
+    let known = ScopedName::parse("known").unwrap();
+    match tir.root().lookup_decl_identity(&known) {
+        DeclarationIdentityLookup::Bound(identity) => {
+            assert_eq!(identity.owner(), tir.root_dag_id());
+            assert_eq!(identity.as_str(), "known");
+        }
+        DeclarationIdentityLookup::DiagnosticProbe(probe) => {
+            panic!("known declaration became a diagnostic probe: {probe}");
+        }
+    }
+
+    let unknown = ScopedName::parse("dependency.missing").unwrap();
+    match tir.root().lookup_decl_identity(&unknown) {
+        DeclarationIdentityLookup::DiagnosticProbe(probe) => {
+            assert_eq!(probe.dag_id(), tir.root_dag_id());
+            assert_eq!(probe.name(), &unknown);
+        }
+        DeclarationIdentityLookup::Bound(identity) => {
+            panic!("unknown declaration received fabricated identity `{identity}`");
+        }
+    }
+}
+
+#[test]
 fn resolve_dimensionless() {
     let resolved = resolve_source_type("Dimensionless", &[], &[], &[]).unwrap();
     assert_eq!(resolved, ResolvedTypeExpr::Dimensionless);

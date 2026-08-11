@@ -1,11 +1,11 @@
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::tir::typed::DagTIR;
+use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe};
 
 /// Runtime key for a value declaration during evaluation.
 ///
 /// Runtime maps use canonical `ResolvedName<Decl>` identities so same-leaf
-/// declarations from different modules/DAGs cannot collide. Standalone TIRs
-/// synthesize those identities from the DAG owner plus the declaration leaf.
+/// declarations from different modules/DAGs cannot collide. Unknown names
+/// cannot enter runtime maps through fabricated owner-plus-leaf identities.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RuntimeDeclKey {
     Resolved(graphcal_compiler::syntax::decl_name::ResolvedDeclName),
@@ -19,27 +19,19 @@ impl RuntimeDeclKey {
         Self::Resolved(name)
     }
 
-    fn local_or_leaf(dag: &DagTIR, name: &ScopedName) -> Self {
-        Self::Resolved(dag.resolved_decl_key_for_local(name))
-    }
-
-    /// Build the key for a declaration owned by `dag`.
-    #[must_use]
-    pub(crate) fn for_local_decl(dag: &DagTIR, name: &ScopedName) -> Self {
-        Self::local_or_leaf(dag, name)
-    }
-
-    /// Build the key for a visible declaration name in `dag`.
+    /// Build the key for a declaration authoritatively bound in `dag`.
     ///
-    /// Imported/selective names are resolved through the DAG semantic binding
-    /// map; otherwise the DAG owner plus leaf name provides the standalone
-    /// identity.
-    #[must_use]
-    pub(crate) fn for_visible_name(dag: &DagTIR, name: &ScopedName) -> Self {
-        if let Some(resolved) = dag.semantic().decl_bindings.get(name) {
-            return Self::Resolved(resolved.clone());
-        }
-        Self::local_or_leaf(dag, name)
+    /// # Errors
+    ///
+    /// Returns a typed diagnostic probe when `name` has no canonical binding;
+    /// evaluation must not fabricate an identity for that unknown name.
+    pub(crate) fn for_local_decl(
+        dag: &DagTIR,
+        name: &ScopedName,
+    ) -> Result<Self, DiagnosticDeclProbe> {
+        dag.lookup_decl_identity(name)
+            .into_bound()
+            .map(Self::Resolved)
     }
 
     #[must_use]

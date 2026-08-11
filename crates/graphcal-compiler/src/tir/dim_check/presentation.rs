@@ -91,18 +91,23 @@ impl PresentationResolver<'_> {
         let dag = self.dag(dag_id, DiagnosticAnchor::WholeFile)?;
         // Materialize keys to release the immutable DAG borrow before the
         // recursive resolver mutates its memo/visiting sets.
-        let declaration_keys = presentation_declaration_keys(dag);
+        let declaration_keys = presentation_declaration_keys(dag, self.fallback_src)?;
         let plot_entries = dag
             .plots()
             .iter()
             .map(|entry| {
-                (
-                    dag.resolved_decl_key_for_local(&entry.name),
+                let body_src = entry.body_src.resolve(self.fallback_src);
+                Ok((
+                    dag.require_bound_decl_identity(
+                        &entry.name,
+                        body_src,
+                        DiagnosticAnchor::WholeFile,
+                    )?,
                     entry.body.clone(),
-                    entry.body_src.resolve(self.fallback_src).clone(),
-                )
+                    body_src.clone(),
+                ))
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
 
         let declarations = declaration_keys
             .into_iter()
@@ -457,20 +462,30 @@ impl PresentationResolver<'_> {
     }
 }
 
-fn presentation_declaration_keys(dag: &crate::tir::typed::DagTIR) -> Vec<ResolvedDeclName> {
+fn presentation_declaration_keys(
+    dag: &crate::tir::typed::DagTIR,
+    fallback_src: &NamedSource<Arc<String>>,
+) -> Result<Vec<ResolvedDeclName>, GraphcalError> {
     dag.consts()
         .iter()
-        .map(|entry| dag.resolved_decl_key_for_local(&entry.name))
+        .map(|entry| (&entry.name, entry.span, &entry.body_src))
         .chain(
             dag.params()
                 .iter()
-                .map(|entry| dag.resolved_decl_key_for_local(&entry.name)),
+                .map(|entry| (&entry.name, entry.span, &entry.type_src)),
         )
         .chain(
             dag.nodes()
                 .iter()
-                .map(|entry| dag.resolved_decl_key_for_local(&entry.name)),
+                .map(|entry| (&entry.name, entry.span, &entry.body_src)),
         )
+        .map(|(name, span, provenance)| {
+            dag.require_bound_decl_identity(
+                name,
+                provenance.resolve(fallback_src),
+                DiagnosticAnchor::Source(span),
+            )
+        })
         .collect()
 }
 
@@ -481,7 +496,7 @@ fn declaration_body(
 ) -> Option<(hir::Expr, NamedSource<Arc<String>>)> {
     dag.consts()
         .iter()
-        .find(|entry| dag.resolved_decl_key_for_local(&entry.name) == *key)
+        .find(|entry| dag.bound_decl_identity(&entry.name) == Some(key))
         .map(|entry| {
             (
                 entry.expr.clone(),
@@ -491,7 +506,7 @@ fn declaration_body(
         .or_else(|| {
             dag.params()
                 .iter()
-                .find(|entry| dag.resolved_decl_key_for_local(&entry.name) == *key)
+                .find(|entry| dag.bound_decl_identity(&entry.name) == Some(key))
                 .and_then(|entry| {
                     entry.default_expr.as_ref().map(|expr| {
                         (
@@ -508,7 +523,7 @@ fn declaration_body(
         .or_else(|| {
             dag.nodes()
                 .iter()
-                .find(|entry| dag.resolved_decl_key_for_local(&entry.name) == *key)
+                .find(|entry| dag.bound_decl_identity(&entry.name) == Some(key))
                 .map(|entry| {
                     (
                         entry.expr.clone(),

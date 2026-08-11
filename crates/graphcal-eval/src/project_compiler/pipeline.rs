@@ -115,17 +115,26 @@ fn lower_single_file_to_hir(
 fn dag_const_values(
     dag: &graphcal_compiler::tir::typed::DagTIR,
     const_values: &crate::eval_expr::RuntimeValueMap,
-) -> HashMap<DeclName, RuntimeValue> {
-    dag.consts()
+    src: &NamedSource<Arc<String>>,
+) -> Result<HashMap<DeclName, RuntimeValue>, GraphcalError> {
+    Ok(dag
+        .consts()
         .iter()
-        .filter_map(|entry| {
-            let key = crate::decl_key::RuntimeDeclKey::for_local_decl(dag, &entry.name);
-            const_values
-                .get(&key)
+        .map(|entry| {
+            let identity = dag.require_bound_decl_identity(
+                &entry.name,
+                src,
+                DiagnosticAnchor::Source(entry.span),
+            )?;
+            Ok(const_values
+                .get(&crate::decl_key::RuntimeDeclKey::resolved(identity))
                 .cloned()
-                .map(|value| (entry.name.member().clone(), value))
+                .map(|value| (entry.name.member().clone(), value)))
         })
-        .collect()
+        .collect::<Result<Vec<_>, GraphcalError>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// Store one pure compile-time module artifact for downstream imports.
@@ -151,7 +160,10 @@ fn store_module_artifact(
                         DiagnosticAnchor::WholeFile,
                     ))
                 })?;
-            Ok((dag_id.clone(), dag_const_values(dag, &facts.const_values)))
+            Ok((
+                dag_id.clone(),
+                dag_const_values(dag, &facts.const_values, file_src)?,
+            ))
         })
         .collect::<Result<HashMap<_, _>, CompileError>>()?;
     let declared_types_by_dag = compiled

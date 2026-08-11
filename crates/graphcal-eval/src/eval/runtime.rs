@@ -321,12 +321,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         host_fns: Some(host_fns),
     };
 
-    let local_key = |name: &ScopedName| RuntimeDeclKey::for_local_decl(tir.root(), name);
+    let local_key = |name: &ScopedName| {
+        tir.root()
+            .require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
+            .map(RuntimeDeclKey::resolved)
+    };
 
     let make_value = |name: &ScopedName,
                       runtime: &RuntimeValue|
      -> Result<Result<Value, NodeError>, GraphcalError> {
-        let runtime_key = local_key(name);
+        let runtime_key = local_key(name)?;
         let declaration = runtime_key.as_resolved();
         let presentation = bindings
             .get(&runtime_key)
@@ -368,7 +372,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
     };
 
     let make_result = |name: &ScopedName| -> Result<Result<Value, NodeError>, GraphcalError> {
-        let key = local_key(name);
+        let key = local_key(name)?;
         errors.get(&key).map_or_else(
             || {
                 values.get(&key).map_or_else(
@@ -391,7 +395,7 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .consts()
         .iter()
         .map(|entry| {
-            let key = local_key(&entry.name);
+            let key = local_key(&entry.name)?;
             let runtime =
                 plan.const_values
                     .get(&key)
@@ -431,32 +435,27 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 | DeclCategory::Figure
                 | DeclCategory::Layer => return None,
             };
-            Some(match category {
-                DeclCategory::Const => {
-                    let key = local_key(name);
-                    plan.const_values.get(&key).map_or_else(
-                        || {
-                            Err(GraphcalError::internal_error(
-                                format!(
-                                    "checked source-order constant `{key}` has no runtime value"
-                                ),
-                                src,
-                                DiagnosticAnchor::WholeFile,
-                            ))
-                        },
-                        |runtime| {
-                            make_value(name, runtime).map(|value| (name.clone(), value, decl_type))
-                        },
-                    )
-                }
-                DeclCategory::Param | DeclCategory::Node => {
-                    make_result(name).map(|value| (name.clone(), value, decl_type))
-                }
-                DeclCategory::Assert
-                | DeclCategory::Plot
-                | DeclCategory::Figure
-                | DeclCategory::Layer => return None,
-            })
+            Some((name, decl_type))
+        })
+        .map(|(name, decl_type)| match decl_type {
+            DeclType::Const => {
+                let key = local_key(name)?;
+                plan.const_values.get(&key).map_or_else(
+                    || {
+                        Err(GraphcalError::internal_error(
+                            format!("checked source-order constant `{key}` has no runtime value"),
+                            src,
+                            DiagnosticAnchor::WholeFile,
+                        ))
+                    },
+                    |runtime| {
+                        make_value(name, runtime).map(|value| (name.clone(), value, decl_type))
+                    },
+                )
+            }
+            DeclType::Param | DeclType::Node => {
+                make_result(name).map(|value| (name.clone(), value, decl_type))
+            }
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     cancellation.checkpoint()?;
@@ -474,7 +473,11 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .asserts()
         .iter()
         .map(|entry| {
-            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
+            let owner = tir.root().require_bound_decl_identity(
+                &entry.name,
+                src,
+                DiagnosticAnchor::Source(entry.span),
+            )?;
             let entry_ctx = ctx.for_decl(&owner);
             let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
                 || {
@@ -489,9 +492,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
                 },
                 |message| AssertResult::Error { message },
             );
-            (entry.name.clone(), assert_result, entry.span)
+            Ok((entry.name.clone(), assert_result, entry.span))
         })
-        .collect();
+        .collect::<Result<_, GraphcalError>>()?;
     cancellation.checkpoint()?;
 
     // Evaluate plot declarations. Evaluation is per-plot best-effort, but a
@@ -503,7 +506,11 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .plots()
         .iter()
         .try_fold(Vec::new(), |mut plots, entry| {
-            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
+            let owner = tir.root().require_bound_decl_identity(
+                &entry.name,
+                src,
+                DiagnosticAnchor::WholeFile,
+            )?;
             match evaluate_plot(entry, &values, &errors, &ctx.for_decl(&owner)) {
                 Ok(plot) => plots.push(plot),
                 Err(PlotEvaluationError::Render(message)) => {
@@ -524,28 +531,37 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .root()
         .figures()
         .iter()
-        .filter_map(|entry| {
-            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
-            match eval_composition_fields(
-                &entry.fields,
-                &entry.plot_names,
-                &values,
-                &ctx.for_decl(&owner),
-            ) {
-                Ok(evaluated) => Some(super::types::FigureSpec {
-                    name: entry.name.clone(),
-                    plot_names: evaluated.plot_names,
-                    properties: evaluated.properties,
-                }),
-                Err(message) => {
-                    plot_errors.push(super::types::PlotError {
+        .map(|entry| {
+            let owner = tir.root().require_bound_decl_identity(
+                &entry.name,
+                src,
+                DiagnosticAnchor::WholeFile,
+            )?;
+            Ok(
+                match eval_composition_fields(
+                    &entry.fields,
+                    &entry.plot_names,
+                    &values,
+                    &ctx.for_decl(&owner),
+                ) {
+                    Ok(evaluated) => Some(super::types::FigureSpec {
                         name: entry.name.clone(),
-                        message,
-                    });
-                    None
-                }
-            }
+                        plot_names: evaluated.plot_names,
+                        properties: evaluated.properties,
+                    }),
+                    Err(message) => {
+                        plot_errors.push(super::types::PlotError {
+                            name: entry.name.clone(),
+                            message,
+                        });
+                        None
+                    }
+                },
+            )
         })
+        .collect::<Result<Vec<_>, GraphcalError>>()?
+        .into_iter()
+        .flatten()
         .collect();
 
     // Evaluate layer declarations
@@ -553,28 +569,37 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .root()
         .layers()
         .iter()
-        .filter_map(|entry| {
-            let owner = tir.root().resolved_decl_key_for_local(&entry.name);
-            match eval_composition_fields(
-                &entry.fields,
-                &entry.plot_names,
-                &values,
-                &ctx.for_decl(&owner),
-            ) {
-                Ok(evaluated) => Some(super::types::LayerSpec {
-                    name: entry.name.clone(),
-                    plot_names: evaluated.plot_names,
-                    properties: evaluated.properties,
-                }),
-                Err(message) => {
-                    plot_errors.push(super::types::PlotError {
+        .map(|entry| {
+            let owner = tir.root().require_bound_decl_identity(
+                &entry.name,
+                src,
+                DiagnosticAnchor::WholeFile,
+            )?;
+            Ok(
+                match eval_composition_fields(
+                    &entry.fields,
+                    &entry.plot_names,
+                    &values,
+                    &ctx.for_decl(&owner),
+                ) {
+                    Ok(evaluated) => Some(super::types::LayerSpec {
                         name: entry.name.clone(),
-                        message,
-                    });
-                    None
-                }
-            }
+                        plot_names: evaluated.plot_names,
+                        properties: evaluated.properties,
+                    }),
+                    Err(message) => {
+                        plot_errors.push(super::types::PlotError {
+                            name: entry.name.clone(),
+                            message,
+                        });
+                        None
+                    }
+                },
+            )
         })
+        .collect::<Result<Vec<_>, GraphcalError>>()?
+        .into_iter()
+        .flatten()
         .collect();
     cancellation.checkpoint()?;
 
@@ -585,11 +610,16 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .root()
         .source_order()
         .iter()
-        .filter_map(|(name, _)| {
-            plan.domain_constraints
-                .get(&local_key(name))
-                .map(|v| (name.clone(), v.clone()))
+        .map(|(name, _)| {
+            let key = local_key(name)?;
+            Ok(plan
+                .domain_constraints
+                .get(&key)
+                .map(|constraint| (name.clone(), constraint.clone())))
         })
+        .collect::<Result<Vec<_>, GraphcalError>>()?
+        .into_iter()
+        .flatten()
         .collect();
     cancellation.checkpoint()?;
     let assumes_map: HashMap<ScopedName, Vec<ScopedName>> = plan.assumes_map.clone();

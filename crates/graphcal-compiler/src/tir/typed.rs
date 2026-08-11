@@ -124,21 +124,45 @@ impl DagTIR {
         );
     }
 
-    /// Return the canonical identity recorded for a declaration visible from
-    /// this DAG.
+    /// Look up the canonical identity recorded for a source-facing name.
     ///
-    /// Authoritative declarations always have an explicit binding. The local
-    /// fallback exists only for diagnostic probes of unknown names; notably it
-    /// does not infer a concrete owner from a source-facing qualifier.
+    /// Unknown names remain [`DiagnosticDeclProbe`] values rather than being
+    /// assigned an authoritative-looking identity from this DAG's owner.
     #[must_use]
-    pub fn resolved_decl_key_for_local(&self, name: &ScopedName) -> ResolvedDeclName {
-        self.semantic
-            .decl_bindings
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| {
-                ResolvedDeclName::from_def(self.dag_id.clone(), name.member().clone())
-            })
+    pub fn lookup_decl_identity(&self, name: &ScopedName) -> DeclarationIdentityLookup {
+        self.semantic.decl_bindings.get(name).map_or_else(
+            || {
+                DeclarationIdentityLookup::DiagnosticProbe(DiagnosticDeclProbe::new(
+                    self.dag_id.clone(),
+                    name.clone(),
+                ))
+            },
+            |identity| DeclarationIdentityLookup::Bound(identity.clone()),
+        )
+    }
+
+    /// Borrow an authoritative declaration identity, if one is bound.
+    #[must_use]
+    pub fn bound_decl_identity(&self, name: &ScopedName) -> Option<&ResolvedDeclName> {
+        self.semantic.decl_bindings.get(name)
+    }
+
+    /// Require an authoritative declaration identity for an invariant-backed
+    /// compiler or evaluator operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an internal error instead of converting an unknown diagnostic
+    /// probe into a semantic identity.
+    pub fn require_bound_decl_identity(
+        &self,
+        name: &ScopedName,
+        src: &NamedSource<Arc<String>>,
+        anchor: DiagnosticAnchor,
+    ) -> Result<ResolvedDeclName, GraphcalError> {
+        self.lookup_decl_identity(name)
+            .into_bound()
+            .map_err(|probe| GraphcalError::internal_error(probe.to_string(), src, anchor))
     }
 }
 
@@ -283,7 +307,7 @@ fn finalize_hir_dag(
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<(), GraphcalError> {
     cancellation.checkpoint()?;
-    augment_runtime_deps_for_dynamic_units(dag);
+    augment_runtime_deps_for_dynamic_units(dag, src)?;
     dag.populate_projectable_outputs(surface);
     cancellation.checkpoint()?;
     validate_public_generic_defaults(dag, surface, module_ctx, src)?;
@@ -1271,8 +1295,12 @@ fn check_hir_body_policies(
     let local = |key: &ResolvedDeclName| key.owner() == ctx.owner;
 
     for entry in &dag.consts {
-        let key = dag.resolved_decl_key_for_local(&entry.name);
         let body_src = entry.body_src.resolve(src);
+        let key = dag.require_bound_decl_identity(
+            &entry.name,
+            body_src,
+            DiagnosticAnchor::Source(entry.span),
+        )?;
         HirPolicyChecker { ctx, src: body_src }.check_expr(
             &entry.expr,
             BodyPhase::CompileTime,
@@ -1282,8 +1310,12 @@ fn check_hir_body_policies(
     check_domain_bound_policies(semantic, ctx)?;
     check_dynamic_unit_policies(semantic, ctx)?;
     for entry in &dag.nodes {
-        let key = dag.resolved_decl_key_for_local(&entry.name);
         let body_src = entry.body_src.resolve(src);
+        let key = dag.require_bound_decl_identity(
+            &entry.name,
+            body_src,
+            DiagnosticAnchor::Source(entry.span),
+        )?;
         HirPolicyChecker { ctx, src: body_src }.check_expr(
             &entry.expr,
             BodyPhase::Runtime,
@@ -1384,8 +1416,12 @@ fn check_sink_body_policies(
     let is_explicit_export =
         |leaf: &str| external_surface.is_explicit_export(&DeclName::expect_valid(leaf));
     for entry in &dag.asserts {
-        let key = dag.resolved_decl_key_for_local(&entry.name);
         let body_src = entry.body_src.resolve(src);
+        let key = dag.require_bound_decl_identity(
+            &entry.name,
+            body_src,
+            DiagnosticAnchor::Source(entry.span),
+        )?;
         let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
         let checker = HirPolicyChecker { ctx, src: body_src };
         match &entry.body {
@@ -1704,6 +1740,58 @@ use collect::{
     collect_resolved_decl_bindings, resolve_expected_fail_keys,
 };
 
+fn install_non_value_decl_bindings<'a>(
+    bindings: &mut HashMap<ScopedName, ResolvedDeclName>,
+    dag_id: &crate::dag_id::DagId,
+    asserts: &'a [crate::ir::lower::AssertEntry],
+    dag_owned_names: impl Iterator<Item = &'a ScopedName>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let assertions = asserts.iter().map(|entry| {
+        (
+            &entry.name,
+            ResolvedDeclName::from_def(
+                entry.declaration_owner.clone(),
+                entry.name.member().clone(),
+            ),
+        )
+    });
+    let dag_owned = dag_owned_names.map(|name| {
+        (
+            name,
+            ResolvedDeclName::from_def(dag_id.clone(), name.member().clone()),
+        )
+    });
+    for (name, identity) in assertions.chain(dag_owned) {
+        if bindings.insert(name.clone(), identity).is_some() {
+            return Err(GraphcalError::internal_error(
+                format!("duplicate canonical declaration binding `{name}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_source_order_bindings(
+    bindings: &HashMap<ScopedName, ResolvedDeclName>,
+    source_order: &[(ScopedName, DeclCategory)],
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    source_order.iter().try_for_each(|(name, category)| {
+        if bindings.contains_key(name) {
+            Ok(())
+        } else {
+            Err(GraphcalError::internal_error(
+                format!("source-order {category} declaration `{name}` has no canonical binding"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ))
+        }
+    })
+}
+
 /// Partially-built [`DagTIR`] returned by [`type_resolve_dag`]; finalized
 /// by [`DagTIRSeed::with_body`] which fills in the rest of the per-DAG
 /// fields.
@@ -1743,15 +1831,19 @@ impl DagTIRSeed {
             &self.nodes,
             &imported_bindings,
         );
-        decl_bindings.extend(asserts.iter().map(|entry| {
-            (
-                entry.name.clone(),
-                ResolvedDeclName::from_def(
-                    entry.declaration_owner.clone(),
-                    entry.name.member().clone(),
-                ),
-            )
-        }));
+        let dag_owned_sinks = plots
+            .iter()
+            .map(|entry| &entry.name)
+            .chain(figures.iter().map(|entry| &entry.name))
+            .chain(layers.iter().map(|entry| &entry.name));
+        install_non_value_decl_bindings(
+            &mut decl_bindings,
+            &self.dag_id,
+            &asserts,
+            dag_owned_sinks,
+            src,
+        )?;
+        validate_source_order_bindings(&decl_bindings, &source_order, src)?;
         let expected_fail = resolve_expected_fail_keys(expected_fail, module_ctx, src)?;
 
         let mut semantic = self.semantic;
@@ -1794,15 +1886,24 @@ impl DagTIRSeed {
             instances,
             projectable_outputs: std::collections::HashSet::new(),
         };
-        dag.index_declaration_records()
-            .map_err(|duplicate| GraphcalError::InternalError {
+        dag.index_declaration_records().map_err(|error| match error {
+            DeclarationIndexError::MissingBinding { name, span } => GraphcalError::InternalError {
                 message: format!(
-                    "duplicate checked declaration record `{}` while building TIR index",
-                    duplicate.name
+                    "checked declaration record `{name}` has no canonical binding while building TIR index"
                 ),
                 src: src.clone(),
-                span: duplicate.span.into(),
-            })?;
+                span: span.into(),
+            },
+            DeclarationIndexError::DuplicateRecord { name, span } => {
+                GraphcalError::InternalError {
+                    message: format!(
+                        "duplicate checked declaration record `{name}` while building TIR index"
+                    ),
+                    src: src.clone(),
+                    span: span.into(),
+                }
+            }
+        })?;
         Ok(dag)
     }
 }

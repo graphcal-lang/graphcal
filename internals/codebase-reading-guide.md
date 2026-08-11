@@ -381,8 +381,11 @@ maps canonical IDs to those records; no semantic side map clones bodies.
   metadata backed by shared project-store type handles.
 - `semantic.type_defs`: resolved field/default semantics plus shared handles to
   canonical nominal definitions.
-- `semantic.decl_bindings`: visible `ScopedName` keys mapped to
-  `ResolvedName<Decl>` identities at the source boundary.
+- `semantic.decl_bindings`: declaration records and visible imported values
+  mapped from source-facing `ScopedName` keys to authoritative
+  `ResolvedName<Decl>` identities. Unknown-name diagnostics use
+  `DeclarationIdentityLookup::DiagnosticProbe`; they never synthesize a
+  resolved identity from the current DAG owner.
 
 Dimensions are exact exponent maps:
 

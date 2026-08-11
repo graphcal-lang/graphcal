@@ -139,11 +139,11 @@ pub fn compile_checked_with_cancellation(
         imported_values: tir
             .root()
             .imported_bindings()
-            .iter()
-            .filter_map(|(name, binding)| {
+            .values()
+            .filter_map(|binding| {
                 binding.value().map(|value| {
                     (
-                        RuntimeDeclKey::for_visible_name(tir.root(), name),
+                        RuntimeDeclKey::resolved(binding.target().clone()),
                         value.clone(),
                     )
                 })
@@ -170,15 +170,14 @@ fn visible_values_with_imports(
     known_const_values: &RuntimeValueMap,
 ) -> RuntimeValueMap {
     let mut values = known_const_values.clone();
-    values.extend(
-        dag.imported_bindings()
-            .iter()
-            .filter_map(|(name, binding)| {
-                binding
-                    .value()
-                    .map(|value| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
-            }),
-    );
+    values.extend(dag.imported_bindings().values().filter_map(|binding| {
+        binding.value().map(|value| {
+            (
+                RuntimeDeclKey::resolved(binding.target().clone()),
+                value.clone(),
+            )
+        })
+    }));
     values.extend(
         local_const_values
             .iter()
@@ -197,15 +196,14 @@ fn known_const_values(
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<RuntimeValueMap>();
     for dag in tir.dag_registry().values() {
-        values.extend(
-            dag.imported_bindings()
-                .iter()
-                .filter_map(|(name, binding)| {
-                    binding
-                        .value()
-                        .map(|value| (RuntimeDeclKey::for_visible_name(dag, name), value.clone()))
-                }),
-        );
+        values.extend(dag.imported_bindings().values().filter_map(|binding| {
+            binding.value().map(|value| {
+                (
+                    RuntimeDeclKey::resolved(binding.target().clone()),
+                    value.clone(),
+                )
+            })
+        }));
     }
     values
 }
@@ -366,7 +364,11 @@ fn eval_const_pools_for_dags(
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         for entry in entries {
             cancellation.checkpoint()?;
-            let key = dag.resolved_decl_key_for_local(&entry.name);
+            let key = dag.require_bound_decl_identity(
+                &entry.name,
+                src,
+                DiagnosticAnchor::Source(entry.span),
+            )?;
             index_map.insert(key.clone(), graph.add_node(key.clone()));
             declaration_by_key.insert(key, (dag_id.clone(), entry.name.clone(), entry.span));
         }
@@ -478,7 +480,8 @@ pub fn eval_consts_from_tir_with_cancellation(
 
     for name in sorted_names {
         cancellation.checkpoint()?;
-        let key = RuntimeDeclKey::for_local_decl(dag, &name);
+        let identity = dag.require_bound_decl_identity(&name, src, DiagnosticAnchor::WholeFile)?;
+        let key = RuntimeDeclKey::resolved(identity);
         let ctx = EvalContext {
             cancellation: cancellation.clone(),
             work_budget: crate::eval_expr::fresh_work_budget(),
@@ -547,7 +550,11 @@ fn const_eval_order_resolved(
     sorted_consts.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in &sorted_consts {
         cancellation.checkpoint()?;
-        let key = dag.resolved_decl_key_for_local(&entry.name);
+        let key = dag.require_bound_decl_identity(
+            &entry.name,
+            src,
+            DiagnosticAnchor::Source(entry.span),
+        )?;
         let idx = graph.add_node(key.clone());
         index_map.insert(key.clone(), idx);
         local_name_by_key.insert(key.clone(), entry.name.clone());
@@ -636,10 +643,13 @@ fn build_runtime_dag(
         decl_spans.push((decl.name().clone(), decl.span()));
     }
 
-    Ok(runtime_eval_order(dag, &decl_spans, src, cancellation)?
+    runtime_eval_order(dag, &decl_spans, src, cancellation)?
         .into_iter()
-        .map(|name| RuntimeDeclKey::for_local_decl(dag, &name))
-        .collect())
+        .map(|name| {
+            dag.require_bound_decl_identity(&name, src, DiagnosticAnchor::WholeFile)
+                .map(RuntimeDeclKey::resolved)
+        })
+        .collect()
 }
 
 fn runtime_eval_order(
@@ -672,7 +682,7 @@ fn runtime_eval_order_resolved(
 
     for (name, span) in decl_spans {
         cancellation.checkpoint()?;
-        let key = dag.resolved_decl_key_for_local(name);
+        let key = dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(*span))?;
         let idx = graph.add_node(key.clone());
         index_map.insert(key.clone(), idx);
         local_name_by_key.insert(key.clone(), name.clone());
@@ -789,7 +799,8 @@ fn resolve_domain_constraints_for_dag(
 
     for (name, decl_span, is_const) in decl_iter {
         cancellation.checkpoint()?;
-        let resolved_key = dag.resolved_decl_key_for_local(name);
+        let resolved_key =
+            dag.require_bound_decl_identity(name, src, DiagnosticAnchor::Source(decl_span))?;
         let Some(domain_bounds) = dag.semantic().domain_bounds.get(&resolved_key) else {
             continue;
         };
@@ -808,7 +819,7 @@ fn resolve_domain_constraints_for_dag(
             &ctx.for_decl(&resolved_key).with_src(constraint_src),
             constraint_src,
         )?;
-        let runtime_key = RuntimeDeclKey::for_local_decl(dag, name);
+        let runtime_key = RuntimeDeclKey::resolved(resolved_key);
         if is_const
             && let Some(value) = const_values.get(&runtime_key)
             && let Err(violation) =
@@ -1370,7 +1381,11 @@ fn check_dag_const_struct_field_constraints_at_compile_time(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for entry in dag.consts() {
-        let key = RuntimeDeclKey::for_local_decl(dag, &entry.name);
+        let key = RuntimeDeclKey::resolved(dag.require_bound_decl_identity(
+            &entry.name,
+            src,
+            DiagnosticAnchor::Source(entry.span),
+        )?);
         if let Some(value) = const_values.get(&key) {
             let owning_type = dag
                 .resolved_decl_types()

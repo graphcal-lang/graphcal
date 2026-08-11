@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::registry::resolve_types::DeclCategory;
-use graphcal_compiler::tir::typed::{DagTIR, TIR};
+use graphcal_compiler::tir::typed::{DagTIR, DiagnosticDeclProbe, TIR};
 
 /// Stable identity of a graph node: the declaration's canonical resolved name.
 pub type GraphNodeId = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
@@ -88,16 +88,23 @@ pub struct GraphIr {
 /// dependency maps (`const_deps` + `runtime_deps`), oriented in dataflow
 /// direction (dependency → dependent). Dependencies on declarations outside
 /// the projected DAGs surface as [`GraphNodeKind::External`] placeholders.
-#[must_use]
-pub fn project_tir(tir: &TIR) -> GraphIr {
-    let root = project_dag(tir, tir.root());
+///
+/// # Errors
+///
+/// Returns a typed diagnostic probe if a checked source-order declaration has
+/// no authoritative canonical identity.
+pub fn project_tir(tir: &TIR) -> Result<GraphIr, DiagnosticDeclProbe> {
+    let root = project_dag(tir, tir.root())?;
 
     let mut child_dags: Vec<&DagTIR> = tir
         .local_dags()
         .filter_map(|(dag_id, dag)| (dag_id != tir.root_dag_id()).then_some(dag))
         .collect();
     child_dags.sort_by(|a, b| a.dag_id().cmp(b.dag_id()));
-    let children: Vec<GraphCluster> = child_dags.iter().map(|dag| project_dag(tir, dag)).collect();
+    let children: Vec<GraphCluster> = child_dags
+        .iter()
+        .map(|dag| project_dag(tir, dag))
+        .collect::<Result<_, _>>()?;
 
     let mut edges: BTreeSet<GraphEdge> = BTreeSet::new();
     for dag in std::iter::once(tir.root()).chain(child_dags) {
@@ -134,16 +141,16 @@ pub fn project_tir(tir: &TIR) -> GraphIr {
         })
         .collect();
 
-    GraphIr {
+    Ok(GraphIr {
         root,
         children,
         external: external.into_values().collect(),
         edges: edges.into_iter().collect(),
-    }
+    })
 }
 
 /// Project one DAG body's const/param/node declarations, in source order.
-fn project_dag(tir: &TIR, dag: &DagTIR) -> GraphCluster {
+fn project_dag(tir: &TIR, dag: &DagTIR) -> Result<GraphCluster, DiagnosticDeclProbe> {
     let nodes = dag
         .source_order()
         .iter()
@@ -157,22 +164,25 @@ fn project_dag(tir: &TIR, dag: &DagTIR) -> GraphCluster {
                 | DeclCategory::Figure
                 | DeclCategory::Layer => return None,
             };
-            let id = dag.resolved_decl_key_for_local(name);
+            Some((name, kind))
+        })
+        .map(|(name, kind)| {
+            let id = dag.lookup_decl_identity(name).into_bound()?;
             let type_label = dag
                 .resolved_decl_types()
                 .get(name)
                 .map(|ty| ty.format(tir.registry()));
-            Some(GraphNode {
+            Ok(GraphNode {
                 id,
                 kind,
                 type_label,
             })
         })
-        .collect();
-    GraphCluster {
+        .collect::<Result<_, DiagnosticDeclProbe>>()?;
+    Ok(GraphCluster {
         dag_id: dag.dag_id().clone(),
         nodes,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -240,7 +250,7 @@ assert positive_dv = @delta_v > 0.0 m/s;
     #[test]
     fn projects_decls_in_source_order_with_kinds() {
         let tir = tir_from_source(ROCKET_SOURCE);
-        let ir = project_tir(&tir);
+        let ir = project_tir(&tir).unwrap();
 
         let kinds: Vec<(&str, GraphNodeKind)> = ir
             .root
@@ -266,7 +276,7 @@ assert positive_dv = @delta_v > 0.0 m/s;
     #[test]
     fn projects_dataflow_edges_including_const_reads() {
         let tir = tir_from_source(ROCKET_SOURCE);
-        let ir = project_tir(&tir);
+        let ir = project_tir(&tir).unwrap();
 
         let expected = [
             ("dry_mass", "mass_ratio"),
@@ -287,7 +297,7 @@ assert positive_dv = @delta_v > 0.0 m/s;
     #[test]
     fn projects_type_labels() {
         let tir = tir_from_source(ROCKET_SOURCE);
-        let ir = project_tir(&tir);
+        let ir = project_tir(&tir).unwrap();
 
         let labels: BTreeMap<&str, Option<&str>> = ir
             .root
@@ -316,7 +326,7 @@ param speed: Dimensionless = 10.0;
 node doubled: Dimensionless = @scale(factor: 2.0, v: @speed).result;
 ",
         );
-        let ir = project_tir(&tir);
+        let ir = project_tir(&tir).unwrap();
 
         let root_names: Vec<&str> = ir.root.nodes.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(root_names, vec!["speed", "doubled"]);

@@ -740,12 +740,15 @@ fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
             .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns))
     });
     match outcome {
-        Ok(checked) => {
-            let ir = graphcal_eval::graph_ir::project_tir(checked.tir());
-            match format {
+        Ok(checked) => match graphcal_eval::graph_ir::project_tir(checked.tir()) {
+            Ok(ir) => match format {
                 GraphFormat::Dot => print!("{}", graphcal_eval::graph_ir::dot::render(&ir)),
+            },
+            Err(error) => {
+                eprintln!("internal graph projection error: {error}");
+                process::exit(2);
             }
-        }
+        },
         Err(e) => {
             eprintln!("{:?}", miette::Report::new(e));
             process::exit(2);

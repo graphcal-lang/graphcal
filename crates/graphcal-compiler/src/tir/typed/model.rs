@@ -1155,6 +1155,60 @@ pub(crate) enum BindableNominalIdentity {
     Type(ResolvedStructTypeName),
 }
 
+/// An unbound source-facing name retained only as a diagnostic probe.
+///
+/// A probe deliberately keeps the DAG and written scoped name as separate
+/// fields. It cannot be converted into a [`ResolvedDeclName`], because no
+/// authoritative declaration binding established that identity.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unbound declaration probe `{name}` in DAG `{dag_id}`")]
+pub struct DiagnosticDeclProbe {
+    dag_id: crate::dag_id::DagId,
+    name: ScopedName,
+}
+
+impl DiagnosticDeclProbe {
+    pub(super) const fn new(dag_id: crate::dag_id::DagId, name: ScopedName) -> Self {
+        Self { dag_id, name }
+    }
+
+    #[must_use]
+    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
+        &self.dag_id
+    }
+
+    #[must_use]
+    pub const fn name(&self) -> &ScopedName {
+        &self.name
+    }
+}
+
+/// Result of looking up a declaration identity by its source-facing name.
+///
+/// Only [`Self::Bound`] carries a canonical semantic identity. Unknown names
+/// remain typed diagnostic probes so callers cannot accidentally route values
+/// or semantic facts through an identity fabricated from the current DAG.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclarationIdentityLookup {
+    Bound(ResolvedDeclName),
+    DiagnosticProbe(DiagnosticDeclProbe),
+}
+
+impl DeclarationIdentityLookup {
+    /// Require an authoritative binding rather than a diagnostic probe.
+    ///
+    /// # Errors
+    ///
+    /// Returns the structured probe when the source-facing name has no
+    /// canonical declaration binding in this DAG.
+    pub fn into_bound(self) -> Result<ResolvedDeclName, DiagnosticDeclProbe> {
+        match self {
+            Self::Bound(identity) => Ok(identity),
+            Self::DiagnosticProbe(probe) => Err(probe),
+        }
+    }
+}
+
 /// Derived semantic facts for a checked DAG.
 ///
 /// Authoritative HIR bodies remain on the declaration records in [`DagTIR`].
@@ -1182,7 +1236,8 @@ pub struct DagSemanticBody {
     pub(crate) bindable_nominals: HashSet<BindableNominalIdentity>,
     /// Canonical type definitions referenced by this DAG.
     pub type_defs: ResolvedTypeDefs,
-    /// Canonical declaration identity for every value name visible in this DAG.
+    /// Canonical identities for every declaration record and imported value
+    /// binding visible in this DAG.
     pub decl_bindings: HashMap<ScopedName, ResolvedDeclName>,
     /// Checked total-cardinality facts for every concrete indexed expression.
     pub materialized_shapes: HashMap<
@@ -1408,7 +1463,7 @@ impl TIR {
                 .map(|entry| &entry.name)
                 .chain(dag.params().iter().map(|entry| &entry.name))
                 .chain(dag.nodes().iter().map(|entry| &entry.name))
-                .any(|name| dag.resolved_decl_key_for_local(name) == *declaration)
+                .any(|name| dag.bound_decl_identity(name) == Some(declaration))
                 .then_some(dag)
         })
     }
@@ -1536,11 +1591,11 @@ pub(super) struct DagDeclarationIndex {
     assertions: HashMap<ResolvedDeclName, usize>,
 }
 
-/// A duplicate discovered while indexing records that passed frontend checks.
+/// An invariant failure discovered while indexing checked declaration records.
 #[derive(Debug)]
-pub(super) struct DuplicateDeclarationRecord {
-    pub(crate) name: ScopedName,
-    pub(crate) span: Span,
+pub(super) enum DeclarationIndexError {
+    MissingBinding { name: ScopedName, span: Span },
+    DuplicateRecord { name: ScopedName, span: Span },
 }
 
 /// Resolved expected-fail configuration with its authored diagnostic source.
@@ -1671,7 +1726,7 @@ impl DagTIR {
     }
 
     /// Build identity-to-record indexes after all declaration vectors are installed.
-    pub(super) fn index_declaration_records(&mut self) -> Result<(), DuplicateDeclarationRecord> {
+    pub(super) fn index_declaration_records(&mut self) -> Result<(), DeclarationIndexError> {
         let mut index = DagDeclarationIndex::default();
         for (slot, name, span) in
             self.consts
@@ -1685,18 +1740,29 @@ impl DagTIR {
                     (ValueDeclarationSlot::Node(slot), &entry.name, entry.span)
                 }))
         {
-            let key = self.resolved_decl_key_for_local(name);
+            let key = self.bound_decl_identity(name).cloned().ok_or_else(|| {
+                DeclarationIndexError::MissingBinding {
+                    name: name.clone(),
+                    span,
+                }
+            })?;
             if index.values.insert(key, slot).is_some() {
-                return Err(DuplicateDeclarationRecord {
+                return Err(DeclarationIndexError::DuplicateRecord {
                     name: name.clone(),
                     span,
                 });
             }
         }
         for (slot, entry) in self.asserts.iter().enumerate() {
-            let key = self.resolved_decl_key_for_local(&entry.name);
+            let key = self
+                .bound_decl_identity(&entry.name)
+                .cloned()
+                .ok_or_else(|| DeclarationIndexError::MissingBinding {
+                    name: entry.name.clone(),
+                    span: entry.span,
+                })?;
             if index.assertions.insert(key, slot).is_some() {
-                return Err(DuplicateDeclarationRecord {
+                return Err(DeclarationIndexError::DuplicateRecord {
                     name: entry.name.clone(),
                     span: entry.span,
                 });
