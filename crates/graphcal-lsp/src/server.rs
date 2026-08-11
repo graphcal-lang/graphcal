@@ -1,6 +1,6 @@
 //! LSP server backend: state management and `LanguageServer` trait implementation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -29,6 +29,10 @@ use crate::symbol_identity::{
     SourceSymbolPath, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
 };
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
+use crate::workspace_revision::{
+    AnalysisInputSnapshot, AnalysisInputs, DependencyGraph, DocumentIdentity, DocumentRevision,
+    RevisionClock, RevisionExhausted,
+};
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
 use graphcal_compiler::dimension::{BaseDimId, Dimension, Rational};
@@ -111,6 +115,8 @@ impl AnalysisRun {
 
 /// Cached analysis result for a document.
 pub(crate) struct AnalysisResult {
+    /// Exact document revisions and dependencies consumed by this result.
+    pub(crate) inputs: AnalysisInputs,
     /// The raw source text. Shared via `Arc` so hover, inlay-hint, and
     /// formatting handlers can borrow without cloning the full buffer.
     pub(crate) source: Arc<String>,
@@ -332,8 +338,16 @@ async fn acquire_analysis_permit(
 /// Latest text and LSP version for one open editor document.
 #[derive(Debug, Clone)]
 struct OpenDocumentSnapshot {
+    identity: DocumentIdentity,
+    revision: DocumentRevision,
     text: Arc<String>,
     version: i32,
+}
+
+#[derive(Debug)]
+struct RecordedDocument {
+    identity: DocumentIdentity,
+    revision: DocumentRevision,
 }
 
 /// The LSP server backend.
@@ -353,6 +367,10 @@ pub struct Backend {
     /// trigger-character completion, signature help, formatting — must read
     /// this instead of the analyzed snapshot.
     latest_text: Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    /// Monotonic revision allocator shared by all document identities.
+    revision_clock: Arc<RevisionClock>,
+    /// Reverse dependency edges from the latest accepted analyses.
+    dependency_graph: Arc<RwLock<DependencyGraph>>,
     /// WASM plugin host shared across analysis passes, so re-analysis on
     /// every debounced keystroke hits the content-hash module cache instead
     /// of recompiling unchanged plugins.
@@ -385,6 +403,7 @@ impl AnalysisResult {
 impl std::fmt::Debug for AnalysisResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnalysisResult")
+            .field("inputs", &self.inputs)
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
             .field(
@@ -410,6 +429,32 @@ impl std::fmt::Debug for AnalysisResult {
     }
 }
 
+fn open_revisions(
+    snapshots: &HashMap<Url, OpenDocumentSnapshot>,
+) -> HashMap<DocumentIdentity, DocumentRevision> {
+    snapshots
+        .values()
+        .map(|snapshot| (snapshot.identity.clone(), snapshot.revision))
+        .collect()
+}
+
+fn document_identity(uri: &Url) -> DocumentIdentity {
+    let Ok(path) = uri.to_file_path() else {
+        return DocumentIdentity::virtual_uri(uri.clone());
+    };
+    let canonical = path.canonicalize().or_else(|_| {
+        let parent = path
+            .parent()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+        let canonical_parent = parent.canonicalize()?;
+        path.file_name().map_or_else(
+            || Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+            |name| Ok(canonical_parent.join(name)),
+        )
+    });
+    DocumentIdentity::file(canonical.unwrap_or(path))
+}
+
 impl Backend {
     fn is_graphcal_file(uri: &Url) -> bool {
         std::path::Path::new(uri.path())
@@ -424,10 +469,16 @@ impl Backend {
     where
         F: FnOnce(&AnalysisResult) -> Option<R>,
     {
+        let snapshots = self.latest_text.read().await;
+        let revisions = open_revisions(&snapshots);
+        drop(snapshots);
         let docs = self.documents.read().await;
         let Some(analysis) = docs.get(uri) else {
             return Ok(None);
         };
+        if !analysis.inputs.is_current(&revisions) {
+            return Ok(None);
+        }
         let result = f(analysis);
         drop(docs);
         Ok(result)
@@ -435,21 +486,57 @@ impl Backend {
 
     /// Record the latest editor text for `uri`, synchronously with the
     /// notification that delivered it.
-    async fn record_latest_text(&self, uri: &Url, text: &str, version: Option<i32>) {
+    async fn record_latest_text(
+        &self,
+        uri: &Url,
+        text: &str,
+        version: Option<i32>,
+    ) -> std::result::Result<RecordedDocument, RevisionExhausted> {
         use std::collections::hash_map::Entry;
-        match self.latest_text.write().await.entry(uri.clone()) {
+        let revision = self.revision_clock.next()?;
+        let identity = match self.latest_text.write().await.entry(uri.clone()) {
             Entry::Occupied(mut entry) => {
-                entry.get_mut().text = Arc::new(text.to_string());
+                let snapshot = entry.get_mut();
+                snapshot.revision = revision;
+                snapshot.text = Arc::new(text.to_string());
                 if let Some(version) = version {
-                    entry.get_mut().version = version;
+                    snapshot.version = version;
                 }
+                snapshot.identity.clone()
             }
             Entry::Vacant(entry) => {
+                let identity = document_identity(uri);
                 entry.insert(OpenDocumentSnapshot {
+                    identity: identity.clone(),
+                    revision,
                     text: Arc::new(text.to_string()),
                     version: version.unwrap_or_default(),
                 });
+                identity
             }
+        };
+        Ok(RecordedDocument { identity, revision })
+    }
+
+    /// Cancel and debounce every open analysis that consumes `changed`.
+    async fn schedule_transitive_importers(&self, changed_uri: &Url, changed: &DocumentIdentity) {
+        let importers = self
+            .dependency_graph
+            .read()
+            .await
+            .transitive_importers(changed);
+        let pending: Vec<_> = self
+            .latest_text
+            .read()
+            .await
+            .iter()
+            .filter(|(uri, snapshot)| *uri != changed_uri && importers.contains(&snapshot.identity))
+            .map(|(uri, snapshot)| (uri.clone(), Arc::clone(&snapshot.text), snapshot.revision))
+            .collect();
+        for (uri, text, revision) in pending {
+            self.analysis_scheduler.cancel_document(&uri);
+            let generation = self.bump_generation(&uri).await;
+            self.spawn_debounced_analysis(uri, text.as_ref().clone(), revision, generation);
         }
     }
 
@@ -471,7 +558,17 @@ impl Backend {
         }
 
         self.analysis_scheduler.open_document(&uri);
-        self.record_latest_text(&uri, &text, version).await;
+        let recorded = match self.record_latest_text(&uri, &text, version).await {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                self.client
+                    .log_message(MessageType::ERROR, error.to_string())
+                    .await;
+                return;
+            }
+        };
+        self.schedule_transitive_importers(&uri, &recorded.identity)
+            .await;
 
         // Bump the generation so any in-flight debounced analysis for this URI
         // becomes stale and refuses to overwrite fresh results.
@@ -482,10 +579,12 @@ impl Backend {
             &self.documents,
             &self.change_generations,
             &self.latest_text,
+            &self.dependency_graph,
             Arc::clone(&self.plugin_host),
             Arc::clone(&self.analysis_scheduler),
             uri,
             text,
+            recorded.revision,
             generation,
         )
         .await;
@@ -496,11 +595,18 @@ impl Backend {
     /// Waits [`DEBOUNCE_DELAY_MS`] and bails out if a newer change has
     /// arrived (generation mismatch). Any `JoinError` from the blocking
     /// analysis task is logged to the client rather than silently swallowed.
-    fn spawn_debounced_analysis(&self, uri: Url, text: String, generation: u64) {
+    fn spawn_debounced_analysis(
+        &self,
+        uri: Url,
+        text: String,
+        root_revision: DocumentRevision,
+        generation: u64,
+    ) {
         let client = self.client.clone();
         let documents = self.documents.clone();
         let generations = self.change_generations.clone();
         let latest_text = self.latest_text.clone();
+        let dependency_graph = Arc::clone(&self.dependency_graph);
         let plugin_host = Arc::clone(&self.plugin_host);
         let analysis_scheduler = Arc::clone(&self.analysis_scheduler);
 
@@ -517,10 +623,12 @@ impl Backend {
                 &documents,
                 &generations,
                 &latest_text,
+                &dependency_graph,
                 plugin_host,
                 analysis_scheduler,
                 uri,
                 text,
+                root_revision,
                 generation,
             )
             .await;
@@ -529,50 +637,98 @@ impl Backend {
 
     /// Increment and return the current generation for `uri`.
     async fn bump_generation(&self, uri: &Url) -> u64 {
-        let generation = *self
-            .change_generations
-            .write()
-            .await
-            .entry(uri.clone())
-            .and_modify(|value| *value = value.saturating_add(1))
-            .or_insert(1);
+        let generation = bump_generation_value(&self.change_generations, uri).await;
         self.analysis_scheduler.cancel_document(uri);
         generation
     }
 }
 
-/// Run the (blocking, timeout-guarded) analysis for `uri` and store/publish
-/// the result. Shared by the immediate (`did_open`/`did_save`) and debounced
-/// (`did_change`) paths so the panic/timeout/store sequence lives once.
+#[derive(Debug)]
+enum AnalysisCompletion {
+    Done,
+    Retry(OpenDocumentSnapshot),
+}
+
+/// Run analysis until it either stores a revision-coherent result or reaches
+/// a terminal cancellation/error. A dependency edit racing the worker returns
+/// the current root snapshot for another bounded pass.
 #[expect(
     clippy::too_many_arguments,
-    clippy::too_many_lines,
-    reason = "one call site per trigger; the arguments are the Backend's shared state"
+    reason = "the arguments are the Backend's shared state"
 )]
 async fn analyze_store_publish(
     client: &Client,
     documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
     latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    dependency_graph: &Arc<RwLock<DependencyGraph>>,
+    plugin_host: Arc<graphcal_plugin_host::PluginHost>,
+    scheduler: Arc<AnalysisScheduler>,
+    uri: Url,
+    mut text: String,
+    mut root_revision: DocumentRevision,
+    mut generation: u64,
+) {
+    loop {
+        match analyze_store_publish_once(
+            client,
+            documents,
+            generations,
+            latest_text,
+            dependency_graph,
+            Arc::clone(&plugin_host),
+            Arc::clone(&scheduler),
+            uri.clone(),
+            text,
+            root_revision,
+            generation,
+        )
+        .await
+        {
+            AnalysisCompletion::Done => return,
+            AnalysisCompletion::Retry(snapshot) => {
+                text = snapshot.text.as_ref().clone();
+                root_revision = snapshot.revision;
+                generation = bump_generation_value(generations, &uri).await;
+                scheduler.cancel_document(&uri);
+            }
+        }
+    }
+}
+
+/// Run one blocking, timeout-guarded analysis pass and store/publish it only
+/// when every consumed open-document revision is still current.
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "one call site per trigger; the arguments are the Backend's shared state"
+)]
+async fn analyze_store_publish_once(
+    client: &Client,
+    documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
+    generations: &Arc<RwLock<HashMap<Url, u64>>>,
+    latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
+    dependency_graph: &Arc<RwLock<DependencyGraph>>,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
     uri: Url,
     text: String,
+    root_revision: DocumentRevision,
     generation: u64,
-) {
+) -> AnalysisCompletion {
     let registration = scheduler.register(&uri, generation);
     let cancellation = registration.source.token();
     if !is_generation_current(generations, &uri, generation).await {
         registration.source.cancel();
         scheduler.finish(&uri, generation);
-        return;
+        return AnalysisCompletion::Done;
     }
     let document_permit =
         match acquire_analysis_permit(registration.document_gate, &cancellation).await {
             Ok(Some(permit)) => permit,
             Ok(None) => {
                 scheduler.finish(&uri, generation);
-                return;
+                return AnalysisCompletion::Done;
             }
             Err(error) => {
                 scheduler.finish(&uri, generation);
@@ -582,12 +738,12 @@ async fn analyze_store_publish(
                         format!("document analysis gate closed unexpectedly: {error}"),
                     )
                     .await;
-                return;
+                return AnalysisCompletion::Done;
             }
         };
     if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
         scheduler.finish(&uri, generation);
-        return;
+        return AnalysisCompletion::Done;
     }
 
     let global_permit = match acquire_analysis_permit(registration.global_gate, &cancellation).await
@@ -595,7 +751,7 @@ async fn analyze_store_publish(
         Ok(Some(permit)) => permit,
         Ok(None) => {
             scheduler.finish(&uri, generation);
-            return;
+            return AnalysisCompletion::Done;
         }
         Err(error) => {
             scheduler.finish(&uri, generation);
@@ -605,21 +761,26 @@ async fn analyze_store_publish(
                     format!("global analysis gate closed unexpectedly: {error}"),
                 )
                 .await;
-            return;
+            return AnalysisCompletion::Done;
         }
     };
     if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
         scheduler.finish(&uri, generation);
-        return;
+        return AnalysisCompletion::Done;
     }
 
     // Snapshot every *other* open document's latest text: the analysis
     // overlays them onto the filesystem so imports of open-but-dirty files
     // see the editor state, not stale disk content. The analyzed document
     // itself uses `text` (this analysis pass's snapshot).
-    let open_buffers: Vec<OpenBuffer> = latest_text
-        .read()
-        .await
+    let snapshots = latest_text.read().await;
+    let root_identity = snapshots.get(&uri).map_or_else(
+        || document_identity(&uri),
+        |snapshot| snapshot.identity.clone(),
+    );
+    let input_snapshot =
+        AnalysisInputSnapshot::new(root_identity, root_revision, open_revisions(&snapshots));
+    let open_buffers: Vec<OpenBuffer> = snapshots
         .iter()
         .filter(|(open_uri, _)| **open_uri != uri)
         .filter_map(|(open_uri, snapshot)| {
@@ -629,13 +790,15 @@ async fn analyze_store_publish(
             })
         })
         .collect();
+    drop(snapshots);
     if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
         scheduler.finish(&uri, generation);
-        return;
+        return AnalysisCompletion::Done;
     }
 
     let uri_for_analysis = uri.clone();
     let source = registration.source;
+    let worker_plugin_host = Arc::clone(&plugin_host);
     let mut task = tokio::task::spawn_blocking(move || {
         // Keep both permits until the synchronous worker truly exits. Dropping
         // the async waiter on timeout must not admit replacement work while a
@@ -645,7 +808,8 @@ async fn analyze_store_publish(
             &uri_for_analysis,
             &text,
             &open_buffers,
-            &plugin_host,
+            &worker_plugin_host,
+            &input_snapshot,
             &cancellation,
         )
     });
@@ -653,7 +817,7 @@ async fn analyze_store_publish(
         Ok(Ok(Ok(analysis_run))) => analysis_run,
         Ok(Ok(Err(Cancelled))) => {
             scheduler.finish(&uri, generation);
-            return;
+            return AnalysisCompletion::Done;
         }
         Ok(Err(error)) => {
             scheduler.finish(&uri, generation);
@@ -663,7 +827,7 @@ async fn analyze_store_publish(
                     format!("analysis task panicked: {error}"),
                 )
                 .await;
-            return;
+            return AnalysisCompletion::Done;
         }
         Err(_elapsed) => {
             source.cancel();
@@ -677,7 +841,7 @@ async fn analyze_store_publish(
             if is_generation_current(generations, &uri, generation).await {
                 publish_analysis_timeout(client, &uri).await;
             }
-            return;
+            return AnalysisCompletion::Done;
         }
     };
     scheduler.finish(&uri, generation);
@@ -685,13 +849,35 @@ async fn analyze_store_publish(
         analysis,
         degradations,
     } = analysis_run;
+    let latest_guard = latest_text.read().await;
+    let current_revisions = open_revisions(&latest_guard);
+    if !analysis.inputs.is_current(&current_revisions) {
+        let root_is_current = analysis.inputs.root_is_current(&current_revisions);
+        if analysis.inputs.has_complete_dependencies() {
+            dependency_graph.write().await.update(
+                analysis.inputs.root().clone(),
+                analysis.inputs.dependencies().cloned().collect(),
+            );
+        }
+        let retry = root_is_current
+            .then(|| latest_guard.get(&uri).cloned())
+            .flatten();
+        drop(latest_guard);
+        return retry.map_or(AnalysisCompletion::Done, AnalysisCompletion::Retry);
+    }
+    let graph_update = analysis.inputs.has_complete_dependencies().then(|| {
+        (
+            analysis.inputs.root().clone(),
+            analysis.inputs.dependencies().cloned().collect(),
+        )
+    });
 
     // Hold the documents write lock across the generation re-check and
     // the insert: a newer-generation analysis completing between a
     // separate check and insert used to be clobbered by this older one.
     let mut docs = documents.write().await;
     if !is_generation_current(generations, &uri, generation).await {
-        return;
+        return AnalysisCompletion::Done;
     }
     // Every URI this analysis touches — newly reported plus previously
     // reported (which may need clearing) — is re-published from the
@@ -708,6 +894,13 @@ async fn analyze_store_publish(
     store_analysis(&mut docs, &uri, analysis);
     let publish = merged_diagnostics_for(&docs, &affected);
     drop(docs);
+    // Publish dependency edges before releasing the revision snapshot lock.
+    // A concurrent dependency edit cannot become visible and miss this new
+    // importer between accepting its result and registering its edges.
+    if let Some((root, dependencies)) = graph_update {
+        dependency_graph.write().await.update(root, dependencies);
+    }
+    drop(latest_guard);
     for degradation in degradations {
         client
             .log_message(MessageType::WARNING, degradation.message(&uri))
@@ -718,6 +911,7 @@ async fn analyze_store_publish(
     }
     // Best-effort: the client may not support inlay-hint refresh.
     let _ = client.inlay_hint_refresh().await;
+    AnalysisCompletion::Done
 }
 
 /// Store a fresh analysis for `uri`, keeping the previous symbol-dependent
@@ -826,6 +1020,15 @@ async fn publish_analysis_timeout(client: &Client, uri: &Url) {
         .await;
 }
 
+async fn bump_generation_value(generations: &Arc<RwLock<HashMap<Url, u64>>>, uri: &Url) -> u64 {
+    *generations
+        .write()
+        .await
+        .entry(uri.clone())
+        .and_modify(|value| *value = value.saturating_add(1))
+        .or_insert(1)
+}
+
 /// Check whether `generation` is still the current generation stored for `uri`.
 async fn is_generation_current(
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
@@ -884,6 +1087,15 @@ fn build_project(
     }
 }
 
+fn project_dependency_identities(project: &LoadedProject) -> HashSet<DocumentIdentity> {
+    project
+        .files()
+        .iter()
+        .filter(|(file_id, _)| *file_id != project.root_id())
+        .map(|(_, file)| DocumentIdentity::file(file.path().to_path_buf()))
+        .collect()
+}
+
 /// Wrap a single-URI diagnostic vec into the per-URI map shape so the active
 /// document's URI is always present (even when empty) and so eval diagnostics
 /// — which always belong to the active file — sit alongside any cross-file
@@ -913,11 +1125,15 @@ fn run_analysis_run(
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
 ) -> AnalysisRun {
+    let revision = RevisionClock::default().next().unwrap();
+    let input_snapshot =
+        AnalysisInputSnapshot::new(document_identity(uri), revision, HashMap::new());
     run_analysis_with_cancellation(
         uri,
         text,
         open_buffers,
         plugin_host,
+        &input_snapshot,
         &CancellationToken::unbounded(),
     )
     .expect("an unbounded analysis cannot be cancelled")
@@ -942,6 +1158,7 @@ fn run_analysis_with_cancellation(
     text: &str,
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
+    input_snapshot: &AnalysisInputSnapshot,
     cancellation: &CancellationToken,
 ) -> std::result::Result<AnalysisRun, Cancelled> {
     cancellation.checkpoint()?;
@@ -981,6 +1198,7 @@ fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             return Ok(AnalysisRun {
                 analysis: AnalysisResult {
+                    inputs: input_snapshot.finish_incomplete(),
                     source: Arc::new(text.to_string()),
                     symbol_table,
                     project_symbols: ProjectSymbols::Incomplete,
@@ -1000,6 +1218,8 @@ fn run_analysis_with_cancellation(
     };
 
     cancellation.checkpoint()?;
+    let analysis_inputs =
+        input_snapshot.finish_loaded_project(project_dependency_identities(&project));
     let root_ast = project.root_file().ast();
     let import_links = collect_import_links(&project, cancellation)?;
     cancellation.checkpoint()?;
@@ -1048,6 +1268,7 @@ fn run_analysis_with_cancellation(
             diagnostics.entry(uri.clone()).or_default();
 
             Ok(AnalysisRun::complete(AnalysisResult {
+                inputs: analysis_inputs,
                 source: Arc::new(text.to_string()),
                 symbol_table,
                 project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
@@ -1086,6 +1307,7 @@ fn run_analysis_with_cancellation(
 
             Ok(AnalysisRun {
                 analysis: AnalysisResult {
+                    inputs: analysis_inputs,
                     source: Arc::new(text.to_string()),
                     symbol_table,
                     project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
@@ -2212,10 +2434,22 @@ impl LanguageServer for Backend {
         // Record the new text synchronously: completion/signature-help fire
         // on trigger characters milliseconds after this notification, long
         // before the debounced analysis lands.
-        self.record_latest_text(&uri, &change.text, Some(params.text_document.version))
+        let recorded = match self
+            .record_latest_text(&uri, &change.text, Some(params.text_document.version))
+            .await
+        {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                self.client
+                    .log_message(MessageType::ERROR, error.to_string())
+                    .await;
+                return;
+            }
+        };
+        self.schedule_transitive_importers(&uri, &recorded.identity)
             .await;
         let generation = self.bump_generation(&uri).await;
-        self.spawn_debounced_analysis(uri, change.text, generation);
+        self.spawn_debounced_analysis(uri, change.text, recorded.revision, generation);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -2227,6 +2461,10 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
+        let identity = self.latest_text.read().await.get(&uri).map_or_else(
+            || document_identity(&uri),
+            |snapshot| snapshot.identity.clone(),
+        );
         // Invalidate and cancel queued/running work before clearing state. Keep
         // the generation entry to avoid an ABA collision if the URI is reopened
         // while an old blocking worker is still winding down.
@@ -2253,6 +2491,8 @@ impl LanguageServer for Backend {
             publish
         };
         self.latest_text.write().await.remove(&uri);
+        self.dependency_graph.write().await.remove(&identity);
+        self.schedule_transitive_importers(&uri, &identity).await;
         for (target_uri, diags) in publish {
             self.client
                 .publish_diagnostics(target_uri, diags, None)
@@ -2449,6 +2689,8 @@ pub(crate) async fn run() {
         documents: Arc::new(RwLock::new(HashMap::new())),
         change_generations: Arc::new(RwLock::new(HashMap::new())),
         latest_text: Arc::new(RwLock::new(HashMap::new())),
+        revision_clock: Arc::new(RevisionClock::default()),
+        dependency_graph: Arc::new(RwLock::new(DependencyGraph::default())),
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
         analysis_scheduler: Arc::new(AnalysisScheduler::new()),
     });
@@ -2464,9 +2706,10 @@ mod tests {
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
-    use tower_lsp::lsp_types::{Position, Range};
+    use tower_lsp::lsp_types::{InlayHintLabel, Position, Range};
 
     use super::*;
+    use crate::{completion, goto_definition, inlay_hints};
 
     fn imported_target_for_spelling<'a>(
         analysis: &'a AnalysisResult,
@@ -3684,9 +3927,13 @@ node bad: Mass = mass + length;
             document_changes: None,
             change_annotations: None,
         };
+        let revision = RevisionClock::default().next().unwrap();
+        let identity = document_identity(&uri);
         let snapshots = HashMap::from([(
             uri,
             OpenDocumentSnapshot {
+                identity,
+                revision,
                 text: Arc::new("new".to_string()),
                 version: 2,
             },
@@ -3721,9 +3968,12 @@ node bad: Mass = mass + length;
             document_changes: None,
             change_annotations: None,
         };
+        let revision = RevisionClock::default().next().unwrap();
         let snapshots = HashMap::from([(
             open_uri.clone(),
             OpenDocumentSnapshot {
+                identity: document_identity(&open_uri),
+                revision,
                 text: Arc::new(String::new()),
                 version: 7,
             },
@@ -3747,6 +3997,9 @@ node bad: Mass = mass + length;
     /// exercising the per-URI ownership merge.
     fn analysis_with_diags(diags: HashMap<Url, Vec<Diagnostic>>) -> AnalysisResult {
         AnalysisResult {
+            inputs: AnalysisInputs::untracked_for_test(DocumentIdentity::virtual_uri(
+                Url::parse("file:///diagnostics.gcl").unwrap(),
+            )),
             source: Arc::new(String::new()),
             symbol_table: SymbolTable::default(),
             project_symbols: ProjectSymbols::Incomplete,
@@ -3949,6 +4202,110 @@ node momentum: Force * Time = @mass * @velocity;
             "the fixed editor buffer must shadow the broken disk content, got: {:?}",
             analysis.diagnostics,
         );
+    }
+
+    #[test]
+    fn dependency_revision_change_invalidates_importer_analysis() {
+        let dir = write_project(&[
+            ("graphcal.toml", "[package]\nname = \"fresh\"\n"),
+            (
+                "src/fresh/lib.gcl",
+                "pub const node y: Dimensionless = 2.0;\n",
+            ),
+            (
+                "src/fresh/main.gcl",
+                "import fresh.lib.{y};\nnode z: Dimensionless = @y + 1.0;\n",
+            ),
+        ]);
+        let main_path = dir.path().join("src/fresh/main.gcl");
+        let lib_path = dir.path().join("src/fresh/lib.gcl");
+        let main_uri = Url::from_file_path(&main_path).unwrap();
+        let main_text = std::fs::read_to_string(&main_path).unwrap();
+        let root = document_identity(&main_uri);
+        let dependency = DocumentIdentity::file(lib_path.canonicalize().unwrap());
+        let clock = RevisionClock::default();
+        let root_revision = clock.next().unwrap();
+        let old_dependency_revision = clock.next().unwrap();
+        let input = AnalysisInputSnapshot::new(
+            root.clone(),
+            root_revision,
+            HashMap::from([(dependency.clone(), old_dependency_revision)]),
+        );
+        let overlay = vec![OpenBuffer {
+            path: lib_path,
+            text: Arc::new("pub const node y: Dimensionless = 2.0;\n".to_string()),
+        }];
+        let analysis = run_analysis_with_cancellation(
+            &main_uri,
+            &main_text,
+            &overlay,
+            test_plugin_host(),
+            &input,
+            &CancellationToken::unbounded(),
+        )
+        .unwrap()
+        .analysis;
+        assert!(analysis.has_no_diagnostics());
+        assert!(
+            analysis
+                .inputs
+                .dependencies()
+                .any(|identity| identity == &dependency)
+        );
+        assert!(analysis.inputs.is_current(&HashMap::from([
+            (root.clone(), root_revision),
+            (dependency.clone(), old_dependency_revision),
+        ])));
+        let new_dependency_revision = clock.next().unwrap();
+        assert!(!analysis.inputs.is_current(&HashMap::from([
+            (root.clone(), root_revision),
+            (dependency.clone(), new_dependency_revision),
+        ])));
+        let refreshed_input = AnalysisInputSnapshot::new(
+            root,
+            root_revision,
+            HashMap::from([(dependency, new_dependency_revision)]),
+        );
+        let refreshed_overlay = vec![OpenBuffer {
+            path: dir.path().join("src/fresh/lib.gcl"),
+            text: Arc::new("pub const node q: Dimensionless = 4.0;\n".to_string()),
+        }];
+        let refreshed = run_analysis_with_cancellation(
+            &main_uri,
+            &main_text,
+            &refreshed_overlay,
+            test_plugin_host(),
+            &refreshed_input,
+            &CancellationToken::unbounded(),
+        )
+        .unwrap()
+        .analysis;
+        assert!(!refreshed.has_no_diagnostics());
+        let use_offset = main_text.rfind('y').unwrap();
+        assert!(goto_definition::goto_definition(&analysis, &main_uri, use_offset).is_some());
+        assert!(goto_definition::goto_definition(&refreshed, &main_uri, use_offset).is_none());
+        let old_labels: HashSet<_> = completion::completion(&analysis, &main_text, use_offset)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        let new_labels: HashSet<_> = completion::completion(&refreshed, &main_text, use_offset)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(old_labels.contains("y"));
+        assert!(!new_labels.contains("y"));
+
+        let range = tower_lsp::lsp_types::Range {
+            start: Position::new(0, 0),
+            end: Position::new(u32::MAX, u32::MAX),
+        };
+        let old_hints = inlay_hints::inlay_hints(&analysis, range).unwrap();
+        let new_hints = inlay_hints::inlay_hints(&refreshed, range).unwrap_or_default();
+        let is_old_value = |hint: &InlayHint| matches!(&hint.label, InlayHintLabel::String(label) if label == " = 3");
+        assert!(old_hints.iter().any(is_old_value));
+        assert!(!new_hints.iter().any(is_old_value));
     }
 
     /// Issue #831: imported symbols hover with the same type fidelity as

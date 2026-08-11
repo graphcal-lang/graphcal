@@ -321,6 +321,11 @@ mod tests {
         let ast = desugared;
         let symbol_table = symbol_table::build_for_buffer(&ast, source);
         AnalysisResult {
+            inputs: crate::workspace_revision::AnalysisInputs::untracked_for_test(
+                crate::workspace_revision::DocumentIdentity::virtual_uri(
+                    tower_lsp::lsp_types::Url::parse("file:///test.gcl").unwrap(),
+                ),
+            ),
             source: Arc::new(source.to_string()),
             symbol_table,
             project_symbols: crate::project_symbols::ProjectSymbols::Incomplete,

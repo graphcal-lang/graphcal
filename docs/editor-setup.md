@@ -42,9 +42,13 @@ imports and uses while preserving authored aliases. The server refuses rename
 when an occurrence is ambiguous, an affected open snapshot is stale, or an
 exported definition may have reverse importers outside the loaded project.
 
-Analysis is revision-aware and bounded. A new edit cancels superseded loading,
-compilation, and evaluation work; only the newest completed revision publishes
-diagnostics or inlay-hint data. If an analysis exceeds the server deadline, the
+Analysis is dependency- and revision-aware and bounded. Each result records the
+exact open-buffer revisions it consumed. Editing, saving, opening, closing, or
+reverting an imported file invalidates and reanalyzes every transitive open
+importer, so diagnostics, navigation, completion, and evaluated inlay hints stay
+project-coherent without touching the importer. A new edit cancels superseded
+loading, compilation, and evaluation work; only a result whose full dependency
+snapshot is still current can publish. If an analysis exceeds the server deadline, the
 LSP keeps the last completed result available rather than replacing source
 diagnostics with a server-timeout error. If analysis must fall back to an empty
 symbol table or module resolver, the server emits a warning through the LSP

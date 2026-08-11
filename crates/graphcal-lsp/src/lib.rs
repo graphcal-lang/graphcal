@@ -24,6 +24,7 @@ pub mod server;
 mod signature_help;
 mod symbol_identity;
 mod symbol_table;
+mod workspace_revision;
 
 /// Start the LSP server, reading from stdin and writing to stdout.
 pub async fn run() {
