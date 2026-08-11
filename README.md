@@ -36,7 +36,7 @@ mass_ratio = 3.333333
 delta_v    = 3778.220768 m/s
 ```
 
-[Try `rocket.gcl` in the browser playground](https://graphcal.org/docs/playground/) without installing anything.
+[Try `rocket.gcl` in the browser playground](https://graphcal.org/docs/playground/) without installing anything. Browser project files are validated into normalized absolute virtual paths, so relative escapes and file/directory path conflicts cannot enter the loader.
 
 ## Why Graphcal?
 
