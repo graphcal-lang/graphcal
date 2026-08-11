@@ -239,12 +239,17 @@ at load time before any plugin code runs:
   with a dedicated diagnostic (P007). A module importing `graphcal::fail`
   must export its linear memory as `"memory"` so the failure message can
   be read.
-- **Resource bounds.** Every call runs under a fuel budget (roughly,
-  an instruction count) and a linear-memory cap. These bounds are why
-  plugins can be trusted by default: the sandbox removes filesystem and
-  network access, and fuel plus the memory cap bound how much time and
-  memory a call can consume — the language server re-evaluates on every
-  debounced keystroke, so this protects the editor, not just one CLI run.
+- **Resource bounds.** Every logical call runs under one fuel budget
+  (roughly an instruction count). Every plugin instance separately caps
+  linear-memory bytes, the number of memories and tables, and the elements in
+  each table; an oversized initial allocation fails during instantiation and
+  growth beyond a cap is denied. Wasmi's value and call stacks have separate
+  engine-wide bounds. Compiled modules and their process-level cache live
+  outside this per-instance cap and therefore require a separate cache policy;
+  they are not hidden inside the linear-memory number. Together with the
+  filesystem/network sandbox, these limits protect the
+  language server during keystroke-frequency re-evaluation, not just one CLI
+  run.
 - **Determinism.** Plugin arithmetic is IEEE-754 deterministic and the
   math is compiled into the module, so results are bit-identical across
   platforms.
