@@ -2436,7 +2436,7 @@ fn verify_locked_source(
     budget
         .account_source_tree(root, actual.entries(), actual.bytes())
         .map_err(loader_manifest_error)?;
-    if actual.sha256() == tree_hashes.sha256 {
+    if actual.sha256() == tree_hashes.sha256.to_string() {
         Ok(())
     } else {
         Err(loader_manifest_error(format!(
@@ -4076,7 +4076,9 @@ dag calc {
     }
 
     fn locked_package_fixture(root_source: &str, dependency_source: &str) -> LockedPackageFixture {
-        use graphcal_package::{LOCK_VERSION, Lockfile, PackageInstanceId, SourceTreeHashes};
+        use graphcal_package::{
+            LOCK_VERSION, Lockfile, PackageInstanceId, Sha256Digest, SourceTreeHashes,
+        };
 
         let directory = tempfile::tempdir().unwrap();
         let project_root = directory.path().join("project");
@@ -4156,7 +4158,9 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
                         url,
                         requested_rev: revision.clone(),
                         commit: revision,
-                        tree_hashes: SourceTreeHashes { sha256: tree_hash },
+                        tree_hashes: SourceTreeHashes {
+                            sha256: Sha256Digest::new(tree_hash).unwrap(),
+                        },
                     },
                     dependencies: BTreeMap::new(),
                 },

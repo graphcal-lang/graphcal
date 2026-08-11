@@ -33,6 +33,10 @@ pub struct PackageInstanceId(String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GitCommitHash(String);
 
+/// Canonical SHA-256 digest stored as exactly 32 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Sha256Digest([u8; 32]);
+
 /// Parsed remote Git repository URL.
 ///
 /// Only HTTPS, SSH URL, and SSH scp-like transports are representable. Local
@@ -269,6 +273,65 @@ impl GitCommitHash {
             Err(GitRevError { value })
         }
     }
+}
+
+impl Sha256Digest {
+    /// Parse exactly 64 lowercase hexadecimal digits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Sha256DigestError`] for any non-canonical spelling.
+    pub fn new(value: impl Into<String>) -> Result<Self, Sha256DigestError> {
+        let value = value.into();
+        let bytes = value.as_bytes();
+        if bytes.len() != 64 {
+            return Err(Sha256DigestError { value });
+        }
+        let mut digest = [0_u8; 32];
+        for (index, pair) in bytes.chunks_exact(2).enumerate() {
+            let (Some(high), Some(low)) = (hex_nibble(pair[0]), hex_nibble(pair[1])) else {
+                return Err(Sha256DigestError { value });
+            };
+            digest[index] = (high << 4) | low;
+        }
+        Ok(Self(digest))
+    }
+
+    /// Construct a digest from its exact binary representation.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the exact binary representation.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl fmt::Display for Sha256Digest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// Non-canonical SHA-256 spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("invalid SHA-256 digest `{value}`: must be 64 lowercase hex digits")]
+pub struct Sha256DigestError {
+    value: String,
 }
 
 impl GitUrl {
@@ -928,7 +991,7 @@ pub struct Lockfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockedPlugin {
     path: String,
-    sha256: String,
+    sha256: Sha256Digest,
 }
 
 impl LockedPlugin {
@@ -958,14 +1021,7 @@ impl LockedPlugin {
         if !plain_relative || !path.ends_with(".wasm") {
             return Err(LockedPluginError::InvalidPath { path });
         }
-        let sha256 = sha256.into();
-        let valid_sha = sha256.len() == 64
-            && sha256
-                .chars()
-                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c));
-        if !valid_sha {
-            return Err(LockedPluginError::InvalidSha256 { value: sha256 });
-        }
+        let sha256 = Sha256Digest::new(sha256).map_err(LockedPluginError::InvalidSha256)?;
         Ok(Self { path, sha256 })
     }
 
@@ -977,7 +1033,7 @@ impl LockedPlugin {
 
     /// Lowercase-hex SHA-256 of the plugin file bytes.
     #[must_use]
-    pub fn sha256(&self) -> &str {
+    pub const fn sha256(&self) -> &Sha256Digest {
         &self.sha256
     }
 }
@@ -994,11 +1050,8 @@ pub enum LockedPluginError {
         path: String,
     },
     /// The digest is not 64 lowercase hex digits.
-    #[error("invalid plugin sha256 `{value}`: must be 64 lowercase hex digits")]
-    InvalidSha256 {
-        /// The rejected digest string.
-        value: String,
-    },
+    #[error("invalid plugin sha256: {0}")]
+    InvalidSha256(Sha256DigestError),
 }
 
 impl Lockfile {
@@ -1065,6 +1118,7 @@ impl Lockfile {
             }
         }
         self.reject_dependency_cycles()?;
+        self.reject_conflicting_git_source_hashes()?;
         self.reject_duplicate_canonical_instances()?;
 
         let mut plugin_paths = BTreeSet::new();
@@ -1088,6 +1142,45 @@ impl Lockfile {
         let mut visited = BTreeSet::new();
         for package in &self.packages {
             visit_lock_package_for_cycles(&package.id, &packages, &mut visiting, &mut visited)?;
+        }
+        Ok(())
+    }
+
+    fn reject_conflicting_git_source_hashes(&self) -> Result<(), LockValidationError> {
+        let mut sources =
+            BTreeMap::<CanonicalGitSource, (&Sha256Digest, &PackageInstanceId)>::new();
+        for package in &self.packages {
+            let PackageSource::Git {
+                url,
+                commit,
+                tree_hashes,
+                ..
+            } = &package.source
+            else {
+                continue;
+            };
+            let source = CanonicalGitSource {
+                url: url.clone(),
+                commit: commit.clone(),
+            };
+            match sources.get(&source) {
+                Some((expected, first)) if *expected != &tree_hashes.sha256 => {
+                    return Err(LockValidationError::ConflictingGitSourceDigest(Box::new(
+                        GitSourceDigestConflict {
+                            first: (*first).clone(),
+                            second: package.id.clone(),
+                            url: url.clone(),
+                            commit: commit.clone(),
+                            first_digest: **expected,
+                            second_digest: tree_hashes.sha256,
+                        },
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    sources.insert(source, (&tree_hashes.sha256, &package.id));
+                }
+            }
         }
         Ok(())
     }
@@ -1171,7 +1264,7 @@ impl Lockfile {
                     push_kv_inline_table(
                         &mut out,
                         "tree_hashes",
-                        &[("sha256", tree_hashes.sha256.as_str())],
+                        &[("sha256", &tree_hashes.sha256.to_string())],
                     );
                 }
             }
@@ -1188,7 +1281,7 @@ impl Lockfile {
         for plugin in plugins {
             out.push_str("\n[[plugin]]\n");
             push_kv_string(&mut out, "path", plugin.path());
-            push_kv_string(&mut out, "sha256", plugin.sha256());
+            push_kv_string(&mut out, "sha256", &plugin.sha256().to_string());
         }
         out
     }
@@ -1267,15 +1360,9 @@ impl PackageSource {
     fn canonical_key(&self) -> CanonicalPackageSource {
         match self {
             Self::Path { path } => CanonicalPackageSource::Path { path: path.clone() },
-            Self::Git {
-                url,
-                commit,
-                tree_hashes,
-                ..
-            } => CanonicalPackageSource::Git {
+            Self::Git { url, commit, .. } => CanonicalPackageSource::Git {
                 url: url.clone(),
                 commit: commit.clone(),
-                sha256: tree_hashes.sha256.clone(),
             },
         }
     }
@@ -1283,21 +1370,21 @@ impl PackageSource {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum CanonicalPackageSource {
-    Path {
-        path: String,
-    },
-    Git {
-        url: GitUrl,
-        commit: GitCommitHash,
-        sha256: String,
-    },
+    Path { path: String },
+    Git { url: GitUrl, commit: GitCommitHash },
 }
 
 /// Hashes for a locked Git source tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceTreeHashes {
     /// SHA-256 digest of the normalized source tree.
-    pub sha256: String,
+    pub sha256: Sha256Digest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct CanonicalGitSource {
+    url: GitUrl,
+    commit: GitCommitHash,
 }
 
 /// Lockfile validation error.
@@ -1334,6 +1421,9 @@ pub enum LockValidationError {
     /// The locked dependency graph contains a cycle.
     #[error("dependency cycle involving package `{package}` in graphcal.lock")]
     DependencyCycle { package: PackageInstanceId },
+    /// The same immutable Git source is pinned to contradictory tree digests.
+    #[error(transparent)]
+    ConflictingGitSourceDigest(Box<GitSourceDigestConflict>),
     /// Two ids describe the same canonical package instance.
     #[error("package ids `{first}` and `{second}` describe the same canonical package instance")]
     DuplicateCanonicalPackage {
@@ -1698,6 +1788,9 @@ pub enum LockfileParseError {
         field: String,
         expected: &'static str,
     },
+    /// A table contains a field outside the current lock schema.
+    #[error("unknown field `{field}` in `{table}` in graphcal.lock")]
+    UnknownField { table: String, field: String },
     /// Package name validation failed.
     #[error(transparent)]
     PackageName(#[from] PackageNameError),
@@ -1724,6 +1817,9 @@ pub enum LockfileParseError {
     /// Package source type was not recognized.
     #[error("unsupported package source type `{source_type}` in graphcal.lock")]
     UnsupportedSourceType { source_type: String },
+    /// Source-tree digest validation failed.
+    #[error(transparent)]
+    Sha256Digest(#[from] Sha256DigestError),
     /// Plugin pin validation failed.
     #[error(transparent)]
     Plugin(#[from] LockedPluginError),
@@ -1742,6 +1838,21 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
         })?;
 
     let lock_version = required_u64(root.get("lock_version"), "lock_version")?;
+    let strict_schema = lock_version == LOCK_VERSION;
+    reject_unknown_lock_fields(
+        &root,
+        "root",
+        &[
+            "lock_version",
+            "created_by",
+            "graphcal_version",
+            "stdlib_version",
+            "root",
+            "package",
+            "plugin",
+        ],
+        strict_schema,
+    )?;
     let created_by = required_string(root.get("created_by"), "created_by")?.to_string();
     let graphcal_version =
         required_string(root.get("graphcal_version"), "graphcal_version")?.to_string();
@@ -1754,10 +1865,10 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
     let packages = package_array
         .iter()
         .enumerate()
-        .map(|(index, package)| parse_locked_package(index, package))
+        .map(|(index, package)| parse_locked_package(index, package, strict_schema))
         .collect::<Result<Vec<_>, _>>()?;
     let plugins = match root.get("plugin") {
-        Some(plugin) => parse_locked_plugins(plugin)?,
+        Some(plugin) => parse_locked_plugins(plugin, strict_schema)?,
         None => Vec::new(),
     };
 
@@ -1772,7 +1883,10 @@ pub fn parse_lockfile_str(content: &str) -> Result<Lockfile, LockfileParseError>
     })
 }
 
-fn parse_locked_plugins(item: &Value) -> Result<Vec<LockedPlugin>, LockfileParseError> {
+fn parse_locked_plugins(
+    item: &Value,
+    strict_schema: bool,
+) -> Result<Vec<LockedPlugin>, LockfileParseError> {
     let Some(array) = item.as_array() else {
         return Err(LockfileParseError::InvalidType {
             field: "plugin".to_string(),
@@ -1789,6 +1903,12 @@ fn parse_locked_plugins(item: &Value) -> Result<Vec<LockedPlugin>, LockfileParse
                     expected: "a table",
                 });
             };
+            reject_unknown_lock_fields(
+                table,
+                &format!("plugin[{index}]"),
+                &["path", "sha256"],
+                strict_schema,
+            )?;
             let path = required_string(table.get("path"), "plugin.path")?;
             let sha256 = required_string(table.get("sha256"), "plugin.sha256")?;
             Ok(LockedPlugin::new(path, sha256)?)
@@ -1796,13 +1916,23 @@ fn parse_locked_plugins(item: &Value) -> Result<Vec<LockedPlugin>, LockfileParse
         .collect()
 }
 
-fn parse_locked_package(index: usize, item: &Value) -> Result<LockedPackage, LockfileParseError> {
+fn parse_locked_package(
+    index: usize,
+    item: &Value,
+    strict_schema: bool,
+) -> Result<LockedPackage, LockfileParseError> {
     let Some(table) = item.as_table() else {
         return Err(LockfileParseError::InvalidType {
             field: format!("package[{index}]"),
             expected: "a table",
         });
     };
+    reject_unknown_lock_fields(
+        table,
+        &format!("package[{index}]"),
+        &["id", "name", "source_dir", "source", "dependencies"],
+        strict_schema,
+    )?;
     let id = PackageInstanceId::new(required_string(table.get("id"), "package.id")?)?;
     let name = PackageName::new(required_string(table.get("name"), "package.name")?)?;
     let source_dir = parse_lock_source_dir(required_string(
@@ -1816,7 +1946,7 @@ fn parse_locked_package(index: usize, item: &Value) -> Result<LockedPackage, Loc
             .ok_or(LockfileParseError::MissingField {
                 field: "package.source",
             })?;
-    let source = parse_package_source(source_table)?;
+    let source = parse_package_source(source_table, strict_schema)?;
     let dependencies = match table.get("dependencies") {
         Some(dependencies) => parse_package_dependencies(dependencies)?,
         None => BTreeMap::new(),
@@ -1838,13 +1968,25 @@ fn parse_lock_source_dir(value: &str) -> Result<PackageSourceDirectory, Lockfile
     })
 }
 
-fn parse_package_source(table: &Table) -> Result<PackageSource, LockfileParseError> {
+fn parse_package_source(
+    table: &Table,
+    strict_schema: bool,
+) -> Result<PackageSource, LockfileParseError> {
     let source_type = required_string(table.get("type"), "package.source.type")?;
     match source_type {
-        "path" => Ok(PackageSource::Path {
-            path: required_string(table.get("path"), "package.source.path")?.to_string(),
-        }),
+        "path" => {
+            reject_unknown_lock_fields(table, "package.source", &["type", "path"], strict_schema)?;
+            Ok(PackageSource::Path {
+                path: required_string(table.get("path"), "package.source.path")?.to_string(),
+            })
+        }
         "git" => {
+            reject_unknown_lock_fields(
+                table,
+                "package.source",
+                &["type", "url", "requested_rev", "commit", "tree_hashes"],
+                strict_schema,
+            )?;
             let url = GitUrl::new(required_string(table.get("url"), "package.source.url")?)?;
             let requested_rev = GitCommitHash::new(required_string(
                 table.get("requested_rev"),
@@ -1859,9 +2001,16 @@ fn parse_package_source(table: &Table) -> Result<PackageSource, LockfileParseErr
                     field: "package.source.tree_hashes",
                 },
             )?;
-            let sha256 =
-                required_string(hashes.get("sha256"), "package.source.tree_hashes.sha256")?
-                    .to_string();
+            reject_unknown_lock_fields(
+                hashes,
+                "package.source.tree_hashes",
+                &["sha256"],
+                strict_schema,
+            )?;
+            let sha256 = Sha256Digest::new(required_string(
+                hashes.get("sha256"),
+                "package.source.tree_hashes.sha256",
+            )?)?;
             Ok(PackageSource::Git {
                 url,
                 requested_rev,
@@ -1897,6 +2046,46 @@ fn parse_package_dependencies(
             Ok((name, target))
         })
         .collect()
+}
+
+/// Details of contradictory hashes pinned for one canonical Git source.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error(
+    "package ids `{first}` and `{second}` pin Git source `{url}` at `{commit}` to conflicting SHA-256 digests `{first_digest}` and `{second_digest}`"
+)]
+pub struct GitSourceDigestConflict {
+    /// First package instance using the source.
+    pub first: PackageInstanceId,
+    /// Second package instance using the source.
+    pub second: PackageInstanceId,
+    /// Canonical remote repository URL.
+    pub url: GitUrl,
+    /// Immutable Git commit.
+    pub commit: GitCommitHash,
+    /// Digest pinned by the first package.
+    pub first_digest: Sha256Digest,
+    /// Contradictory digest pinned by the second package.
+    pub second_digest: Sha256Digest,
+}
+
+fn reject_unknown_lock_fields(
+    table: &Table,
+    table_name: &str,
+    allowed: &[&str],
+    strict_schema: bool,
+) -> Result<(), LockfileParseError> {
+    if !strict_schema {
+        return Ok(());
+    }
+    table
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+        .map_or(Ok(()), |field| {
+            Err(LockfileParseError::UnknownField {
+                table: table_name.to_string(),
+                field: field.clone(),
+            })
+        })
 }
 
 fn required_string<'a>(
@@ -1999,13 +2188,21 @@ mod tests {
         PackageSourceDirectory::new(value).unwrap()
     }
 
+    fn digest(value: char) -> Sha256Digest {
+        Sha256Digest::new(value.to_string().repeat(64)).unwrap()
+    }
+
     fn git_source(url_text: &str, rev_char: char) -> PackageSource {
+        git_source_with_digest(url_text, rev_char, rev_char)
+    }
+
+    fn git_source_with_digest(url_text: &str, rev_char: char, digest_char: char) -> PackageSource {
         PackageSource::Git {
             url: url(url_text),
             requested_rev: hash(rev_char),
             commit: hash(rev_char),
             tree_hashes: SourceTreeHashes {
-                sha256: format!("sha256-{rev_char}"),
+                sha256: digest(digest_char),
             },
         }
     }
@@ -2464,6 +2661,29 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn lockfile_rejects_conflicting_digests_for_one_git_source_identity() {
+        let root_dependencies = BTreeMap::from([
+            (dep("units_a"), id("pkg-units-a")),
+            (dep("units_b"), id("pkg-units-b")),
+        ]);
+        let first = git_source("https://github.com/acme/units.git", '1');
+        let second = git_source_with_digest("https://github.com/acme/units.git", '1', '2');
+        let lock = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), root_dependencies),
+            package("pkg-units-a", "units_a", first, BTreeMap::new()),
+            package("pkg-units-b", "units_b", second, BTreeMap::new()),
+        ]);
+
+        let error = lock.validate(GRAPHCAL_VERSION, STDLIB_VERSION).unwrap_err();
+
+        assert!(matches!(
+            error,
+            LockValidationError::ConflictingGitSourceDigest(details)
+                if details.first_digest == digest('1') && details.second_digest == digest('2')
+        ));
+    }
+
+    #[test]
     fn package_graph_resolves_same_dependency_name_contextually() {
         let mut mission_deps = BTreeMap::new();
         mission_deps.insert(dep("orbital"), id("pkg-orbital"));
@@ -2579,6 +2799,134 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn current_lock_schema_rejects_unknown_fields_at_every_fixed_table_level() {
+        let mut lock = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), BTreeMap::new()),
+            package(
+                "pkg-units",
+                "units",
+                git_source("https://github.com/acme/units.git", '1'),
+                BTreeMap::new(),
+            ),
+        ]);
+        lock.plugins = vec![LockedPlugin::new("plugins/x.wasm", "a".repeat(64)).unwrap()];
+        let base = lock.to_deterministic_toml();
+        let cases = [
+            (
+                base.replacen("created_by =", "unexpected = true\ncreated_by =", 1),
+                "root",
+            ),
+            (
+                base.replacen(
+                    "name = \"mission\"",
+                    "name = \"mission\"\nunexpected = true",
+                    1,
+                ),
+                "package[0]",
+            ),
+            (
+                base.replacen(
+                    "type = \"path\"",
+                    "type = \"path\"\nunexpected = true",
+                    1,
+                ),
+                "package.source",
+            ),
+            (
+                base.replacen(
+                    "tree_hashes = { sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\" }",
+                    "tree_hashes = { sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\", unexpected = true }",
+                    1,
+                ),
+                "package.source.tree_hashes",
+            ),
+            (
+                base.replacen(
+                    "path = \"plugins/x.wasm\"",
+                    "path = \"plugins/x.wasm\"\nunexpected = true",
+                    1,
+                ),
+                "plugin[0]",
+            ),
+        ];
+
+        for (content, expected_table) in cases {
+            let error = parse_lockfile_str(&content).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    LockfileParseError::UnknownField { ref table, ref field }
+                        if table == expected_table && field == "unexpected"
+                ),
+                "wrong rejection for table `{expected_table}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn current_lock_schema_rejects_non_edge_values_in_dependency_tables() {
+        let root_dependencies = BTreeMap::from([(dep("units"), id("pkg-units"))]);
+        let base = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), root_dependencies),
+            package(
+                "pkg-units",
+                "units",
+                git_source("https://github.com/acme/units.git", '1'),
+                BTreeMap::new(),
+            ),
+        ])
+        .to_deterministic_toml();
+        let malformed = base.replacen(
+            "units = \"pkg-units\"",
+            "units = { target = \"pkg-units\", unexpected = true }",
+            1,
+        );
+
+        assert!(matches!(
+            parse_lockfile_str(&malformed),
+            Err(LockfileParseError::InvalidType { field, .. })
+                if field == "package.dependencies.units"
+        ));
+    }
+
+    #[test]
+    fn sha256_digest_requires_and_renders_canonical_lowercase_hex() {
+        let lowercase = "0123456789abcdef".repeat(4);
+        let digest = Sha256Digest::new(lowercase.clone()).unwrap();
+        assert_eq!(digest.to_string(), lowercase);
+        assert_eq!(digest.as_bytes().len(), 32);
+
+        for malformed in [
+            "f".repeat(63),
+            "f".repeat(65),
+            "F".repeat(64),
+            "g".repeat(64),
+        ] {
+            assert!(Sha256Digest::new(malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn lockfile_parser_rejects_malformed_source_tree_digests() {
+        let base = lockfile(vec![
+            package("pkg-mission", "mission", path_source(), BTreeMap::new()),
+            package(
+                "pkg-units",
+                "units",
+                git_source("https://github.com/acme/units.git", '1'),
+                BTreeMap::new(),
+            ),
+        ])
+        .to_deterministic_toml();
+        let uppercase = base.replacen(&"1".repeat(64), &"A".repeat(64), 1);
+
+        assert!(matches!(
+            parse_lockfile_str(&uppercase),
+            Err(LockfileParseError::Sha256Digest(_))
+        ));
+    }
+
+    #[test]
     fn lockfile_toml_escapes_control_characters() {
         let mut lock = lockfile(vec![package(
             "pkg-mission",
@@ -2620,9 +2968,9 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             .unwrap();
         assert_eq!(reparsed.plugins.len(), 2);
         assert_eq!(reparsed.plugins[0].path(), "plugins/alpha.wasm");
-        assert_eq!(reparsed.plugins[0].sha256(), sha_b);
+        assert_eq!(reparsed.plugins[0].sha256().to_string(), sha_b);
         assert_eq!(reparsed.plugins[1].path(), "plugins/zeta.wasm");
-        assert_eq!(reparsed.plugins[1].sha256(), sha_a);
+        assert_eq!(reparsed.plugins[1].sha256().to_string(), sha_a);
     }
 
     #[test]
@@ -2660,7 +3008,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         for bad_sha in ["", "abc", &"A".repeat(64), &"g".repeat(64)] {
             assert!(matches!(
                 LockedPlugin::new("plugins/x.wasm", bad_sha.to_string()),
-                Err(LockedPluginError::InvalidSha256 { .. })
+                Err(LockedPluginError::InvalidSha256(_))
             ));
         }
     }
