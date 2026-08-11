@@ -315,7 +315,6 @@ fn lower_inline_dag_modules<'a>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<Vec<graphcal_compiler::ir::lower::HirDag>, CompileError> {
     let loaded_file = &project.files()[file_dag_id];
-    let parent_values = crate::inline_dag::classify_value_decls_in_ast(loaded_file.ast());
 
     loaded_file
         .inline_dags()
@@ -329,7 +328,6 @@ fn lower_inline_dag_modules<'a>(
                 loaded_dag,
                 dag_body,
                 file_src,
-                &parent_values,
                 module_artifacts,
                 module_resolver,
                 module_templates,
@@ -350,7 +348,6 @@ fn compile_loaded_dag_module_ir<'a>(
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
-    parent_values: &crate::inline_dag::ParentValueDecls,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
@@ -371,7 +368,6 @@ fn compile_loaded_dag_module_ir<'a>(
         dag_body,
         loaded_dag.parent_dag_id(),
         parent_loaded.ast(),
-        parent_values,
         loaded_dag.resolved_imports(),
         file_src,
     )?;
@@ -871,14 +867,11 @@ fn elaborate_include_instances(
                             span: instance.include_span.into(),
                         })
                     })?;
-                let parent_values =
-                    crate::inline_dag::classify_value_decls_in_ast(parent_loaded.ast());
                 let inline_body = loaded_inline.body(parent_loaded);
                 let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
                     inline_body,
                     parent_dag_id,
                     parent_loaded.ast(),
-                    &parent_values,
                     loaded_inline.resolved_imports(),
                     importer_src,
                 )?;

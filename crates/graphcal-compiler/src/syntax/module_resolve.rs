@@ -1963,7 +1963,22 @@ impl ModuleResolver {
             .into_iter()
             .chain(selected_target)
             .chain(imported_alias_target)
-            .collect::<Vec<_>>();
+            .fold(
+                Vec::<(DagId, Option<ModuleAccess>)>::new(),
+                |mut candidates, (target, access)| {
+                    match candidates
+                        .iter_mut()
+                        .find(|(registered, _)| registered == &target)
+                    {
+                        Some((_, registered_access)) if access.is_none() => {
+                            *registered_access = None;
+                        }
+                        Some(_) => {}
+                        None => candidates.push((target, access)),
+                    }
+                    candidates
+                },
+            );
 
         let (mut target, imported_access) = match candidates.as_slice() {
             [(target, access)] => (target.clone(), *access),
@@ -4488,6 +4503,56 @@ mod tests {
             Err(ModuleResolveError::AmbiguousCallableModule { targets, .. })
                 if targets.len() == 2
         ));
+    }
+
+    #[test]
+    fn local_and_selected_bindings_to_same_dag_are_one_callable() {
+        let root_id = DagId::root_in_package("test", "self");
+        let helper_id = root_id.child("helper");
+        let calculation_id = root_id.child("calculation");
+        let root = desugared_source(
+            "pub dag helper {}
+             dag calculation { import self.{ helper }; }",
+        );
+        let [helper, calculation] = root
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                ast::DeclKind::Dag(dag) => Some(dag),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("two DAG declarations");
+        let (import_path, import_kind) = calculation
+            .body
+            .iter()
+            .find_map(|declaration| match &declaration.kind {
+                ast::DeclKind::Import(import) => Some((&import.path, &import.kind)),
+                _ => None,
+            })
+            .expect("calculation imports its parent");
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(root_id.clone(), &root.declarations)
+            .unwrap();
+        resolver
+            .add_module(helper_id.clone(), &helper.body)
+            .unwrap();
+        resolver
+            .add_module(calculation_id.clone(), &calculation.body)
+            .unwrap();
+        resolver
+            .register_import(&calculation_id, import_path, import_kind, &root_id)
+            .unwrap();
+
+        assert_eq!(
+            resolver
+                .resolve_module_path(&calculation_id, &module_path(&["helper"]))
+                .unwrap(),
+            helper_id
+        );
     }
 
     #[test]

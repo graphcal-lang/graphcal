@@ -166,6 +166,146 @@ impl ImportItemPresence {
     }
 }
 
+/// Compile-time policy for a term selected by a pure import.
+///
+/// Both cross-file imports and an inline DAG's `import <self>.{...}` consume
+/// this classification. Keeping the permitted actions and rejection reasons
+/// exhaustive prevents either path from silently accepting a new declaration
+/// kind when the language grows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PureImportTermDisposition {
+    /// Materialize a compile-time constant binding in the importer.
+    BindConstant,
+    /// Keep the name available only to compile-time/type-system resolution,
+    /// such as an algebraic constructor or DAG blueprint.
+    ResolverOnly,
+    /// Reject a term that requires a concrete instance boundary.
+    Reject(PureImportRejection),
+}
+
+/// Why a term cannot cross a pure-import boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PureImportRejection {
+    Runtime,
+    Assertion,
+    Visualization,
+}
+
+impl PureImportRejection {
+    /// Build the diagnostic shared by cross-file and inline-self imports.
+    pub fn diagnostic(
+        self,
+        name: &NameAtom,
+        src: &NamedSource<Arc<String>>,
+        span: Span,
+    ) -> GraphcalError {
+        let name = name.to_string();
+        let src = src.clone();
+        let span = span.into();
+        match self {
+            Self::Runtime => GraphcalError::ImportRuntimeItem { name, src, span },
+            Self::Assertion => GraphcalError::ImportAssertionItem { name, src, span },
+            Self::Visualization => GraphcalError::ImportPlotItem { name, src, span },
+        }
+    }
+}
+
+impl PureImportTermDisposition {
+    const fn precedence(self) -> u8 {
+        match self {
+            Self::Reject(PureImportRejection::Visualization) => 4,
+            Self::Reject(PureImportRejection::Runtime) => 3,
+            Self::Reject(PureImportRejection::Assertion) => 2,
+            Self::BindConstant => 1,
+            Self::ResolverOnly => 0,
+        }
+    }
+
+    const fn combine(self, other: Self) -> Self {
+        if self.precedence() >= other.precedence() {
+            self
+        } else {
+            other
+        }
+    }
+}
+
+/// Classify a term by the action a pure import must take.
+///
+/// `None` means no declaration occupies the term namespace. Visibility is an
+/// independent boundary and must be checked before applying this policy.
+pub fn pure_import_term_disposition(
+    declarations: &[Declaration],
+    name: &str,
+) -> Option<PureImportTermDisposition> {
+    declarations
+        .iter()
+        .filter_map(|decl| decl_pure_import_term_disposition(decl, name))
+        .reduce(PureImportTermDisposition::combine)
+}
+
+fn decl_pure_import_term_disposition(
+    decl: &Declaration,
+    name: &str,
+) -> Option<PureImportTermDisposition> {
+    match &decl.kind {
+        DeclKind::ConstNode(constant) if constant.name.value.as_str() == name => {
+            Some(PureImportTermDisposition::BindConstant)
+        }
+        DeclKind::Param(param) if param.name.value.as_str() == name => Some(
+            PureImportTermDisposition::Reject(PureImportRejection::Runtime),
+        ),
+        DeclKind::Node(node) if node.name.value.as_str() == name => Some(
+            PureImportTermDisposition::Reject(PureImportRejection::Runtime),
+        ),
+        DeclKind::Assert(assertion) if assertion.name.value.as_str() == name => Some(
+            PureImportTermDisposition::Reject(PureImportRejection::Assertion),
+        ),
+        DeclKind::Plot(plot) if plot.name.value.as_str() == name => Some(
+            PureImportTermDisposition::Reject(PureImportRejection::Visualization),
+        ),
+        DeclKind::Figure(figure) if figure.name.value.as_str() == name => Some(
+            PureImportTermDisposition::Reject(PureImportRejection::Visualization),
+        ),
+        DeclKind::Layer(layer) if layer.name.value.as_str() == name => Some(
+            PureImportTermDisposition::Reject(PureImportRejection::Visualization),
+        ),
+        DeclKind::Dag(dag) if dag.name.value.as_str() == name => {
+            Some(PureImportTermDisposition::ResolverOnly)
+        }
+        DeclKind::Type(type_decl)
+            if type_decl_import_item_matches(type_decl, name, ImportItemNamespace::Term) =>
+        {
+            Some(PureImportTermDisposition::ResolverOnly)
+        }
+        DeclKind::Import(import)
+            if selective_reexport_matches(&import.kind, name, ImportItemNamespace::Term) =>
+        {
+            Some(PureImportTermDisposition::ResolverOnly)
+        }
+        DeclKind::Include(include) if selective_include_reexport_matches(&include.kind, name) => {
+            Some(PureImportTermDisposition::ResolverOnly)
+        }
+        DeclKind::Sugar(_) => graphcal_compiler::syntax::desugar::unreachable_post_desugar(),
+        DeclKind::Param(_)
+        | DeclKind::Node(_)
+        | DeclKind::ConstNode(_)
+        | DeclKind::Assert(_)
+        | DeclKind::BaseDimension(_)
+        | DeclKind::Dimension(_)
+        | DeclKind::Unit(_)
+        | DeclKind::Index(_)
+        | DeclKind::Type(_)
+        | DeclKind::Plot(_)
+        | DeclKind::Figure(_)
+        | DeclKind::Layer(_)
+        | DeclKind::Dag(_)
+        | DeclKind::Import(_)
+        | DeclKind::PluginImport(_)
+        | DeclKind::Include(_) => None,
+    }
+}
+
 pub fn file_import_item_presence(
     file: &File,
     name: &str,
@@ -422,6 +562,49 @@ mod tests {
                 .as_slice(),
             &[ImportItemNamespace::Term, ImportItemNamespace::Type]
         );
+    }
+
+    #[test]
+    fn pure_term_policy_classifies_every_supported_declaration_role() {
+        let file = parse(
+            "pub const node constant: Dimensionless = 1.0;\n\
+             param parameter: Dimensionless = 1.0;\n\
+             pub node runtime_node: Dimensionless = @parameter;\n\
+             pub assert assertion = true;\n\
+             pub plot chart = { mark: point, encode: { x: 1.0 } };\n\
+             pub type Choice { Pick }\n\
+             pub dag blueprint { pub node output: Dimensionless = 1.0; }\n",
+        );
+
+        let cases = [
+            ("constant", PureImportTermDisposition::BindConstant),
+            (
+                "parameter",
+                PureImportTermDisposition::Reject(PureImportRejection::Runtime),
+            ),
+            (
+                "runtime_node",
+                PureImportTermDisposition::Reject(PureImportRejection::Runtime),
+            ),
+            (
+                "assertion",
+                PureImportTermDisposition::Reject(PureImportRejection::Assertion),
+            ),
+            (
+                "chart",
+                PureImportTermDisposition::Reject(PureImportRejection::Visualization),
+            ),
+            ("Pick", PureImportTermDisposition::ResolverOnly),
+            ("blueprint", PureImportTermDisposition::ResolverOnly),
+        ];
+
+        for (name, expected) in cases {
+            assert_eq!(
+                pure_import_term_disposition(&file.declarations, name),
+                Some(expected),
+                "unexpected pure-import disposition for {name}"
+            );
+        }
     }
 
     #[test]
