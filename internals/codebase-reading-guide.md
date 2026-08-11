@@ -1458,21 +1458,32 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 
 ### Stage 20 - Language server (`graphcal-lsp`)
 
-Note: the feature modules from `resolve.rs` onward and `server.rs` are mutually dependent (each feature references `server::Backend`); the features come first because `server.rs` orchestrates them all.
+Note: feature modules reference `server::AnalysisResult`, while `server.rs`
+orchestrates those features. Read the typed indexing and revision cores first,
+then the request features, and finally the imperative server shell.
 
-1. `crates/graphcal-lsp/src/diagnostics.rs`
-2. `crates/graphcal-lsp/src/resolve.rs`
-3. `crates/graphcal-lsp/src/completion.rs`
-4. `crates/graphcal-lsp/src/signature_help.rs`
-5. `crates/graphcal-lsp/src/inlay_hints.rs`
-6. `crates/graphcal-lsp/src/document_symbols.rs`
-7. `crates/graphcal-lsp/src/document_links.rs`
-8. `crates/graphcal-lsp/src/code_actions.rs`
-9. `crates/graphcal-lsp/src/goto_definition.rs`
-10. `crates/graphcal-lsp/src/references.rs`
-11. `crates/graphcal-lsp/src/rename.rs`
-12. `crates/graphcal-lsp/src/hover.rs`
-13. `crates/graphcal-lsp/src/server.rs`
+1. `crates/graphcal-lsp/src/convert.rs`
+2. `crates/graphcal-lsp/src/cursor_context.rs`
+3. `crates/graphcal-lsp/src/symbol_identity.rs`
+4. `crates/graphcal-lsp/src/nominal_type_index.rs`
+5. `crates/graphcal-lsp/src/symbol_table.rs`
+6. `crates/graphcal-lsp/src/project_symbols.rs`
+7. `crates/graphcal-lsp/src/workspace_revision.rs`
+8. `crates/graphcal-lsp/src/diagnostics.rs`
+9. `crates/graphcal-lsp/src/resolve.rs`
+10. `crates/graphcal-lsp/src/completion.rs`
+11. `crates/graphcal-lsp/src/signature_help.rs`
+12. `crates/graphcal-lsp/src/inlay_hints.rs`
+13. `crates/graphcal-lsp/src/document_symbols.rs`
+14. `crates/graphcal-lsp/src/document_links.rs`
+15. `crates/graphcal-lsp/src/code_actions.rs`
+16. `crates/graphcal-lsp/src/goto_definition.rs`
+17. `crates/graphcal-lsp/src/references.rs`
+18. `crates/graphcal-lsp/src/rename.rs`
+19. `crates/graphcal-lsp/src/hover.rs`
+20. `crates/graphcal-lsp/src/formatting.rs`
+21. `crates/graphcal-lsp/src/server.rs`
+22. `crates/graphcal-lsp/src/lib.rs`
 
 ### Stage 21 - CLI plugin support and integration tests
 
