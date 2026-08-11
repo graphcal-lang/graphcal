@@ -98,8 +98,14 @@ pub fn decl_has_external_role(decl: &Declaration) -> bool {
 /// outputs. Namespaced imports/includes are private use-sites and never widen
 /// this surface.
 pub fn extract_external_decl_surface(file: &File) -> ExternalDeclSurface {
+    extract_external_decl_surface_from_declarations(&file.declarations)
+}
+
+pub fn extract_external_decl_surface_from_declarations(
+    declarations: &[Declaration],
+) -> ExternalDeclSurface {
     let mut surface = ExternalDeclSurface::default();
-    for decl in &file.declarations {
+    for decl in declarations {
         match &decl.kind {
             DeclKind::Param(param) => {
                 surface.insert_input_port(param.name.value.clone());
@@ -165,7 +171,15 @@ pub fn file_import_item_presence(
     name: &str,
     namespace: ImportItemNamespace,
 ) -> ImportItemPresence {
-    file.declarations
+    declarations_import_item_presence(&file.declarations, name, namespace)
+}
+
+pub fn declarations_import_item_presence(
+    declarations: &[Declaration],
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> ImportItemPresence {
+    declarations
         .iter()
         .filter_map(|decl| decl_import_item_presence(decl, name, namespace))
         .fold(ImportItemPresence::Missing, |acc, presence| {
@@ -273,8 +287,16 @@ fn selective_include_reexport_matches(
 }
 
 /// Import categories in which `name` exists, in canonical marker order.
+#[cfg(test)]
 pub fn file_import_item_namespaces(
     file: &File,
+    name: &str,
+) -> Option<graphcal_compiler::syntax::non_empty::NonEmpty<ImportItemNamespace>> {
+    declarations_import_item_namespaces(&file.declarations, name)
+}
+
+pub fn declarations_import_item_namespaces(
+    declarations: &[Declaration],
     name: &str,
 ) -> Option<graphcal_compiler::syntax::non_empty::NonEmpty<ImportItemNamespace>> {
     let namespaces = [
@@ -285,7 +307,9 @@ pub fn file_import_item_namespaces(
         ImportItemNamespace::Index,
     ]
     .into_iter()
-    .filter(|namespace| file_import_item_presence(file, name, *namespace).is_present())
+    .filter(|namespace| {
+        declarations_import_item_presence(declarations, name, *namespace).is_present()
+    })
     .collect();
     graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(namespaces).ok()
 }
@@ -298,7 +322,25 @@ pub fn import_item_not_found_error(
     src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> GraphcalError {
-    file_import_item_namespaces(file, name.as_str()).map_or_else(
+    import_item_not_found_error_from_declarations(
+        &file.declarations,
+        name,
+        expected,
+        file_path,
+        src,
+        span,
+    )
+}
+
+pub fn import_item_not_found_error_from_declarations(
+    declarations: &[Declaration],
+    name: &NameAtom,
+    expected: ImportItemNamespace,
+    file_path: &str,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> GraphcalError {
+    declarations_import_item_namespaces(declarations, name.as_str()).map_or_else(
         || GraphcalError::ImportNameNotFound {
             name: name.to_string(),
             file_path: file_path.to_string(),
@@ -314,12 +356,20 @@ pub fn import_item_not_found_error(
     )
 }
 
-pub fn file_has_import_item(file: &File, name: &str, namespace: ImportItemNamespace) -> bool {
-    file_import_item_presence(file, name, namespace).is_present()
+pub fn declarations_have_import_item(
+    declarations: &[Declaration],
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> bool {
+    declarations_import_item_presence(declarations, name, namespace).is_present()
 }
 
-pub fn file_exposes_import_item(file: &File, name: &str, namespace: ImportItemNamespace) -> bool {
-    file_import_item_presence(file, name, namespace).can_select_output()
+pub fn declarations_expose_import_item(
+    declarations: &[Declaration],
+    name: &str,
+    namespace: ImportItemNamespace,
+) -> bool {
+    declarations_import_item_presence(declarations, name, namespace).can_select_output()
 }
 
 const fn import_namespace_matches(kind: ProjectDeclKind, namespace: ImportItemNamespace) -> bool {

@@ -30,8 +30,9 @@ fn value_for_target(
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
 ) -> Option<RuntimeValue> {
     module_artifacts
-        .get(target.owner())
-        .and_then(|artifact| artifact.const_values.get(&target.to_unowned_def_name()))
+        .values()
+        .find_map(|artifact| artifact.const_values_by_dag.get(target.owner()))
+        .and_then(|values| values.get(&target.to_unowned_def_name()))
         .cloned()
 }
 

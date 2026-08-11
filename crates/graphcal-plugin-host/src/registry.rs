@@ -20,7 +20,7 @@ use crate::module::{PluginLoadError, PluginModule};
 /// Load every wasm plugin the project references and register its functions.
 ///
 /// File-level read failures recorded by the loader are left in
-/// `project.plugins` (the pipeline reports them); module-level validation
+/// `project.plugins()` (the pipeline reports them); module-level validation
 /// failures are recorded in the registry via
 /// [`HostFunctionRegistry::record_plugin_failure`]. Successfully loaded
 /// modules register one closure per manifest function, each carrying the
@@ -30,13 +30,13 @@ pub fn register_project_plugins(
     project: &LoadedProject,
     registry: &mut HostFunctionRegistry,
 ) {
-    for (plugin_path, entry) in &project.plugins {
+    for (plugin_path, entry) in project.plugins() {
         let Ok(plugin) = entry else {
             // The loader recorded why the file is unavailable; the pipeline
-            // reports it from `project.plugins` directly.
+            // reports it from `project.plugins()` directly.
             continue;
         };
-        match host.load(&plugin.bytes) {
+        match host.load(plugin.bytes()) {
             Ok(module) => register_module_functions(plugin_path, &module, registry),
             Err(PluginLoadError::ForbiddenImport { module, name }) => {
                 registry.record_plugin_failure(

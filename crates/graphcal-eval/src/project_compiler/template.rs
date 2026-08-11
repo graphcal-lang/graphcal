@@ -34,6 +34,7 @@ impl ModuleTemplateRef {
 pub(super) struct ElaboratedModuleTemplate {
     pub(super) unfrozen: UnfrozenIR,
     pub(super) frontend_registry: Registry,
+    pub(super) external_surface: graphcal_compiler::registry::resolve_types::ExternalDeclSurface,
 }
 
 /// Project-session cache containing exactly one elaborated template per DAG.

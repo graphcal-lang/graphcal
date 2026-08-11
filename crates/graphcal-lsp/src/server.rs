@@ -825,10 +825,10 @@ fn run_analysis_with_cancellation(
                 uri.as_str(),
                 cancellation,
             ) {
-                Ok(single) => {
-                    let root_ast = &single.files[&single.root].ast;
-                    Some(symbol_table::build_for_buffer(root_ast, text))
-                }
+                Ok(single) => Some(symbol_table::build_for_buffer(
+                    single.root_file().ast(),
+                    text,
+                )),
                 Err(error) if error.is_cancelled() => return Err(Cancelled),
                 Err(_) => None,
             };
@@ -850,7 +850,7 @@ fn run_analysis_with_cancellation(
     };
 
     cancellation.checkpoint()?;
-    let root_ast = &project.files[&project.root].ast;
+    let root_ast = project.root_file().ast();
     let import_links = collect_import_links(&project, cancellation)?;
     cancellation.checkpoint()?;
     // Extern (plugin) registry for this pass: the built-in demo plugin plus
@@ -869,9 +869,9 @@ fn run_analysis_with_cancellation(
             let module_resolver = checked.module_resolver();
             // Full success: symbol table from AST + TIR enrichment.
             let mut symbol_table =
-                symbol_table::build_from_ast(root_ast, text, &project.root, module_resolver);
+                symbol_table::build_from_ast(root_ast, text, project.root_id(), module_resolver);
             cancellation.checkpoint()?;
-            symbol_table::enrich_from_tir(&mut symbol_table, tir, &project.root);
+            symbol_table::enrich_from_tir(&mut symbol_table, tir, project.root_id());
 
             cancellation.checkpoint()?;
             let imported_definitions = collect_imported_definitions(
@@ -917,7 +917,7 @@ fn run_analysis_with_cancellation(
             // best-effort resolver only for partial editor information.
             let module_resolver = project.build_module_resolver().unwrap_or_default();
             let symbol_table =
-                symbol_table::build_from_ast(root_ast, text, &project.root, &module_resolver);
+                symbol_table::build_from_ast(root_ast, text, project.root_id(), &module_resolver);
             cancellation.checkpoint()?;
             let imported_definitions =
                 collect_imported_definitions(uri, &project, None, &module_resolver, cancellation)?;
@@ -983,23 +983,21 @@ fn collect_import_links(
     cancellation: &CancellationToken,
 ) -> std::result::Result<Vec<ResolvedImportLink>, Cancelled> {
     cancellation.checkpoint()?;
-    let Some(root_file) = project.files.get(&project.root) else {
-        return Ok(Vec::new());
-    };
+    let root_file = project.root_file();
 
     let import_links = root_file
-        .imports_with_dag_ids()
-        .map(|(_, import_decl, dag_id)| (import_decl.path.span(), dag_id));
+        .imports_with_targets()
+        .map(|(_, import_decl, target)| (import_decl.path.span(), target));
     let include_links = root_file
-        .includes_with_dag_ids()
-        .map(|(_, include_decl, dag_id)| (include_decl.path.span(), dag_id));
+        .includes_with_targets()
+        .map(|(_, include_decl, target)| (include_decl.path.span(), target));
 
     import_links
         .chain(include_links)
-        .map(|(span, dag_id)| {
+        .map(|(span, target)| {
             cancellation.checkpoint()?;
-            Ok(project.files.get(dag_id).and_then(|loaded| {
-                Url::from_file_path(&loaded.path)
+            Ok(project.file(target.source_file()).and_then(|loaded| {
+                Url::from_file_path(loaded.path())
                     .ok()
                     .map(|target_uri| ResolvedImportLink {
                         path_span: span,
@@ -1486,15 +1484,10 @@ fn collect_import_surfaces(
 > {
     cancellation.checkpoint()?;
     let mut surfaces = HashMap::new();
-    let Some(root_file) = project.files.get(&project.root) else {
-        return Ok(surfaces);
-    };
+    let root_file = project.root_file();
 
-    for (_, import, dag_id) in root_file.imports_with_dag_ids() {
+    for (_, import, target) in root_file.imports_with_targets() {
         cancellation.checkpoint()?;
-        let Ok(target) = project.resolved_module_target(&import.path, dag_id) else {
-            continue;
-        };
         let Ok(items) = module_resolver.exported_import_items(target.target()) else {
             continue;
         };
@@ -1528,9 +1521,7 @@ fn collect_imported_definitions(
     cancellation.checkpoint()?;
     let mut result = HashMap::new();
 
-    let Some(root_file) = project.files.get(&project.root) else {
-        return Ok(result);
-    };
+    let root_file = project.root_file();
 
     // Cache symbol tables per dag_id to avoid re-building for files referenced
     // by multiple import/include declarations.
@@ -1540,19 +1531,16 @@ fn collect_imported_definitions(
     > = HashMap::new();
 
     let imports = root_file
-        .imports_with_dag_ids()
-        .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
+        .imports_with_targets()
+        .map(|(_, decl, target)| (&decl.path, &decl.kind, target));
     let includes = root_file
-        .includes_with_dag_ids()
-        .map(|(_, decl, dag_id)| (&decl.path, &decl.kind, dag_id));
+        .includes_with_targets()
+        .map(|(_, decl, target)| (&decl.path, &decl.kind, target));
 
-    for (path, kind, dag_id) in imports.chain(includes) {
+    for (path, kind, resolved_module) in imports.chain(includes) {
         cancellation.checkpoint()?;
-        let Ok(resolved_module) = project.resolved_module_target(path, dag_id) else {
-            continue;
-        };
         let source_file_id = resolved_module.source_file();
-        let Some(loaded_file) = project.files.get(source_file_id) else {
+        let Some(loaded_file) = project.file(source_file_id) else {
             continue;
         };
         let Some(target_prefix) = module_target_prefix(source_file_id, resolved_module.target())
@@ -1561,18 +1549,18 @@ fn collect_imported_definitions(
         };
 
         let (imported_table, imported_uri, source) = table_cache
-            .entry(source_file_id.clone())
+            .entry(resolved_module.target().clone())
             .or_insert_with(|| {
                 let mut table = symbol_table::build_from_ast(
-                    &loaded_file.ast,
-                    &loaded_file.source,
+                    loaded_file.ast(),
+                    loaded_file.source(),
                     source_file_id,
                     module_resolver,
                 );
                 if let Some(tir) = tir {
-                    symbol_table::enrich_from_tir(&mut table, tir, dag_id);
+                    symbol_table::enrich_from_tir(&mut table, tir, resolved_module.target());
                 }
-                let uri = Url::from_file_path(&loaded_file.path).unwrap_or_else(|()| {
+                let uri = Url::from_file_path(loaded_file.path()).unwrap_or_else(|()| {
                     // Url::from_file_path only fails for non-absolute paths.
                     // The loader canonicalizes, so this should not happen — but
                     // emit to stderr (LSP clients surface this) rather than
@@ -1585,12 +1573,12 @@ fn collect_imported_definitions(
                     {
                         eprintln!(
                             "graphcal-lsp: Url::from_file_path failed for {:?}; falling back to root URI",
-                            loaded_file.path,
+                            loaded_file.path(),
                         );
                     }
                     root_uri.clone()
                 });
-                let src = Arc::clone(&loaded_file.source);
+                let src = Arc::clone(loaded_file.source());
                 (table, uri, src)
             });
         cancellation.checkpoint()?;
