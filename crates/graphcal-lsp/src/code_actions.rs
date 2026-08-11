@@ -17,7 +17,6 @@ use tower_lsp::lsp_types::{
 use crate::convert::LineIndex;
 use crate::diagnostics::AutoImportDiagnosticData;
 use crate::server::AnalysisResult;
-use crate::symbol_table::SymbolKey;
 
 /// All declaration keywords that can be preceded by `pub`.
 ///
@@ -186,10 +185,7 @@ fn make_exact_power_action(diag: &Diagnostic, uri: &Url) -> Option<CodeAction> {
 /// symbol table rather than by grepping source lines (which also matched
 /// declaration-shaped text inside comments and string literals).
 fn declaration_line(analysis: &AnalysisResult, name: &str) -> Option<u32> {
-    let def = analysis
-        .symbol_table
-        .definitions
-        .get(&SymbolKey::TopLevel(name.to_string()))?;
+    let def = analysis.symbol_table.unique_definition_named(name)?;
     if def.name_span.is_empty() {
         return None;
     }
@@ -328,6 +324,7 @@ mod tests {
             source: Arc::new(source.to_string()),
             symbol_table,
             imported_definitions: StdHashMap::new(),
+            imported_bindings: Vec::new(),
             import_surfaces: StdHashMap::new(),
             diagnostics: Arc::new(StdHashMap::new()),
             eval_values: StdHashMap::new(),

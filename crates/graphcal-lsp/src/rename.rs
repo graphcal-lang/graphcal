@@ -7,7 +7,15 @@ use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 use crate::convert::LineIndex;
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::server::AnalysisResult;
-use crate::symbol_table::{SymbolCategory, SymbolKey, SymbolPath};
+use crate::symbol_identity::{FieldId, GenericParamId, IndexVariantId};
+use crate::symbol_table::{SymbolCategory, SymbolKey};
+use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
+use graphcal_compiler::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName};
+use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexName};
+use graphcal_compiler::syntax::type_name::{
+    ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
+    StructTypeName,
+};
 
 /// Check whether a name is a valid Graphcal identifier.
 ///
@@ -94,54 +102,79 @@ impl std::fmt::Display for RenameRefusal {
 /// The key the renamed symbol would occupy: the same key shape with the
 /// leaf name replaced. Used to probe the symbol table for collisions in
 /// the renamed symbol's own namespace/scope.
-fn key_with_new_name(key: &SymbolKey, new_name: &str) -> SymbolKey {
-    fn path_with_new_leaf(path: &SymbolPath, new_name: &str) -> SymbolPath {
-        match path {
-            SymbolPath::Local(_) => SymbolPath::local(new_name),
-            SymbolPath::Qualified { module, .. } => SymbolPath::Qualified {
-                module: module.clone(),
-                name: new_name.to_string(),
-            },
-        }
-    }
-    match key {
-        SymbolKey::TopLevel(_) => SymbolKey::TopLevel(new_name.to_string()),
-        SymbolKey::Qualified { module, .. } => SymbolKey::Qualified {
-            module: module.clone(),
-            name: new_name.to_string(),
-        },
-        SymbolKey::Constructor(path) => SymbolKey::Constructor(path_with_new_leaf(path, new_name)),
-        SymbolKey::Variant { parent, .. } => SymbolKey::Variant {
-            parent: parent.clone(),
-            variant: new_name.to_string(),
-        },
-        SymbolKey::Field { owner, .. } => SymbolKey::Field {
-            owner: owner.clone(),
-            field_name: new_name.to_string(),
-        },
-        SymbolKey::GenericParam { owner, .. } => SymbolKey::GenericParam {
-            owner: owner.clone(),
-            name: new_name.to_string(),
-        },
-        SymbolKey::ExprScoped { kind, offset, .. } => SymbolKey::ExprScoped {
-            kind: *kind,
-            offset: *offset,
-            local: new_name.to_string(),
-        },
-    }
+fn key_with_new_name(key: &SymbolKey, new_name: &str) -> Option<SymbolKey> {
+    Some(match key {
+        SymbolKey::Declaration(name) => SymbolKey::Declaration(ResolvedDeclName::from_def(
+            name.owner().clone(),
+            DeclName::expect_valid(new_name),
+        )),
+        SymbolKey::Dimension(name) => SymbolKey::Dimension(ResolvedDimName::from_def(
+            name.owner().clone(),
+            DimName::expect_valid(new_name),
+        )),
+        SymbolKey::Unit(name) => SymbolKey::Unit(ResolvedUnitName::from_def(
+            name.owner().clone(),
+            UnitName::expect_valid(new_name),
+        )),
+        SymbolKey::StructType(name) => SymbolKey::StructType(ResolvedStructTypeName::from_def(
+            name.owner().clone(),
+            StructTypeName::expect_valid(new_name),
+        )),
+        SymbolKey::Constructor(name) => SymbolKey::Constructor(ResolvedConstructorName::from_def(
+            name.owner().clone(),
+            ConstructorName::expect_valid(new_name),
+        )),
+        SymbolKey::Index(name) => SymbolKey::Index(ResolvedIndexName::from_def(
+            name.owner().clone(),
+            IndexName::expect_valid(new_name),
+        )),
+        SymbolKey::IndexVariant(variant) => SymbolKey::IndexVariant(IndexVariantId::new(
+            variant.index().clone(),
+            IndexVariantName::expect_valid(new_name),
+        )),
+        SymbolKey::Field(field) => SymbolKey::Field(FieldId::new(
+            field.owner().clone(),
+            FieldName::expect_valid(new_name),
+        )),
+        SymbolKey::GenericParam(parameter) => SymbolKey::GenericParam(GenericParamId::new(
+            parameter.owner().clone(),
+            GenericParamName::expect_valid(new_name),
+        )),
+        SymbolKey::Local(_)
+        | SymbolKey::ExternFunction(_)
+        | SymbolKey::BuiltinFunction(_)
+        | SymbolKey::BuiltinConstant(_)
+        | SymbolKey::TimeScale(_) => return None,
+    })
 }
 
 /// True when `new_name` collides with a visible declaration in the renamed
 /// symbol's namespace/scope. Builtins (`PI`, `sqrt`, unit names) are not
 /// collisions: the compiler allows shadowing them.
 fn collides_with_existing(analysis: &AnalysisResult, key: &SymbolKey, new_name: &str) -> bool {
-    let candidate = key_with_new_name(key, new_name);
+    let Some(candidate) = key_with_new_name(key, new_name) else {
+        return false;
+    };
     if let Some(existing) = analysis.symbol_table.definitions.get(&candidate)
         && !existing.is_builtin()
     {
         return true;
     }
-    analysis.imported_definitions.contains_key(&candidate)
+    let top_level_namespace = matches!(
+        candidate,
+        SymbolKey::Declaration(_)
+            | SymbolKey::Dimension(_)
+            | SymbolKey::Unit(_)
+            | SymbolKey::StructType(_)
+            | SymbolKey::Constructor(_)
+            | SymbolKey::Index(_)
+    );
+    top_level_namespace
+        && analysis.imported_bindings.iter().any(|binding| {
+            binding.spelling().is_local()
+                && binding.spelling().leaf().as_str() == new_name
+                && candidate.same_namespace(binding.target())
+        })
 }
 
 /// Perform the rename, returning a workspace edit.
@@ -237,6 +270,7 @@ mod tests {
             source: Arc::new(source.to_string()),
             symbol_table,
             imported_definitions: HashMap::new(),
+            imported_bindings: Vec::new(),
             import_surfaces: HashMap::new(),
             diagnostics: Arc::new(HashMap::new()),
             eval_values: HashMap::new(),
@@ -245,6 +279,33 @@ mod tests {
             import_links: Vec::new(),
             buffer_parsed: true,
         }
+    }
+
+    #[test]
+    fn rename_respects_compiler_namespaces_for_same_spelling() {
+        let source = "pub const node scale: Dimensionless = 2.0;\n\
+                      pub const unit scale: Length = 1.0 m;\n\
+                      node value: Length = scale * 1.0 scale;";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+
+        let const_use = source.find("= scale *").unwrap() + 2;
+        let const_edit = rename(&analysis, &uri, const_use, "factor")
+            .unwrap()
+            .unwrap();
+        let const_edits = &const_edit.changes.unwrap()[&uri];
+        assert_eq!(const_edits.len(), 2);
+        assert!(const_edits.iter().any(|edit| edit.range.start.line == 0));
+        assert!(!const_edits.iter().any(|edit| edit.range.start.line == 1));
+
+        let unit_use = source.rfind("scale").unwrap();
+        let unit_edit = rename(&analysis, &uri, unit_use, "scaled_metre")
+            .unwrap()
+            .unwrap();
+        let unit_edits = &unit_edit.changes.unwrap()[&uri];
+        assert_eq!(unit_edits.len(), 2);
+        assert!(unit_edits.iter().any(|edit| edit.range.start.line == 1));
+        assert!(!unit_edits.iter().any(|edit| edit.range.start.line == 0));
     }
 
     #[test]

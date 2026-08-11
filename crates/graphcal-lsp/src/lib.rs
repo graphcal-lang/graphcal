@@ -20,6 +20,7 @@ mod rename;
 mod resolve;
 pub mod server;
 mod signature_help;
+mod symbol_identity;
 mod symbol_table;
 
 /// Start the LSP server, reading from stdin and writing to stdout.

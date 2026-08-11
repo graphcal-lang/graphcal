@@ -1,5 +1,7 @@
 //! textDocument/completion handler.
 
+use std::borrow::Cow;
+
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::cursor_context::{
@@ -7,7 +9,7 @@ use crate::cursor_context::{
     determine_completion_context, determine_coordinate_index_completion_context,
 };
 use crate::server::AnalysisResult;
-use crate::symbol_table::{DefinitionInfo, SymbolCategory, SymbolKey};
+use crate::symbol_table::{DefinitionInfo, SymbolCategory};
 
 /// Top-level declaration keywords.
 ///
@@ -30,13 +32,30 @@ const TYPE_KEYWORDS: &[&str] = &[
     "Fin",
 ];
 
-/// Iterate over all visible definitions: local (from symbol table) and imported.
-fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = &DefinitionInfo> {
-    let local = analysis.symbol_table.definitions.values();
-    let imported = analysis
-        .imported_definitions
+struct VisibleDefinition<'a> {
+    label: Cow<'a, str>,
+    definition: &'a DefinitionInfo,
+}
+
+/// Iterate over all visible definitions without treating an import alias as
+/// semantic identity. Multiple bindings of one canonical target intentionally
+/// produce multiple completion labels.
+fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = VisibleDefinition<'_>> {
+    let local = analysis
+        .symbol_table
+        .definitions
         .values()
-        .map(|imp| &imp.definition);
+        .map(|definition| VisibleDefinition {
+            label: Cow::Borrowed(definition.name.as_str()),
+            definition,
+        });
+    let imported = analysis.imported_bindings.iter().filter_map(|binding| {
+        let imported = analysis.imported_definitions.get(binding.target())?;
+        Some(VisibleDefinition {
+            label: Cow::Owned(binding.spelling().to_string()),
+            definition: &imported.definition,
+        })
+    });
     local.chain(imported)
 }
 
@@ -134,13 +153,15 @@ fn build_definition_items(
     category_to_kind: impl Fn(SymbolCategory) -> Option<CompletionItemKind>,
 ) -> Vec<CompletionItem> {
     all_definitions(analysis)
-        .filter(|def| !def.name_span.is_empty() || def.is_builtin())
-        .filter_map(|def| {
-            let kind = category_to_kind(def.category)?;
+        .filter(|visible| {
+            !visible.definition.name_span.is_empty() || visible.definition.is_builtin()
+        })
+        .filter_map(|visible| {
+            let kind = category_to_kind(visible.definition.category)?;
             Some(CompletionItem {
-                label: def.name.clone(),
+                label: visible.label.into_owned(),
                 kind: Some(kind),
-                detail: def.type_description.clone(),
+                detail: visible.definition.type_description.clone(),
                 ..Default::default()
             })
         })
@@ -170,13 +191,13 @@ const fn graph_ref_kind(cat: SymbolCategory) -> Option<CompletionItemKind> {
 }
 
 /// Build a completion item for a graph-referenceable definition.
-fn graph_ref_item(def: &DefinitionInfo) -> Option<CompletionItem> {
+fn graph_ref_item(def: &DefinitionInfo, label: String) -> Option<CompletionItem> {
     if def.name_span.is_empty() {
         return None;
     }
     let kind = graph_ref_kind(def.category)?;
     Some(CompletionItem {
-        label: def.name.clone(),
+        label,
         kind: Some(kind),
         detail: def.type_description.clone(),
         ..Default::default()
@@ -199,36 +220,28 @@ fn complete_graph_refs(analysis: &AnalysisResult, offset: usize) -> Vec<Completi
         .definitions
         .iter()
         .filter(|(key, _)| {
-            enclosing_dag.map_or_else(
-                // Top level: only top-level declarations (dag members are
-                // registered under `Qualified` keys and not in scope here).
-                || matches!(key, SymbolKey::TopLevel(_)),
-                // Inside a dag body: only that dag's own members.
-                |dag_name| {
-                    matches!(
-                        key,
-                        SymbolKey::Qualified { module, .. }
-                            if matches!(&module[..], [segment] if segment == dag_name)
-                    )
-                },
-            )
+            let expected_owner = enclosing_dag.map_or_else(
+                || analysis.symbol_table.owner().clone(),
+                |dag_name| analysis.symbol_table.owner().child(dag_name),
+            );
+            key.owner() == Some(&expected_owner)
         })
-        .map(|(_, def)| def);
+        .map(|(_, def)| (def, def.name.clone()));
     // Imported names are referenceable in both scopes (a dag body may not
     // reach top-level declarations, but imports stay visible). Members of
     // imported dags (`Qualified` with more than one segment) need call
     // arguments and are not bare `@`-referenceable.
-    let imported = analysis
-        .imported_definitions
-        .iter()
-        .filter(|(key, _)| match key {
-            SymbolKey::TopLevel(_) => true,
-            SymbolKey::Qualified { module, .. } => module.len() == 1,
-            _ => false,
-        })
-        .map(|(_, imp)| &imp.definition);
+    let imported = analysis.imported_bindings.iter().filter_map(|binding| {
+        (binding.spelling().qualifier().len() <= 1)
+            .then(|| analysis.imported_definitions.get(binding.target()))
+            .flatten()
+            .map(|imported| (&imported.definition, binding.spelling().to_string()))
+    });
 
-    local.chain(imported).filter_map(graph_ref_item).collect()
+    local
+        .chain(imported)
+        .filter_map(|(definition, label)| graph_ref_item(definition, label))
+        .collect()
 }
 
 /// Complete type names (after `:`).

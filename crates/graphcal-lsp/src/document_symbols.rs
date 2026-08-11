@@ -21,7 +21,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
     // per call rather than re-scanning all definitions (O(N*M) in total).
     let variants_by_parent = build_variants_index(analysis);
 
-    for def in analysis.symbol_table.definitions.values() {
+    for (key, def) in &analysis.symbol_table.definitions {
         // Skip builtins, locals, and variants (variants are shown as children).
         // Also skip definitions with zero-length spans (synthetic/builtins).
         if def.decl_span.is_empty() {
@@ -52,7 +52,10 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
         let selection_range = lines.span_to_range(def.name_span);
 
         // Collect children (variants for indexes and tagged unions).
-        let children = collect_children(&lines, &variants_by_parent, &def.name);
+        let children = match key {
+            SymbolKey::Index(parent) => collect_children(&lines, &variants_by_parent, parent),
+            _ => Vec::new(),
+        };
 
         symbols.push(DocumentSymbol {
             name: def.name.clone(),
@@ -81,14 +84,18 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
 /// call (O(N*M)) with a single pre-pass that groups by parent.
 fn build_variants_index(
     analysis: &AnalysisResult,
-) -> HashMap<crate::symbol_table::SymbolPath, Vec<&crate::symbol_table::DefinitionInfo>> {
-    let mut out: HashMap<crate::symbol_table::SymbolPath, Vec<_>> = HashMap::new();
+) -> HashMap<
+    graphcal_compiler::syntax::index_name::ResolvedIndexName,
+    Vec<&crate::symbol_table::DefinitionInfo>,
+> {
+    let mut out: HashMap<graphcal_compiler::syntax::index_name::ResolvedIndexName, Vec<_>> =
+        HashMap::new();
     for (key, def) in &analysis.symbol_table.definitions {
         if def.category != SymbolCategory::IndexVariant {
             continue;
         }
-        if let SymbolKey::Variant { parent, .. } = key {
-            out.entry(parent.clone()).or_default().push(def);
+        if let SymbolKey::IndexVariant(variant) = key {
+            out.entry(variant.index().clone()).or_default().push(def);
         }
     }
     out
@@ -102,13 +109,12 @@ fn build_variants_index(
 fn collect_children(
     lines: &LineIndex<'_>,
     variants_by_parent: &HashMap<
-        crate::symbol_table::SymbolPath,
+        graphcal_compiler::syntax::index_name::ResolvedIndexName,
         Vec<&crate::symbol_table::DefinitionInfo>,
     >,
-    parent_name: &str,
+    parent: &graphcal_compiler::syntax::index_name::ResolvedIndexName,
 ) -> Vec<DocumentSymbol> {
-    let parent = crate::symbol_table::SymbolPath::Local(parent_name.to_string());
-    let Some(defs) = variants_by_parent.get(&parent) else {
+    let Some(defs) = variants_by_parent.get(parent) else {
         return Vec::new();
     };
 

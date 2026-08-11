@@ -1657,7 +1657,7 @@ impl ModuleResolver {
     /// Bare paths first search local declarations, then selective imports.
     /// Qualified paths resolve their qualifier through module aliases and then
     /// apply that alias boundary's visibility rule.
-    pub(crate) fn resolve_decl_path(
+    pub fn resolve_decl_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1687,7 +1687,7 @@ impl ModuleResolver {
     }
 
     /// Return the semantic kind of a resolved declaration symbol.
-    pub(crate) fn decl_symbol_kind(
+    pub fn decl_symbol_kind(
         &self,
         name: &ResolvedDeclName,
     ) -> Result<DeclSymbolKind, ModuleResolveError> {
@@ -1705,7 +1705,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic dimension path to a canonical owner + leaf.
-    pub(crate) fn resolve_dimension_path(
+    pub fn resolve_dimension_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1727,7 +1727,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic struct/tagged-union type path to a canonical owner + leaf.
-    pub(crate) fn resolve_struct_type_path(
+    pub fn resolve_struct_type_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1755,7 +1755,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic tagged-union constructor path to a canonical owner + leaf.
-    pub(crate) fn resolve_constructor_path(
+    pub fn resolve_constructor_path(
         &self,
         owner: &DagId,
         path: &NamePath,
@@ -1793,7 +1793,7 @@ impl ModuleResolver {
     }
 
     /// Resolve a syntactic index path to a canonical owner + leaf.
-    pub(crate) fn resolve_index_path(
+    pub fn resolve_index_path(
         &self,
         owner: &DagId,
         path: &NamePath,
