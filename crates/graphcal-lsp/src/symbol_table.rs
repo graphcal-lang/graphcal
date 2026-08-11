@@ -2181,13 +2181,15 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
             let name_str = name.to_string();
             let key = SymbolKey::TopLevel(name_str);
             if let Some(def) = table.definitions.get_mut(&key) {
-                let semantic_key = dag.resolved_decl_key_for_local(name);
-                let type_desc = dag.semantic().domain_bounds.get(&semantic_key).map_or_else(
-                    || resolved_type.format(registry),
-                    |constraints| {
-                        format_type_with_constraints(resolved_type, constraints, registry)
-                    },
-                );
+                let type_desc = dag
+                    .bound_decl_identity(name)
+                    .and_then(|identity| dag.semantic().domain_bounds.get(identity))
+                    .map_or_else(
+                        || resolved_type.format(registry),
+                        |constraints| {
+                            format_type_with_constraints(resolved_type, constraints, registry)
+                        },
+                    );
                 def.type_description = Some(type_desc);
             }
         }

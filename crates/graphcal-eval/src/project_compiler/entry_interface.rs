@@ -129,6 +129,18 @@ fn missing_interface_fact(
     })
 }
 
+fn checked_runtime_key(
+    tir: &TIR,
+    name: &ScopedName,
+    source: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<RuntimeDeclKey, CompileError> {
+    tir.root()
+        .require_bound_decl_identity(name, source, DiagnosticAnchor::Source(span))
+        .map(RuntimeDeclKey::resolved)
+        .map_err(CompileError::from)
+}
+
 /// Attach checked types and runtime identities to HIR source-interface records.
 pub(super) fn build_checked_entry_interface(
     source_declarations: &[SourceDeclaration],
@@ -168,7 +180,7 @@ pub(super) fn build_checked_entry_interface(
                     name: name.clone(),
                     declared_type,
                     has_default: entry.default_expr.is_some(),
-                    runtime_key: RuntimeDeclKey::for_local_decl(tir.root(), &scoped),
+                    runtime_key: checked_runtime_key(tir, &scoped, source, *span)?,
                     span: *span,
                 });
             }
@@ -196,7 +208,7 @@ pub(super) fn build_checked_entry_interface(
                     } else {
                         Visibility::Private
                     },
-                    runtime_key: RuntimeDeclKey::for_local_decl(tir.root(), &scoped),
+                    runtime_key: checked_runtime_key(tir, &scoped, source, *span)?,
                 });
             }
             SourceDeclaration::Index { name, span } => {

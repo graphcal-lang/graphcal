@@ -567,7 +567,7 @@ impl PreparedProject {
         )?;
 
         if !errors.is_empty() {
-            let (name, error) = self.first_runtime_error(&errors).ok_or_else(|| {
+            let (name, error) = self.first_runtime_error(&errors)?.ok_or_else(|| {
                 ModelExecutionError::Internal(
                     "runtime error map contains no declaration from root source order".to_string(),
                 )
@@ -595,12 +595,18 @@ impl PreparedProject {
             host_fns: Some(&self.host_fns),
         };
         for assertion in self.tir.root().asserts() {
+            let owner = self
+                .tir
+                .root()
+                .lookup_decl_identity(&assertion.name)
+                .into_bound()
+                .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
             let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
                 &assertion.body,
                 self.plan.expected_fail.get(&assertion.name),
                 &values,
                 &empty_locals,
-                &ctx.for_decl(&self.tir.root().resolved_decl_key_for_local(&assertion.name)),
+                &ctx.for_decl(&owner),
             );
             match result {
                 AssertResult::Pass => {}
@@ -770,16 +776,18 @@ impl PreparedProject {
     fn first_runtime_error<'errors>(
         &self,
         errors: &'errors HashMap<RuntimeDeclKey, NodeError>,
-    ) -> Option<(ScopedName, &'errors NodeError)> {
-        self.tir.root().source_order().iter().find_map(|(name, _)| {
-            let key = RuntimeDeclKey::for_local_decl(self.tir.root(), name);
-            errors.get(&key).map(|error| {
-                (
+    ) -> Result<Option<(ScopedName, &'errors NodeError)>, ModelExecutionError> {
+        for (name, _) in self.tir.root().source_order() {
+            let key = RuntimeDeclKey::for_local_decl(self.tir.root(), name)
+                .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
+            if let Some(error) = errors.get(&key) {
+                return Ok(Some((
                     remap_include_debug_name(name, &self.output_assembly.include_debug_names),
                     error,
-                )
-            })
-        })
+                )));
+            }
+        }
+        Ok(None)
     }
 
     fn assemble_normal_result(

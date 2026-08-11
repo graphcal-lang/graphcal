@@ -22,9 +22,12 @@ use super::{
     module_resolve_error,
 };
 
-pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
+pub(super) fn augment_runtime_deps_for_dynamic_units(
+    dag: &mut DagTIR,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
     if dag.semantic.dynamic_unit_scales.is_empty() {
-        return;
+        return Ok(());
     }
     let scale_deps: HashMap<
         crate::syntax::dimension::ResolvedUnitName,
@@ -43,21 +46,33 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
     let runtime_units = dag
         .params
         .iter()
-        .filter_map(|entry| {
-            entry.default_expr.as_ref().map(|expr| {
-                (
-                    dag.resolved_decl_key_for_local(&entry.name),
-                    collect_unit_names(expr),
-                )
-            })
+        .filter_map(|entry| entry.default_expr.as_ref().map(|expr| (entry, expr)))
+        .map(|(entry, expr)| {
+            let entry_src = entry
+                .default_src
+                .as_ref()
+                .map_or(src, |source| source.resolve(src));
+            Ok((
+                dag.require_bound_decl_identity(
+                    &entry.name,
+                    entry_src,
+                    DiagnosticAnchor::Source(entry.span),
+                )?,
+                collect_unit_names(expr),
+            ))
         })
         .chain(dag.nodes.iter().map(|entry| {
-            (
-                dag.resolved_decl_key_for_local(&entry.name),
+            let entry_src = entry.body_src.resolve(src);
+            Ok((
+                dag.require_bound_decl_identity(
+                    &entry.name,
+                    entry_src,
+                    DiagnosticAnchor::Source(entry.span),
+                )?,
                 collect_unit_names(&entry.expr),
-            )
+            ))
         }))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
 
     for (key, unit_names) in runtime_units {
         let extra: BTreeSet<ResolvedDeclName> = unit_names
@@ -75,6 +90,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(dag: &mut DagTIR) {
                 .extend(extra);
         }
     }
+    Ok(())
 }
 
 fn collect_unit_names(

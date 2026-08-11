@@ -3854,7 +3854,9 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
-        .resolved_decl_key_for_local(&scoped_name("distance"));
+        .bound_decl_identity(&scoped_name("distance"))
+        .unwrap()
+        .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
@@ -3866,7 +3868,8 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
         crate::eval_expr::RuntimeValue::Quantity(9.0),
     );
     let values = HashMap::from([(
-        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("action")),
+        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("action"))
+            .unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
                 graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Pick"),
@@ -3918,7 +3921,9 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let expr_key = tir
         .root()
-        .resolved_decl_key_for_local(&scoped_name("distance"));
+        .bound_decl_identity(&scoped_name("distance"))
+        .unwrap()
+        .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
@@ -3930,7 +3935,7 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
         crate::eval_expr::RuntimeValue::Quantity(99.0),
     );
     let values = HashMap::from([(
-        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("item")),
+        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("item")).unwrap(),
         crate::eval_expr::RuntimeValue::Struct {
             type_name: graphcal_compiler::registry::declared_type::StructTypeRef::with_display_leaf(
                 graphcal_compiler::syntax::type_name::StructTypeName::expect_valid("Item"),
@@ -4790,7 +4795,11 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let expr_key = tir.root().resolved_decl_key_for_local(&scoped_name("burn"));
+    let expr_key = tir
+        .root()
+        .bound_decl_identity(&scoped_name("burn"))
+        .unwrap()
+        .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
     let b_owner = graphcal_compiler::syntax::names::ResolvedName::from_def(
         loaded_file_dag_id(&project, "b.gcl"),
@@ -4810,7 +4819,8 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
         crate::eval_expr::RuntimeValue::Quantity(100.0),
     );
     let values = HashMap::from([(
-        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("series")),
+        crate::decl_key::RuntimeDeclKey::for_local_decl(tir.root(), &scoped_name("series"))
+            .unwrap(),
         crate::eval_expr::RuntimeValue::Indexed {
             index_name: graphcal_compiler::registry::declared_type::IndexTypeRef::from_resolved(
                 b_owner,
@@ -4861,7 +4871,11 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
-    let expr_key = tir.root().resolved_decl_key_for_local(&scoped_name("code"));
+    let expr_key = tir
+        .root()
+        .bound_decl_identity(&scoped_name("code"))
+        .unwrap()
+        .clone();
     let expr = tir.root().value_expr(&expr_key).unwrap();
     let graphcal_compiler::hir::ExprKind::ForComp { bindings, body } = &expr.kind else {
         panic!("expected `code` to be a for-comprehension, got {expr:?}");

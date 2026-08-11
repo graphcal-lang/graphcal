@@ -2519,7 +2519,7 @@ fn seed_inline_dag_imported_values(
             .collect();
     for (scoped, binding) in dag_tir.imported_bindings() {
         let member = scoped.member();
-        let visible_key = RuntimeDeclKey::for_visible_name(dag_tir, scoped);
+        let visible_key = RuntimeDeclKey::resolved(binding.target().clone());
         let unresolved_local_import =
             !dag_tir.semantic().decl_bindings.contains_key(scoped) && own_names.contains(member);
         if unresolved_local_import || dag_values.contains_key(&visible_key) {
@@ -2555,7 +2555,10 @@ fn check_inline_dag_asserts(
         if !matches!(cat, DeclCategory::Assert) {
             continue;
         }
-        let key = dag_tir.resolved_decl_key_for_local(name);
+        let key = dag_tir
+            .lookup_decl_identity(name)
+            .into_bound()
+            .map_err(|probe| ctx.internal_error(probe.to_string(), call_span))?;
         let body = dag_tir.assert_body(&key).ok_or_else(|| {
             ctx.internal_error(
                 format!("TIR assertion entry missing for DAG assertion `{name}`"),

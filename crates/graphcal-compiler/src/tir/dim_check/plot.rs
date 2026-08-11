@@ -33,8 +33,12 @@ pub(super) fn check_plot_properties_dag(
     let mut channel_types = HashMap::new();
     for entry in &dag.plots {
         let body = &entry.body;
-        let owner = dag.resolved_decl_key_for_local(&entry.name);
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
+        let owner = dag.require_bound_decl_identity(
+            &entry.name,
+            entry_ctx.src,
+            crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+        )?;
         let types = check_plot_encodings(&entry_ctx, &owner, body)?;
         channel_types.insert(owner.clone(), types);
         for field in &body.mark_properties {
@@ -61,8 +65,12 @@ pub(super) fn check_plot_properties_dag(
         }
     }
     for entry in &dag.figures {
-        let owner = dag.resolved_decl_key_for_local(&entry.name);
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
+        let owner = dag.require_bound_decl_identity(
+            &entry.name,
+            entry_ctx.src,
+            crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+        )?;
         for field in &entry.fields {
             let prop = CompositionProperty::from_name(field.name.as_str())
                 .filter(|p| p.applies_to_figure());
@@ -87,8 +95,12 @@ pub(super) fn check_plot_properties_dag(
         }
     }
     for entry in &dag.layers {
-        let owner = dag.resolved_decl_key_for_local(&entry.name);
         let entry_ctx = ctx.for_body(entry.body_src.resolve(ctx.src));
+        let owner = dag.require_bound_decl_identity(
+            &entry.name,
+            entry_ctx.src,
+            crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+        )?;
         for field in &entry.fields {
             let Some(prop) = CompositionProperty::from_name(field.name.as_str()) else {
                 return Err(invalid_property(
