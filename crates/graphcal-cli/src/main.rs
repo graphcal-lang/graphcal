@@ -37,7 +37,10 @@ use graphcal_eval::eval::{
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
-use graphcal_io::replace_file_atomically_if_unchanged;
+use graphcal_io::{
+    FileSystemEntryKind, FileSystemReader, NeverCancel, ProjectIngestionPolicy, RealFileSystem,
+    replace_file_atomically_if_unchanged,
+};
 
 use graphcal::format::{
     FileDiscovery, FormatStatus, TraversalFailures, collect_gcl_files, format_status,
@@ -417,9 +420,45 @@ fn run_plugin_new(name: &str, dir: Option<&Path>) {
 /// Exit codes: 1 when the module fails validation or the called function
 /// fails or returns a value violating its declared kind; 2 for unreadable
 /// files or unusable --call arguments.
+fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = std::fs::symlink_metadata(module_path).map_err(|error| error.to_string())?;
+    if !metadata.file_type().is_file() {
+        return Err(
+            "plugin module must be a regular file, not a symlink or special file".to_string(),
+        );
+    }
+    let parent = module_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let fs = RealFileSystem::rooted(parent).map_err(|error| error.to_string())?;
+    match fs
+        .entry_kind(module_path)
+        .map_err(|error| error.to_string())?
+    {
+        FileSystemEntryKind::File => fs
+            .read_bytes_bounded(
+                module_path,
+                ProjectIngestionPolicy::default().plugin(),
+                &NeverCancel,
+            )
+            .map_err(|error| error.to_string()),
+        FileSystemEntryKind::Directory
+        | FileSystemEntryKind::Symlink
+        | FileSystemEntryKind::Other => {
+            Err("plugin module must be a regular file, not a symlink or special file".to_string())
+        }
+    }
+}
+
 fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
-    let bytes = std::fs::read(module_path)
-        .unwrap_or_else(|e| bail_with(&format!("could not read {}", module_path.display()), e, 2));
+    let bytes = read_plugin_module_bounded(module_path).unwrap_or_else(|error| {
+        bail_with(
+            &format!("could not read {}", module_path.display()),
+            error,
+            2,
+        )
+    });
 
     let host = graphcal_plugin_host::PluginHost::new();
     let module = match host.load(&bytes) {

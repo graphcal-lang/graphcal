@@ -13,6 +13,7 @@
 
 mod atomic_write;
 mod in_memory_fs;
+mod ingestion;
 mod overlay_fs;
 mod real_fs;
 mod source_tree;
@@ -23,6 +24,7 @@ pub use atomic_write::{
 pub use in_memory_fs::{
     InMemoryFileSystem, InMemoryFileSystemError, VirtualAbsolutePath, VirtualPathError,
 };
+pub use ingestion::ProjectIngestionPolicy;
 pub use overlay_fs::{OverlayFileSystem, OverlayFileSystemError};
 pub use real_fs::RealFileSystem;
 pub use source_tree::{
@@ -33,6 +35,8 @@ use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 /// Maximum number of bytes one filesystem read may return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -144,6 +148,33 @@ impl FileSystemReadError {
     }
 }
 
+/// SHA-256 and resource usage from one bounded streaming file hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundedFileHash {
+    sha256: [u8; 32],
+    bytes: u64,
+}
+
+impl BoundedFileHash {
+    /// Construct a completed bounded file hash.
+    #[must_use]
+    pub const fn new(sha256: [u8; 32], bytes: u64) -> Self {
+        Self { sha256, bytes }
+    }
+
+    /// Exact SHA-256 bytes.
+    #[must_use]
+    pub const fn sha256(self) -> [u8; 32] {
+        self.sha256
+    }
+
+    /// Bytes consumed while hashing.
+    #[must_use]
+    pub const fn bytes(self) -> u64 {
+        self.bytes
+    }
+}
+
 /// Kind of an entry without following the entry itself when it is a symlink.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileSystemEntryKind {
@@ -172,6 +203,21 @@ pub trait FileSystemReader {
         limit: ByteLimit,
         cancellation: &dyn CancellationSignal,
     ) -> Result<Vec<u8>, FileSystemReadError>;
+
+    /// Hash one file without accepting more than `limit` bytes.
+    ///
+    /// Concrete disk implementations should override this to stream without
+    /// allocating the complete artifact.
+    fn hash_file_sha256_bounded(
+        &self,
+        path: &Path,
+        limit: ByteLimit,
+        cancellation: &dyn CancellationSignal,
+    ) -> Result<BoundedFileHash, FileSystemReadError> {
+        let bytes = self.read_bytes_bounded(path, limit, cancellation)?;
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        Ok(BoundedFileHash::new(digest, bytes.len() as u64))
+    }
 
     /// Read a bounded UTF-8 file.
     fn read_to_string_bounded(

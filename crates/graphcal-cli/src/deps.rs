@@ -8,14 +8,17 @@ use std::sync::atomic::AtomicBool;
 
 use graphcal_eval::loader::discover_project_root;
 use graphcal_io::{
-    NeverCancel, RealFileSystem, SourceTreeHashLimits, create_file_atomically,
-    hash_source_tree as hash_package_source_tree, replace_file_atomically_if_unchanged,
+    ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, NeverCancel,
+    ProjectIngestionPolicy, RealFileSystem, SourceTreeHash, SourceTreeHashLimits,
+    create_file_atomically, hash_source_tree as hash_package_source_tree,
+    replace_file_atomically_if_unchanged,
 };
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitTransport, GitUrl, LOCK_VERSION,
-    LockedPackage, LockedPlugin, LockedPluginError, Lockfile, PackageGraph, PackageInstanceId,
-    PackageManifest, PackageName, PackageSource, PackageSourceDirectory, STDLIB_VERSION,
-    Sha256Digest, Sha256DigestError, SourceTreeHashes, parse_manifest_str,
+    LockedPackage, LockedPlugin, Lockfile, PackageGraph, PackageInstanceId, PackageManifest,
+    PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
+    PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError, SourceTreeHashes,
+    parse_manifest_str,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -24,6 +27,240 @@ const CACHE_ENV: &str = "GRAPHCAL_CACHE_DIR";
 const FETCHED_COMMIT_REF: &str = "refs/remotes/origin/graphcal-lock";
 
 type BoxError = Box<dyn StdError + Send + Sync>;
+
+#[derive(Debug, Clone, Copy)]
+enum IngestionArtifact {
+    Source,
+    Manifest,
+    Lockfile,
+}
+
+impl IngestionArtifact {
+    const fn limit(self, policy: ProjectIngestionPolicy) -> ByteLimit {
+        match self {
+            Self::Source => policy.source_file(),
+            Self::Manifest => policy.manifest(),
+            Self::Lockfile => policy.lockfile(),
+        }
+    }
+
+    const fn resource(self) -> IngestionResource {
+        match self {
+            Self::Source => IngestionResource::SourceFileBytes,
+            Self::Manifest => IngestionResource::ManifestBytes,
+            Self::Lockfile => IngestionResource::LockfileBytes,
+        }
+    }
+}
+
+/// Package-ingestion resource category exhausted during lock generation.
+#[derive(Debug, Clone, Copy)]
+pub enum IngestionResource {
+    /// One Graphcal source file.
+    SourceFileBytes,
+    /// One package manifest.
+    ManifestBytes,
+    /// One lockfile.
+    LockfileBytes,
+    /// One WASM plugin artifact.
+    PluginBytes,
+    /// Aggregate files, directories, and artifacts.
+    Entries,
+    /// Aggregate bytes across package ingestion.
+    TotalBytes,
+}
+
+impl std::fmt::Display for IngestionResource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SourceFileBytes => formatter.write_str("source-file byte"),
+            Self::ManifestBytes => formatter.write_str("manifest byte"),
+            Self::LockfileBytes => formatter.write_str("lockfile byte"),
+            Self::PluginBytes => formatter.write_str("plugin byte"),
+            Self::Entries => formatter.write_str("entry-count"),
+            Self::TotalBytes => formatter.write_str("aggregate byte"),
+        }
+    }
+}
+
+struct PackageIngestionBudget {
+    policy: ProjectIngestionPolicy,
+    entries: u64,
+    bytes: u64,
+}
+
+impl Default for PackageIngestionBudget {
+    fn default() -> Self {
+        Self::new(ProjectIngestionPolicy::default())
+    }
+}
+
+impl PackageIngestionBudget {
+    const fn new(policy: ProjectIngestionPolicy) -> Self {
+        Self {
+            policy,
+            entries: 0,
+            bytes: 0,
+        }
+    }
+
+    const fn remaining_entries(&self) -> u64 {
+        self.policy.max_entries().saturating_sub(self.entries)
+    }
+
+    const fn remaining_bytes(&self) -> u64 {
+        self.policy.max_total_bytes().saturating_sub(self.bytes)
+    }
+
+    fn account_entry(&mut self, path: &Path) -> Result<(), DepsError> {
+        if self.entries >= self.policy.max_entries() {
+            return Err(DepsError::IngestionLimit {
+                path: path.to_path_buf(),
+                resource: IngestionResource::Entries,
+                limit: self.policy.max_entries(),
+            });
+        }
+        self.entries = self
+            .entries
+            .checked_add(1)
+            .ok_or_else(|| DepsError::IngestionLimit {
+                path: path.to_path_buf(),
+                resource: IngestionResource::Entries,
+                limit: self.policy.max_entries(),
+            })?;
+        Ok(())
+    }
+
+    fn account_bytes(&mut self, path: &Path, bytes: u64) -> Result<(), DepsError> {
+        let total = self
+            .bytes
+            .checked_add(bytes)
+            .ok_or_else(|| DepsError::IngestionLimit {
+                path: path.to_path_buf(),
+                resource: IngestionResource::TotalBytes,
+                limit: self.policy.max_total_bytes(),
+            })?;
+        if total > self.policy.max_total_bytes() {
+            return Err(DepsError::IngestionLimit {
+                path: path.to_path_buf(),
+                resource: IngestionResource::TotalBytes,
+                limit: self.policy.max_total_bytes(),
+            });
+        }
+        self.bytes = total;
+        Ok(())
+    }
+
+    fn read_text(
+        &mut self,
+        fs: &dyn FileSystemReader,
+        path: &Path,
+        artifact: IngestionArtifact,
+    ) -> Result<String, DepsError> {
+        if self.remaining_entries() == 0 {
+            return Err(DepsError::IngestionLimit {
+                path: path.to_path_buf(),
+                resource: IngestionResource::Entries,
+                limit: self.policy.max_entries(),
+            });
+        }
+        let artifact_limit = artifact.limit(self.policy);
+        let remaining = self.remaining_bytes();
+        let (limit, exhausted) = if artifact_limit.get() <= remaining {
+            (artifact_limit, artifact.resource())
+        } else {
+            (ByteLimit::new(remaining), IngestionResource::TotalBytes)
+        };
+        let content = fs
+            .read_to_string_bounded(path, limit, &NeverCancel)
+            .map_err(|source| match source {
+                FileSystemReadError::ByteLimitExceeded { .. } => DepsError::IngestionLimit {
+                    path: path.to_path_buf(),
+                    resource: exhausted,
+                    limit: match exhausted {
+                        IngestionResource::TotalBytes => self.policy.max_total_bytes(),
+                        _ => artifact_limit.get(),
+                    },
+                },
+                other => DepsError::ArtifactRead {
+                    path: path.to_path_buf(),
+                    source: other,
+                },
+            })?;
+        self.account_entry(path)?;
+        self.account_bytes(path, content.len() as u64)?;
+        Ok(content)
+    }
+
+    fn hash_plugin(
+        &mut self,
+        fs: &dyn FileSystemReader,
+        path: &Path,
+    ) -> Result<Sha256Digest, DepsError> {
+        if self.remaining_entries() == 0 {
+            return Err(DepsError::IngestionLimit {
+                path: path.to_path_buf(),
+                resource: IngestionResource::Entries,
+                limit: self.policy.max_entries(),
+            });
+        }
+        let plugin_limit = self.policy.plugin();
+        let remaining = self.remaining_bytes();
+        let (limit, exhausted) = if plugin_limit.get() <= remaining {
+            (plugin_limit, IngestionResource::PluginBytes)
+        } else {
+            (ByteLimit::new(remaining), IngestionResource::TotalBytes)
+        };
+        let hash = fs
+            .hash_file_sha256_bounded(path, limit, &NeverCancel)
+            .map_err(|source| match source {
+                FileSystemReadError::ByteLimitExceeded { .. } => DepsError::IngestionLimit {
+                    path: path.to_path_buf(),
+                    resource: exhausted,
+                    limit: match exhausted {
+                        IngestionResource::TotalBytes => self.policy.max_total_bytes(),
+                        _ => plugin_limit.get(),
+                    },
+                },
+                other => DepsError::PluginFileUnreadable {
+                    path: path.to_path_buf(),
+                    source: other,
+                },
+            })?;
+        self.account_entry(path)?;
+        self.account_bytes(path, hash.bytes())?;
+        Ok(Sha256Digest::from_bytes(hash.sha256()))
+    }
+
+    const fn source_tree_limits(&self) -> SourceTreeHashLimits {
+        SourceTreeHashLimits::new(
+            self.policy.source_tree_file(),
+            self.remaining_bytes(),
+            self.remaining_entries(),
+        )
+    }
+
+    fn account_source_tree(&mut self, root: &Path, hash: &SourceTreeHash) -> Result<(), DepsError> {
+        let entries =
+            self.entries
+                .checked_add(hash.entries())
+                .ok_or_else(|| DepsError::IngestionLimit {
+                    path: root.to_path_buf(),
+                    resource: IngestionResource::Entries,
+                    limit: self.policy.max_entries(),
+                })?;
+        if entries > self.policy.max_entries() {
+            return Err(DepsError::IngestionLimit {
+                path: root.to_path_buf(),
+                resource: IngestionResource::Entries,
+                limit: self.policy.max_entries(),
+            });
+        }
+        self.account_bytes(root, hash.bytes())?;
+        self.entries = entries;
+        Ok(())
+    }
+}
 
 /// Result of a successful `graphcal deps lock` run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,16 +286,16 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     })?;
 
     let resolver = LockResolver::new(cache);
-    let lock = resolver.resolve_root(&root)?;
-    let manifest = read_manifest(&root)?;
-    let plugins = resolve_plugin_pins(&root, &manifest.source_dir)?;
+    let mut budget = PackageIngestionBudget::default();
+    let resolved_lock = resolver.resolve_root(&root, &mut budget)?;
+    let plugins = resolve_plugin_pins(&root, &resolved_lock.source_dir, &mut budget)?;
     let lockfile = Lockfile {
         lock_version: LOCK_VERSION,
         created_by: "graphcal".to_string(),
         graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
         stdlib_version: STDLIB_VERSION.to_string(),
-        root: lock.root,
-        packages: lock.packages,
+        root: resolved_lock.root,
+        packages: resolved_lock.packages,
         plugins,
     };
 
@@ -67,7 +304,11 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
 
     let content = lockfile.to_deterministic_toml();
     let lockfile_path = root.join("graphcal.lock");
-    let changed = match std::fs::read_to_string(&lockfile_path) {
+    let root_fs = RealFileSystem::rooted(&root).map_err(|source| DepsError::Canonicalize {
+        path: root.clone(),
+        source,
+    })?;
+    let changed = match budget.read_text(&root_fs, &lockfile_path, IngestionArtifact::Lockfile) {
         Ok(existing) if existing == content => false,
         Ok(existing) => {
             replace_file_atomically_if_unchanged(
@@ -77,16 +318,13 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
             )?;
             true
         }
-        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+        Err(DepsError::ArtifactRead { source, .. })
+            if source.io_kind() == Some(std::io::ErrorKind::NotFound) =>
+        {
             create_file_atomically(&lockfile_path, content.as_bytes())?;
             true
         }
-        Err(source) => {
-            return Err(DepsError::ReadFile {
-                path: lockfile_path,
-                source,
-            });
-        }
+        Err(error) => return Err(error),
     };
 
     Ok(LockOutcome {
@@ -106,35 +344,19 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
 fn resolve_plugin_pins(
     root: &Path,
     source_dir: &PackageSourceDirectory,
+    budget: &mut PackageIngestionBudget,
 ) -> Result<Vec<LockedPlugin>, DepsError> {
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
 
+    let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
+        path: root.to_path_buf(),
+        source,
+    })?;
     let scan_dir = source_dir.join_to(root);
-    let discovery = if scan_dir.is_dir() {
-        graphcal::format::collect_gcl_files(&scan_dir)
-    } else {
-        graphcal::format::FileDiscovery::complete(Vec::new())
-    };
-    let (mut gcl_files, traversal_failures) = discovery.into_parts();
-    // Unreadable directories would silently drop pins; that must be a hard
-    // error for lock generation.
-    if let Some(failures) = traversal_failures
-        && let Some(failure) = failures.into_failures().next()
-    {
-        let path = failure.path().to_path_buf();
-        return Err(DepsError::ReadDir {
-            path,
-            source: failure.into_source().into(),
-        });
-    }
-    gcl_files.sort();
-
+    let gcl_files = collect_gcl_files_bounded(&fs, &scan_dir, budget)?;
     let mut plugin_paths = BTreeSet::new();
     for file in &gcl_files {
-        let source = std::fs::read_to_string(file).map_err(|source| DepsError::ReadFile {
-            path: file.clone(),
-            source,
-        })?;
+        let source = budget.read_text(&fs, file, IngestionArtifact::Source)?;
         let display = file.display().to_string();
         let raw = graphcal_compiler::syntax::parser::Parser::with_name(&source, &display)
             .parse_file()
@@ -148,7 +370,9 @@ fn resolve_plugin_pins(
                 &decl.kind
                 && plugin.path.value.source_kind() == PluginSourceKind::WasmModule
             {
-                plugin_paths.insert(plugin.path.value.as_str().to_string());
+                let path = PluginArtifactPath::new(plugin.path.value.as_str())
+                    .map_err(DepsError::PluginPath)?;
+                plugin_paths.insert(path);
             }
         }
     }
@@ -156,16 +380,90 @@ fn resolve_plugin_pins(
     plugin_paths
         .into_iter()
         .map(|path| {
-            let file = root.join(&path);
-            let bytes = std::fs::read(&file).map_err(|source| DepsError::PluginFileUnreadable {
-                plugin: path.clone(),
-                path: file.clone(),
-                source,
-            })?;
-            let sha256 = hex_string(&Sha256::digest(&bytes));
-            LockedPlugin::new(path, sha256).map_err(DepsError::PluginPin)
+            let file = path.join_to(root);
+            match fs.entry_kind(&file) {
+                Ok(FileSystemEntryKind::File) => {}
+                Ok(
+                    FileSystemEntryKind::Directory
+                    | FileSystemEntryKind::Symlink
+                    | FileSystemEntryKind::Other,
+                ) => {
+                    return Err(DepsError::UnsupportedSourceEntry { path: file });
+                }
+                Err(source) => {
+                    return Err(DepsError::PluginFileUnreadable {
+                        path: file,
+                        source: FileSystemReadError::Io(source),
+                    });
+                }
+            }
+            let sha256 = budget.hash_plugin(&fs, &file)?;
+            Ok(LockedPlugin::from_parts(path, sha256))
         })
         .collect()
+}
+
+fn collect_gcl_files_bounded(
+    fs: &dyn FileSystemReader,
+    root: &Path,
+    budget: &mut PackageIngestionBudget,
+) -> Result<Vec<PathBuf>, DepsError> {
+    if !fs.exists(root) {
+        return Ok(Vec::new());
+    }
+    if fs.entry_kind(root).map_err(|source| DepsError::Metadata {
+        path: root.to_path_buf(),
+        source,
+    })? != FileSystemEntryKind::Directory
+    {
+        return Err(DepsError::UnsupportedSourceEntry {
+            path: root.to_path_buf(),
+        });
+    }
+
+    let mut files = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let mut names = fs
+            .read_directory_bounded(
+                &directory,
+                EntryLimit::new(budget.remaining_entries()),
+                &NeverCancel,
+            )
+            .map_err(|source| match source {
+                FileSystemReadError::EntryLimitExceeded { .. } => DepsError::IngestionLimit {
+                    path: directory.clone(),
+                    resource: IngestionResource::Entries,
+                    limit: budget.policy.max_entries(),
+                },
+                other => DepsError::ArtifactRead {
+                    path: directory.clone(),
+                    source: other,
+                },
+            })?;
+        names.sort();
+        for name in names.into_iter().rev() {
+            let path = directory.join(name);
+            budget.account_entry(&path)?;
+            match fs.entry_kind(&path).map_err(|source| DepsError::Metadata {
+                path: path.clone(),
+                source,
+            })? {
+                FileSystemEntryKind::Directory => pending.push(path),
+                FileSystemEntryKind::File
+                    if path.extension() == Some(std::ffi::OsStr::new("gcl")) =>
+                {
+                    files.push(path);
+                }
+                FileSystemEntryKind::File => {}
+                FileSystemEntryKind::Symlink | FileSystemEntryKind::Other => {
+                    return Err(DepsError::UnsupportedSourceEntry { path });
+                }
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
 }
 
 fn ensure_lock_graph_loadable(graph: &PackageGraph) -> Result<(), DepsError> {
@@ -208,6 +506,7 @@ fn cache_dir() -> Result<PathBuf, DepsError> {
 #[derive(Debug)]
 struct ResolvedLock {
     root: PackageInstanceId,
+    source_dir: PackageSourceDirectory,
     packages: Vec<LockedPackage>,
 }
 
@@ -220,17 +519,28 @@ impl LockResolver {
         Self { cache_dir }
     }
 
-    fn resolve_root(&self, root: &Path) -> Result<ResolvedLock, DepsError> {
-        let manifest = read_manifest(root)?;
+    fn resolve_root(
+        &self,
+        root: &Path,
+        budget: &mut PackageIngestionBudget,
+    ) -> Result<ResolvedLock, DepsError> {
+        let manifest = read_manifest(root, budget)?;
         let root_id = root_package_id(&manifest.name)?;
+        let source_dir = manifest.source_dir.clone();
         let mut state = ResolveState::default();
-        let root_package =
-            self.resolve_package(root_id.clone(), manifest, PackageSource::Root, &mut state)?;
+        let root_package = self.resolve_package(
+            root_id.clone(),
+            manifest,
+            PackageSource::Root,
+            &mut state,
+            budget,
+        )?;
         state.insert(root_package);
         let mut packages = state.packages.into_values().collect::<Vec<_>>();
         packages.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(ResolvedLock {
             root: root_id,
+            source_dir,
             packages,
         })
     }
@@ -241,6 +551,7 @@ impl LockResolver {
         manifest: PackageManifest,
         source: PackageSource,
         state: &mut ResolveState,
+        budget: &mut PackageIngestionBudget,
     ) -> Result<LockedPackage, DepsError> {
         if let Some(existing) = state.packages.get(&id) {
             return Ok(existing.clone());
@@ -251,7 +562,7 @@ impl LockResolver {
 
         let mut dependencies = BTreeMap::new();
         for (alias, spec) in &manifest.dependencies {
-            let dep = self.resolve_dependency(&id, alias, spec, state)?;
+            let dep = self.resolve_dependency(&id, alias, spec, state, budget)?;
             dependencies.insert(alias.clone(), dep.id);
         }
 
@@ -272,9 +583,10 @@ impl LockResolver {
         alias: &DependencyName,
         spec: &DependencySpec,
         state: &mut ResolveState,
+        budget: &mut PackageIngestionBudget,
     ) -> Result<ResolvedDependency, DepsError> {
-        let materialized = self.materialize_git(&spec.git.url, &spec.git.rev)?;
-        let manifest = read_manifest(&materialized.root)?;
+        let materialized = self.materialize_git(&spec.git.url, &spec.git.rev, budget)?;
+        let manifest = materialized.manifest;
         let expected = spec.expected_package_name(alias);
         if manifest.name != expected {
             return Err(DepsError::DependencyPackageNameMismatch {
@@ -293,7 +605,7 @@ impl LockResolver {
                 sha256: materialized.sha256,
             },
         };
-        let package = self.resolve_package(id.clone(), manifest, source, state)?;
+        let package = self.resolve_package(id.clone(), manifest, source, state, budget)?;
         state.insert(package);
         Ok(ResolvedDependency { id })
     }
@@ -302,6 +614,7 @@ impl LockResolver {
         &self,
         url: &GitUrl,
         rev: &GitCommitHash,
+        budget: &mut PackageIngestionBudget,
     ) -> Result<MaterializedGit, DepsError> {
         let path = self.cache_dir.join("git").join(cache_key(url, rev));
         remove_existing_cache_checkout(&path)?;
@@ -322,12 +635,18 @@ impl LockResolver {
             })?;
         let tmp_path = tmp.path().to_path_buf();
         materialize_git_revision(url, rev, &tmp_path)?;
-        let sha256 = hash_source_tree(&tmp_path)?;
+        let inspected = inspect_materialized_package(&tmp_path, budget)?;
         match std::fs::rename(&tmp_path, &path) {
-            Ok(()) => Ok(MaterializedGit { root: path, sha256 }),
+            Ok(()) => Ok(MaterializedGit {
+                sha256: inspected.sha256,
+                manifest: inspected.manifest,
+            }),
             Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => {
-                let sha256 = hash_source_tree(&path)?;
-                Ok(MaterializedGit { root: path, sha256 })
+                let inspected = inspect_materialized_package(&path, budget)?;
+                Ok(MaterializedGit {
+                    sha256: inspected.sha256,
+                    manifest: inspected.manifest,
+                })
             }
             Err(source) => Err(DepsError::Rename {
                 from: tmp_path,
@@ -475,23 +794,45 @@ struct ResolvedDependency {
 
 #[derive(Debug)]
 struct MaterializedGit {
-    root: PathBuf,
     sha256: Sha256Digest,
+    manifest: PackageManifest,
 }
 
-fn read_manifest(root: &Path) -> Result<PackageManifest, DepsError> {
+struct InspectedPackage {
+    sha256: Sha256Digest,
+    manifest: PackageManifest,
+}
+
+fn inspect_materialized_package(
+    root: &Path,
+    budget: &mut PackageIngestionBudget,
+) -> Result<InspectedPackage, DepsError> {
+    let manifest = read_manifest(root, budget)?;
+    let sha256 = hash_source_tree(root, &manifest.source_dir, budget)?;
+    Ok(InspectedPackage { sha256, manifest })
+}
+
+fn read_manifest(
+    root: &Path,
+    budget: &mut PackageIngestionBudget,
+) -> Result<PackageManifest, DepsError> {
+    let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
+        path: root.to_path_buf(),
+        source,
+    })?;
     let path = root.join("graphcal.toml");
-    let metadata = std::fs::symlink_metadata(&path).map_err(|source| DepsError::Metadata {
-        path: path.clone(),
-        source,
-    })?;
-    if !metadata.is_file() {
-        return Err(DepsError::UnsupportedSourceEntry { path });
+    match fs.entry_kind(&path) {
+        Ok(FileSystemEntryKind::File) => {}
+        Ok(
+            FileSystemEntryKind::Directory
+            | FileSystemEntryKind::Symlink
+            | FileSystemEntryKind::Other,
+        ) => return Err(DepsError::UnsupportedSourceEntry { path }),
+        Err(source) => {
+            return Err(DepsError::Metadata { path, source });
+        }
     }
-    let content = std::fs::read_to_string(&path).map_err(|source| DepsError::ReadFile {
-        path: path.clone(),
-        source,
-    })?;
+    let content = budget.read_text(&fs, &path, IngestionArtifact::Manifest)?;
     parse_manifest_str(&content).map_err(|source| DepsError::Manifest { path, source })
 }
 
@@ -527,20 +868,23 @@ fn cache_key(url: &GitUrl, rev: &GitCommitHash) -> String {
     hex_string(&hasher.finalize())
 }
 
-fn hash_source_tree(root: &Path) -> Result<Sha256Digest, DepsError> {
-    let manifest = read_manifest(root)?;
+fn hash_source_tree(
+    root: &Path,
+    source_dir: &PackageSourceDirectory,
+    budget: &mut PackageIngestionBudget,
+) -> Result<Sha256Digest, DepsError> {
     let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
         path: root.to_path_buf(),
         source,
     })?;
-    let source_dir = manifest.source_dir.to_path_buf();
     let hash = hash_package_source_tree(
         &fs,
         root,
-        &source_dir,
-        SourceTreeHashLimits::unbounded(),
+        &source_dir.to_path_buf(),
+        budget.source_tree_limits(),
         &NeverCancel,
     )?;
+    budget.account_source_tree(root, &hash)?;
     Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
 }
 
@@ -585,23 +929,24 @@ pub enum DepsError {
         path: PathBuf,
         source: std::io::Error,
     },
-    /// File read failed.
-    #[error("could not read `{}`: {source}", path.display())]
-    ReadFile {
-        path: PathBuf,
-        source: std::io::Error,
-    },
     /// Deterministic source-tree traversal or hashing failed.
     #[error(transparent)]
     SourceTreeHash(#[from] graphcal_io::SourceTreeHashError),
     /// A generated source-tree digest was not canonical.
     #[error(transparent)]
     Sha256Digest(#[from] Sha256DigestError),
-    /// Directory read failed.
-    #[error("could not read directory `{}`: {source}", path.display())]
-    ReadDir {
+    /// A bounded package artifact read failed.
+    #[error("could not read `{}`: {source}", path.display())]
+    ArtifactRead {
         path: PathBuf,
-        source: std::io::Error,
+        source: FileSystemReadError,
+    },
+    /// Lock generation exhausted its explicit ingestion policy.
+    #[error("package ingestion {resource} limit of {limit} exceeded at `{}`", path.display())]
+    IngestionLimit {
+        path: PathBuf,
+        resource: IngestionResource,
+        limit: u64,
     },
     /// Metadata read failed.
     #[error("could not inspect `{}`: {source}", path.display())]
@@ -616,18 +961,14 @@ pub enum DepsError {
     #[error("could not scan `{}` for plugin imports: {message}", path.display())]
     PluginScanParse { path: PathBuf, message: String },
     /// A referenced plugin file could not be read for pinning.
-    #[error(
-        "could not read plugin \"{plugin}\" at `{}` to pin it: {source}",
-        path.display()
-    )]
+    #[error("could not read plugin artifact `{}` to pin it: {source}", path.display())]
     PluginFileUnreadable {
-        plugin: String,
         path: PathBuf,
-        source: std::io::Error,
+        source: FileSystemReadError,
     },
-    /// A plugin pin failed validation.
+    /// A plugin artifact path failed validation before filesystem access.
     #[error(transparent)]
-    PluginPin(#[from] LockedPluginError),
+    PluginPath(#[from] PluginArtifactPathError),
     /// Cache materialization rename failed.
     #[error("could not move `{}` to `{}`: {source}", from.display(), to.display())]
     Rename {
@@ -685,6 +1026,25 @@ pub enum DepsError {
 mod tests {
     use super::*;
 
+    fn test_budget(
+        source_file: u64,
+        manifest: u64,
+        plugin: u64,
+        source_tree_file: u64,
+        max_entries: u64,
+        max_total_bytes: u64,
+    ) -> PackageIngestionBudget {
+        PackageIngestionBudget::new(ProjectIngestionPolicy::new(
+            ByteLimit::new(source_file),
+            ByteLimit::new(manifest),
+            ByteLimit::new(1024),
+            ByteLimit::new(plugin),
+            ByteLimit::new(source_tree_file),
+            max_entries,
+            max_total_bytes,
+        ))
+    }
+
     fn unique_temp_dir() -> PathBuf {
         // Parallel test threads can observe the same wall-clock tick, so a
         // monotonically increasing counter makes the directory unique even
@@ -723,9 +1083,10 @@ node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
         std::fs::write(root.join("plugins/demo.wasm"), plugin_bytes).unwrap();
 
         let source_dir = PackageSourceDirectory::new("src").unwrap();
-        let pins = resolve_plugin_pins(&root, &source_dir).unwrap();
+        let mut budget = PackageIngestionBudget::default();
+        let pins = resolve_plugin_pins(&root, &source_dir, &mut budget).unwrap();
         assert_eq!(pins.len(), 1, "host-registry identities get no pins");
-        assert_eq!(pins[0].path(), "plugins/demo.wasm");
+        assert_eq!(pins[0].path().to_string(), "plugins/demo.wasm");
         assert_eq!(
             pins[0].sha256().to_string(),
             hex_string(&Sha256::digest(plugin_bytes))
@@ -748,9 +1109,11 @@ import plugin "plugins/nope.wasm" as demo {
         )
         .unwrap();
         let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = PackageIngestionBudget::default();
         assert!(matches!(
-            resolve_plugin_pins(&root, &source_dir).unwrap_err(),
-            DepsError::PluginFileUnreadable { plugin, .. } if plugin == "plugins/nope.wasm"
+            resolve_plugin_pins(&root, &source_dir, &mut budget).unwrap_err(),
+            DepsError::PluginFileUnreadable { path, .. }
+                if path.ends_with("plugins/nope.wasm")
         ));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -761,10 +1124,170 @@ import plugin "plugins/nope.wasm" as demo {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/broken.gcl"), "import plugin \"x.wasm").unwrap();
         let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = PackageIngestionBudget::default();
         assert!(matches!(
-            resolve_plugin_pins(&root, &source_dir).unwrap_err(),
+            resolve_plugin_pins(&root, &source_dir, &mut budget).unwrap_err(),
             DepsError::PluginScanParse { .. }
         ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plugin_paths_are_validated_before_filesystem_access() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src/lib.gcl"),
+            r#"
+import plugin "../outside.wasm" as outside {
+    fn f(x: Dimensionless) -> Dimensionless;
+}
+"#,
+        )
+        .unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = PackageIngestionBudget::default();
+
+        assert!(matches!(
+            resolve_plugin_pins(&root, &source_dir, &mut budget),
+            Err(DepsError::PluginPath(_))
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plugin_pinning_rejects_sparse_artifact_before_allocating_it() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::write(
+            root.join("src/lib.gcl"),
+            r#"
+import plugin "plugins/large.wasm" as large {
+    fn f(x: Dimensionless) -> Dimensionless;
+}
+"#,
+        )
+        .unwrap();
+        std::fs::File::create(root.join("plugins/large.wasm"))
+            .unwrap()
+            .set_len(9)
+            .unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = test_budget(1024, 1024, 8, 1024, 100, 4096);
+
+        assert!(matches!(
+            resolve_plugin_pins(&root, &source_dir, &mut budget),
+            Err(DepsError::IngestionLimit {
+                resource: IngestionResource::PluginBytes,
+                limit: 8,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn plugin_scan_rejects_oversized_source_before_allocation() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::File::create(root.join("src/large.gcl"))
+            .unwrap()
+            .set_len(9)
+            .unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = test_budget(8, 1024, 1024, 1024, 100, 4096);
+
+        assert!(matches!(
+            resolve_plugin_pins(&root, &source_dir, &mut budget),
+            Err(DepsError::IngestionLimit {
+                resource: IngestionResource::SourceFileBytes,
+                limit: 8,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_pinning_rejects_symlink_before_reading_target() {
+        let root = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(
+            root.join("src/lib.gcl"),
+            r#"
+import plugin "plugins/linked.wasm" as linked {
+    fn f(x: Dimensionless) -> Dimensionless;
+}
+"#,
+        )
+        .unwrap();
+        std::fs::write(outside.join("secret.wasm"), b"secret").unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("secret.wasm"),
+            root.join("plugins/linked.wasm"),
+        )
+        .unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = PackageIngestionBudget::default();
+
+        assert!(matches!(
+            resolve_plugin_pins(&root, &source_dir, &mut budget),
+            Err(DepsError::UnsupportedSourceEntry { path })
+                if path.ends_with("plugins/linked.wasm")
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn manifest_read_obeys_shared_per_file_limit() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::File::create(root.join("graphcal.toml"))
+            .unwrap()
+            .set_len(9)
+            .unwrap();
+        let mut budget = test_budget(1024, 8, 1024, 1024, 100, 4096);
+
+        assert!(matches!(
+            read_manifest(&root, &mut budget),
+            Err(DepsError::IngestionLimit {
+                resource: IngestionResource::ManifestBytes,
+                limit: 8,
+                ..
+            })
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn source_tree_hash_uses_loader_compatible_file_and_aggregate_limits() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("graphcal.toml"), "x").unwrap();
+        std::fs::File::create(root.join("src/large.gcl"))
+            .unwrap()
+            .set_len(9)
+            .unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let mut budget = test_budget(1024, 1024, 1024, 8, 100, 4096);
+
+        let error = hash_source_tree(&root, &source_dir, &mut budget).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                DepsError::SourceTreeHash(graphcal_io::SourceTreeHashError::ReadFile {
+                    source: FileSystemReadError::ByteLimitExceeded { .. },
+                    ..
+                })
+            ),
+            "unexpected error: {error:?}"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -792,7 +1315,9 @@ import plugin "plugins/nope.wasm" as demo {
         .unwrap();
         std::os::unix::fs::symlink(outside.join("secret.gcl"), root.join("src/evil.gcl")).unwrap();
 
-        let err = hash_source_tree(&root).unwrap_err();
+        let mut budget = PackageIngestionBudget::default();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+        let err = hash_source_tree(&root, &source_dir, &mut budget).unwrap_err();
         assert!(matches!(
             err,
             DepsError::SourceTreeHash(graphcal_io::SourceTreeHashError::Symlink { path })

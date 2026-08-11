@@ -747,6 +747,9 @@ Existing hand-edited lockfiles with custom fields, uppercase hashes, malformed
 hashes, non-root path sources, or unreachable package entries must remove those
 fields/entries and run `graphcal deps lock` to regenerate canonical pins. Do not
 preserve private metadata inside `graphcal.lock`; keep it in a separate file.
+Plugin paths containing absolute, `.`/`..`, backslash, drive-prefix-like colon,
+or control-character components must move the artifact to a portable relative
+path and regenerate the lock.
 
 Lock creation and loading use the same deterministic source-tree algorithm.
 Package trees may contain only ordinary directories and regular files: symbolic
@@ -764,10 +767,13 @@ paths outside that root, and file/directory collisions are rejected. Open
 buffers from unrelated workspace roots are not added to the active project's
 snapshot.
 
-Project ingestion is bounded before allocation. CLI and LSP loads accept at most
-16 MiB per `.gcl` source or source-tree file, 1 MiB per manifest, 4 MiB per
-lockfile, and 16 MiB per WASM plugin, with a shared ceiling of 10,000 loaded
-artifacts/source-tree entries and 256 MiB. Lock parsing additionally limits the
+Project ingestion is bounded before allocation. CLI and LSP loads, `graphcal
+deps lock`, and plugin inspection share limits of 16 MiB per `.gcl` source,
+source-tree file, or WASM plugin, 1 MiB per manifest, and 4 MiB per lockfile,
+with a shared ceiling of 10,000 loaded artifacts/source-tree entries and 256
+MiB. Plugin pinning validates a portable root-relative artifact path before any
+filesystem lookup and hashes regular files incrementally instead of allocating
+the complete module. Lock parsing additionally limits the
 number of package entries to the configured file-count ceiling before graph
 validation. Exceeding a limit is a loader error; evaluator work budgets do not
 replace these earlier I/O bounds.

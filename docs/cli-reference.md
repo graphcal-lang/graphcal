@@ -62,7 +62,11 @@ graphcal deps lock [OPTIONS]
 It reads `[dependencies]` from `graphcal.toml`, accepts only supported remote
 HTTPS or SSH Git URLs with a full commit-hash `rev`, fetches any missing
 sources, records a graph-shaped package-instance lockfile, and writes nothing
-when the deterministic lockfile contents are already up to date. Local paths,
+when the deterministic lockfile contents are already up to date. Manifest,
+source, source-tree, plugin, and existing-lock reads use the same per-artifact
+and aggregate limits as ordinary project loading; lock generation therefore
+cannot produce a lock that the default loader rejects only for artifact size.
+Local paths,
 `file://`, plain HTTP, unsupported schemes, embedded credentials, and malformed
 or option-shaped remote components fail validation before any fetch starts.
 In the generated lock graph, the unique root uses the fixed path source `.`,
@@ -163,7 +167,9 @@ code: the embedded manifest must decode, the module may import nothing
 beyond `graphcal::fail`, and each manifest function's wasm parameter/result types must match its
 declared signature. On success the output includes the SHA-256 (the
 value `graphcal deps lock` pins) and a paste-ready `import plugin` block
-in `.gcl` syntax.
+in `.gcl` syntax. Module inspection accepts only a regular file, rejects
+symlinks and special files before opening them, and reads at most 16 MiB before
+WASM validation.
 
 ```bash
 graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
