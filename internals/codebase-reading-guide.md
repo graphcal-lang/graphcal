@@ -1197,9 +1197,10 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `reg
 9. `crates/graphcal-compiler/src/registry/prelude.rs`
 10. `crates/graphcal-compiler/src/registry/declared_type.rs`
 11. `crates/graphcal-compiler/src/registry/resolve_types.rs`
-12. `crates/graphcal-compiler/src/registry/error.rs`
-13. `crates/graphcal-compiler/src/registry/runtime_value.rs`
-14. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
+12. `crates/graphcal-compiler/src/diagnostic_anchor.rs`
+13. `crates/graphcal-compiler/src/registry/error.rs`
+14. `crates/graphcal-compiler/src/registry/runtime_value.rs`
+15. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
 
 ### Stage 6 - Name resolution (IR)
 

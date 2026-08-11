@@ -859,6 +859,17 @@ fn reduction_functions_have_fixed_arity() {
 }
 
 #[test]
+fn zero_argument_arity_error_points_at_the_call() {
+    let source = "node x: Dimensionless = sin();";
+    let error = check(source).unwrap_err();
+    let GraphcalError::WrongArity { span, .. } = error else {
+        panic!("expected wrong-arity diagnostic");
+    };
+    assert_eq!(span.offset(), source.find("sin").unwrap());
+    assert!(!span.is_empty());
+}
+
+#[test]
 fn check_linear_algebra_preserves_axes_and_dimensions() {
     let source = "\
 param a: Length[Fin(2), Fin(3)] = for i: Fin(2), j: Fin(3) { 1.0 m };

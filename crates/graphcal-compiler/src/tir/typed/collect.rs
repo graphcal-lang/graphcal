@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir;
 use crate::ir::lower::ParsedExpectedFailMetadata;
 use crate::ir::resolve::ExpectedFail;
@@ -390,9 +391,25 @@ fn record_declared_collection_index(
     src: &NamedSource<Arc<String>>,
     refs: &mut ResolvedCollectionRefs,
 ) -> Result<(), GraphcalError> {
-    index.declared_resolved().map_or(Ok(()), |resolved| {
-        record_resolved_collection_index(resolved, ctx, src, Span::new(0, 0), refs)
-    })
+    let Some(resolved) = index.declared_resolved() else {
+        return Ok(());
+    };
+    if refs.index_defs.contains_key(resolved) {
+        return Ok(());
+    }
+    let definition = ctx
+        .types
+        .get_index_handle(resolved)
+        .cloned()
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("declared collection metadata references unknown index `{resolved}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
+    refs.index_defs.insert(resolved.clone(), definition);
+    Ok(())
 }
 
 fn collect_resolved_collection_indexes_from_type(

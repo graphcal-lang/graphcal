@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::hir::SourceDeclaration;
 use graphcal_compiler::registry::declared_type::DeclaredType;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -81,7 +82,7 @@ impl CheckedEntryOutput {
 #[derive(Debug)]
 pub struct RequiredEntryIndex {
     name: IndexName,
-    span: Span,
+    anchor: DiagnosticAnchor,
 }
 
 impl RequiredEntryIndex {
@@ -89,8 +90,8 @@ impl RequiredEntryIndex {
         &self.name
     }
 
-    pub const fn span(&self) -> Span {
-        self.span
+    pub const fn anchor(&self) -> DiagnosticAnchor {
+        self.anchor
     }
 }
 
@@ -212,7 +213,7 @@ pub(super) fn build_checked_entry_interface(
                 if required_index.is_none() && definition.is_required() {
                     required_index = Some(RequiredEntryIndex {
                         name: name.clone(),
-                        span: *span,
+                        anchor: DiagnosticAnchor::Source(*span),
                     });
                 }
             }
@@ -230,7 +231,7 @@ pub(super) fn build_checked_entry_interface(
             .min_by(|left, right| left.name.cmp(&right.name))
             .map(|definition| RequiredEntryIndex {
                 name: definition.name.clone(),
-                span: Span::new(0, 0),
+                anchor: DiagnosticAnchor::WholeFile,
             });
     }
 

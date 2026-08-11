@@ -6,6 +6,7 @@ use std::sync::Arc;
 use miette::NamedSource;
 
 use crate::desugar::desugared_ast::MulDivOp;
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 #[cfg(test)]
 use crate::dimension::Rational;
@@ -55,7 +56,7 @@ pub fn resolved_to_declared_type(
                 index.format_for_diagnostic()
             ),
             src: src.clone(),
-            span: resolved_type_expr_span(resolved).into(),
+            span: resolved_index_span(index).into(),
         }),
         ResolvedTypeExpr::Quantity(dim) => Ok(DeclaredType::Quantity(dim.clone())),
         ResolvedTypeExpr::Complex { dimension, span } => {
@@ -198,25 +199,6 @@ fn resolved_generic_arg_to_declared(
         ResolvedGenericArg::Type(type_expr) => {
             resolved_to_declared_type(type_expr, src).map(DeclaredGenericArg::Type)
         }
-    }
-}
-
-fn resolved_type_expr_span(resolved: &ResolvedTypeExpr) -> Span {
-    match resolved {
-        ResolvedTypeExpr::Dimensionless
-        | ResolvedTypeExpr::Bool
-        | ResolvedTypeExpr::Int
-        | ResolvedTypeExpr::Datetime(_)
-        | ResolvedTypeExpr::Quantity(_) => Span::new(0, 0),
-        ResolvedTypeExpr::IndexArg(index) => resolved_index_span(index),
-        ResolvedTypeExpr::Complex { span, .. }
-        | ResolvedTypeExpr::Key { span, .. }
-        | ResolvedTypeExpr::Struct(_, span)
-        | ResolvedTypeExpr::GenericDimParam(_, span)
-        | ResolvedTypeExpr::GenericTypeParam(_, span)
-        | ResolvedTypeExpr::GenericDimExpr { span, .. }
-        | ResolvedTypeExpr::GenericStruct { span, .. } => *span,
-        ResolvedTypeExpr::Indexed { base, .. } => resolved_type_expr_span(base),
     }
 }
 
@@ -1155,12 +1137,11 @@ pub fn substitute_resolved_generic_arg(
                 crate::tir::dim_check::InferredType::Quantity(dimension) => {
                     Ok(InferredGenericArg::Dim(dimension))
                 }
-                _ => Err(GraphcalError::InternalError {
-                    message: "dimension generic argument substituted to a non-dimension type"
-                        .to_string(),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                }),
+                _ => Err(GraphcalError::internal_error(
+                    "dimension generic argument substituted to a non-dimension type",
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )),
             }
         }
         ResolvedGenericArg::Index(index) => {

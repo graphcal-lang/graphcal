@@ -17,6 +17,7 @@ use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl,
     PlotDecl, TypeExpr,
 };
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::{Dimension, Rational};
 use crate::ir::imported_binding::HirImportedBinding;
 use crate::ir::instance::{InstanceBindingEnvironment, InstanceIndexBindingTarget, InstanceRecord};
@@ -438,8 +439,6 @@ pub struct HirDag {
     /// Runtime-interface-relevant declarations authored directly in this DAG,
     /// excluding declarations merged from includes.
     source_declarations: Vec<crate::hir::SourceDeclaration>,
-    /// Canonical child-DAG identities and their authored name spans.
-    pub(crate) child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     /// Mapping from assert name to the list of declarations that assume it.
     pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
     /// Expected-fail metadata keyed by assertion name, retaining its authored scope and source.
@@ -501,10 +500,12 @@ impl HirDag {
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, GraphcalError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
-        .map_err(|e| GraphcalError::EvalError {
-            message: format!("invalid source name `{}`: {e}", src.name()),
-            src: src.clone(),
-            span: crate::syntax::span::Span::new(0, 0).into(),
+        .map_err(|error| {
+            GraphcalError::internal_error(
+                format!("invalid source name `{}`: {error}", src.name()),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
         })?;
     lower_with_imports(ast, src, &ImportedNames::default(), &dag_id)
 }
@@ -515,10 +516,12 @@ pub(crate) fn lower_with_frontend_registry_for_test(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(HirDag, Registry), GraphcalError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(src.name()))
-        .map_err(|error| GraphcalError::EvalError {
-            message: format!("invalid source name `{}`: {error}", src.name()),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
+        .map_err(|error| {
+            GraphcalError::internal_error(
+                format!("invalid source name `{}`: {error}", src.name()),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
         })?;
     let (builder, unresolved) = lower_to_builder(ast, src, &ImportedNames::default(), &dag_id)?;
     let resolver = single_module_resolver(ast, &dag_id, src)?;
@@ -569,10 +572,8 @@ fn single_module_resolver(
     ) -> Result<(), GraphcalError> {
         target
             .add_module(owner.clone(), declarations)
-            .map_err(|err| GraphcalError::EvalError {
-                message: err.to_string(),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
+            .map_err(|error| {
+                GraphcalError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
             })?;
         for decl in declarations {
             if let crate::desugar::desugared_ast::DeclKind::Dag(dag) = &decl.kind {
@@ -909,10 +910,12 @@ fn build_ir_from_resolved(
     // type annotations and dynamic-unit dep augmentation see the enclosing
     // file's type system.
     let mut builder = RegistryBuilder::new();
-    load_prelude(&mut builder).map_err(|e| GraphcalError::EvalError {
-        message: format!("internal: prelude failed to load: {e}"),
-        src: src.clone(),
-        span: Span::new(0, 0).into(),
+    load_prelude(&mut builder).map_err(|error| {
+        GraphcalError::internal_error(
+            format!("prelude failed to load: {error}"),
+            src,
+            DiagnosticAnchor::Builtin,
+        )
     })?;
     if let Some(parent) = parent_registry {
         builder.merge_from_registry(parent);
@@ -1050,14 +1053,6 @@ fn build_ir_from_resolved(
             .map(|(name, cat)| (ScopedName::from(name), cat))
             .collect(),
         source_declarations: collect_source_declarations(ast),
-        child_dag_spans: ast
-            .declarations
-            .iter()
-            .filter_map(|declaration| match &declaration.kind {
-                DeclKind::Dag(dag) => Some((dag_id.child(dag.name.value.as_str()), dag.name.span)),
-                _ => None,
-            })
-            .collect(),
         assert_names: resolved
             .assert_names
             .into_iter()
@@ -1122,8 +1117,6 @@ pub struct UnfrozenIR {
     /// Direct source declarations are immutable provenance. Include merging
     /// extends `source_order` but never this entry-interface subset.
     source_declarations: Vec<crate::hir::SourceDeclaration>,
-    /// Canonical child-DAG identities and their authored name spans.
-    child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
     assert_names: HashSet<ScopedName>,
     // Key-lookup only, order irrelevant.
     assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
@@ -1220,13 +1213,11 @@ impl UnfrozenIR {
                 .insert(name.clone(), binding.target().clone())
                 .is_some()
             {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
-                        "imported lexical binding `{name}` collides with a local declaration"
-                    ),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                });
+                return Err(GraphcalError::internal_error(
+                    format!("imported lexical binding `{name}` collides with a local declaration"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                ));
             }
         }
 
@@ -1568,7 +1559,6 @@ impl UnfrozenIR {
             included_plots: self.included_plots,
             source_order: self.source_order,
             source_declarations: self.source_declarations,
-            child_dag_spans: self.child_dag_spans,
             assumes_map: self.assumes_map,
             expected_fail: self.expected_fail,
             dynamic_unit_scales,
@@ -1843,6 +1833,7 @@ impl UnfrozenIR {
         requested_plots: &HashMap<DeclName, RequestedPlot>,
         dependency_owner: &crate::dag_id::DagId,
         importer_owner: &crate::dag_id::DagId,
+        include_span: Span,
         importer_src: &NamedSource<Arc<String>>,
         dep_src: &NamedSource<Arc<String>>,
     ) -> Result<(), GraphcalError> {
@@ -2027,14 +2018,14 @@ impl UnfrozenIR {
                 .iter()
                 .any(|existing| existing.id.owner() == record.id.owner())
             {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
+                return Err(GraphcalError::internal_error(
+                    format!(
                         "duplicate concrete instance identity `{}`",
                         record.id.owner()
                     ),
-                    src: importer_src.clone(),
-                    span: Span::new(0, 0).into(),
-                });
+                    importer_src,
+                    DiagnosticAnchor::Source(include_span),
+                ));
             }
             self.instances.push(record);
         }
@@ -2104,7 +2095,7 @@ impl UnfrozenIR {
                 return Err(GraphcalError::ConflictingImportedUnit {
                     name: entry.spelling,
                     src: importer_src.clone(),
-                    span: Span::new(0, 0).into(),
+                    span: include_span.into(),
                 });
             }
             self.dynamic_unit_scales.push(entry);
@@ -2398,13 +2389,13 @@ impl UnfrozenIR {
                 .insert(lexical.clone(), binding)
                 .is_some()
             {
-                return Err(GraphcalError::InternalError {
-                    message: format!(
+                return Err(GraphcalError::internal_error(
+                    format!(
                         "duplicate imported lexical binding `{lexical}` while merging include instance `{prefix}`"
                     ),
-                    src: importer_src.clone(),
-                    span: Span::new(0, 0).into(),
-                });
+                    importer_src,
+                    DiagnosticAnchor::Source(include_span),
+                ));
             }
         }
         Ok(())
@@ -3697,11 +3688,11 @@ fn registry_build_error(
     err: &types::RegistryBuildError,
     src: &NamedSource<Arc<String>>,
 ) -> GraphcalError {
-    GraphcalError::InternalError {
-        message: format!("registry build failed: {err}"),
-        src: src.clone(),
-        span: Span::new(0, 0).into(),
-    }
+    GraphcalError::internal_error(
+        format!("registry build failed: {err}"),
+        src,
+        DiagnosticAnchor::WholeFile,
+    )
 }
 
 fn dimension_resolve_error(
@@ -6023,6 +6014,7 @@ mod tests {
                 &HashMap::new(),
                 &crate::dag_id::DagId::root_in_package("test", "dep"),
                 &crate::dag_id::DagId::root_in_package("test", "main"),
+                Span::new(0, 0),
                 &importer_src,
                 &dep_src,
             )

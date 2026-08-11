@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::declared_type::{DeclaredGenericArg, DeclaredType, StructTypeRef};
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
@@ -121,17 +122,16 @@ pub fn compile_checked_with_cancellation(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
     cancellation.checkpoint()?;
-    let root_facts =
-        facts
-            .for_dag(tir.root_dag_id())
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!(
-                    "checked execution facts are missing root DAG `{}`",
-                    tir.root_dag_id()
-                ),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+    let root_facts = facts.for_dag(tir.root_dag_id()).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!(
+                "checked execution facts are missing root DAG `{}`",
+                tir.root_dag_id()
+            ),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
     debug_assert_eq!(&root_facts.dag_id, tir.root_dag_id());
 
     Ok(ExecPlan {
@@ -248,14 +248,13 @@ fn check_dag_execution_facts(
 
     for dag_id in &dag_ids {
         cancellation.checkpoint()?;
-        let dag = tir
-            .dag_registry()
-            .get(dag_id)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("checked DAG `{dag_id}` disappeared from the TIR registry"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let dag = tir.dag_registry().get(dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked DAG `{dag_id}` disappeared from the TIR registry"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         let const_values = const_pools.get(dag_id).cloned().unwrap_or_default();
         dag_facts.insert(
             dag_id.clone(),
@@ -274,13 +273,13 @@ fn check_dag_execution_facts(
     for dag_id in &dag_ids {
         cancellation.checkpoint()?;
         let dag = &tir.dag_registry()[dag_id];
-        let facts = dag_facts
-            .get_mut(dag_id)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("newly checked DAG facts for `{dag_id}` were lost"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let facts = dag_facts.get_mut(dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("newly checked DAG facts for `{dag_id}` were lost"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         facts.domain_constraints = Arc::new(resolve_domain_constraints_for_dag(
             tir,
             dag,
@@ -300,13 +299,13 @@ fn check_dag_execution_facts(
         cancellation,
     )?;
     for (owner, constraints) in field_constraints {
-        let facts = dag_facts
-            .get_mut(&owner)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("field-constraint owner `{owner}` has no checked DAG facts"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let facts = dag_facts.get_mut(&owner).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("field-constraint owner `{owner}` has no checked DAG facts"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         let mut merged = facts.struct_field_constraints.as_ref().clone();
         merged.extend(constraints);
         facts.struct_field_constraints = Arc::new(merged);
@@ -411,13 +410,13 @@ fn eval_const_pools_for_dags(
             generic_nat_bindings: None,
             host_fns: None,
         };
-        let hir_expr = dag
-            .const_expr(key)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("constant schedule references missing declaration `{name}`"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let hir_expr = dag.const_expr(key).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("constant schedule references missing declaration `{name}`"),
+                src,
+                DiagnosticAnchor::Source(declaration_by_key[key].2),
+            )
+        })?;
         if let Some((target, call_span)) = graphcal_compiler::hir::find_dag_call(hir_expr) {
             return Err(GraphcalError::DagCallInCompileTime {
                 name: target.to_string(),
@@ -428,13 +427,13 @@ fn eval_const_pools_for_dags(
         let value = eval_hir_expr(hir_expr, &values, &empty_hir_locals, &ctx)?;
         let runtime_key = RuntimeDeclKey::resolved(key.clone());
         visible_values.insert(runtime_key.clone(), value.clone());
-        let pool = const_pools
-            .get_mut(dag_id)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("checked DAG `{dag_id}` has no initialized const pool"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+        let pool = const_pools.get_mut(dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked DAG `{dag_id}` has no initialized const pool"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         pool.insert(runtime_key, value);
     }
     Ok(const_pools)
@@ -482,13 +481,13 @@ pub fn eval_consts_from_tir_with_cancellation(
             generic_nat_bindings: None,
             host_fns: None,
         };
-        let hir_expr =
-            dag.const_expr(key.as_resolved())
-                .ok_or_else(|| GraphcalError::InternalError {
-                    message: format!("constant schedule references missing declaration `{name}"),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                })?;
+        let hir_expr = dag.const_expr(key.as_resolved()).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("constant schedule references missing declaration `{name}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         // Defense in depth for TIR values constructed or mutated outside the
         // compiler pipeline. Valid TIR rejects runtime DAG instantiation in a
         // const body during policy checking.
@@ -555,17 +554,20 @@ fn const_eval_order_resolved(
 
     let sorted = toposort(&graph, None).map_err(|cycle| {
         let cycle_node = &graph[cycle.node_id()];
-        let span = span_by_key
-            .get(cycle_node)
-            .copied()
-            .unwrap_or_else(|| Span::new(0, 0));
-        let name = local_name_by_key
-            .get(cycle_node)
-            .map_or_else(|| cycle_node.to_string(), std::string::ToString::to_string);
-        GraphcalError::CyclicDependency {
-            name,
-            src: src.clone(),
-            span: span.into(),
+        match (
+            span_by_key.get(cycle_node).copied(),
+            local_name_by_key.get(cycle_node),
+        ) {
+            (Some(span), Some(name)) => GraphcalError::CyclicDependency {
+                name: name.to_string(),
+                src: src.clone(),
+                span: span.into(),
+            },
+            _ => GraphcalError::internal_error(
+                format!("constant cycle node `{cycle_node}` is missing declaration metadata"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ),
         }
     })?;
 
@@ -677,17 +679,20 @@ fn runtime_eval_order_resolved(
 
     let topo_indices = toposort(&graph, None).map_err(|cycle| {
         let cycle_node = &graph[cycle.node_id()];
-        let span = span_by_key
-            .get(cycle_node)
-            .copied()
-            .unwrap_or_else(|| Span::new(0, 0));
-        let name = local_name_by_key
-            .get(cycle_node)
-            .map_or_else(|| cycle_node.to_string(), std::string::ToString::to_string);
-        GraphcalError::CyclicDependency {
-            name,
-            src: src.clone(),
-            span: span.into(),
+        match (
+            span_by_key.get(cycle_node).copied(),
+            local_name_by_key.get(cycle_node),
+        ) {
+            (Some(span), Some(name)) => GraphcalError::CyclicDependency {
+                name: name.to_string(),
+                src: src.clone(),
+                span: span.into(),
+            },
+            _ => GraphcalError::internal_error(
+                format!("runtime cycle node `{cycle_node}` is missing declaration metadata"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ),
         }
     })?;
 
@@ -887,16 +892,16 @@ fn resolve_constraint_from_bounds(
                 |_expr, epoch| epoch.to_string(),
             )?;
             ResolvedDomainConstraint::datetime(scale, evaluated).map_err(|error| {
-                GraphcalError::InternalError {
-                    message: format!(
+                let anchor = bounds.first().map_or(DiagnosticAnchor::WholeFile, |bound| {
+                    DiagnosticAnchor::Source(bound.span)
+                });
+                GraphcalError::internal_error(
+                    format!(
                         "datetime domain bounds on `{display_name}` violated their checked scale invariant: {error}"
                     ),
-                    src: src.clone(),
-                    span: bounds
-                        .first()
-                        .map_or_else(|| Span::new(0, 0), |bound| bound.span)
-                        .into(),
-                }
+                    src,
+                    anchor,
+                )
             })
         }
     }
@@ -915,11 +920,11 @@ fn evaluate_domain_bounds<T: PartialOrd>(
     format_display: impl Fn(&graphcal_compiler::hir::Expr, &T) -> String,
 ) -> Result<EvaluatedDomainBounds<T>, GraphcalError> {
     let Some(first) = bounds.first() else {
-        return Err(GraphcalError::InternalError {
-            message: format!("domain constraint on `{display_name}` has no bounds"),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
-        });
+        return Err(GraphcalError::internal_error(
+            format!("domain constraint on `{display_name}` has no bounds"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        ));
     };
     let empty_locals = HirLocalValueMap::root();
     let evaluated = bounds
@@ -1138,44 +1143,43 @@ fn resolve_application_field_constraints(
 ) -> Result<ApplicationFieldConstraints, GraphcalError> {
     ctx.cancellation.checkpoint()?;
     let dag_id = application.identity.resolved().owner();
-    let dag = ctx
-        .tir
-        .dag_registry()
-        .get(dag_id)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("type owner `{dag_id}` has no checked DAG"),
-            src: ctx.fallback_src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
+    let dag = ctx.tir.dag_registry().get(dag_id).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("type owner `{dag_id}` has no checked DAG"),
+            ctx.fallback_src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
     let type_def = dag
         .semantic()
         .type_defs
         .struct_types
         .get(application.identity.resolved())
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!(
-                "semantic type metadata missing concrete application `{}`",
-                application.identity
-            ),
-            src: ctx.fallback_src.clone(),
-            span: Span::new(0, 0).into(),
+        .ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!(
+                    "semantic type metadata missing concrete application `{}`",
+                    application.identity
+                ),
+                ctx.fallback_src,
+                DiagnosticAnchor::WholeFile,
+            )
         })?;
-    let facts = ctx
-        .dag_facts
-        .get(dag_id)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!("type owner `{dag_id}` has no checked execution facts"),
-            src: ctx.fallback_src.clone(),
-            span: Span::new(0, 0).into(),
-        })?;
+    let facts = ctx.dag_facts.get(dag_id).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("type owner `{dag_id}` has no checked execution facts"),
+            ctx.fallback_src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
     let owner_src = facts.source();
     let visible_const_values =
         visible_values_with_imports(dag, &facts.const_values, ctx.all_const_values);
     let nat_bindings = generic_nat_bindings(
         type_def,
         &application.generic_args,
-        owner_src,
-        Span::new(0, 0),
+        type_def.source(),
+        type_def.span(),
     )?;
     let application_ctx = EvalContext {
         cancellation: ctx.cancellation.clone(),
@@ -1202,10 +1206,15 @@ fn resolve_application_field_constraints(
     {
         let display_name = format!("{}.{}", key.constructor, key.field);
         let bounds = field_semantics.domain_bounds();
-        let bound_span = bounds
-            .first()
-            .map_or_else(|| Span::new(0, 0), |bound| bound.span);
-        let constraint_src = bounds.first().map_or(owner_src, |bound| &bound.src);
+        let Some(first_bound) = bounds.first() else {
+            return Err(GraphcalError::internal_error(
+                format!("constrained field `{display_name}` has no domain bounds"),
+                type_def.source(),
+                DiagnosticAnchor::Source(type_def.span()),
+            ));
+        };
+        let bound_span = first_bound.span;
+        let constraint_src = &first_bound.src;
         let target = resolve_constraint_target(
             &display_name,
             Some(strip_indexed(field_semantics.resolved_type())),

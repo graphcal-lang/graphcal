@@ -1,5 +1,7 @@
 //! Static checking from authoritative project HIR to checked TIR.
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
@@ -48,13 +50,13 @@ fn resolve_imported_bindings(
             let target = hir_binding.target();
             let declared_type = declared_type_for_target(target, local_interfaces, module_artifacts)
                 .ok_or_else(|| {
-                    CompileError::Eval(GraphcalError::InternalError {
-                        message: format!(
+                    CompileError::Eval(GraphcalError::internal_error(
+                        format!(
                             "checked interface for HIR import `{lexical}` targeting `{target}` is unavailable"
                         ),
-                        src: src.clone(),
-                        span: Span::new(0, 0).into(),
-                    })
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    ))
                 })?;
             let checked = match value_for_target(target, module_artifacts) {
                 Some(value) =>
@@ -163,11 +165,11 @@ pub(super) fn check_hir_file(
             cancellation,
         )?;
         tir.insert_dag(checked).map_err(|error| {
-            CompileError::Eval(GraphcalError::InternalError {
-                message: error.to_string(),
-                src: file_src.clone(),
-                span: Span::new(0, 0).into(),
-            })
+            CompileError::Eval(GraphcalError::internal_error(
+                error.to_string(),
+                file_src,
+                DiagnosticAnchor::WholeFile,
+            ))
         })?;
     }
 

@@ -45,7 +45,7 @@ delta_v    = 3778.220768 m/s
 - **Git-friendly.** Plain-text `.gcl` files diff and merge cleanly, with no hidden spreadsheet state.
 - **Built for engineering.** Typed axes, dimension-aware linear algebra, assertions with per-index expected-failure tracking, checked structured display provenance, unit-aware plotting, and reusable computation graphs are built in.
 - **Resource-bounded.** Composite eager shapes are checked before allocation, and expensive dense kernels use a cooperative, cancellation-aware work budget.
-- **Live in your editor.** The language server provides diagnostics, navigation, and inline computed values.
+- **Live in your editor.** The language server provides source-accurate diagnostics, navigation, and inline computed values.
 
 ## Installation
 

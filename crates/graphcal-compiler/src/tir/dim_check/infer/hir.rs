@@ -32,7 +32,7 @@ use crate::tir::materialized_shape::{
 };
 use crate::tir::typed::NatPolyForm;
 
-use super::super::builtins::infer_fn_dim_from_spans;
+use super::super::builtins::infer_fn_dim;
 use super::super::helpers::{
     expect_quantity, format_distinct_inferred_types, format_inferred_type,
     resolved_type_matches_inferred, struct_type_def_for_inferred,
@@ -1898,10 +1898,10 @@ fn infer_hir_builtin_fn(
             span: callee_span.into(),
         });
     }
-    let arg_dims: Vec<Dimension> = args
+    let dimension_args = args
         .iter()
         .map(|arg| {
-            let t = infer_arg(
+            let inferred = infer_arg(
                 arg,
                 declared_types,
                 local_types,
@@ -1911,15 +1911,15 @@ fn infer_hir_builtin_fn(
                 builtin_fns,
                 src,
             )?;
-            expect_quantity(&t, registry, src, arg.span)
+            let dimension = expect_quantity(&inferred, registry, src, arg.span)?;
+            Ok(crate::syntax::span::Spanned::new(dimension, arg.span))
         })
-        .collect::<Result<_, _>>()?;
-    let arg_spans: Vec<Span> = args.iter().map(|arg| arg.span).collect();
-    infer_fn_dim_from_spans(
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    infer_fn_dim(
         name.as_str(),
         func.signature(),
-        &arg_dims,
-        &arg_spans,
+        &dimension_args,
+        callee_span,
         registry,
         src,
     )

@@ -8,6 +8,7 @@ use miette::NamedSource;
 
 use crate::eval::types::CompileError;
 use crate::loader::LoadedProject;
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 
 use super::{CompiledFile, lowering, pipeline};
 
@@ -54,8 +55,8 @@ impl<'project> ProjectCompiler<'project> {
                     cycle,
                     ..
                 } => CompileError::Eval(
-                    graphcal_compiler::registry::error::GraphcalError::EvalError {
-                        message: format!(
+                    graphcal_compiler::registry::error::GraphcalError::internal_error(
+                        format!(
                             "recursive DAG instantiation: {}",
                             cycle
                                 .iter()
@@ -63,9 +64,9 @@ impl<'project> ProjectCompiler<'project> {
                                 .collect::<Vec<_>>()
                                 .join(" -> ")
                         ),
-                        src: root_source.clone(),
-                        span: graphcal_compiler::syntax::span::Span::new(0, 0).into(),
-                    },
+                        root_source,
+                        DiagnosticAnchor::WholeFile,
+                    ),
                 ),
             })?;
         Ok(Self {

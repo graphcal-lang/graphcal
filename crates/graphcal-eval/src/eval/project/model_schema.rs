@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::declared_type::{
     DeclaredGenericArg, DeclaredType, IndexTypeRef, StructTypeRef,
 };
@@ -15,7 +16,6 @@ use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::time_scale::TimeScale;
 use graphcal_compiler::registry::types::{IndexDef, IndexKind};
 use graphcal_compiler::syntax::index_name::IndexVariantName;
-use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::{ConstructorName, FieldName};
 use miette::NamedSource;
 
@@ -375,13 +375,13 @@ impl<'a> ModelSchemaGraphBuilder<'a> {
                 self.ensure_algebraic_definition(&id)?;
                 Ok(ModelValueSchema::Algebraic(id))
             }
-            DeclaredType::IndexArg(index) => Err(GraphcalError::InternalError {
-                message: format!(
+            DeclaredType::IndexArg(index) => Err(GraphcalError::internal_error(
+                format!(
                     "unresolved index argument `{index}` cannot be a concrete model value port"
                 ),
-                src: self.source.clone(),
-                span: Span::new(0, 0).into(),
-            }),
+                self.source,
+                DiagnosticAnchor::WholeFile,
+            )),
         }
     }
 
@@ -478,10 +478,12 @@ fn model_index_schema(
             },
         });
     }
-    let definition = index_def_for_ref(index, tir).ok_or_else(|| GraphcalError::InternalError {
-        message: format!("concrete model index definition is unavailable for `{index}`"),
-        src: source.clone(),
-        span: Span::new(0, 0).into(),
+    let definition = index_def_for_ref(index, tir).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("concrete model index definition is unavailable for `{index}`"),
+            source,
+            DiagnosticAnchor::WholeFile,
+        )
     })?;
     let kind = match &definition.kind {
         IndexKind::Named { variants } => ModelIndexKind::Named {
@@ -499,11 +501,11 @@ fn model_index_schema(
             cardinality: cardinality.get(),
         },
         IndexKind::RequiredNamed | IndexKind::RequiredCoordinate { .. } => {
-            return Err(GraphcalError::InternalError {
-                message: format!("required model index `{index}` was not concretely bound"),
-                src: source.clone(),
-                span: Span::new(0, 0).into(),
-            });
+            return Err(GraphcalError::internal_error(
+                format!("required model index `{index}` was not concretely bound"),
+                source,
+                DiagnosticAnchor::WholeFile,
+            ));
         }
     };
     Ok(ModelIndexSchema {

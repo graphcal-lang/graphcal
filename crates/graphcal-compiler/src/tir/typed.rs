@@ -10,6 +10,7 @@ use crate::syntax::type_name::ResolvedStructTypeName;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
 use crate::hir;
 pub use crate::ir::lower::{LoweredPlotBody, LoweredPlotField};
@@ -241,34 +242,34 @@ where
     S: std::hash::BuildHasher,
 {
     if ir.imported_bindings().len() != checked.len() {
-        return Err(GraphcalError::InternalError {
-            message: format!(
+        return Err(GraphcalError::internal_error(
+            format!(
                 "HIR declares {} imported bindings but checking supplied {}",
                 ir.imported_bindings().len(),
                 checked.len()
             ),
-            src: src.clone(),
-            span: Span::new(0, 0).into(),
-        });
+            src,
+            DiagnosticAnchor::WholeFile,
+        ));
     }
     for (lexical, hir_binding) in ir.imported_bindings() {
         let Some(checked_binding) = checked.get(lexical) else {
-            return Err(GraphcalError::InternalError {
-                message: format!("checked interface for imported binding `{lexical}` is missing"),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            });
+            return Err(GraphcalError::internal_error(
+                format!("checked interface for imported binding `{lexical}` is missing"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            ));
         };
         if checked_binding.target() != hir_binding.target() {
-            return Err(GraphcalError::InternalError {
-                message: format!(
+            return Err(GraphcalError::internal_error(
+                format!(
                     "checked interface for `{lexical}` targets `{}` instead of HIR target `{}`",
                     checked_binding.target(),
                     hir_binding.target()
                 ),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            });
+                src,
+                DiagnosticAnchor::WholeFile,
+            ));
         }
     }
     Ok(())
@@ -318,7 +319,6 @@ fn type_resolve_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
-        ir.child_dag_spans,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
@@ -434,7 +434,6 @@ fn type_resolve_single_impl(
         ir.layers,
         ir.included_plots,
         ir.source_order,
-        ir.child_dag_spans,
         ir.assumes_map,
         ir.expected_fail,
         ir.dynamic_unit_scales,
@@ -661,15 +660,13 @@ fn collect_bindable_nominals(
     ctx: ModuleTypeContext<'_>,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashSet<BindableNominalIdentity>, GraphcalError> {
-    let symbols =
-        ctx.resolver
-            .modules()
-            .get(ctx.owner)
-            .ok_or_else(|| GraphcalError::InternalError {
-                message: format!("module symbol table missing for DAG `{}`", ctx.owner),
-                src: src.clone(),
-                span: Span::new(0, 0).into(),
-            })?;
+    let symbols = ctx.resolver.modules().get(ctx.owner).ok_or_else(|| {
+        GraphcalError::internal_error(
+            format!("module symbol table missing for DAG `{}`", ctx.owner),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
     Ok(symbols
         .indexes()
         .values()
@@ -933,10 +930,13 @@ fn validate_public_generic_defaults(
         {
             continue;
         }
-        let pub_span = ctx
-            .resolver
-            .struct_type_span(type_name)
-            .unwrap_or(Span::new(0, 0));
+        let pub_span = ctx.resolver.struct_type_span(type_name).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("module resolver lost source span for public type `{type_name}`"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
         for param in type_def.generic_params() {
             let Some(default) = param.default() else {
                 continue;
@@ -1729,7 +1729,6 @@ impl DagTIRSeed {
         layers: Vec<crate::ir::lower::LayerEntry>,
         included_plots: Vec<crate::ir::lower::IncludedPlotEntry>,
         source_order: Vec<(ScopedName, DeclCategory)>,
-        child_dag_spans: HashMap<crate::dag_id::DagId, Span>,
         assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
         expected_fail: HashMap<ScopedName, crate::ir::lower::ParsedExpectedFailMetadata>,
         dynamic_unit_scales: Vec<crate::ir::lower::DynamicUnitScaleEntry>,
@@ -1759,16 +1758,17 @@ impl DagTIRSeed {
         semantic.decl_bindings = decl_bindings;
         for entry in dynamic_unit_scales {
             let unit = entry.unit.clone();
+            let span = entry.span;
             if semantic
                 .dynamic_unit_scales
                 .insert(unit.clone(), entry)
                 .is_some()
             {
-                return Err(GraphcalError::InternalError {
-                    message: format!("duplicate dynamic unit semantic entry `{unit}`"),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                });
+                return Err(GraphcalError::internal_error(
+                    format!("duplicate dynamic unit semantic entry `{unit}`"),
+                    src,
+                    DiagnosticAnchor::Source(span),
+                ));
             }
         }
         collect_dynamic_unit_refs(module_ctx, &mut semantic)?;
@@ -1787,7 +1787,6 @@ impl DagTIRSeed {
             declaration_index: DagDeclarationIndex::default(),
             semantic,
             source_order,
-            child_dag_spans,
             assumes_map,
             expected_fail,
             resolved_decl_types: self.resolved_decl_types,

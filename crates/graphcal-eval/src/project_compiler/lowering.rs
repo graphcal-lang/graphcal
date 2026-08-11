@@ -1,5 +1,7 @@
 //! HIR lowering, registry composition, and include elaboration for projects.
 
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
@@ -263,7 +265,7 @@ pub(super) fn module_resolve_compile_error(
             name,
             file_path: owner.to_string(),
             src: src.clone(),
-            span: Span::new(0, 0).into(),
+            span: Span::new(0, src.inner().len()).into(),
         }),
         graphcal_compiler::syntax::module_resolve::ModuleResolveError::WrongImportCategory {
             owner,
@@ -295,7 +297,7 @@ pub(super) fn module_resolve_compile_error(
         other => CompileError::Eval(GraphcalError::EvalError {
             message: other.to_string(),
             src: src.clone(),
-            span: Span::new(0, 0).into(),
+            span: Span::new(0, src.inner().len()).into(),
         }),
     }
 }
@@ -509,11 +511,11 @@ fn registry_build_compile_error(
     err: &graphcal_compiler::registry::types::RegistryBuildError,
     src: &NamedSource<Arc<String>>,
 ) -> CompileError {
-    CompileError::Eval(GraphcalError::InternalError {
-        message: format!("registry build failed: {err}"),
-        src: src.clone(),
-        span: Span::new(0, 0).into(),
-    })
+    CompileError::Eval(GraphcalError::internal_error(
+        format!("registry build failed: {err}"),
+        src,
+        DiagnosticAnchor::WholeFile,
+    ))
 }
 
 fn extend_imported_value_names(target: &mut ImportedValueNames, source: ImportedValueNames) {
@@ -537,8 +539,20 @@ fn extend_imported_bindings(
                 .chain(&imported_names.param_names)
                 .chain(&imported_names.node_names)
                 .filter_map(|(candidate, span)| (candidate == &name).then_some(*span));
-            let first = spans.next().unwrap_or(Span::new(0, 0));
-            let duplicate = spans.next_back().unwrap_or(first);
+            let Some(first) = spans.next() else {
+                return Err(CompileError::Eval(GraphcalError::internal_error(
+                    format!("duplicate imported binding `{name}` has no source provenance"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )));
+            };
+            let Some(duplicate) = spans.next_back() else {
+                return Err(CompileError::Eval(GraphcalError::internal_error(
+                    format!("duplicate imported binding `{name}` has only one source location"),
+                    src,
+                    DiagnosticAnchor::Source(first),
+                )));
+            };
             return Err(CompileError::Eval(GraphcalError::DuplicateName {
                 name: name.to_string(),
                 src: src.clone(),
@@ -678,11 +692,11 @@ pub(super) fn merge_dep_dag_tirs(
         for (key, function) in &dep_eval.extern_functions {
             tir.insert_extern_function(key.clone(), function.clone())
                 .map_err(|error| {
-                    CompileError::Eval(GraphcalError::InternalError {
-                        message: error.to_string(),
-                        src: src.clone(),
-                        span: Span::new(0, 0).into(),
-                    })
+                    CompileError::Eval(GraphcalError::internal_error(
+                        error.to_string(),
+                        src,
+                        DiagnosticAnchor::WholeFile,
+                    ))
                 })?;
         }
         for (dep_id, dag_tir) in &dep_eval.dag_tirs {
@@ -701,11 +715,11 @@ pub(super) fn merge_dep_dag_tirs(
                 }
             }
             tir.insert_dag(cloned).map_err(|error| {
-                CompileError::Eval(GraphcalError::InternalError {
-                    message: error.to_string(),
-                    src: src.clone(),
-                    span: Span::new(0, 0).into(),
-                })
+                CompileError::Eval(GraphcalError::internal_error(
+                    error.to_string(),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                ))
             })?;
         }
     }
@@ -1066,6 +1080,7 @@ fn elaborate_include_instances(
             &instance.requested_plots,
             &dep_resolution_owner,
             importer_dag_id,
+            instance.include_span,
             importer_src,
             &dep_src,
         )?;

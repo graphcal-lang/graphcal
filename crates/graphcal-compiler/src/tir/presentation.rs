@@ -151,6 +151,11 @@ impl PresentationCallKey {
     pub const fn new(owner: ResolvedDeclName, span: Span) -> Self {
         Self { owner, span }
     }
+
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
 }
 
 /// Presentation metadata whose structure mirrors an evaluated public value.
