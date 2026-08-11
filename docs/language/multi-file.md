@@ -475,7 +475,10 @@ dag analyze {
 
 The path `orbit_analysis.analyze.deeper` reads: package
 `orbit_analysis`, sub-module `analyze`, sub-module `deeper`. Identical
-addressing rule as cross-package `nasa.rocket.compute_thrust`.
+addressing rule as cross-package `nasa.rocket.compute_thrust`. Resolution
+chooses the longest prefix that names a physical `.gcl` file, then follows every
+remaining inline-DAG segment exactly; same-named descendants under different
+parents never alias each other.
 
 `import` and `include` declarations inside an inline DAG are real
 project dependency edges. They load dependencies, import values and
@@ -501,10 +504,10 @@ dag analyze {
 
 ### Recursive parent-DAG include
 
-An inline DAG may `include` its enclosing DAG by full path. This is
-recursive instantiation: the source-level grammar accepts it, but the
-evaluator currently emits `NotYetImplemented`. A future implementation
-will require recursion to terminate (via diverging param values).
+An inline DAG may spell an `include` of its enclosing DAG by full path, but
+that source forms an unbounded concrete-instance graph. Graphcal rejects direct
+and mutual recursive includes before constructing module scopes; recursive
+instantiation is not a runtime control-flow mechanism.
 
 ## Self-Reference: A File Is Its Own Package
 

@@ -29,7 +29,6 @@ node one: List = Cons(head: 1, tail: @empty);
 }
 
 #[test]
-#[ignore = "fixed by #1256 in Phase 1"]
 fn nested_inline_module_paths_preserve_every_segment() {
     let directory = tempfile::tempdir().unwrap();
     let package = directory.path().join("src/mission");
@@ -82,7 +81,6 @@ node total: Dimensionless = @left + @right;
 }
 
 #[test]
-#[ignore = "fixed by #1255 in Phase 1"]
 fn module_resolver_rejects_recursive_include_expansion() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("main.gcl");
@@ -104,6 +102,43 @@ dag recurse {
         error.to_string().contains("recursive") || error.to_string().contains("cycle"),
         "unexpected recursion diagnostic: {error:?}"
     );
+}
+
+#[test]
+fn module_resolver_rejects_mutually_recursive_includes() {
+    let project = graphcal_eval::loader::LoadedProject::from_source(
+        r"
+dag first { include second() as next; }
+dag second { include first() as next; }
+",
+        "main.gcl",
+    )
+    .unwrap();
+
+    assert!(matches!(
+        project.build_module_resolver(),
+        Err(graphcal_eval::loader::ModuleResolverBuildError::RecursiveIncludeExpansion { .. })
+    ));
+}
+
+#[test]
+fn module_resolver_builds_deep_acyclic_include_chains_iteratively() {
+    const DEPTH: usize = 128;
+
+    let source = (0..DEPTH)
+        .map(|index| {
+            if index + 1 == DEPTH {
+                format!("dag d{index} {{ pub node value: Dimensionless = 1.0; }}\n")
+            } else {
+                format!("dag d{index} {{ include d{}() as next; }}\n", index + 1)
+            }
+        })
+        .collect::<String>();
+    let project = graphcal_eval::loader::LoadedProject::from_source(&source, "main.gcl").unwrap();
+
+    project
+        .build_module_resolver()
+        .expect("deep acyclic include expansion should be stack-safe");
 }
 
 #[test]
