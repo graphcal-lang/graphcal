@@ -965,7 +965,10 @@ include container(Element: Inner).{ pub origin };
 ```
 
 V006 checks only outputs/items explicitly marked `pub`; adding another public
-output to the dependency does not alter the importer's facade.
+output to the dependency does not alter the importer's facade. The check follows
+only typed include substitutions into the importer. Unsubstituted builtin,
+dependency-local, and qualified names retain their original identity rather
+than being reinterpreted as a same-spelled importer declaration.
 
 ## Parameterized Includes
 
