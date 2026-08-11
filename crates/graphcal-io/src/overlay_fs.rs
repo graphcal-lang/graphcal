@@ -157,19 +157,24 @@ impl<F: FileSystemReader> FileSystemReader for OverlayFileSystem<F> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{InMemoryFileSystem, NeverCancel};
+    use crate::{InMemoryFileSystem, NeverCancel, VirtualAbsolutePath};
 
     use super::*;
 
     const TEST_LIMIT: ByteLimit = ByteLimit::new(1024);
 
+    fn virtual_path(path: &str) -> VirtualAbsolutePath {
+        VirtualAbsolutePath::new(path).unwrap()
+    }
+
     #[test]
     fn overlay_intercepts_read() {
         let mut base = InMemoryFileSystem::new();
         base.add_file(
-            PathBuf::from("/project/main.gcl"),
+            virtual_path("/project/main.gcl"),
             "original content".to_string(),
-        );
+        )
+        .unwrap();
 
         let fs = OverlayFileSystem::new(
             base,
@@ -188,13 +193,15 @@ mod tests {
     fn overlay_delegates_other_files() {
         let mut base = InMemoryFileSystem::new();
         base.add_file(
-            PathBuf::from("/project/main.gcl"),
+            virtual_path("/project/main.gcl"),
             "main content".to_string(),
-        );
+        )
+        .unwrap();
         base.add_file(
-            PathBuf::from("/project/helper.gcl"),
+            virtual_path("/project/helper.gcl"),
             "helper content".to_string(),
-        );
+        )
+        .unwrap();
         let fs = OverlayFileSystem::new(
             base,
             PathBuf::from("/project/main.gcl"),
@@ -222,12 +229,12 @@ mod tests {
     #[test]
     fn multiple_overlays_intercept_reads() {
         let mut base = InMemoryFileSystem::new();
-        base.add_file(PathBuf::from("/project/main.gcl"), "main disk".to_string());
-        base.add_file(PathBuf::from("/project/lib.gcl"), "lib disk".to_string());
-        base.add_file(
-            PathBuf::from("/project/other.gcl"),
-            "other disk".to_string(),
-        );
+        base.add_file(virtual_path("/project/main.gcl"), "main disk".to_string())
+            .unwrap();
+        base.add_file(virtual_path("/project/lib.gcl"), "lib disk".to_string())
+            .unwrap();
+        base.add_file(virtual_path("/project/other.gcl"), "other disk".to_string())
+            .unwrap();
         let fs = OverlayFileSystem::with_overlays(
             base,
             [

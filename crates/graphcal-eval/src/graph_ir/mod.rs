@@ -216,9 +216,10 @@ mod tests {
     fn tir_from_project_source(source: &str) -> TIR {
         let mut fs = graphcal_io::InMemoryFileSystem::new();
         fs.add_file(
-            std::path::PathBuf::from("/proj/test.gcl"),
+            graphcal_io::VirtualAbsolutePath::new("/proj/test.gcl").unwrap(),
             source.to_string(),
-        );
+        )
+        .unwrap();
         let (tir, _project) = crate::eval::compile_to_tir_project(
             std::path::Path::new("/proj/test.gcl"),
             Some(std::path::Path::new("/proj")),

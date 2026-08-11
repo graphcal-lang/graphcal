@@ -5,40 +5,141 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use thiserror::Error;
+
 use crate::{
     ByteLimit, CancellationSignal, EntryLimit, FileSystemEntryKind, FileSystemReadError,
     FileSystemReader,
 };
 
-/// In-memory filesystem for tests and WASM environments.
+/// Normalized absolute path in an in-memory virtual filesystem.
 ///
-/// All paths must be absolute within the virtual tree. On bare Wasm, a path
-/// rooted at `/` satisfies this invariant even though the target has no host
-/// path prefix.
-#[derive(Debug, Clone, Default)]
-pub struct InMemoryFileSystem {
-    files: HashMap<PathBuf, String>,
-    binary_files: HashMap<PathBuf, Vec<u8>>,
-}
+/// Construction removes `.` components and resolves `..` components while
+/// rejecting any parent traversal that would escape the virtual root.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VirtualAbsolutePath(PathBuf);
 
-fn is_virtual_absolute(path: &Path) -> bool {
-    path.is_absolute() || (cfg!(target_arch = "wasm32") && path.has_root())
-}
+impl VirtualAbsolutePath {
+    /// Validate and normalize an absolute virtual path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VirtualPathError::NotAbsolute`] for a relative path and
+    /// [`VirtualPathError::EscapesRoot`] when a `..` component crosses the
+    /// virtual root.
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, VirtualPathError> {
+        let path = path.into();
+        if !path.has_root() {
+            return Err(VirtualPathError::NotAbsolute { path });
+        }
 
-fn normalized(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if normalized.parent().is_some() {
-                    normalized.pop();
+        let mut normalized = PathBuf::new();
+        let mut normal_components = 0usize;
+        for component in path.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => {
+                    normalized.push(component.as_os_str());
                 }
+                Component::CurDir => {}
+                Component::Normal(name) => {
+                    normalized.push(name);
+                    normal_components += 1;
+                }
+                Component::ParentDir if normal_components > 0 => {
+                    normalized.pop();
+                    normal_components -= 1;
+                }
+                Component::ParentDir => return Err(VirtualPathError::EscapesRoot { path }),
             }
-            other => normalized.push(other.as_os_str()),
+        }
+        Ok(Self(normalized))
+    }
+
+    /// Borrow the normalized host representation used at filesystem boundaries.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+
+    /// Consume the validated path and return its normalized representation.
+    #[must_use]
+    pub fn into_path_buf(self) -> PathBuf {
+        self.0
+    }
+}
+
+impl AsRef<Path> for VirtualAbsolutePath {
+    fn as_ref(&self) -> &Path {
+        self.as_path()
+    }
+}
+
+/// Invalid virtual absolute path.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum VirtualPathError {
+    /// Virtual paths must start at a root.
+    #[error("virtual filesystem path `{}` must be absolute", path.display())]
+    NotAbsolute {
+        /// Rejected spelling.
+        path: PathBuf,
+    },
+    /// Parent traversal attempted to cross the virtual root.
+    #[error("virtual filesystem path `{}` escapes the virtual root", path.display())]
+    EscapesRoot {
+        /// Rejected spelling.
+        path: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum FileContent {
+    Utf8(String),
+    Bytes(Vec<u8>),
+}
+
+impl FileContent {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Utf8(content) => content.as_bytes(),
+            Self::Bytes(content) => content,
         }
     }
-    normalized
+}
+
+/// Failure to insert a file into an impossible virtual filesystem topology.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum InMemoryFileSystemError {
+    /// A file already occupies an ancestor of the requested path.
+    #[error(
+        "cannot add virtual file `{}` below existing file `{}`",
+        path.as_path().display(),
+        ancestor.as_path().display()
+    )]
+    FileAncestor {
+        /// Requested file path.
+        path: VirtualAbsolutePath,
+        /// Existing file that blocks the path.
+        ancestor: VirtualAbsolutePath,
+    },
+    /// Existing files already make the requested path a directory.
+    #[error(
+        "cannot add virtual file `{}` because that path is already a directory",
+        path.as_path().display()
+    )]
+    DirectoryAlreadyExists {
+        /// Requested file path.
+        path: VirtualAbsolutePath,
+    },
+}
+
+/// In-memory filesystem for tests and WASM environments.
+///
+/// Every key is a normalized [`VirtualAbsolutePath`], and each path has exactly
+/// one internal content variant. Inserting a new content kind at an existing path
+/// replaces the complete previous entry.
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryFileSystem {
+    files: HashMap<VirtualAbsolutePath, FileContent>,
 }
 
 impl InMemoryFileSystem {
@@ -48,49 +149,85 @@ impl InMemoryFileSystem {
         Self::default()
     }
 
-    /// Insert a UTF-8 file. `path` must be absolute in the virtual tree.
-    pub fn add_file(&mut self, path: PathBuf, content: String) {
-        debug_assert!(
-            is_virtual_absolute(&path),
-            "InMemoryFileSystem requires absolute paths, got `{}`",
-            path.display()
-        );
+    /// Insert or replace a UTF-8 file at a validated path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InMemoryFileSystemError`] if the path is already an implied
+    /// directory or has an existing file as an ancestor.
+    pub fn add_file(
+        &mut self,
+        path: VirtualAbsolutePath,
+        content: String,
+    ) -> Result<(), InMemoryFileSystemError> {
+        self.insert(path, FileContent::Utf8(content))
+    }
+
+    /// Insert or replace a binary file at a validated path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InMemoryFileSystemError`] if the path is already an implied
+    /// directory or has an existing file as an ancestor.
+    pub fn add_binary_file(
+        &mut self,
+        path: VirtualAbsolutePath,
+        content: Vec<u8>,
+    ) -> Result<(), InMemoryFileSystemError> {
+        self.insert(path, FileContent::Bytes(content))
+    }
+
+    fn insert(
+        &mut self,
+        path: VirtualAbsolutePath,
+        content: FileContent,
+    ) -> Result<(), InMemoryFileSystemError> {
+        if self.is_dir(&path) {
+            return Err(InMemoryFileSystemError::DirectoryAlreadyExists { path });
+        }
+        if let Some(ancestor) = self
+            .files
+            .keys()
+            .find(|existing| *existing != &path && path.as_path().starts_with(existing.as_path()))
+            .cloned()
+        {
+            return Err(InMemoryFileSystemError::FileAncestor { path, ancestor });
+        }
         self.files.insert(path, content);
+        Ok(())
     }
 
-    /// Insert a binary file. `path` must be absolute in the virtual tree.
-    pub fn add_binary_file(&mut self, path: PathBuf, content: Vec<u8>) {
-        debug_assert!(
-            is_virtual_absolute(&path),
-            "InMemoryFileSystem requires absolute paths, got `{}`",
-            path.display()
-        );
-        self.binary_files.insert(path, content);
+    fn contains(&self, path: &VirtualAbsolutePath) -> bool {
+        self.files.contains_key(path)
     }
 
-    fn contains(&self, path: &Path) -> bool {
-        self.files.contains_key(path) || self.binary_files.contains_key(path)
-    }
-
-    fn is_dir(&self, path: &Path) -> bool {
+    fn is_dir(&self, path: &VirtualAbsolutePath) -> bool {
         self.files
             .keys()
-            .chain(self.binary_files.keys())
-            .any(|key| key.starts_with(path) && key != path)
+            .any(|key| key != path && key.as_path().starts_with(path.as_path()))
+    }
+
+    fn existing_path(&self, path: &Path) -> Result<VirtualAbsolutePath, io::Error> {
+        let path = virtual_path(path)?;
+        if self.contains(&path) || self.is_dir(&path) {
+            Ok(path)
+        } else {
+            Err(not_found(&path))
+        }
     }
 
     fn child_names_bounded(
         &self,
-        path: &Path,
+        path: &VirtualAbsolutePath,
         limit: EntryLimit,
         cancellation: &dyn CancellationSignal,
     ) -> Result<Vec<OsString>, FileSystemReadError> {
         let mut names = BTreeSet::new();
-        for key in self.files.keys().chain(self.binary_files.keys()) {
+        for key in self.files.keys() {
             if cancellation.is_cancelled() {
                 return Err(FileSystemReadError::Cancelled);
             }
-            let Ok(relative) = key.strip_prefix(path) else {
+            let Ok(relative) = key.as_path().strip_prefix(path.as_path()) else {
                 continue;
             };
             let Some(Component::Normal(name)) = relative.components().next() else {
@@ -115,12 +252,12 @@ impl FileSystemReader for InMemoryFileSystem {
         if cancellation.is_cancelled() {
             return Err(FileSystemReadError::Cancelled);
         }
+        let path = virtual_path(path)?;
         let bytes = self
-            .binary_files
-            .get(path)
-            .map(Vec::as_slice)
-            .or_else(|| self.files.get(path).map(String::as_bytes))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))?;
+            .files
+            .get(&path)
+            .map(FileContent::as_bytes)
+            .ok_or_else(|| not_found(&path))?;
         if bytes.len() as u64 > limit.get() {
             return Err(FileSystemReadError::ByteLimitExceeded { limit });
         }
@@ -128,36 +265,18 @@ impl FileSystemReader for InMemoryFileSystem {
     }
 
     fn canonicalize(&self, path: &Path) -> Result<PathBuf, io::Error> {
-        if !is_virtual_absolute(path) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "InMemoryFileSystem::canonicalize requires an absolute path, got `{}`",
-                    path.display()
-                ),
-            ));
-        }
-        let normalized = normalized(path);
-        if self.contains(&normalized) || self.is_dir(&normalized) {
-            return Ok(normalized);
-        }
-        Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            normalized.display().to_string(),
-        ))
+        self.existing_path(path)
+            .map(VirtualAbsolutePath::into_path_buf)
     }
 
     fn entry_kind(&self, path: &Path) -> Result<FileSystemEntryKind, io::Error> {
-        let path = normalized(path);
+        let path = virtual_path(path)?;
         if self.contains(&path) {
             Ok(FileSystemEntryKind::File)
         } else if self.is_dir(&path) {
             Ok(FileSystemEntryKind::Directory)
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                path.display().to_string(),
-            ))
+            Err(not_found(&path))
         }
     }
 
@@ -167,41 +286,58 @@ impl FileSystemReader for InMemoryFileSystem {
         limit: EntryLimit,
         cancellation: &dyn CancellationSignal,
     ) -> Result<Vec<OsString>, FileSystemReadError> {
-        let canonical = self.canonicalize(path)?;
-        if !self.is_dir(&canonical) {
+        let path = self.existing_path(path)?;
+        if !self.is_dir(&path) {
             return Err(io::Error::new(
                 io::ErrorKind::NotADirectory,
-                canonical.display().to_string(),
+                path.as_path().display().to_string(),
             )
             .into());
         }
-        self.child_names_bounded(&canonical, limit, cancellation)
+        self.child_names_bounded(&path, limit, cancellation)
     }
 
     fn is_file(&self, path: &Path) -> bool {
-        self.contains(&normalized(path))
+        VirtualAbsolutePath::new(path.to_path_buf()).is_ok_and(|path| self.contains(&path))
     }
 
     fn exists(&self, path: &Path) -> bool {
-        let path = normalized(path);
-        self.contains(&path) || self.is_dir(&path)
+        VirtualAbsolutePath::new(path.to_path_buf())
+            .is_ok_and(|path| self.contains(&path) || self.is_dir(&path))
     }
+}
+
+fn virtual_path(path: &Path) -> Result<VirtualAbsolutePath, io::Error> {
+    VirtualAbsolutePath::new(path.to_path_buf())
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+}
+
+fn not_found(path: &VirtualAbsolutePath) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        path.as_path().display().to_string(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::NeverCancel;
+    use crate::{NeverCancel, RealFileSystem};
 
     const TEST_LIMIT: ByteLimit = ByteLimit::new(1024);
+
+    fn path(value: impl Into<PathBuf>) -> VirtualAbsolutePath {
+        VirtualAbsolutePath::new(value).unwrap()
+    }
 
     #[test]
     fn in_memory_read_existing_file() {
         let mut fs = InMemoryFileSystem::new();
         fs.add_file(
-            PathBuf::from("/project/main.gcl"),
+            path("/project/main.gcl"),
             "param x: Dimensionless = 1.0;".to_string(),
-        );
+        )
+        .unwrap();
         let content = fs
             .read_to_string_bounded(Path::new("/project/main.gcl"), TEST_LIMIT, &NeverCancel)
             .unwrap();
@@ -211,7 +347,7 @@ mod tests {
     #[test]
     fn in_memory_bounded_read_checks_before_cloning() {
         let mut fs = InMemoryFileSystem::new();
-        fs.add_binary_file(PathBuf::from("/large"), vec![0; 5]);
+        fs.add_binary_file(path("/large"), vec![0; 5]).unwrap();
         let error = fs
             .read_bytes_bounded(Path::new("/large"), ByteLimit::new(4), &NeverCancel)
             .unwrap_err();
@@ -222,16 +358,81 @@ mod tests {
     }
 
     #[test]
+    fn text_and_binary_inserts_replace_the_entire_prior_entry() {
+        let mut fs = InMemoryFileSystem::new();
+        let file = path("/value");
+        fs.add_binary_file(file.clone(), b"old".to_vec()).unwrap();
+        fs.add_file(file.clone(), "new".to_string()).unwrap();
+        assert_eq!(
+            fs.read_bytes_bounded(file.as_path(), TEST_LIMIT, &NeverCancel)
+                .unwrap(),
+            b"new"
+        );
+
+        fs.add_binary_file(file.clone(), vec![0xff]).unwrap();
+        assert_eq!(
+            fs.read_bytes_bounded(file.as_path(), TEST_LIMIT, &NeverCancel)
+                .unwrap(),
+            vec![0xff]
+        );
+        assert_eq!(
+            fs.read_to_string_bounded(file.as_path(), TEST_LIMIT, &NeverCancel)
+                .unwrap_err()
+                .io_kind(),
+            Some(io::ErrorKind::InvalidData)
+        );
+    }
+
+    #[test]
+    fn normalized_insertions_are_found_through_equivalent_spellings() {
+        let mut fs = InMemoryFileSystem::new();
+        let spelling = path("/project/sub/../model.gcl");
+        assert_eq!(spelling.as_path(), Path::new("/project/model.gcl"));
+        fs.add_file(spelling, "model".to_string()).unwrap();
+
+        assert_eq!(
+            fs.read_to_string_bounded(Path::new("/project/./model.gcl"), TEST_LIMIT, &NeverCancel)
+                .unwrap(),
+            "model"
+        );
+        assert_eq!(
+            fs.canonicalize(Path::new("/project/sub/../model.gcl"))
+                .unwrap(),
+            PathBuf::from("/project/model.gcl")
+        );
+    }
+
+    #[test]
+    fn virtual_paths_reject_relative_and_root_escaping_spellings_in_release_builds() {
+        assert!(matches!(
+            VirtualAbsolutePath::new("relative/model.gcl"),
+            Err(VirtualPathError::NotAbsolute { .. })
+        ));
+        assert!(matches!(
+            VirtualAbsolutePath::new("/../model.gcl"),
+            Err(VirtualPathError::EscapesRoot { .. })
+        ));
+
+        let fs = InMemoryFileSystem::new();
+        let error = fs
+            .read_bytes_bounded(Path::new("relative/model.gcl"), TEST_LIMIT, &NeverCancel)
+            .unwrap_err();
+        assert_eq!(error.io_kind(), Some(io::ErrorKind::InvalidInput));
+        assert!(!fs.exists(Path::new("/../model.gcl")));
+    }
+
+    #[test]
     fn in_memory_read_missing_file() {
         let fs = InMemoryFileSystem::new();
         let result = fs.read_to_string_bounded(Path::new("/missing.gcl"), TEST_LIMIT, &NeverCancel);
-        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().io_kind(), Some(io::ErrorKind::NotFound));
     }
 
     #[test]
     fn in_memory_canonicalize_existing() {
         let mut fs = InMemoryFileSystem::new();
-        fs.add_file(PathBuf::from("/project/main.gcl"), String::new());
+        fs.add_file(path("/project/main.gcl"), String::new())
+            .unwrap();
         let canonical = fs.canonicalize(Path::new("/project/main.gcl")).unwrap();
         assert_eq!(canonical, PathBuf::from("/project/main.gcl"));
     }
@@ -239,23 +440,28 @@ mod tests {
     #[test]
     fn in_memory_canonicalize_directory() {
         let mut fs = InMemoryFileSystem::new();
-        fs.add_file(PathBuf::from("/project/sub/file.gcl"), String::new());
+        fs.add_file(path("/project/sub/file.gcl"), String::new())
+            .unwrap();
         let canonical = fs.canonicalize(Path::new("/project/sub")).unwrap();
         assert_eq!(canonical, PathBuf::from("/project/sub"));
     }
 
     #[test]
-    fn in_memory_canonicalize_parent_of_root_stays_root() {
+    fn in_memory_canonicalize_rejects_parent_of_root() {
         let mut fs = InMemoryFileSystem::new();
-        fs.add_file(PathBuf::from("/project/main.gcl"), String::new());
-        let canonical = fs.canonicalize(Path::new("/..")).unwrap();
-        assert_eq!(canonical, PathBuf::from("/"));
+        fs.add_file(path("/project/main.gcl"), String::new())
+            .unwrap();
+        let error = fs.canonicalize(Path::new("/..")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
     fn in_memory_canonicalize_missing() {
         let fs = InMemoryFileSystem::new();
-        assert!(fs.canonicalize(Path::new("/missing")).is_err());
+        assert_eq!(
+            fs.canonicalize(Path::new("/missing")).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
     }
 
     #[test]
@@ -266,18 +472,40 @@ mod tests {
     }
 
     #[test]
+    fn canonicalization_matches_real_filesystem_dot_and_parent_semantics() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join("sub")).unwrap();
+        let real = RealFileSystem::default();
+        let canonical_directory = real.canonicalize(directory.path()).unwrap();
+        let real_file = canonical_directory.join("model.gcl");
+        std::fs::write(&real_file, b"model").unwrap();
+        let alternate = canonical_directory.join("sub/.././model.gcl");
+        let real_canonical = real.canonicalize(&alternate).unwrap();
+        let mut memory = InMemoryFileSystem::new();
+        memory
+            .add_file(path(real_canonical.clone()), "model".to_string())
+            .unwrap();
+
+        assert_eq!(memory.canonicalize(&alternate).unwrap(), real_canonical);
+    }
+
+    #[test]
     fn in_memory_is_file() {
         let mut fs = InMemoryFileSystem::new();
-        fs.add_file(PathBuf::from("/project/main.gcl"), String::new());
+        fs.add_file(path("/project/main.gcl"), String::new())
+            .unwrap();
         assert!(fs.is_file(Path::new("/project/main.gcl")));
         assert!(!fs.is_file(Path::new("/project")));
+        assert!(!fs.is_file(Path::new("relative")));
     }
 
     #[test]
     fn in_memory_exists_and_lists_direct_children() {
         let mut fs = InMemoryFileSystem::new();
-        fs.add_file(PathBuf::from("/project/sub/file.gcl"), String::new());
-        fs.add_file(PathBuf::from("/project/other.gcl"), String::new());
+        fs.add_file(path("/project/sub/file.gcl"), String::new())
+            .unwrap();
+        fs.add_file(path("/project/other.gcl"), String::new())
+            .unwrap();
         assert!(fs.exists(Path::new("/project/sub/file.gcl")));
         assert!(fs.exists(Path::new("/project/sub")));
         assert!(!fs.exists(Path::new("/other")));
@@ -286,5 +514,23 @@ mod tests {
                 .unwrap(),
             vec![OsString::from("other.gcl"), OsString::from("sub")]
         );
+    }
+
+    #[test]
+    fn insertion_rejects_file_directory_topology_conflicts() {
+        let mut fs = InMemoryFileSystem::new();
+        fs.add_file(path("/project/file/child.gcl"), String::new())
+            .unwrap();
+        assert!(matches!(
+            fs.add_file(path("/project/file"), String::new()),
+            Err(InMemoryFileSystemError::DirectoryAlreadyExists { .. })
+        ));
+
+        fs.add_file(path("/project/other.gcl"), String::new())
+            .unwrap();
+        assert!(matches!(
+            fs.add_file(path("/project/other.gcl/child"), String::new()),
+            Err(InMemoryFileSystemError::FileAncestor { .. })
+        ));
     }
 }
