@@ -633,7 +633,8 @@ The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 | `references.rs`             | Find references                                   |
 | `rename.rs`                 | Rename                                            |
 | `inlay_hints.rs`            | Computed value hints                              |
-| `formatting.rs`             | Formatting provider                               |
+| `formatting.rs`             | Pure formatting-to-edit adapter                   |
+| `formatting_scheduler.rs`   | Size, concurrency, cancellation, and timeout shell |
 | `document_symbols.rs`       | Outline symbols                                   |
 | `document_links.rs`         | Import/include links                              |
 | `signature_help.rs`         | Function signatures                               |
@@ -1482,8 +1483,9 @@ then the request features, and finally the imperative server shell.
 18. `crates/graphcal-lsp/src/rename.rs`
 19. `crates/graphcal-lsp/src/hover.rs`
 20. `crates/graphcal-lsp/src/formatting.rs`
-21. `crates/graphcal-lsp/src/server.rs`
-22. `crates/graphcal-lsp/src/lib.rs`
+21. `crates/graphcal-lsp/src/formatting_scheduler.rs`
+22. `crates/graphcal-lsp/src/server.rs`
+23. `crates/graphcal-lsp/src/lib.rs`
 
 ### Stage 21 - CLI plugin support and integration tests
 

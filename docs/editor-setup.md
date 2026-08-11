@@ -62,7 +62,11 @@ client log (`window/logMessage`) so unavailable navigation or completion can be
 diagnosed instead of appearing indistinguishable from an empty result. Formatting
 an incomplete buffer quietly produces no edit, while an internal formatter
 reparse, AST-equivalence, rendering, or UTF-8 failure is returned as a
-JSON-RPC internal error and written to the client log.
+JSON-RPC internal error and written to the client log. Editor formatting rejects
+buffers above the loader's 16 MiB per-source limit before parsing. Accepted
+requests run one at a time on a blocking worker with a 10-second deadline;
+timed-out work keeps its sole permit until the synchronous worker exits, and
+cooperative phase boundaries observe cancellation.
 
 ## VS Code
 
