@@ -323,6 +323,7 @@ mod tests {
         AnalysisResult {
             source: Arc::new(source.to_string()),
             symbol_table,
+            project_symbols: crate::project_symbols::ProjectSymbols::Incomplete,
             imported_definitions: StdHashMap::new(),
             imported_bindings: Vec::new(),
             import_surfaces: StdHashMap::new(),

@@ -16,6 +16,7 @@ mod goto_definition;
 mod hover;
 mod inlay_hints;
 mod nominal_type_index;
+mod project_symbols;
 mod references;
 mod rename;
 mod resolve;

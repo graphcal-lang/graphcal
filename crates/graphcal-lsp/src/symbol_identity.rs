@@ -147,6 +147,21 @@ impl ExternFunctionId {
             function,
         }
     }
+
+    #[must_use]
+    pub const fn owner(&self) -> &DagId {
+        &self.owner
+    }
+
+    #[must_use]
+    pub const fn plugin(&self) -> &ModuleAliasName {
+        &self.plugin
+    }
+
+    #[must_use]
+    pub const fn function(&self) -> &FnName {
+        &self.function
+    }
 }
 
 /// A symbol identity that has passed namespace-aware module resolution.
@@ -227,6 +242,7 @@ impl SymbolId {
             Self::IndexVariant(id) => id.variant().as_str(),
             Self::Field(id) => id.field().as_str(),
             Self::GenericParam(id) => id.parameter().as_str(),
+            Self::ExternFunction(id) => id.function().as_str(),
             Self::BuiltinFunction(name) => name.as_str(),
             Self::BuiltinConstant(name) => name.as_str(),
             Self::TimeScale(scale) => match scale {
@@ -240,7 +256,7 @@ impl SymbolId {
                 TimeScale::BDT => "BDT",
                 TimeScale::QZSST => "QZSST",
             },
-            Self::Local(_) | Self::ExternFunction(_) => "",
+            Self::Local(_) => "",
         }
     }
 }
@@ -420,4 +436,21 @@ impl VisibleBinding {
                 _ => unresolved.path().is_some_and(|path| path == &self.spelling),
             }
     }
+}
+
+/// Resolve one authored spelling only when every matching binding agrees on
+/// the same canonical semantic identity.
+#[must_use]
+pub fn resolve_visible_target(
+    bindings: &[VisibleBinding],
+    unresolved: &UnresolvedSymbol,
+) -> Option<SymbolId> {
+    let mut targets = bindings
+        .iter()
+        .filter(|binding| binding.resolves(unresolved))
+        .map(VisibleBinding::target);
+    let target = targets.next()?;
+    targets
+        .all(|candidate| candidate == target)
+        .then(|| target.clone())
 }

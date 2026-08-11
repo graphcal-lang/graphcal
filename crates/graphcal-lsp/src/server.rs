@@ -10,21 +10,24 @@ use tower_lsp::lsp_types::{
     CodeActionParams, CodeActionProviderCapability, CodeActionResponse, CompletionOptions,
     CompletionParams, CompletionResponse, Diagnostic, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-    DocumentFormattingParams, DocumentLink, DocumentLinkOptions, DocumentLinkParams,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse,
-    Hover, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-    InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
-    PrepareRenameResponse, ReferenceParams, RenameOptions, RenameParams, SaveOptions,
-    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams,
-    TextDocumentPositionParams, TextDocumentSyncCapability, TextDocumentSyncKind,
-    TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url, WorkDoneProgressOptions,
-    WorkspaceEdit,
+    DocumentChanges, DocumentFormattingParams, DocumentLink, DocumentLinkOptions,
+    DocumentLinkParams, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability, InitializeParams,
+    InitializeResult, InitializedParams, InlayHint, InlayHintParams, Location, MessageType, OneOf,
+    OptionalVersionedTextDocumentIdentifier, PrepareRenameResponse, ReferenceParams, RenameOptions,
+    RenameParams, SaveOptions, ServerCapabilities, SignatureHelp, SignatureHelpOptions,
+    SignatureHelpParams, TextDocumentEdit, TextDocumentPositionParams, TextDocumentSyncCapability,
+    TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, Url,
+    WorkDoneProgressOptions, WorkspaceEdit,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
-use crate::symbol_identity::{SourceSymbolPath, UnresolvedSymbol, VisibleBinding};
+use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbolIndex, ProjectSymbols};
+use crate::symbol_identity::{
+    SourceSymbolPath, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
+};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
@@ -115,6 +118,8 @@ pub(crate) struct AnalysisResult {
     pub(crate) symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
     pub(crate) imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
+    /// Complete immutable occurrence index for the loaded project snapshot.
+    pub(crate) project_symbols: ProjectSymbols,
     /// Source-visible aliases/qualifiers for imported canonical definitions.
     /// Several bindings may target one identity; no alias is chosen as the
     /// semantic key.
@@ -324,6 +329,13 @@ async fn acquire_analysis_permit(
     }
 }
 
+/// Latest text and LSP version for one open editor document.
+#[derive(Debug, Clone)]
+struct OpenDocumentSnapshot {
+    text: Arc<String>,
+    version: i32,
+}
+
 /// The LSP server backend.
 #[cfg_attr(test, derive(Debug))]
 pub struct Backend {
@@ -340,7 +352,7 @@ pub struct Backend {
     /// out), so text-sensitive requests fired right after a keystroke —
     /// trigger-character completion, signature help, formatting — must read
     /// this instead of the analyzed snapshot.
-    latest_text: Arc<RwLock<HashMap<Url, Arc<String>>>>,
+    latest_text: Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
     /// WASM plugin host shared across analysis passes, so re-analysis on
     /// every debounced keystroke hits the content-hash module cache instead
     /// of recompiling unchanged plugins.
@@ -354,15 +366,7 @@ impl AnalysisResult {
         &self,
         unresolved: &UnresolvedSymbol,
     ) -> Option<SymbolKey> {
-        let mut targets = self
-            .imported_bindings
-            .iter()
-            .filter(|binding| binding.resolves(unresolved))
-            .map(VisibleBinding::target);
-        let target = targets.next()?;
-        targets
-            .all(|candidate| candidate == target)
-            .then(|| target.clone())
+        resolve_visible_target(&self.imported_bindings, unresolved)
     }
 }
 
@@ -383,6 +387,10 @@ impl std::fmt::Debug for AnalysisResult {
         f.debug_struct("AnalysisResult")
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
+            .field(
+                "project_symbols_complete",
+                &self.project_symbols.complete().is_some(),
+            )
             .field("imported_defs", &self.imported_definitions.len())
             .field("imported_bindings", &self.imported_bindings.len())
             .field("import_surfaces", &self.import_surfaces.len())
@@ -427,17 +435,28 @@ impl Backend {
 
     /// Record the latest editor text for `uri`, synchronously with the
     /// notification that delivered it.
-    async fn record_latest_text(&self, uri: &Url, text: &str) {
-        self.latest_text
-            .write()
-            .await
-            .insert(uri.clone(), Arc::new(text.to_string()));
+    async fn record_latest_text(&self, uri: &Url, text: &str, version: Option<i32>) {
+        use std::collections::hash_map::Entry;
+        match self.latest_text.write().await.entry(uri.clone()) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().text = Arc::new(text.to_string());
+                if let Some(version) = version {
+                    entry.get_mut().version = version;
+                }
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(OpenDocumentSnapshot {
+                    text: Arc::new(text.to_string()),
+                    version: version.unwrap_or_default(),
+                });
+            }
+        }
     }
 
     /// Latest editor text for `uri`, falling back to the analyzed snapshot.
     async fn current_text(&self, uri: &Url) -> Option<Arc<String>> {
-        if let Some(text) = self.latest_text.read().await.get(uri) {
-            return Some(Arc::clone(text));
+        if let Some(snapshot) = self.latest_text.read().await.get(uri) {
+            return Some(Arc::clone(&snapshot.text));
         }
         self.documents
             .read()
@@ -446,13 +465,13 @@ impl Backend {
             .map(|analysis| Arc::clone(&analysis.source))
     }
 
-    async fn analyze_and_publish(&self, uri: Url, text: String) {
+    async fn analyze_and_publish(&self, uri: Url, text: String, version: Option<i32>) {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
 
         self.analysis_scheduler.open_document(&uri);
-        self.record_latest_text(&uri, &text).await;
+        self.record_latest_text(&uri, &text, version).await;
 
         // Bump the generation so any in-flight debounced analysis for this URI
         // becomes stale and refuses to overwrite fresh results.
@@ -534,7 +553,7 @@ async fn analyze_store_publish(
     client: &Client,
     documents: &Arc<RwLock<HashMap<Url, AnalysisResult>>>,
     generations: &Arc<RwLock<HashMap<Url, u64>>>,
-    latest_text: &Arc<RwLock<HashMap<Url, Arc<String>>>>,
+    latest_text: &Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
     uri: Url,
@@ -603,10 +622,10 @@ async fn analyze_store_publish(
         .await
         .iter()
         .filter(|(open_uri, _)| **open_uri != uri)
-        .filter_map(|(open_uri, open_text)| {
+        .filter_map(|(open_uri, snapshot)| {
             open_uri.to_file_path().ok().map(|path| OpenBuffer {
                 path,
-                text: Arc::clone(open_text),
+                text: Arc::clone(&snapshot.text),
             })
         })
         .collect();
@@ -751,6 +770,46 @@ fn merged_diagnostics_for(
             (target.clone(), merged)
         })
         .collect()
+}
+
+fn workspace_edit_matches_open_snapshots(
+    edit: &WorkspaceEdit,
+    project: &ProjectSymbolIndex,
+    snapshots: &HashMap<Url, OpenDocumentSnapshot>,
+) -> bool {
+    edit.changes.as_ref().is_none_or(|changes| {
+        changes.keys().all(|uri| {
+            snapshots.get(uri).is_none_or(|snapshot| {
+                project
+                    .document(uri)
+                    .is_some_and(|document| document.source == snapshot.text)
+            })
+        })
+    })
+}
+
+fn version_workspace_edit(
+    mut edit: WorkspaceEdit,
+    snapshots: &HashMap<Url, OpenDocumentSnapshot>,
+) -> WorkspaceEdit {
+    let Some(changes) = edit.changes.take() else {
+        return edit;
+    };
+    let mut changes: Vec<_> = changes.into_iter().collect();
+    changes.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+    edit.document_changes = Some(DocumentChanges::Edits(
+        changes
+            .into_iter()
+            .map(|(uri, edits)| TextDocumentEdit {
+                text_document: OptionalVersionedTextDocumentIdentifier {
+                    version: snapshots.get(&uri).map(|snapshot| snapshot.version),
+                    uri,
+                },
+                edits: edits.into_iter().map(OneOf::Left).collect(),
+            })
+            .collect(),
+    ));
+    edit
 }
 
 /// Log a current-revision analysis timeout without replacing source
@@ -924,6 +983,7 @@ fn run_analysis_with_cancellation(
                 analysis: AnalysisResult {
                     source: Arc::new(text.to_string()),
                     symbol_table,
+                    project_symbols: ProjectSymbols::Incomplete,
                     imported_definitions: HashMap::new(),
                     imported_bindings: Vec::new(),
                     import_surfaces: HashMap::new(),
@@ -990,6 +1050,7 @@ fn run_analysis_with_cancellation(
             Ok(AnalysisRun::complete(AnalysisResult {
                 source: Arc::new(text.to_string()),
                 symbol_table,
+                project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
                 imported_definitions: imported_symbols.definitions,
                 imported_bindings: imported_symbols.bindings,
                 import_surfaces,
@@ -1027,6 +1088,7 @@ fn run_analysis_with_cancellation(
                 analysis: AnalysisResult {
                     source: Arc::new(text.to_string()),
                     symbol_table,
+                    project_symbols: ProjectSymbols::Complete(imported_symbols.project_index),
                     imported_definitions: imported_symbols.definitions,
                     imported_bindings: imported_symbols.bindings,
                     import_surfaces: collect_import_surfaces(
@@ -1608,19 +1670,121 @@ fn collect_import_surfaces(
     Ok(surfaces)
 }
 
-/// Collect imported definitions from a loaded project.
+/// Collect canonical definitions, visible bindings, and occurrences for every
+/// source in one loader-resolved project closure.
 ///
-/// For each `import` and `include` declaration in the root file, uses the
-/// loader-resolved DAG ids to look up the dependency in the project, and
-/// builds a symbol table from the imported file's AST to extract the
-/// definition info.
-///
-/// Selective items are keyed by their **local name** (alias if present,
-/// otherwise the original name), so that references using the alias resolve
-/// correctly in LSP features.
+/// Definitions remain keyed by canonical semantic identity. Authored module
+/// qualifiers and selective aliases are separate bindings, including
+/// transitive re-exports resolved through the compiler's module scope.
 struct ImportedSymbols {
     definitions: HashMap<SymbolKey, ImportedDefinition>,
     bindings: Vec<VisibleBinding>,
+    project_index: ProjectSymbolIndex,
+}
+
+struct BuiltProjectDocument {
+    uri: Url,
+    source: Arc<String>,
+    table: SymbolTable,
+}
+
+fn build_project_symbol_documents(
+    root_uri: &Url,
+    project: &graphcal_eval::loader::LoadedProject,
+    tir: Option<&graphcal_compiler::tir::typed::TIR>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    cancellation: &CancellationToken,
+) -> std::result::Result<HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>, Cancelled>
+{
+    project
+        .files()
+        .iter()
+        .map(|(file_id, loaded_file)| {
+            cancellation.checkpoint()?;
+            let mut table = symbol_table::build_from_ast(
+                loaded_file.ast(),
+                loaded_file.source(),
+                file_id,
+                module_resolver,
+            );
+            if let Some(tir) = tir {
+                symbol_table::enrich_from_tir(&mut table, tir, file_id);
+            }
+            let uri = if file_id == project.root_id() {
+                root_uri.clone()
+            } else {
+                loaded_file_uri(loaded_file, root_uri)
+            };
+            Ok((
+                file_id.clone(),
+                BuiltProjectDocument {
+                    uri,
+                    source: Arc::clone(loaded_file.source()),
+                    table,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn collect_file_imported_symbols(
+    file_id: &graphcal_compiler::dag_id::DagId,
+    loaded_file: &graphcal_eval::loader::LoadedFile,
+    documents: &HashMap<graphcal_compiler::dag_id::DagId, BuiltProjectDocument>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    cancellation: &CancellationToken,
+) -> std::result::Result<ImportedSymbols, Cancelled> {
+    let mut imported = ImportedSymbols {
+        definitions: HashMap::new(),
+        bindings: Vec::new(),
+        project_index: ProjectSymbolIndex::default(),
+    };
+    let imports = loaded_file
+        .imports_with_targets()
+        .map(|(_, decl, target)| (&decl.path, &decl.kind, target, true));
+    let includes = loaded_file
+        .includes_with_targets()
+        .map(|(_, decl, target)| (&decl.path, &decl.kind, target, false));
+    for (path, kind, resolved_module, is_import) in imports.chain(includes) {
+        cancellation.checkpoint()?;
+        let Some(target) = documents.get(resolved_module.source_file()) else {
+            continue;
+        };
+        match kind {
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
+                if is_import {
+                    imported.bindings.extend(items.iter().filter_map(|item| {
+                        resolve_selective_binding(file_id, item, module_resolver)
+                    }));
+                }
+                collect_selective_import_definitions(
+                    &mut imported,
+                    &target.table,
+                    items,
+                    resolved_module.target(),
+                    &target.uri,
+                    &target.source,
+                    cancellation,
+                )?;
+            }
+            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
+                let module_name = alias.as_ref().map_or_else(
+                    || path.leaf().name.clone(),
+                    |alias_ident| alias_ident.value.atom().clone(),
+                );
+                collect_module_import_definitions(
+                    &mut imported,
+                    &target.table,
+                    &module_name,
+                    resolved_module.target(),
+                    &target.uri,
+                    &target.source,
+                    cancellation,
+                )?;
+            }
+        }
+    }
+    Ok(imported)
 }
 
 fn collect_imported_definitions(
@@ -1631,99 +1795,115 @@ fn collect_imported_definitions(
     cancellation: &CancellationToken,
 ) -> std::result::Result<ImportedSymbols, Cancelled> {
     cancellation.checkpoint()?;
-    let mut result = ImportedSymbols {
-        definitions: HashMap::new(),
-        bindings: Vec::new(),
+    let documents =
+        build_project_symbol_documents(root_uri, project, tir, module_resolver, cancellation)?;
+    let mut imported_by_file = project
+        .files()
+        .iter()
+        .map(|(file_id, loaded_file)| {
+            collect_file_imported_symbols(
+                file_id,
+                loaded_file,
+                &documents,
+                module_resolver,
+                cancellation,
+            )
+            .map(|imported| (file_id.clone(), imported))
+        })
+        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+
+    let project_documents = documents.into_iter().map(|(file_id, document)| {
+        let bindings = imported_by_file
+            .get(&file_id)
+            .map_or_else(Vec::new, |imported| imported.bindings.clone());
+        ProjectDocumentSymbols::new(document.uri, document.source, document.table, bindings)
+    });
+    let project_index = if root_uri.to_file_path().is_ok() {
+        ProjectSymbolIndex::loaded_dependency_closure(root_uri.clone(), project_documents)
+    } else {
+        ProjectSymbolIndex::standalone(root_uri.clone(), project_documents)
     };
-
-    let root_file = project.root_file();
-
-    // Cache symbol tables per dag_id to avoid re-building for files referenced
-    // by multiple import/include declarations.
-    let mut table_cache: HashMap<
-        graphcal_compiler::dag_id::DagId,
-        (SymbolTable, Url, Arc<String>),
-    > = HashMap::new();
-
-    let imports = root_file
-        .imports_with_targets()
-        .map(|(_, decl, target)| (&decl.path, &decl.kind, target));
-    let includes = root_file
-        .includes_with_targets()
-        .map(|(_, decl, target)| (&decl.path, &decl.kind, target));
-
-    for (path, kind, resolved_module) in imports.chain(includes) {
-        cancellation.checkpoint()?;
-        let source_file_id = resolved_module.source_file();
-        let Some(loaded_file) = project.file(source_file_id) else {
+    let mut root_imported = imported_by_file
+        .remove(project.root_id())
+        .unwrap_or_else(|| ImportedSymbols {
+            definitions: HashMap::new(),
+            bindings: Vec::new(),
+            project_index: ProjectSymbolIndex::default(),
+        });
+    for binding in &root_imported.bindings {
+        if root_imported.definitions.contains_key(binding.target()) {
+            continue;
+        }
+        let Some(definition) = project_index.definition(binding.target()) else {
             continue;
         };
-        let (imported_table, imported_uri, source) = table_cache
-            .entry(resolved_module.target().clone())
-            .or_insert_with(|| {
-                let mut table = symbol_table::build_from_ast(
-                    loaded_file.ast(),
-                    loaded_file.source(),
-                    source_file_id,
-                    module_resolver,
-                );
-                if let Some(tir) = tir {
-                    symbol_table::enrich_from_tir(&mut table, tir, resolved_module.target());
-                }
-                let uri = Url::from_file_path(loaded_file.path()).unwrap_or_else(|()| {
-                    // Url::from_file_path only fails for non-absolute paths.
-                    // The loader canonicalizes, so this should not happen — but
-                    // emit to stderr (LSP clients surface this) rather than
-                    // silently misattribute go-to-definition.
-                    #[expect(
-                        clippy::print_stderr,
-                        clippy::unnecessary_debug_formatting,
-                        reason = "developer-visible warning for an unreachable fallback"
-                    )]
-                    {
-                        eprintln!(
-                            "graphcal-lsp: Url::from_file_path failed for {:?}; falling back to root URI",
-                            loaded_file.path(),
-                        );
-                    }
-                    root_uri.clone()
-                });
-                let src = Arc::clone(loaded_file.source());
-                (table, uri, src)
-            });
-        cancellation.checkpoint()?;
-
-        match kind {
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
-                collect_selective_import_definitions(
-                    &mut result,
-                    imported_table,
-                    items,
-                    resolved_module.target(),
-                    imported_uri,
-                    source,
-                    cancellation,
-                )?;
-            }
-            graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
-                let module_name = alias.as_ref().map_or_else(
-                    || path.leaf().name.clone(),
-                    |alias_ident| alias_ident.value.atom().clone(),
-                );
-                collect_module_import_definitions(
-                    &mut result,
-                    imported_table,
-                    &module_name,
-                    resolved_module.target(),
-                    imported_uri,
-                    source,
-                    cancellation,
-                )?;
-            }
-        }
+        let Some(document) = project_index.document(&definition.occurrence.uri) else {
+            continue;
+        };
+        root_imported.definitions.insert(
+            binding.target().clone(),
+            ImportedDefinition {
+                uri: definition.occurrence.uri,
+                source: Arc::clone(&document.source),
+                definition: definition.definition.clone(),
+            },
+        );
     }
+    root_imported.project_index = project_index;
+    Ok(root_imported)
+}
 
-    Ok(result)
+fn resolve_selective_binding(
+    owner: &graphcal_compiler::dag_id::DagId,
+    item: &graphcal_compiler::syntax::ast::ImportItem,
+    resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+) -> Option<VisibleBinding> {
+    use graphcal_compiler::syntax::ast::ImportItemNamespace;
+    use graphcal_compiler::syntax::names::NamePath;
+    use graphcal_compiler::syntax::non_empty::NonEmpty;
+
+    let local = item.local_name_atom().clone();
+    let path = NamePath::new(NonEmpty::new(local.clone(), Vec::new()));
+    let target = match item.namespace {
+        ImportItemNamespace::Term => match resolver.resolve_decl_path(owner, &path) {
+            Ok(declaration) => SymbolKey::Declaration(declaration),
+            Err(_) => SymbolKey::Constructor(resolver.resolve_constructor_path(owner, &path).ok()?),
+        },
+        ImportItemNamespace::Type => resolver
+            .resolve_struct_type_path(owner, &path)
+            .map(SymbolKey::StructType)
+            .ok()?,
+        ImportItemNamespace::Dimension => resolver
+            .resolve_dimension_path(owner, &path)
+            .map(SymbolKey::Dimension)
+            .ok()?,
+        ImportItemNamespace::Unit => resolver
+            .resolve_unit_path(owner, &path)
+            .map(SymbolKey::Unit)
+            .ok()?,
+        ImportItemNamespace::Index => resolver
+            .resolve_index_path(owner, &path)
+            .map(SymbolKey::Index)
+            .ok()?,
+    };
+    Some(VisibleBinding::new(target, SourceSymbolPath::local(local)))
+}
+
+fn loaded_file_uri(loaded_file: &graphcal_eval::loader::LoadedFile, root_uri: &Url) -> Url {
+    Url::from_file_path(loaded_file.path()).unwrap_or_else(|()| {
+        #[expect(
+            clippy::print_stderr,
+            clippy::unnecessary_debug_formatting,
+            reason = "developer-visible warning for an unreachable fallback"
+        )]
+        {
+            eprintln!(
+                "graphcal-lsp: Url::from_file_path failed for {:?}; falling back to root URI",
+                loaded_file.path(),
+            );
+        }
+        root_uri.clone()
+    })
 }
 
 fn collect_selective_import_definitions(
@@ -2011,8 +2191,12 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.analyze_and_publish(params.text_document.uri, params.text_document.text)
-            .await;
+        self.analyze_and_publish(
+            params.text_document.uri,
+            params.text_document.text,
+            Some(params.text_document.version),
+        )
+        .await;
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -2028,14 +2212,15 @@ impl LanguageServer for Backend {
         // Record the new text synchronously: completion/signature-help fire
         // on trigger characters milliseconds after this notification, long
         // before the debounced analysis lands.
-        self.record_latest_text(&uri, &change.text).await;
+        self.record_latest_text(&uri, &change.text, Some(params.text_document.version))
+            .await;
         let generation = self.bump_generation(&uri).await;
         self.spawn_debounced_analysis(uri, change.text, generation);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         if let Some(text) = params.text {
-            self.analyze_and_publish(params.text_document.uri, text)
+            self.analyze_and_publish(params.text_document.uri, text, None)
                 .await;
         }
     }
@@ -2180,6 +2365,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position.position;
         let new_name = params.new_name;
         let current_text = self.current_text(&uri).await;
+        let snapshots = self.latest_text.read().await.clone();
         let outcome = self
             .with_analysis(&uri, |analysis| {
                 let current_text = current_text.as_ref()?;
@@ -2187,7 +2373,19 @@ impl LanguageServer for Backend {
                     return None;
                 }
                 let offset = position_to_byte_offset(current_text, position);
-                Some(crate::rename::rename(analysis, &uri, offset, &new_name))
+                let result = crate::rename::rename(analysis, &uri, offset, &new_name);
+                Some(match result {
+                    Ok(Some(edit)) => {
+                        if let Some(project) = analysis.project_symbols.complete()
+                            && !workspace_edit_matches_open_snapshots(&edit, project, &snapshots)
+                        {
+                            Err(crate::rename::RenameRefusal::StaleProjectSnapshot)
+                        } else {
+                            Ok(Some(version_workspace_edit(edit, &snapshots)))
+                        }
+                    }
+                    other => other,
+                })
             })
             .await?;
         match outcome {
@@ -2215,7 +2413,7 @@ impl LanguageServer for Backend {
                 return None;
             }
             let offset = position_to_byte_offset(current_text, position);
-            crate::rename::prepare_rename(analysis, offset)
+            crate::rename::prepare_rename(analysis, &uri, offset)
         })
         .await
     }
@@ -3469,12 +3667,89 @@ node bad: Mass = mass + length;
         }
     }
 
+    #[test]
+    fn workspace_rename_refuses_stale_open_project_document() {
+        let uri = Url::parse("file:///open.gcl").unwrap();
+        let project = ProjectSymbolIndex::loaded_dependency_closure(
+            uri.clone(),
+            [ProjectDocumentSymbols::new(
+                uri.clone(),
+                Arc::new("old".to_string()),
+                SymbolTable::default(),
+                Vec::new(),
+            )],
+        );
+        let edit = WorkspaceEdit {
+            changes: Some(HashMap::from([(uri.clone(), Vec::new())])),
+            document_changes: None,
+            change_annotations: None,
+        };
+        let snapshots = HashMap::from([(
+            uri,
+            OpenDocumentSnapshot {
+                text: Arc::new("new".to_string()),
+                version: 2,
+            },
+        )]);
+
+        assert!(!workspace_edit_matches_open_snapshots(
+            &edit, &project, &snapshots
+        ));
+    }
+
+    #[test]
+    fn workspace_rename_edits_carry_open_document_versions() {
+        let open_uri = Url::parse("file:///open.gcl").unwrap();
+        let closed_uri = Url::parse("file:///closed.gcl").unwrap();
+        let edit = WorkspaceEdit {
+            changes: Some(HashMap::from([
+                (
+                    open_uri.clone(),
+                    vec![TextEdit {
+                        range: tower_lsp::lsp_types::Range::default(),
+                        new_text: "renamed".to_string(),
+                    }],
+                ),
+                (
+                    closed_uri.clone(),
+                    vec![TextEdit {
+                        range: tower_lsp::lsp_types::Range::default(),
+                        new_text: "renamed".to_string(),
+                    }],
+                ),
+            ])),
+            document_changes: None,
+            change_annotations: None,
+        };
+        let snapshots = HashMap::from([(
+            open_uri.clone(),
+            OpenDocumentSnapshot {
+                text: Arc::new(String::new()),
+                version: 7,
+            },
+        )]);
+
+        let versioned = version_workspace_edit(edit, &snapshots);
+        assert!(versioned.changes.is_none());
+        let Some(DocumentChanges::Edits(documents)) = versioned.document_changes else {
+            panic!("expected versioned document edits");
+        };
+        assert_eq!(documents.len(), 2);
+        let versions: HashMap<_, _> = documents
+            .into_iter()
+            .map(|document| (document.text_document.uri, document.text_document.version))
+            .collect();
+        assert_eq!(versions[&open_uri], Some(7));
+        assert_eq!(versions[&closed_uri], None);
+    }
+
     /// Build a bare `AnalysisResult` carrying only a diagnostics map, for
     /// exercising the per-URI ownership merge.
     fn analysis_with_diags(diags: HashMap<Url, Vec<Diagnostic>>) -> AnalysisResult {
         AnalysisResult {
             source: Arc::new(String::new()),
             symbol_table: SymbolTable::default(),
+            project_symbols: ProjectSymbols::Incomplete,
             imported_definitions: HashMap::new(),
             imported_bindings: Vec::new(),
             import_surfaces: HashMap::new(),

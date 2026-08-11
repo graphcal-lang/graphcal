@@ -35,10 +35,12 @@ same-leaf declarations. If `a.gcl` and `b.gcl` both export `Phase`, `Item`, and
 jumps to `a.gcl`, not whichever same-leaf symbol was seen first. Navigation and
 rename also preserve Graphcal namespaces: a term and a unit may share a spelling
 without being merged. Selective imports retain every authored alias while all
-aliases still navigate to the one canonical declaration. File-local rename
-covers nested DAG bodies, include bindings, plot composition, domain bounds,
-and record field accesses; it is refused when a tolerant occurrence cannot be
-assigned to one canonical symbol safely.
+aliases still navigate to the one canonical declaration. References and rename
+use one canonical index across every source in the active loaded project,
+including re-exports and includes. A canonical API rename changes unaliased
+imports and uses while preserving authored aliases. The server refuses rename
+when an occurrence is ambiguous, an affected open snapshot is stale, or an
+exported definition may have reverse importers outside the loaded project.
 
 Analysis is revision-aware and bounded. A new edit cancels superseded loading,
 compilation, and evaluation work; only the newest completed revision publishes

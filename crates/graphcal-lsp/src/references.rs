@@ -27,20 +27,47 @@ pub fn references(
 
     let target_keys = reference_lookup_keys(&resolved.key);
 
-    let lines = LineIndex::new(&analysis.source);
-    let mut locations: Vec<Location> = target_keys
-        .iter()
-        .flat_map(|target_key| analysis.symbol_table.find_all_references(target_key))
-        .map(|r| Location {
-            uri: uri.clone(),
-            range: lines.span_to_range(r.span),
-        })
-        .collect();
+    let mut locations: Vec<Location> = analysis.project_symbols.complete().map_or_else(
+        || {
+            let lines = LineIndex::new(&analysis.source);
+            target_keys
+                .iter()
+                .flat_map(|target_key| analysis.symbol_table.find_all_references(target_key))
+                .map(|reference| Location {
+                    uri: uri.clone(),
+                    range: lines.span_to_range(reference.span),
+                })
+                .collect()
+        },
+        |project| {
+            target_keys
+                .iter()
+                .flat_map(|target| project.references(target))
+                .filter_map(|occurrence| {
+                    let document = project.document(&occurrence.uri)?;
+                    Some(Location {
+                        uri: occurrence.uri,
+                        range: LineIndex::new(&document.source).span_to_range(occurrence.span),
+                    })
+                })
+                .collect()
+        },
+    );
 
-    if include_declaration
-        && let Some(loc) = definition_location(&resolved.location, uri, &analysis.source)
-    {
-        locations.push(loc);
+    if include_declaration {
+        let project_location = analysis.project_symbols.complete().and_then(|project| {
+            let definition = project.definition(&resolved.key)?;
+            let document = project.document(&definition.occurrence.uri)?;
+            Some(Location {
+                uri: definition.occurrence.uri,
+                range: LineIndex::new(&document.source).span_to_range(definition.occurrence.span),
+            })
+        });
+        if let Some(location) = project_location
+            .or_else(|| definition_location(&resolved.location, uri, &analysis.source))
+        {
+            locations.push(location);
+        }
     }
 
     if locations.is_empty() {
