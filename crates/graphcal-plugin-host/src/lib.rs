@@ -11,7 +11,8 @@
 //!   [`FunctionSignature`](graphcal_compiler::function_signature::FunctionSignature)
 //!   IR ([`convert`]), no imports beyond `graphcal::fail`, memory exported
 //!   when failure messages need reading, and every manifest function exported
-//!   with the wasm parameter/result types required by its signature;
+//!   with the wasm parameter/result types required by its signature, plus an
+//!   encoded-module byte cap and malicious-input parser/compiler limits;
 //! - execute plugin functions under mandatory resource bounds
 //!   ([`PluginLimits`]: per-call fuel plus per-instance linear-memory and
 //!   table-element caps), mapping failure messages, traps, and fuel exhaustion
@@ -36,5 +37,5 @@ pub mod registry;
 
 pub use convert::{ConvertErrorKind, ManifestConvertError, convert_manifest};
 pub use host::{PluginHost, PluginLimits};
-pub use module::{PluginCallError, PluginLoadError, PluginModule};
+pub use module::{PluginCallError, PluginLoadError, PluginModule, PluginModuleLimitError};
 pub use registry::register_project_plugins;
