@@ -732,7 +732,11 @@ graphcal graph [OPTIONS] <FILE>
 | `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 
 The output is deterministic (declarations keep source order, edges are sorted),
-so exported graphs diff cleanly in version control.
+so exported graphs diff cleanly in version control. DOT statement identifiers
+(`n0`, `n1`, … and `c0`, `c1`, …) are opaque renderer-local ids; semantic
+compiler names appear only as labels. This prevents Graphviz from merging
+separate package versions or source modules and concrete instances that happen
+to have the same display path.
 
 **Exit codes:**
 
@@ -749,9 +753,9 @@ $ graphcal graph rocket.gcl
 digraph graphcal {
     rankdir=LR;
     node [fontname="Helvetica,Arial,sans-serif"];
-    "rocket.dry_mass" [label="dry_mass\nMass", shape=ellipse];
+    "n0" [label="dry_mass\nMass", shape=ellipse];
     ...
-    "rocket.v_exhaust" -> "rocket.delta_v";
+    "n3" -> "n5";
 }
 
 # Render to SVG with Graphviz
@@ -761,8 +765,10 @@ graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 Node styling encodes the declaration kind: `param` declarations are ellipses
 (the graph's inputs), `const node` declarations are rounded boxes, `node`
 declarations are plain boxes, and values imported from other files are dashed
-boxes labeled with their fully qualified name. Each vertex's label shows the
-declaration name and its resolved type.
+boxes. Each vertex's label shows the declaration name and its resolved type.
+When multiple external declarations share the same ordinary display path, their
+labels add package identity and distinguish lexical (`.`) from concrete-instance
+(`@`) hierarchy edges.
 
 ---
 

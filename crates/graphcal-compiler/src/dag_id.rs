@@ -75,8 +75,10 @@ impl fmt::Display for DagPackageId {
 /// Source-module and concrete-instance edges may have the same source-visible
 /// spelling, but they are different semantic identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum DagHierarchyEdge {
+pub enum DagHierarchyEdge {
+    /// Lexical source-module nesting, such as an inline `dag` declaration.
     SourceModule,
+    /// Concrete runtime include or DAG-call instance.
     ConcreteInstance,
 }
 
@@ -268,6 +270,14 @@ impl DagId {
     #[must_use]
     pub const fn segments(&self) -> &NonEmpty<Arc<str>> {
         &self.segments
+    }
+
+    /// Structural edge kinds between adjacent segments.
+    ///
+    /// Construction guarantees `hierarchy_edges().len() + 1 == segments().len()`.
+    #[must_use]
+    pub fn hierarchy_edges(&self) -> &[DagHierarchyEdge] {
+        &self.edges
     }
 
     /// The last segment (leaf name). Always present.

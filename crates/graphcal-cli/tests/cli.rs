@@ -4986,6 +4986,14 @@ fn format_check_fails_on_unparsable_file() {
     );
 }
 
+fn dot_statement_id_for_label<'a>(dot: &'a str, label_prefix: &str) -> &'a str {
+    let marker = format!("label=\"{label_prefix}");
+    dot.lines()
+        .find(|line| line.contains(&marker))
+        .and_then(|line| line.split('"').nth(1))
+        .unwrap_or_else(|| panic!("DOT statement with label prefix `{label_prefix}`:\n{dot}"))
+}
+
 #[test]
 fn graph_rocket_dot_output() {
     let output = graphcal_bin()
@@ -5009,19 +5017,19 @@ fn graph_rocket_dot_output() {
         r#"digraph graphcal {
     rankdir=LR;
     node [fontname="Helvetica,Arial,sans-serif"];
-    "rocket.dry_mass" [label="dry_mass\nMass", shape=ellipse];
-    "rocket.fuel_mass" [label="fuel_mass\nMass", shape=ellipse];
-    "rocket.isp" [label="isp\nTime", shape=ellipse];
-    "rocket.g0" [label="g0\nAcceleration", shape=box, style=rounded];
-    "rocket.v_exhaust" [label="v_exhaust\nVelocity", shape=box];
-    "rocket.mass_ratio" [label="mass_ratio\nDimensionless", shape=box];
-    "rocket.delta_v" [label="delta_v\nVelocity", shape=box];
-    "rocket.dry_mass" -> "rocket.mass_ratio";
-    "rocket.fuel_mass" -> "rocket.mass_ratio";
-    "rocket.g0" -> "rocket.v_exhaust";
-    "rocket.isp" -> "rocket.v_exhaust";
-    "rocket.mass_ratio" -> "rocket.delta_v";
-    "rocket.v_exhaust" -> "rocket.delta_v";
+    "n0" [label="dry_mass\nMass", shape=ellipse];
+    "n1" [label="fuel_mass\nMass", shape=ellipse];
+    "n2" [label="isp\nTime", shape=ellipse];
+    "n3" [label="g0\nAcceleration", shape=box, style=rounded];
+    "n4" [label="v_exhaust\nVelocity", shape=box];
+    "n5" [label="mass_ratio\nDimensionless", shape=box];
+    "n6" [label="delta_v\nVelocity", shape=box];
+    "n0" -> "n5";
+    "n1" -> "n5";
+    "n3" -> "n4";
+    "n2" -> "n4";
+    "n5" -> "n6";
+    "n4" -> "n6";
 }
 "#
     );
@@ -5052,15 +5060,17 @@ fn graph_inline_dag_renders_cluster() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("subgraph \"cluster_main.scale\" {"),
+        stdout.contains("subgraph \"c0\" {"),
         "inline dag block should render as a cluster:\n{stdout}"
     );
     assert!(
         stdout.contains("label=\"dag scale\";"),
         "cluster should carry the dag's name as its label:\n{stdout}"
     );
+    let input = dot_statement_id_for_label(&stdout, "v\\n");
+    let result = dot_statement_id_for_label(&stdout, "result\\n");
     assert!(
-        stdout.contains("\"main.scale.v\" -> \"main.scale.result\";"),
+        stdout.contains(&format!("\"{input}\" -> \"{result}\";")),
         "cluster-internal dataflow should be present:\n{stdout}"
     );
 }
@@ -5087,14 +5097,16 @@ fn graph_imported_values_render_as_external_nodes() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let external = dot_statement_id_for_label(&stdout, "src.lib.constants.g0\"");
+    let dependent = dot_statement_id_for_label(&stdout, "v_exhaust\\n");
     assert!(
-        stdout.contains(
-            "\"src.lib.constants.g0\" [label=\"src.lib.constants.g0\", shape=box, style=dashed];"
-        ),
+        stdout.contains(&format!(
+            "\"{external}\" [label=\"src.lib.constants.g0\", shape=box, style=dashed];"
+        )),
         "imported value should render as a dashed external node:\n{stdout}"
     );
     assert!(
-        stdout.contains("\"src.lib.constants.g0\" -> \"src.lib.main.v_exhaust\";"),
+        stdout.contains(&format!("\"{external}\" -> \"{dependent}\";")),
         "cross-file dataflow edge should be present:\n{stdout}"
     );
 }
