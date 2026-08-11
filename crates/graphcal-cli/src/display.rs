@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use graphcal_compiler::dimension::{BaseDimId, Dimension};
-use graphcal_eval::eval::{NodeError, Value};
+use graphcal_eval::eval::{DisplayUnit, NodeError, Value};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
 ///
@@ -91,9 +91,8 @@ impl TableLeafPresentation {
             (Self::Empty, presentation) | (presentation, Self::Empty) => presentation,
             (Self::NonQuantity, Self::NonQuantity) => Self::NonQuantity,
             (Self::Quantity(left), Self::Quantity(right)) if left == right => Self::Quantity(left),
-            (Self::NonQuantity, Self::Quantity(_))
-            | (Self::Quantity(_), Self::NonQuantity)
-            | (Self::Quantity(_), Self::Quantity(_)) => Self::Heterogeneous,
+            (Self::NonQuantity | Self::Quantity(_), Self::Quantity(_))
+            | (Self::Quantity(_), Self::NonQuantity) => Self::Heterogeneous,
         }
     }
 }
@@ -157,7 +156,7 @@ fn table_leaf_presentation(
         } => TableLeafPresentation::Quantity(QuantityPresentation {
             dimension: dimension.clone(),
             label: value.display_label(symbols),
-            scale: display_unit.as_ref().map_or(1.0, |unit| unit.scale()),
+            scale: display_unit.as_ref().map_or(1.0, DisplayUnit::scale),
         }),
         Value::Bool(_)
         | Value::Int(_)
@@ -424,7 +423,6 @@ mod tests {
     use graphcal_compiler::registry::prelude::prelude_base_dimension;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
-    use graphcal_eval::eval::DisplayUnit;
     use indexmap::IndexMap;
 
     fn quantity(si: f64) -> Value {
