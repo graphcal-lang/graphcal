@@ -16,14 +16,174 @@ use super::{
 // ---------------------------------------------------------------------------
 
 pub fn format_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
+    format_expr_in_context(fmt, expr, ExprContext::Root)
+}
+
+fn format_delimited_expr(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
+    format_expr_in_context(fmt, expr, ExprContext::Delimited)
+}
+
+fn format_expr_in_context(
+    fmt: &mut Formatter<'_>,
+    expr: &Expr,
+    context: ExprContext,
+) -> RcDoc<'static> {
     // Recursion choke point: formatting recurses once per tree level
     // (unbounded for left-nested operator chains).
-    graphcal_compiler::stack::with_stack_growth(|| format_expr_inner(fmt, expr))
+    graphcal_compiler::stack::with_stack_growth(|| {
+        let doc = format_expr_inner(fmt, expr);
+        if context.needs_parentheses(expr) {
+            soft_parenthesized(doc)
+        } else {
+            doc
+        }
+    })
 }
 
 fn render_table_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
     let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
-    render_doc_to_string(&format_expr(&mut cell_fmt, expr))
+    render_doc_to_string(&format_delimited_expr(&mut cell_fmt, expr))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BindingStrength {
+    Conversion,
+    Conditional,
+    Or,
+    And,
+    Comparison,
+    Additive,
+    Multiplicative,
+    Prefix,
+    Power,
+    Postfix,
+    Atom,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InfixSide {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PostfixOperator {
+    Field,
+    Index,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Associativity {
+    Left,
+    Right,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExprContext {
+    Root,
+    Delimited,
+    PrefixOperand,
+    InfixOperand { parent: BinOp, side: InfixSide },
+    PostfixBase(PostfixOperator),
+    ConversionOperand,
+}
+
+impl ExprContext {
+    fn needs_parentheses(self, expr: &Expr) -> bool {
+        let child = binding_strength(expr);
+        match self {
+            Self::Root | Self::Delimited => false,
+            Self::PrefixOperand => child < BindingStrength::Prefix,
+            Self::PostfixBase(operator) => {
+                child < BindingStrength::Postfix
+                    || (operator == PostfixOperator::Field
+                        && matches!(
+                            expr.kind,
+                            ExprKind::UnresolvedRef(_) | ExprKind::QuantityLiteral { .. }
+                        ))
+            }
+            Self::ConversionOperand => child == BindingStrength::Conversion,
+            Self::InfixOperand { parent, side } => {
+                infix_child_needs_parentheses(child, parent, side)
+            }
+        }
+    }
+}
+
+const fn binding_strength(expr: &Expr) -> BindingStrength {
+    match &expr.kind {
+        ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. } => BindingStrength::Conversion,
+        ExprKind::If { .. } => BindingStrength::Conditional,
+        ExprKind::BinOp { op, .. } => binop_binding_strength(*op),
+        ExprKind::UnaryOp { .. } => BindingStrength::Prefix,
+        ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. } => BindingStrength::Postfix,
+        ExprKind::Number(_)
+        | ExprKind::Integer(_)
+        | ExprKind::Bool(_)
+        | ExprKind::StringLiteral(_)
+        | ExprKind::GraphRef(_)
+        | ExprKind::InlineDagRef { .. }
+        | ExprKind::UnresolvedRef(_)
+        | ExprKind::FnCall { .. }
+        | ExprKind::QuantityLiteral { .. }
+        | ExprKind::ConstructorCall { .. }
+        | ExprKind::MapLiteral { .. }
+        | ExprKind::Sugar(_)
+        | ExprKind::ForComp { .. }
+        | ExprKind::Scan { .. }
+        | ExprKind::Unfold { .. }
+        | ExprKind::KeyForm { .. }
+        | ExprKind::Match { .. } => BindingStrength::Atom,
+    }
+}
+
+const fn binop_binding_strength(op: BinOp) -> BindingStrength {
+    match op {
+        BinOp::Or => BindingStrength::Or,
+        BinOp::And => BindingStrength::And,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+            BindingStrength::Comparison
+        }
+        BinOp::Add | BinOp::Sub => BindingStrength::Additive,
+        BinOp::Mul | BinOp::Div | BinOp::Mod => BindingStrength::Multiplicative,
+        BinOp::Pow(_) => BindingStrength::Power,
+    }
+}
+
+const fn associativity(op: BinOp) -> Associativity {
+    match op {
+        BinOp::Pow(_) => Associativity::Right,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+            Associativity::None
+        }
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::And | BinOp::Or => {
+            Associativity::Left
+        }
+    }
+}
+
+fn infix_child_needs_parentheses(child: BindingStrength, parent: BinOp, side: InfixSide) -> bool {
+    let parent_strength = binop_binding_strength(parent);
+    // The power parser deliberately accepts a unary expression on its right
+    // (`x ^ -2`), while every other infix operand starts at its own level.
+    let minimum_strength = if matches!((parent, side), (BinOp::Pow(_), InfixSide::Right)) {
+        BindingStrength::Prefix
+    } else {
+        parent_strength
+    };
+    if child < minimum_strength {
+        return true;
+    }
+    if child != parent_strength {
+        return false;
+    }
+    match (associativity(parent), side) {
+        (Associativity::Left, InfixSide::Right)
+        | (Associativity::Right, InfixSide::Left)
+        | (Associativity::None, _) => true,
+        (Associativity::Left, InfixSide::Left) | (Associativity::Right, InfixSide::Right) => false,
+    }
 }
 
 #[expect(
@@ -51,7 +211,11 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                 UnaryOp::Neg => "-",
                 UnaryOp::Not => "!",
             };
-            RcDoc::text(op_str).append(format_unary_operand(fmt, operand))
+            RcDoc::text(op_str).append(format_expr_in_context(
+                fmt,
+                operand,
+                ExprContext::PrefixOperand,
+            ))
         }
         ExprKind::FnCall {
             callee,
@@ -75,18 +239,20 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::Convert {
             expr: inner,
             target,
-        } => format_convert_operand(fmt, inner)
+        } => format_expr_in_context(fmt, inner, ExprContext::ConversionOperand)
             .append(RcDoc::text(" -> "))
             .append(format_unit_expr_inline(target)),
         ExprKind::DisplayTimezone {
             expr: inner,
             timezone,
-        } => format_convert_operand(fmt, inner)
+        } => format_expr_in_context(fmt, inner, ExprContext::ConversionOperand)
             .append(RcDoc::text(" -> "))
             .append(RcDoc::text(format!("\"{timezone}\""))),
-        ExprKind::FieldAccess { expr: inner, field } => format_expr(fmt, inner)
-            .append(RcDoc::text("."))
-            .append(RcDoc::text(field.value.as_str().to_string())),
+        ExprKind::FieldAccess { expr: inner, field } => {
+            format_expr_in_context(fmt, inner, ExprContext::PostfixBase(PostfixOperator::Field))
+                .append(RcDoc::text("."))
+                .append(RcDoc::text(field.value.as_str().to_string()))
+        }
         ExprKind::ConstructorCall {
             callee,
             generic_args,
@@ -106,10 +272,10 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                         RcDoc::text(format!("{}.{}", index.value, variant.value.as_str()))
                     }
                     IndexArg::Var(ident) => RcDoc::text(ident.name.clone()),
-                    IndexArg::Expr(e) => format_expr(fmt, e),
+                    IndexArg::Expr(e) => format_delimited_expr(fmt, e),
                 })
                 .collect();
-            format_expr(fmt, inner)
+            format_expr_in_context(fmt, inner, ExprContext::PostfixBase(PostfixOperator::Index))
                 .append(RcDoc::text("["))
                 .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
                 .append(RcDoc::text("]"))
@@ -153,33 +319,12 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                 .append(RcDoc::text("("))
                 .append(axis_doc)
                 .append(RcDoc::text(", "))
-                .append(format_expr(fmt, arg))
+                .append(format_delimited_expr(fmt, arg))
                 .append(RcDoc::text(")"))
         }
         ExprKind::Match { scrutinee, arms } => format_match(fmt, scrutinee, arms),
     }
 }
-
-/// Operator precedence (higher = binds tighter).
-///
-/// Unary `!`/`-` sits at [`UNARY_PREC`] (7). `^` is intentionally above the
-/// unary level so paren-elision around `(-x) ^ 2` stays semantics-preserving:
-/// without the parens, `-x ^ 2` reparses as `-(x^2)` (issue #575).
-const fn precedence(op: BinOp) -> u8 {
-    match op {
-        BinOp::Or => 1,
-        BinOp::And => 2,
-        BinOp::Eq | BinOp::Ne => 3,
-        BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => 4,
-        BinOp::Add | BinOp::Sub => 5,
-        BinOp::Mul | BinOp::Div | BinOp::Mod => 6,
-        BinOp::Pow(_) => 8,
-    }
-}
-
-/// Precedence of unary `!` and `-`. Sits between the multiplicative operators
-/// and `^` (per `docs/language/expressions.md`).
-const UNARY_PREC: u8 = 7;
 
 const fn op_token(op: BinOp) -> &'static str {
     match op {
@@ -200,78 +345,29 @@ const fn op_token(op: BinOp) -> &'static str {
     }
 }
 
-/// Format the operand of `->`, parenthesizing a nested conversion.
-///
-/// `(x -> u) -> v` parses but `x -> u -> v` does not (`->` is non-chaining),
-/// so stripping the parens would make the output unparsable. The shape is
-/// rejected by the dimension checker (D012), but the formatter must stay
-/// robust on everything the parser accepts.
-fn format_convert_operand(fmt: &mut Formatter<'_>, inner: &Expr) -> RcDoc<'static> {
-    if matches!(
-        inner.kind,
-        ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. }
-    ) {
-        return soft_parenthesized(format_expr(fmt, inner));
-    }
-    format_expr(fmt, inner)
-}
-
-/// Format a child expression of a binary op, adding parens if needed to
-/// preserve semantics.
-fn format_binop_child(
-    fmt: &mut Formatter<'_>,
-    child: &Expr,
-    parent_op: BinOp,
-    is_right: bool,
-) -> RcDoc<'static> {
-    let parent_prec = precedence(parent_op);
-    let needs_parens = match &child.kind {
-        ExprKind::BinOp { op: child_op, .. } => {
-            let child_prec = precedence(*child_op);
-            // Lower precedence wraps; equal-precedence wraps on the
-            // "wrong" associativity side (all left-associative except `^`).
-            let parent_is_power = matches!(parent_op, BinOp::Pow(_));
-            child_prec < parent_prec
-                || (child_prec == parent_prec && is_right && !parent_is_power)
-                || (child_prec == parent_prec && !is_right && parent_is_power)
-        }
-        // A bare unary on the lhs of a higher-binding operator must be
-        // parenthesized: stripping `(-x) ^ 2` to `-x ^ 2` reparses as
-        // `-(x^2)` because `^` binds tighter than unary `-` (issue #575).
-        // Symmetric on the rhs would be redundant — `^` is right-assoc, so
-        // `x ^ -2` is unambiguous and parses as intended.
-        ExprKind::UnaryOp { .. } if !is_right && parent_prec > UNARY_PREC => true,
-        _ => false,
-    };
-    if needs_parens {
-        return soft_parenthesized(format_expr(fmt, child));
-    }
-    format_expr(fmt, child)
-}
-
-/// Format the operand of a unary `!`/`-`, adding parens if the operand is a
-/// binary expression that binds looser than the unary itself.
-///
-/// Without this, `!(a && b)` collapses to `!a && b` — which reparses as
-/// `(!a) && b` because `!` binds tighter than `&&` (issue #575).
-fn format_unary_operand(fmt: &mut Formatter<'_>, operand: &Expr) -> RcDoc<'static> {
-    if let ExprKind::BinOp { op: child_op, .. } = &operand.kind
-        && precedence(*child_op) < UNARY_PREC
-    {
-        return soft_parenthesized(format_expr(fmt, operand));
-    }
-    format_expr(fmt, operand)
-}
-
 fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> RcDoc<'static> {
     if matches!(op, BinOp::And | BinOp::Or) {
         return format_logical_chain(fmt, op, lhs, rhs);
     }
 
-    let lhs_doc = format_binop_child(fmt, lhs, op, false);
+    let lhs_doc = format_expr_in_context(
+        fmt,
+        lhs,
+        ExprContext::InfixOperand {
+            parent: op,
+            side: InfixSide::Left,
+        },
+    );
     // Drain any comment between lhs and rhs (e.g. `1.0 + // comment\n 2.0`)
     let comment = fmt.drain_comments_before(rhs.span.offset());
-    let rhs_doc = format_binop_child(fmt, rhs, op, true);
+    let rhs_doc = format_expr_in_context(
+        fmt,
+        rhs,
+        ExprContext::InfixOperand {
+            parent: op,
+            side: InfixSide::Right,
+        },
+    );
     let operator = RcDoc::text(format!(" {} ", op_token(op)));
     match comment {
         None => lhs_doc.append(operator).append(rhs_doc),
@@ -311,13 +407,27 @@ fn format_logical_chain(
         first = child_lhs;
     }
 
-    let first_doc = format_binop_child(fmt, first, op, false);
+    let first_doc = format_expr_in_context(
+        fmt,
+        first,
+        ExprContext::InfixOperand {
+            parent: op,
+            side: InfixSide::Left,
+        },
+    );
     reversed_rhs
         .into_iter()
         .rev()
         .fold(first_doc, |doc, term| {
             let comment = fmt.drain_comments_before(term.span.offset());
-            let term_doc = format_binop_child(fmt, term, op, true);
+            let term_doc = format_expr_in_context(
+                fmt,
+                term,
+                ExprContext::InfixOperand {
+                    parent: op,
+                    side: InfixSide::Right,
+                },
+            );
             match comment {
                 None => doc
                     .append(RcDoc::line())
@@ -347,7 +457,7 @@ pub fn format_fn_call_expr(
     for arg in args {
         // Drain leading comments before this argument
         let leading = fmt.drain_comments_before(arg.span.offset());
-        let arg_doc = format_expr(fmt, arg);
+        let arg_doc = format_delimited_expr(fmt, arg);
         // Drain trailing comment after this argument
         let arg_end = arg.span.offset() + arg.span.len();
         let trailing = fmt.drain_trailing_comment(arg_end);
@@ -399,9 +509,9 @@ pub fn format_if(
     then_branch: &Expr,
     else_branch: &Expr,
 ) -> RcDoc<'static> {
-    let cond = format_expr(fmt, condition);
-    let then_doc = format_expr(fmt, then_branch);
-    let else_doc = format_expr(fmt, else_branch);
+    let cond = format_delimited_expr(fmt, condition);
+    let then_doc = format_delimited_expr(fmt, then_branch);
+    let else_doc = format_delimited_expr(fmt, else_branch);
 
     // Try single-line first via group
     let single_line = RcDoc::text("if ")
@@ -443,7 +553,7 @@ pub fn format_constructor_call(
         let name = RcDoc::text(f.name.value.as_str().to_string());
         let field_doc = name
             .append(RcDoc::text(": "))
-            .append(format_expr(fmt, &f.value));
+            .append(format_delimited_expr(fmt, &f.value));
         field_docs.push(prepend_comments(leading, field_doc));
     }
 
@@ -474,7 +584,7 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
         };
         let entry_doc = key_doc
             .append(RcDoc::text(": "))
-            .append(format_expr(fmt, &e.value))
+            .append(format_delimited_expr(fmt, &e.value))
             .append(RcDoc::text(","));
         // Drain trailing comment after this entry's value (but before next entry)
         let value_end = e.value.span.offset() + e.value.span.len();
@@ -859,7 +969,7 @@ pub fn format_for_comp(
 
     // Drain leading comments before the body expression
     let leading = fmt.drain_comments_before(body.span.offset());
-    let body_doc = format_expr(fmt, body);
+    let body_doc = format_delimited_expr(fmt, body);
     let body_doc = prepend_comments(leading, body_doc);
 
     let single_line = RcDoc::text("for ")
@@ -895,7 +1005,11 @@ fn format_lambda_call(
     let lambda_body = RcDoc::text("|")
         .append(params)
         .append(RcDoc::text("|"))
-        .append(RcDoc::line().append(format_expr(fmt, body)).nest(INDENT))
+        .append(
+            RcDoc::line()
+                .append(format_delimited_expr(fmt, body))
+                .nest(INDENT),
+        )
         .group();
     let docs = arg_docs
         .into_iter()
@@ -912,7 +1026,10 @@ fn format_scan(
     val_name: &Spanned<LocalName>,
     body: &Expr,
 ) -> RcDoc<'static> {
-    let arg_docs = vec![format_expr(fmt, source), format_expr(fmt, init)];
+    let arg_docs = vec![
+        format_delimited_expr(fmt, source),
+        format_delimited_expr(fmt, init),
+    ];
     format_lambda_call(fmt, "scan", arg_docs, &[acc_name, val_name], body)
 }
 
@@ -925,7 +1042,10 @@ fn format_unfold(
     index_name: &Spanned<LocalName>,
     body: &Expr,
 ) -> RcDoc<'static> {
-    let arg_docs = vec![RcDoc::text(axis.value.to_string()), format_expr(fmt, init)];
+    let arg_docs = vec![
+        RcDoc::text(axis.value.to_string()),
+        format_delimited_expr(fmt, init),
+    ];
     format_lambda_call(
         fmt,
         "unfold",
@@ -944,7 +1064,7 @@ pub fn format_match(
         format_match_pattern(&arms[i].pattern)
     });
     wrap_match_block(
-        RcDoc::text("match ").append(format_expr(fmt, scrutinee)),
+        RcDoc::text("match ").append(format_delimited_expr(fmt, scrutinee)),
         arm_docs,
     )
 }
@@ -1010,7 +1130,7 @@ fn collect_arm_docs<'a>(
     for (i, (span, body)) in arms.enumerate() {
         let leading = fmt.drain_comments_before(span.offset());
         let pattern = pattern_for(i);
-        let body_doc = format_expr(fmt, body);
+        let body_doc = format_delimited_expr(fmt, body);
         let arm_doc = pattern
             .append(RcDoc::text(" => "))
             .append(body_doc)
@@ -1047,7 +1167,7 @@ fn format_inline_dag_ref(
         .map(|b| {
             RcDoc::text(b.name.name.clone())
                 .append(RcDoc::text(": "))
-                .append(format_expr(fmt, &b.value))
+                .append(format_delimited_expr(fmt, &b.value))
         })
         .collect();
     let path_text = path.display_path();

@@ -73,7 +73,7 @@ graphcal eval analysis.gcl --input params.json --format json
 graphcal eval analysis.gcl --output-view all
 graphcal eval analysis.gcl --plot browser
 
-# Canonically format source (with a 100-column target for breakable layouts)
+# Canonically format source with AST-checked, precedence-safe parentheses
 graphcal format rocket.gcl
 
 # Export the dependency graph as Graphviz DOT (experimental)
