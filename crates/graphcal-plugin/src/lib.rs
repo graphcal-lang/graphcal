@@ -474,9 +474,8 @@ pub mod __rt {
     // -- Buffer protocol (arrays over index variables, issue #25 Phase D) --
 
     /// Alignment of every host-requested buffer allocation. Mirrors the ABI
-    /// crate's `BUFFER_ALIGN`; the drift test pins the two together through
-    /// the real loader.
-    const BUFFER_ALIGN: usize = 8;
+    /// crate's `BUFFER_ALIGN`; a unit test pins the two constants together.
+    pub(crate) const BUFFER_ALIGN: usize = 8;
 
     fn buffer_layout(size: u32) -> std::alloc::Layout {
         // `size.max(1)` sidesteps the zero-size allocation edge; the host
@@ -491,6 +490,9 @@ pub mod __rt {
     }
 
     /// The `graphcal_alloc` export body: allocate one host-requested buffer.
+    ///
+    /// A null result is the ABI's explicit allocation-failure sentinel; the
+    /// host rejects it before writing memory or invoking the kernel.
     #[must_use]
     #[expect(
         unsafe_code,
@@ -632,6 +634,11 @@ pub mod __rt {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sdk_buffer_alignment_matches_the_abi() {
+        assert_eq!(__rt::BUFFER_ALIGN, graphcal_plugin_abi::BUFFER_ALIGN);
+    }
 
     #[test]
     fn arrays_validate_rank_extents_and_cardinality() {
