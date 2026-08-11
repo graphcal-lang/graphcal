@@ -25,7 +25,9 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbolIndex, ProjectSymbols};
-use crate::symbol_identity::{SourceSymbolPath, UnresolvedSymbol, VisibleBinding};
+use crate::symbol_identity::{
+    SourceSymbolPath, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
+};
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
@@ -364,15 +366,7 @@ impl AnalysisResult {
         &self,
         unresolved: &UnresolvedSymbol,
     ) -> Option<SymbolKey> {
-        let mut targets = self
-            .imported_bindings
-            .iter()
-            .filter(|binding| binding.resolves(unresolved))
-            .map(VisibleBinding::target);
-        let target = targets.next()?;
-        targets
-            .all(|candidate| candidate == target)
-            .then(|| target.clone())
+        resolve_visible_target(&self.imported_bindings, unresolved)
     }
 }
 
@@ -393,7 +387,10 @@ impl std::fmt::Debug for AnalysisResult {
         f.debug_struct("AnalysisResult")
             .field("source_len", &self.source.len())
             .field("symbol_table_defs", &self.symbol_table.definitions.len())
-            .field("project_symbols", &self.project_symbols)
+            .field(
+                "project_symbols_complete",
+                &self.project_symbols.complete().is_some(),
+            )
             .field("imported_defs", &self.imported_definitions.len())
             .field("imported_bindings", &self.imported_bindings.len())
             .field("import_surfaces", &self.import_surfaces.len())
@@ -1673,16 +1670,12 @@ fn collect_import_surfaces(
     Ok(surfaces)
 }
 
-/// Collect imported definitions from a loaded project.
+/// Collect canonical definitions, visible bindings, and occurrences for every
+/// source in one loader-resolved project closure.
 ///
-/// For each `import` and `include` declaration in the root file, uses the
-/// loader-resolved DAG ids to look up the dependency in the project, and
-/// builds a symbol table from the imported file's AST to extract the
-/// definition info.
-///
-/// Selective items are keyed by their **local name** (alias if present,
-/// otherwise the original name), so that references using the alias resolve
-/// correctly in LSP features.
+/// Definitions remain keyed by canonical semantic identity. Authored module
+/// qualifiers and selective aliases are separate bindings, including
+/// transitive re-exports resolved through the compiler's module scope.
 struct ImportedSymbols {
     definitions: HashMap<SymbolKey, ImportedDefinition>,
     bindings: Vec<VisibleBinding>,
@@ -1825,8 +1818,11 @@ fn collect_imported_definitions(
             .map_or_else(Vec::new, |imported| imported.bindings.clone());
         ProjectDocumentSymbols::new(document.uri, document.source, document.table, bindings)
     });
-    let project_index =
-        ProjectSymbolIndex::loaded_dependency_closure(root_uri.clone(), project_documents);
+    let project_index = if root_uri.to_file_path().is_ok() {
+        ProjectSymbolIndex::loaded_dependency_closure(root_uri.clone(), project_documents)
+    } else {
+        ProjectSymbolIndex::standalone(root_uri.clone(), project_documents)
+    };
     let mut root_imported = imported_by_file
         .remove(project.root_id())
         .unwrap_or_else(|| ImportedSymbols {

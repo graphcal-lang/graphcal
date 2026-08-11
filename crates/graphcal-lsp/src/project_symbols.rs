@@ -11,7 +11,9 @@ use graphcal_compiler::syntax::lexer::Lexer;
 use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::Url;
 
-use crate::symbol_identity::{ReferenceTarget, UnresolvedSymbol, VisibleBinding};
+use crate::symbol_identity::{
+    ReferenceTarget, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
+};
 use crate::symbol_table::{DefinitionInfo, ReferenceInfo, SymbolKey, SymbolTable};
 
 /// Symbol data for one physical source document in a project snapshot.
@@ -115,7 +117,6 @@ pub struct ProjectDefinition<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum ProjectCoverage {
     /// A virtual standalone buffer has no filesystem importers.
-    #[cfg(test)]
     Standalone,
     /// A loader root includes its transitive dependencies but not sibling roots
     /// that may import the root itself.
@@ -140,7 +141,6 @@ impl ProjectSymbolIndex {
         Self::with_coverage(root_uri, documents, ProjectCoverage::DependencyClosure)
     }
 
-    #[cfg(test)]
     #[must_use]
     pub fn standalone(
         root_uri: Url,
@@ -168,11 +168,7 @@ impl ProjectSymbolIndex {
     /// reverse importers outside this snapshot.
     #[must_use]
     pub const fn covers_reverse_dependencies(&self) -> bool {
-        match self.coverage {
-            #[cfg(test)]
-            ProjectCoverage::Standalone => true,
-            ProjectCoverage::DependencyClosure => false,
-        }
+        matches!(self.coverage, ProjectCoverage::Standalone)
     }
 
     #[must_use]
@@ -232,6 +228,12 @@ impl ProjectSymbolIndex {
     /// canonical-definition rename.
     #[must_use]
     pub fn rename_occurrences(&self, target: &SymbolKey) -> Vec<ProjectOccurrence> {
+        let Some(canonical_name) = self
+            .definition(target)
+            .map(|definition| definition.definition.name.as_str())
+        else {
+            return Vec::new();
+        };
         let mut occurrences: Vec<_> = self
             .documents
             .values()
@@ -247,7 +249,7 @@ impl ProjectSymbolIndex {
                     });
                 let references = document.table.references().iter().filter_map(|reference| {
                     (document.resolve_reference(reference).as_ref() == Some(target))
-                        .then(|| rename_leaf_span(&document.source, reference.span, target))
+                        .then(|| rename_leaf_span(&document.source, reference.span, canonical_name))
                         .flatten()
                         .map(|span| ProjectOccurrence {
                             uri: document.uri.clone(),
@@ -344,9 +346,15 @@ impl ProjectSymbolIndex {
         span: Span,
         target: &SymbolKey,
     ) -> bool {
-        self.documents
-            .get(uri)
-            .is_some_and(|document| rename_leaf_span(&document.source, span, target).is_some())
+        let Some(canonical_name) = self
+            .definition(target)
+            .map(|definition| definition.definition.name.as_str())
+        else {
+            return false;
+        };
+        self.documents.get(uri).is_some_and(|document| {
+            rename_leaf_span(&document.source, span, canonical_name).is_some()
+        })
     }
 }
 
@@ -369,21 +377,7 @@ impl ProjectSymbols {
     }
 }
 
-fn resolve_visible_target(
-    bindings: &[VisibleBinding],
-    unresolved: &UnresolvedSymbol,
-) -> Option<SymbolKey> {
-    let mut targets = bindings
-        .iter()
-        .filter(|binding| binding.resolves(unresolved))
-        .map(VisibleBinding::target);
-    let target = targets.next()?;
-    targets
-        .all(|candidate| candidate == target)
-        .then(|| target.clone())
-}
-
-fn rename_leaf_span(source: &str, occurrence: Span, target: &SymbolKey) -> Option<Span> {
+fn rename_leaf_span(source: &str, occurrence: Span, canonical_name: &str) -> Option<Span> {
     let text = source.get(occurrence.offset()..occurrence.offset() + occurrence.len())?;
     let mut lexer = Lexer::new(text);
     let mut leaf = None;
@@ -394,8 +388,7 @@ fn rename_leaf_span(source: &str, occurrence: Span, target: &SymbolKey) -> Optio
     }
     let leaf = leaf?;
     let spelling = text.get(leaf.offset()..leaf.offset() + leaf.len())?;
-    (spelling == target.leaf_name())
-        .then(|| Span::new(occurrence.offset() + leaf.offset(), leaf.len()))
+    (spelling == canonical_name).then(|| Span::new(occurrence.offset() + leaf.offset(), leaf.len()))
 }
 
 fn sort_and_dedup(occurrences: &mut Vec<ProjectOccurrence>) {

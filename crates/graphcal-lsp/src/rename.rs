@@ -7,10 +7,11 @@ use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 use crate::convert::LineIndex;
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::server::AnalysisResult;
-use crate::symbol_identity::{FieldId, GenericParamId, IndexVariantId};
+use crate::symbol_identity::{ExternFunctionId, FieldId, GenericParamId, IndexVariantId};
 use crate::symbol_table::SymbolKey;
 use graphcal_compiler::syntax::decl_name::{DeclName, ResolvedDeclName};
 use graphcal_compiler::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName};
+use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName, ResolvedIndexName};
 use graphcal_compiler::syntax::type_name::{
     ConstructorName, FieldName, GenericParamName, ResolvedConstructorName, ResolvedStructTypeName,
@@ -226,8 +227,12 @@ fn key_with_new_name(key: &SymbolKey, new_name: &str) -> Option<SymbolKey> {
             parameter.owner().clone(),
             GenericParamName::expect_valid(new_name),
         )),
+        SymbolKey::ExternFunction(function) => SymbolKey::ExternFunction(ExternFunctionId::new(
+            function.owner().clone(),
+            function.plugin().clone(),
+            FnName::expect_valid(new_name),
+        )),
         SymbolKey::Local(_)
-        | SymbolKey::ExternFunction(_)
         | SymbolKey::BuiltinFunction(_)
         | SymbolKey::BuiltinConstant(_)
         | SymbolKey::TimeScale(_) => return None,
@@ -423,6 +428,26 @@ mod tests {
                 output
             },
         )
+    }
+
+    #[test]
+    fn rename_expression_local_uses_definition_spelling() {
+        let source = r"
+index Step = range(0.0 s, 1.0 s, step: 1.0 s);
+node y: Dimensionless[Step] = unfold(
+    Step,
+    0.0,
+    |prev_y, prev_t, t| prev_y + (t - prev_t) / 1.0 s
+);
+";
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        let cursor = source.find("prev_y").unwrap();
+        let edit = rename(&analysis, &uri, cursor, "previous")
+            .unwrap()
+            .expect("expression local should be renameable");
+
+        assert_eq!(edit.changes.unwrap()[&uri].len(), 2);
     }
 
     #[test]
