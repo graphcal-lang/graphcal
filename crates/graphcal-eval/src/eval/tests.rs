@@ -2084,6 +2084,94 @@ fn override_unknown_param_errors() {
 }
 
 #[test]
+fn recursive_schema_graph_supports_finite_bindings_and_lazy_transport_rejection() {
+    let source = r"
+        pub type List {
+            Nil,
+            Cons(head: Int, tail: List),
+        }
+        param list: List;
+        pub node echo: List = @list;
+        pub node accepted: Bool = true;
+    ";
+    let project = crate::loader::LoadedProject::from_source(source, "recursive.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let ModelValueSchema::Algebraic(list_id) = prepared.parameter_ports()[0].value_schema() else {
+        panic!("List parameter must reference an algebraic definition");
+    };
+    let list_definition = prepared
+        .schema_graph()
+        .definition(list_id)
+        .expect("List definition");
+    let cons = &list_definition.constructors()[1];
+    assert_eq!(cons.name().as_str(), "Cons");
+    assert!(matches!(
+        cons.fields()[1].value(),
+        ModelValueSchema::Algebraic(tail_id) if tail_id == list_id
+    ));
+    assert!(
+        prepared
+            .schema_graph()
+            .contains_recursive_type(prepared.parameter_ports()[0].value_schema())
+    );
+
+    let mut bindings = prepared.binding_builder();
+    bindings
+        .bind_expression(
+            &DeclName::expect_valid("list"),
+            &parse_expr("Cons(head: 1, tail: Cons(head: 2, tail: Nil))"),
+        )
+        .unwrap();
+    let row = bindings.finish().unwrap();
+    let model = prepared.model(&[DeclName::expect_valid("echo")]).unwrap();
+    let ModelRowOutcome::Success(values) = prepared.evaluate_model_row(&row, &model).unwrap()
+    else {
+        panic!("finite recursive binding unexpectedly failed");
+    };
+    assert!(matches!(values.as_slice(), [Value::Struct { .. }]));
+
+    let error = prepared
+        .tenax_v2_model(&[DeclName::expect_valid("accepted")])
+        .expect_err("Tenax v2 must reject recursion at its own boundary");
+    assert!(matches!(
+        error,
+        ModelDefinitionError::RecursiveInputTypeUnsupported { name, .. }
+            if name.as_str() == "list"
+    ));
+}
+
+#[test]
+fn mutually_recursive_model_definitions_form_a_finite_schema_graph() {
+    let source = r"
+        pub type Left {
+            End,
+            ToRight(value: Right),
+        }
+        pub type Right {
+            ToLeft(value: Left),
+        }
+        pub node result: Left = End;
+    ";
+    let project = crate::loader::LoadedProject::from_source(source, "mutual.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let ModelValueSchema::Algebraic(left_id) = prepared.output_ports()[0].value_schema() else {
+        panic!("Left output must be algebraic");
+    };
+    assert_eq!(prepared.schema_graph().definitions().len(), 2);
+    assert!(
+        prepared
+            .schema_graph()
+            .contains_recursive_type(prepared.output_ports()[0].value_schema())
+    );
+    assert!(prepared.schema_graph().definition(left_id).is_some());
+    assert!(
+        prepared
+            .evaluate(&prepared.binding_builder().finish().unwrap())
+            .is_ok()
+    );
+}
+
+#[test]
 #[expect(
     clippy::too_many_lines,
     reason = "one end-to-end row-binding test covers every recursive value family"
@@ -2164,13 +2252,18 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
     let first_result = prepared.evaluate(&first_row).unwrap();
     assert_eq!(find_int_value(&first_result, "total"), 3);
     let recursive_model = prepared.model(&[DeclName::expect_valid("echo")]).unwrap();
-    let ModelValueSchema::Algebraic { constructors, .. } =
-        recursive_model.outputs()[0].value_schema()
-    else {
+    let ModelValueSchema::Algebraic(type_id) = recursive_model.outputs()[0].value_schema() else {
         panic!("echo schema was not algebraic");
     };
-    assert_eq!(constructors.len(), 2);
-    assert_eq!(constructors[1].fields()[0].value(), &ModelValueSchema::Int);
+    let definition = recursive_model
+        .schema_graph()
+        .definition(type_id)
+        .expect("algebraic schema reference must have a definition");
+    assert_eq!(definition.constructors().len(), 2);
+    assert_eq!(
+        definition.constructors()[1].fields()[0].value(),
+        &ModelValueSchema::Int
+    );
     let ModelRowOutcome::Success(recursive_outputs) = prepared
         .evaluate_model_row(&first_row, &recursive_model)
         .unwrap()
