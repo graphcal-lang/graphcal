@@ -111,6 +111,14 @@ enum DependencyCoverage {
     Incomplete,
 }
 
+/// Relationship between cached analysis inputs and the current workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisFreshness {
+    Current,
+    RootChanged,
+    DependencyChanged,
+}
+
 /// Exact open-buffer revisions and source dependencies consumed by one result.
 #[derive(Debug, Clone)]
 pub struct AnalysisInputs {
@@ -147,6 +155,25 @@ impl AnalysisInputs {
     }
 
     #[must_use]
+    pub fn freshness(
+        &self,
+        current: &HashMap<DocumentIdentity, DocumentRevision>,
+    ) -> AnalysisFreshness {
+        let dependency_changed = self.dependencies.iter().any(|identity| {
+            self.expected_revisions.get(identity).copied().flatten()
+                != current.get(identity).copied()
+        });
+        if dependency_changed {
+            return AnalysisFreshness::DependencyChanged;
+        }
+        if self.root_is_current(current) {
+            AnalysisFreshness::Current
+        } else {
+            AnalysisFreshness::RootChanged
+        }
+    }
+
+    #[must_use]
     pub fn root_is_current(&self, current: &HashMap<DocumentIdentity, DocumentRevision>) -> bool {
         self.expected_revisions
             .get(&self.root)
@@ -157,9 +184,7 @@ impl AnalysisInputs {
     /// and revision as it had when analysis started.
     #[must_use]
     pub fn is_current(&self, current: &HashMap<DocumentIdentity, DocumentRevision>) -> bool {
-        self.expected_revisions
-            .iter()
-            .all(|(identity, expected)| current.get(identity).copied() == *expected)
+        self.freshness(current) == AnalysisFreshness::Current
     }
 }
 
@@ -216,14 +241,27 @@ mod tests {
         );
         let inputs = snapshot.finish_loaded_project(HashSet::from([dependency.clone()]));
 
-        assert!(inputs.is_current(&HashMap::from([
+        let current = HashMap::from([
             (root.clone(), root_revision),
             (dependency.clone(), dependency_revision),
-        ])));
-        assert!(!inputs.is_current(&HashMap::from([
+        ]);
+        assert_eq!(inputs.freshness(&current), AnalysisFreshness::Current);
+        let root_changed = HashMap::from([
+            (root.clone(), clock.next().unwrap()),
+            (dependency.clone(), dependency_revision),
+        ]);
+        assert_eq!(
+            inputs.freshness(&root_changed),
+            AnalysisFreshness::RootChanged
+        );
+        let dependency_changed = HashMap::from([
             (root.clone(), root_revision),
             (dependency, clock.next().unwrap()),
-        ])));
+        ]);
+        assert_eq!(
+            inputs.freshness(&dependency_changed),
+            AnalysisFreshness::DependencyChanged
+        );
         assert!(!inputs.is_current(&HashMap::from([(root, root_revision)])));
     }
 

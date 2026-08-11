@@ -30,8 +30,8 @@ use crate::symbol_identity::{
 };
 use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
 use crate::workspace_revision::{
-    AnalysisInputSnapshot, AnalysisInputs, DependencyGraph, DocumentIdentity, DocumentRevision,
-    RevisionClock, RevisionExhausted,
+    AnalysisFreshness, AnalysisInputSnapshot, AnalysisInputs, DependencyGraph, DocumentIdentity,
+    DocumentRevision, RevisionClock, RevisionExhausted,
 };
 use graphcal_compiler::builtin::{AggregationFn, ComplexFn, LinearAlgebraFn};
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
@@ -429,6 +429,40 @@ impl std::fmt::Debug for AnalysisResult {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CurrentAnalysis<'a>(&'a AnalysisResult);
+
+impl<'a> CurrentAnalysis<'a> {
+    const fn get(self) -> &'a AnalysisResult {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SemanticAnalysis<'a>(&'a AnalysisResult);
+
+impl<'a> SemanticAnalysis<'a> {
+    const fn get(self) -> &'a AnalysisResult {
+        self.0
+    }
+}
+
+fn select_current_analysis<'a>(
+    analysis: &'a AnalysisResult,
+    revisions: &HashMap<DocumentIdentity, DocumentRevision>,
+) -> Option<CurrentAnalysis<'a>> {
+    (analysis.inputs.freshness(revisions) == AnalysisFreshness::Current)
+        .then_some(CurrentAnalysis(analysis))
+}
+
+fn select_semantic_analysis<'a>(
+    analysis: &'a AnalysisResult,
+    revisions: &HashMap<DocumentIdentity, DocumentRevision>,
+) -> Option<SemanticAnalysis<'a>> {
+    (analysis.inputs.freshness(revisions) != AnalysisFreshness::DependencyChanged)
+        .then_some(SemanticAnalysis(analysis))
+}
+
 fn open_revisions(
     snapshots: &HashMap<Url, OpenDocumentSnapshot>,
 ) -> HashMap<DocumentIdentity, DocumentRevision> {
@@ -462,24 +496,49 @@ impl Backend {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
     }
 
-    /// Look up cached analysis for a document and apply a closure to it.
-    ///
-    /// Returns `Ok(None)` if the document has not been analyzed yet.
-    async fn with_analysis<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
+    /// Apply an exact-coordinate feature only to a fully current analysis.
+    async fn with_current_analysis<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
     where
-        F: FnOnce(&AnalysisResult) -> Option<R>,
+        F: FnOnce(CurrentAnalysis<'_>) -> Option<R>,
     {
         let snapshots = self.latest_text.read().await;
         let revisions = open_revisions(&snapshots);
-        drop(snapshots);
         let docs = self.documents.read().await;
         let Some(analysis) = docs.get(uri) else {
             return Ok(None);
         };
-        if !analysis.inputs.is_current(&revisions) {
+        let Some(current) = select_current_analysis(analysis, &revisions) else {
             return Ok(None);
-        }
-        let result = f(analysis);
+        };
+        drop(snapshots);
+        let result = f(current);
+        drop(docs);
+        Ok(result)
+    }
+
+    /// Apply a coordinate-free candidate feature when dependencies are still
+    /// current. The root text may be newer than the cached semantic snapshot.
+    async fn with_semantic_analysis<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(SemanticAnalysis<'_>, &str) -> Option<R>,
+    {
+        let snapshots = self.latest_text.read().await;
+        let revisions = open_revisions(&snapshots);
+        let Some(current_source) = snapshots
+            .get(uri)
+            .map(|snapshot| Arc::clone(&snapshot.text))
+        else {
+            return Ok(None);
+        };
+        let docs = self.documents.read().await;
+        let Some(analysis) = docs.get(uri) else {
+            return Ok(None);
+        };
+        let Some(semantic) = select_semantic_analysis(analysis, &revisions) else {
+            return Ok(None);
+        };
+        drop(snapshots);
+        let result = f(semantic, &current_source);
         drop(docs);
         Ok(result)
     }
@@ -533,6 +592,12 @@ impl Backend {
             .filter(|(uri, snapshot)| *uri != changed_uri && importers.contains(&snapshot.identity))
             .map(|(uri, snapshot)| (uri.clone(), Arc::clone(&snapshot.text), snapshot.revision))
             .collect();
+        if !pending.is_empty() {
+            let refresh_client = self.client.clone();
+            tokio::spawn(async move {
+                let _ = refresh_client.inlay_hint_refresh().await;
+            });
+        }
         for (uri, text, revision) in pending {
             self.analysis_scheduler.cancel_document(&uri);
             let generation = self.bump_generation(&uri).await;
@@ -2446,6 +2511,12 @@ impl LanguageServer for Backend {
                 return;
             }
         };
+        // Cached hint coordinates became stale as soon as the root revision
+        // changed; ask the client to clear/re-request them before debounce.
+        let refresh_client = self.client.clone();
+        tokio::spawn(async move {
+            let _ = refresh_client.inlay_hint_refresh().await;
+        });
         self.schedule_transitive_importers(&uri, &recorded.identity)
             .await;
         let generation = self.bump_generation(&uri).await;
@@ -2498,19 +2569,18 @@ impl LanguageServer for Backend {
                 .publish_diagnostics(target_uri, diags, None)
                 .await;
         }
-        // No `inlay_hint_refresh` here — the document is gone; there's
-        // nothing for the client to re-fetch hints for. The refresh call
-        // at `analyze_and_publish` and `spawn_debounced_analysis` sites
-        // covers the only cases where hints could meaningfully change.
+        // The closed document needs no hint refresh. If it had open
+        // importers, `schedule_transitive_importers` already requested one
+        // globally so their stale evaluated hints are cleared immediately.
     }
 
     async fn document_symbol(
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
-        self.with_analysis(&params.text_document.uri, |analysis| {
+        self.with_current_analysis(&params.text_document.uri, |current| {
             Some(DocumentSymbolResponse::Nested(
-                crate::document_symbols::build_document_symbols(analysis),
+                crate::document_symbols::build_document_symbols(current.get()),
             ))
         })
         .await
@@ -2522,7 +2592,8 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        self.with_analysis(&uri, |analysis| {
+        self.with_current_analysis(&uri, |current| {
+            let analysis = current.get();
             let offset = position_to_byte_offset(&analysis.source, position);
             crate::goto_definition::goto_definition(analysis, &uri, offset)
         })
@@ -2532,7 +2603,8 @@ impl LanguageServer for Backend {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        self.with_analysis(&uri, |analysis| {
+        self.with_current_analysis(&uri, |current| {
+            let analysis = current.get();
             let offset = position_to_byte_offset(&analysis.source, position);
             crate::hover::hover(analysis, offset)
         })
@@ -2543,7 +2615,8 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
-        self.with_analysis(&uri, |analysis| {
+        self.with_current_analysis(&uri, |current| {
+            let analysis = current.get();
             let offset = position_to_byte_offset(&analysis.source, position);
             crate::references::references(analysis, &uri, offset, include_declaration)
         })
@@ -2553,8 +2626,8 @@ impl LanguageServer for Backend {
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let uri = params.text_document.uri;
         let range = params.range;
-        self.with_analysis(&uri, |analysis| {
-            crate::inlay_hints::inlay_hints(analysis, range)
+        self.with_current_analysis(&uri, |current| {
+            crate::inlay_hints::inlay_hints(current.get(), range)
         })
         .await
     }
@@ -2562,13 +2635,12 @@ impl LanguageServer for Backend {
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        // Signature help fires on `(`/`,` against the just-typed text,
-        // which is ahead of the debounced analysis snapshot.
-        let text = self.current_text(&uri).await;
-        self.with_analysis(&uri, |analysis| {
-            let source = text.as_deref().map_or(analysis.source.as_str(), |t| t);
-            let offset = position_to_byte_offset(source, position);
-            crate::signature_help::signature_help(analysis, source, offset)
+        // Signature help parses the atomically captured current text while
+        // reading coordinate-free signatures from the cached analysis.
+        self.with_semantic_analysis(&uri, |semantic, current_source| {
+            let analysis = semantic.get();
+            let offset = position_to_byte_offset(current_source, position);
+            crate::signature_help::signature_help(analysis, current_source, offset)
         })
         .await
     }
@@ -2576,13 +2648,13 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        // Trigger-character completion runs against the just-typed text,
-        // which is ahead of the debounced analysis snapshot.
-        let text = self.current_text(&uri).await;
-        self.with_analysis(&uri, |analysis| {
-            let source = text.as_deref().map_or(analysis.source.as_str(), |t| t);
-            let offset = position_to_byte_offset(source, position);
-            crate::completion::completion(analysis, source, offset).map(CompletionResponse::Array)
+        // Completion derives context and DAG scope from the atomically
+        // captured current text, never from stale declaration spans.
+        self.with_semantic_analysis(&uri, |semantic, current_source| {
+            let analysis = semantic.get();
+            let offset = position_to_byte_offset(current_source, position);
+            crate::completion::completion(analysis, current_source, offset)
+                .map(CompletionResponse::Array)
         })
         .await
     }
@@ -2590,7 +2662,8 @@ impl LanguageServer for Backend {
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri.clone();
         let current_text = self.current_text(&uri).await;
-        self.with_analysis(&uri, move |analysis| {
+        self.with_current_analysis(&uri, move |current| {
+            let analysis = current.get();
             let current_text = current_text.as_ref()?;
             if current_text.as_str() != analysis.source.as_str() {
                 return None;
@@ -2607,7 +2680,8 @@ impl LanguageServer for Backend {
         let current_text = self.current_text(&uri).await;
         let snapshots = self.latest_text.read().await.clone();
         let outcome = self
-            .with_analysis(&uri, |analysis| {
+            .with_current_analysis(&uri, |current| {
+                let analysis = current.get();
                 let current_text = current_text.as_ref()?;
                 if current_text.as_str() != analysis.source.as_str() {
                     return None;
@@ -2647,7 +2721,8 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let position = params.position;
         let current_text = self.current_text(&uri).await;
-        self.with_analysis(&uri, |analysis| {
+        self.with_current_analysis(&uri, |current| {
+            let analysis = current.get();
             let current_text = current_text.as_ref()?;
             if current_text.as_str() != analysis.source.as_str() {
                 return None;
@@ -2660,22 +2735,26 @@ impl LanguageServer for Backend {
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = params.text_document.uri;
-        self.with_analysis(&uri, |analysis| {
-            crate::document_links::document_links(analysis)
+        self.with_current_analysis(&uri, |current| {
+            crate::document_links::document_links(current.get())
         })
         .await
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = params.text_document.uri;
-        // Formatting edits must be computed against the client's current
-        // buffer, not the (possibly older) analyzed snapshot.
-        let text = self.current_text(&uri).await;
-        self.with_analysis(&uri, |analysis| {
-            let source = text.as_deref().map_or(analysis.source.as_str(), |t| t);
-            crate::formatting::format_document(source)
-        })
-        .await
+        // Formatting is text-only and must never depend on cached semantic
+        // coordinates. Formatting resource bounds are handled separately.
+        let Some(text) = self
+            .latest_text
+            .read()
+            .await
+            .get(&uri)
+            .map(|snapshot| Arc::clone(&snapshot.text))
+        else {
+            return Ok(None);
+        };
+        Ok(crate::formatting::format_document(&text))
     }
 }
 
@@ -3908,6 +3987,48 @@ node bad: Mass = mass + length;
             };
             assert_eq!(imported.uri, lib_uri, "`{needle}` should jump to lib.gcl");
         }
+    }
+
+    #[test]
+    fn analysis_access_separates_exact_coordinates_from_stale_root_candidates() {
+        let uri = Url::parse("file:///tmp/stale-position.gcl").unwrap();
+        let root = document_identity(&uri);
+        let dependency = DocumentIdentity::file(std::path::PathBuf::from("/tmp/lib.gcl"));
+        let clock = RevisionClock::default();
+        let root_revision = clock.next().unwrap();
+        let dependency_revision = clock.next().unwrap();
+        let snapshot = AnalysisInputSnapshot::new(
+            root.clone(),
+            root_revision,
+            HashMap::from([(dependency.clone(), dependency_revision)]),
+        );
+        let mut analysis = run_analysis_for_test(
+            &uri,
+            "const node first: Dimensionless = 1.0;\r\n\
+             node second: Dimensionless = @first;\r\n",
+        );
+        analysis.inputs = snapshot.finish_loaded_project(HashSet::from([dependency.clone()]));
+
+        let current = HashMap::from([
+            (root.clone(), root_revision),
+            (dependency.clone(), dependency_revision),
+        ]);
+        assert!(select_current_analysis(&analysis, &current).is_some());
+        assert!(select_semantic_analysis(&analysis, &current).is_some());
+
+        // This revision represents a current buffer with deleted CRLF text and
+        // an inserted astral character (a two-code-unit UTF-16 shift).
+        let shifted_root = HashMap::from([
+            (root.clone(), clock.next().unwrap()),
+            (dependency.clone(), dependency_revision),
+        ]);
+        assert!(select_current_analysis(&analysis, &shifted_root).is_none());
+        assert!(select_semantic_analysis(&analysis, &shifted_root).is_some());
+
+        let changed_dependency =
+            HashMap::from([(root, root_revision), (dependency, clock.next().unwrap())]);
+        assert!(select_current_analysis(&analysis, &changed_dependency).is_none());
+        assert!(select_semantic_analysis(&analysis, &changed_dependency).is_none());
     }
 
     #[test]
