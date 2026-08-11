@@ -36,7 +36,10 @@ Commands that load Graphcal source sandbox filesystem access to the explicit
 `--root`, the nearest discovered `graphcal.toml` directory, or (for a loose
 file) the file's enclosing directory. An explicit root that does not exist or
 cannot be canonicalized is a hard error; Graphcal never drops to unrestricted
-filesystem access when sandbox setup fails.
+filesystem access when sandbox setup fails. A rooted reader holds an open root
+directory capability and performs opens, metadata queries, canonicalization,
+and directory listing relative to that handle. Concurrent file or parent
+symlink swaps therefore cannot redirect a checked operation outside the root.
 
 ---
 

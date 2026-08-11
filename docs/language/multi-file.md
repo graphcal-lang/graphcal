@@ -736,6 +736,9 @@ Lock creation and loading use the same deterministic source-tree algorithm.
 Package trees may contain only ordinary directories and regular files: symbolic
 links and special files are rejected rather than followed, every canonical path
 must remain under its locked package root, and relative path names must be UTF-8.
+Rooted disk access is handle-relative to an open directory capability, so a
+concurrent file, parent-directory, or directory-listing symlink swap cannot
+escape after validation.
 The root package continues to use editor overlays, while each cached dependency
 is read through its own immutable rooted filesystem capability. Overlay
 construction is itself capability-preserving: existing buffers use a canonical

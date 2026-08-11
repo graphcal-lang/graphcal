@@ -1304,10 +1304,10 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 
 `atomic_write.rs` is an independent imperative write shell. The in-memory
 reader owns normalized `VirtualAbsolutePath` keys and one content variant per
-file; overlay construction resolves those same identities without widening its
-base reader's capability. Other reader implementations share capability types
-exposed by `lib.rs`, which comes last because it re-exports and ties the modules
-together.
+file; rooted real I/O traverses relative to a held directory handle, and
+overlay construction resolves identities without widening that base capability.
+Other reader implementations share capability types exposed by `lib.rs`, which
+comes last because it re-exports and ties the modules together.
 
 1. `crates/graphcal-io/src/atomic_write.rs`
 2. `crates/graphcal-io/src/in_memory_fs.rs`
