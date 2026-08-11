@@ -21,7 +21,7 @@
 
 use std::collections::BTreeMap;
 
-use graphcal_compiler::dimension::BaseDimId;
+use graphcal_compiler::dimension::{BaseDimId, Dimension};
 use graphcal_eval::eval::{NodeError, Value};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
@@ -62,19 +62,108 @@ pub fn index_depth(value: &Value) -> usize {
     }
 }
 
-/// Walk into nested `Indexed` to find the first real/complex quantity's display label.
+/// Effective presentation attached to one quantity cell.
 ///
-/// Used to annotate the table header (e.g. `delta_v (m/s):`). Returns `None`
-/// if the value has no numeric quantity leaves (e.g. an indexed of structs or labels).
-#[must_use]
-pub fn extract_unit_label(value: &Value, symbols: &BTreeMap<BaseDimId, String>) -> Option<String> {
+/// The physical dimension and scale participate in equality, so two cells are
+/// never treated as uniform merely because their rendered labels happen to
+/// match. Default SI presentation is normalized to scale `1.0`, making an
+/// explicit `m` and the default `m` semantically identical.
+#[derive(Debug, Clone, PartialEq)]
+struct QuantityPresentation {
+    dimension: Dimension,
+    label: Option<String>,
+    scale: f64,
+}
+
+/// Fold state while classifying every leaf cell in an indexed table.
+#[derive(Debug, Clone, PartialEq)]
+enum TableLeafPresentation {
+    Empty,
+    NonQuantity,
+    Quantity(QuantityPresentation),
+    Heterogeneous,
+}
+
+impl TableLeafPresentation {
+    fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Heterogeneous, _) | (_, Self::Heterogeneous) => Self::Heterogeneous,
+            (Self::Empty, presentation) | (presentation, Self::Empty) => presentation,
+            (Self::NonQuantity, Self::NonQuantity) => Self::NonQuantity,
+            (Self::Quantity(left), Self::Quantity(right)) if left == right => Self::Quantity(left),
+            (Self::NonQuantity, Self::Quantity(_))
+            | (Self::Quantity(_), Self::NonQuantity)
+            | (Self::Quantity(_), Self::Quantity(_)) => Self::Heterogeneous,
+        }
+    }
+}
+
+/// Unit-rendering policy derived from all table leaves, never from a sentinel cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TableUnitPolicy {
+    /// There are no quantity cells, so no unit text is needed.
+    NoQuantity,
+    /// Every quantity cell has one semantic presentation but no available label.
+    UniformUnlabelled,
+    /// Every cell has the same semantic quantity presentation and shared label.
+    UniformLabelled(String),
+    /// Cells differ in kind, dimension, display scale, or display label.
+    PerCell,
+}
+
+impl TableUnitPolicy {
+    fn for_value(value: &Value, symbols: &BTreeMap<BaseDimId, String>) -> Self {
+        match table_leaf_presentation(value, symbols) {
+            TableLeafPresentation::Empty | TableLeafPresentation::NonQuantity => Self::NoQuantity,
+            TableLeafPresentation::Quantity(QuantityPresentation {
+                label: Some(label), ..
+            }) => Self::UniformLabelled(label),
+            TableLeafPresentation::Quantity(QuantityPresentation { label: None, .. }) => {
+                Self::UniformUnlabelled
+            }
+            TableLeafPresentation::Heterogeneous => Self::PerCell,
+        }
+    }
+
+    const fn cell_symbols<'a>(
+        &self,
+        symbols: &'a BTreeMap<BaseDimId, String>,
+    ) -> Option<&'a BTreeMap<BaseDimId, String>> {
+        match self {
+            Self::PerCell => Some(symbols),
+            Self::NoQuantity | Self::UniformUnlabelled | Self::UniformLabelled(_) => None,
+        }
+    }
+}
+
+fn table_leaf_presentation(
+    value: &Value,
+    symbols: &BTreeMap<BaseDimId, String>,
+) -> TableLeafPresentation {
     match value {
-        Value::Quantity { .. } | Value::Complex { .. } => value.display_label(symbols),
         Value::Indexed { entries, .. } => entries
             .values()
-            .next()
-            .and_then(|v| extract_unit_label(v, symbols)),
-        _ => None,
+            .map(|entry| table_leaf_presentation(entry, symbols))
+            .fold(TableLeafPresentation::Empty, TableLeafPresentation::combine),
+        Value::Quantity {
+            dimension,
+            display_unit,
+            ..
+        }
+        | Value::Complex {
+            dimension,
+            display_unit,
+            ..
+        } => TableLeafPresentation::Quantity(QuantityPresentation {
+            dimension: dimension.clone(),
+            label: value.display_label(symbols),
+            scale: display_unit.as_ref().map_or(1.0, |unit| unit.scale()),
+        }),
+        Value::Bool(_)
+        | Value::Int(_)
+        | Value::Label { .. }
+        | Value::Struct { .. }
+        | Value::Datetime { .. } => TableLeafPresentation::NonQuantity,
     }
 }
 
@@ -182,10 +271,14 @@ pub fn max_flat_name_len(blocks: &[OutputBlock<'_>]) -> usize {
 /// header — the caller prepends that).
 ///
 /// Columns come from the union of row variant keys and become the top header.
-/// Row variants become the leftmost column. Cells use `format_display(None)`
-/// (units are already in the table caption).
-#[must_use]
-pub fn format_table_grid(value: &Value) -> String {
+/// Row variants become the leftmost column. Uniform quantity units are omitted
+/// from cells because the caller places them in the caption; heterogeneous
+/// cells carry their own labels.
+fn format_table_grid_with_policy(
+    value: &Value,
+    symbols: &BTreeMap<BaseDimId, String>,
+    policy: &TableUnitPolicy,
+) -> String {
     use tabled::builder::Builder;
     use tabled::settings::{Alignment, Style, object::Columns};
 
@@ -235,7 +328,7 @@ pub fn format_table_grid(value: &Value) -> String {
             for (col_variant, _) in &columns {
                 let cell_val = cells.get(col_variant).map_or_else(String::new, |value| {
                     value
-                        .format_display(None)
+                        .format_display(policy.cell_symbols(symbols))
                         .unwrap_or_else(|error| format!("ERROR: {error}"))
                 });
                 row.push(cell_val);
@@ -254,17 +347,12 @@ pub fn format_table_grid(value: &Value) -> String {
 /// Recursively peel outer index dimensions and render 2D table slices with
 /// section headers.
 ///
-/// `symbols` is threaded through for consistency with sibling formatters even
-/// though 2D leaves ignore it; deeper calls forward it unchanged so that a
-/// future "slice-scoped unit header" change stays local.
-#[expect(
-    clippy::only_used_in_recursion,
-    reason = "symbols is threaded through for consistency with sibling formatters; \
-              2D leaves ignore it but higher-depth calls forward it unchanged"
-)]
-pub fn format_table_slices(
+/// The top-level unit policy is reused by every slice, so a heterogeneous 3D
+/// value cannot accidentally acquire a caption from one locally uniform slice.
+fn format_table_slices(
     value: &Value,
     symbols: &BTreeMap<BaseDimId, String>,
+    policy: &TableUnitPolicy,
     depth: usize,
     parts: &mut Vec<String>,
 ) {
@@ -278,7 +366,7 @@ pub fn format_table_slices(
     };
 
     if depth == 2 {
-        let grid = format_table_grid(value);
+        let grid = format_table_grid_with_policy(value, symbols, policy);
         parts.push(grid);
         return;
     }
@@ -290,7 +378,7 @@ pub fn format_table_slices(
             index_name.display_name(),
             value.indexed_entry_display_name(variant)
         ));
-        format_table_slices(inner_val, symbols, depth - 1, parts);
+        format_table_slices(inner_val, symbols, policy, depth - 1, parts);
     }
 }
 
@@ -300,37 +388,43 @@ pub fn format_table_slices(
 /// - Depth >= 3: header + a list of `\n  [Outer::Variant]`-tagged 2D grids.
 ///
 /// For dimensionless or non-quantity leaves, the `(unit)` part of the header is
-/// omitted.
+/// omitted. If leaves have different semantic presentations, the shared caption
+/// is omitted and each quantity/complex cell carries its own unit label.
 #[must_use]
 pub fn format_indexed_table(
     name: &str,
     value: &Value,
     symbols: &BTreeMap<BaseDimId, String>,
 ) -> String {
-    let unit_label = extract_unit_label(value, symbols);
-    let header = unit_label
-        .as_ref()
-        .map_or_else(|| format!("{name}:"), |label| format!("{name} ({label}):"));
+    let policy = TableUnitPolicy::for_value(value, symbols);
+    let header = match &policy {
+        TableUnitPolicy::UniformLabelled(label) => format!("{name} ({label}):"),
+        TableUnitPolicy::NoQuantity
+        | TableUnitPolicy::UniformUnlabelled
+        | TableUnitPolicy::PerCell => format!("{name}:"),
+    };
 
     let depth = index_depth(value);
     if depth == 2 {
-        let grid = format_table_grid(value);
+        let grid = format_table_grid_with_policy(value, symbols, &policy);
         return format!("{header}\n{grid}");
     }
 
     // depth >= 3: peel off outermost index levels until we reach 2D slices
     let mut parts = vec![header];
-    format_table_slices(value, symbols, depth, &mut parts);
+    format_table_slices(value, symbols, &policy, depth, &mut parts);
     parts.join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use graphcal_compiler::dimension::Dimension;
+    use graphcal_compiler::complex_value::ComplexValue;
     use graphcal_compiler::registry::declared_type::IndexTypeRef;
+    use graphcal_compiler::registry::prelude::prelude_base_dimension;
     use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
+    use graphcal_eval::eval::DisplayUnit;
     use indexmap::IndexMap;
 
     fn quantity(si: f64) -> Value {
@@ -338,6 +432,22 @@ mod tests {
             si_value: si,
             dimension: Dimension::dimensionless(),
             display_unit: None,
+        }
+    }
+
+    fn displayed_length(si: f64, label: &str, scale: f64) -> Value {
+        Value::Quantity {
+            si_value: si,
+            dimension: prelude_base_dimension("Length").unwrap(),
+            display_unit: Some(DisplayUnit::try_new(label, scale).unwrap()),
+        }
+    }
+
+    fn displayed_complex_length(re: f64, im: f64, label: &str, scale: f64) -> Value {
+        Value::Complex {
+            si_value: ComplexValue::new(re, im),
+            dimension: prelude_base_dimension("Length").unwrap(),
+            display_unit: Some(DisplayUnit::try_new(label, scale).unwrap()),
         }
     }
 
@@ -509,7 +619,9 @@ mod tests {
         let inner_r1 = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let inner_r2 = indexed_1d("Col", &[("X", quantity(3.0)), ("Y", quantity(4.0))]);
         let v = indexed_1d("Row", &[("R1", inner_r1), ("R2", inner_r2)]);
-        let grid = format_table_grid(&v);
+        let symbols = BTreeMap::new();
+        let policy = TableUnitPolicy::for_value(&v, &symbols);
+        let grid = format_table_grid_with_policy(&v, &symbols, &policy);
         assert!(grid.contains("R1"), "grid missing R1 row: {grid}");
         assert!(grid.contains("R2"), "grid missing R2 row: {grid}");
         assert!(grid.contains('X'), "grid missing X col: {grid}");
@@ -522,9 +634,52 @@ mod tests {
         let inner_r2 =
             indexed_1d_with_display("Col", &[("Y", quantity(2.0))], &[("Y", "second-Y")]);
         let v = indexed_1d("Row", &[("R1", inner_r1), ("R2", inner_r2)]);
-        let grid = format_table_grid(&v);
+        let symbols = BTreeMap::new();
+        let policy = TableUnitPolicy::for_value(&v, &symbols);
+        let grid = format_table_grid_with_policy(&v, &symbols, &policy);
         assert!(grid.contains("first-X"), "grid missing X display: {grid}");
         assert!(grid.contains("second-Y"), "grid missing Y display: {grid}");
+    }
+
+    #[test]
+    fn heterogeneous_table_units_are_labelled_per_cell() {
+        let kilometre = indexed_1d("Col", &[("X", displayed_length(1000.0, "km", 1000.0))]);
+        let metre = indexed_1d(
+            "Col",
+            &[("X", displayed_complex_length(2000.0, 3.0, "m", 1.0))],
+        );
+        let value = indexed_1d("Row", &[("A", kilometre), ("B", metre)]);
+        let output = format_indexed_table("grid", &value, &BTreeMap::new());
+
+        assert!(output.starts_with("grid:\n"), "{output}");
+        assert!(!output.contains("grid (km):"), "{output}");
+        assert!(output.contains("1 [km]"), "{output}");
+        assert!(output.contains("2000 + 3i [m]"), "{output}");
+    }
+
+    #[test]
+    fn uniform_table_units_use_one_shared_caption() {
+        let first = indexed_1d("Col", &[("X", displayed_length(1000.0, "km", 1000.0))]);
+        let second = indexed_1d("Col", &[("X", displayed_length(2000.0, "km", 1000.0))]);
+        let value = indexed_1d("Row", &[("A", first), ("B", second)]);
+        let output = format_indexed_table("grid", &value, &BTreeMap::new());
+
+        assert!(output.starts_with("grid (km):\n"), "{output}");
+        assert!(!output.contains("[km]"), "{output}");
+    }
+
+    #[test]
+    fn heterogeneous_units_across_slices_remain_per_cell() {
+        let km_cell = indexed_1d("Col", &[("X", displayed_length(1000.0, "km", 1000.0))]);
+        let m_cell = indexed_1d("Col", &[("X", displayed_length(2000.0, "m", 1.0))]);
+        let km_slice = indexed_1d("Row", &[("A", km_cell)]);
+        let m_slice = indexed_1d("Row", &[("A", m_cell)]);
+        let value = indexed_1d("Slab", &[("One", km_slice), ("Two", m_slice)]);
+        let output = format_indexed_table("cube", &value, &BTreeMap::new());
+
+        assert!(output.starts_with("cube:\n"), "{output}");
+        assert!(output.contains("1 [km]"), "{output}");
+        assert!(output.contains("2000 [m]"), "{output}");
     }
 
     #[test]

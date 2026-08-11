@@ -416,7 +416,9 @@ spacecraft_mass (kg):
 
 1D indexed values remain as flat lines, while 2D values are shown as table
 grids. 3D and higher values are displayed as multiple 2D table slices with
-section headers.
+section headers. A unit is shown once in the table caption only when every cell
+has the same physical dimension, display scale, and label. Heterogeneous tables
+omit the shared caption and label each quantity or complex cell individually.
 
 When a file contains assertions, they are checked after evaluation and printed
 below the values:
