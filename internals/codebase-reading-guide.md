@@ -213,7 +213,9 @@ Key files:
 - `syntax/parser/expr.rs` parses expressions.
 - `syntax/parser/type_expr.rs` parses type and dimension expressions.
 - `syntax/parser/decl/` contains per-declaration parsers.
-- `syntax/parser/table.rs` parses table-literal surface syntax.
+- `syntax/parser/table.rs` parses table-literal surface syntax. Its cardinality
+  diagnostics retain declared and parsed counts as `u64`, including on 32-bit
+  wasm targets.
 
 The parser emits `File<Raw>`. Declarations carry typed definition leaves where
 possible (`DeclName`, `DimName`, `UnitName`, etc.), a `Visibility`, attributes,
