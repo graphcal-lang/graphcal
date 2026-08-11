@@ -640,7 +640,9 @@ The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 `run_analysis()` treats library files specially. A file with required params or
 required indexes is not evaluated standalone, so diagnostics avoid surfacing
 unbound input errors for files intended to be consumed through parameterized
-includes.
+includes. Deliberate empty-symbol-table and empty-resolver fallbacks leave the
+synchronous core as typed `AnalysisDegradation` values; the async server shell
+renders them through `window/logMessage`.
 
 ### 2.8 Editors and Grammars
 
