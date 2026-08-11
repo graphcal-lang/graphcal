@@ -55,6 +55,21 @@ fn write_temp_file(root: &Path, rel: &str, source: &str) -> PathBuf {
     path
 }
 
+fn assert_diagnostic_failure(output: &std::process::Output, expected: &[&str]) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected diagnostic exit code 1; stderr:\n{stderr}"
+    );
+    for needle in expected {
+        assert!(
+            stderr.contains(needle),
+            "missing diagnostic text `{needle}`; stderr:\n{stderr}"
+        );
+    }
+}
+
 #[expect(
     clippy::option_if_let_else,
     reason = "the explicit error branch documents that a fixture repository with an unborn HEAD has no parent commit"
@@ -1129,37 +1144,41 @@ node sum2: Dimensionless = @good.out + @bad.out;
         .args(["eval", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "one failed assertion must produce exit code 1"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let combined = format!("{stdout}{stderr}");
-    for needle in [
-        "good.v ",
-        "good.out",
-        "bad.v ",
-        "bad.out",
-        "good.v_positive",
-        "bad.v_positive",
-    ] {
+    for needle in ["good.v ", "good.out", "bad.v ", "bad.out"] {
         assert!(
-            combined.contains(needle),
-            "missing `{needle}` in output:\n{combined}"
+            stdout.contains(needle),
+            "missing value `{needle}` from stdout:\n{stdout}"
         );
     }
     assert!(
-        combined.contains("good.v_positive  PASS"),
-        "good instance should pass:\n{combined}"
+        stdout.contains("good.v_positive  PASS"),
+        "good instance should pass on stdout:\n{stdout}"
     );
     assert!(
-        combined.contains("bad.v_positive   FAIL"),
-        "bad instance should fail:\n{combined}"
+        stderr.contains("bad.v_positive   FAIL"),
+        "bad instance should fail on stderr:\n{stderr}"
     );
-    assert!(!combined.contains("good.internal"), "output:\n{combined}");
-    assert!(!combined.contains("bad.internal"), "output:\n{combined}");
+    for hidden in ["good.internal", "bad.internal"] {
+        assert!(!stdout.contains(hidden), "stdout:\n{stdout}");
+        assert!(!stderr.contains(hidden), "stderr:\n{stderr}");
+    }
 
     let output = graphcal_bin()
         .args(["eval", root.to_str().unwrap(), "--format", "json"])
         .output()
         .expect("failed to run graphcal");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "JSON output must preserve the failed-assertion exit code"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
@@ -1206,16 +1225,20 @@ node use_both: Dimensionless = @pos.out + @neg.out;
         .args(["eval", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unexpected pass must produce exit code 1"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let combined = format!("{stdout}{stderr}");
     assert!(
-        combined.contains("pos.is_neg  PASS"),
-        "pos instance fails as expected → PASS:\n{combined}"
+        stdout.contains("pos.is_neg  PASS"),
+        "pos instance fails as expected on stdout → PASS:\n{stdout}"
     );
     assert!(
-        combined.contains("neg.is_neg  FAIL  (assertion passed but was marked #[expected_fail])"),
-        "neg instance passes unexpectedly → FAIL:\n{combined}"
+        stderr.contains("neg.is_neg  FAIL  (assertion passed but was marked #[expected_fail])"),
+        "neg instance passes unexpectedly on stderr → FAIL:\n{stderr}"
     );
 }
 
@@ -1239,9 +1262,9 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
         .args(["check", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "duplicate expected_fail keys should be rejected"
+    assert_diagnostic_failure(
+        &output,
+        &["graphcal::A012", "duplicate key in `#[expected_fail(...)]`"],
     );
 }
 
@@ -1267,9 +1290,12 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
         .args(["check", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "expected_fail keys must belong to the assertion index"
+    assert_diagnostic_failure(
+        &output,
+        &[
+            "graphcal::A014",
+            "key does not belong to the assertion index",
+        ],
     );
 }
 
@@ -1299,9 +1325,9 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
         .args(["check", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "duplicate expected_fail tuple keys should be rejected"
+    assert_diagnostic_failure(
+        &output,
+        &["graphcal::A012", "duplicate key in `#[expected_fail(...)]`"],
     );
 }
 
@@ -1326,9 +1352,13 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
         .args(["check", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "multi-index expected_fail should require full tuple keys"
+    assert_diagnostic_failure(
+        &output,
+        &[
+            "graphcal::A013",
+            "key has the wrong index shape",
+            "expected 2 index axis/axes, found 1",
+        ],
     );
 }
 
@@ -1353,9 +1383,12 @@ assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
         .args(["check", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "expected_fail tuple keys should match assertion axis order"
+    assert_diagnostic_failure(
+        &output,
+        &[
+            "graphcal::A014",
+            "key does not belong to the assertion index",
+        ],
     );
 }
 
@@ -1379,9 +1412,12 @@ assert order = @lhs > @rhs;
         .args(["check", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "unindexed expected_fail should not accept per-variant keys"
+    assert_diagnostic_failure(
+        &output,
+        &[
+            "graphcal::A010",
+            "`#[expected_fail(...)]` on non-indexed assertion",
+        ],
     );
 }
 
@@ -1406,9 +1442,12 @@ assert order = for m: Mode { @lhs[m] > @rhs[m] };
         .args(["check", root.to_str().unwrap()])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "foreign expected_fail keys should be rejected before evaluation"
+    assert_diagnostic_failure(
+        &output,
+        &[
+            "graphcal::A014",
+            "key does not belong to the assertion index",
+        ],
     );
 }
 
@@ -1444,9 +1483,9 @@ fn check_rejects_private_include_output() {
         ])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "include should not expose private outputs across modules"
+    assert_diagnostic_failure(
+        &output,
+        &["graphcal::V001", "cannot import private item `hidden`"],
     );
 }
 
@@ -1482,9 +1521,9 @@ fn check_rejects_private_include_output_renamed() {
         ])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "include output renaming should not bypass visibility"
+    assert_diagnostic_failure(
+        &output,
+        &["graphcal::V001", "cannot import private item `hidden`"],
     );
 }
 
@@ -1520,10 +1559,7 @@ fn check_rejects_private_include_output_via_alias() {
         ])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "include aliases should not expose private outputs"
-    );
+    assert_diagnostic_failure(&output, &["graphcal::N002", "unknown graph reference `@h`"]);
 }
 
 #[test]
@@ -1557,9 +1593,9 @@ fn check_rejects_private_dag_include() {
         ])
         .output()
         .expect("failed to run graphcal");
-    assert!(
-        !output.status.success(),
-        "private DAGs should not be includable across modules"
+    assert_diagnostic_failure(
+        &output,
+        &["graphcal::V001", "cannot import private item `helper`"],
     );
 }
 
