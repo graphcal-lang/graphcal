@@ -13,6 +13,7 @@ use miette::NamedSource;
 use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 
+use crate::dag_id::DescendantRebase;
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, Expr, ExprKind, FigureDecl, File, IndexDeclKind, LayerDecl,
     PlotDecl, TypeExpr,
@@ -1859,14 +1860,34 @@ impl UnfrozenIR {
             }
         }
 
-        fn rebase_instance_owner(
+        fn rebase_descendant_or_preserve_external(
             owner: crate::dag_id::DagId,
             dependency_owner: &crate::dag_id::DagId,
             instance_owner: &crate::dag_id::DagId,
         ) -> crate::dag_id::DagId {
-            owner
-                .rebase_descendant(dependency_owner, instance_owner)
-                .unwrap_or(owner)
+            match owner.rebase_descendant(dependency_owner, instance_owner) {
+                DescendantRebase::Rebased(rebased) => rebased,
+                DescendantRebase::OutsideSubtree => owner,
+            }
+        }
+
+        fn require_rebased_instance_owner(
+            owner: &crate::dag_id::DagId,
+            dependency_owner: &crate::dag_id::DagId,
+            instance_owner: &crate::dag_id::DagId,
+            importer_src: &NamedSource<Arc<String>>,
+            include_span: Span,
+        ) -> Result<crate::dag_id::DagId, GraphcalError> {
+            match owner.rebase_descendant(dependency_owner, instance_owner) {
+                DescendantRebase::Rebased(rebased) => Ok(rebased),
+                DescendantRebase::OutsideSubtree => Err(GraphcalError::internal_error(
+                    format!(
+                        "instance-owned DAG `{owner}` is outside dependency subtree `{dependency_owner}`"
+                    ),
+                    importer_src,
+                    DiagnosticAnchor::Source(include_span),
+                )),
+            }
         }
 
         fn rebase_resolved_name<Ns: NameNamespace>(
@@ -1874,8 +1895,11 @@ impl UnfrozenIR {
             dependency_owner: &crate::dag_id::DagId,
             instance_owner: &crate::dag_id::DagId,
         ) -> ResolvedName<Ns> {
-            let owner =
-                rebase_instance_owner(name.owner().clone(), dependency_owner, instance_owner);
+            let owner = rebase_descendant_or_preserve_external(
+                name.owner().clone(),
+                dependency_owner,
+                instance_owner,
+            );
             ResolvedName::from_def(owner, name.to_unowned_def_name())
         }
 
@@ -1901,9 +1925,15 @@ impl UnfrozenIR {
         let merge_body_resolution_owner =
             |producer_owner: crate::dag_id::DagId, uses_dynamic_unit: bool| {
                 if uses_dynamic_unit {
-                    rebase_instance_owner(producer_owner, dependency_owner, &instance_owner)
+                    require_rebased_instance_owner(
+                        &producer_owner,
+                        dependency_owner,
+                        &instance_owner,
+                        importer_src,
+                        include_span,
+                    )
                 } else {
-                    merge_resolution_owner(producer_owner)
+                    Ok(merge_resolution_owner(producer_owner))
                 }
             };
 
@@ -1972,18 +2002,25 @@ impl UnfrozenIR {
                 dimensions,
             },
         }];
-        instance_records.extend(std::mem::take(&mut dep.instances).into_iter().map(
-            |mut record| {
-                record.parent_owner =
-                    rebase_instance_owner(record.parent_owner, dependency_owner, &instance_owner);
-                record.id = crate::dag_id::InstanceId::new(
-                    rebase_instance_owner(
-                        record.id.owner().clone(),
-                        dependency_owner,
-                        &instance_owner,
-                    ),
-                    record.id.template().clone(),
-                );
+        let nested_instance_records = std::mem::take(&mut dep.instances)
+            .into_iter()
+            .map(|mut record| {
+                record.parent_owner = require_rebased_instance_owner(
+                    &record.parent_owner,
+                    dependency_owner,
+                    &instance_owner,
+                    importer_src,
+                    include_span,
+                )?;
+                let concrete_owner = require_rebased_instance_owner(
+                    record.id.owner(),
+                    dependency_owner,
+                    &instance_owner,
+                    importer_src,
+                    include_span,
+                )?;
+                record.id =
+                    crate::dag_id::InstanceId::new(concrete_owner, record.id.template().clone());
                 record
                     .bindings
                     .value_ports
@@ -2009,9 +2046,10 @@ impl UnfrozenIR {
                         *concrete =
                             rebase_resolved_name(concrete, dependency_owner, &instance_owner);
                     });
-                record
-            },
-        ));
+                Ok(record)
+            })
+            .collect::<Result<Vec<_>, GraphcalError>>()?;
+        instance_records.extend(nested_instance_records);
         for record in instance_records {
             if self
                 .instances
@@ -2081,13 +2119,20 @@ impl UnfrozenIR {
             substitute_indexes(&mut entry.expr, index_bindings);
             substitute_type_names_in_expr(&mut entry.expr, type_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names, dep_scoped_names);
-            entry.unit_owner =
-                rebase_instance_owner(entry.unit_owner, dependency_owner, &instance_owner);
-            entry.body_resolution_owner = rebase_instance_owner(
-                entry.body_resolution_owner,
+            entry.unit_owner = require_rebased_instance_owner(
+                &entry.unit_owner,
                 dependency_owner,
                 &instance_owner,
-            );
+                importer_src,
+                include_span,
+            )?;
+            entry.body_resolution_owner = require_rebased_instance_owner(
+                &entry.body_resolution_owner,
+                dependency_owner,
+                &instance_owner,
+                importer_src,
+                include_span,
+            )?;
             entry.src = entry.src.or_dependency(dep_src);
             if self.dynamic_unit_scales.iter().any(|existing| {
                 existing.unit_owner == entry.unit_owner && existing.spelling == entry.spelling
@@ -2113,18 +2158,20 @@ impl UnfrozenIR {
             let uses_dynamic_unit = expr_uses_local_units(&entry.expr, &dynamic_unit_names);
             self.consts.push(UnfrozenConstEntry {
                 name: prefixed,
-                declaration_owner: rebase_instance_owner(
-                    entry.declaration_owner,
+                declaration_owner: require_rebased_instance_owner(
+                    &entry.declaration_owner,
                     dependency_owner,
                     &instance_owner,
-                ),
+                    importer_src,
+                    include_span,
+                )?,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
                 body_resolution_owner: merge_body_resolution_owner(
                     entry.body_resolution_owner,
                     uses_dynamic_unit,
-                ),
+                )?,
                 span: entry.span,
                 type_src: entry.type_src.or_dependency(dep_src),
                 body_src: entry.body_src.or_dependency(dep_src),
@@ -2158,7 +2205,7 @@ impl UnfrozenIR {
                 merge_body_resolution_owner(
                     entry.default_resolution_owner,
                     expr_uses_local_units(expr, &dynamic_unit_names),
-                )
+                )?
             } else {
                 // Required param without binding — stays None, caught later in exec_plan.
                 entry.default_src = None;
@@ -2169,11 +2216,13 @@ impl UnfrozenIR {
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
             self.params.push(UnfrozenParamEntry {
                 name: prefixed,
-                declaration_owner: rebase_instance_owner(
-                    entry.declaration_owner,
+                declaration_owner: require_rebased_instance_owner(
+                    &entry.declaration_owner,
                     dependency_owner,
                     &instance_owner,
-                ),
+                    importer_src,
+                    include_span,
+                )?,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 default_expr: entry.default_expr,
@@ -2197,18 +2246,20 @@ impl UnfrozenIR {
             let uses_dynamic_unit = expr_uses_local_units(&entry.expr, &dynamic_unit_names);
             self.nodes.push(UnfrozenNodeEntry {
                 name: prefixed,
-                declaration_owner: rebase_instance_owner(
-                    entry.declaration_owner,
+                declaration_owner: require_rebased_instance_owner(
+                    &entry.declaration_owner,
                     dependency_owner,
                     &instance_owner,
-                ),
+                    importer_src,
+                    include_span,
+                )?,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
                 expr: entry.expr,
                 body_resolution_owner: merge_body_resolution_owner(
                     entry.body_resolution_owner,
                     uses_dynamic_unit,
-                ),
+                )?,
                 span: entry.span,
                 type_src: entry.type_src.or_dependency(dep_src),
                 body_src: entry.body_src.or_dependency(dep_src),
@@ -2244,16 +2295,18 @@ impl UnfrozenIR {
             let merged_name = merged_assert_name(&entry.name);
             self.asserts.push(UnfrozenAssertEntry {
                 name: merged_name.clone(),
-                declaration_owner: rebase_instance_owner(
-                    entry.declaration_owner,
+                declaration_owner: require_rebased_instance_owner(
+                    &entry.declaration_owner,
                     dependency_owner,
                     &instance_owner,
-                ),
+                    importer_src,
+                    include_span,
+                )?,
                 body: entry.body,
                 body_resolution_owner: merge_body_resolution_owner(
                     entry.body_resolution_owner,
                     uses_dynamic_unit,
-                ),
+                )?,
                 span: entry.span,
                 body_src: entry.body_src.or_dependency(dep_src),
             });
@@ -2292,7 +2345,7 @@ impl UnfrozenIR {
                 body_resolution_owner: merge_body_resolution_owner(
                     entry.body_resolution_owner,
                     uses_dynamic_unit,
-                ),
+                )?,
                 span: entry.span,
                 body_src: entry.body_src.or_dependency(dep_src),
                 displayed: !requested.hidden,

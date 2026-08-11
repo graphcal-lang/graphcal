@@ -1231,9 +1231,12 @@ it does not evaluate or propagate assertions. Attempting to import an assertion
 is rejected (`M024`).
 
 Every explicit `include` creates a concrete runtime instance and evaluates the
-assertions in that instance, including nested included assertions. Select an
-assertion in the include braces when an importer declaration needs to name that
-instance-local outcome in `#[assumes(...)]`:
+assertions in that instance, including nested included assertions. Nested
+instances preserve their full concrete owner path when rebased into the
+importer; inconsistent internal ownership is an error rather than a stale
+reference to the template. Select an assertion in the include braces when an
+importer declaration needs to name that instance-local outcome in
+`#[assumes(...)]`:
 
 ```graphcal
 include project.checks(limit: 50.0).{ limit, limit_positive };

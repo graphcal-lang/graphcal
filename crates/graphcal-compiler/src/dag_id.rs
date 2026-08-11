@@ -109,6 +109,18 @@ pub struct DagId {
     edges: Arc<[DagHierarchyEdge]>,
 }
 
+/// Result of attempting to move a [`DagId`] subtree onto a new owner.
+///
+/// Callers must choose explicitly whether an outside-subtree identity is a
+/// legitimate external reference or a broken ownership invariant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DescendantRebase {
+    /// The identity was the requested ancestor or one of its descendants.
+    Rebased(DagId),
+    /// The identity lies outside the requested ancestor's subtree.
+    OutsideSubtree,
+}
+
 /// Typed identity of one concrete include or DAG-call instance.
 ///
 /// `owner` is the fresh runtime namespace allocated at the call/include site;
@@ -306,19 +318,21 @@ impl DagId {
     /// Rebase this identity from one ancestor onto another while preserving
     /// every source-module/concrete-instance edge in the descendant suffix.
     ///
-    /// Returns `None` when `self` is neither `ancestor` nor its descendant.
+    /// Returns [`DescendantRebase::OutsideSubtree`] when `self` is neither
+    /// `ancestor` nor its descendant. The typed result forces each caller to
+    /// decide whether that case is expected or an invariant violation.
     #[must_use]
-    pub fn rebase_descendant(&self, ancestor: &Self, replacement: &Self) -> Option<Self> {
+    pub fn rebase_descendant(&self, ancestor: &Self, replacement: &Self) -> DescendantRebase {
         if self == ancestor {
-            return Some(replacement.clone());
+            return DescendantRebase::Rebased(replacement.clone());
         }
         if !self.is_descendant_of(ancestor) {
-            return None;
+            return DescendantRebase::OutsideSubtree;
         }
 
         let suffix_segments = self.segments.iter().skip(ancestor.segments.len());
         let suffix_edges = self.edges.iter().skip(ancestor.edges.len());
-        Some(
+        DescendantRebase::Rebased(
             suffix_segments
                 .zip(suffix_edges)
                 .fold(replacement.clone(), |rebased, (segment, edge)| {
@@ -509,10 +523,25 @@ mod tests {
         let nested = template.instance_child("inner").child("helper");
         let configured = DagId::root_in_package("test", "main").instance_child("configured");
 
-        let rebased = nested.rebase_descendant(&template, &configured).unwrap();
+        let DescendantRebase::Rebased(rebased) = nested.rebase_descendant(&template, &configured)
+        else {
+            panic!("nested identity must be inside the template subtree");
+        };
         let expected = configured.instance_child("inner").child("helper");
         assert_eq!(rebased, expected);
         assert_eq!(rebased.to_string(), "main.configured.inner.helper");
+    }
+
+    #[test]
+    fn rebase_descendant_classifies_an_external_owner() {
+        let template = DagId::root_in_package("test", "template");
+        let external = DagId::root_in_package("dependency", "external");
+        let configured = DagId::root_in_package("test", "main").instance_child("configured");
+
+        assert_eq!(
+            external.rebase_descendant(&template, &configured),
+            DescendantRebase::OutsideSubtree
+        );
     }
 
     #[test]
