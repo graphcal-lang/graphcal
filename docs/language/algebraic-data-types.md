@@ -77,6 +77,11 @@ node time_hours: Time = @result.tof -> h;
 For types with multiple constructors, field access is rejected — destructure
 through `match` instead.
 
+Public output projection also resolves every algebraic value through its
+canonical constructor schema. Field dimensions and display metadata are kept
+with the field value; an internal constructor or field mismatch is reported as
+an error instead of silently displaying the field without its declared unit.
+
 ## Unit Markers
 
 A unit marker is a one-constructor type whose constructor takes no payload:

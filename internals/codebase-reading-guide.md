@@ -532,6 +532,11 @@ elaboration out of runtime modules even though both currently share this crate.
 | `eval_expr/hir_eval.rs` | HIR expression evaluator with canonical references            |
 | `graph_ir/`             | Dependency-graph export model and DOT rendering               |
 
+`eval/public_projection.rs` consumes an atomic runtime-value/`DeclaredType`
+pair. It recursively resolves nominal constructors and fields; missing or
+mismatched metadata is an internal error, never a fallback to untyped fields
+that could lose display units.
+
 The public API is re-exported from `eval/mod.rs`, including
 `compile_and_eval_project`, `compile_to_tir_project`, and
 `compile_and_eval_from_project`.
