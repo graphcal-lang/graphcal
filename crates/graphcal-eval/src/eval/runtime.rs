@@ -28,7 +28,7 @@ use super::display::{
 };
 use super::types::{
     AssertResult, AxisMeta, DeclType, DisplayUnit, EvalResult, NodeError, PlotFieldValue, PlotSpec,
-    Value,
+    Value, validate_display_projection,
 };
 
 fn index_def_for_value_ref<'a>(
@@ -199,9 +199,8 @@ pub(super) fn runtime_to_value(
             let display_unit = index_def_for_value_ref(index_name, tir)
                 .and_then(|index| index.coordinate_data())
                 .and_then(|data| {
-                    data.display_label.as_ref().map(|label| DisplayUnit {
-                        label: label.clone(),
-                        scale: data.display_scale,
+                    data.display_label.as_ref().and_then(|label| {
+                        DisplayUnit::try_new(label.clone(), data.display_scale).ok()
                     })
                 });
             Value::Quantity {
@@ -524,6 +523,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             attach_display_units(&mut value, expr, &ctx, &values)
                 .map_err(|e| eval_failed_node_error(&e))?;
         }
+        validate_display_projection(&value).map_err(|error| NodeError::EvalFailed {
+            message: error.to_string(),
+        })?;
         Ok(value)
     };
 
@@ -1609,10 +1611,6 @@ fn check_positive_property(
 /// A value that cannot be represented in a plot (a struct, or an indexed
 /// value mixing kinds) is an error — never silently replaced by a
 /// placeholder or by index variant names (#840).
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "plot data loss of precision from i64 to f64 is acceptable"
-)]
 fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, String> {
     match rv {
         RuntimeValue::Quantity(v) => Ok(PlotFieldValue::Number(*v)),
@@ -1620,14 +1618,20 @@ fn runtime_to_plot_field_value(rv: &RuntimeValue) -> Result<PlotFieldValue, Stri
             "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
                 .to_string(),
         ),
-        RuntimeValue::Int(i) => Ok(PlotFieldValue::Number(*i as f64)),
+        RuntimeValue::Int(i) => crate::eval_expr::numeric::exact_i64_to_f64(*i)
+            .map(PlotFieldValue::Number)
+            .map_err(|_| {
+                format!(
+                    "Int value {i} cannot be plotted exactly; convert it explicitly with to_float()"
+                )
+            }),
         RuntimeValue::Bool(b) => Ok(PlotFieldValue::String(b.to_string())),
         RuntimeValue::Label { variant, .. } => Ok(PlotFieldValue::String(variant.to_string())),
         RuntimeValue::Indexed { .. } => super::plot_data::flatten_to_field_value(rv),
         RuntimeValue::Struct { .. } => Err(format!("{} cannot be plotted", rv.kind())),
-        RuntimeValue::Datetime(epoch) => Ok(PlotFieldValue::Datetime(
-            super::types::epoch_to_rfc3339(epoch),
-        )),
+        RuntimeValue::Datetime(epoch) => super::types::epoch_to_rfc3339(epoch)
+            .map(PlotFieldValue::Datetime)
+            .map_err(|error| error.to_string()),
         RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotFieldValue::Number(*value)),
     }
 }

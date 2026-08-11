@@ -347,18 +347,68 @@ const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 ///     fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
 /// }
 /// ```
+fn checked_demo_result(value: f64, function: &str) -> Result<f64, HostFnError> {
+    crate::eval_expr::numeric::computed_finite_quantity(value, function)
+        .map_err(|error| HostFnError::new(error.to_string()))
+}
+
+fn demo_lerp(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
+    let (a, b, t) = (
+        args[0].expect_quantity(0)?,
+        args[1].expect_quantity(1)?,
+        args[2].expect_quantity(2)?,
+    );
+    let interpolated = (1.0 - t).mul_add(a, t * b);
+    Ok(HostFnValue::F64(checked_demo_result(
+        interpolated,
+        "lerp()",
+    )?))
+}
+
+fn demo_geometric_mean(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
+    let x = args[0].expect_quantity(0)?;
+    let y = args[1].expect_quantity(1)?;
+    if x.is_sign_negative() != y.is_sign_negative() && x != 0.0 && y != 0.0 {
+        return Err(HostFnError::new(
+            "geometric mean of a negative product is undefined",
+        ));
+    }
+    let mean = x.abs().sqrt() * y.abs().sqrt();
+    Ok(HostFnValue::F64(checked_demo_result(
+        mean,
+        "geometric_mean()",
+    )?))
+}
+
+fn demo_normalize(args: &[HostFnValue]) -> Result<HostFnValue, HostFnError> {
+    let xs = args[0].expect_array(0)?;
+    let total = crate::eval_expr::numeric::ScaledSum::from_values(xs.values(), "normalize() input")
+        .map_err(|error| HostFnError::new(error.to_string()))?;
+    if total.is_zero() {
+        return Err(HostFnError::new(
+            "cannot normalize: the elements sum to zero",
+        ));
+    }
+    let normalized = xs
+        .values()
+        .iter()
+        .map(|value| {
+            total
+                .normalized_ratio(*value, "normalize()")
+                .map_err(|error| HostFnError::new(error.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(HostFnValue::Array(HostArray::try_new(
+        xs.shape().to_vec(),
+        normalized,
+    )?))
+}
+
 #[must_use]
 pub fn demo_registry() -> HostFunctionRegistry {
     let plugin = PluginPath::new(DEMO_PLUGIN_PATH);
     let mut registry = HostFunctionRegistry::new();
-    registry.register(plugin.clone(), FnName::expect_valid("lerp"), |args| {
-        let (a, b, t) = (
-            args[0].expect_quantity(0)?,
-            args[1].expect_quantity(1)?,
-            args[2].expect_quantity(2)?,
-        );
-        Ok(HostFnValue::F64((b - a).mul_add(t, a)))
-    });
+    registry.register(plugin.clone(), FnName::expect_valid("lerp"), demo_lerp);
     registry.register(plugin.clone(), FnName::expect_valid("inverse"), |args| {
         let x = args[0].expect_quantity(0)?;
         if x == 0.0 {
@@ -369,29 +419,13 @@ pub fn demo_registry() -> HostFunctionRegistry {
     registry.register(
         plugin.clone(),
         FnName::expect_valid("geometric_mean"),
-        |args| {
-            let product = args[0].expect_quantity(0)? * args[1].expect_quantity(1)?;
-            if product < 0.0 {
-                return Err(HostFnError::new(
-                    "geometric mean of a negative product is undefined",
-                ));
-            }
-            Ok(HostFnValue::F64(product.sqrt()))
-        },
+        demo_geometric_mean,
     );
-    registry.register(plugin.clone(), FnName::expect_valid("normalize"), |args| {
-        let xs = args[0].expect_array(0)?;
-        let total: f64 = xs.values().iter().sum();
-        if total == 0.0 {
-            return Err(HostFnError::new(
-                "cannot normalize: the elements sum to zero",
-            ));
-        }
-        Ok(HostFnValue::Array(HostArray::try_new(
-            xs.shape().to_vec(),
-            xs.values().iter().map(|x| x / total).collect(),
-        )?))
-    });
+    registry.register(
+        plugin.clone(),
+        FnName::expect_valid("normalize"),
+        demo_normalize,
+    );
     registry.register(
         plugin.clone(),
         FnName::expect_valid("matrix_transpose"),
@@ -475,6 +509,29 @@ mod tests {
         let lerp = registry.get(&key("lerp")).unwrap();
         let result = lerp(&quantities(&[0.0, 10.0, 0.25])).unwrap();
         assert_eq!(result, HostFnValue::F64(2.5));
+    }
+
+    #[test]
+    fn demo_kernels_preserve_extreme_finite_results() {
+        let registry = demo_registry();
+        let lerp = registry.get(&key("lerp")).unwrap();
+        assert_eq!(
+            lerp(&quantities(&[-1.0e308, 1.0e308, 0.5])).unwrap(),
+            HostFnValue::F64(0.0)
+        );
+
+        let geometric_mean = registry.get(&key("geometric_mean")).unwrap();
+        assert_eq!(
+            geometric_mean(&quantities(&[1.0e308, 1.0e308])).unwrap(),
+            HostFnValue::F64(1.0e308)
+        );
+
+        let normalize = registry.get(&key("normalize")).unwrap();
+        let input = HostArray::vector(vec![1.0e308, 1.0e308]).unwrap();
+        assert_eq!(
+            normalize(&[HostFnValue::Array(input)]).unwrap(),
+            HostFnValue::Array(HostArray::vector(vec![0.5, 0.5]).unwrap())
+        );
     }
 
     #[test]

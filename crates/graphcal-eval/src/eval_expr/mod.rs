@@ -7,7 +7,7 @@ mod datetime;
 mod hir_eval;
 mod linear_algebra;
 mod linear_algebra_lu;
-mod numeric;
+pub mod numeric;
 mod unit_scale;
 
 use std::collections::HashMap;

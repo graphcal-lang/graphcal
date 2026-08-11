@@ -346,41 +346,32 @@ fn eval_hir_binop(
             }
             match (&l, &r) {
                 (RuntimeValue::Datetime(le), RuntimeValue::Datetime(re)) if op == BinOp::Sub => {
-                    #[expect(
-                        clippy::arithmetic_side_effects,
-                        reason = "hifitime exposes Epoch subtraction for datetime differences"
-                    )]
-                    {
-                        return Ok(RuntimeValue::Quantity((*le - *re).to_seconds()));
-                    }
+                    return super::datetime::checked_epoch_difference_seconds(*le, *re)
+                        .map(RuntimeValue::Quantity)
+                        .map_err(|error| ctx.eval_error(error.to_string(), span));
                 }
                 (RuntimeValue::Datetime(_), RuntimeValue::Datetime(_)) => {
                     return Err(ctx.eval_error("cannot add two datetimes", span));
                 }
                 (RuntimeValue::Datetime(e), RuntimeValue::Quantity(secs)) => {
-                    let duration = hifitime::Duration::from_seconds(*secs);
-                    #[expect(
-                        clippy::arithmetic_side_effects,
-                        reason = "hifitime exposes Epoch +/- Duration for datetime arithmetic"
-                    )]
-                    return match op {
-                        BinOp::Add => Ok(RuntimeValue::Datetime(*e + duration)),
-                        BinOp::Sub => Ok(RuntimeValue::Datetime(*e - duration)),
-                        _ => Err(ctx.eval_error(
-                            format!("unsupported operator {op:?} for Datetime and quantity"),
-                            span,
-                        )),
+                    let result = match op {
+                        BinOp::Add => super::datetime::checked_epoch_add_seconds(*e, *secs),
+                        BinOp::Sub => super::datetime::checked_epoch_subtract_seconds(*e, *secs),
+                        _ => {
+                            return Err(ctx.eval_error(
+                                format!("unsupported operator {op:?} for Datetime and quantity"),
+                                span,
+                            ));
+                        }
                     };
+                    return result
+                        .map(RuntimeValue::Datetime)
+                        .map_err(|error| ctx.eval_error(error.to_string(), span));
                 }
                 (RuntimeValue::Quantity(secs), RuntimeValue::Datetime(e)) if op == BinOp::Add => {
-                    let duration = hifitime::Duration::from_seconds(*secs);
-                    #[expect(
-                        clippy::arithmetic_side_effects,
-                        reason = "hifitime exposes Epoch + Duration for datetime arithmetic"
-                    )]
-                    {
-                        return Ok(RuntimeValue::Datetime(*e + duration));
-                    }
+                    return super::datetime::checked_epoch_add_seconds(*e, *secs)
+                        .map(RuntimeValue::Datetime)
+                        .map_err(|error| ctx.eval_error(error.to_string(), span));
                 }
                 (RuntimeValue::Quantity(_), RuntimeValue::Datetime(_)) => {
                     return Err(ctx.eval_error("cannot subtract a Datetime from a quantity", span));
@@ -642,12 +633,14 @@ fn eval_hir_fn_call(
                     ));
                 }
             };
-            let epoch = match kind {
-                DatetimeFromFn::Jd => hifitime::Epoch::from_jde_utc(num),
-                DatetimeFromFn::Mjd => hifitime::Epoch::from_mjd_utc(num),
-                DatetimeFromFn::Unix => hifitime::Epoch::from_unix_seconds(num),
+            let kind = match kind {
+                DatetimeFromFn::Jd => super::datetime::NumericEpochKind::JulianDate,
+                DatetimeFromFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
+                DatetimeFromFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
             };
-            Ok(RuntimeValue::Datetime(epoch))
+            super::datetime::checked_epoch_from_numeric(num, kind)
+                .map(RuntimeValue::Datetime)
+                .map_err(|error| ctx.eval_error(error.to_string(), args[0].span))
         }
         EvalBuiltinRule::DatetimeToNumeric(kind) => {
             expect_hir_builtin_arity(name, args, 1, callee.span, ctx)?;
@@ -971,20 +964,12 @@ fn exact_numeric_datetime_arg(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {
-    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
-    if value.unsigned_abs() > MAX_EXACT_F64_INT {
-        return Err(ctx.eval_error(
+    super::numeric::exact_i64_to_f64(value).map_err(|_| {
+        ctx.eval_error(
             format!("{fn_name}() integer argument {value} is too large for exact conversion"),
             span,
-        ));
-    }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "integer magnitude is checked to be exactly representable before casting"
-    )]
-    {
-        Ok(value as f64)
-    }
+        )
+    })
 }
 
 fn eval_hir_datetime_constructor(
@@ -1533,22 +1518,14 @@ fn exact_numeric_extern_arg(
     span: Span,
     ctx: &EvalContext<'_>,
 ) -> Result<f64, GraphcalError> {
-    const MAX_EXACT_F64_INT: u64 = 1_u64 << f64::MANTISSA_DIGITS;
-    if value.unsigned_abs() > MAX_EXACT_F64_INT {
-        return Err(ctx.eval_error(
+    super::numeric::exact_i64_to_f64(value).map_err(|_| {
+        ctx.eval_error(
             format!(
                 "extern function `{ext}` integer argument {value} is too large for exact conversion"
             ),
             span,
-        ));
-    }
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "integer magnitude is checked to be exactly representable before casting"
-    )]
-    {
-        Ok(value as f64)
-    }
+        )
+    })
 }
 
 fn eval_hir_builtin_fn(

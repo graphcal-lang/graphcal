@@ -833,20 +833,29 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                                 ..
                             } = value
                             {
-                                let formatted =
-                                    format_number(graphcal_eval::eval::quantity_display_value(
-                                        *si_value,
-                                        display_unit.as_ref(),
-                                    ));
-                                if let Some(label) = value.display_label(&result.base_dim_symbols) {
-                                    println!("{name:width$} = {formatted} {label}");
-                                } else {
-                                    println!("{name:width$} = {formatted}");
+                                match graphcal_eval::eval::quantity_display_value(
+                                    *si_value,
+                                    display_unit.as_ref(),
+                                ) {
+                                    Ok(displayed) => {
+                                        let formatted = format_number(displayed);
+                                        if let Some(label) =
+                                            value.display_label(&result.base_dim_symbols)
+                                        {
+                                            println!("{name:width$} = {formatted} {label}");
+                                        } else {
+                                            println!("{name:width$} = {formatted}");
+                                        }
+                                    }
+                                    Err(error) => {
+                                        eprintln!("{name:width$} = ERROR: {error}");
+                                    }
                                 }
                             } else {
-                                let formatted =
-                                    value.format_display(Some(&result.base_dim_symbols));
-                                println!("{name:width$} = {formatted}");
+                                match value.format_display(Some(&result.base_dim_symbols)) {
+                                    Ok(formatted) => println!("{name:width$} = {formatted}"),
+                                    Err(error) => eprintln!("{name:width$} = ERROR: {error}"),
+                                }
                             }
                         }
                     }
@@ -930,13 +939,16 @@ fn format_assertion_line(
     clippy::too_many_lines,
     reason = "JSON output formatting is clearest as a single function"
 )]
-fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), serde_json::Error> {
-    use graphcal_eval::eval::{NodeError, Value};
+fn print_json(
+    result: &EvalResult,
+    output_view: EvalOutputView,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use graphcal_eval::eval::{DisplayProjectionError, NodeError, Value};
 
     fn value_to_json(
         v: &Value,
         symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
-    ) -> serde_json::Value {
+    ) -> Result<serde_json::Value, DisplayProjectionError> {
         match v {
             Value::Quantity {
                 si_value,
@@ -946,15 +958,16 @@ fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), se
                 let mut map = serde_json::Map::new();
                 map.insert("si_value".to_string(), serde_json::json!(si_value));
                 if let Some(du) = display_unit {
-                    let dv = graphcal_eval::eval::quantity_display_value(*si_value, Some(du));
-                    map.insert("display_value".to_string(), serde_json::json!(dv));
+                    let displayed =
+                        graphcal_eval::eval::quantity_display_value(*si_value, Some(du))?;
+                    map.insert("display_value".to_string(), serde_json::json!(displayed));
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 } else if let Some(si_unit) = v.display_label(symbols) {
                     map.insert("unit".to_string(), serde_json::json!(si_unit));
                 } else {
                     // Dimensionless: no unit field
                 }
-                serde_json::Value::Object(map)
+                Ok(serde_json::Value::Object(map))
             }
             Value::Complex {
                 si_value,
@@ -967,18 +980,13 @@ fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), se
                     serde_json::json!({ "re": si_value.re(), "im": si_value.im() }),
                 );
                 if let Some(du) = display_unit {
+                    let real =
+                        graphcal_eval::eval::quantity_display_value(si_value.re(), Some(du))?;
+                    let imaginary =
+                        graphcal_eval::eval::quantity_display_value(si_value.im(), Some(du))?;
                     map.insert(
                         "display_value".to_string(),
-                        serde_json::json!({
-                            "re": graphcal_eval::eval::quantity_display_value(
-                                si_value.re(),
-                                Some(du),
-                            ),
-                            "im": graphcal_eval::eval::quantity_display_value(
-                                si_value.im(),
-                                Some(du),
-                            ),
-                        }),
+                        serde_json::json!({ "re": real, "im": imaginary }),
                     );
                     map.insert("unit".to_string(), serde_json::json!(du.label));
                 }
@@ -987,28 +995,29 @@ fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), se
                 {
                     map.insert("unit".to_string(), serde_json::json!(si_unit));
                 }
-                serde_json::Value::Object(map)
+                Ok(serde_json::Value::Object(map))
             }
-            Value::Bool(b) => serde_json::Value::Bool(*b),
-            Value::Int(i) => serde_json::Value::Number((*i).into()),
+            Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+            Value::Int(i) => Ok(serde_json::Value::Number((*i).into())),
             Value::Label {
                 index_name,
                 variant,
-            } => {
-                serde_json::json!({
-                    "index": index_name.display_name().as_str(),
-                    "variant": variant.as_str()
-                })
-            }
+            } => Ok(serde_json::json!({
+                "index": index_name.display_name().as_str(),
+                "variant": variant.as_str()
+            })),
             Value::Struct { type_name, fields } => {
                 let mut map = serde_json::Map::new();
                 map.insert("type".to_string(), serde_json::json!(type_name.as_str()));
-                let fields_map: serde_json::Map<String, serde_json::Value> = fields
+                let fields_map = fields
                     .iter()
-                    .map(|(name, val)| (name.as_str().to_string(), value_to_json(val, symbols)))
-                    .collect();
+                    .map(|(name, value)| {
+                        value_to_json(value, symbols)
+                            .map(|value| (name.as_str().to_string(), value))
+                    })
+                    .collect::<Result<serde_json::Map<_, _>, _>>()?;
                 map.insert("fields".to_string(), serde_json::Value::Object(fields_map));
-                serde_json::Value::Object(map)
+                Ok(serde_json::Value::Object(map))
             }
             Value::Indexed {
                 index_name,
@@ -1020,20 +1029,18 @@ fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), se
                     "index".to_string(),
                     serde_json::json!(index_name.display_name().as_str()),
                 );
-                let entries_map: serde_json::Map<String, serde_json::Value> = entries
+                let entries_map = entries
                     .iter()
-                    .map(|(name, val)| {
-                        (
-                            v.indexed_entry_display_name(name),
-                            value_to_json(val, symbols),
-                        )
+                    .map(|(name, value)| {
+                        value_to_json(value, symbols)
+                            .map(|value| (v.indexed_entry_display_name(name), value))
                     })
-                    .collect();
+                    .collect::<Result<serde_json::Map<_, _>, _>>()?;
                 map.insert(
                     "entries".to_string(),
                     serde_json::Value::Object(entries_map),
                 );
-                serde_json::Value::Object(map)
+                Ok(serde_json::Value::Object(map))
             }
             Value::Datetime {
                 epoch,
@@ -1055,7 +1062,7 @@ fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), se
                 if let Some(tz) = display_tz {
                     map.insert("display_tz".to_string(), serde_json::json!(tz.as_str()));
                 }
-                serde_json::Value::Object(map)
+                Ok(serde_json::Value::Object(map))
             }
         }
     }
@@ -1083,30 +1090,30 @@ fn print_json(result: &EvalResult, output_view: EvalOutputView) -> Result<(), se
     }
 
     fn result_to_json(
-        r: &Result<Value, NodeError>,
+        result: &Result<Value, NodeError>,
         symbols: &std::collections::BTreeMap<graphcal_compiler::dimension::BaseDimId, String>,
-    ) -> serde_json::Value {
-        match r {
-            Ok(v) => value_to_json(v, symbols),
-            Err(e) => node_error_to_json(e),
+    ) -> Result<serde_json::Value, DisplayProjectionError> {
+        match result {
+            Ok(value) => value_to_json(value, symbols),
+            Err(error) => Ok(node_error_to_json(error)),
         }
     }
 
     let symbols = &result.base_dim_symbols;
     let mut output = serde_json::Map::new();
 
-    let consts: serde_json::Map<String, serde_json::Value> = result
+    let consts = result
         .output_consts(output_view)
-        .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
-        .collect();
-    let params: serde_json::Map<String, serde_json::Value> = result
+        .map(|(name, value)| result_to_json(value, symbols).map(|value| (name.to_string(), value)))
+        .collect::<Result<serde_json::Map<_, _>, _>>()?;
+    let params = result
         .output_params(output_view)
-        .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
-        .collect();
-    let nodes: serde_json::Map<String, serde_json::Value> = result
+        .map(|(name, value)| result_to_json(value, symbols).map(|value| (name.to_string(), value)))
+        .collect::<Result<serde_json::Map<_, _>, _>>()?;
+    let nodes = result
         .output_nodes(output_view)
-        .map(|(n, r)| (n.to_string(), result_to_json(r, symbols)))
-        .collect();
+        .map(|(name, value)| result_to_json(value, symbols).map(|value| (name.to_string(), value)))
+        .collect::<Result<serde_json::Map<_, _>, _>>()?;
 
     output.insert("const".to_string(), serde_json::Value::Object(consts));
     output.insert("param".to_string(), serde_json::Value::Object(params));

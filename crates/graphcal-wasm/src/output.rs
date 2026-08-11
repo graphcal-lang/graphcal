@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use graphcal_compiler::dimension::BaseDimId;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
-    AssertResult, DeclType, EvalOutputView, EvalResult, NodeError, Value, format_epoch_with_tz,
-    format_number, quantity_display_value,
+    AssertResult, DeclType, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult,
+    NodeError, Value, format_epoch_with_tz, format_number, quantity_display_value,
 };
 use serde::Serialize;
 
@@ -110,9 +110,14 @@ impl DeclarationOutcomeView {
         symbols: &BTreeMap<BaseDimId, String>,
     ) -> Self {
         match result {
-            Ok(value) => Self::Value {
-                value: ValueView::from_value(value, symbols),
-            },
+            Ok(value) => ValueView::from_value(value, symbols).map_or_else(
+                |error| Self::Error {
+                    error: NodeErrorView::EvaluationFailed {
+                        message: error.to_string(),
+                    },
+                },
+                |value| Self::Value { value },
+            ),
             Err(error) => Self::Error {
                 error: NodeErrorView::from(error),
             },
@@ -169,39 +174,30 @@ pub enum ValueView {
 }
 
 impl ValueView {
-    fn from_value(value: &Value, symbols: &BTreeMap<BaseDimId, String>) -> Self {
-        match value {
+    fn from_value(
+        value: &Value,
+        symbols: &BTreeMap<BaseDimId, String>,
+    ) -> Result<Self, DisplayProjectionError> {
+        Ok(match value {
             Value::Quantity {
                 si_value,
                 display_unit,
                 ..
-            } => {
-                let displayed_value = quantity_display_value(*si_value, display_unit.as_ref());
-                let unit = value.display_label(symbols);
-                Self::Quantity {
-                    display: display_number_with_unit(displayed_value, unit.as_deref()),
-                    value: displayed_value,
-                    si_value: *si_value,
-                    unit,
-                }
-            }
+            } => Self::from_quantity(
+                *si_value,
+                display_unit.as_ref(),
+                value.display_label(symbols),
+            )?,
             Value::Complex {
                 si_value,
                 display_unit,
                 ..
-            } => {
-                let real = quantity_display_value(si_value.re(), display_unit.as_ref());
-                let imaginary = quantity_display_value(si_value.im(), display_unit.as_ref());
-                let unit = value.display_label(symbols);
-                Self::Complex {
-                    display: display_complex_with_unit(real, imaginary, unit.as_deref()),
-                    real,
-                    imaginary,
-                    si_real: si_value.re(),
-                    si_imaginary: si_value.im(),
-                    unit,
-                }
-            }
+            } => Self::from_complex(
+                si_value.re(),
+                si_value.im(),
+                display_unit.as_ref(),
+                value.display_label(symbols),
+            )?,
             Value::Bool(inner) => Self::Bool {
                 display: inner.to_string(),
                 value: *inner,
@@ -232,11 +228,13 @@ impl ValueView {
                     type_name,
                     fields: fields
                         .iter()
-                        .map(|(name, field_value)| StructFieldView {
-                            name: name.as_str().to_string(),
-                            value: Self::from_value(field_value, symbols),
+                        .map(|(name, field_value)| {
+                            Self::from_value(field_value, symbols).map(|value| StructFieldView {
+                                name: name.as_str().to_string(),
+                                value,
+                            })
                         })
-                        .collect(),
+                        .collect::<Result<Vec<_>, _>>()?,
                 }
             }
             Value::Indexed {
@@ -250,12 +248,16 @@ impl ValueView {
                     index,
                     entries: entries
                         .iter()
-                        .map(|(key, entry_value)| IndexedEntryView {
-                            key: IndexEntryKeyView::from(key),
-                            display_key: value.indexed_entry_display_name(key),
-                            value: Self::from_value(entry_value, symbols),
+                        .map(|(key, entry_value)| {
+                            Self::from_value(entry_value, symbols).map(|entry_value| {
+                                IndexedEntryView {
+                                    key: IndexEntryKeyView::from(key),
+                                    display_key: value.indexed_entry_display_name(key),
+                                    value: entry_value,
+                                }
+                            })
                         })
-                        .collect(),
+                        .collect::<Result<Vec<_>, _>>()?,
                 }
             }
             Value::Datetime {
@@ -268,7 +270,39 @@ impl ValueView {
                 time_scale: time_scale.to_string(),
                 display_timezone: display_tz.as_ref().map(|tz| tz.as_str().to_string()),
             },
-        }
+        })
+    }
+
+    fn from_quantity(
+        si_value: f64,
+        display_unit: Option<&DisplayUnit>,
+        unit: Option<String>,
+    ) -> Result<Self, DisplayProjectionError> {
+        let value = quantity_display_value(si_value, display_unit)?;
+        Ok(Self::Quantity {
+            display: display_number_with_unit(value, unit.as_deref()),
+            value,
+            si_value,
+            unit,
+        })
+    }
+
+    fn from_complex(
+        si_real: f64,
+        si_imaginary: f64,
+        display_unit: Option<&DisplayUnit>,
+        unit: Option<String>,
+    ) -> Result<Self, DisplayProjectionError> {
+        let real = quantity_display_value(si_real, display_unit)?;
+        let imaginary = quantity_display_value(si_imaginary, display_unit)?;
+        Ok(Self::Complex {
+            display: display_complex_with_unit(real, imaginary, unit.as_deref()),
+            real,
+            imaginary,
+            si_real,
+            si_imaginary,
+            unit,
+        })
     }
 }
 

@@ -96,25 +96,29 @@ fn plot_datum_from_leaf(
     rv: &RuntimeValue,
     display_unit: Option<&DisplayUnit>,
 ) -> Result<PlotDatum, String> {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "plot data loss of precision from i64 to f64 is acceptable"
-    )]
     match rv {
-        RuntimeValue::Quantity(v) => {
-            Ok(PlotDatum::Number(quantity_display_value(*v, display_unit)))
-        }
+        RuntimeValue::Quantity(v) => quantity_display_value(*v, display_unit)
+            .map(PlotDatum::Number)
+            .map_err(|error| error.to_string()),
         RuntimeValue::Complex(_) => Err(
             "Complex values cannot be plotted directly; use re(), im(), abs(), or phase()"
                 .to_string(),
         ),
-        RuntimeValue::Int(i) => Ok(PlotDatum::Number(*i as f64)),
+        RuntimeValue::Int(i) => crate::eval_expr::numeric::exact_i64_to_f64(*i)
+            .map(PlotDatum::Number)
+            .map_err(|_| {
+                format!(
+                    "Int value {i} cannot be plotted exactly; convert it explicitly with to_float()"
+                )
+            }),
         // A coordinate-index loop variable surfacing as a value
         // (e.g. `x: for t: T { t }`) is numeric data (#839).
         RuntimeValue::CoordinateLabel { value, .. } => Ok(PlotDatum::Number(*value)),
         RuntimeValue::Bool(b) => Ok(PlotDatum::Label(b.to_string())),
         RuntimeValue::Label { variant, .. } => Ok(PlotDatum::Label(variant.to_string())),
-        RuntimeValue::Datetime(epoch) => Ok(PlotDatum::Datetime(epoch_to_rfc3339(epoch))),
+        RuntimeValue::Datetime(epoch) => epoch_to_rfc3339(epoch)
+            .map(PlotDatum::Datetime)
+            .map_err(|error| error.to_string()),
         RuntimeValue::Struct { .. } | RuntimeValue::Indexed { .. } => {
             Err(format!("{} cannot be plotted", rv.kind()))
         }
@@ -343,10 +347,7 @@ mod tests {
 
     #[test]
     fn display_unit_scales_scalar_and_indexed_quantity_leaves() {
-        let kilometres = DisplayUnit {
-            label: "km".to_string(),
-            scale: 1000.0,
-        };
+        let kilometres = DisplayUnit::try_new("km", 1000.0).unwrap();
         let scalar = channel_data_from_runtime_with_display_unit(
             &RuntimeValue::Quantity(3000.0),
             Some(&kilometres),

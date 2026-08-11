@@ -150,3 +150,99 @@ node good: Dimensionless = @EXPORTED;
     .unwrap();
     compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default()).unwrap();
 }
+
+#[test]
+fn datetime_numeric_constructors_and_arithmetic_reject_saturation() {
+    let result = compile_and_eval(
+        r#"
+node now: Datetime = datetime("2024-01-01T00:00:00Z");
+node far_add: Datetime = @now + 1.0e300 s;
+node far_subtract: Datetime = @now - 1.0e300 s;
+node far_unix: Datetime = from_unix(1.0e300);
+node far_jd: Datetime = from_jd(1.0e300);
+node far_mjd: Datetime = from_mjd(-1.0e300);
+"#,
+    )
+    .unwrap();
+
+    for name in ["far_add", "far_subtract", "far_unix", "far_jd", "far_mjd"] {
+        assert_node_failed(&result, name);
+    }
+}
+
+#[test]
+fn overflowing_display_conversion_is_a_node_and_plot_error() {
+    let result = compile_and_eval(
+        r"
+const unit tiny: Length = 1.0e-300 m;
+node huge: Length = 1.0e300 m -> tiny;
+plot p = { mark: point, encode: { x: 1.0e300 m -> tiny } };
+",
+    )
+    .unwrap();
+
+    assert_node_failed(&result, "huge");
+    assert!(result.plots.is_empty());
+    assert_eq!(result.plot_errors.len(), 1);
+    assert!(result.plot_errors[0].message.contains("non-finite"));
+}
+
+#[test]
+fn mean_uses_a_scaled_accumulator() {
+    let result = compile_and_eval(
+        r"
+index Sample = { A, B };
+node values: Dimensionless[Sample] = {
+    Sample.A: 1.0e308,
+    Sample.B: 1.0e308,
+};
+node average: Dimensionless = mean(@values);
+",
+    )
+    .unwrap();
+    let (_, average) = result
+        .nodes
+        .iter()
+        .find(|(name, _)| name.to_string() == "average")
+        .unwrap();
+    let average = average.as_ref().unwrap().si_value().unwrap();
+    assert!((average / 1.0e308 - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn plot_rejects_ints_that_binary64_cannot_represent_exactly() {
+    let result = compile_and_eval(
+        r"
+plot p = {
+    mark: point,
+    encode: { x: 9007199254740993 },
+};
+",
+    )
+    .unwrap();
+
+    assert!(result.plots.is_empty());
+    assert_eq!(result.plot_errors.len(), 1);
+    assert!(result.plot_errors[0].message.contains("to_float"));
+}
+
+#[test]
+fn datetime_plot_data_preserves_nanoseconds() {
+    let result = compile_and_eval(
+        r#"
+node instant: Datetime = datetime("2026-01-01T00:00:00.000000001Z");
+plot p = {
+    mark: point,
+    encode: { x: @instant },
+};
+"#,
+    )
+    .unwrap();
+
+    let plot = result.plots.first().unwrap();
+    let (_, values) = plot.encodings.first().unwrap();
+    let graphcal_eval::eval::PlotFieldValue::Datetimes(values) = values else {
+        panic!("expected datetime plot data, got {values:?}");
+    };
+    assert_eq!(values, &["2026-01-01T00:00:00.000000001Z"]);
+}
