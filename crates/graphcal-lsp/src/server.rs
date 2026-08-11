@@ -354,10 +354,15 @@ impl AnalysisResult {
         &self,
         unresolved: &UnresolvedSymbol,
     ) -> Option<SymbolKey> {
-        self.imported_bindings
+        let mut targets = self
+            .imported_bindings
             .iter()
-            .find(|binding| binding.resolves(unresolved))
-            .map(|binding| binding.target().clone())
+            .filter(|binding| binding.resolves(unresolved))
+            .map(VisibleBinding::target);
+        let target = targets.next()?;
+        targets
+            .all(|candidate| candidate == target)
+            .then(|| target.clone())
     }
 }
 

@@ -6,8 +6,8 @@ use std::sync::Arc;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{
     AssertDecl, AttributeArg, BaseDimDecl, BindableVisibility, DagDecl, DeclKind, DimDecl, DimExpr,
-    ExprKind, FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl,
-    PlotDecl, TypeDecl, TypeDeclBody, TypeExprKind, UnitDecl, UnitExpr,
+    FigureDecl, ImportDecl, IndexDecl, IndexDeclKind, LayerDecl, NodeDecl, ParamDecl, PlotDecl,
+    TypeDecl, TypeDeclBody, TypeExprKind, UnitDecl, UnitExpr,
 };
 use graphcal_compiler::hir;
 use graphcal_compiler::syntax::attribute::AttributeName;
@@ -32,6 +32,7 @@ use graphcal_eval::eval::format_number;
 use tower_lsp::lsp_types::Position;
 
 use crate::convert::LineIndex;
+use crate::nominal_type_index::NominalTypeIndex;
 use crate::symbol_identity::{
     ExternFunctionId, FieldId, GenericParamId, IndexVariantId, LocalSymbolId, ReferenceTarget,
     SourceSymbolPath, UnresolvedSymbol,
@@ -96,6 +97,7 @@ pub fn build_for_buffer(
 struct HirRefCollector<'a> {
     dag_id: &'a DagId,
     resolver: &'a ModuleResolver,
+    nominal_types: &'a NominalTypeIndex,
     time_zones: TimeZoneRegistry,
     /// Lexical local definitions of the current body, keyed by HIR identity.
     locals: HashMap<hir::LocalId, SymbolKey>,
@@ -105,14 +107,32 @@ struct HirRefCollector<'a> {
 }
 
 impl<'a> HirRefCollector<'a> {
-    fn new(dag_id: &'a DagId, resolver: &'a ModuleResolver) -> Self {
+    fn new(
+        dag_id: &'a DagId,
+        resolver: &'a ModuleResolver,
+        nominal_types: &'a NominalTypeIndex,
+    ) -> Self {
         Self {
             dag_id,
             resolver,
+            nominal_types,
             time_zones: TimeZoneRegistry::bundled(),
             locals: HashMap::new(),
             body_span: Span::new(0, 0),
         }
+    }
+
+    fn declaration_target(&self, path: &NamePath) -> ReferenceTarget {
+        self.resolver
+            .resolve_decl_path(self.dag_id, path)
+            .map_or_else(
+                |_| {
+                    ReferenceTarget::Unresolved(UnresolvedSymbol::Declaration(
+                        SourceSymbolPath::from_name_path(path),
+                    ))
+                },
+                |name| SymbolKey::Declaration(name).into(),
+            )
     }
 
     fn collect_resolved_unit_expr_refs(unit: &hir::ResolvedUnitExpr, table: &mut SymbolTable) {
@@ -323,12 +343,21 @@ impl<'a> HirRefCollector<'a> {
                 self.walk(rhs, table);
             }
             hir::ExprKind::UnaryOp { operand, .. }
-            | hir::ExprKind::DisplayTimezone { expr: operand, .. }
-            | hir::ExprKind::FieldAccess { expr: operand, .. } => {
-                // Bare-field references would need TIR-level type info to
-                // know the owning struct; pattern bindings still record
-                // precisely-keyed field references.
+            | hir::ExprKind::DisplayTimezone { expr: operand, .. } => {
                 self.walk(operand, table);
+            }
+            hir::ExprKind::FieldAccess { expr, field } => {
+                self.walk(expr, table);
+                let target = self.nominal_types.expression_constructor(expr).map_or_else(
+                    || ReferenceTarget::Unresolved(UnresolvedSymbol::Field(field.value.clone())),
+                    |constructor| {
+                        SymbolKey::Field(FieldId::new(constructor, field.value.clone())).into()
+                    },
+                );
+                table.references.push(ReferenceInfo {
+                    span: field.span,
+                    target,
+                });
             }
             hir::ExprKind::FnCall { callee, args } => {
                 match &callee.value {
@@ -586,6 +615,11 @@ impl<'a> HirRefCollector<'a> {
                     SymbolKey::Declaration(output.value.clone()),
                 );
                 for arg in args {
+                    Self::reference(
+                        table,
+                        arg.target.span,
+                        SymbolKey::Declaration(arg.target.value.clone()),
+                    );
                     self.walk(&arg.value, table);
                 }
             }
@@ -1141,20 +1175,42 @@ impl SymbolTable {
         match target {
             ReferenceTarget::Resolved(target) => Some(target.clone()),
             ReferenceTarget::Unresolved(unresolved) => {
-                let path = unresolved.path();
-                if !path.is_local() {
-                    return None;
-                }
-                self.definitions
-                    .keys()
-                    .find(|candidate| {
-                        candidate.owner() == Some(&self.owner)
-                            && candidate.leaf_name() == path.leaf().as_str()
-                            && unresolved.accepts(candidate)
-                    })
-                    .cloned()
+                let leaf = if let UnresolvedSymbol::Field(field) = unresolved {
+                    field.as_str()
+                } else {
+                    let path = unresolved.path()?;
+                    if !path.is_local() {
+                        return None;
+                    }
+                    path.leaf().as_str()
+                };
+                let mut candidates = self.definitions.keys().filter(|candidate| {
+                    candidate.leaf_name() == leaf && unresolved.accepts(candidate)
+                });
+                let candidate = candidates.next()?;
+                candidates.next().is_none().then(|| candidate.clone())
             }
         }
+    }
+
+    /// Whether a source occurrence has the target's spelling and namespace but
+    /// could not be assigned a unique canonical identity. Rename must refuse
+    /// such a target rather than silently omit a possible occurrence.
+    pub fn has_ambiguous_reference_to(&self, target: &SymbolKey) -> bool {
+        self.references.iter().any(|reference| {
+            let ReferenceTarget::Unresolved(unresolved) = &reference.target else {
+                return false;
+            };
+            let same_local_spelling = match unresolved {
+                UnresolvedSymbol::Field(field) => field.as_str() == target.leaf_name(),
+                _ => unresolved.path().is_some_and(|path| {
+                    path.is_local() && path.leaf().as_str() == target.leaf_name()
+                }),
+            };
+            same_local_spelling
+                && unresolved.accepts(target)
+                && self.resolve_local_target(&reference.target).is_none()
+        })
     }
 
     /// Find all references that point to the given target key.
@@ -1256,63 +1312,16 @@ pub fn build_from_ast(
     resolver: &ModuleResolver,
 ) -> SymbolTable {
     let mut table = SymbolTable::new(dag_id.clone());
-    let mut refs = HirRefCollector::new(dag_id, resolver);
-
     register_builtins(&mut table);
-
-    for decl in &ast.declarations {
-        collect_attribute_refs(&decl.attributes, &mut table);
-
-        match &decl.kind {
-            DeclKind::Param(p) => collect_param_decl(
-                p,
-                decl.span,
-                BindableVisibility::PublicBind,
-                &mut table,
-                &mut refs,
-            ),
-            DeclKind::Node(n) => {
-                collect_node_decl(n, decl.span, n.visibility.into(), &mut table, &mut refs);
-            }
-            DeclKind::ConstNode(c) => {
-                collect_const_node_decl(c, decl.span, c.visibility.into(), &mut table, &mut refs);
-            }
-            DeclKind::BaseDimension(d) => {
-                collect_base_dim_decl(d, decl.span, d.visibility.into(), &mut table);
-            }
-            DeclKind::Dimension(d) => collect_dim_decl(d, decl.span, d.visibility, &mut table),
-            DeclKind::Unit(u) => {
-                collect_unit_decl(u, decl.span, u.visibility.into(), &mut table, &mut refs);
-            }
-            DeclKind::Type(t) => collect_type_decl(t, decl.span, t.visibility, &mut table),
-            DeclKind::Index(idx) => collect_index_decl(idx, decl.span, idx.visibility, &mut table),
-            DeclKind::Assert(a) => {
-                collect_assert_decl(a, decl.span, a.visibility.into(), &mut table, &mut refs);
-            }
-            DeclKind::Plot(p) => {
-                collect_plot_decl(p, decl.span, p.visibility.into(), &mut table, &mut refs);
-            }
-            DeclKind::Figure(f) => {
-                collect_figure_decl(f, decl.span, f.visibility.into(), &mut table, &mut refs);
-            }
-            DeclKind::Layer(l) => {
-                collect_layer_decl(l, decl.span, l.visibility.into(), &mut table, &mut refs);
-            }
-            DeclKind::Import(u) => collect_import_decl(u, &mut table),
-            DeclKind::PluginImport(p) => collect_plugin_import_decl(p, source, &mut table),
-            DeclKind::Include(u) => collect_include_decl(u, &mut table),
-            DeclKind::Dag(d) => collect_dag_decl(d, decl.span, d.visibility.into(), &mut table),
-            // `Sugar(_)` carries `Infallible` for the `Desugared` phase, so
-            // this arm is statically unreachable. The deref of `&Infallible`
-            // is sound (no value can be observed) — this is the canonical
-            // proof of unreachability for sealed sugar variants.
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "Sugar(Infallible) — proof of unreachability"
-            )]
-            DeclKind::Sugar(s) => match *s {},
-        }
-    }
+    let nominal_types = NominalTypeIndex::build(&ast.declarations, dag_id, resolver);
+    collect_declarations(
+        &ast.declarations,
+        source,
+        dag_id,
+        resolver,
+        &nominal_types,
+        &mut table,
+    );
 
     // Sort references by offset for binary search, and drop duplicates:
     // every row of a desugared `table[Axis] { ... }` records an index
@@ -1329,6 +1338,127 @@ pub fn build_from_ast(
     // precompute inlay-hint candidate positions.
     table.finalize(source);
     table
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "exhaustive declaration dispatch keeps owner recursion visibly complete"
+)]
+fn collect_declarations(
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    source: &str,
+    owner: &DagId,
+    resolver: &ModuleResolver,
+    nominal_types: &NominalTypeIndex,
+    table: &mut SymbolTable,
+) {
+    let mut refs = HirRefCollector::new(owner, resolver, nominal_types);
+    for declaration in declarations {
+        collect_attribute_refs(&declaration.attributes, table, &refs);
+        match &declaration.kind {
+            DeclKind::Param(param) => collect_param_decl(
+                param,
+                declaration.span,
+                BindableVisibility::PublicBind,
+                table,
+                &mut refs,
+            ),
+            DeclKind::Node(node) => collect_node_decl(
+                node,
+                declaration.span,
+                node.visibility.into(),
+                table,
+                &mut refs,
+            ),
+            DeclKind::ConstNode(constant) => collect_const_node_decl(
+                constant,
+                declaration.span,
+                constant.visibility.into(),
+                table,
+                &mut refs,
+            ),
+            DeclKind::BaseDimension(dimension) => collect_base_dim_decl(
+                dimension,
+                declaration.span,
+                dimension.visibility.into(),
+                table,
+                &refs,
+            ),
+            DeclKind::Dimension(dimension) => collect_dim_decl(
+                dimension,
+                declaration.span,
+                dimension.visibility,
+                table,
+                &refs,
+            ),
+            DeclKind::Unit(unit) => collect_unit_decl(
+                unit,
+                declaration.span,
+                unit.visibility.into(),
+                table,
+                &mut refs,
+            ),
+            DeclKind::Type(type_decl) => collect_type_decl(
+                type_decl,
+                declaration.span,
+                type_decl.visibility,
+                table,
+                &mut refs,
+            ),
+            DeclKind::Index(index) => {
+                collect_index_decl(index, declaration.span, index.visibility, table, &mut refs);
+            }
+            DeclKind::Assert(assertion) => collect_assert_decl(
+                assertion,
+                declaration.span,
+                assertion.visibility.into(),
+                table,
+                &mut refs,
+            ),
+            DeclKind::Plot(plot) => collect_plot_decl(
+                plot,
+                declaration.span,
+                plot.visibility.into(),
+                table,
+                &mut refs,
+            ),
+            DeclKind::Figure(figure) => collect_figure_decl(
+                figure,
+                declaration.span,
+                figure.visibility.into(),
+                table,
+                &mut refs,
+            ),
+            DeclKind::Layer(layer) => collect_layer_decl(
+                layer,
+                declaration.span,
+                layer.visibility.into(),
+                table,
+                &mut refs,
+            ),
+            DeclKind::Import(import) => collect_import_decl(import, table),
+            DeclKind::PluginImport(plugin) => {
+                collect_plugin_import_decl(plugin, source, table, &mut refs);
+            }
+            DeclKind::Include(include) => collect_include_decl(include, table, &mut refs),
+            DeclKind::Dag(dag) => {
+                collect_dag_decl(dag, declaration.span, dag.visibility.into(), table, &refs);
+                collect_declarations(
+                    &dag.body,
+                    source,
+                    &owner.child(dag.name.value.as_str()),
+                    resolver,
+                    nominal_types,
+                    table,
+                );
+            }
+            #[expect(
+                clippy::uninhabited_references,
+                reason = "Sugar(Infallible) — proof of unreachability"
+            )]
+            DeclKind::Sugar(sugar) => match *sugar {},
+        }
+    }
 }
 
 fn register_builtins(table: &mut SymbolTable) {
@@ -1384,26 +1514,34 @@ fn register_builtins(table: &mut SymbolTable) {
 fn collect_attribute_refs(
     attributes: &[graphcal_compiler::desugar::desugared_ast::Attribute],
     table: &mut SymbolTable,
+    refs: &HirRefCollector<'_>,
 ) {
-    for attr in attributes {
-        if attr.name.name.parse::<AttributeName>() == Ok(AttributeName::Assumes) {
-            for arg in &attr.args {
-                match arg {
-                    AttributeArg::Path { segments, .. } if segments.len() == 1 => {
-                        let ident = segments.first();
-                        table.references.push(ReferenceInfo {
-                            span: ident.span,
-                            target: SymbolKey::Declaration(ResolvedDeclName::from_def(
-                                table.owner.clone(),
-                                DeclName::from_atom(ident.name.clone()),
-                            ))
-                            .into(),
-                        });
-                    }
-                    AttributeArg::Path { .. }
-                    | AttributeArg::FinitePosition { .. }
-                    | AttributeArg::Group { .. } => {}
+    fn collect_argument(
+        argument: &AttributeArg,
+        table: &mut SymbolTable,
+        refs: &HirRefCollector<'_>,
+    ) {
+        match argument {
+            AttributeArg::Path { segments, .. } => {
+                let path = NamePath::new(segments.clone().map(|segment| segment.name));
+                table.references.push(ReferenceInfo {
+                    span: segments.last().span,
+                    target: refs.declaration_target(&path),
+                });
+            }
+            AttributeArg::Group { elements, .. } => {
+                for element in elements {
+                    collect_argument(element, table, refs);
                 }
+            }
+            AttributeArg::FinitePosition { .. } => {}
+        }
+    }
+
+    for attribute in attributes {
+        if attribute.name.name.parse::<AttributeName>() == Ok(AttributeName::Assumes) {
+            for argument in &attribute.args {
+                collect_argument(argument, table, refs);
             }
         }
     }
@@ -1418,7 +1556,7 @@ fn collect_param_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Param(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             p.name.value.clone(),
         )),
         p.name.span,
@@ -1427,7 +1565,7 @@ fn collect_param_decl(
         None,
         visibility,
     );
-    collect_type_expr_refs(&p.type_ann, table);
+    collect_type_expr_refs(&p.type_ann, table, refs);
     if let Some(ref value) = p.value {
         refs.collect_body(value, table);
     }
@@ -1442,7 +1580,7 @@ fn collect_node_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Node(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             n.name.value.clone(),
         )),
         n.name.span,
@@ -1451,7 +1589,7 @@ fn collect_node_decl(
         None,
         visibility,
     );
-    collect_type_expr_refs(&n.type_ann, table);
+    collect_type_expr_refs(&n.type_ann, table, refs);
     refs.collect_body(&n.value, table);
 }
 
@@ -1464,7 +1602,7 @@ fn collect_const_node_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Const(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             c.name.value.clone(),
         )),
         c.name.span,
@@ -1473,7 +1611,7 @@ fn collect_const_node_decl(
         None,
         visibility,
     );
-    collect_type_expr_refs(&c.type_ann, table);
+    collect_type_expr_refs(&c.type_ann, table, refs);
     refs.collect_body(&c.value, table);
 }
 
@@ -1482,10 +1620,11 @@ fn collect_base_dim_decl(
     decl_span: Span,
     visibility: BindableVisibility,
     table: &mut SymbolTable,
+    refs: &HirRefCollector<'_>,
 ) {
     table.register_definition(
         TopLevelDefinition::Dimension(ResolvedDimName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             d.name.value.clone(),
         )),
         d.name.span,
@@ -1501,10 +1640,11 @@ fn collect_dim_decl(
     decl_span: Span,
     visibility: BindableVisibility,
     table: &mut SymbolTable,
+    refs: &HirRefCollector<'_>,
 ) {
     table.register_definition(
         TopLevelDefinition::Dimension(ResolvedDimName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             d.name.value.clone(),
         )),
         d.name.span,
@@ -1527,7 +1667,7 @@ fn collect_unit_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Unit(ResolvedUnitName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             u.name.value.clone(),
         )),
         u.name.span,
@@ -1548,8 +1688,9 @@ fn collect_type_decl(
     decl_span: Span,
     visibility: BindableVisibility,
     table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
 ) {
-    let type_id = ResolvedStructTypeName::from_def(table.owner.clone(), t.name.value.clone());
+    let type_id = ResolvedStructTypeName::from_def(refs.dag_id.clone(), t.name.value.clone());
     table.register_definition(
         TopLevelDefinition::StructType(type_id.clone()),
         t.name.span,
@@ -1586,7 +1727,7 @@ fn collect_type_decl(
     let mut earlier_params = GenericParamSymbolScope::new();
     for param in &t.generic_params {
         if let Some(default) = &param.default {
-            collect_generic_arg_refs(default, Some(&earlier_params), table);
+            collect_generic_arg_refs(default, Some(&earlier_params), table, refs);
         }
         if let Some(key) = generic_scope.get(&param.name.value) {
             earlier_params.insert(param.name.value.clone(), key.clone());
@@ -1601,7 +1742,7 @@ fn collect_type_decl(
         for member in members {
             let constructor_name = member.name.value.to_string();
             let constructor_id =
-                ResolvedConstructorName::from_def(table.owner.clone(), member.name.value.clone());
+                ResolvedConstructorName::from_def(refs.dag_id.clone(), member.name.value.clone());
             table.insert_definition(
                 SymbolKey::Constructor(constructor_id.clone()),
                 DefinitionInfo {
@@ -1631,7 +1772,12 @@ fn collect_type_decl(
                             visibility: None,
                         },
                     );
-                    collect_type_expr_refs_in_scope(&field.type_ann, Some(&generic_scope), table);
+                    collect_type_expr_refs_in_scope(
+                        &field.type_ann,
+                        Some(&generic_scope),
+                        table,
+                        refs,
+                    );
                 }
             }
         }
@@ -1654,9 +1800,10 @@ fn collect_index_decl(
     decl_span: Span,
     visibility: BindableVisibility,
     table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
 ) {
     let name = idx.name.value.to_string();
-    let index_id = ResolvedIndexName::from_def(table.owner.clone(), idx.name.value.clone());
+    let index_id = ResolvedIndexName::from_def(refs.dag_id.clone(), idx.name.value.clone());
     table.register_definition(
         TopLevelDefinition::Index(index_id.clone()),
         idx.name.span,
@@ -1687,12 +1834,19 @@ fn collect_index_decl(
                 );
             }
         }
+        IndexDeclKind::Range { start, end, step } => {
+            refs.collect_body(start, table);
+            refs.collect_body(end, table);
+            refs.collect_body(step, table);
+        }
+        IndexDeclKind::Linspace { start, end, .. } => {
+            refs.collect_body(start, table);
+            refs.collect_body(end, table);
+        }
         IndexDeclKind::RequiredCoordinate { dimension } => {
             collect_dim_expr_refs(dimension, table);
         }
-        IndexDeclKind::Range { .. }
-        | IndexDeclKind::Linspace { .. }
-        | IndexDeclKind::RequiredNamed => {}
+        IndexDeclKind::RequiredNamed => {}
     }
 }
 
@@ -1705,7 +1859,7 @@ fn collect_assert_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Assert(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             a.name.value.clone(),
         )),
         a.name.span,
@@ -1740,7 +1894,7 @@ fn collect_plot_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Plot(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             p.name.value.clone(),
         )),
         p.name.span,
@@ -1769,7 +1923,7 @@ fn collect_figure_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Figure(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             f.name.value.clone(),
         )),
         f.name.span,
@@ -1778,6 +1932,12 @@ fn collect_figure_decl(
         Some("figure".to_string()),
         visibility,
     );
+    for plot in &f.plot_names {
+        table.references.push(ReferenceInfo {
+            span: plot.span,
+            target: refs.declaration_target(&plot.value.to_name_path()),
+        });
+    }
     for field in &f.fields {
         refs.collect_body(&field.value, table);
     }
@@ -1792,7 +1952,7 @@ fn collect_layer_decl(
 ) {
     table.register_definition(
         TopLevelDefinition::Layer(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             l.name.value.clone(),
         )),
         l.name.span,
@@ -1801,6 +1961,12 @@ fn collect_layer_decl(
         Some("layer".to_string()),
         visibility,
     );
+    for plot in &l.plot_names {
+        table.references.push(ReferenceInfo {
+            span: plot.span,
+            target: refs.declaration_target(&plot.value.to_name_path()),
+        });
+    }
     for field in &l.fields {
         refs.collect_body(&field.value, table);
     }
@@ -1811,10 +1977,11 @@ fn collect_dag_decl(
     decl_span: Span,
     visibility: BindableVisibility,
     table: &mut SymbolTable,
+    refs: &HirRefCollector<'_>,
 ) {
     table.register_definition(
         TopLevelDefinition::Dag(ResolvedDeclName::from_def(
-            table.owner.clone(),
+            refs.dag_id.clone(),
             d.name.value.clone(),
         )),
         d.name.span,
@@ -1823,46 +1990,6 @@ fn collect_dag_decl(
         None,
         visibility,
     );
-    // Register the DAG body's value declarations as qualified members so
-    // inline-call projections (`@dag(...).out`), including projectable param
-    // input ports, resolve to their definitions inside the DAG body.
-    let dag_id = table.owner.child(d.name.value.as_str());
-    for body_decl in &d.body {
-        let (member_name, member_span, category) = match &body_decl.kind {
-            graphcal_compiler::desugar::desugared_ast::DeclKind::Param(p) => {
-                (p.name.value.to_string(), p.name.span, SymbolCategory::Param)
-            }
-            graphcal_compiler::desugar::desugared_ast::DeclKind::Node(n) => {
-                (n.name.value.to_string(), n.name.span, SymbolCategory::Node)
-            }
-            graphcal_compiler::desugar::desugared_ast::DeclKind::ConstNode(c) => {
-                (c.name.value.to_string(), c.name.span, SymbolCategory::Const)
-            }
-            _ => continue,
-        };
-        let member_id =
-            ResolvedDeclName::from_def(dag_id.clone(), DeclName::expect_valid(member_name.clone()));
-        table.insert_definition(
-            SymbolKey::Declaration(member_id),
-            DefinitionInfo {
-                name: member_name,
-                category,
-                name_span: member_span,
-                decl_span: body_decl.span,
-                type_description: None,
-                detail: None,
-                visibility: Some(match &body_decl.kind {
-                    graphcal_compiler::desugar::desugared_ast::DeclKind::Node(n) => {
-                        n.visibility.into()
-                    }
-                    graphcal_compiler::desugar::desugared_ast::DeclKind::ConstNode(c) => {
-                        c.visibility.into()
-                    }
-                    _ => BindableVisibility::Private,
-                }),
-            },
-        );
-    }
 }
 
 fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
@@ -1878,6 +2005,7 @@ fn collect_plugin_import_decl(
     p: &graphcal_compiler::desugar::desugared_ast::PluginImportDecl,
     source: &str,
     table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
 ) {
     for function in &p.functions {
         // The declared signature text, verbatim, is the best hover/detail
@@ -1887,7 +2015,7 @@ fn collect_plugin_import_decl(
             .map(|text| text.trim_end_matches(';').trim().to_string());
         table.insert_definition(
             SymbolKey::ExternFunction(ExternFunctionId::new(
-                table.owner.clone(),
+                refs.dag_id.clone(),
                 p.alias.value.clone(),
                 function.name.value.clone(),
             )),
@@ -1902,17 +2030,70 @@ fn collect_plugin_import_decl(
             },
         );
         for param in &function.params {
-            collect_type_expr_refs(&param.type_ann, table);
+            collect_type_expr_refs(&param.type_ann, table, refs);
         }
-        collect_type_expr_refs(&function.result, table);
+        collect_type_expr_refs(&function.result, table, refs);
     }
 }
 
 fn collect_include_decl(
-    u: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
+    include: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
 ) {
-    collect_import_or_include_names(&u.kind, table);
+    let target = refs
+        .resolver
+        .resolve_module_path(refs.dag_id, &include.path)
+        .ok();
+    if let Some(target) = &target {
+        if let Some(parent) = target.parent() {
+            table.references.push(ReferenceInfo {
+                span: include.path.segments.last().span,
+                target: SymbolKey::Declaration(ResolvedDeclName::from_def(
+                    parent,
+                    DeclName::expect_valid(target.name()),
+                ))
+                .into(),
+            });
+        }
+        for binding in &include.param_bindings {
+            table.references.push(ReferenceInfo {
+                span: binding.name.span,
+                target: SymbolKey::Declaration(ResolvedDeclName::from_def(
+                    target.clone(),
+                    DeclName::from_atom(binding.name.name.clone()),
+                ))
+                .into(),
+            });
+        }
+        if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
+            &include.kind
+        {
+            for item in items {
+                table.references.push(ReferenceInfo {
+                    span: item.name.span,
+                    target: SymbolKey::Declaration(ResolvedDeclName::from_def(
+                        target.clone(),
+                        DeclName::from_atom(item.name.name.clone()),
+                    ))
+                    .into(),
+                });
+                if let Some(alias) = &item.alias {
+                    table.references.push(ReferenceInfo {
+                        span: alias.span,
+                        target: ReferenceTarget::Unresolved(UnresolvedSymbol::Declaration(
+                            SourceSymbolPath::local(alias.name.clone()),
+                        )),
+                    });
+                }
+            }
+        }
+    } else {
+        collect_import_or_include_names(&include.kind, table);
+    }
+    for binding in &include.param_bindings {
+        refs.collect_body(&binding.value, table);
+    }
 }
 
 fn collect_import_or_include_names(
@@ -1963,14 +2144,16 @@ type GenericParamSymbolScope = HashMap<GenericParamName, SymbolKey>;
 fn collect_type_expr_refs(
     type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
 ) {
-    collect_type_expr_refs_in_scope(type_expr, None, table);
+    collect_type_expr_refs_in_scope(type_expr, None, table, refs);
 }
 
 fn collect_type_expr_refs_in_scope(
     type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     generic_scope: Option<&GenericParamSymbolScope>,
     table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
 ) {
     match &type_expr.kind {
         TypeExprKind::Dimensionless
@@ -1986,7 +2169,7 @@ fn collect_type_expr_refs_in_scope(
             );
         }
         TypeExprKind::Indexed { base, indexes } => {
-            collect_type_expr_refs_in_scope(base, generic_scope, table);
+            collect_type_expr_refs_in_scope(base, generic_scope, table, refs);
             for idx in indexes {
                 match idx {
                     graphcal_compiler::desugar::desugared_ast::IndexExpr::Name(path) => {
@@ -2019,13 +2202,13 @@ fn collect_type_expr_refs_in_scope(
                 ),
             });
             for arg in generic_args {
-                collect_generic_arg_refs(arg, generic_scope, table);
+                collect_generic_arg_refs(arg, generic_scope, table, refs);
             }
         }
         TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => {
             for arg in generic_args {
-                collect_generic_arg_refs(arg, generic_scope, table);
+                collect_generic_arg_refs(arg, generic_scope, table, refs);
             }
         }
         TypeExprKind::DatetimeApplication { type_args } => {
@@ -2033,13 +2216,13 @@ fn collect_type_expr_refs_in_scope(
             // Recurse into args so any user-defined names reachable from the
             // time-scale expression are still picked up by go-to-definition.
             for arg in type_args {
-                collect_type_expr_refs_in_scope(arg, generic_scope, table);
+                collect_type_expr_refs_in_scope(arg, generic_scope, table, refs);
             }
         }
     }
     // Collect references from domain constraint bound expressions (e.g., unit names in `100 kg`).
     for bound in &type_expr.constraints {
-        collect_constraint_expr_refs(&bound.value, table);
+        refs.collect_body(&bound.value, table);
     }
 }
 
@@ -2047,10 +2230,11 @@ fn collect_generic_arg_refs(
     arg: &graphcal_compiler::syntax::ast::GenericArg<graphcal_compiler::syntax::phase::Desugared>,
     generic_scope: Option<&GenericParamSymbolScope>,
     table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
 ) {
     match arg {
         graphcal_compiler::syntax::ast::GenericArg::Type(type_expr) => {
-            collect_type_expr_refs_in_scope(type_expr, generic_scope, table);
+            collect_type_expr_refs_in_scope(type_expr, generic_scope, table, refs);
         }
         graphcal_compiler::syntax::ast::GenericArg::Index(index) => match index {
             graphcal_compiler::syntax::ast::IndexExpr::Name(path) => {
@@ -2148,22 +2332,6 @@ fn reference_target_in_generic_scope(
         return ReferenceTarget::Resolved(target);
     }
     ReferenceTarget::Unresolved(unresolved(SourceSymbolPath::from_name_path(path)))
-}
-
-/// Collect references from a constraint bound expression (limited walk for unit names).
-fn collect_constraint_expr_refs(
-    expr: &graphcal_compiler::desugar::desugared_ast::Expr,
-    table: &mut SymbolTable,
-) {
-    match &expr.kind {
-        ExprKind::QuantityLiteral { unit, .. } => {
-            collect_unit_expr_refs(unit, table);
-        }
-        ExprKind::UnaryOp { operand, .. } => {
-            collect_constraint_expr_refs(operand, table);
-        }
-        _ => {}
-    }
 }
 
 /// Collect references from a dimension expression.
@@ -2528,6 +2696,92 @@ mod tests {
                     == Some(x_key.clone())),
             "expected @x reference"
         );
+    }
+
+    #[test]
+    fn indexes_grouped_attributes_index_bounds_and_compound_constraints() {
+        let source = r"
+assert first = true;
+assert second = true;
+#[assumes((first, second))]
+node guarded: Dimensionless = 1.0;
+const node START: Dimensionless = 0.0;
+const node END: Dimensionless = 10.0;
+const node STEP: Dimensionless = 1.0;
+index Axis = range(@START, @END, step: @STEP);
+const node LOWER: Dimensionless = 0.0;
+param bounded: Dimensionless(min: @LOWER + 1.0) = 2.0;
+";
+        let table = table_for(source);
+
+        for spelling in ["first, second", "@START", "@END", "@STEP", "@LOWER"] {
+            let offset = source.find(spelling).unwrap() + usize::from(spelling != "first, second");
+            assert!(
+                reference_key(&table, offset).is_some(),
+                "missing reference at `{spelling}`"
+            );
+        }
+        let second = source.find("first, second").unwrap() + "first, ".len();
+        assert!(reference_key(&table, second).is_some());
+    }
+
+    #[test]
+    fn field_accesses_use_the_owning_constructor_when_spellings_collide() {
+        let source = r"
+type Item { Item(mass: Dimensionless), }
+type Other { Other(mass: Dimensionless), }
+param item: Item = Item(mass: 1.0);
+param other: Other = Other(mass: 2.0);
+node item_mass: Dimensionless = @item.mass;
+node other_mass: Dimensionless = @other.mass;
+";
+        let table = table_for(source);
+        let item_access = source.find("@item.mass").unwrap() + "@item.".len();
+        let other_access = source.find("@other.mass").unwrap() + "@other.".len();
+        let item_key = reference_key(&table, item_access)
+            .unwrap_or_else(|| panic!("missing item field in {:#?}", table.references));
+        let other_key = reference_key(&table, other_access)
+            .unwrap_or_else(|| panic!("missing other field in {:#?}", table.references));
+
+        assert_ne!(item_key, other_key);
+        assert!(matches!(item_key, SymbolKey::Field(_)));
+        assert!(matches!(other_key, SymbolKey::Field(_)));
+        assert_eq!(table.find_all_references(&item_key).len(), 2);
+        assert_eq!(table.find_all_references(&other_key).len(), 2);
+    }
+
+    #[test]
+    fn recursively_indexes_dag_include_and_composition_references() {
+        let source = r"
+param outer: Dimensionless = 2.0;
+dag d {
+    param inner: Dimensionless;
+    node doubled: Dimensionless = @inner * 2.0;
+}
+include d(inner: @outer).{ doubled as result };
+plot p = { mark: point, encode: { x: @outer } };
+figure f = { plots: [p] };
+";
+        let table = table_for(source);
+        let outer = definition_key(&table, SymbolCategory::Param, "outer");
+        let inner = definition_key(&table, SymbolCategory::Param, "inner");
+        let plot = definition_key(&table, SymbolCategory::Plot, "p");
+
+        assert_eq!(table.find_all_references(&outer).len(), 2);
+        assert_eq!(table.find_all_references(&inner).len(), 2);
+        assert_eq!(table.find_all_references(&plot).len(), 1);
+        for (spelling, relative_offset) in [
+            ("@inner", 1),
+            ("inner: @outer", 0),
+            ("@outer", 1),
+            ("plots: [p]", "plots: [".len()),
+        ] {
+            let offset = source.find(spelling).unwrap() + relative_offset;
+            assert!(
+                reference_key(&table, offset).is_some(),
+                "missing reference at `{spelling}`"
+            );
+        }
     }
 
     #[test]
