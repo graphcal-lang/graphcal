@@ -137,11 +137,34 @@ fn calls_a_quantity_kernel() {
         .call(&fn_name("lerp"), &f64_values(&[0.0, 10.0, 0.25]))
         .unwrap();
     assert!((f64_value(&result) - 2.5).abs() < f64::EPSILON);
-    // Second call reuses the pooled instance.
+    // A second fresh instance preserves ordinary stateless behavior.
     let result = module
         .call(&fn_name("lerp"), &f64_values(&[1.0, 3.0, 0.5]))
         .unwrap();
     assert!((f64_value(&result) - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn equal_calls_cannot_observe_mutable_global_history() {
+    let wat = r#"
+    (module
+      (global $calls (mut i32) (i32.const 0))
+      (func (export "next") (param f64) (result f64)
+        (global.set $calls (i32.add (global.get $calls) (i32.const 1)))
+        (f64.convert_i32_s (global.get $calls))))
+    "#;
+    let manifest = manifest(vec![function(
+        "next",
+        &[],
+        &[("x", dimensionless())],
+        dimensionless(),
+    )]);
+    let module = PluginHost::new().load(&plugin(wat, &manifest)).unwrap();
+
+    let first = module.call(&fn_name("next"), &f64_values(&[0.0])).unwrap();
+    let second = module.call(&fn_name("next"), &f64_values(&[0.0])).unwrap();
+    assert!((f64_value(&first) - 1.0).abs() < f64::EPSILON);
+    assert!((f64_value(&second) - 1.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -203,7 +226,7 @@ fn fail_import_reports_the_plugin_message_and_recovers() {
         }
     );
 
-    // The damaged instance is discarded; the next call gets a fresh one.
+    // Every call is fresh, including the call following a failure.
     let ok = module
         .call(&fn_name("inverse"), &f64_values(&[4.0]))
         .unwrap();
@@ -816,8 +839,7 @@ fn calls_an_array_kernel_with_an_array_result() {
         .unwrap();
     assert_eq!(result, vector(vec![2.0, 5.0, -8.0]));
 
-    // The pooled instance is reused and the buffers were freed: a second
-    // call must see fresh inputs, not stale memory.
+    // The second call gets a fresh instance and must see only its own inputs.
     let result = module
         .call(
             &fn_name("scale"),
