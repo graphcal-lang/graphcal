@@ -737,7 +737,8 @@ fn build_project(
             // The analyzed snapshot comes first so it wins over any (possibly
             // newer) latest-text entry for the same file: the produced
             // `AnalysisResult` must stay consistent with `text`.
-            let base = graphcal_eval::loader::build_rooted_filesystem(&path, None);
+            let base =
+                graphcal_eval::loader::build_rooted_filesystem(&path, None).map_err(Box::new)?;
             let overlays = std::iter::once((path.clone(), text.to_string())).chain(
                 open_buffers
                     .iter()

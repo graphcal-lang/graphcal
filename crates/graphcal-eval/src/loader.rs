@@ -3195,37 +3195,40 @@ pub fn discover_project_root<F: FileSystemReader>(start_dir: &Path, fs: &F) -> O
 /// `file`. Used by the CLI and the LSP so both discover the same root.
 ///
 /// Resolution order:
-/// 1. If `root_override` canonicalizes, return [`RealFileSystem::rooted`] there.
+/// 1. If `root_override` is present, root the filesystem there.
 /// 2. Otherwise pick a starting directory: the parent of the canonicalized
 ///    file when it exists on disk, falling back to the canonicalized parent
 ///    of the input path (so unsaved LSP buffers can still walk up from their
 ///    enclosing directory).
 /// 3. From that directory, walk up looking for `graphcal.toml`; if found,
-///    root the FS there.
-/// 4. Otherwise return an unrooted [`RealFileSystem::default`] so one-shot
-///    evals of loose files outside any project keep working.
-#[must_use]
-pub fn build_rooted_filesystem(file: &Path, root_override: Option<&Path>) -> RealFileSystem {
-    if let Some(explicit) = root_override
-        && let Ok(fs) = RealFileSystem::rooted(explicit)
-    {
-        return fs;
+///    root the filesystem there.
+/// 4. Otherwise root the filesystem at the loose file's enclosing directory.
+///
+/// The function never returns an unrestricted filesystem: a root that cannot
+/// be canonicalized is an error rather than a reason to drop the sandbox.
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] when the explicit, discovered, or loose-file
+/// root cannot be canonicalized.
+pub fn build_rooted_filesystem(
+    file: &Path,
+    root_override: Option<&Path>,
+) -> Result<RealFileSystem, CompileError> {
+    if let Some(explicit) = root_override {
+        return RealFileSystem::rooted(explicit).map_err(|_| io_not_found(explicit));
     }
 
     let start_dir = file
         .canonicalize()
         .ok()
-        .and_then(|c| c.parent().map(Path::to_path_buf))
-        .or_else(|| file.parent().and_then(|p| p.canonicalize().ok()));
+        .and_then(|canonical| canonical.parent().map(Path::to_path_buf))
+        .or_else(|| file.parent().and_then(|parent| parent.canonicalize().ok()))
+        .ok_or_else(|| io_not_found(file))?;
 
-    let Some(start_dir) = start_dir else {
-        return RealFileSystem::default();
-    };
-
-    let fs = RealFileSystem::default();
-    discover_project_root(&start_dir, &fs)
-        .and_then(|root| RealFileSystem::rooted(&root).ok())
-        .unwrap_or_default()
+    let discovery_fs = RealFileSystem::default();
+    let project_root = project_root_for(&start_dir, &discovery_fs);
+    RealFileSystem::rooted(&project_root).map_err(|_| io_not_found(&project_root))
 }
 
 /// Pick the project root directory for `root_file_dir`, falling back to
@@ -3475,7 +3478,7 @@ mod tests {
     use std::io;
 
     use graphcal_compiler::syntax::non_empty::NonEmpty;
-    use graphcal_io::{CancellationSignal, EntryLimit, RealFileSystem};
+    use graphcal_io::{CancellationSignal, EntryLimit, NeverCancel, RealFileSystem};
 
     fn fs() -> RealFileSystem {
         RealFileSystem::default()
@@ -3581,6 +3584,41 @@ mod tests {
         graphcal_compiler::syntax::names::NamePath::new(
             graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(atoms).unwrap(),
         )
+    }
+
+    #[test]
+    fn rooted_filesystem_rejects_invalid_explicit_root() {
+        let dir = setup_temp_dir(&[("main.gcl", "param x: Dimensionless = 1.0;")]);
+        let missing_root = dir.path().join("missing");
+
+        let error = build_rooted_filesystem(&dir.path().join("main.gcl"), Some(&missing_root))
+            .expect_err("an invalid explicit root must not disable the sandbox");
+
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::FileNotFound { path })
+                if path == missing_root.display().to_string()
+        ));
+    }
+
+    #[test]
+    fn rooted_filesystem_confines_loose_file_to_its_parent() {
+        let dir = setup_temp_dir(&[
+            ("project/main.gcl", "param x: Dimensionless = 1.0;"),
+            ("outside.gcl", "param secret: Dimensionless = 42.0;"),
+        ]);
+        let main = dir.path().join("project/main.gcl");
+        let outside = dir.path().join("outside.gcl");
+        let fs = build_rooted_filesystem(&main, None).unwrap();
+
+        assert!(
+            fs.read_bytes_bounded(&main, ByteLimit::new(1024), &NeverCancel)
+                .is_ok()
+        );
+        assert!(
+            fs.read_bytes_bounded(&outside, ByteLimit::new(1024), &NeverCancel)
+                .is_err()
+        );
     }
 
     #[test]

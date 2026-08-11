@@ -32,6 +32,12 @@ graphcal [OPTIONS] <COMMAND>
 | [`plugin test`](#graphcal-plugin-test) | Validate a built `.wasm` plugin module and call its functions (experimental) |
 | [`lsp`](#graphcal-lsp) | Start the LSP server |
 
+Commands that load Graphcal source sandbox filesystem access to the explicit
+`--root`, the nearest discovered `graphcal.toml` directory, or (for a loose
+file) the file's enclosing directory. An explicit root that does not exist or
+cannot be canonicalized is a hard error; Graphcal never drops to unrestricted
+filesystem access when sandbox setup fails.
+
 ---
 
 ## `graphcal deps lock`
@@ -222,6 +228,7 @@ graphcal eval [OPTIONS] <FILE>
 | `--set <SET>` | Bind a param to a closed value: `--set 'name=value'` (repeatable) |
 | `--input <INPUT>` | JSON input file for param values |
 | `--plot <MODE>` | Plot output mode: `browser` (open in browser), `json` (print only plot JSON to stdout), or a path ending in `.html` (write a self-contained HTML page) |
+| `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 
 When both `--set` and `--input` are provided, `--set` takes precedence.
 

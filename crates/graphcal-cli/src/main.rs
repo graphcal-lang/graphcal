@@ -530,20 +530,21 @@ fn handle_eval(
     // Rooted sandbox: derive the project root from the loader's rules and
     // confine reads to it. `root` (the user's explicit --root) takes
     // precedence; otherwise walk up from `file`'s parent looking for
-    // `graphcal.toml`, falling back to an unrooted FS for loose files.
-    let fs = build_rooted_filesystem(file, root);
-    let outcome = load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
-        let prepared = prepare_from_project_with_host_fns(&project, &host_fns)?;
-        let mut bindings = prepared.binding_builder();
-        for (name, expression) in &overrides.values {
-            match overrides.input_sources.get(name) {
-                Some(InputOverrideSource { source, span }) => {
-                    bindings.bind_external_expression(name, expression, source, *span)?;
+    // `graphcal.toml`, falling back to the loose file's parent directory.
+    let outcome = build_rooted_filesystem(file, root).and_then(|fs| {
+        load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
+            let prepared = prepare_from_project_with_host_fns(&project, &host_fns)?;
+            let mut bindings = prepared.binding_builder();
+            for (name, expression) in &overrides.values {
+                match overrides.input_sources.get(name) {
+                    Some(InputOverrideSource { source, span }) => {
+                        bindings.bind_external_expression(name, expression, source, *span)?;
+                    }
+                    None => bindings.bind_expression(name, expression)?,
                 }
-                None => bindings.bind_expression(name, expression)?,
             }
-        }
-        prepared.evaluate(&bindings.finish()?)
+            prepared.evaluate(&bindings.finish()?)
+        })
     });
     match outcome {
         Ok(result) => {
@@ -701,9 +702,10 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 
     let mut error_count = 0;
     for file in &targets {
-        let fs = build_rooted_filesystem(file, project_root);
-        let outcome = load_project_with_plugins(file, project_root, &fs)
-            .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns));
+        let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
+            load_project_with_plugins(file, project_root, &fs)
+                .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns))
+        });
         match outcome {
             Ok(_) => {
                 println!("ok: {}", file.display());
@@ -729,9 +731,10 @@ fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
     eprintln!(
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
     );
-    let fs = build_rooted_filesystem(file, project_root);
-    let outcome = load_project_with_plugins(file, project_root, &fs)
-        .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns));
+    let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
+        load_project_with_plugins(file, project_root, &fs)
+            .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns))
+    });
     match outcome {
         Ok(checked) => {
             let ir = graphcal_eval::graph_ir::project_tir(checked.tir());
