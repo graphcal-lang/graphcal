@@ -723,7 +723,10 @@ version, every fixed table is a closed schema: unknown root, package, source,
 tree-hash, and plugin fields are rejected rather than ignored and then dropped
 by reserialization. Source-tree and plugin SHA-256 values must be exactly 64
 lowercase hexadecimal digits. Entries for the same canonical Git URL and commit
-must agree on the source-tree digest.
+must agree on the source-tree digest. Cycle validation uses an explicit typed
+work stack, so a deeply nested acyclic dependency graph cannot exhaust the Rust
+or WebAssembly call stack; cycle diagnostics retain the package-instance path
+that closes the cycle.
 
 `graphcal check`, `graphcal eval`, `graphcal graph`, and the LSP read only the
 lockfile and locally materialized cache entries. They do not fetch dependencies
@@ -761,8 +764,10 @@ snapshot.
 Project ingestion is bounded before allocation. CLI and LSP loads accept at most
 16 MiB per `.gcl` source or source-tree file, 1 MiB per manifest, 4 MiB per
 lockfile, and 16 MiB per WASM plugin, with a shared ceiling of 10,000 loaded
-artifacts/source-tree entries and 256 MiB. Exceeding a limit is a loader error;
-evaluator work budgets do not replace these earlier I/O bounds.
+artifacts/source-tree entries and 256 MiB. Lock parsing additionally limits the
+number of package entries to the configured file-count ceiling before graph
+validation. Exceeding a limit is a loader error; evaluator work budgets do not
+replace these earlier I/O bounds.
 
 ### Dependency Visibility
 

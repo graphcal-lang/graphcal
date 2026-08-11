@@ -94,7 +94,9 @@ remote HTTPS or SSH URLs. Local paths, `file://`, plain HTTP, unsupported
 schemes, and embedded credentials are rejected before fetching. The current
 lockfile schema rejects unknown fields and requires canonical lowercase SHA-256
 pins; hand-edited lockfiles with custom fields or non-canonical hashes must be
-regenerated with `graphcal deps lock`. See the
+regenerated with `graphcal deps lock`. Lock dependency cycles are checked with
+an explicit work stack rather than recursive calls, and bounded loaders cap the
+number of package entries before validating the graph. See the
 [package dependency guide](https://graphcal.org/docs/language/multi-file/#package-dependencies)
 for supported forms and migration guidance.
 
