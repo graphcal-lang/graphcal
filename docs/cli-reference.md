@@ -621,6 +621,18 @@ graphcal format rocket.gcl hohmann.gcl
 graphcal format --check
 ```
 
+Directory traversal errors are hard failures: visible files are still processed
+for a complete diagnostic batch, but a partial tree never produces a successful
+certification result.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Formatting completed, or every inspected file was already formatted under `--check` |
+| `1` | A file could not be read/formatted, or `--check` found changes |
+| `2` | One or more requested directories could not be traversed completely |
+
 ---
 
 ## `graphcal check`
@@ -654,8 +666,9 @@ graphcal check my_project/
 
 | Code | Meaning |
 |------|---------|
-| `0` | No errors found |
-| `1` | Errors detected |
+| `0` | No errors found and every requested directory was inspected completely |
+| `1` | Source errors detected |
+| `2` | One or more requested directories could not be traversed completely |
 
 ---
 

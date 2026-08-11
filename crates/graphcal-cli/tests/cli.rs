@@ -3183,6 +3183,79 @@ fn format_check_recursive_directory() {
     );
 }
 
+#[test]
+fn check_deduplicates_overlapping_file_and_directory_targets() {
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    let file = write_temp_file(&tree, "model.gcl", "param value: Dimensionless = 1.0;\n");
+
+    let output = graphcal_bin()
+        .args(["check", file.to_str().unwrap(), tree.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.matches("ok:").count(), 1, "{stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn certification_commands_fail_when_directory_discovery_is_incomplete() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    struct RestorePermissions(PathBuf);
+
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("tree");
+    let hidden = tree.join("hidden");
+    std::fs::create_dir_all(&hidden).unwrap();
+    std::fs::write(tree.join("ok.gcl"), "param x: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(hidden.join("bad.gcl"), "not valid Graphcal").unwrap();
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let _restore = RestorePermissions(hidden.clone());
+
+    // A privileged test runner may still traverse mode-000 directories. The
+    // behavior under review is not reproducible in that environment.
+    if std::fs::read_dir(&hidden).is_ok() {
+        return;
+    }
+
+    for arguments in [
+        vec!["check", tree.to_str().unwrap()],
+        vec!["format", tree.to_str().unwrap()],
+        vec!["format", "--check", tree.to_str().unwrap()],
+    ] {
+        let output = graphcal_bin()
+            .args(arguments)
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("could not traverse"), "{stderr}");
+        assert!(
+            stderr.contains("source discovery was incomplete"),
+            "{stderr}"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn format_directory_skips_symlinked_gcl_files() {
@@ -4936,7 +5009,8 @@ fn well_formed_fixtures_are_formatted() {
     let root = fixtures_root();
     let mut files = Vec::new();
     for category in ["valid", "valid_library", "runtime_error"] {
-        let (mut found, _warnings) = collect_gcl_files(&root.join(category));
+        let (mut found, failures) = collect_gcl_files(&root.join(category)).into_parts();
+        assert!(failures.is_none(), "fixture discovery must be complete");
         files.append(&mut found);
     }
     assert!(

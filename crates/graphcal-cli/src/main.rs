@@ -26,6 +26,7 @@ mod plot;
 mod plugin;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -37,7 +38,9 @@ use graphcal_eval::eval::{
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
 
-use graphcal::format::{FormatStatus, collect_gcl_files, format_status};
+use graphcal::format::{
+    FileDiscovery, FormatStatus, TraversalFailures, collect_gcl_files, format_status,
+};
 
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{
@@ -649,39 +652,49 @@ fn handle_eval(
     }
 }
 
-/// Resolve CLI path arguments to a list of `.gcl` files.
+/// Resolve CLI path arguments without erasing incomplete directory traversal.
 ///
 /// If `paths` is empty, collects all `.gcl` files from the current directory.
-/// Otherwise, expands directories and passes through individual files.
-fn resolve_target_files(paths: &[PathBuf]) -> Vec<PathBuf> {
-    if paths.is_empty() {
-        collect_with_warnings(&PathBuf::from("."))
+/// Otherwise, expands directories and passes through individual files. Existing
+/// files are deduplicated by canonical identity so overlapping arguments cannot
+/// process one source repeatedly.
+fn resolve_target_files(paths: &[PathBuf]) -> FileDiscovery {
+    let discovery = if paths.is_empty() {
+        collect_gcl_files(Path::new("."))
     } else {
-        let mut files = Vec::new();
-        for path in paths {
-            if path.is_dir() {
-                files.extend(collect_with_warnings(path));
-            } else {
-                files.push(path.clone());
-            }
-        }
-        files
-    }
+        paths
+            .iter()
+            .map(|path| {
+                if path.is_dir() {
+                    collect_gcl_files(path)
+                } else {
+                    FileDiscovery::complete(vec![path.clone()])
+                }
+            })
+            .fold(FileDiscovery::complete(Vec::new()), FileDiscovery::merge)
+    };
+    discovery.map_files(deduplicate_target_files)
 }
 
-/// Thin shell over `format::collect_gcl_files`: surfaces traversal warnings on
-/// stderr (the library returns them as data) so users know when `format` only
-/// saw part of the tree, then yields just the file list.
-fn collect_with_warnings(dir: &Path) -> Vec<PathBuf> {
-    let (files, warnings) = collect_gcl_files(dir);
-    for err in warnings {
-        eprintln!(
-            "warning: could not traverse {}: {err}",
-            err.path()
-                .map_or_else(|| dir.display().to_string(), |p| p.display().to_string())
-        );
-    }
+fn deduplicate_target_files(files: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
     files
+        .into_iter()
+        .filter(|path| {
+            let identity = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            seen.insert(identity)
+        })
+        .collect()
+}
+
+fn report_traversal_failures(failures: &TraversalFailures) {
+    failures.iter().for_each(|failure| {
+        eprintln!(
+            "error: could not traverse {}: {}",
+            failure.path().display(),
+            failure.source()
+        );
+    });
 }
 
 /// Load a project and build the host function registry backing its extern
@@ -703,9 +716,12 @@ fn load_project_with_plugins<F: graphcal_io::FileSystemReader>(
 }
 
 fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
-    let targets = resolve_target_files(paths);
+    let (targets, traversal_failures) = resolve_target_files(paths).into_parts();
+    if let Some(failures) = &traversal_failures {
+        report_traversal_failures(failures);
+    }
 
-    if targets.is_empty() {
+    if targets.is_empty() && traversal_failures.is_none() {
         eprintln!("No .gcl files found");
         process::exit(1);
     }
@@ -727,6 +743,13 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
         }
     }
 
+    if let Some(failures) = traversal_failures {
+        eprintln!(
+            "source discovery was incomplete: {} traversal error(s)",
+            failures.len()
+        );
+        process::exit(2);
+    }
     if error_count > 0 {
         eprintln!("{error_count} file(s) had errors");
         process::exit(1);
@@ -763,9 +786,12 @@ fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
 }
 
 fn run_format(paths: &[PathBuf], check: bool) {
-    let targets = resolve_target_files(paths);
+    let (targets, traversal_failures) = resolve_target_files(paths).into_parts();
+    if let Some(failures) = &traversal_failures {
+        report_traversal_failures(failures);
+    }
 
-    if targets.is_empty() {
+    if targets.is_empty() && traversal_failures.is_none() {
         eprintln!("No .gcl files found");
         process::exit(1);
     }
@@ -809,12 +835,19 @@ fn run_format(paths: &[PathBuf], check: bool) {
         }
     }
 
-    if check && unformatted_count > 0 {
-        eprintln!("{unformatted_count} file(s) would be reformatted");
-        process::exit(1);
+    if let Some(failures) = traversal_failures {
+        eprintln!(
+            "source discovery was incomplete: {} traversal error(s)",
+            failures.len()
+        );
+        process::exit(2);
     }
     if error_count > 0 {
         eprintln!("{error_count} file(s) could not be read or formatted");
+        process::exit(1);
+    }
+    if check && unformatted_count > 0 {
+        eprintln!("{unformatted_count} file(s) would be reformatted");
         process::exit(1);
     }
 }
