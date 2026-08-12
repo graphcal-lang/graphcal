@@ -3140,6 +3140,57 @@ mod tests {
     }
 
     #[test]
+    fn inlay_hints_keep_reordered_dynamic_dag_presentations() {
+        let text = "index Rate = { Two, Three };\n\
+                    index Order = { First, Second };\n\
+                    dag units {\n\
+                        param rate: Dimensionless;\n\
+                        unit DynamicM: Length = (@rate) m;\n\
+                        pub node distance: Length = 1.0 DynamicM;\n\
+                    }\n\
+                    node rates: Dimensionless[Rate] = {\n\
+                        Rate.Two: 2.0,\n\
+                        Rate.Three: 3.0,\n\
+                    };\n\
+                    node values: Length[Rate] = for rate: Rate {\n\
+                        @units(rate: @rates[rate]).distance\n\
+                    };\n\
+                    node reversed: Length[Order] = {\n\
+                        Order.First: @values[Rate.Three],\n\
+                        Order.Second: @values[Rate.Two],\n\
+                    };\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+
+        let hints = crate::inlay_hints::inlay_hints(
+            &analysis,
+            Range::new(
+                tower_lsp::lsp_types::Position::new(0, 0),
+                tower_lsp::lsp_types::Position::new(u32::MAX, u32::MAX),
+            ),
+        )
+        .expect("expected inlay hints for reordered DAG output");
+        let labels = hints
+            .into_iter()
+            .filter_map(|hint| match hint.label {
+                tower_lsp::lsp_types::InlayHintLabel::String(label) => Some(label),
+                tower_lsp::lsp_types::InlayHintLabel::LabelParts(_) => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels
+                .iter()
+                .any(|label| label == " = { First: 1 [DynamicM], Second: 1 [DynamicM] }"),
+            "expected exact invocation-aware presentation hint: {labels:?}"
+        );
+    }
+
+    #[test]
     fn inlay_hints_use_declared_scale_datetime_extractors() {
         let text = "node tt: Datetime<TT> = epoch<TT>(\"2024-01-01T00:00:30\");\n\
                     node utc: Datetime = to_utc(@tt);\n\
