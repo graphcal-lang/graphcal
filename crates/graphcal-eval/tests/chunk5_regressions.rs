@@ -541,17 +541,29 @@ node reversed: Length[Order] = {
     Order.First: @values[Rate.Three],
     Order.Second: @values[Rate.Two],
 };
+node authored_reverse: Length[Order] = {
+    Order.Second: @values[Rate.Two],
+    Order.First: @values[Rate.Three],
+};
+node selected: Length[Order] = for order: Order {
+    match order {
+        Order.First => @values[Rate.Three],
+        Order.Second => @values[Rate.Two],
+    }
+};
 plot reordered = {
     mark: point,
-    encode: { x: @reversed },
+    encode: { x: @selected },
 };
 ",
     )
     .unwrap();
 
-    let displayed =
-        dynamic_call_display_values(successful_node(&result, "reversed").unwrap()).unwrap();
-    assert_eq!(displayed, [1.0, 1.0]);
+    for node in ["reversed", "authored_reverse", "selected"] {
+        let displayed =
+            dynamic_call_display_values(successful_node(&result, node).unwrap()).unwrap();
+        assert_eq!(displayed, [1.0, 1.0], "node `{node}`");
+    }
 
     let plot = result.plots.first().expect("reordered plot must render");
     let (_, values) = plot.encodings.first().expect("plot must contain x data");

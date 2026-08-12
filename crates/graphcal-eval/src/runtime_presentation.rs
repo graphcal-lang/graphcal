@@ -4,35 +4,15 @@
 //! the evaluation-scoped invocation identity that distinguishes concrete calls
 //! and carries that identity through value-preserving projections.
 
-use std::collections::HashMap;
-use std::fmt;
-
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::type_name::FieldName;
 use indexmap::IndexMap;
+use std::collections::HashMap;
 use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
-
-/// Opaque identity of one presentation-relevant inline DAG invocation.
-///
-/// IDs are allocated by one [`crate::execution_facts::EvaluatedPresentationCalls`]
-/// store and are meaningful only for that evaluation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PresentationInvocationId(u64);
-
-impl PresentationInvocationId {
-    pub(crate) const fn new(raw: u64) -> Self {
-        Self(raw)
-    }
-}
-
-impl fmt::Display for PresentationInvocationId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
+use crate::execution_facts::PresentationInvocationId;
 
 /// Runtime instantiation of the invocation-bearing parts of checked
 /// presentation provenance.

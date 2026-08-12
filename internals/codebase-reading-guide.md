@@ -533,8 +533,8 @@ elaboration out of runtime modules even though both currently share this crate.
 | `eval/project/output.rs`          | Presentation-only output projection                            |
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
 | `decl_key.rs`                     | Runtime declaration keys backed by `ResolvedName<Decl>`         |
-| `runtime_presentation.rs`         | Evaluation-scoped presentation invocation identities and sidecars |
 | `execution_facts.rs`              | Per-DAG checked constants, constraints, schedules, and source   |
+| `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
 | `exec_plan.rs`          | Const evaluation, runtime topological order, domain prep      |
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
 | `eval/runtime.rs`       | Evaluation loop                                               |
@@ -1356,18 +1356,18 @@ Note: the proc-macro pipeline is parse/lower/manifest/codegen, but `codegen.rs` 
 Note: `eval_expr/work_budget.rs`, `eval_expr/linear_algebra_lu.rs`, `eval_expr/linear_algebra.rs`, `eval_expr/builtin_call.rs`, `eval_expr/arithmetic.rs`, `eval_expr/aggregations.rs`, `eval_expr/unit_scale.rs`, `eval_expr/hir_eval.rs`, and `eval_expr/mod.rs` form a mutually dependent group.
 
 1. `crates/graphcal-eval/src/decl_key.rs`
-2. `crates/graphcal-eval/src/runtime_presentation.rs`
-3. `crates/graphcal-eval/src/eval_expr/numeric.rs`
-4. `crates/graphcal-eval/src/eval_expr/work_budget.rs`
-5. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
-6. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
-7. `crates/graphcal-eval/src/eval_expr/conversions.rs`
-8. `crates/graphcal-eval/src/eval_expr/datetime.rs`
-9. `crates/graphcal-eval/src/lib.rs`
-10. `crates/graphcal-eval/src/host_fns.rs`
-11. `crates/graphcal-eval/src/host_abi.rs`
-12. `crates/graphcal-eval/src/domain_check.rs`
-13. `crates/graphcal-eval/src/execution_facts.rs`
+2. `crates/graphcal-eval/src/eval_expr/numeric.rs`
+3. `crates/graphcal-eval/src/eval_expr/work_budget.rs`
+4. `crates/graphcal-eval/src/eval_expr/linear_algebra_lu.rs`
+5. `crates/graphcal-eval/src/eval_expr/linear_algebra.rs`
+6. `crates/graphcal-eval/src/eval_expr/conversions.rs`
+7. `crates/graphcal-eval/src/eval_expr/datetime.rs`
+8. `crates/graphcal-eval/src/lib.rs`
+9. `crates/graphcal-eval/src/host_fns.rs`
+10. `crates/graphcal-eval/src/host_abi.rs`
+11. `crates/graphcal-eval/src/domain_check.rs`
+12. `crates/graphcal-eval/src/execution_facts.rs`
+13. `crates/graphcal-eval/src/runtime_presentation.rs`
 14. `crates/graphcal-eval/src/eval/bindings.rs`
 15. `crates/graphcal-eval/src/eval_expr/complex.rs`
 16. `crates/graphcal-eval/src/eval_expr/builtin_call.rs`

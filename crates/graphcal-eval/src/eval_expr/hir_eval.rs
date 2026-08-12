@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::builtin::{AggregationFn, BuiltinFnName};
@@ -1711,7 +1712,7 @@ fn eval_hir_constructor_call(
             callee.span,
         )?;
     let mut field_map = IndexMap::new();
-    let mut field_presentations = Vec::new();
+    let mut field_presentations = HashMap::new();
     for field_init in fields {
         let evaluated = eval_hir_expr_evaluated(
             &field_init.value,
@@ -1740,7 +1741,9 @@ fn eval_hir_constructor_call(
             ));
         }
         field_map.insert(field_init.name.value.clone(), val);
-        field_presentations.push((field_init.name.value.clone(), presentation));
+        if !presentation.is_none() {
+            field_presentations.insert(field_init.name.value.clone(), presentation);
+        }
     }
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Struct {
@@ -1881,7 +1884,7 @@ fn eval_hir_map_literal(
             evaluated.insert(variant, value);
         }
         let mut result = IndexMap::new();
-        let mut presentations = Vec::new();
+        let mut presentations = IndexMap::new();
         for variant in idx_def.entry_keys() {
             let evaluated = evaluated.swap_remove(&variant).ok_or_else(|| {
                 ctx.internal_error(
@@ -1893,7 +1896,9 @@ fn eval_hir_map_literal(
             })?;
             let (value, presentation) = evaluated.into_parts();
             result.insert(variant.clone(), value);
-            presentations.push((variant, presentation));
+            if !presentation.is_none() {
+                presentations.insert(variant, presentation);
+            }
         }
         return Ok(EvaluatedRuntimeValue::new(
             RuntimeValue::Indexed {
@@ -1912,7 +1917,7 @@ fn eval_hir_map_literal(
     })?;
     let variants = idx_def.entry_keys();
     let mut outer = IndexMap::new();
-    let mut presentations = Vec::new();
+    let mut presentations = IndexMap::new();
     for variant in &variants {
         let mut sub_entries = Vec::new();
         for entry in entries {
@@ -1952,7 +1957,9 @@ fn eval_hir_map_literal(
         )?;
         let (inner, presentation) = evaluated.into_parts();
         outer.insert(variant.clone(), inner);
-        presentations.push((variant.clone(), presentation));
+        if !presentation.is_none() {
+            presentations.insert(variant.clone(), presentation);
+        }
     }
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Indexed {
@@ -2074,7 +2081,7 @@ fn eval_hir_for_comp_bindings(
     let remaining = &bindings[1..];
     let variants = idx_def.entry_keys();
     let mut entries = IndexMap::new();
-    let mut presentations = Vec::new();
+    let mut presentations = IndexMap::new();
     let mut inner_locals = local_values.child(Vec::new());
     for (position, variant) in variants.iter().enumerate() {
         let binding_value = match (&idx_def.kind, variant) {
@@ -2127,7 +2134,9 @@ fn eval_hir_for_comp_bindings(
         };
         let (value, presentation) = evaluated.into_parts();
         entries.insert(variant.clone(), value);
-        presentations.push((variant.clone(), presentation));
+        if !presentation.is_none() {
+            presentations.insert(variant.clone(), presentation);
+        }
     }
     Ok(EvaluatedRuntimeValue::new(
         RuntimeValue::Indexed {
@@ -2338,14 +2347,16 @@ fn eval_hir_scan(
         eval_hir_expr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let (mut acc_val, init_presentation) = evaluated_init.into_parts();
     let mut result_entries = IndexMap::new();
-    let mut presentations = Vec::new();
+    let mut presentations = IndexMap::new();
     let mut scan_locals = local_values.child(Vec::new());
     for (variant, item) in &source_entries {
         scan_locals.bind(acc.id, acc_val);
         scan_locals.bind(val.id, item.clone());
         let body_val = eval_hir_expr(body, values, &scan_locals, ctx)?;
         result_entries.insert(variant.clone(), body_val.clone());
-        presentations.push((variant.clone(), init_presentation.clone()));
+        if !init_presentation.is_none() {
+            presentations.insert(variant.clone(), init_presentation.clone());
+        }
         acc_val = body_val;
     }
     Ok(EvaluatedRuntimeValue::new(
@@ -2388,7 +2399,10 @@ fn eval_hir_unfold(
     let (init_value, init_presentation) = evaluated_init.into_parts();
     let mut previous_state = init_value.clone();
     let mut result_entries = IndexMap::new();
-    let mut presentations = vec![(variants[0].clone(), init_presentation.clone())];
+    let mut presentations = IndexMap::new();
+    if !init_presentation.is_none() {
+        presentations.insert(variants[0].clone(), init_presentation.clone());
+    }
     result_entries.insert(variants[0].clone(), init_value);
 
     let mut unfold_locals = local_values.child(Vec::new());
@@ -2415,7 +2429,9 @@ fn eval_hir_unfold(
         );
         let body_value = eval_hir_expr(body, values, &unfold_locals, ctx)?;
         result_entries.insert(variant.clone(), body_value.clone());
-        presentations.push((variant.clone(), init_presentation.clone()));
+        if !init_presentation.is_none() {
+            presentations.insert(variant.clone(), init_presentation.clone());
+        }
         previous_state = body_value;
     }
     Ok(EvaluatedRuntimeValue::new(

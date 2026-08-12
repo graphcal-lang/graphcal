@@ -1,6 +1,7 @@
 //! Immutable checked facts required to execute canonical DAG bodies.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use miette::NamedSource;
@@ -13,9 +14,21 @@ use thiserror::Error;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::ResolvedDomainConstraint;
-use crate::runtime_presentation::PresentationInvocationId;
 
 pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
+
+/// Opaque identity of one presentation-relevant inline DAG invocation.
+///
+/// IDs are allocated by one [`EvaluatedPresentationCalls`] store and are
+/// meaningful only for that evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PresentationInvocationId(u64);
+
+impl fmt::Display for PresentationInvocationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
 
 /// One retained inline-call environment and its checked static call site.
 #[derive(Debug)]
@@ -68,7 +81,7 @@ impl EvaluatedPresentationCalls {
             .next_invocation
             .checked_add(1)
             .ok_or(PresentationCallValuesError::IdentityExhausted)?;
-        let invocation = PresentationInvocationId::new(state.next_invocation);
+        let invocation = PresentationInvocationId(state.next_invocation);
         state.next_invocation = next_invocation;
         let previous = state.by_invocation.insert(
             invocation,
