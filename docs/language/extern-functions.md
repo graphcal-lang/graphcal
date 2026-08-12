@@ -215,7 +215,13 @@ at load time before any plugin code runs:
   exponents — `Velocity` is `Length^1 * Time^-1`. Quantity kinds use the
   `"quantity"` JSON tag. ABI v2's former `"scalar"` tag is not accepted;
   rebuild plugins with the current SDK. User-defined base dimensions cannot
-  cross the binary boundary.
+  cross the binary boundary. The JSON payload is limited to 256 KiB and 256
+  functions. Names are at most 256 UTF-8 bytes; each function may declare at
+  most 32 dimension variables, 32 index variables, and 32 parameters; arrays
+  have at most 31 axes; struct results have at most 256 flattened fields; and
+  each monomial has at most 64 combined variable and fixed-dimension factors.
+  These limits are checked before compilation, and the payload byte limit is
+  checked before JSON decoding.
 - **Value ABI.** Each function's wasm export type follows its signature:
   quantity/`Bool`/`Int` parameters use one `f64` ABI slot each (raw SI base
   units for quantities; `Int` as exactly-representable integers, `Bool` as

@@ -9,10 +9,13 @@
 //! boundary and the compiler's constructor enforces the semantic invariants
 //! (variable binding discipline, known dimension names).
 //!
-//! This module validates only *wire shape*: JSON well-formedness, a known
-//! [`ABI_VERSION`](crate::ABI_VERSION), non-empty names, positive
-//! denominators, non-zero powers, and no duplicate keys. Everything the
-//! compiler can check better is left to the compiler.
+//! This module validates only *wire shape*: bounded payload/list/name sizes,
+//! JSON well-formedness, a known [`ABI_VERSION`](crate::ABI_VERSION), non-empty
+//! names, positive denominators, non-zero powers, and no duplicate keys.
+//! Everything the compiler can check better is left to the compiler.
+
+use std::collections::HashSet;
+use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -198,12 +201,35 @@ pub struct ManifestRational {
     pub den: i32,
 }
 
-/// Version-only probe decoded before the full manifest, so that a manifest
-/// written for a different (possibly shape-incompatible) ABI version reports
-/// [`ManifestDecodeError::UnsupportedAbiVersion`] instead of a shape error.
+/// Version-only fallback probe used when full decoding fails, so that a
+/// manifest written for a different (possibly shape-incompatible) ABI version
+/// reports [`ManifestDecodeError::UnsupportedAbiVersion`] instead of a shape
+/// error. Valid current-shape manifests do not need this second pass.
 #[derive(Deserialize)]
 struct VersionProbe {
     abi_version: u32,
+}
+
+/// JSON output sink that refuses to retain more than the manifest wire limit.
+#[derive(Default)]
+struct ManifestJsonWriter {
+    bytes: Vec<u8>,
+    exceeded_limit: bool,
+}
+
+impl Write for ManifestJsonWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > crate::MAX_MANIFEST_BYTES.saturating_sub(self.bytes.len()) {
+            self.exceeded_limit = true;
+            return Err(io::Error::other("plugin manifest exceeds its byte limit"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 impl PluginManifest {
@@ -212,11 +238,21 @@ impl PluginManifest {
     ///
     /// # Errors
     ///
-    /// Returns [`ManifestEncodeError`] if JSON serialization fails.
+    /// Returns [`ManifestEncodeError`] if JSON serialization fails or the
+    /// encoded payload would exceed [`MAX_MANIFEST_BYTES`](crate::MAX_MANIFEST_BYTES).
     pub fn to_json(&self) -> Result<String, ManifestEncodeError> {
-        serde_json::to_string(self).map_err(|err| ManifestEncodeError::Json {
-            message: err.to_string(),
-        })
+        let mut writer = ManifestJsonWriter::default();
+        match serde_json::to_writer(&mut writer, self) {
+            Ok(()) => String::from_utf8(writer.bytes).map_err(|err| ManifestEncodeError::Json {
+                message: err.to_string(),
+            }),
+            Err(_) if writer.exceeded_limit => Err(ManifestEncodeError::PayloadTooLarge {
+                max: crate::MAX_MANIFEST_BYTES,
+            }),
+            Err(err) => Err(ManifestEncodeError::Json {
+                message: err.to_string(),
+            }),
+        }
     }
 
     /// Decode and shape-validate a manifest from its JSON payload.
@@ -227,20 +263,38 @@ impl PluginManifest {
     /// the manifest shape, was written for a different ABI version, or
     /// violates a wire-shape rule.
     pub fn from_json(payload: &[u8]) -> Result<Self, ManifestDecodeError> {
-        let probe: VersionProbe =
-            serde_json::from_slice(payload).map_err(|err| ManifestDecodeError::Json {
-                message: err.to_string(),
-            })?;
-        if probe.abi_version != crate::ABI_VERSION {
+        if payload.len() > crate::MAX_MANIFEST_BYTES {
+            return Err(ManifestDecodeError::PayloadTooLarge {
+                bytes: payload.len(),
+                max: crate::MAX_MANIFEST_BYTES,
+            });
+        }
+        let manifest = match serde_json::from_slice::<Self>(payload) {
+            Ok(manifest) => manifest,
+            Err(manifest_error) => {
+                // Only malformed current-shape payloads take this bounded
+                // fallback pass. It preserves the more useful ABI-version
+                // diagnostic when a future version has an unknown shape,
+                // while valid current manifests deserialize exactly once.
+                if let Ok(probe) = serde_json::from_slice::<VersionProbe>(payload)
+                    && probe.abi_version != crate::ABI_VERSION
+                {
+                    return Err(ManifestDecodeError::UnsupportedAbiVersion {
+                        found: probe.abi_version,
+                        supported: crate::ABI_VERSION,
+                    });
+                }
+                return Err(ManifestDecodeError::Json {
+                    message: manifest_error.to_string(),
+                });
+            }
+        };
+        if manifest.abi_version != crate::ABI_VERSION {
             return Err(ManifestDecodeError::UnsupportedAbiVersion {
-                found: probe.abi_version,
+                found: manifest.abi_version,
                 supported: crate::ABI_VERSION,
             });
         }
-        let manifest: Self =
-            serde_json::from_slice(payload).map_err(|err| ManifestDecodeError::Json {
-                message: err.to_string(),
-            })?;
         manifest.validate()?;
         Ok(manifest)
     }
@@ -274,23 +328,23 @@ impl PluginManifest {
 
     /// Enforce the wire-shape rules documented on [`ManifestValidationError`].
     fn validate(&self) -> Result<(), ManifestValidationError> {
+        validate_list_count(
+            self.functions.len(),
+            crate::MAX_MANIFEST_FUNCTIONS,
+            ManifestListRole::Functions,
+            None,
+        )?;
         if self.functions.is_empty() {
             return Err(ManifestValidationError::NoFunctions);
         }
-        let mut function_names: Vec<&str> = Vec::new();
+        let mut function_names = HashSet::with_capacity(self.functions.len());
         for function in &self.functions {
-            if function.name.is_empty() {
-                return Err(ManifestValidationError::EmptyName {
-                    function: None,
-                    role: NameRole::Function,
-                });
-            }
-            if function_names.contains(&function.name.as_str()) {
+            validate_name(&function.name, NameRole::Function, None)?;
+            if !function_names.insert(function.name.as_str()) {
                 return Err(ManifestValidationError::DuplicateFunction {
                     name: function.name.clone(),
                 });
             }
-            function_names.push(&function.name);
             validate_function(function)?;
         }
         Ok(())
@@ -298,55 +352,55 @@ impl PluginManifest {
 }
 
 fn validate_function(function: &ManifestFunction) -> Result<(), ManifestValidationError> {
-    let mut seen_vars: Vec<&str> = Vec::new();
+    validate_list_count(
+        function.dim_vars.len(),
+        crate::MAX_MANIFEST_VARIABLES,
+        ManifestListRole::DimensionVariables,
+        Some(&function.name),
+    )?;
+    let mut seen_vars = HashSet::with_capacity(function.dim_vars.len());
     for var in &function.dim_vars {
-        if var.is_empty() {
-            return Err(ManifestValidationError::EmptyName {
-                function: Some(function.name.clone()),
-                role: NameRole::DimVar,
-            });
-        }
-        if seen_vars.contains(&var.as_str()) {
+        validate_name(var, NameRole::DimVar, Some(&function.name))?;
+        if !seen_vars.insert(var.as_str()) {
             return Err(ManifestValidationError::DuplicateDimVar {
                 function: function.name.clone(),
                 var: var.clone(),
             });
         }
-        seen_vars.push(var);
     }
 
-    let mut seen_index_vars: Vec<&str> = Vec::new();
+    validate_list_count(
+        function.index_vars.len(),
+        crate::MAX_MANIFEST_VARIABLES,
+        ManifestListRole::IndexVariables,
+        Some(&function.name),
+    )?;
+    let mut seen_index_vars = HashSet::with_capacity(function.index_vars.len());
     for var in &function.index_vars {
-        if var.is_empty() {
-            return Err(ManifestValidationError::EmptyName {
-                function: Some(function.name.clone()),
-                role: NameRole::IndexVar,
-            });
-        }
-        if seen_index_vars.contains(&var.as_str()) {
+        validate_name(var, NameRole::IndexVar, Some(&function.name))?;
+        if !seen_index_vars.insert(var.as_str()) {
             return Err(ManifestValidationError::DuplicateIndexVar {
                 function: function.name.clone(),
                 var: var.clone(),
             });
         }
-        seen_index_vars.push(var);
     }
 
-    let mut seen_params: Vec<&str> = Vec::new();
+    validate_list_count(
+        function.params.len(),
+        crate::MAX_MANIFEST_PARAMETERS,
+        ManifestListRole::Parameters,
+        Some(&function.name),
+    )?;
+    let mut seen_params = HashSet::with_capacity(function.params.len());
     for param in &function.params {
-        if param.name.is_empty() {
-            return Err(ManifestValidationError::EmptyName {
-                function: Some(function.name.clone()),
-                role: NameRole::Param,
-            });
-        }
-        if seen_params.contains(&param.name.as_str()) {
+        validate_name(&param.name, NameRole::Param, Some(&function.name))?;
+        if !seen_params.insert(param.name.as_str()) {
             return Err(ManifestValidationError::DuplicateParam {
                 function: function.name.clone(),
                 param: param.name.clone(),
             });
         }
-        seen_params.push(&param.name);
         validate_kind(function, &param.kind)?;
     }
 
@@ -369,16 +423,19 @@ fn validate_kind(
     let monomial = match kind {
         ManifestValueKind::Quantity(monomial) => monomial,
         ManifestValueKind::Array { element, indexes } => {
+            validate_list_count(
+                indexes.len(),
+                crate::MAX_MANIFEST_ARRAY_AXES,
+                ManifestListRole::ArrayAxes,
+                Some(&function.name),
+            )?;
             if indexes.is_empty() {
                 return Err(ManifestValidationError::EmptyArrayAxes {
                     function: function.name.clone(),
                 });
             }
-            if indexes.iter().any(String::is_empty) {
-                return Err(ManifestValidationError::EmptyName {
-                    function: Some(function.name.clone()),
-                    role: NameRole::IndexVar,
-                });
+            for index in indexes {
+                validate_name(index, NameRole::IndexVar, Some(&function.name))?;
             }
             element
         }
@@ -393,26 +450,26 @@ fn validate_struct(
     function: &ManifestFunction,
     fields: &[ManifestField],
 ) -> Result<(), ManifestValidationError> {
+    validate_list_count(
+        fields.len(),
+        crate::MAX_MANIFEST_STRUCT_FIELDS,
+        ManifestListRole::StructFields,
+        Some(&function.name),
+    )?;
     if fields.is_empty() {
         return Err(ManifestValidationError::EmptyStruct {
             function: function.name.clone(),
         });
     }
-    let mut seen_fields: Vec<&str> = Vec::new();
+    let mut seen_fields = HashSet::with_capacity(fields.len());
     for field in fields {
-        if field.name.is_empty() {
-            return Err(ManifestValidationError::EmptyName {
-                function: Some(function.name.clone()),
-                role: NameRole::Field,
-            });
-        }
-        if seen_fields.contains(&field.name.as_str()) {
+        validate_name(&field.name, NameRole::Field, Some(&function.name))?;
+        if !seen_fields.insert(field.name.as_str()) {
             return Err(ManifestValidationError::DuplicateStructField {
                 function: function.name.clone(),
                 field: field.name.clone(),
             });
         }
-        seen_fields.push(&field.name);
         match &field.kind {
             ManifestFieldKind::Bool | ManifestFieldKind::Int => {}
             ManifestFieldKind::Quantity(monomial) => {
@@ -433,40 +490,75 @@ fn validate_monomial(
     function: &ManifestFunction,
     monomial: &ManifestMonomial,
 ) -> Result<(), ManifestValidationError> {
-    let mut seen_vars: Vec<&str> = Vec::new();
+    let factor_count = monomial.vars.len().saturating_add(monomial.fixed.len());
+    validate_list_count(
+        factor_count,
+        crate::MAX_MANIFEST_MONOMIAL_FACTORS,
+        ManifestListRole::MonomialFactors,
+        Some(&function.name),
+    )?;
+
+    let mut seen_vars = HashSet::with_capacity(monomial.vars.len());
     for factor in &monomial.vars {
-        if factor.var.is_empty() {
-            return Err(ManifestValidationError::EmptyName {
-                function: Some(function.name.clone()),
-                role: NameRole::MonomialVar,
-            });
-        }
-        if seen_vars.contains(&factor.var.as_str()) {
+        validate_name(&factor.var, NameRole::MonomialVar, Some(&function.name))?;
+        if !seen_vars.insert(factor.var.as_str()) {
             return Err(ManifestValidationError::DuplicateMonomialVar {
                 function: function.name.clone(),
                 var: factor.var.clone(),
             });
         }
-        seen_vars.push(&factor.var);
         validate_power(function, factor.pow)?;
     }
 
-    let mut seen_dims: Vec<&str> = Vec::new();
+    let mut seen_dims = HashSet::with_capacity(monomial.fixed.len());
     for factor in &monomial.fixed {
-        if factor.dim.is_empty() {
-            return Err(ManifestValidationError::EmptyName {
-                function: Some(function.name.clone()),
-                role: NameRole::FixedDim,
-            });
-        }
-        if seen_dims.contains(&factor.dim.as_str()) {
+        validate_name(&factor.dim, NameRole::FixedDim, Some(&function.name))?;
+        if !seen_dims.insert(factor.dim.as_str()) {
             return Err(ManifestValidationError::DuplicateFixedDim {
                 function: function.name.clone(),
                 dim: factor.dim.clone(),
             });
         }
-        seen_dims.push(&factor.dim);
         validate_power(function, factor.pow)?;
+    }
+    Ok(())
+}
+
+fn validate_list_count(
+    count: usize,
+    max: usize,
+    role: ManifestListRole,
+    function: Option<&str>,
+) -> Result<(), ManifestValidationError> {
+    if count > max {
+        return Err(ManifestValidationError::TooManyItems {
+            function: function.map(str::to_owned),
+            role,
+            count,
+            max,
+        });
+    }
+    Ok(())
+}
+
+fn validate_name(
+    name: &str,
+    role: NameRole,
+    function: Option<&str>,
+) -> Result<(), ManifestValidationError> {
+    if name.is_empty() {
+        return Err(ManifestValidationError::EmptyName {
+            function: function.map(str::to_owned),
+            role,
+        });
+    }
+    if name.len() > crate::MAX_MANIFEST_NAME_BYTES {
+        return Err(ManifestValidationError::NameTooLong {
+            function: function.map(str::to_owned),
+            role,
+            bytes: name.len(),
+            max: crate::MAX_MANIFEST_NAME_BYTES,
+        });
     }
     Ok(())
 }
@@ -523,6 +615,39 @@ impl std::fmt::Display for NameRole {
     }
 }
 
+/// Which bounded manifest list exceeded its protocol count limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestListRole {
+    /// The manifest's exported functions.
+    Functions,
+    /// A function's declared dimension variables.
+    DimensionVariables,
+    /// A function's declared index variables.
+    IndexVariables,
+    /// A function's named parameters.
+    Parameters,
+    /// One array kind's ordered axes.
+    ArrayAxes,
+    /// One struct result's flattened fields.
+    StructFields,
+    /// One dimension monomial's combined variable and fixed factors.
+    MonomialFactors,
+}
+
+impl std::fmt::Display for ManifestListRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Functions => "functions",
+            Self::DimensionVariables => "dimension variables",
+            Self::IndexVariables => "index variables",
+            Self::Parameters => "parameters",
+            Self::ArrayAxes => "array axes",
+            Self::StructFields => "struct fields",
+            Self::MonomialFactors => "monomial factors",
+        })
+    }
+}
+
 /// Error from [`PluginManifest::to_json`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ManifestEncodeError {
@@ -532,11 +657,25 @@ pub enum ManifestEncodeError {
         /// The serializer's error message.
         message: String,
     },
+    /// The encoded payload would exceed the protocol byte limit.
+    #[error("plugin manifest JSON exceeds the encoded payload limit of {max} bytes")]
+    PayloadTooLarge {
+        /// Maximum accepted encoded payload size.
+        max: usize,
+    },
 }
 
 /// Error from [`PluginManifest::from_json`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ManifestDecodeError {
+    /// The encoded payload exceeds the protocol byte limit.
+    #[error("plugin manifest payload is {bytes} bytes, exceeding the limit of {max} bytes")]
+    PayloadTooLarge {
+        /// Encoded payload size received from the caller.
+        bytes: usize,
+        /// Maximum accepted encoded payload size.
+        max: usize,
+    },
     /// The payload is not valid JSON for the manifest shape.
     #[error("plugin manifest is not valid manifest JSON: {message}")]
     Json {
@@ -570,6 +709,21 @@ pub enum ManifestValidationError {
         /// The repeated function name.
         name: String,
     },
+    /// A bounded list has more entries than the protocol permits.
+    #[error(
+        "plugin manifest contains {count} {role}{}, exceeding the limit of {max}",
+        function_context(function.as_deref())
+    )]
+    TooManyItems {
+        /// The declaring function, when the list is inside one.
+        function: Option<String>,
+        /// Which typed list exceeded its limit.
+        role: ManifestListRole,
+        /// Number of decoded entries.
+        count: usize,
+        /// Maximum accepted entry count.
+        max: usize,
+    },
     /// A name slot holds an empty string.
     #[error("plugin manifest contains an empty {role}{}", function_context(function.as_deref()))]
     EmptyName {
@@ -577,6 +731,21 @@ pub enum ManifestValidationError {
         function: Option<String>,
         /// Which name slot was empty.
         role: NameRole,
+    },
+    /// A name's UTF-8 encoding is longer than the protocol permits.
+    #[error(
+        "plugin manifest contains a {role} of {bytes} bytes{}, exceeding the limit of {max}",
+        function_context(function.as_deref())
+    )]
+    NameTooLong {
+        /// The declaring function, when the slot is inside one.
+        function: Option<String>,
+        /// Which name slot was oversized.
+        role: NameRole,
+        /// UTF-8 byte length of the decoded name.
+        bytes: usize,
+        /// Maximum accepted UTF-8 byte length.
+        max: usize,
     },
     /// A function declares the same dimension variable twice.
     #[error("function `{function}` declares dimension variable `{var}` more than once")]
@@ -721,6 +890,16 @@ mod tests {
             }],
             fixed: Vec::new(),
         })
+    }
+
+    fn scalar_function(name: impl Into<String>) -> ManifestFunction {
+        ManifestFunction {
+            name: name.into(),
+            dim_vars: Vec::new(),
+            index_vars: Vec::new(),
+            params: Vec::new(),
+            result: ManifestValueKind::Quantity(ManifestMonomial::default()),
+        }
     }
 
     fn lerp_manifest() -> PluginManifest {
@@ -870,6 +1049,79 @@ mod tests {
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Json { .. }
         ));
+    }
+
+    #[test]
+    fn encoded_payload_limit_is_checked_before_json_decoding() {
+        let mut payload = lerp_manifest().to_json().unwrap().into_bytes();
+        payload.resize(crate::MAX_MANIFEST_BYTES, b' ');
+        PluginManifest::from_json(&payload).unwrap();
+
+        payload.push(b' ');
+        assert_eq!(
+            PluginManifest::from_json(&payload).unwrap_err(),
+            ManifestDecodeError::PayloadTooLarge {
+                bytes: crate::MAX_MANIFEST_BYTES + 1,
+                max: crate::MAX_MANIFEST_BYTES,
+            }
+        );
+    }
+
+    #[test]
+    fn json_encoding_stops_at_the_payload_limit() {
+        let mut manifest = lerp_manifest();
+        manifest.functions[0].name = "x".repeat(crate::MAX_MANIFEST_BYTES);
+        assert_eq!(
+            manifest.to_json().unwrap_err(),
+            ManifestEncodeError::PayloadTooLarge {
+                max: crate::MAX_MANIFEST_BYTES,
+            }
+        );
+    }
+
+    #[test]
+    fn accepts_the_function_limit_with_unique_names_and_rejects_one_more() {
+        let mut manifest = PluginManifest {
+            abi_version: crate::ABI_VERSION,
+            functions: (0..crate::MAX_MANIFEST_FUNCTIONS)
+                .map(|index| scalar_function(format!("f{index}")))
+                .collect(),
+        };
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        manifest.functions.push(scalar_function("overflow"));
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyItems {
+                function: None,
+                role: ManifestListRole::Functions,
+                count: crate::MAX_MANIFEST_FUNCTIONS + 1,
+                max: crate::MAX_MANIFEST_FUNCTIONS,
+            })
+        );
+    }
+
+    #[test]
+    fn names_are_bounded_by_utf8_bytes() {
+        let mut manifest = lerp_manifest();
+        manifest.functions[0].params[0].name =
+            "é".repeat(crate::MAX_MANIFEST_NAME_BYTES / "é".len());
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        manifest.functions[0].params[0].name.push('x');
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::NameTooLong {
+                function: Some("lerp".to_string()),
+                role: NameRole::Param,
+                bytes: crate::MAX_MANIFEST_NAME_BYTES + 1,
+                max: crate::MAX_MANIFEST_NAME_BYTES,
+            })
+        );
     }
 
     #[test]
@@ -1091,6 +1343,54 @@ mod tests {
     }
 
     #[test]
+    fn variable_lists_accept_the_limit_and_reject_one_more() {
+        let mut manifest = PluginManifest {
+            abi_version: crate::ABI_VERSION,
+            functions: vec![scalar_function("bounded")],
+        };
+        manifest.functions[0].dim_vars = (0..crate::MAX_MANIFEST_VARIABLES)
+            .map(|index| format!("D{index}"))
+            .collect();
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        manifest.functions[0]
+            .dim_vars
+            .push("D_overflow".to_string());
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyItems {
+                function: Some("bounded".to_string()),
+                role: ManifestListRole::DimensionVariables,
+                count: crate::MAX_MANIFEST_VARIABLES + 1,
+                max: crate::MAX_MANIFEST_VARIABLES,
+            })
+        );
+
+        manifest.functions[0].dim_vars.clear();
+        manifest.functions[0].index_vars = (0..crate::MAX_MANIFEST_VARIABLES)
+            .map(|index| format!("I{index}"))
+            .collect();
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        manifest.functions[0]
+            .index_vars
+            .push("I_overflow".to_string());
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyItems {
+                function: Some("bounded".to_string()),
+                role: ManifestListRole::IndexVariables,
+                count: crate::MAX_MANIFEST_VARIABLES + 1,
+                max: crate::MAX_MANIFEST_VARIABLES,
+            })
+        );
+    }
+
+    #[test]
     fn arrays_without_axes_are_rejected() {
         let mut manifest = smooth_manifest();
         manifest.functions[0].result = ManifestValueKind::Array {
@@ -1124,6 +1424,126 @@ mod tests {
     }
 
     #[test]
+    fn array_axes_accept_the_limit_and_reject_one_more() {
+        let indexes: Vec<String> = (0..crate::MAX_MANIFEST_ARRAY_AXES)
+            .map(|index| format!("I{index}"))
+            .collect();
+        let mut manifest = PluginManifest {
+            abi_version: crate::ABI_VERSION,
+            functions: vec![ManifestFunction {
+                name: "array".to_string(),
+                dim_vars: Vec::new(),
+                index_vars: indexes.clone(),
+                params: vec![ManifestParam {
+                    name: "xs".to_string(),
+                    kind: ManifestValueKind::Array {
+                        element: ManifestMonomial::default(),
+                        indexes,
+                    },
+                }],
+                result: ManifestValueKind::Bool,
+            }],
+        };
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        let overflow = "I_overflow".to_string();
+        manifest.functions[0].index_vars.push(overflow.clone());
+        let ManifestValueKind::Array { indexes, .. } = &mut manifest.functions[0].params[0].kind
+        else {
+            panic!("test parameter must remain an array");
+        };
+        indexes.push(overflow);
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyItems {
+                function: Some("array".to_string()),
+                role: ManifestListRole::ArrayAxes,
+                count: crate::MAX_MANIFEST_ARRAY_AXES + 1,
+                max: crate::MAX_MANIFEST_ARRAY_AXES,
+            })
+        );
+    }
+
+    #[test]
+    fn struct_fields_accept_the_limit_and_reject_one_more() {
+        let fields = (0..crate::MAX_MANIFEST_STRUCT_FIELDS)
+            .map(|index| ManifestField {
+                name: format!("field{index}"),
+                kind: ManifestFieldKind::Bool,
+            })
+            .collect();
+        let mut manifest = PluginManifest {
+            abi_version: crate::ABI_VERSION,
+            functions: vec![ManifestFunction {
+                result: ManifestValueKind::Struct { fields },
+                ..scalar_function("record")
+            }],
+        };
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        let ManifestValueKind::Struct { fields } = &mut manifest.functions[0].result else {
+            panic!("test result must remain a struct");
+        };
+        fields.push(ManifestField {
+            name: "overflow".to_string(),
+            kind: ManifestFieldKind::Int,
+        });
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyItems {
+                function: Some("record".to_string()),
+                role: ManifestListRole::StructFields,
+                count: crate::MAX_MANIFEST_STRUCT_FIELDS + 1,
+                max: crate::MAX_MANIFEST_STRUCT_FIELDS,
+            })
+        );
+    }
+
+    #[test]
+    fn monomial_factors_accept_the_limit_and_reject_one_more() {
+        let fixed = (0..crate::MAX_MANIFEST_MONOMIAL_FACTORS)
+            .map(|index| ManifestDimPower {
+                dim: format!("Base{index}"),
+                pow: rational(1, 1),
+            })
+            .collect();
+        let mut manifest = PluginManifest {
+            abi_version: crate::ABI_VERSION,
+            functions: vec![ManifestFunction {
+                result: ManifestValueKind::Quantity(ManifestMonomial {
+                    vars: Vec::new(),
+                    fixed,
+                }),
+                ..scalar_function("factors")
+            }],
+        };
+        let json = manifest.to_json().unwrap();
+        PluginManifest::from_json(json.as_bytes()).unwrap();
+
+        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].result else {
+            panic!("test result must remain a quantity");
+        };
+        monomial.fixed.push(ManifestDimPower {
+            dim: "Overflow".to_string(),
+            pow: rational(1, 1),
+        });
+        let json = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyItems {
+                function: Some("factors".to_string()),
+                role: ManifestListRole::MonomialFactors,
+                count: crate::MAX_MANIFEST_MONOMIAL_FACTORS + 1,
+                max: crate::MAX_MANIFEST_MONOMIAL_FACTORS,
+            })
+        );
+    }
+
+    #[test]
     fn raw_abi_parameter_limit_counts_scalar_arity() {
         let mut manifest = lerp_manifest();
         {
@@ -1149,10 +1569,11 @@ mod tests {
         let json = manifest.to_json().unwrap();
         assert_eq!(
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
-            ManifestDecodeError::Invalid(ManifestValidationError::TooManyAbiParameters {
-                function: "lerp".to_string(),
-                slots: crate::MAX_ABI_FUNCTION_PARAMS + 1,
-                max: crate::MAX_ABI_FUNCTION_PARAMS,
+            ManifestDecodeError::Invalid(ManifestValidationError::TooManyItems {
+                function: Some("lerp".to_string()),
+                role: ManifestListRole::Parameters,
+                count: crate::MAX_MANIFEST_PARAMETERS + 1,
+                max: crate::MAX_MANIFEST_PARAMETERS,
             })
         );
     }
