@@ -205,7 +205,14 @@ mod tests {
         let message = error_of(quote! {
             fn f(x: Datetime) -> Dimensionless { x }
         });
-        assert!(message.contains("plugin ABI v1"), "got: {message}");
+        assert!(
+            message.contains("plugin ABI does not yet support `Datetime`"),
+            "got: {message}"
+        );
+        assert!(
+            message.contains("convert explicitly before crossing"),
+            "got: {message}"
+        );
 
         let message = error_of(quote! {
             fn f<Length: Dim>(x: Length) -> Length { x }
@@ -555,5 +562,22 @@ mod tests {
             "got: {expansion}"
         );
         assert!(expansion.contains("Docs survive."), "got: {expansion}");
+    }
+
+    #[test]
+    fn generated_struct_rustdoc_has_normalized_whitespace() {
+        let expansion = expand(quote! {
+            fn sample(x: Dimensionless) -> { value: Pressure } { unreachable!() }
+        })
+        .expect("expansion")
+        .to_string();
+        assert!(
+            expansion.contains("quantities in SI base units"),
+            "got: {expansion}"
+        );
+        assert!(
+            !expansion.contains("SI                  base"),
+            "got: {expansion}"
+        );
     }
 }

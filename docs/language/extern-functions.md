@@ -300,6 +300,14 @@ graphcal_plugin::plugin! {
 }
 ```
 
+Under the ABI v4 SDK, array parameters such as `D[I, J]` arrive as
+`graphcal_plugin::ArrayView` values with an ordered shape and flattened
+row-major SI data; array bodies return a validated `graphcal_plugin::Array`.
+A Rust declaration may spell a record result structurally, for example
+`-> { lo: Pressure, hi: Pressure }`; the macro generates the corresponding
+named output type (`SpanOutput` for `span`) used by the body. `Bool`, `Int`, and
+quantity bodies use `bool`, `i64`, and SI `f64`, respectively.
+
 `graphcal plugin new` scaffolds a ready-to-build crate and
 `graphcal plugin test` validates and calls the built module. See the
 [Plugin Authoring](../authoring-plugins.md) guide for the full workflow —

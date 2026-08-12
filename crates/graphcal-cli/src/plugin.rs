@@ -157,6 +157,10 @@ fn lib_rs_file() -> ScaffoldFile {
         relative_path: "src/lib.rs",
         contents: r#"//! A graphcal plugin: pure kernels with dimensional signatures.
 //!
+//! Quantity values are SI `f64`s. Multi-axis array parameters arrive as
+//! `graphcal_plugin::ArrayView` and array results use `graphcal_plugin::Array`;
+//! structural results use a generated `<FunctionName>Output` type.
+//!
 //! Build with `cargo build --release --target wasm32-unknown-unknown`
 //! (or `just build`), then vendor the artifact into your graphcal project.
 
@@ -175,8 +179,9 @@ graphcal_plugin::plugin! {
         x.sqrt()
     }
 
-    /// Each element's share of the total. Array parameters carry an
-    /// explicit shape and flattened row-major values.
+    /// Each element's share of the total. `ArrayView` carries an ordered
+    /// (potentially multi-axis) shape and flattened row-major SI values;
+    /// array results are validated `Array` values.
     fn share<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I] {
         let total: f64 = xs.iter().sum();
         if total == 0.0 {
@@ -263,7 +268,11 @@ graphcal deps lock   # records the module's SHA-256 in graphcal.lock
 ```
 
 Quantity values cross the plugin boundary as `f64`s in SI base units; keep
-kernel math in SI throughout.
+kernel math in SI throughout. In Rust bodies, arrays over one or more index
+variables arrive as shaped `graphcal_plugin::ArrayView` values and return
+validated `graphcal_plugin::Array` values. A structural result such as
+`-> {{ lo: Pressure, hi: Pressure }}` uses the generated output type derived from
+its function name (`SpanOutput` for `span`).
 "#
         ),
     }
@@ -1014,8 +1023,16 @@ mod tests {
             cargo.contains("crate-type = [\"cdylib\", \"rlib\"]"),
             "{cargo}"
         );
+        let source = &plan.files[4].contents;
+        assert!(source.contains("graphcal_plugin::ArrayView"), "{source}");
+        assert!(
+            source.contains("generated `<FunctionName>Output`"),
+            "{source}"
+        );
         let readme = &plan.files[5].contents;
         assert!(readme.contains("plugins/fluid_props.wasm"), "{readme}");
+        assert!(readme.contains("one or more index\nvariables"), "{readme}");
+        assert!(readme.contains("`SpanOutput` for `span`"), "{readme}");
         let toolchain = &plan.files[1].contents;
         assert!(toolchain.contains("wasm32-unknown-unknown"), "{toolchain}");
     }

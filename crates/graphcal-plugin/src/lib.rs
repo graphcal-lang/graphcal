@@ -1,7 +1,7 @@
 //! The graphcal plugin authoring SDK (Phase C of the plugin plan, issue #25).
 //!
-//! A graphcal plugin is a WebAssembly module that exports pure quantity
-//! kernels and embeds a manifest describing their dimensional signatures
+//! A graphcal plugin is a WebAssembly module that exports pure typed
+//! engineering kernels and embeds a manifest describing their signatures
 //! (see the `graphcal-plugin-abi` crate for the protocol). Writing that
 //! module by hand means keeping three things in sync: the manifest JSON,
 //! the `extern "C"` exports, and the `.gcl` extern declaration. This crate
@@ -42,6 +42,9 @@
 //!   returns validated [`Array`] values, while the generated wasm wrapper and
 //!   the `graphcal_alloc`/`graphcal_free` exports move row-major SI buffers and
 //!   ordered extents across the boundary;
+//! - for struct-shaped results (`-> { lo: Pressure, hi: Pressure }`), a named
+//!   Rust output type such as `SpanOutput` and a checked flattened result
+//!   layout in the manifest;
 //! - a panic hook that forwards panic messages through the host's
 //!   `graphcal::fail` import, so a `panic!` in plugin code surfaces as a
 //!   readable per-node diagnostic instead of an anonymous trap.
@@ -88,6 +91,20 @@
 ///     fn cbrt<D: Dim>(x: D) -> D^(1/3) {
 ///         x.cbrt()
 ///     }
+///
+///     /// Multi-axis arrays expose their ordered shape and row-major values.
+///     fn scale<D: Dim, I: Index, J: Index>(xs: D[I, J], k: Dimensionless) -> D[I, J] {
+///         let values = xs.iter().map(|value| value * k).collect();
+///         graphcal_plugin::Array::new(xs.shape().to_vec(), values)
+///             .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
+///     }
+///
+///     /// Struct results use a generated type derived from the function name.
+///     fn pressure_span<I: Index>(xs: Pressure[I]) -> { lo: Pressure, hi: Pressure } {
+///         let lo = xs.iter().copied().fold(f64::INFINITY, f64::min);
+///         let hi = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+///         PressureSpanOutput { lo, hi }
+///     }
 /// }
 /// # fn main() {
 /// #     assert!((cbrt(27.0) - 3.0).abs() < 1e-12);
@@ -99,9 +116,12 @@
 /// Each function is `fn name<Vars>(params) -> Result { body }`, with
 /// binders written `name: constraint` (`D: Dim` for dimension variables,
 /// `I: Index` for index variables). Parameter and result types are `Bool`,
-/// `Int`, dimension expressions, or arrays of quantities over one declared
-/// index variable (`xs: D[I]`, `-> Dimensionless[I]`). Dimension
-/// expressions range over:
+/// `Int`, dimension expressions, or arrays of quantities over one or more
+/// declared index variables (`xs: D[I]`, `matrix: D[I, J]`,
+/// `-> Dimensionless[J, I]`). Results may additionally be braced struct
+/// shapes with named `Bool`, `Int`, or concrete-quantity fields
+/// (`-> { root: Dimensionless, iters: Int }`). Dimension expressions range
+/// over:
 ///
 /// - dimension variables declared in the `<...>` binder (`D`, `D1`, …);
 /// - the prelude base dimensions `Length`, `Time`, `Mass`, `Temperature`,
@@ -116,29 +136,38 @@
 /// Every dimension variable must first appear as a bare parameter type
 /// (`x: D`, or a bare array element `xs: D[I]`) before it is used in a
 /// compound form — the same rule the graphcal compiler enforces on the
-/// `.gcl` declaration. A result array must reuse an index variable that
-/// indexes some array parameter: a plugin can never invent its output
-/// length.
+/// `.gcl` declaration. Every result-array axis must reuse an index variable
+/// that indexes an array parameter: a plugin can reorder input axes but can
+/// never invent an output extent. Struct fields must have unique names and
+/// concrete kinds; dimension variables and nested arrays are not supported in
+/// fields.
 ///
 /// # In the body
 ///
-/// Parameters are in scope with their declared names: `f64` (SI) for
-/// quantity types, `bool` for `Bool`, `i64` for `Int`, and `&[f64]` (SI,
-/// dense, in index order) for arrays. The body is an ordinary Rust block
-/// evaluating to `f64`, `bool`, `i64`, or `Vec<f64>` to match the declared
-/// result; an array result must have exactly the length of the input array
-/// bound to its index variable. Dimension and index variables are
-/// *parametric*: the body never learns what `D` or `I` was bound to beyond
-/// each slice's length, so keep the math dimension-uniform.
+/// Parameters are in scope with their declared names and natural Rust types:
+/// `f64` (SI) for quantities, `bool` for `Bool`, `i64` for `Int`, and
+/// [`ArrayView`] for arrays. An `ArrayView` exposes the ordered multi-axis
+/// shape through [`ArrayView::shape`] and flattened row-major SI values through
+/// [`ArrayView::values`] or [`ArrayView::iter`].
+///
+/// The body evaluates to `f64`, `bool`, `i64`, a validated [`Array`], or the
+/// generated named output struct that matches the declared result. An array's
+/// shape must equal the result-axis extents in result order, including any axis
+/// reordering. A function named `pressure_span` with a struct result returns
+/// `PressureSpanOutput`; its public fields retain declaration order and their
+/// natural scalar Rust types. Dimension and index variables are *parametric*:
+/// the body learns only array extents and values, never what `D`, `I`, or `J`
+/// denotes, so keep the math dimension-uniform.
 ///
 /// # Generated items
 ///
-/// Besides one `pub extern "C-unwind"` wrapper per function (exported
-/// from the wasm module under the function's name), the macro emits the
-/// manifest bytes as `GRAPHCAL_PLUGIN_MANIFEST` and, on wasm targets, an
-/// unmangled guard symbol so that linking two `plugin!` blocks into one
-/// module fails with a duplicate-symbol error instead of a corrupt
-/// manifest section. Use **one `plugin!` block per plugin**; helper
+/// Each declaration becomes a callable public Rust function for native tests
+/// and an ABI wrapper exported from wasm under the declared name. Functions
+/// that move arrays or structs also cause the macro to emit the buffer
+/// allocator exports; struct results emit their named `...Output` type. The
+/// manifest bytes are available as `GRAPHCAL_PLUGIN_MANIFEST`, and an unmangled
+/// wasm guard makes linking two `plugin!` blocks fail instead of concatenating
+/// two manifest sections. Use **one `plugin!` block per plugin**; helper
 /// functions can live anywhere in the crate and be called from the bodies.
 pub use graphcal_plugin_macros::plugin;
 
