@@ -275,6 +275,92 @@ node ascent_share: Dimensionless = @dv_share[Leg.Ascent];
 }
 
 #[test]
+fn generated_wrapper_bindings_are_hygienic_on_wasm() {
+    if !wasm_target_installed() {
+        eprintln!(
+            "SKIPPED: generated_wrapper_bindings_are_hygienic_on_wasm needs the \
+             wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown)"
+        );
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let crate_dir = dir.path().join("codegen-hygiene-probe");
+    std::fs::create_dir_all(crate_dir.join("src")).unwrap();
+    let sdk_path = repo_root().join("crates").join("graphcal-plugin");
+    std::fs::write(
+        crate_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "codegen-hygiene-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+graphcal-plugin = {{ path = {sdk_path:?} }}
+
+[profile.release]
+panic = "abort"
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        crate_dir.join("src/lib.rs"),
+        r#"graphcal_plugin::plugin! {
+    fn collide<D: Dim, I: Index>(
+        xs: D[I],
+        xs_ptr: Dimensionless,
+        xs_len: Dimensionless,
+        xs_shape: Dimensionless,
+        xs_extent_0: Dimensionless,
+        __graphcal_out: Dimensionless,
+        __graphcal_function_0_param_0_ptr: Dimensionless,
+        __graphcal_function_0_param_0_len: Dimensionless,
+        __graphcal_function_0_param_0_shape: Dimensionless,
+        __graphcal_function_0_param_0_extent_0: Dimensionless,
+        __graphcal_function_0_out: Dimensionless,
+        __graphcal_function_0_result: Dimensionless,
+        __graphcal_function_0_expected_shape: Dimensionless,
+    ) -> D[I] {
+        let _ = (
+            xs_ptr,
+            xs_len,
+            xs_shape,
+            xs_extent_0,
+            __graphcal_out,
+            __graphcal_function_0_param_0_ptr,
+            __graphcal_function_0_param_0_len,
+            __graphcal_function_0_param_0_shape,
+            __graphcal_function_0_param_0_extent_0,
+            __graphcal_function_0_out,
+            __graphcal_function_0_result,
+            __graphcal_function_0_expected_shape,
+        );
+        graphcal_plugin::Array::new(xs.shape().to_vec(), xs.values().to_vec())
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
+    }
+
+    fn __graphcal_export_0(x: Dimensionless) -> Dimensionless { x }
+    fn __graphcal_allocator(x: Dimensionless) -> Dimensionless { x }
+    fn __graphcal_deallocator(x: Dimensionless) -> Dimensionless { x }
+    fn result_name(__graphcal_result: Dimensionless) -> Dimensionless {
+        __graphcal_result
+    }
+}
+"#,
+    )
+    .unwrap();
+
+    let artifact = build_wasm(&crate_dir, "codegen_hygiene_probe.wasm");
+    assert!(artifact.is_file());
+}
+
+#[test]
 fn plugin_panics_surface_as_failure_messages() {
     if !wasm_target_installed() {
         eprintln!(

@@ -16,7 +16,7 @@ use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
     ALLOC_EXPORT, BUFFER_ALIGN, FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, FREE_EXPORT,
-    MAX_FAIL_MESSAGE_BYTES, ManifestFromWasmError, PluginManifest,
+    MAX_FAIL_MESSAGE_BYTES, MEMORY_EXPORT, ManifestFromWasmError, PluginManifest,
 };
 use sha2::Digest as _;
 use thiserror::Error;
@@ -124,7 +124,7 @@ impl PluginModule {
 
         if imports_fail
             && !matches!(
-                module.get_export("memory"),
+                module.get_export(MEMORY_EXPORT),
                 Some(wasmi::ExternType::Memory(_))
             )
         {
@@ -161,11 +161,11 @@ impl PluginModule {
             .any(|(_, signature)| signature_uses_buffers(signature))
         {
             if !matches!(
-                module.get_export("memory"),
+                module.get_export(MEMORY_EXPORT),
                 Some(wasmi::ExternType::Memory(_))
             ) {
                 return Err(PluginLoadError::MissingBufferProtocolExport {
-                    export: "memory".to_string(),
+                    export: MEMORY_EXPORT.to_string(),
                     expected: "an exported linear memory".to_string(),
                 });
             }
@@ -629,9 +629,9 @@ impl BufferProtocol {
         };
         let memory = live
             .instance
-            .get_export(&live.store, "memory")
+            .get_export(&live.store, MEMORY_EXPORT)
             .and_then(wasmi::Extern::into_memory)
-            .ok_or_else(|| missing("memory"))?;
+            .ok_or_else(|| missing(MEMORY_EXPORT))?;
         let alloc = live
             .instance
             .get_export(&live.store, ALLOC_EXPORT)
@@ -865,7 +865,7 @@ fn read_fail_message(caller: &wasmi::Caller<'_, CallState>, ptr: u32, len: u32) 
     // Memory presence is validated at load for modules importing fail; the
     // fallbacks below are defense in depth, not reachable paths.
     let Some(memory) = caller
-        .get_export("memory")
+        .get_export(MEMORY_EXPORT)
         .and_then(wasmi::Extern::into_memory)
     else {
         return "<plugin reported a failure but exports no memory>".to_string();
