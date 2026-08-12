@@ -1,6 +1,6 @@
 //! Bounded single-flight LRU cache used by the plugin host.
 //!
-//! This module is the functional cache core: it knows only keys, clonable
+//! This module is the functional cache core: it knows only keys, cloneable
 //! outcomes, encoded-byte charges, and recency. WebAssembly compilation stays
 //! in the host shell.
 
