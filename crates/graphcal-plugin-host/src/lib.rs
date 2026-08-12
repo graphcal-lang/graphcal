@@ -19,9 +19,9 @@
 //!   ([`PluginLimits`]: per-call fuel plus per-instance linear-memory and
 //!   table-element caps), mapping failure messages, traps, and fuel exhaustion
 //!   to [`PluginCallError`];
-//! - cache only immutable compiled modules by content hash ([`PluginHost`]), so the
-//!   language server's keystroke-frequency re-evaluation never recompiles
-//!   an unchanged plugin.
+//! - retain only a bounded LRU of immutable compiled modules and deterministic
+//!   load failures by content hash ([`PluginHost`]), with concurrent misses
+//!   sharing one compilation.
 //!
 //! Evaluation itself stays WASM-free: the evaluator calls plugins through
 //! the `HostFunctionRegistry` interface of `graphcal-eval`, and embedders
@@ -32,11 +32,13 @@
 //! (browser playground, #43), and its arithmetic is IEEE-754 deterministic
 //! so plugin results are bit-identical across platforms.
 
+mod cache;
 pub mod convert;
 pub mod host;
 pub mod module;
 pub mod registry;
 
+pub use cache::PluginCacheLimits;
 pub use convert::{ConvertErrorKind, ManifestConvertError, convert_manifest};
 pub use host::{PluginHost, PluginLimits};
 pub use module::{PluginCallError, PluginLoadError, PluginModule, PluginModuleLimitError};
