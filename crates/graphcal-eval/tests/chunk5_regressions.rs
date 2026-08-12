@@ -496,6 +496,57 @@ node values: Length[Rate] = for rate: Rate {
 }
 
 #[test]
+fn reused_dag_call_result_keeps_one_presentation_invocation() {
+    let result = compile_and_eval(
+        r"
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+node original: Length = @units(rate: 2.0).distance;
+node copies: Length[Fin(2)] = for i: Fin(2) { @original };
+",
+    )
+    .unwrap();
+
+    let displayed =
+        dynamic_call_display_values(successful_node(&result, "copies").unwrap()).unwrap();
+    assert_eq!(displayed, [1.0, 1.0]);
+}
+
+#[test]
+fn reordered_dag_call_results_keep_their_presentation_invocations() {
+    let result = compile_and_eval(
+        r"
+index Rate = { Two, Three };
+index Order = { First, Second };
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+node rates: Dimensionless[Rate] = {
+    Rate.Two: 2.0,
+    Rate.Three: 3.0,
+};
+node values: Length[Rate] = for rate: Rate {
+    @units(rate: @rates[rate]).distance
+};
+node reversed: Length[Order] = {
+    Order.First: @values[Rate.Three],
+    Order.Second: @values[Rate.Two],
+};
+",
+    )
+    .unwrap();
+
+    let displayed =
+        dynamic_call_display_values(successful_node(&result, "reversed").unwrap()).unwrap();
+    assert_eq!(displayed, [1.0, 1.0]);
+}
+
+#[test]
 fn multi_axis_comprehension_keeps_nested_leaf_presentation() {
     let result = compile_and_eval(
         r"
