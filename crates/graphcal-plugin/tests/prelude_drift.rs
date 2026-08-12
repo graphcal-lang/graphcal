@@ -44,11 +44,15 @@ graphcal_plugin::plugin! {
     fn f_area(x: Area) -> Area { x }
     fn f_volume(x: Volume) -> Volume { x }
     fn f_dimensionless(x: Dimensionless) -> Dimensionless { x }
+    fn f_array<I: Index>(xs: Velocity[I]) -> Pressure[I] { let _ = xs; unreachable!() }
+    fn f_struct(x: Dimensionless) -> { speed: Velocity, load: Pressure } { let _ = x; unreachable!() }
 }
 
 /// The `.gcl` extern declarations naming the same vocabulary, in the same
 /// order as the `plugin!` block above.
 const GCL_DECLARATIONS: &str = r#"
+type DriftStruct { DriftStruct(speed: Velocity, load: Pressure) }
+
 import plugin "graphcal:sdk-drift" as sdk {
     fn f_length(x: Length) -> Length;
     fn f_time(x: Time) -> Time;
@@ -68,6 +72,8 @@ import plugin "graphcal:sdk-drift" as sdk {
     fn f_area(x: Area) -> Area;
     fn f_volume(x: Volume) -> Volume;
     fn f_dimensionless(x: Dimensionless) -> Dimensionless;
+    fn f_array<I: Index>(xs: Velocity[I]) -> Pressure[I];
+    fn f_struct(x: Dimensionless) -> DriftStruct;
 }
 
 node ok: Dimensionless = sdk.f_dimensionless(1.0);
@@ -95,6 +101,39 @@ fn compile(dir: &Path, source: &str, registry: &HostFunctionRegistry) -> Result<
     let project = load_project(&entry, None, &fs)?;
     graphcal_eval::eval::check_project_with_host_fns(&project, registry)?;
     Ok(())
+}
+
+fn visit_monomials(
+    function: &graphcal_plugin_abi::ManifestFunction,
+    visit: &mut impl FnMut(&graphcal_plugin_abi::ManifestMonomial),
+) {
+    for param in &function.params {
+        match &param.kind {
+            graphcal_plugin_abi::ManifestParamKind::Quantity(monomial)
+            | graphcal_plugin_abi::ManifestParamKind::Array {
+                element: monomial, ..
+            } => visit(monomial),
+            graphcal_plugin_abi::ManifestParamKind::Bool
+            | graphcal_plugin_abi::ManifestParamKind::Int => {}
+        }
+    }
+    match &function.result {
+        graphcal_plugin_abi::ManifestResultKind::Quantity(monomial)
+        | graphcal_plugin_abi::ManifestResultKind::Array {
+            element: monomial, ..
+        } => visit(monomial),
+        graphcal_plugin_abi::ManifestResultKind::Struct { fields } => {
+            for field in fields {
+                match &field.kind {
+                    graphcal_plugin_abi::ManifestFieldKind::Quantity(monomial) => visit(monomial),
+                    graphcal_plugin_abi::ManifestFieldKind::Bool
+                    | graphcal_plugin_abi::ManifestFieldKind::Int => {}
+                }
+            }
+        }
+        graphcal_plugin_abi::ManifestResultKind::Bool
+        | graphcal_plugin_abi::ManifestResultKind::Int => {}
+    }
 }
 
 #[test]
@@ -143,26 +182,53 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
             }
         };
     for function in &manifest.functions {
-        for param in &function.params {
-            match &param.kind {
-                graphcal_plugin_abi::ManifestParamKind::Quantity(monomial) => {
-                    assert_base_factors(&function.name, monomial);
-                }
-                graphcal_plugin_abi::ManifestParamKind::Bool
-                | graphcal_plugin_abi::ManifestParamKind::Int
-                | graphcal_plugin_abi::ManifestParamKind::Array { .. } => {}
-            }
-        }
-        match &function.result {
-            graphcal_plugin_abi::ManifestResultKind::Quantity(monomial) => {
-                assert_base_factors(&function.name, monomial);
-            }
-            graphcal_plugin_abi::ManifestResultKind::Bool
-            | graphcal_plugin_abi::ManifestResultKind::Int
-            | graphcal_plugin_abi::ManifestResultKind::Array { .. }
-            | graphcal_plugin_abi::ManifestResultKind::Struct { .. } => {}
-        }
+        visit_monomials(function, &mut |monomial| {
+            assert_base_factors(&function.name, monomial);
+        });
     }
+
+    let array = manifest
+        .functions
+        .iter()
+        .find(|function| function.name == "f_array")
+        .expect("array drift probe is declared");
+    let graphcal_plugin_abi::ManifestParamKind::Array { element, .. } = &array.params[0].kind
+    else {
+        panic!("array drift probe must keep an array parameter");
+    };
+    assert_eq!(
+        element
+            .fixed
+            .iter()
+            .map(|factor| factor.dim.as_str())
+            .collect::<Vec<_>>(),
+        ["Length", "Time"]
+    );
+    let graphcal_plugin_abi::ManifestResultKind::Array { element, .. } = &array.result else {
+        panic!("array drift probe must keep an array result");
+    };
+    assert_eq!(
+        element
+            .fixed
+            .iter()
+            .map(|factor| factor.dim.as_str())
+            .collect::<Vec<_>>(),
+        ["Length", "Time", "Mass"]
+    );
+
+    let structure = manifest
+        .functions
+        .iter()
+        .find(|function| function.name == "f_struct")
+        .expect("struct drift probe is declared");
+    let graphcal_plugin_abi::ManifestResultKind::Struct { fields } = &structure.result else {
+        panic!("struct drift probe must keep a struct result");
+    };
+    assert_eq!(fields.len(), 2);
+    assert!(fields.iter().all(|field| matches!(
+        &field.kind,
+        graphcal_plugin_abi::ManifestFieldKind::Quantity(_)
+    )));
     // Base-dimension functions must carry exactly their own base name.
     for (function_name, base_name) in [
         ("f_length", "Length"),
