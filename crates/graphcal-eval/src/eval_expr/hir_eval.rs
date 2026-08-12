@@ -17,6 +17,9 @@ use miette::NamedSource;
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::execution_facts::CheckedDagExecutionFacts;
+use crate::runtime_presentation::{
+    EvaluatedRuntimeValue, PresentationInstance, PresentationInstanceMap,
+};
 
 use super::builtin_call::{
     DatetimeConstructorFn, DatetimeExtractFn, DatetimeFromFn, DatetimeToFn, EvalBuiltinRule,
@@ -44,11 +47,34 @@ pub fn eval_hir_expr(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
+    eval_hir_expr_evaluated(expr, values, None, local_values, ctx)
+        .map(EvaluatedRuntimeValue::into_value)
+}
+
+/// Evaluate one HIR expression while preserving concrete presentation-call
+/// identities through value-preserving expression forms.
+pub(crate) fn eval_hir_expr_with_presentation(
+    expr: &hir::Expr,
+    values: &RuntimeValueMap,
+    presentation_values: &PresentationInstanceMap,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    eval_hir_expr_evaluated(expr, values, Some(presentation_values), local_values, ctx)
+}
+
+fn eval_hir_expr_evaluated(
+    expr: &hir::Expr,
+    values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     ctx.cancellation.checkpoint()?;
     // Recursion choke point: evaluation recurses once per tree level
     // (unbounded for left-nested operator chains).
     graphcal_compiler::stack::with_stack_growth(|| {
-        eval_hir_expr_inner(expr, values, local_values, ctx)
+        eval_hir_expr_inner(expr, values, presentation_values, local_values, ctx)
     })
 }
 
@@ -56,18 +82,20 @@ pub fn eval_hir_expr(
 fn eval_hir_expr_inner(
     expr: &hir::Expr,
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     match &expr.kind {
         // Error nodes exist only in tolerant lowering for IDE consumers; the
         // batch pipeline rejects them before evaluation.
         hir::ExprKind::Error { .. } => {
             Err(ctx.eval_error("unresolved reference reached evaluation", expr.span))
         }
-        hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx),
-        hir::ExprKind::Integer(n) => Ok(RuntimeValue::Int(*n)),
-        hir::ExprKind::Bool(b) => Ok(RuntimeValue::Bool(*b)),
+        hir::ExprKind::Number(n) => checked_finite_quantity(*n, "numeric literal", expr.span, ctx)
+            .map(EvaluatedRuntimeValue::plain),
+        hir::ExprKind::Integer(n) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Int(*n))),
+        hir::ExprKind::Bool(b) => Ok(EvaluatedRuntimeValue::plain(RuntimeValue::Bool(*b))),
         hir::ExprKind::StringLiteral(_)
         | hir::ExprKind::OffsetDateTimeLiteral(_)
         | hir::ExprKind::CivilDateTimeLiteral(_)
@@ -86,24 +114,52 @@ fn eval_hir_expr_inner(
         hir::ExprKind::QuantityLiteral { value, unit } => {
             let scale = resolve_unit_scale(unit, values, ctx)?;
             checked_unit_scaled_value(*value, scale, expr.span, ctx)
+                .map(EvaluatedRuntimeValue::plain)
         }
         hir::ExprKind::GraphRef(target) => {
+            let key = RuntimeDeclKey::resolved(target.value.clone());
             let value = resolve_hir_graph_ref(&target.value, target.span, values, ctx)?;
-            Ok(clone_hir_graph_ref_value(value))
+            let presentation = presentation_values
+                .and_then(|presentations| presentations.get(&key))
+                .cloned()
+                .unwrap_or_default();
+            Ok(EvaluatedRuntimeValue::new(
+                clone_hir_graph_ref_value(value),
+                presentation,
+            ))
         }
-        hir::ExprKind::ConstRef(target) => eval_hir_const_ref(target, values, local_values, ctx),
+        hir::ExprKind::ConstRef(target) => {
+            let value = eval_hir_const_ref(target, values, local_values, ctx)?;
+            let presentation = match &target.value {
+                ConstRef::Decl(target) => presentation_values
+                    .and_then(|presentations| {
+                        presentations.get(&RuntimeDeclKey::resolved(target.clone()))
+                    })
+                    .cloned()
+                    .unwrap_or_default(),
+                ConstRef::Builtin(_)
+                | ConstRef::Constructor(_)
+                | ConstRef::TimeScale(_)
+                | ConstRef::GenericNatParam(_) => PresentationInstance::None,
+            };
+            Ok(EvaluatedRuntimeValue::new(value, presentation))
+        }
         hir::ExprKind::LocalRef(local) => local_values
             .get(local.value)
             .cloned()
+            .map(EvaluatedRuntimeValue::plain)
             .ok_or_else(|| ctx.eval_error("undefined local variable", local.span)),
         hir::ExprKind::BinOp { op, lhs, rhs } => {
             eval_hir_binop(expr.span, *op, lhs, rhs, values, local_values, ctx)
+                .map(EvaluatedRuntimeValue::plain)
         }
         hir::ExprKind::UnaryOp { op, operand } => {
             eval_hir_unary(expr.span, *op, operand, values, local_values, ctx)
+                .map(EvaluatedRuntimeValue::plain)
         }
         hir::ExprKind::FnCall { callee, args, .. } => {
             eval_hir_fn_call(expr, callee, args, values, local_values, ctx)
+                .map(EvaluatedRuntimeValue::plain)
         }
         hir::ExprKind::If {
             condition,
@@ -114,59 +170,124 @@ fn eval_hir_expr_inner(
                 .expect_bool("if condition")
                 .map_err(|e| ctx.eval_error(e.to_string(), expr.span))?;
             if cond {
-                eval_hir_expr(then_branch, values, local_values, ctx)
+                eval_hir_expr_evaluated(then_branch, values, presentation_values, local_values, ctx)
             } else {
-                eval_hir_expr(else_branch, values, local_values, ctx)
+                eval_hir_expr_evaluated(else_branch, values, presentation_values, local_values, ctx)
             }
         }
         hir::ExprKind::Convert { expr: inner, .. }
         | hir::ExprKind::DisplayTimezone { expr: inner, .. } => {
-            eval_hir_expr(inner, values, local_values, ctx)
+            eval_hir_expr(inner, values, local_values, ctx).map(EvaluatedRuntimeValue::plain)
         }
         hir::ExprKind::FieldAccess { expr: inner, field } => {
-            let inner_val = eval_hir_expr(inner, values, local_values, ctx)?;
-            eval_hir_field_access(inner_val, inner.span, field, ctx)
+            let inner_val =
+                eval_hir_expr_evaluated(inner, values, presentation_values, local_values, ctx)?;
+            let (inner_val, presentation) = inner_val.into_parts();
+            let value = eval_hir_field_access(inner_val, inner.span, field, ctx)?;
+            let presentation = presentation
+                .project_field(&field.value)
+                .map_err(|error| ctx.internal_error(error.to_string(), field.span))?;
+            Ok(EvaluatedRuntimeValue::new(value, presentation))
         }
         hir::ExprKind::ConstructorCall {
             callee,
             generic_args,
             fields,
-        } => eval_hir_constructor_call(callee, generic_args, fields, values, local_values, ctx),
-        hir::ExprKind::MapLiteral { entries } => {
-            eval_hir_map_literal(expr.span, entries, values, local_values, ctx)
-        }
-        hir::ExprKind::ForComp { bindings, body } => {
-            eval_hir_for_comp(expr.span, bindings, body, values, local_values, ctx)
-        }
-        hir::ExprKind::IndexAccess { expr: inner, args } => {
-            eval_hir_index_access(expr.span, inner, args.as_slice(), values, local_values, ctx)
-        }
+        } => eval_hir_constructor_call(
+            callee,
+            generic_args,
+            fields,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
+        hir::ExprKind::MapLiteral { entries } => eval_hir_map_literal(
+            expr.span,
+            entries,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
+        hir::ExprKind::ForComp { bindings, body } => eval_hir_for_comp(
+            expr.span,
+            bindings,
+            body,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
+        hir::ExprKind::IndexAccess { expr: inner, args } => eval_hir_index_access(
+            expr.span,
+            inner,
+            args.as_slice(),
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
         hir::ExprKind::Scan {
             source,
             init,
             acc,
             val,
             body,
-        } => eval_hir_scan(source, init, acc, val, body, values, local_values, ctx),
+        } => eval_hir_scan(
+            source,
+            init,
+            acc,
+            val,
+            body,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
         hir::ExprKind::Unfold {
             recurrence,
             init,
             body,
-        } => eval_hir_unfold(recurrence, init, body, values, local_values, ctx),
+        } => eval_hir_unfold(
+            recurrence,
+            init,
+            body,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
         hir::ExprKind::KeyForm {
             kind, axis, arg, ..
-        } => eval_hir_key_form(*kind, axis, arg, expr.span, values, local_values, ctx),
-        hir::ExprKind::Match { scrutinee, arms } => {
-            eval_hir_match(expr.span, scrutinee, arms, values, local_values, ctx)
-        }
-        hir::ExprKind::VariantLiteral(variant) => {
-            Ok(RuntimeValue::resolved_label(&variant.variant))
-        }
+        } => eval_hir_key_form(*kind, axis, arg, expr.span, values, local_values, ctx)
+            .map(EvaluatedRuntimeValue::plain),
+        hir::ExprKind::Match { scrutinee, arms } => eval_hir_match(
+            expr.span,
+            scrutinee,
+            arms,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
+        hir::ExprKind::VariantLiteral(variant) => Ok(EvaluatedRuntimeValue::plain(
+            RuntimeValue::resolved_label(&variant.variant),
+        )),
         hir::ExprKind::DagCall {
             target,
             args,
             output,
-        } => eval_hir_dag_call(expr.span, target, args, output, values, local_values, ctx),
+        } => eval_hir_dag_call(
+            expr.span,
+            target,
+            args,
+            output,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        ),
     }
 }
 
@@ -1550,9 +1671,10 @@ fn eval_hir_constructor_call(
     applied_generic_args: &[hir::GenericArg],
     fields: &[hir::expr::FieldInit],
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let target = constructor_target(ctx, &callee.value).ok_or_else(|| {
         ctx.eval_error(
             format!("unknown constructor `{}`", callee.value),
@@ -1571,8 +1693,16 @@ fn eval_hir_constructor_call(
             callee.span,
         )?;
     let mut field_map = IndexMap::new();
+    let mut field_presentations = Vec::new();
     for field_init in fields {
-        let val = eval_hir_expr(&field_init.value, values, local_values, ctx)?;
+        let evaluated = eval_hir_expr_evaluated(
+            &field_init.value,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        )?;
+        let (val, presentation) = evaluated.into_parts();
         if let Some(field_constraints) = ctx.struct_field_constraints
             && let Some(constraint) = find_struct_field_constraint(
                 field_constraints,
@@ -1592,15 +1722,19 @@ fn eval_hir_constructor_call(
             ));
         }
         field_map.insert(field_init.name.value.clone(), val);
+        field_presentations.push((field_init.name.value.clone(), presentation));
     }
-    Ok(RuntimeValue::Struct {
-        type_name: StructTypeRef::with_display_leaf(
-            StructTypeName::from_atom(target.variant.name().atom().clone()),
-            target.owning_type.clone(),
-        ),
-        generic_args: concrete_generic_args,
-        fields: field_map,
-    })
+    Ok(EvaluatedRuntimeValue::new(
+        RuntimeValue::Struct {
+            type_name: StructTypeRef::with_display_leaf(
+                StructTypeName::from_atom(target.variant.name().atom().clone()),
+                target.owning_type.clone(),
+            ),
+            generic_args: concrete_generic_args,
+            fields: field_map,
+        },
+        PresentationInstance::fields(field_presentations),
+    ))
 }
 
 fn index_def_for_ref<'a>(
@@ -1693,9 +1827,10 @@ fn eval_hir_map_literal(
     map_span: Span,
     entries: &[hir::expr::MapEntry],
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let first = entries
         .first()
         .ok_or_else(|| ctx.internal_error("empty map literal", map_span))?;
@@ -1714,12 +1849,19 @@ fn eval_hir_map_literal(
         for entry in entries {
             let key = entry.keys.first();
             let variant = map_entry_variant_for_axis(key, &idx_name, ctx)?;
-            let val = eval_hir_expr(&entry.value, values, local_values, ctx)?;
-            evaluated.insert(variant, val);
+            let value = eval_hir_expr_evaluated(
+                &entry.value,
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            )?;
+            evaluated.insert(variant, value);
         }
         let mut result = IndexMap::new();
+        let mut presentations = Vec::new();
         for variant in idx_def.entry_keys() {
-            let val = evaluated.swap_remove(&variant).ok_or_else(|| {
+            let evaluated = evaluated.swap_remove(&variant).ok_or_else(|| {
                 ctx.internal_error(
                     format!(
                         "map literal for index `{idx_name}` is missing entry for variant `{variant}`"
@@ -1727,12 +1869,17 @@ fn eval_hir_map_literal(
                     map_span,
                 )
             })?;
-            result.insert(variant, val);
+            let (value, presentation) = evaluated.into_parts();
+            result.insert(variant.clone(), value);
+            presentations.push((variant, presentation));
         }
-        return Ok(RuntimeValue::Indexed {
-            index_name: idx_name,
-            entries: result,
-        });
+        return Ok(EvaluatedRuntimeValue::new(
+            RuntimeValue::Indexed {
+                index_name: idx_name,
+                entries: result,
+            },
+            PresentationInstance::entries(presentations),
+        ));
     }
 
     let idx_def = map_entry_index_def(first_key, &idx_name, ctx).ok_or_else(|| {
@@ -1743,6 +1890,7 @@ fn eval_hir_map_literal(
     })?;
     let variants = idx_def.entry_keys();
     let mut outer = IndexMap::new();
+    let mut presentations = Vec::new();
     for variant in &variants {
         let mut sub_entries = Vec::new();
         for entry in entries {
@@ -1772,13 +1920,25 @@ fn eval_hir_map_literal(
                 map_span,
             ));
         }
-        let inner = eval_hir_map_literal(map_span, &sub_entries, values, local_values, ctx)?;
+        let evaluated = eval_hir_map_literal(
+            map_span,
+            &sub_entries,
+            values,
+            presentation_values,
+            local_values,
+            ctx,
+        )?;
+        let (inner, presentation) = evaluated.into_parts();
         outer.insert(variant.clone(), inner);
+        presentations.push((variant.clone(), presentation));
     }
-    Ok(RuntimeValue::Indexed {
-        index_name: idx_name,
-        entries: outer,
-    })
+    Ok(EvaluatedRuntimeValue::new(
+        RuntimeValue::Indexed {
+            index_name: idx_name,
+            entries: outer,
+        },
+        PresentationInstance::entries(presentations),
+    ))
 }
 
 /// Generic Nat parameters are substituted during TIR construction, so a
@@ -1823,9 +1983,10 @@ fn eval_hir_for_comp(
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     if let Some(owner) = &ctx.current_decl {
         ctx.current_dag
             .materialized_shape(owner, span)
@@ -1836,16 +1997,24 @@ fn eval_hir_for_comp(
                 )
             })?;
     }
-    eval_hir_for_comp_bindings(bindings, body, values, local_values, ctx)
+    eval_hir_for_comp_bindings(
+        bindings,
+        body,
+        values,
+        presentation_values,
+        local_values,
+        ctx,
+    )
 }
 
 fn eval_hir_for_comp_bindings(
     bindings: &[hir::expr::ForBinding],
     body: &hir::Expr,
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let binding = &bindings[0];
     let (idx_name, error_span, dynamic_finite_index) = match &binding.index {
         hir::expr::ForBindingIndex::Named(index) => (
@@ -1883,6 +2052,7 @@ fn eval_hir_for_comp_bindings(
     let remaining = &bindings[1..];
     let variants = idx_def.entry_keys();
     let mut entries = IndexMap::new();
+    let mut presentations = Vec::new();
     let mut inner_locals = local_values.child(Vec::new());
     for (position, variant) in variants.iter().enumerate() {
         let binding_value = match (&idx_def.kind, variant) {
@@ -1921,17 +2091,29 @@ fn eval_hir_for_comp_bindings(
             }
         };
         inner_locals.bind(binding.local.id, binding_value);
-        let val = if remaining.is_empty() {
-            eval_hir_expr(body, values, &inner_locals, ctx)?
+        let evaluated = if remaining.is_empty() {
+            eval_hir_expr_evaluated(body, values, presentation_values, &inner_locals, ctx)?
         } else {
-            eval_hir_for_comp_bindings(remaining, body, values, &inner_locals, ctx)?
+            eval_hir_for_comp_bindings(
+                remaining,
+                body,
+                values,
+                presentation_values,
+                &inner_locals,
+                ctx,
+            )?
         };
-        entries.insert(variant.clone(), val);
+        let (value, presentation) = evaluated.into_parts();
+        entries.insert(variant.clone(), value);
+        presentations.push((variant.clone(), presentation));
     }
-    Ok(RuntimeValue::Indexed {
-        index_name: idx_name,
-        entries,
-    })
+    Ok(EvaluatedRuntimeValue::new(
+        RuntimeValue::Indexed {
+            index_name: idx_name,
+            entries,
+        },
+        PresentationInstance::entries(presentations),
+    ))
 }
 
 #[expect(
@@ -1943,25 +2125,39 @@ fn eval_hir_index_access(
     inner: &hir::Expr,
     args: &[hir::expr::IndexArg],
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
-    let base_value = match &inner.kind {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
+    let (base_value, base_presentation) = match &inner.kind {
         hir::ExprKind::GraphRef(target) => {
             // This replaces the checkpoint normally performed by
             // `eval_hir_expr(inner, ...)` while retaining a reference to the
             // stored value instead of deep-cloning it before traversal.
             ctx.cancellation.checkpoint()?;
-            std::borrow::Cow::Borrowed(resolve_hir_graph_ref(
+            let value = std::borrow::Cow::Borrowed(resolve_hir_graph_ref(
                 &target.value,
                 target.span,
                 values,
                 ctx,
-            )?)
+            )?);
+            let presentation = presentation_values
+                .and_then(|presentations| {
+                    presentations.get(&RuntimeDeclKey::resolved(target.value.clone()))
+                })
+                .cloned()
+                .unwrap_or_default();
+            (value, presentation)
         }
-        _ => std::borrow::Cow::Owned(eval_hir_expr(inner, values, local_values, ctx)?),
+        _ => {
+            let evaluated =
+                eval_hir_expr_evaluated(inner, values, presentation_values, local_values, ctx)?;
+            let (value, presentation) = evaluated.into_parts();
+            (std::borrow::Cow::Owned(value), presentation)
+        }
     };
     let mut current = base_value.as_ref();
+    let mut selected_keys = Vec::with_capacity(args.len());
     for arg in args {
         let RuntimeValue::Indexed {
             index_name,
@@ -2073,8 +2269,15 @@ fn eval_hir_index_access(
         current = entries
             .get(&entry_key)
             .ok_or_else(|| ctx.eval_error(format!("index entry `{entry_key}` not found"), span))?;
+        selected_keys.push(entry_key);
     }
-    Ok(clone_hir_index_access_result(current))
+    let presentation = base_presentation
+        .project_indexes(&selected_keys)
+        .map_err(|error| ctx.internal_error(error.to_string(), span))?;
+    Ok(EvaluatedRuntimeValue::new(
+        clone_hir_index_access_result(current),
+        presentation,
+    ))
 }
 
 #[expect(
@@ -2088,9 +2291,10 @@ fn eval_hir_scan(
     val: &hir::LocalDef,
     body: &hir::Expr,
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let source_val = eval_hir_expr(source, values, local_values, ctx)?;
     let RuntimeValue::Indexed {
         index_name,
@@ -2109,20 +2313,27 @@ fn eval_hir_scan(
             source.span,
         ));
     }
-    let mut acc_val = eval_hir_expr(init, values, local_values, ctx)?;
+    let evaluated_init =
+        eval_hir_expr_evaluated(init, values, presentation_values, local_values, ctx)?;
+    let (mut acc_val, init_presentation) = evaluated_init.into_parts();
     let mut result_entries = IndexMap::new();
+    let mut presentations = Vec::new();
     let mut scan_locals = local_values.child(Vec::new());
     for (variant, item) in &source_entries {
         scan_locals.bind(acc.id, acc_val);
         scan_locals.bind(val.id, item.clone());
         let body_val = eval_hir_expr(body, values, &scan_locals, ctx)?;
         result_entries.insert(variant.clone(), body_val.clone());
+        presentations.push((variant.clone(), init_presentation.clone()));
         acc_val = body_val;
     }
-    Ok(RuntimeValue::Indexed {
-        index_name,
-        entries: result_entries,
-    })
+    Ok(EvaluatedRuntimeValue::new(
+        RuntimeValue::Indexed {
+            index_name,
+            entries: result_entries,
+        },
+        PresentationInstance::entries(presentations),
+    ))
 }
 
 fn eval_hir_unfold(
@@ -2130,9 +2341,10 @@ fn eval_hir_unfold(
     init: &hir::Expr,
     body: &hir::Expr,
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let axis = &recurrence.axis;
     let index_ref = IndexTypeRef::from_resolved(axis.value.clone());
     let idx_def = index_def_for_ref(&index_ref, ctx).ok_or_else(|| {
@@ -2150,9 +2362,12 @@ fn eval_hir_unfold(
             axis.span,
         )
     })?;
-    let init_value = eval_hir_expr(init, values, local_values, ctx)?;
+    let evaluated_init =
+        eval_hir_expr_evaluated(init, values, presentation_values, local_values, ctx)?;
+    let (init_value, init_presentation) = evaluated_init.into_parts();
     let mut previous_state = init_value.clone();
     let mut result_entries = IndexMap::new();
+    let mut presentations = vec![(variants[0].clone(), init_presentation.clone())];
     result_entries.insert(variants[0].clone(), init_value);
 
     let mut unfold_locals = local_values.child(Vec::new());
@@ -2179,12 +2394,16 @@ fn eval_hir_unfold(
         );
         let body_value = eval_hir_expr(body, values, &unfold_locals, ctx)?;
         result_entries.insert(variant.clone(), body_value.clone());
+        presentations.push((variant.clone(), init_presentation.clone()));
         previous_state = body_value;
     }
-    Ok(RuntimeValue::Indexed {
-        index_name: index_ref,
-        entries: result_entries,
-    })
+    Ok(EvaluatedRuntimeValue::new(
+        RuntimeValue::Indexed {
+            index_name: index_ref,
+            entries: result_entries,
+        },
+        PresentationInstance::entries(presentations),
+    ))
 }
 
 fn runtime_struct_matches_resolved_constructor(
@@ -2200,9 +2419,10 @@ fn eval_hir_match(
     scrutinee: &hir::Expr,
     arms: &[hir::expr::MatchArm],
     values: &RuntimeValueMap,
+    presentation_values: Option<&PresentationInstanceMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let scrutinee_val = eval_hir_expr(scrutinee, values, local_values, ctx)?;
     match &scrutinee_val {
         RuntimeValue::Label {
@@ -2221,7 +2441,13 @@ fn eval_hir_match(
                 .ok_or_else(|| {
                     ctx.eval_error(format!("no match arm for label `{variant}`"), span)
                 })?;
-            eval_hir_expr(&matched_arm.body, values, local_values, ctx)
+            eval_hir_expr_evaluated(
+                &matched_arm.body,
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            )
         }
         RuntimeValue::Struct {
             type_name,
@@ -2262,7 +2488,13 @@ fn eval_hir_match(
                     hir::expr::PatternBinding::Wildcard { .. } => {}
                 }
             }
-            eval_hir_expr(&matched_arm.body, values, &arm_locals, ctx)
+            eval_hir_expr_evaluated(
+                &matched_arm.body,
+                values,
+                presentation_values,
+                &arm_locals,
+                ctx,
+            )
         }
         _ => Err(ctx.eval_error(
             "match scrutinee must be a label or tagged union",
@@ -2293,9 +2525,10 @@ fn eval_hir_dag_call(
     args: &[hir::expr::ParamBinding],
     output: &graphcal_compiler::syntax::span::Spanned<ResolvedDeclKey>,
     caller_values: &RuntimeValueMap,
+    caller_presentations: Option<&PresentationInstanceMap>,
     caller_locals: &HirLocalValueMap,
     ctx: &EvalContext<'_>,
-) -> Result<RuntimeValue, GraphcalError> {
+) -> Result<EvaluatedRuntimeValue, GraphcalError> {
     let dag_tir = ctx.tir.dag_registry().get(&target.value).ok_or_else(|| {
         ctx.internal_error(
             format!(
@@ -2328,13 +2561,21 @@ fn eval_hir_dag_call(
     }
 
     let mut dag_values = dag_facts.const_values.as_ref().clone();
+    let mut dag_presentations = PresentationInstanceMap::new();
     for binding in args {
         let key = super::dag_decl_runtime_key(&binding.target.value);
         let value = eval_hir_expr(&binding.value, caller_values, caller_locals, ctx)?;
         check_called_dag_domain_constraint(&key, &value, dag_facts, &binding.value, ctx)?;
         dag_values.insert(key, value);
     }
-    seed_inline_dag_imported_values(dag_tir, &mut dag_values, caller_values, ctx);
+    seed_inline_dag_imported_values(
+        dag_tir,
+        &mut dag_values,
+        &mut dag_presentations,
+        caller_values,
+        caller_presentations,
+        ctx,
+    );
 
     let dag_ctx = EvalContext {
         cancellation: ctx.cancellation.clone(),
@@ -2346,6 +2587,7 @@ fn eval_hir_dag_call(
         current_dag: dag_tir,
         current_decl: None,
         root_values: ctx.root_values,
+        root_presentation_instances: ctx.root_presentation_instances,
         checked_execution_facts: ctx.checked_execution_facts,
         presentation_calls: ctx.presentation_calls,
         struct_field_constraints: ctx.struct_field_constraints,
@@ -2364,14 +2606,19 @@ fn eval_hir_dag_call(
                 output.span,
             )
         })?;
-        let value = eval_hir_expr(
+        let evaluated = eval_hir_expr_evaluated(
             hir_expr,
             &dag_values,
+            Some(&dag_presentations),
             &empty_hir_locals,
             &dag_ctx.for_decl(key.as_resolved()),
         )?;
+        let (value, presentation) = evaluated.into_parts();
         check_called_dag_domain_constraint(key, &value, dag_facts, hir_expr, &dag_ctx)?;
         dag_values.insert(key.clone(), value);
+        if !presentation.is_none() {
+            dag_presentations.insert(key.clone(), presentation);
+        }
     }
 
     check_inline_dag_asserts(dag_tir, &dag_values, &dag_ctx, target, output.span, ctx)?;
@@ -2387,8 +2634,16 @@ fn eval_hir_dag_call(
             output.span,
         )
     })?;
-    retain_called_dag_presentation_values(dag_tir, &output.value, call_span, dag_values, ctx)?;
-    Ok(output_value)
+    let output_presentation = dag_presentations.remove(&output_key).unwrap_or_default();
+    let presentation = retain_called_dag_presentation_values(
+        dag_tir,
+        &output.value,
+        call_span,
+        dag_values,
+        output_presentation,
+        ctx,
+    )?;
+    Ok(EvaluatedRuntimeValue::new(output_value, presentation))
 }
 
 fn retain_called_dag_presentation_values(
@@ -2396,30 +2651,45 @@ fn retain_called_dag_presentation_values(
     output: &ResolvedDeclKey,
     call_span: Span,
     values: RuntimeValueMap,
+    output_presentation: PresentationInstance,
     ctx: &EvalContext<'_>,
-) -> Result<(), GraphcalError> {
+) -> Result<PresentationInstance, GraphcalError> {
     let requires_values = dag.declaration_presentation(output).is_some_and(
         graphcal_compiler::tir::presentation::PresentationProvenance::requires_runtime_values,
     );
-    if requires_values
-        && let (Some(calls), Some(owner)) = (ctx.presentation_calls, &ctx.current_decl)
-    {
-        calls
-            .record(
-                graphcal_compiler::tir::presentation::PresentationCallKey::new(
-                    owner.clone(),
-                    call_span,
-                ),
-                values,
-            )
-            .map_err(|error| {
-                ctx.internal_error(
-                    format!("failed to retain inline-call presentation values: {error}"),
-                    call_span,
-                )
-            })?;
+    if !requires_values {
+        return Ok(output_presentation);
     }
-    Ok(())
+    let calls = ctx.presentation_calls.ok_or_else(|| {
+        ctx.internal_error(
+            "presentation-relevant inline call has no evaluated call store",
+            call_span,
+        )
+    })?;
+    let owner = ctx.current_decl.as_ref().ok_or_else(|| {
+        ctx.internal_error(
+            "presentation-relevant inline call has no declaration owner",
+            call_span,
+        )
+    })?;
+    let invocation = calls
+        .record(
+            graphcal_compiler::tir::presentation::PresentationCallKey::new(
+                owner.clone(),
+                call_span,
+            ),
+            values,
+        )
+        .map_err(|error| {
+            ctx.internal_error(
+                format!("failed to retain inline-call presentation values: {error}"),
+                call_span,
+            )
+        })?;
+    Ok(PresentationInstance::dag_call(
+        invocation,
+        output_presentation,
+    ))
 }
 
 /// Seed an inline DAG instance with imported compile-time constants and
@@ -2428,7 +2698,9 @@ fn retain_called_dag_presentation_values(
 fn seed_inline_dag_imported_values(
     dag_tir: &DagTIR,
     dag_values: &mut RuntimeValueMap,
+    dag_presentations: &mut PresentationInstanceMap,
     caller_values: &RuntimeValueMap,
+    caller_presentations: Option<&PresentationInstanceMap>,
     ctx: &EvalContext<'_>,
 ) {
     let own_names: std::collections::HashSet<&graphcal_compiler::syntax::decl_name::DeclName> =
@@ -2451,7 +2723,22 @@ fn seed_inline_dag_imported_values(
             .value()
             .or_else(|| imported_binding_value(binding.target(), caller_values, ctx));
         if let Some(value) = value {
-            dag_values.insert(visible_key, value.clone());
+            dag_values.insert(visible_key.clone(), value.clone());
+            if binding.value().is_none() {
+                let presentation = if binding.target().owner() == ctx.current_dag.dag_id() {
+                    caller_presentations.and_then(|instances| instances.get(&visible_key))
+                } else if binding.target().owner() == ctx.tir.root_dag_id() {
+                    ctx.root_presentation_instances
+                        .and_then(|instances| instances.get(&visible_key))
+                } else {
+                    None
+                };
+                if let Some(presentation) = presentation
+                    && !presentation.is_none()
+                {
+                    dag_presentations.insert(visible_key, presentation.clone());
+                }
+            }
         }
     }
 }

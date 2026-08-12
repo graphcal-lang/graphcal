@@ -30,6 +30,7 @@ use crate::domain_check::ResolvedDomainConstraint;
 
 pub use crate::execution_facts::RuntimeValueMap;
 pub use graphcal_compiler::registry::runtime_value::RuntimeValue;
+pub(crate) use hir_eval::eval_hir_expr_with_presentation;
 pub use hir_eval::{HirLocalValueMap, eval_hir_expr};
 pub use unit_scale::resolve_unit_scale;
 pub(in crate::eval_expr) use unit_scale::{checked_finite_quantity, checked_unit_scaled_value};
@@ -67,6 +68,10 @@ pub struct EvalContext<'a> {
     /// self-imports route by their canonical source `DagId` rather than by a
     /// same-leaf name in the immediate caller's local value map.
     pub root_values: Option<&'a RuntimeValueMap>,
+    /// Presentation instances paired with `root_values` for references that
+    /// cross an inline-DAG boundary back into the entry DAG.
+    pub root_presentation_instances:
+        Option<&'a crate::runtime_presentation::PresentationInstanceMap>,
     /// Checked facts for every runtime-callable DAG. Compile-time expression
     /// contexts use `None` because DAG calls are statically forbidden there.
     pub checked_execution_facts: Option<&'a crate::execution_facts::CheckedExecutionFacts>,
@@ -147,6 +152,7 @@ impl<'a> EvalContext<'a> {
             current_dag: self.current_dag,
             current_decl: self.current_decl.clone(),
             root_values: self.root_values,
+            root_presentation_instances: self.root_presentation_instances,
             checked_execution_facts: self.checked_execution_facts,
             presentation_calls: self.presentation_calls,
             struct_field_constraints: self.struct_field_constraints,
@@ -176,6 +182,7 @@ impl<'a> EvalContext<'a> {
             current_dag: dag,
             current_decl: Some(declaration.clone()),
             root_values: self.root_values,
+            root_presentation_instances: self.root_presentation_instances,
             checked_execution_facts: self.checked_execution_facts,
             presentation_calls: self.presentation_calls,
             struct_field_constraints: self.struct_field_constraints,
@@ -200,6 +207,7 @@ impl<'a> EvalContext<'a> {
             current_dag: self.current_dag,
             current_decl: Some(declaration.clone()),
             root_values: self.root_values,
+            root_presentation_instances: self.root_presentation_instances,
             checked_execution_facts: self.checked_execution_facts,
             presentation_calls: self.presentation_calls,
             struct_field_constraints: self.struct_field_constraints,
