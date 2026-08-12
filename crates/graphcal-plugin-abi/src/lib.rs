@@ -65,8 +65,8 @@ pub mod section;
 pub use manifest::{
     ManifestDecodeError, ManifestDimPower, ManifestEmbedError, ManifestEncodeError, ManifestField,
     ManifestFieldKind, ManifestFromWasmError, ManifestFunction, ManifestListRole, ManifestMonomial,
-    ManifestParam, ManifestRational, ManifestValidationError, ManifestValueKind, ManifestVarPower,
-    NameRole, PluginManifest,
+    ManifestParam, ManifestParamKind, ManifestRational, ManifestResultKind,
+    ManifestValidationError, ManifestVarPower, NameRole, PluginManifest,
 };
 pub use section::{SectionError, embed_manifest};
 

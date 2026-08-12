@@ -19,8 +19,8 @@ use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
 use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_compiler::syntax::names::NameAtomError;
 use graphcal_plugin_abi::{
-    ManifestField, ManifestFieldKind, ManifestFunction, ManifestMonomial, ManifestRational,
-    ManifestValueKind, PluginManifest,
+    ManifestField, ManifestFieldKind, ManifestFunction, ManifestMonomial, ManifestParamKind,
+    ManifestRational, ManifestResultKind, PluginManifest,
 };
 use thiserror::Error;
 
@@ -78,12 +78,12 @@ fn convert_function(
                     source,
                 }
             })?;
-            let kind = convert_kind(&param.kind)?;
+            let kind = convert_param_kind(&param.kind)?;
             Ok(FunctionParam { name, kind })
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(&in_function)?;
-    let result = convert_kind(&function.result).map_err(&in_function)?;
+    let result = convert_result_kind(&function.result).map_err(&in_function)?;
 
     let signature = FunctionSignature::try_new(dim_vars, index_vars, params, result)
         .map_err(|source| in_function(ConvertErrorKind::Signature(source)))?;
@@ -104,26 +104,26 @@ fn convert_index_var(var: &str) -> Result<IndexVarName, ConvertErrorKind> {
     })
 }
 
-fn convert_kind(kind: &ManifestValueKind) -> Result<ValueKind, ConvertErrorKind> {
+fn convert_param_kind(kind: &ManifestParamKind) -> Result<ValueKind, ConvertErrorKind> {
     match kind {
-        ManifestValueKind::Bool => Ok(ValueKind::Bool),
-        ManifestValueKind::Int => Ok(ValueKind::Int),
-        ManifestValueKind::Quantity(monomial) => {
+        ManifestParamKind::Bool => Ok(ValueKind::Bool),
+        ManifestParamKind::Int => Ok(ValueKind::Int),
+        ManifestParamKind::Quantity(monomial) => {
             Ok(ValueKind::Quantity(convert_monomial(monomial)?))
         }
-        ManifestValueKind::Array { element, indexes } => {
-            let indexes = indexes
-                .iter()
-                .map(|index| convert_index_var(index))
-                .collect::<Result<Vec<_>, _>>()?;
-            let indexes = graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(indexes)
-                .map_err(|_| ConvertErrorKind::EmptyArrayAxes)?;
-            Ok(ValueKind::Indexed {
-                element: convert_monomial(element)?,
-                indexes,
-            })
+        ManifestParamKind::Array { element, indexes } => convert_array(element, indexes),
+    }
+}
+
+fn convert_result_kind(kind: &ManifestResultKind) -> Result<ValueKind, ConvertErrorKind> {
+    match kind {
+        ManifestResultKind::Bool => Ok(ValueKind::Bool),
+        ManifestResultKind::Int => Ok(ValueKind::Int),
+        ManifestResultKind::Quantity(monomial) => {
+            Ok(ValueKind::Quantity(convert_monomial(monomial)?))
         }
-        ManifestValueKind::Struct { fields } => {
+        ManifestResultKind::Array { element, indexes } => convert_array(element, indexes),
+        ManifestResultKind::Struct { fields } => {
             let fields = fields
                 .iter()
                 .map(convert_struct_field)
@@ -132,6 +132,22 @@ fn convert_kind(kind: &ManifestValueKind) -> Result<ValueKind, ConvertErrorKind>
             Ok(ValueKind::Struct(shape))
         }
     }
+}
+
+fn convert_array(
+    element: &ManifestMonomial,
+    indexes: &[String],
+) -> Result<ValueKind, ConvertErrorKind> {
+    let indexes = indexes
+        .iter()
+        .map(|index| convert_index_var(index))
+        .collect::<Result<Vec<_>, _>>()?;
+    let indexes = graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(indexes)
+        .map_err(|_| ConvertErrorKind::EmptyArrayAxes)?;
+    Ok(ValueKind::Indexed {
+        element: convert_monomial(element)?,
+        indexes,
+    })
 }
 
 fn convert_struct_field(field: &ManifestField) -> Result<StructShapeField, ConvertErrorKind> {
@@ -265,8 +281,8 @@ mod tests {
         ManifestRational { num, den }
     }
 
-    fn quantity_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
-        ManifestValueKind::Quantity(ManifestMonomial {
+    fn quantity_var(var: &str, num: i32, den: i32) -> ManifestParamKind {
+        ManifestParamKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: var.to_string(),
                 pow: rational(num, den),
@@ -275,8 +291,8 @@ mod tests {
         })
     }
 
-    fn fixed_dim(dim: &str, num: i32, den: i32) -> ManifestValueKind {
-        ManifestValueKind::Quantity(ManifestMonomial {
+    fn fixed_dim(dim: &str, num: i32, den: i32) -> ManifestParamKind {
+        ManifestParamKind::Quantity(ManifestMonomial {
             vars: Vec::new(),
             fixed: vec![ManifestDimPower {
                 dim: dim.to_string(),
@@ -285,7 +301,7 @@ mod tests {
         })
     }
 
-    fn param(name: &str, kind: ManifestValueKind) -> ManifestParam {
+    fn param(name: &str, kind: ManifestParamKind) -> ManifestParam {
         ManifestParam {
             name: name.to_string(),
             kind,
@@ -299,7 +315,7 @@ mod tests {
             dim_vars: vec!["D".to_string()],
             index_vars: Vec::new(),
             params: vec![param("x", quantity_var("D", 1, 1))],
-            result: quantity_var("D", 1, 2),
+            result: quantity_var("D", 1, 2).into(),
         };
         let (name, signature) = convert_function(&function).unwrap();
         assert_eq!(name.as_str(), "root");
@@ -318,7 +334,7 @@ mod tests {
             dim_vars: Vec::new(),
             index_vars: Vec::new(),
             params: vec![param("length", fixed_dim("Length", 1, 1))],
-            result: fixed_dim("Time", 1, 1),
+            result: fixed_dim("Time", 1, 1).into(),
         };
         let (_, signature) = convert_function(&function).unwrap();
         let expected = FunctionSignature::fixed_to_fixed(
@@ -338,7 +354,7 @@ mod tests {
             dim_vars: Vec::new(),
             index_vars: Vec::new(),
             params: vec![param("x", fixed_dim("Velocity", 1, 1))],
-            result: ManifestValueKind::Quantity(ManifestMonomial::default()),
+            result: ManifestResultKind::Quantity(ManifestMonomial::default()),
         };
         let err = convert_function(&function).unwrap_err();
         assert_eq!(err.function, "speed");
@@ -355,7 +371,7 @@ mod tests {
             dim_vars: Vec::new(),
             index_vars: Vec::new(),
             params: Vec::new(),
-            result: ManifestValueKind::Int,
+            result: ManifestResultKind::Int,
         };
         assert!(matches!(
             convert_function(&function).unwrap_err().kind,
@@ -371,7 +387,7 @@ mod tests {
             dim_vars: vec!["D".to_string()],
             index_vars: Vec::new(),
             params: vec![param("x", quantity_var("D", 2, 1))],
-            result: quantity_var("D", 1, 1),
+            result: quantity_var("D", 1, 1).into(),
         };
         assert!(matches!(
             convert_function(&function).unwrap_err().kind,

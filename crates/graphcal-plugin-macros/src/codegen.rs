@@ -19,7 +19,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::lower::{FieldKindIr, FunctionIr, KindIr, PluginIr};
+use crate::lower::{FieldKindIr, FunctionIr, ParamKindIr, PluginIr, ResultKindIr};
 
 /// Generate the full expansion from the validated IR and its manifest
 /// payload.
@@ -88,24 +88,24 @@ fn generate_f64_abi_function(function: &FunctionIr) -> TokenStream {
         let name = &param.name;
         let name_str = param.name.to_string();
         match param.kind {
-            KindIr::Quantity(_) | KindIr::Array { .. } | KindIr::Struct(_) => None,
-            KindIr::Bool => Some(quote! {
+            ParamKindIr::Quantity(_) | ParamKindIr::Array { .. } => None,
+            ParamKindIr::Bool => Some(quote! {
                 let #name: bool = ::graphcal_plugin::__rt::bool_from_abi(#name, #name_str);
             }),
-            KindIr::Int => Some(quote! {
+            ParamKindIr::Int => Some(quote! {
                 let #name: i64 = ::graphcal_plugin::__rt::int_from_abi(#name, #name_str);
             }),
         }
     });
     let (result_ty, to_abi) = match function.result {
-        KindIr::Quantity(_) | KindIr::Array { .. } | KindIr::Struct(_) => {
+        ResultKindIr::Quantity(_) | ResultKindIr::Array { .. } | ResultKindIr::Struct(_) => {
             (quote! { f64 }, quote! { __graphcal_result })
         }
-        KindIr::Bool => (
+        ResultKindIr::Bool => (
             quote! { bool },
             quote! { ::graphcal_plugin::__rt::bool_to_abi(__graphcal_result) },
         ),
-        KindIr::Int => (
+        ResultKindIr::Int => (
             quote! { i64 },
             quote! { ::graphcal_plugin::__rt::int_to_abi(__graphcal_result) },
         ),
@@ -143,28 +143,25 @@ fn wrapper_pieces(function: &FunctionIr) -> WrapperPieces {
         let pname = &param.name;
         let pname_str = pname.to_string();
         match &param.kind {
-            // Struct parameters cannot be written (the parser only accepts
-            // the braced shape in result position); the arm keeps the match
-            // total without a panic path.
-            KindIr::Quantity(_) | KindIr::Struct(_) => {
+            ParamKindIr::Quantity(_) => {
                 raw_params.push(quote! { #pname: f64 });
                 natural_args.push(quote! { #pname });
             }
-            KindIr::Bool => {
+            ParamKindIr::Bool => {
                 raw_params.push(quote! { #pname: f64 });
                 decodes.push(quote! {
                     let #pname: bool = ::graphcal_plugin::__rt::bool_from_abi(#pname, #pname_str);
                 });
                 natural_args.push(quote! { #pname });
             }
-            KindIr::Int => {
+            ParamKindIr::Int => {
                 raw_params.push(quote! { #pname: f64 });
                 decodes.push(quote! {
                     let #pname: i64 = ::graphcal_plugin::__rt::int_from_abi(#pname, #pname_str);
                 });
                 natural_args.push(quote! { #pname });
             }
-            KindIr::Array { indexes, .. } => {
+            ParamKindIr::Array { indexes, .. } => {
                 let ptr = format_ident!("{pname}_ptr");
                 let len = format_ident!("{pname}_len");
                 let shape = format_ident!("{pname}_shape");
@@ -209,24 +206,24 @@ fn generate_buffer_function(function: &FunctionIr) -> TokenStream {
     let natural_params = function.params.iter().map(|param| {
         let pname = &param.name;
         match &param.kind {
-            KindIr::Quantity(_) | KindIr::Struct(_) => quote! { #pname: f64 },
-            KindIr::Bool => quote! { #pname: bool },
-            KindIr::Int => quote! { #pname: i64 },
-            KindIr::Array { .. } => quote! { #pname: ::graphcal_plugin::ArrayView<'_> },
+            ParamKindIr::Quantity(_) => quote! { #pname: f64 },
+            ParamKindIr::Bool => quote! { #pname: bool },
+            ParamKindIr::Int => quote! { #pname: i64 },
+            ParamKindIr::Array { .. } => quote! { #pname: ::graphcal_plugin::ArrayView<'_> },
         }
     });
     let output_ident = output_struct_ident(name);
     let natural_result_ty = match &function.result {
-        KindIr::Quantity(_) => quote! { f64 },
-        KindIr::Bool => quote! { bool },
-        KindIr::Int => quote! { i64 },
-        KindIr::Array { .. } => quote! { ::graphcal_plugin::Array },
-        KindIr::Struct(_) => quote! { #output_ident },
+        ResultKindIr::Quantity(_) => quote! { f64 },
+        ResultKindIr::Bool => quote! { bool },
+        ResultKindIr::Int => quote! { i64 },
+        ResultKindIr::Array { .. } => quote! { ::graphcal_plugin::Array },
+        ResultKindIr::Struct(_) => quote! { #output_ident },
     };
     // A struct-shaped result gets a named output type: positional tuples
     // would let two same-kind fields swap silently.
     let output_struct = match &function.result {
-        KindIr::Struct(fields) => {
+        ResultKindIr::Struct(fields) => {
             let field_defs = fields.iter().map(|field| {
                 let fname = &field.name;
                 let ty = match &field.kind {
@@ -282,7 +279,7 @@ fn generate_buffer_wrapper(
     let name_str = name.to_string();
     let wrapper_ident = format_ident!("__graphcal_export_{name}");
     match &function.result {
-        KindIr::Array { indexes, .. } => {
+        ResultKindIr::Array { indexes, .. } => {
             // Every result extent comes from an input occurrence of the same
             // index variable; lowering guarantees each binding exists.
             let expected_extents = indexes
@@ -313,7 +310,7 @@ fn generate_buffer_wrapper(
                 }
             }
         }
-        KindIr::Quantity(_) => quote! {
+        ResultKindIr::Quantity(_) => quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(export_name = #name_str)]
             extern "C-unwind" fn #wrapper_ident(#(#raw_params),*) -> f64 {
@@ -322,7 +319,7 @@ fn generate_buffer_wrapper(
                 #name(#(#natural_args),*)
             }
         },
-        KindIr::Bool => quote! {
+        ResultKindIr::Bool => quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(export_name = #name_str)]
             extern "C-unwind" fn #wrapper_ident(#(#raw_params),*) -> f64 {
@@ -331,7 +328,7 @@ fn generate_buffer_wrapper(
                 ::graphcal_plugin::__rt::bool_to_abi(#name(#(#natural_args),*))
             }
         },
-        KindIr::Int => quote! {
+        ResultKindIr::Int => quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(export_name = #name_str)]
             extern "C-unwind" fn #wrapper_ident(#(#raw_params),*) -> f64 {
@@ -340,7 +337,7 @@ fn generate_buffer_wrapper(
                 ::graphcal_plugin::__rt::int_to_abi(#name(#(#natural_args),*))
             }
         },
-        KindIr::Struct(fields) => {
+        ResultKindIr::Struct(fields) => {
             let slot_count = u32::try_from(fields.len()).unwrap_or(u32::MAX);
             let slots = fields.iter().map(|field| {
                 let fname = &field.name;
@@ -389,11 +386,11 @@ fn binding_extent_ident(function: &FunctionIr, index: &syn::Ident) -> syn::Ident
         .params
         .iter()
         .find_map(|param| match &param.kind {
-            KindIr::Array { indexes, .. } => indexes
+            ParamKindIr::Array { indexes, .. } => indexes
                 .iter()
                 .position(|candidate| candidate == index)
                 .map(|axis| array_extent_ident(&param.name, axis)),
-            KindIr::Bool | KindIr::Int | KindIr::Quantity(_) | KindIr::Struct(_) => None,
+            ParamKindIr::Bool | ParamKindIr::Int | ParamKindIr::Quantity(_) => None,
         })
         .unwrap_or_else(|| format_ident!("__graphcal_unreachable_extent"))
 }

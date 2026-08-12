@@ -9,16 +9,16 @@ use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
     ManifestDecodeError, ManifestFromWasmError, ManifestFunction, ManifestMonomial, ManifestParam,
-    ManifestRational, ManifestValueKind, ManifestVarPower, PluginManifest, SectionError,
-    embed_manifest,
+    ManifestParamKind, ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
+    SectionError, embed_manifest,
 };
 use graphcal_plugin_host::{
     ConvertErrorKind, PluginCacheLimits, PluginCallError, PluginHost, PluginLimits,
     PluginLoadError, PluginModuleLimitError,
 };
 
-fn quantity_var(var: &str) -> ManifestValueKind {
-    ManifestValueKind::Quantity(ManifestMonomial {
+fn quantity_var(var: &str) -> ManifestParamKind {
+    ManifestParamKind::Quantity(ManifestMonomial {
         vars: vec![ManifestVarPower {
             var: var.to_string(),
             pow: ManifestRational { num: 1, den: 1 },
@@ -27,8 +27,8 @@ fn quantity_var(var: &str) -> ManifestValueKind {
     })
 }
 
-fn dimensionless() -> ManifestValueKind {
-    ManifestValueKind::Quantity(ManifestMonomial::default())
+fn dimensionless() -> ManifestParamKind {
+    ManifestParamKind::Quantity(ManifestMonomial::default())
 }
 
 const fn manifest(functions: Vec<ManifestFunction>) -> PluginManifest {
@@ -41,8 +41,8 @@ const fn manifest(functions: Vec<ManifestFunction>) -> PluginManifest {
 fn function(
     name: &str,
     dim_vars: &[&str],
-    params: &[(&str, ManifestValueKind)],
-    result: ManifestValueKind,
+    params: &[(&str, ManifestParamKind)],
+    result: impl Into<ManifestResultKind>,
 ) -> ManifestFunction {
     ManifestFunction {
         name: name.to_string(),
@@ -55,7 +55,7 @@ fn function(
                 kind: kind.clone(),
             })
             .collect(),
-        result,
+        result: result.into(),
     }
 }
 
@@ -239,7 +239,7 @@ fn fail_import_reports_the_plugin_message_and_recovers() {
         "inverse",
         &["D"],
         &[("x", quantity_var("D"))],
-        ManifestValueKind::Quantity(ManifestMonomial {
+        ManifestResultKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: "D".to_string(),
                 pow: ManifestRational { num: -1, den: 1 },
@@ -542,6 +542,20 @@ fn v2_manifests_are_rejected_with_a_version_error() {
 }
 
 #[test]
+fn struct_parameter_manifest_is_rejected_during_host_load() {
+    let wasm = wat::parse_str(LERP_WAT).unwrap();
+    let json = br#"{"abi_version":4,"functions":[{"name":"bad","params":[{"name":"value","kind":{"struct":{"fields":[{"name":"ok","kind":"bool"}]}}}],"result":"bool"}]}"#;
+    let wasm = embed_manifest(&wasm, json).unwrap();
+
+    assert!(matches!(
+        PluginHost::new().load(&wasm).unwrap_err(),
+        PluginLoadError::Manifest(ManifestFromWasmError::Decode(
+            ManifestDecodeError::Json { .. }
+        ))
+    ));
+}
+
+#[test]
 fn manifest_functions_must_be_exported() {
     let manifest = manifest(vec![
         lerp_manifest().functions[0].clone(),
@@ -603,7 +617,7 @@ fn manifest_signatures_using_non_base_dimensions_are_rejected() {
         &[],
         &[(
             "x",
-            ManifestValueKind::Quantity(ManifestMonomial {
+            ManifestParamKind::Quantity(ManifestMonomial {
                 vars: Vec::new(),
                 fixed: vec![graphcal_plugin_abi::ManifestDimPower {
                     dim: "Velocity".to_string(),
@@ -763,7 +777,7 @@ fn abi_parameter_limit_matches_wasmi_strict_limit() {
                 kind: dimensionless(),
             })
             .collect(),
-        result: dimensionless(),
+        result: dimensionless().into(),
     }]);
     let module = PluginHost::new().load(&plugin(&wat, &manifest)).unwrap();
     let args = vec![0.0; count];
@@ -817,8 +831,8 @@ const ARRAY_WAT: &str = r#"
     (local.get $sum)))
 "#;
 
-fn array_kind(var: &str, index: &str) -> ManifestValueKind {
-    ManifestValueKind::Array {
+fn array_kind(var: &str, index: &str) -> ManifestParamKind {
+    ManifestParamKind::Array {
         element: ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: var.to_string(),
@@ -832,8 +846,8 @@ fn array_kind(var: &str, index: &str) -> ManifestValueKind {
 
 fn array_function(
     name: &str,
-    params: &[(&str, ManifestValueKind)],
-    result: ManifestValueKind,
+    params: &[(&str, ManifestParamKind)],
+    result: impl Into<ManifestResultKind>,
 ) -> ManifestFunction {
     ManifestFunction {
         name: name.to_string(),
@@ -846,7 +860,7 @@ fn array_function(
                 kind: kind.clone(),
             })
             .collect(),
-        result,
+        result: result.into(),
     }
 }
 
@@ -944,12 +958,12 @@ fn matrix_manifest() -> PluginManifest {
         index_vars: vec!["I".to_string(), "J".to_string()],
         params: vec![ManifestParam {
             name: "matrix".to_string(),
-            kind: ManifestValueKind::Array {
+            kind: ManifestParamKind::Array {
                 element: element.clone(),
                 indexes: vec!["I".to_string(), "J".to_string()],
             },
         }],
-        result: ManifestValueKind::Array {
+        result: ManifestResultKind::Array {
             element,
             indexes: vec!["J".to_string(), "I".to_string()],
         },
@@ -1191,7 +1205,7 @@ fn struct_manifest() -> PluginManifest {
     use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
 
     let mut function = array_function("span", &[("xs", array_kind("D", "I"))], quantity_var("D"));
-    function.result = ManifestValueKind::Struct {
+    function.result = ManifestResultKind::Struct {
         fields: vec![
             ManifestField {
                 name: "min".to_string(),
@@ -1221,7 +1235,7 @@ fn struct_field_monomials_with_dim_vars_are_rejected() {
     use graphcal_plugin_abi::{ManifestField, ManifestFieldKind};
 
     let mut function = array_function("span", &[("xs", array_kind("D", "I"))], quantity_var("D"));
-    function.result = ManifestValueKind::Struct {
+    function.result = ManifestResultKind::Struct {
         fields: vec![ManifestField {
             name: "min".to_string(),
             kind: ManifestFieldKind::Quantity(ManifestMonomial {

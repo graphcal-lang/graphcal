@@ -45,7 +45,7 @@ pub struct FunctionIr {
     pub dim_vars: Vec<syn::Ident>,
     pub index_vars: Vec<syn::Ident>,
     pub params: Vec<ParamIr>,
-    pub result: KindIr,
+    pub result: ResultKindIr,
     pub body: TokenStream,
 }
 
@@ -55,20 +55,22 @@ impl FunctionIr {
     pub fn uses_buffers(&self) -> bool {
         self.params
             .iter()
-            .map(|param| &param.kind)
-            .chain(std::iter::once(&self.result))
-            .any(|kind| matches!(kind, KindIr::Array { .. } | KindIr::Struct(_)))
+            .any(|param| matches!(&param.kind, ParamKindIr::Array { .. }))
+            || matches!(
+                &self.result,
+                ResultKindIr::Array { .. } | ResultKindIr::Struct(_)
+            )
     }
 }
 
 /// One validated parameter.
 pub struct ParamIr {
     pub name: syn::Ident,
-    pub kind: KindIr,
+    pub kind: ParamKindIr,
 }
 
-/// A validated value kind.
-pub enum KindIr {
+/// A validated parameter kind. Structs have no parameter representation.
+pub enum ParamKindIr {
     Bool,
     Int,
     Quantity(MonomialIr),
@@ -77,8 +79,30 @@ pub enum KindIr {
         /// Non-empty axis list in row-major order (enforced by parsing).
         indexes: Vec<syn::Ident>,
     },
-    /// A struct-shaped result (never a parameter).
+}
+
+/// A validated result kind.
+pub enum ResultKindIr {
+    Bool,
+    Int,
+    Quantity(MonomialIr),
+    Array {
+        element: MonomialIr,
+        /// Non-empty axis list in row-major order (enforced by parsing).
+        indexes: Vec<syn::Ident>,
+    },
     Struct(Vec<FieldIr>),
+}
+
+impl From<ParamKindIr> for ResultKindIr {
+    fn from(kind: ParamKindIr) -> Self {
+        match kind {
+            ParamKindIr::Bool => Self::Bool,
+            ParamKindIr::Int => Self::Int,
+            ParamKindIr::Quantity(monomial) => Self::Quantity(monomial),
+            ParamKindIr::Array { element, indexes } => Self::Array { element, indexes },
+        }
+    }
 }
 
 /// One validated field of a struct-shaped result.
@@ -219,13 +243,12 @@ fn lower_params(
         }
         let kind = lower_type(&param.ty, binders, index_binders)?;
         let monomial = match &kind {
-            KindIr::Quantity(monomial) => Some(monomial),
-            KindIr::Array { element, indexes } => {
+            ParamKindIr::Quantity(monomial) => Some(monomial),
+            ParamKindIr::Array { element, indexes } => {
                 used_indexes.extend(indexes.iter().map(ToString::to_string));
                 Some(element)
             }
-            // The parser only accepts struct shapes in result position.
-            KindIr::Bool | KindIr::Int | KindIr::Struct(_) => None,
+            ParamKindIr::Bool | ParamKindIr::Int => None,
         };
         if let Some(monomial) = monomial {
             match monomial.as_bare_var() {
@@ -271,8 +294,8 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
 
     let result = lower_result(&decl.result, &binders, &index_binders)?;
     let result_monomial = match &result {
-        KindIr::Quantity(monomial) => Some(monomial),
-        KindIr::Array { element, indexes } => {
+        ResultKindIr::Quantity(monomial) => Some(monomial),
+        ResultKindIr::Array { element, indexes } => {
             for index in indexes {
                 if !used_indexes.contains(&index.to_string()) {
                     return Err(syn::Error::new(
@@ -286,7 +309,7 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
             }
             Some(element)
         }
-        KindIr::Bool | KindIr::Int | KindIr::Struct(_) => None,
+        ResultKindIr::Bool | ResultKindIr::Int | ResultKindIr::Struct(_) => None,
     };
     if let Some(monomial) = result_monomial {
         for factor in &monomial.vars {
@@ -339,9 +362,9 @@ fn lower_result(
     result: &ResultAst,
     binders: &HashSet<String>,
     index_binders: &HashSet<String>,
-) -> syn::Result<KindIr> {
+) -> syn::Result<ResultKindIr> {
     match result {
-        ResultAst::Value(ty) => lower_type(ty, binders, index_binders),
+        ResultAst::Value(ty) => lower_type(ty, binders, index_binders).map(Into::into),
         ResultAst::Struct(fields) => {
             if fields.is_empty() {
                 return Err(syn::Error::new(
@@ -371,10 +394,10 @@ fn lower_result(
                         &empty,
                         &empty,
                     )? {
-                        KindIr::Bool => FieldKindIr::Bool,
-                        KindIr::Int => FieldKindIr::Int,
-                        KindIr::Quantity(monomial) => FieldKindIr::Quantity(monomial),
-                        KindIr::Array { .. } | KindIr::Struct(_) => {
+                        ParamKindIr::Bool => FieldKindIr::Bool,
+                        ParamKindIr::Int => FieldKindIr::Int,
+                        ParamKindIr::Quantity(monomial) => FieldKindIr::Quantity(monomial),
+                        ParamKindIr::Array { .. } => {
                             return Err(syn::Error::new(
                                 field.name.span(),
                                 "struct fields must be Bool, Int, or quantity types",
@@ -387,7 +410,7 @@ fn lower_result(
                     })
                 })
                 .collect::<syn::Result<Vec<_>>>()?;
-            Ok(KindIr::Struct(lowered))
+            Ok(ResultKindIr::Struct(lowered))
         }
     }
 }
@@ -432,7 +455,7 @@ fn lower_type(
     ty: &TypeAst,
     binders: &HashSet<String>,
     index_binders: &HashSet<String>,
-) -> syn::Result<KindIr> {
+) -> syn::Result<ParamKindIr> {
     let expr = &ty.element;
     if let (DimTermAst::Named { name, pow: None }, true) = (&expr.first, expr.rest.is_empty()) {
         match name.to_string().as_str() {
@@ -442,8 +465,8 @@ fn lower_type(
                     "array elements must be quantities in this phase",
                 ));
             }
-            "Bool" => return Ok(KindIr::Bool),
-            "Int" => return Ok(KindIr::Int),
+            "Bool" => return Ok(ParamKindIr::Bool),
+            "Int" => return Ok(ParamKindIr::Int),
             _ => {}
         }
     }
@@ -464,12 +487,12 @@ fn lower_type(
                     ));
                 }
             }
-            Ok(KindIr::Array {
+            Ok(ParamKindIr::Array {
                 element,
                 indexes: indexes.clone(),
             })
         }
-        None => Ok(KindIr::Quantity(element)),
+        None => Ok(ParamKindIr::Quantity(element)),
     }
 }
 

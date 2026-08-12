@@ -5738,12 +5738,12 @@ fn hidden_on_non_plot_include_item_is_an_error() {
 /// embedded through the ABI crate (no binary fixtures in the repository).
 fn lerp_plugin_wasm() -> Vec<u8> {
     use graphcal_plugin_abi::{
-        ManifestFunction, ManifestMonomial, ManifestParam, ManifestRational, ManifestValueKind,
+        ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind, ManifestRational,
         ManifestVarPower, PluginManifest,
     };
 
     let var = |name: &str| {
-        ManifestValueKind::Quantity(ManifestMonomial {
+        ManifestParamKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: name.to_string(),
                 pow: ManifestRational { num: 1, den: 1 },
@@ -5768,10 +5768,10 @@ fn lerp_plugin_wasm() -> Vec<u8> {
                 },
                 ManifestParam {
                     name: "t".to_string(),
-                    kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
+                    kind: ManifestParamKind::Quantity(ManifestMonomial::default()),
                 },
             ],
-            result: var("D"),
+            result: var("D").into(),
         }],
     };
     let wasm = wat::parse_str(
