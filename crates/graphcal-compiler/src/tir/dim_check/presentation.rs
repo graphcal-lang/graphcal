@@ -15,8 +15,9 @@ use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::span::Span;
 use crate::tir::presentation::{
     DagPresentationFacts, IndexedPresentation, LeafPresentation, PlotChannelPresentation,
-    PresentationCallKey, PresentationMatchArm, PresentationMatchPattern, PresentationProvenance,
-    PresentationSelection, UnitPresentation,
+    PresentationCallKey, PresentationIndexSubstitution, PresentationLocalBinder,
+    PresentationMatchArm, PresentationMatchPattern, PresentationProvenance, PresentationSelection,
+    UnitPresentation,
 };
 
 use super::infer;
@@ -310,7 +311,7 @@ impl PresentationResolver<'_> {
                     presentation_index(&binding.index, src).map(|index| {
                         PresentationProvenance::uniform_index_for_local(
                             index,
-                            binding.local.id,
+                            PresentationLocalBinder::new(owner.clone(), binding.local.id),
                             inner,
                         )
                     })
@@ -318,7 +319,7 @@ impl PresentationResolver<'_> {
             }
             ExprKind::IndexAccess { expr: inner, args } => {
                 let inner = self.expression(owner, dag_id, inner, src)?;
-                Ok(project_indexes(inner, args.as_slice()))
+                Ok(project_indexes(inner, args.as_slice(), dag_id, owner))
             }
             ExprKind::Scan { source, init, .. } => {
                 let source = self.expression(owner, dag_id, source, src)?;
@@ -662,6 +663,17 @@ fn project_field(
             key,
             output: Box::new(project_field(*output, field)),
         },
+        PresentationProvenance::IndexProjection {
+            defining_dag,
+            owner,
+            substitutions,
+            output,
+        } => PresentationProvenance::IndexProjection {
+            defining_dag,
+            owner,
+            substitutions,
+            output: Box::new(project_field(*output, field)),
+        },
         PresentationProvenance::Select(selection) => {
             PresentationProvenance::Select(Box::new(match *selection {
                 PresentationSelection::If {
@@ -702,38 +714,118 @@ fn project_field(
     }
 }
 
-#[expect(
-    clippy::option_if_let_else,
-    reason = "explicit branches document that an unresolved static key has no authored presentation"
-)]
 fn project_indexes(
     provenance: PresentationProvenance,
     args: &[hir::expr::IndexArg],
+    defining_dag: &crate::dag_id::DagId,
+    owner: &ResolvedDeclName,
 ) -> PresentationProvenance {
-    let mut provenance = match provenance {
-        PresentationProvenance::DagCall { key, output } => {
-            return PresentationProvenance::DagCall {
-                key,
-                output: Box::new(project_indexes(*output, args)),
-            };
-        }
-        other => other,
-    };
-    for arg in args {
-        provenance = match provenance {
-            PresentationProvenance::Indexed { elements, .. } => match elements {
-                IndexedPresentation::Uniform { element, .. } => *element,
-                IndexedPresentation::Entries(mut entries) => {
-                    match static_index_key(arg).and_then(|key| entries.swap_remove(&key)) {
-                        Some(presentation) => presentation,
-                        None => PresentationProvenance::None,
-                    }
-                }
+    if let PresentationProvenance::Select(selection) = provenance {
+        return PresentationProvenance::Select(Box::new(match *selection {
+            PresentationSelection::If {
+                defining_dag: selection_dag,
+                owner: selection_owner,
+                condition,
+                then_presentation,
+                else_presentation,
+            } => PresentationSelection::If {
+                defining_dag: selection_dag,
+                owner: selection_owner,
+                condition,
+                then_presentation: Box::new(project_indexes(
+                    *then_presentation,
+                    args,
+                    defining_dag,
+                    owner,
+                )),
+                else_presentation: Box::new(project_indexes(
+                    *else_presentation,
+                    args,
+                    defining_dag,
+                    owner,
+                )),
             },
-            _ => return PresentationProvenance::None,
-        };
+            PresentationSelection::Match {
+                defining_dag: selection_dag,
+                owner: selection_owner,
+                scrutinee,
+                arms,
+            } => PresentationSelection::Match {
+                defining_dag: selection_dag,
+                owner: selection_owner,
+                scrutinee,
+                arms: arms
+                    .into_iter()
+                    .map(|arm| PresentationMatchArm {
+                        pattern: arm.pattern,
+                        presentation: project_indexes(arm.presentation, args, defining_dag, owner),
+                    })
+                    .collect(),
+            },
+        }));
     }
-    provenance
+
+    let mut substitutions = Vec::new();
+    let output = project_index_layers(provenance, args, &mut substitutions);
+    if substitutions.is_empty() || is_none(&output) {
+        output
+    } else {
+        PresentationProvenance::IndexProjection {
+            defining_dag: defining_dag.clone(),
+            owner: owner.clone(),
+            substitutions,
+            output: Box::new(output),
+        }
+    }
+}
+
+fn project_index_layers(
+    provenance: PresentationProvenance,
+    args: &[hir::expr::IndexArg],
+    substitutions: &mut Vec<PresentationIndexSubstitution>,
+) -> PresentationProvenance {
+    let Some((arg, remaining)) = args.split_first() else {
+        return provenance;
+    };
+    match provenance {
+        PresentationProvenance::DagCall { key, output } => PresentationProvenance::DagCall {
+            key,
+            output: Box::new(project_index_layers(*output, args, substitutions)),
+        },
+        PresentationProvenance::IndexProjection {
+            defining_dag,
+            owner,
+            substitutions: existing,
+            output,
+        } => PresentationProvenance::IndexProjection {
+            defining_dag,
+            owner,
+            substitutions: existing,
+            output: Box::new(project_index_layers(*output, args, substitutions)),
+        },
+        PresentationProvenance::Indexed { index, elements } => match elements {
+            IndexedPresentation::Uniform { binder, element } => {
+                if let Some(binder) = binder {
+                    substitutions.push(PresentationIndexSubstitution::new(
+                        index,
+                        binder,
+                        arg.clone(),
+                    ));
+                }
+                project_index_layers(*element, remaining, substitutions)
+            }
+            IndexedPresentation::Entries(mut entries) => static_index_key(arg)
+                .and_then(|key| entries.swap_remove(&key))
+                .map_or_else(
+                    || PresentationProvenance::None,
+                    |presentation| project_index_layers(presentation, remaining, substitutions),
+                ),
+        },
+        PresentationProvenance::None
+        | PresentationProvenance::Leaf(_)
+        | PresentationProvenance::Struct { .. }
+        | PresentationProvenance::Select(_) => PresentationProvenance::None,
+    }
 }
 
 fn static_index_key(arg: &hir::expr::IndexArg) -> Option<IndexEntryKey> {
@@ -754,7 +846,8 @@ fn static_index_key(arg: &hir::expr::IndexArg) -> Option<IndexEntryKey> {
 const fn outer_index(provenance: &PresentationProvenance) -> Option<&IndexTypeRef> {
     match provenance {
         PresentationProvenance::Indexed { index, .. } => Some(index),
-        PresentationProvenance::DagCall { output, .. } => outer_index(output),
+        PresentationProvenance::DagCall { output, .. }
+        | PresentationProvenance::IndexProjection { output, .. } => outer_index(output),
         PresentationProvenance::None
         | PresentationProvenance::Leaf(_)
         | PresentationProvenance::Struct { .. }
