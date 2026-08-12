@@ -45,7 +45,7 @@ fn function_to_manifest(function: &FunctionIr) -> syn::Result<ManifestFunction> 
             })
         })
         .collect::<syn::Result<Vec<_>>>()?;
-    Ok(ManifestFunction {
+    let manifest = ManifestFunction {
         name: function.name.to_string(),
         dim_vars: function.dim_vars.iter().map(ToString::to_string).collect(),
         index_vars: function
@@ -55,7 +55,19 @@ fn function_to_manifest(function: &FunctionIr) -> syn::Result<ManifestFunction> 
             .collect(),
         params,
         result: kind_to_manifest(&function.result, function.name.span())?,
-    })
+    };
+    let slots = manifest.abi_parameter_slots().unwrap_or(usize::MAX);
+    if slots > graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS {
+        return Err(syn::Error::new(
+            function.name.span(),
+            format!(
+                "function `{}` requires {slots} raw ABI parameter slots, exceeding the limit of {}",
+                function.name,
+                graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS
+            ),
+        ));
+    }
+    Ok(manifest)
 }
 
 fn kind_to_manifest(kind: &KindIr, fallback_span: Span) -> syn::Result<ManifestValueKind> {

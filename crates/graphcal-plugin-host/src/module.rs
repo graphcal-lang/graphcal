@@ -98,9 +98,7 @@ impl PluginModule {
         let functions = convert_manifest(&manifest)?;
 
         let module =
-            wasmi::Module::new(engine, bytes).map_err(|err| PluginLoadError::InvalidModule {
-                message: err.to_string(),
-            })?;
+            wasmi::Module::new(engine, bytes).map_err(|error| plugin_module_error(&error))?;
 
         let mut imports_fail = false;
         for import in module.imports() {
@@ -926,6 +924,118 @@ fn describe_func_type(ty: &wasmi::FuncType) -> String {
     format!("({}) -> ({})", list(ty.params()), list(ty.results()))
 }
 
+fn plugin_module_error(error: &wasmi::Error) -> PluginLoadError {
+    match error.kind() {
+        wasmi::errors::ErrorKind::Limits(limit) => {
+            PluginLoadError::ModuleLimit(module_limit_error(limit))
+        }
+        _ => PluginLoadError::InvalidModule {
+            message: error.to_string(),
+        },
+    }
+}
+
+const fn module_limit_error(error: &wasmi::errors::EnforcedLimitsError) -> PluginModuleLimitError {
+    use wasmi::errors::EnforcedLimitsError;
+
+    match error {
+        EnforcedLimitsError::TooManyGlobals { limit } => {
+            PluginModuleLimitError::TooManyGlobals { limit: *limit }
+        }
+        EnforcedLimitsError::TooManyTables { limit } => {
+            PluginModuleLimitError::TooManyTables { limit: *limit }
+        }
+        EnforcedLimitsError::TooManyFunctions { limit } => {
+            PluginModuleLimitError::TooManyFunctions { limit: *limit }
+        }
+        EnforcedLimitsError::TooManyMemories { limit } => {
+            PluginModuleLimitError::TooManyMemories { limit: *limit }
+        }
+        EnforcedLimitsError::TooManyElementSegments { limit } => {
+            PluginModuleLimitError::TooManyElementSegments { limit: *limit }
+        }
+        EnforcedLimitsError::TooManyDataSegments { limit } => {
+            PluginModuleLimitError::TooManyDataSegments { limit: *limit }
+        }
+        EnforcedLimitsError::TooManyParameters { limit } => {
+            PluginModuleLimitError::TooManyParameters { limit: *limit }
+        }
+        EnforcedLimitsError::TooManyResults { limit } => {
+            PluginModuleLimitError::TooManyResults { limit: *limit }
+        }
+        EnforcedLimitsError::MinAvgBytesPerFunction { limit, avg } => {
+            PluginModuleLimitError::FunctionBodiesTooSmall {
+                minimum_average: *limit,
+                actual_average: *avg,
+            }
+        }
+    }
+}
+
+/// A stable Graphcal classification of Wasmi's malicious-module limits.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PluginModuleLimitError {
+    /// The module declares too many globals.
+    #[error("plugin module exceeds the limit of {limit} globals")]
+    TooManyGlobals {
+        /// Maximum globals accepted by the engine.
+        limit: u32,
+    },
+    /// The module declares too many tables.
+    #[error("plugin module exceeds the limit of {limit} tables")]
+    TooManyTables {
+        /// Maximum tables accepted by the engine.
+        limit: u32,
+    },
+    /// The module declares too many functions.
+    #[error("plugin module exceeds the limit of {limit} functions")]
+    TooManyFunctions {
+        /// Maximum functions accepted by the engine.
+        limit: u32,
+    },
+    /// The module declares too many linear memories.
+    #[error("plugin module exceeds the limit of {limit} memories")]
+    TooManyMemories {
+        /// Maximum memories accepted by the engine.
+        limit: u32,
+    },
+    /// The module declares too many element segments.
+    #[error("plugin module exceeds the limit of {limit} element segments")]
+    TooManyElementSegments {
+        /// Maximum element segments accepted by the engine.
+        limit: u32,
+    },
+    /// The module declares too many data segments.
+    #[error("plugin module exceeds the limit of {limit} data segments")]
+    TooManyDataSegments {
+        /// Maximum data segments accepted by the engine.
+        limit: u32,
+    },
+    /// A Wasm function or control type has too many parameters.
+    #[error("plugin module contains a function type with more than {limit} parameters")]
+    TooManyParameters {
+        /// Maximum parameters accepted in one type.
+        limit: usize,
+    },
+    /// A Wasm function or control type has too many results.
+    #[error("plugin module contains a function type with more than {limit} results")]
+    TooManyResults {
+        /// Maximum results accepted in one type.
+        limit: usize,
+    },
+    /// Many tiny function bodies would amplify eager compilation work.
+    #[error(
+        "plugin module function bodies average {actual_average} bytes, below the required \
+         {minimum_average} bytes"
+    )]
+    FunctionBodiesTooSmall {
+        /// Required minimum average body size.
+        minimum_average: u32,
+        /// Module's actual average body size.
+        actual_average: u32,
+    },
+}
+
 /// Error validating and compiling a plugin module.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PluginLoadError {
@@ -935,6 +1045,17 @@ pub enum PluginLoadError {
     /// A manifest signature failed to convert to the typed IR.
     #[error(transparent)]
     InvalidSignature(#[from] ManifestConvertError),
+    /// The encoded module exceeds the host's byte policy.
+    #[error("plugin module is {bytes} bytes, exceeding the {max_bytes}-byte limit")]
+    ModuleTooLarge {
+        /// Actual encoded module size.
+        bytes: usize,
+        /// Configured maximum encoded module size.
+        max_bytes: usize,
+    },
+    /// Parsing or eager translation exceeded a structural compilation limit.
+    #[error(transparent)]
+    ModuleLimit(#[from] PluginModuleLimitError),
     /// The bytes are not a valid WebAssembly module.
     #[error("invalid WebAssembly module: {message}")]
     InvalidModule {

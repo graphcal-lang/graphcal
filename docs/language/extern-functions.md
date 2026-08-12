@@ -224,8 +224,11 @@ at load time before any plugin code runs:
   row-major `f64` elements. A quantity/`Bool`/`Int` result is the single `f64`
   return value; an array or struct result replaces the return with one trailing
   `i32` out-pointer the plugin fills — the product of the signature-bound
-  result extents for an array, or one slot per field for a struct. A non-finite quantity
-  flows into graphcal's ordinary non-finite containment.
+  result extents for an array, or one slot per field for a struct. The complete
+  lowered function signature may use at most 32 raw WebAssembly parameters;
+  array pointers, every axis extent, and an out-pointer each count separately.
+  This is checked in the manifest and by the Rust SDK before code generation.
+  A non-finite quantity flows into graphcal's ordinary non-finite containment.
 - **Allocator exports.** A module that takes or returns arrays or structs
   must export its memory as `"memory"` plus
   `graphcal_alloc(size: i32) -> i32` (8-byte-aligned) and
@@ -239,8 +242,13 @@ at load time before any plugin code runs:
   with a dedicated diagnostic (P007). A module importing `graphcal::fail`
   must export its linear memory as `"memory"` so the failure message can
   be read.
-- **Resource bounds.** Every logical call runs under one fuel budget
-  (roughly an instruction count). Every plugin instance separately caps
+- **Resource bounds.** The host rejects an encoded module over 16 MiB by
+  default, including for direct API callers, before hashing, manifest parsing,
+  or compilation. Wasmi's malicious-input policy bounds functions, globals,
+  memories, tables, data/element segments, function type widths, and
+  tiny-function compilation amplification while retaining eager compilation.
+  Every logical call then runs under one fuel budget (roughly an instruction
+  count). Every plugin instance separately caps
   linear-memory bytes, the number of memories and tables, and the elements in
   each table; an oversized initial allocation fails during instantiation and
   growth beyond a cap is denied. Wasmi's value and call stacks have separate

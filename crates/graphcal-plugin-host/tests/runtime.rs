@@ -14,6 +14,7 @@ use graphcal_plugin_abi::{
 };
 use graphcal_plugin_host::{
     ConvertErrorKind, PluginCallError, PluginHost, PluginLimits, PluginLoadError,
+    PluginModuleLimitError,
 };
 
 fn quantity_var(var: &str) -> ManifestValueKind {
@@ -87,6 +88,13 @@ fn f64_value(value: &HostFnValue) -> f64 {
     }
 }
 
+const LERP_FUNCTION_WAT: &str = r#"
+(func (export "lerp") (param f64 f64 f64) (result f64)
+  (f64.add
+    (local.get 0)
+    (f64.mul (f64.sub (local.get 1) (local.get 0)) (local.get 2))))
+"#;
+
 const LERP_WAT: &str = r#"
 (module
   (memory (export "memory") 1)
@@ -95,6 +103,18 @@ const LERP_WAT: &str = r#"
       (local.get 0)
       (f64.mul (f64.sub (local.get 1) (local.get 0)) (local.get 2)))))
 "#;
+
+fn module_with(extra_items: &str) -> String {
+    format!("(module\n{LERP_FUNCTION_WAT}\n{extra_items}\n)")
+}
+
+fn module_limit_error(extra_items: &str) -> PluginModuleLimitError {
+    let bytes = plugin(&module_with(extra_items), &lerp_manifest());
+    match PluginHost::new().load(&bytes).unwrap_err() {
+        PluginLoadError::ModuleLimit(error) => error,
+        other => panic!("expected a module compilation limit, got {other:?}"),
+    }
+}
 
 fn lerp_manifest() -> PluginManifest {
     manifest(vec![function(
@@ -561,6 +581,137 @@ fn invalid_wasm_bytes_are_rejected() {
         PluginHost::new().load(&wasm).unwrap_err(),
         PluginLoadError::InvalidModule { .. }
     ));
+}
+
+#[test]
+fn direct_load_rejects_modules_over_the_byte_policy_before_parsing() {
+    let bytes = plugin(LERP_WAT, &lerp_manifest());
+    let max_bytes = bytes.len() - 1;
+    let host = PluginHost::with_limits(PluginLimits::default().with_max_module_bytes(max_bytes));
+    assert_eq!(
+        host.load(&bytes).unwrap_err(),
+        PluginLoadError::ModuleTooLarge {
+            bytes: bytes.len(),
+            max_bytes,
+        }
+    );
+}
+
+#[test]
+fn default_host_module_cap_matches_project_ingestion() {
+    let host_bytes = u64::try_from(PluginLimits::default().max_module_bytes());
+    let project_bytes = graphcal_io::ProjectIngestionPolicy::default()
+        .plugin()
+        .get();
+    assert_eq!(host_bytes, Ok(project_bytes));
+}
+
+#[test]
+fn strict_compilation_limits_globals() {
+    assert_eq!(
+        module_limit_error(&"(global i32 (i32.const 0))\n".repeat(1_001)),
+        PluginModuleLimitError::TooManyGlobals { limit: 1_000 }
+    );
+}
+
+#[test]
+fn strict_compilation_limits_tables() {
+    assert_eq!(
+        module_limit_error(&"(table 0 funcref)\n".repeat(101)),
+        PluginModuleLimitError::TooManyTables { limit: 100 }
+    );
+}
+
+#[test]
+fn strict_compilation_limits_functions() {
+    assert_eq!(
+        module_limit_error(&"(func)\n".repeat(10_000)),
+        PluginModuleLimitError::TooManyFunctions { limit: 10_000 }
+    );
+}
+
+#[test]
+fn strict_compilation_limits_memories() {
+    assert_eq!(
+        module_limit_error("(memory 0)\n(memory 0)"),
+        PluginModuleLimitError::TooManyMemories { limit: 1 }
+    );
+}
+
+#[test]
+fn strict_compilation_limits_element_segments() {
+    let segments = "(elem (i32.const 0) func $element)\n".repeat(1_001);
+    let items = format!("(table 1 funcref)\n(func $element)\n{segments}");
+    assert_eq!(
+        module_limit_error(&items),
+        PluginModuleLimitError::TooManyElementSegments { limit: 1_000 }
+    );
+}
+
+#[test]
+fn strict_compilation_limits_data_segments() {
+    let items = format!(
+        "(memory 1)\n{}",
+        "(data (i32.const 0) \"\")\n".repeat(1_001)
+    );
+    assert_eq!(
+        module_limit_error(&items),
+        PluginModuleLimitError::TooManyDataSegments { limit: 1_000 }
+    );
+}
+
+#[test]
+fn strict_compilation_limits_function_parameters() {
+    let items = format!("(func {})", "(param i32) ".repeat(33));
+    assert_eq!(
+        module_limit_error(&items),
+        PluginModuleLimitError::TooManyParameters { limit: 32 }
+    );
+}
+
+#[test]
+fn strict_compilation_limits_function_results() {
+    let result_types = "i32 ".repeat(33);
+    let values = "(i32.const 0) ".repeat(33);
+    let items = format!("(func (result {result_types}) {values})");
+    assert_eq!(
+        module_limit_error(&items),
+        PluginModuleLimitError::TooManyResults { limit: 32 }
+    );
+}
+
+#[test]
+fn strict_compilation_rejects_tiny_function_amplification() {
+    assert!(matches!(
+        module_limit_error(&"(func)\n".repeat(600)),
+        PluginModuleLimitError::FunctionBodiesTooSmall {
+            minimum_average: 40,
+            actual_average: 0..=3,
+        }
+    ));
+}
+
+#[test]
+fn abi_parameter_limit_matches_wasmi_strict_limit() {
+    let count = graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS;
+    let wasm_params = "(param f64) ".repeat(count);
+    let wat = format!("(module (func (export \"many\") {wasm_params} (result f64) (f64.const 0)))");
+    let manifest = manifest(vec![ManifestFunction {
+        name: "many".to_string(),
+        dim_vars: Vec::new(),
+        index_vars: Vec::new(),
+        params: (0..count)
+            .map(|index| ManifestParam {
+                name: format!("p{index}"),
+                kind: dimensionless(),
+            })
+            .collect(),
+        result: dimensionless(),
+    }]);
+    let module = PluginHost::new().load(&plugin(&wat, &manifest)).unwrap();
+    let args = vec![0.0; count];
+    let result = module.call(&fn_name("many"), &f64_values(&args)).unwrap();
+    assert!(f64_value(&result).abs() < f64::EPSILON);
 }
 
 // ---------------------------------------------------------------------------
