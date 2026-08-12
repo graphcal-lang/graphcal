@@ -13,8 +13,8 @@ use graphcal_plugin_abi::{
     embed_manifest,
 };
 use graphcal_plugin_host::{
-    ConvertErrorKind, PluginCallError, PluginHost, PluginLimits, PluginLoadError,
-    PluginModuleLimitError,
+    ConvertErrorKind, PluginCacheLimits, PluginCallError, PluginHost, PluginLimits,
+    PluginLoadError, PluginModuleLimitError,
 };
 
 fn quantity_var(var: &str) -> ManifestValueKind {
@@ -185,6 +185,40 @@ fn caches_modules_by_content_hash() {
     let second = host.load(&bytes).unwrap();
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(first.sha256_hex().len(), 64);
+}
+
+#[test]
+fn bounded_cache_evicts_the_least_recently_used_module() {
+    let host = PluginHost::with_policies(
+        PluginLimits::default(),
+        PluginCacheLimits::new(2, usize::MAX),
+    );
+    let a_bytes = plugin(&module_with("(global i32 (i32.const 1))"), &lerp_manifest());
+    let b_bytes = plugin(&module_with("(global i32 (i32.const 2))"), &lerp_manifest());
+    let c_bytes = plugin(&module_with("(global i32 (i32.const 3))"), &lerp_manifest());
+
+    let a = host.load(&a_bytes).unwrap();
+    let b = host.load(&b_bytes).unwrap();
+    assert!(Arc::ptr_eq(&a, &host.load(&a_bytes).unwrap()));
+    host.load(&c_bytes).unwrap();
+
+    assert!(Arc::ptr_eq(&a, &host.load(&a_bytes).unwrap()));
+    assert!(!Arc::ptr_eq(&b, &host.load(&b_bytes).unwrap()));
+}
+
+#[test]
+fn changed_bytes_recover_after_a_cached_invalid_module() {
+    let host = PluginHost::new();
+    let mut invalid = plugin(LERP_WAT, &lerp_manifest());
+    invalid.truncate(invalid.len() - 1);
+    assert!(host.load(&invalid).is_err());
+    assert!(host.load(&invalid).is_err());
+
+    let valid = host.load(&plugin(LERP_WAT, &lerp_manifest())).unwrap();
+    let result = valid
+        .call(&fn_name("lerp"), &f64_values(&[0.0, 10.0, 0.5]))
+        .unwrap();
+    assert!((f64_value(&result) - 5.0).abs() < f64::EPSILON);
 }
 
 #[test]
