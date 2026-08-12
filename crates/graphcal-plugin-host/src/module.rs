@@ -8,15 +8,18 @@
 //! failure messages, traps, and fuel exhaustion mapped to
 //! [`PluginCallError`].
 
-use std::sync::{Mutex, PoisonError};
+use std::{
+    num::NonZeroU32,
+    sync::{Mutex, PoisonError},
+};
 
 use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
-    ALLOC_EXPORT, FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, FREE_EXPORT, MAX_FAIL_MESSAGE_BYTES,
-    ManifestFromWasmError, PluginManifest,
+    ALLOC_EXPORT, BUFFER_ALIGN, FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, FREE_EXPORT,
+    MAX_FAIL_MESSAGE_BYTES, ManifestFromWasmError, PluginManifest,
 };
 use sha2::Digest as _;
 use thiserror::Error;
@@ -345,7 +348,7 @@ impl PluginModule {
 
         let value = match (out_buffer, buffers.as_ref()) {
             (Some(out), Some(buffers)) => {
-                let values = buffers.read_buffer(live, out.ptr, out.len)?;
+                let values = buffers.read_buffer(live, out.allocation)?;
                 match out.kind {
                     OutBufferKind::Array { shape } => {
                         HostFnValue::Array(HostArray::try_new(shape, values).map_err(|error| {
@@ -443,9 +446,9 @@ impl PluginModule {
                         }
                     }
                     let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-                    let ptr =
+                    let pointer =
                         buffers.write_buffer(live, self.limits.fuel_per_call, array.values())?;
-                    params.push(wasmi::Val::I32(ptr));
+                    params.push(wasmi::Val::I32(pointer.as_abi_i32()));
                     for extent in array.shape() {
                         let extent = u32::try_from(*extent)
                             .map_err(|_| PluginCallError::BufferTooLarge { elements: *extent })?;
@@ -471,7 +474,7 @@ impl PluginModule {
             buffers,
         )?;
         if let Some(out) = &out_buffer {
-            params.push(wasmi::Val::I32(out.ptr));
+            params.push(wasmi::Val::I32(out.allocation.pointer().as_abi_i32()));
         }
         Ok((params, out_buffer))
     }
@@ -517,8 +520,8 @@ impl PluginModule {
             ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => return Ok(None),
         };
         let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-        let ptr = buffers.alloc(live, self.limits.fuel_per_call, len)?;
-        Ok(Some(OutBuffer { ptr, len, kind }))
+        let allocation = buffers.alloc(live, self.limits.fuel_per_call, len)?;
+        Ok(Some(OutBuffer { allocation, kind }))
     }
 }
 
@@ -528,10 +531,91 @@ enum OutBufferKind {
     Record,
 }
 
+/// A non-null, ABI-aligned offset into a plugin's linear memory.
+///
+/// Construction also proves that the complete allocation range is currently
+/// in bounds. WebAssembly memories cannot shrink, so the offset remains valid
+/// for the allocation's lifetime.
+#[derive(Clone, Copy)]
+struct WasmBufferPointer {
+    abi: NonZeroU32,
+    offset: usize,
+}
+
+impl WasmBufferPointer {
+    fn from_allocator(
+        raw: i32,
+        byte_len: usize,
+        memory_bytes: usize,
+    ) -> Result<Self, PluginCallError> {
+        let address = u32::from_ne_bytes(raw.to_ne_bytes());
+        let abi = NonZeroU32::new(address)
+            .ok_or(PluginCallError::AllocationFailed { bytes: byte_len })?;
+        let alignment = u32::try_from(BUFFER_ALIGN)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .ok_or_else(|| PluginCallError::Internal {
+                message: format!("invalid ABI buffer alignment {BUFFER_ALIGN}"),
+            })?;
+        if !address.is_multiple_of(alignment.get()) {
+            return Err(PluginCallError::MisalignedAllocatorPointer {
+                pointer: address,
+                required_alignment: alignment.get(),
+            });
+        }
+        let offset =
+            usize::try_from(address).map_err(|_| PluginCallError::AllocatorBufferOutOfBounds {
+                pointer: address,
+                bytes: byte_len,
+                memory_bytes,
+            })?;
+        if offset
+            .checked_add(byte_len)
+            .is_none_or(|end| end > memory_bytes)
+        {
+            return Err(PluginCallError::AllocatorBufferOutOfBounds {
+                pointer: address,
+                bytes: byte_len,
+                memory_bytes,
+            });
+        }
+        Ok(Self { abi, offset })
+    }
+
+    const fn as_abi_i32(self) -> i32 {
+        i32::from_ne_bytes(self.abi.get().to_ne_bytes())
+    }
+
+    const fn offset(self) -> usize {
+        self.offset
+    }
+}
+
+/// One allocation returned by the plugin and validated against the ABI.
+#[derive(Clone, Copy)]
+struct PluginAllocation {
+    pointer: WasmBufferPointer,
+    byte_len: usize,
+    abi_byte_len: u32,
+}
+
+impl PluginAllocation {
+    const fn pointer(self) -> WasmBufferPointer {
+        self.pointer
+    }
+
+    const fn byte_len(self) -> usize {
+        self.byte_len
+    }
+
+    const fn abi_byte_len(self) -> i32 {
+        i32::from_ne_bytes(self.abi_byte_len.to_ne_bytes())
+    }
+}
+
 /// A host-allocated result buffer handed to the plugin.
 struct OutBuffer {
-    ptr: i32,
-    len: usize,
+    allocation: PluginAllocation,
     kind: OutBufferKind,
 }
 
@@ -541,9 +625,7 @@ struct BufferProtocol {
     memory: wasmi::Memory,
     alloc: wasmi::Func,
     free: wasmi::Func,
-    /// `(ptr, size_bytes)` of every host-requested allocation, freed after
-    /// the call completes.
-    allocations: Vec<(i32, i32)>,
+    allocations: Vec<PluginAllocation>,
 }
 
 impl BufferProtocol {
@@ -583,25 +665,42 @@ impl BufferProtocol {
         live: &mut LiveInstance,
         fuel: u64,
         len: usize,
-    ) -> Result<i32, PluginCallError> {
-        let size = i32::try_from(len)
-            .ok()
-            .and_then(|len| len.checked_mul(8))
+    ) -> Result<PluginAllocation, PluginCallError> {
+        let byte_len = len
+            .checked_mul(size_of::<f64>())
             .ok_or(PluginCallError::BufferTooLarge { elements: len })?;
+        let abi_byte_len = u32::try_from(byte_len)
+            .map_err(|_| PluginCallError::BufferTooLarge { elements: len })?;
         let mut results = [wasmi::Val::I32(0)];
         self.alloc
-            .call(&mut live.store, &[wasmi::Val::I32(size)], &mut results)
+            .call(
+                &mut live.store,
+                &[wasmi::Val::I32(i32::from_ne_bytes(
+                    abi_byte_len.to_ne_bytes(),
+                ))],
+                &mut results,
+            )
             .map_err(|err| error_from_wasm(&mut live.store, &err, fuel))?;
-        let ptr = match results[0] {
-            wasmi::Val::I32(ptr) => ptr,
+        let raw_pointer = match results[0] {
+            wasmi::Val::I32(pointer) => pointer,
             ref other => {
                 return Err(PluginCallError::Internal {
                     message: format!("allocator returned {other:?} despite load-time type checks"),
                 });
             }
         };
-        self.allocations.push((ptr, size));
-        Ok(ptr)
+        let pointer = WasmBufferPointer::from_allocator(
+            raw_pointer,
+            byte_len,
+            self.memory.data_size(&live.store),
+        )?;
+        let allocation = PluginAllocation {
+            pointer,
+            byte_len,
+            abi_byte_len,
+        };
+        self.allocations.push(allocation);
+        Ok(allocation)
     }
 
     /// Allocate and fill one input buffer; returns its plugin-memory pointer.
@@ -610,51 +709,38 @@ impl BufferProtocol {
         live: &mut LiveInstance,
         fuel: u64,
         values: &[f64],
-    ) -> Result<i32, PluginCallError> {
-        let ptr = self.alloc(live, fuel, values.len())?;
-        let mut bytes = Vec::with_capacity(values.len() * 8);
-        for value in values {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "a negative allocator pointer is out of bounds and rejected by the write below"
-        )]
+    ) -> Result<WasmBufferPointer, PluginCallError> {
+        let allocation = self.alloc(live, fuel, values.len())?;
+        let mut bytes = Vec::with_capacity(allocation.byte_len());
+        bytes.extend(values.iter().flat_map(|value| value.to_le_bytes()));
         self.memory
-            .write(&mut live.store, ptr as usize, &bytes)
-            .map_err(|_| PluginCallError::Trap {
+            .write(&mut live.store, allocation.pointer().offset(), &bytes)
+            .map_err(|error| PluginCallError::Internal {
                 message: format!(
-                    "plugin allocator returned an out-of-bounds buffer (ptr {ptr}, {} bytes)",
-                    bytes.len()
+                    "validated plugin input buffer became inaccessible before use: {error}"
                 ),
             })?;
-        Ok(ptr)
+        Ok(allocation.pointer())
     }
 
     /// Read the out-buffer the plugin filled.
     fn read_buffer(
         &self,
         live: &LiveInstance,
-        ptr: i32,
-        len: usize,
+        allocation: PluginAllocation,
     ) -> Result<Vec<f64>, PluginCallError> {
-        let mut bytes = vec![0_u8; len * 8];
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "a negative allocator pointer is out of bounds and rejected by the read below"
-        )]
+        let mut bytes = vec![0_u8; allocation.byte_len()];
         self.memory
-            .read(&live.store, ptr as usize, &mut bytes)
-            .map_err(|_| PluginCallError::Trap {
+            .read(&live.store, allocation.pointer().offset(), &mut bytes)
+            .map_err(|error| PluginCallError::Internal {
                 message: format!(
-                    "plugin result buffer is out of bounds (ptr {ptr}, {} bytes)",
-                    bytes.len()
+                    "validated plugin result buffer became inaccessible before use: {error}"
                 ),
             })?;
         Ok(bytes
-            .chunks_exact(8)
+            .chunks_exact(size_of::<f64>())
             .map(|chunk| {
-                let mut raw = [0_u8; 8];
+                let mut raw = [0_u8; size_of::<f64>()];
                 raw.copy_from_slice(chunk);
                 f64::from_le_bytes(raw)
             })
@@ -663,11 +749,14 @@ impl BufferProtocol {
 
     /// Release every allocation made for this call.
     fn free_all(self, live: &mut LiveInstance, fuel: u64) -> Result<(), PluginCallError> {
-        for (ptr, size) in self.allocations {
+        for allocation in self.allocations {
             self.free
                 .call(
                     &mut live.store,
-                    &[wasmi::Val::I32(ptr), wasmi::Val::I32(size)],
+                    &[
+                        wasmi::Val::I32(allocation.pointer().as_abi_i32()),
+                        wasmi::Val::I32(allocation.abi_byte_len()),
+                    ],
                     &mut [],
                 )
                 .map_err(|err| error_from_wasm(&mut live.store, &err, fuel))?;
@@ -962,6 +1051,37 @@ pub enum PluginCallError {
     BufferTooLarge {
         /// The element count of the oversized array.
         elements: usize,
+    },
+    /// The plugin allocator reported that it could not satisfy a request.
+    #[error("plugin allocator could not allocate {bytes} byte(s)")]
+    AllocationFailed {
+        /// Number of bytes requested by the host.
+        bytes: usize,
+    },
+    /// The plugin allocator returned a pointer that violates the ABI's
+    /// alignment requirement.
+    #[error(
+        "plugin allocator returned misaligned pointer {pointer}; required alignment is \
+         {required_alignment} bytes"
+    )]
+    MisalignedAllocatorPointer {
+        /// Unsigned WebAssembly address returned by the allocator.
+        pointer: u32,
+        /// Required ABI alignment in bytes.
+        required_alignment: u32,
+    },
+    /// The plugin allocator returned a range outside its exported memory.
+    #[error(
+        "plugin allocator returned out-of-bounds buffer (pointer {pointer}, {bytes} byte(s), \
+         memory size {memory_bytes} bytes)"
+    )]
+    AllocatorBufferOutOfBounds {
+        /// Unsigned WebAssembly address returned by the allocator.
+        pointer: u32,
+        /// Number of bytes requested by the host.
+        bytes: usize,
+        /// Current exported memory size in bytes.
+        memory_bytes: usize,
     },
     /// An internal invariant of the host itself failed.
     #[error("plugin host internal error: {message}")]

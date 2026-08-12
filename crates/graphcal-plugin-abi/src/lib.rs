@@ -97,9 +97,11 @@ pub const MAX_FAIL_MESSAGE_BYTES: usize = 4096;
 
 /// Export name of the plugin allocator the host places array buffers with.
 ///
-/// Wasm type `(i32 size) -> i32`, returning an 8-byte-aligned pointer.
-/// Required (with [`FREE_EXPORT`] and an exported memory) whenever the
-/// manifest declares any array parameter or result.
+/// Wasm type `(i32 size) -> i32`, returning a nonzero,
+/// [`BUFFER_ALIGN`]-aligned pointer whose complete requested range is in the
+/// exported memory. A return value of zero is reserved to report allocation
+/// failure. Required (with [`FREE_EXPORT`] and an exported memory) whenever
+/// the manifest declares any array parameter or result.
 pub const ALLOC_EXPORT: &str = "graphcal_alloc";
 
 /// Export name of the matching deallocator: wasm type
