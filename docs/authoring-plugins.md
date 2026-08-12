@@ -149,6 +149,16 @@ the extents bound by the result's axis list. Other results are `f64`, `bool`,
 `i64`, or the generated `...Output` struct. Array-moving functions still
 compile natively, so `cargo test` needs no wasm toolchain.
 
+Generated public names are checked before Rust code is emitted. A struct result
+on `foo_bar` uses `FooBarOutput`; declarations whose spellings collapse to the
+same output name (for example, `foo` and `foo_`) are rejected at both function
+spans. `GRAPHCAL_PLUGIN_MANIFEST` and
+`GRAPHCAL_PLUGIN_MANIFEST_SECTION_IS_UNIQUE` are reserved in the invocation's
+module. If any signature uses the buffer protocol, the WebAssembly export names
+`graphcal_alloc`, `graphcal_free`, and `memory` are also reserved. Private
+wrapper parameters and locals are hygienic, so ordinary parameter names never
+collide with them.
+
 **Quantity values are SI base units, always.** A `Pressure` parameter is
 pascals; a `Velocity` result is metres per second. Graphcal checks
 dimensions at every call site, but it cannot see whether your math treats
