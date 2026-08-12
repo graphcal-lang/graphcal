@@ -33,7 +33,7 @@
 //!     the product of its result-axis extents (all bound by inputs); a struct
 //!     writes one slot per declared field;
 //! - if any function moves an array or struct result, exports its linear memory as
-//!   `"memory"` plus the allocator pair [`ALLOC_EXPORT`] of type
+//!   [`MEMORY_EXPORT`] plus the allocator pair [`ALLOC_EXPORT`] of type
 //!   `(i32 size) -> i32` (returning 8-byte-aligned pointers) and
 //!   [`FREE_EXPORT`] of type `(i32 ptr, i32 size) -> ()`. The host allocates
 //!   every buffer before a call and frees them all after it; a plugin never
@@ -42,7 +42,7 @@
 //!   `graphcal::fail` function ([`FAIL_IMPORT_MODULE`], [`FAIL_IMPORT_NAME`])
 //!   of wasm type `(i32, i32) -> ()`. The import ban is what guarantees
 //!   plugins are pure and free of I/O by construction;
-//! - exports its linear memory as `"memory"` **if** it imports the fail
+//! - exports its linear memory as [`MEMORY_EXPORT`] **if** it imports the fail
 //!   function (the host reads the failure message out of that memory).
 //!
 //! To report a failure, a plugin calls `fail(ptr, len)` with a UTF-8 message
@@ -134,6 +134,12 @@ pub const MAX_MANIFEST_MONOMIAL_FACTORS: usize = 64;
 /// trailing out-pointer. This mirrors the malicious-module compilation policy
 /// used by the host, so accepted manifests remain compilable.
 pub const MAX_ABI_FUNCTION_PARAMS: usize = 32;
+
+/// Export name of the plugin's linear memory.
+///
+/// Required whenever the manifest declares any array parameter/result or a
+/// struct result, and whenever the plugin imports [`FAIL_IMPORT_NAME`].
+pub const MEMORY_EXPORT: &str = "memory";
 
 /// Export name of the plugin allocator the host places array buffers with.
 ///

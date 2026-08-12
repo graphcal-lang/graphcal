@@ -32,7 +32,7 @@ fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStre
     let ast: parse::PluginInput = syn::parse2(input)?;
     let ir = lower::lower(&ast)?;
     let manifest_json = manifest::build_manifest_json(&ir)?;
-    Ok(codegen::generate(&ir, &manifest_json))
+    codegen::generate(&ir, &manifest_json)
 }
 
 #[cfg(test)]
@@ -460,6 +460,74 @@ mod tests {
             message.contains("33 raw ABI parameter slots, exceeding the limit of 32"),
             "got: {message}"
         );
+    }
+
+    #[test]
+    fn generated_output_type_collisions_are_reported_at_authored_functions() {
+        let error = expand(quote! {
+            fn foo(x: Dimensionless) -> { value: Dimensionless } { unreachable!() }
+            fn foo_(x: Dimensionless) -> { value: Dimensionless } { unreachable!() }
+        })
+        .expect_err("generated output names must be unique");
+        let message = error.to_string();
+        assert!(message.contains("`FooOutput`"), "got: {message}");
+        assert!(message.contains("function `foo`"), "got: {message}");
+        assert!(message.contains("function `foo_`"), "got: {message}");
+        let diagnostics = error.into_compile_error().to_string();
+        assert!(
+            diagnostics.contains("first uses `FooOutput` here"),
+            "got: {diagnostics}"
+        );
+
+        let message = error_of(quote! {
+            fn FooOutput(x: Dimensionless) -> Dimensionless { x }
+            fn foo(x: Dimensionless) -> { value: Dimensionless } { unreachable!() }
+        });
+        assert!(message.contains("`FooOutput`"), "got: {message}");
+        assert!(
+            message.contains("authored function `FooOutput`"),
+            "got: {message}"
+        );
+        assert!(message.contains("function `foo`"), "got: {message}");
+    }
+
+    #[test]
+    fn generated_top_level_items_are_reserved() {
+        for reserved in [
+            "GRAPHCAL_PLUGIN_MANIFEST",
+            "GRAPHCAL_PLUGIN_MANIFEST_SECTION_IS_UNIQUE",
+        ] {
+            let reserved_ident = format_ident!("{reserved}");
+            let message = error_of(quote! {
+                fn #reserved_ident(x: Dimensionless) -> Dimensionless { x }
+            });
+            assert!(message.contains(reserved), "got: {message}");
+            assert!(message.contains("collides"), "got: {message}");
+        }
+    }
+
+    #[test]
+    fn buffer_protocol_export_names_are_reserved_only_when_generated() {
+        for reserved in [
+            graphcal_plugin_abi::ALLOC_EXPORT,
+            graphcal_plugin_abi::FREE_EXPORT,
+            graphcal_plugin_abi::MEMORY_EXPORT,
+        ] {
+            let reserved_ident = format_ident!("{reserved}");
+            let message = error_of(quote! {
+                fn #reserved_ident(x: Dimensionless) -> Dimensionless { x }
+                fn buffered<I: Index>(xs: Dimensionless[I]) -> Dimensionless {
+                    xs.iter().sum()
+                }
+            });
+            assert!(message.contains(reserved), "got: {message}");
+            assert!(message.contains("WebAssembly export"), "got: {message}");
+        }
+
+        let manifest = manifest_of(quote! {
+            fn graphcal_alloc(x: Dimensionless) -> Dimensionless { x }
+        });
+        assert_eq!(manifest.functions[0].name, "graphcal_alloc");
     }
 
     #[test]
