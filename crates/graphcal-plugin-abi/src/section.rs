@@ -51,8 +51,15 @@ pub(crate) fn extract_manifest(wasm: &[u8]) -> Result<&[u8], SectionError> {
 ///
 /// Returns [`SectionError`] when the bytes are not a wasm module, the
 /// section framing is malformed, the module already contains a manifest
-/// section, or the section would exceed the format's `u32` size limit.
+/// section, the payload exceeds [`MAX_MANIFEST_BYTES`](crate::MAX_MANIFEST_BYTES),
+/// or the section would exceed the format's `u32` size limit.
 pub fn embed_manifest(wasm: &[u8], payload: &[u8]) -> Result<Vec<u8>, SectionError> {
+    if payload.len() > crate::MAX_MANIFEST_BYTES {
+        return Err(SectionError::ManifestPayloadTooLarge {
+            bytes: payload.len(),
+            max: crate::MAX_MANIFEST_BYTES,
+        });
+    }
     let mut walker = SectionWalker::new(wasm)?;
     while let Some(section) = walker.next_section()? {
         if section.name == crate::MANIFEST_SECTION {
@@ -229,7 +236,15 @@ pub enum SectionError {
         section = crate::MANIFEST_SECTION
     )]
     DuplicateManifest,
-    /// The manifest section would exceed the format's `u32` size limit.
+    /// The manifest payload exceeds the graphcal ABI's byte limit.
+    #[error("plugin manifest payload is {bytes} bytes, exceeding the limit of {max} bytes")]
+    ManifestPayloadTooLarge {
+        /// Encoded manifest payload size supplied by the caller.
+        bytes: usize,
+        /// Maximum accepted encoded payload size.
+        max: usize,
+    },
+    /// The manifest section would exceed the WebAssembly format's `u32` size limit.
     #[error("the plugin manifest is too large to embed as a WebAssembly custom section")]
     TooLarge,
 }
@@ -300,6 +315,21 @@ mod tests {
         assert_eq!(
             embed_manifest(&once, b"b").unwrap_err(),
             SectionError::DuplicateManifest
+        );
+    }
+
+    #[test]
+    fn raw_embedding_enforces_the_manifest_payload_limit() {
+        let payload = vec![b'x'; crate::MAX_MANIFEST_BYTES];
+        embed_manifest(&EMPTY_MODULE, &payload).unwrap();
+
+        let oversized = vec![b'x'; crate::MAX_MANIFEST_BYTES + 1];
+        assert_eq!(
+            embed_manifest(&EMPTY_MODULE, &oversized).unwrap_err(),
+            SectionError::ManifestPayloadTooLarge {
+                bytes: crate::MAX_MANIFEST_BYTES + 1,
+                max: crate::MAX_MANIFEST_BYTES,
+            }
         );
     }
 
