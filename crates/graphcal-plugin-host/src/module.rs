@@ -8,10 +8,7 @@
 //! failure messages, traps, and fuel exhaustion mapped to
 //! [`PluginCallError`].
 
-use std::{
-    num::NonZeroU32,
-    sync::{Mutex, PoisonError},
-};
+use std::{marker::PhantomData, num::NonZeroU32};
 
 use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
 use graphcal_compiler::syntax::function_name::FnName;
@@ -36,19 +33,23 @@ struct CallState {
     fail_message: Option<String>,
 }
 
-/// One instantiated plugin, reused across successful calls.
-struct LiveInstance {
+/// One fresh instance scoped to a borrow of its immutable compiled module.
+///
+/// The lifetime makes storing an instance back inside [`PluginModule`]
+/// impossible in safe Rust, preserving call-history independence by type.
+struct CallInstance<'module> {
     store: wasmi::Store<CallState>,
     instance: wasmi::Instance,
+    module_scope: PhantomData<&'module PluginModule>,
 }
 
 /// A compiled and fully validated plugin module.
 ///
 /// Cheap to share; obtain through
-/// [`PluginHost::load`](crate::host::PluginHost::load), which caches modules
-/// by content hash. Calls reuse one instance and discard it after a failed
-/// call (the instance may be arbitrarily damaged), so a failure in one graph
-/// node cannot corrupt later calls.
+/// [`PluginHost::load`](crate::host::PluginHost::load), which caches immutable
+/// compiled modules by content hash. Every call gets a fresh instance whose
+/// lifetime is tied to that call, so mutable plugin state cannot make call
+/// results depend on evaluation history.
 pub struct PluginModule {
     engine: wasmi::Engine,
     module: wasmi::Module,
@@ -56,7 +57,6 @@ pub struct PluginModule {
     functions: Vec<(FnName, FunctionSignature)>,
     sha256: [u8; 32],
     limits: PluginLimits,
-    instance: Mutex<Option<LiveInstance>>,
 }
 
 impl std::fmt::Debug for PluginModule {
@@ -185,7 +185,6 @@ impl PluginModule {
             functions,
             sha256: sha2::Sha256::digest(bytes).into(),
             limits,
-            instance: Mutex::new(None),
         })
     }
 
@@ -253,21 +252,11 @@ impl PluginModule {
                 .ok_or_else(|| PluginCallError::UnknownFunction {
                     function: function.clone(),
                 })?;
-        let mut slot = self.instance.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut live = match slot.take() {
-            Some(live) => live,
-            None => self.instantiate()?,
-        };
-        // A failed call may leave the instance arbitrarily damaged
-        // (poisoned memory, mid-unwind state, leaked buffers); it is dropped
-        // and the next call starts from a fresh instantiation.
-        let value = self.call_in(&mut live, function, signature, args)?;
-        *slot = Some(live);
-        drop(slot);
-        Ok(value)
+        let mut instance = self.instantiate()?;
+        self.call_in(&mut instance, function, signature, args)
     }
 
-    fn instantiate(&self) -> Result<LiveInstance, PluginCallError> {
+    fn instantiate(&self) -> Result<CallInstance<'_>, PluginCallError> {
         let limiter = wasmi::StoreLimitsBuilder::new()
             .memory_size(self.limits.max_memory_bytes())
             .table_elements(self.limits.max_table_elements())
@@ -296,12 +285,16 @@ impl PluginModule {
         let instance = linker
             .instantiate_and_start(&mut store, &self.module)
             .map_err(|err| error_from_wasm(&mut store, &err, self.limits.fuel_per_call()))?;
-        Ok(LiveInstance { store, instance })
+        Ok(CallInstance {
+            store,
+            instance,
+            module_scope: PhantomData,
+        })
     }
 
     fn call_in(
         &self,
-        live: &mut LiveInstance,
+        live: &mut CallInstance<'_>,
         function: &FnName,
         signature: &FunctionSignature,
         args: &[HostFnValue],
@@ -323,9 +316,9 @@ impl PluginModule {
                 function: function.clone(),
             })?;
 
-        // One fuel budget covers the whole logical call: the allocator
-        // round-trips below and the function body itself.
-        set_fuel(&mut live.store, self.limits.fuel_per_call())?;
+        // Instantiation installed one fuel budget before running `start`.
+        // Do not replenish it: start, allocator round-trips, the kernel, and
+        // deallocation together form one bounded logical call.
         live.store.data_mut().fail_message = None;
 
         let mut buffers = if signature_uses_buffers(signature) {
@@ -380,9 +373,8 @@ impl PluginModule {
             },
         };
 
-        // Return every buffer to the plugin's allocator so the pooled
-        // instance does not leak across calls. A failing free damages the
-        // instance like any other trap; the caller discards it.
+        // Pair every host allocation with the ABI's required free even though
+        // the call-scoped instance is discarded immediately afterward.
         if let Some(buffers) = buffers {
             buffers.free_all(live, self.limits.fuel_per_call())?;
         }
@@ -394,7 +386,7 @@ impl PluginModule {
     /// trailing out-pointer for array and record results.
     fn marshal_params(
         &self,
-        live: &mut LiveInstance,
+        live: &mut CallInstance<'_>,
         function: &FnName,
         signature: &FunctionSignature,
         args: &[HostFnValue],
@@ -480,7 +472,7 @@ impl PluginModule {
 
     fn allocate_result_buffer(
         &self,
-        live: &mut LiveInstance,
+        live: &mut CallInstance<'_>,
         function: &FnName,
         result: &ValueKind,
         bound_extents: &std::collections::HashMap<IndexVarName, usize>,
@@ -629,7 +621,7 @@ struct BufferProtocol {
 
 impl BufferProtocol {
     /// Resolve the memory/allocator exports (validated present at load).
-    fn resolve(live: &LiveInstance, function: &FnName) -> Result<Self, PluginCallError> {
+    fn resolve(live: &CallInstance<'_>, function: &FnName) -> Result<Self, PluginCallError> {
         let missing = |export: &str| PluginCallError::Internal {
             message: format!(
                 "function `{function}` needs buffer export `{export}` despite load-time checks"
@@ -661,7 +653,7 @@ impl BufferProtocol {
     /// Allocate space for `len` `f64` elements inside the plugin's memory.
     fn alloc(
         &mut self,
-        live: &mut LiveInstance,
+        live: &mut CallInstance<'_>,
         fuel: u64,
         len: usize,
     ) -> Result<PluginAllocation, PluginCallError> {
@@ -705,7 +697,7 @@ impl BufferProtocol {
     /// Allocate and fill one input buffer; returns its plugin-memory pointer.
     fn write_buffer(
         &mut self,
-        live: &mut LiveInstance,
+        live: &mut CallInstance<'_>,
         fuel: u64,
         values: &[f64],
     ) -> Result<WasmBufferPointer, PluginCallError> {
@@ -725,7 +717,7 @@ impl BufferProtocol {
     /// Read the out-buffer the plugin filled.
     fn read_buffer(
         &self,
-        live: &LiveInstance,
+        live: &CallInstance<'_>,
         allocation: PluginAllocation,
     ) -> Result<Vec<f64>, PluginCallError> {
         let mut bytes = vec![0_u8; allocation.byte_len()];
@@ -747,7 +739,7 @@ impl BufferProtocol {
     }
 
     /// Release every allocation made for this call.
-    fn free_all(self, live: &mut LiveInstance, fuel: u64) -> Result<(), PluginCallError> {
+    fn free_all(self, live: &mut CallInstance<'_>, fuel: u64) -> Result<(), PluginCallError> {
         for allocation in self.allocations {
             self.free
                 .call(
