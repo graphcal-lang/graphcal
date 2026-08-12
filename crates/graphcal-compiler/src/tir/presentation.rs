@@ -88,14 +88,90 @@ pub enum LeafPresentation {
     Timezone(crate::registry::time_zone::IanaTimeZoneId),
 }
 
+/// Owner-qualified identity of a lexical binder used by presentation metadata.
+///
+/// HIR local IDs are unique only within one lowered declaration body. Pairing
+/// the ID with its declaration owner prevents projected presentation selectors
+/// from accidentally reading an unrelated caller local with the same ID.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PresentationLocalBinder {
+    owner: ResolvedDeclName,
+    local: hir::LocalId,
+}
+
+impl PresentationLocalBinder {
+    #[must_use]
+    pub const fn new(owner: ResolvedDeclName, local: hir::LocalId) -> Self {
+        Self { owner, local }
+    }
+
+    #[must_use]
+    pub const fn owner(&self) -> &ResolvedDeclName {
+        &self.owner
+    }
+
+    #[must_use]
+    pub const fn local(&self) -> hir::LocalId {
+        self.local
+    }
+}
+
+/// A checked substitution from an indexed presentation binder to one access
+/// argument evaluated in the declaration containing that access.
+#[derive(Debug, Clone)]
+pub struct PresentationIndexSubstitution {
+    index: IndexTypeRef,
+    binder: PresentationLocalBinder,
+    argument: hir::expr::IndexArg,
+}
+
+impl PresentationIndexSubstitution {
+    #[must_use]
+    pub const fn new(
+        index: IndexTypeRef,
+        binder: PresentationLocalBinder,
+        argument: hir::expr::IndexArg,
+    ) -> Self {
+        Self {
+            index,
+            binder,
+            argument,
+        }
+    }
+
+    #[must_use]
+    pub const fn index(&self) -> &IndexTypeRef {
+        &self.index
+    }
+
+    #[must_use]
+    pub const fn binder(&self) -> &PresentationLocalBinder {
+        &self.binder
+    }
+
+    #[must_use]
+    pub const fn argument(&self) -> &hir::expr::IndexArg {
+        &self.argument
+    }
+
+    #[must_use]
+    pub fn argument_span(&self) -> Span {
+        match &self.argument {
+            hir::expr::IndexArg::Variant(variant) => variant.path_span(),
+            hir::expr::IndexArg::Var(local) => local.span,
+            hir::expr::IndexArg::Expr(expr) => expr.span,
+        }
+    }
+}
+
 /// Structured presentation for entries of one indexed axis.
 #[derive(Debug, Clone)]
 pub enum IndexedPresentation {
     /// Every position has the same nested presentation shape. A comprehension
-    /// records its lexical binder so runtime branch selectors can be evaluated
-    /// for each concrete entry without re-deriving provenance.
+    /// records its owner-qualified lexical binder so runtime branch selectors
+    /// can be evaluated for each concrete entry without re-deriving provenance.
     Uniform {
-        local: Option<hir::LocalId>,
+        binder: Option<PresentationLocalBinder>,
         element: Box<PresentationProvenance>,
     },
     /// Positions retain independently authored presentation metadata.
@@ -182,6 +258,14 @@ pub enum PresentationProvenance {
         key: PresentationCallKey,
         output: Box<Self>,
     },
+    /// Indexed access whose removed comprehension binders are substituted from
+    /// arguments evaluated in the declaration containing the access.
+    IndexProjection {
+        defining_dag: DagId,
+        owner: ResolvedDeclName,
+        substitutions: Vec<PresentationIndexSubstitution>,
+        output: Box<Self>,
+    },
     /// Runtime branch selection over already-checked presentation alternatives.
     Select(Box<PresentationSelection>),
 }
@@ -193,7 +277,7 @@ impl PresentationProvenance {
         Self::Indexed {
             index,
             elements: IndexedPresentation::Uniform {
-                local: None,
+                binder: None,
                 element: Box::new(element),
             },
         }
@@ -203,13 +287,13 @@ impl PresentationProvenance {
     #[must_use]
     pub fn uniform_index_for_local(
         index: IndexTypeRef,
-        local: hir::LocalId,
+        binder: PresentationLocalBinder,
         element: Self,
     ) -> Self {
         Self::Indexed {
             index,
             elements: IndexedPresentation::Uniform {
-                local: Some(local),
+                binder: Some(binder),
                 element: Box::new(element),
             },
         }
@@ -228,7 +312,7 @@ impl PresentationProvenance {
                     entries.values().any(Self::requires_runtime_values)
                 }
             },
-            Self::DagCall { .. } | Self::Select(_) => true,
+            Self::DagCall { .. } | Self::IndexProjection { .. } | Self::Select(_) => true,
         }
     }
 }

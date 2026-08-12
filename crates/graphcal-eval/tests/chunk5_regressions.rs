@@ -372,6 +372,23 @@ fn every_quantity_uses_km(value: &graphcal_eval::eval::Value) -> Result<(), Stri
     }
 }
 
+fn quantity_display_labels(value: &graphcal_eval::eval::Value) -> Result<Vec<String>, String> {
+    match value {
+        graphcal_eval::eval::Value::Quantity { display_unit, .. } => display_unit
+            .as_ref()
+            .map(|unit| vec![unit.label.clone()])
+            .ok_or_else(|| "quantity has no display presentation".to_string()),
+        graphcal_eval::eval::Value::Indexed { entries, .. } => entries
+            .values()
+            .map(quantity_display_labels)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|nested| nested.into_iter().flatten().collect()),
+        other => Err(format!(
+            "expected quantity presentation tree, got {other:?}"
+        )),
+    }
+}
+
 #[test]
 fn semantic_struct_equality_covers_constructors_indexed_and_coordinate_fields() {
     let result = compile_and_eval(
@@ -491,6 +508,80 @@ node grid: Length[Row, Column] =
     .unwrap();
 
     every_quantity_uses_km(successful_node(&result, "grid").unwrap()).unwrap();
+}
+
+#[test]
+fn projected_index_binders_keep_definition_owned_presentation_selectors() {
+    let result = compile_and_eval(
+        r"
+index Scenario = { Baseline };
+index Model = { A, B };
+index Distance = { Near, Far };
+index Series = { First, Second };
+
+node source: Length[Scenario, Model, Distance] =
+    for scenario: Scenario, model: Model, distance: Distance {
+        match model {
+            Model.A => 1.0 m,
+            Model.B => 0.001 km,
+        }
+    };
+
+node consumer: Length[Series, Distance] =
+    for series: Series, distance: Distance {
+        match series {
+            Series.First => @source[Scenario.Baseline, Model.A, distance],
+            Series.Second => @source[Scenario.Baseline, Model.B, distance],
+        }
+    };
+",
+    )
+    .unwrap();
+
+    let labels = quantity_display_labels(successful_node(&result, "consumer").unwrap()).unwrap();
+    assert_eq!(
+        labels.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["m", "m", "km", "km"]
+    );
+}
+
+#[test]
+fn projected_index_expression_arguments_use_the_access_owner_locals() {
+    let result = compile_and_eval(
+        r"
+index Scenario = { Baseline };
+index Model = { A, B };
+index Distance = { Near, Far };
+index Series = { First, Second };
+
+node source: Length[Scenario, Model, Distance] =
+    for scenario: Scenario, model: Model, distance: Distance {
+        match model {
+            Model.A => 1.0 m,
+            Model.B => 0.001 km,
+        }
+    };
+
+node consumer: Length[Series, Distance] =
+    for series: Series, distance: Distance {
+        @source[
+            Scenario.Baseline,
+            match series {
+                Series.First => Model.A,
+                Series.Second => Model.B,
+            },
+            distance,
+        ]
+    };
+",
+    )
+    .unwrap();
+
+    let labels = quantity_display_labels(successful_node(&result, "consumer").unwrap()).unwrap();
+    assert_eq!(
+        labels.iter().map(String::as_str).collect::<Vec<_>>(),
+        ["m", "m", "km", "km"]
+    );
 }
 
 #[test]

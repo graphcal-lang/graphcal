@@ -1,6 +1,6 @@
 //! Checked presentation application, coordinate formatting, and display-unit rendering.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
@@ -9,8 +9,9 @@ use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::presentation::{
-    IndexedPresentation, LeafPresentation, PresentationCallKey, PresentationMatchPattern,
-    PresentationProvenance, PresentationSelection, UnitPresentation,
+    IndexedPresentation, LeafPresentation, PresentationCallKey, PresentationIndexSubstitution,
+    PresentationLocalBinder, PresentationMatchPattern, PresentationProvenance,
+    PresentationSelection, UnitPresentation,
 };
 
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
@@ -33,6 +34,58 @@ impl PresentationApplicationState {
     }
 }
 
+/// Persistent owner-qualified environment for presentation-only HIR locals.
+///
+/// A raw `LocalId` is unique only within one declaration body. Keeping the
+/// owner in the key prevents presentation selectors from capturing unrelated
+/// locals after indexed projection crosses a declaration boundary.
+struct PresentationLocalEnv<'a> {
+    parent: Option<&'a Self>,
+    bindings: Vec<(PresentationLocalBinder, RuntimeValue)>,
+}
+
+impl<'a> PresentationLocalEnv<'a> {
+    const fn root() -> Self {
+        Self {
+            parent: None,
+            bindings: Vec::new(),
+        }
+    }
+
+    const fn child<'b>(
+        &'b self,
+        bindings: Vec<(PresentationLocalBinder, RuntimeValue)>,
+    ) -> PresentationLocalEnv<'b>
+    where
+        'a: 'b,
+    {
+        PresentationLocalEnv {
+            parent: Some(self),
+            bindings,
+        }
+    }
+
+    fn hir_locals_for(&self, owner: &ResolvedDeclName) -> HirLocalValueMap<'static> {
+        let mut seen = HashSet::new();
+        let mut bindings = Vec::new();
+        let mut frame = Some(self);
+        while let Some(current) = frame {
+            current
+                .bindings
+                .iter()
+                .rev()
+                .filter(|(binder, _)| binder.owner() == owner)
+                .for_each(|(binder, value)| {
+                    if seen.insert(binder.local()) {
+                        bindings.push((binder.local(), value.clone()));
+                    }
+                });
+            frame = current.parent;
+        }
+        HirLocalValueMap::from_bindings(bindings)
+    }
+}
+
 /// Apply checked, owner-qualified presentation facts to a public value.
 ///
 /// # Errors
@@ -50,7 +103,7 @@ pub(super) fn attach_presentation(
         presentation,
         ctx,
         values,
-        &HirLocalValueMap::root(),
+        &PresentationLocalEnv::root(),
         &mut PresentationApplicationState::default(),
     )
 }
@@ -60,7 +113,7 @@ fn attach_presentation_with_locals(
     presentation: &PresentationProvenance,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-    locals: &HirLocalValueMap<'_>,
+    locals: &PresentationLocalEnv<'_>,
     state: &mut PresentationApplicationState,
 ) -> Result<(), GraphcalError> {
     match presentation {
@@ -140,6 +193,22 @@ fn attach_presentation_with_locals(
                 state,
             )
         }
+        PresentationProvenance::IndexProjection {
+            defining_dag,
+            owner,
+            substitutions,
+            output,
+        } => attach_index_projection(
+            value,
+            defining_dag,
+            owner,
+            substitutions,
+            output,
+            ctx,
+            values,
+            locals,
+            state,
+        ),
         PresentationProvenance::Select(selection) => {
             let selected = select_presentation(selection, ctx, values, locals)?;
             attach_presentation_with_locals(value, selected, ctx, values, locals, state)
@@ -153,7 +222,7 @@ fn attach_indexed(
     elements: &IndexedPresentation,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-    locals: &HirLocalValueMap<'_>,
+    locals: &PresentationLocalEnv<'_>,
     state: &mut PresentationApplicationState,
 ) -> Result<(), GraphcalError> {
     match value {
@@ -162,11 +231,11 @@ fn attach_indexed(
             entries,
             ..
         } if index_name.matches_ref(index) => match elements {
-            IndexedPresentation::Uniform { local, element } => {
-                entries.iter_mut().try_for_each(|(key, entry)| match local {
-                    Some(local) => {
+            IndexedPresentation::Uniform { binder, element } => {
+                entries.iter_mut().try_for_each(|(key, entry)| match binder {
+                    Some(binder) => {
                         let binding = presentation_index_binding(index, key, ctx)?;
-                        let child = locals.child(vec![(*local, binding)]);
+                        let child = locals.child(vec![(binder.clone(), binding)]);
                         attach_presentation_with_locals(
                             entry, element, ctx, values, &child, state,
                         )
@@ -217,6 +286,151 @@ fn attach_indexed(
             DiagnosticAnchor::WholeFile,
         )),
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "projection application carries checked context, values, locals, and call state"
+)]
+fn attach_index_projection(
+    value: &mut Value,
+    defining_dag: &graphcal_compiler::dag_id::DagId,
+    owner: &ResolvedDeclName,
+    substitutions: &[PresentationIndexSubstitution],
+    output: &PresentationProvenance,
+    ctx: &EvalContext<'_>,
+    values: &RuntimeValueMap,
+    locals: &PresentationLocalEnv<'_>,
+    state: &mut PresentationApplicationState,
+) -> Result<(), GraphcalError> {
+    let first = substitutions.first().ok_or_else(|| {
+        presentation_error(
+            ctx,
+            "checked index projection has no binder substitutions",
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    let owner_ctx = checked_owner_context(ctx, defining_dag, owner, first.argument_span())?;
+    let owner_locals = locals.hir_locals_for(owner);
+    let bindings = substitutions
+        .iter()
+        .map(|substitution| {
+            evaluate_index_substitution(substitution, values, &owner_locals, &owner_ctx)
+                .map(|binding| (substitution.binder().clone(), binding))
+        })
+        .collect::<Result<Vec<_>, GraphcalError>>()?;
+    let child = locals.child(bindings);
+    attach_presentation_with_locals(value, output, ctx, values, &child, state)
+}
+
+fn evaluate_index_substitution(
+    substitution: &PresentationIndexSubstitution,
+    values: &RuntimeValueMap,
+    locals: &HirLocalValueMap<'_>,
+    ctx: &EvalContext<'_>,
+) -> Result<RuntimeValue, GraphcalError> {
+    use graphcal_compiler::registry::declared_type::IndexTypeRef;
+    use graphcal_compiler::syntax::index_name::IndexEntryKey;
+
+    let argument = match substitution.argument() {
+        graphcal_compiler::hir::expr::IndexArg::Variant(variant) => {
+            let argument_index = IndexTypeRef::from_resolved(variant.variant.index().clone());
+            if !substitution.index().matches_ref(&argument_index) {
+                return Err(presentation_error(
+                    ctx,
+                    format!(
+                        "checked presentation projection argument belongs to `{argument_index}`, expected `{}`",
+                        substitution.index()
+                    ),
+                    substitution.argument_span(),
+                ));
+            }
+            RuntimeValue::Label {
+                index_name: argument_index,
+                variant: variant.variant.variant().clone(),
+            }
+        }
+        graphcal_compiler::hir::expr::IndexArg::Var(local) => {
+            locals.get(local.value).cloned().ok_or_else(|| {
+                presentation_error(
+                    ctx,
+                    "checked presentation projection references an unavailable caller local",
+                    local.span,
+                )
+            })?
+        }
+        graphcal_compiler::hir::expr::IndexArg::Expr(expr) => {
+            eval_hir_expr(expr, values, locals, ctx)?
+        }
+    };
+
+    let key = match argument {
+        RuntimeValue::Label {
+            index_name,
+            variant,
+        } => {
+            if !substitution.index().matches_ref(&index_name) {
+                return Err(presentation_error(
+                    ctx,
+                    format!(
+                        "checked presentation projection key belongs to `{index_name}`, expected `{}`",
+                        substitution.index()
+                    ),
+                    substitution.argument_span(),
+                ));
+            }
+            IndexEntryKey::named(variant)
+        }
+        RuntimeValue::CoordinateLabel {
+            index_name,
+            position,
+            ..
+        } => {
+            if !substitution.index().matches_ref(&index_name) {
+                return Err(presentation_error(
+                    ctx,
+                    format!(
+                        "checked presentation projection key belongs to `{index_name}`, expected `{}`",
+                        substitution.index()
+                    ),
+                    substitution.argument_span(),
+                ));
+            }
+            IndexEntryKey::position(u64::try_from(position).map_err(|_| {
+                presentation_error(
+                    ctx,
+                    "presentation projection coordinate position does not fit u64",
+                    substitution.argument_span(),
+                )
+            })?)
+        }
+        RuntimeValue::Int(position) => {
+            let position = u64::try_from(position).map_err(|_| {
+                presentation_error(
+                    ctx,
+                    "presentation projection position is negative or too large",
+                    substitution.argument_span(),
+                )
+            })?;
+            IndexEntryKey::position(position)
+        }
+        RuntimeValue::Struct { type_name, .. } => IndexEntryKey::named(
+            graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid(
+                type_name.as_str(),
+            ),
+        ),
+        other => {
+            return Err(presentation_error(
+                ctx,
+                format!(
+                    "checked presentation projection argument evaluated to {}, expected an index key",
+                    other.kind()
+                ),
+                substitution.argument_span(),
+            ));
+        }
+    };
+    presentation_index_binding(substitution.index(), &key, ctx)
 }
 
 fn attach_leaf(
@@ -347,7 +561,7 @@ fn select_presentation<'a>(
     selection: &'a PresentationSelection,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
-    locals: &HirLocalValueMap<'_>,
+    locals: &PresentationLocalEnv<'_>,
 ) -> Result<&'a PresentationProvenance, GraphcalError> {
     match selection {
         PresentationSelection::If {
@@ -358,7 +572,8 @@ fn select_presentation<'a>(
             else_presentation,
         } => {
             let owner_ctx = checked_owner_context(ctx, defining_dag, owner, condition.span)?;
-            match eval_hir_expr(condition, values, locals, &owner_ctx)? {
+            let owner_locals = locals.hir_locals_for(owner);
+            match eval_hir_expr(condition, values, &owner_locals, &owner_ctx)? {
                 RuntimeValue::Bool(true) => Ok(then_presentation),
                 RuntimeValue::Bool(false) => Ok(else_presentation),
                 other => Err(presentation_error(
@@ -378,7 +593,8 @@ fn select_presentation<'a>(
             arms,
         } => {
             let owner_ctx = checked_owner_context(ctx, defining_dag, owner, scrutinee.span)?;
-            let scrutinee_value = eval_hir_expr(scrutinee, values, locals, &owner_ctx)?;
+            let owner_locals = locals.hir_locals_for(owner);
+            let scrutinee_value = eval_hir_expr(scrutinee, values, &owner_locals, &owner_ctx)?;
             arms.iter()
                 .find(|arm| presentation_pattern_matches(&arm.pattern, &scrutinee_value))
                 .map(|arm| &arm.presentation)
