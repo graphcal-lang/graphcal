@@ -255,9 +255,10 @@ at load time before any plugin code runs:
   linear-memory bytes, the number of memories and tables, and the elements in
   each table; an oversized initial allocation fails during instantiation and
   growth beyond a cap is denied. Wasmi's value and call stacks have separate
-  engine-wide bounds. Compiled modules and their process-level cache live
-  outside this per-instance cap and therefore require a separate cache policy;
-  they are not hidden inside the linear-memory number. Together with the
+  engine-wide bounds. Compiled modules live outside this per-instance cap, so
+  a separate process-level LRU limits both resident entries and aggregate
+  encoded bytes; the entry count bounds compiled artifacts whose individual
+  structure is already limited at load time. Together with the
   filesystem/network sandbox, these limits protect the
   language server during keystroke-frequency re-evaluation, not just one CLI
   run.
@@ -270,9 +271,12 @@ plugin calls `graphcal::fail` with a UTF-8 message; the call is aborted
 and the message surfaces in the node's diagnostic. Traps and exhausted
 fuel are reported the same way, without a custom message.
 
-Immutable compiled modules and validated metadata are cached by content hash,
-so re-analysis in the language server does not recompile unchanged plugins.
-Live instances are deliberately never cached or pooled.
+A bounded LRU caches immutable compiled modules, validated metadata, and
+deterministic load failures by content hash. Concurrent misses for one hash
+share a single compilation. The default policy retains at most 32 outcomes
+charged against 64 MiB of aggregate encoded input; edited bytes naturally use
+a new hash, and least-recently used outcomes are evicted. Live instances are
+deliberately never cached or pooled.
 
 ### Authoring
 
