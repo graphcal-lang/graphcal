@@ -7,29 +7,78 @@ use sha2::Digest as _;
 
 use crate::module::{PluginLoadError, PluginModule};
 
-/// Resource bounds applied to every plugin call.
+/// Complete per-instance resource policy for plugin execution.
 ///
 /// Plugins are trusted-by-default *because* these bounds exist: the sandbox
 /// removes filesystem and network access (confidentiality and integrity),
-/// and fuel plus the memory cap bound availability. Both limits are
-/// per-call; the language server re-evaluates on every debounced keystroke,
-/// so an unbounded plugin would hang the editor, not just one CLI run.
+/// while fuel, linear-memory bytes, and table elements bound availability.
+/// The fields are private so adding a new resource dimension cannot silently
+/// leave callers with an incomplete policy through a struct literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PluginLimits {
-    /// Fuel budget for one call (instantiation, including a `start`
-    /// function, is metered with the same budget). Fuel corresponds roughly
-    /// to executed instructions.
-    pub fuel_per_call: u64,
-    /// Cap on the plugin's linear memory in bytes.
-    pub max_memory_bytes: usize,
+    fuel_per_call: u64,
+    max_memory_bytes: usize,
+    max_table_elements: usize,
+}
+
+impl PluginLimits {
+    /// Construct a complete resource policy.
+    #[must_use]
+    pub const fn new(
+        fuel_per_call: u64,
+        max_memory_bytes: usize,
+        max_table_elements: usize,
+    ) -> Self {
+        Self {
+            fuel_per_call,
+            max_memory_bytes,
+            max_table_elements,
+        }
+    }
+
+    /// Return a policy with a different per-call fuel budget.
+    #[must_use]
+    pub const fn with_fuel_per_call(mut self, fuel_per_call: u64) -> Self {
+        self.fuel_per_call = fuel_per_call;
+        self
+    }
+
+    /// Return a policy with a different linear-memory byte limit.
+    #[must_use]
+    pub const fn with_max_memory_bytes(mut self, max_memory_bytes: usize) -> Self {
+        self.max_memory_bytes = max_memory_bytes;
+        self
+    }
+
+    /// Return a policy with a different per-table element limit.
+    #[must_use]
+    pub const fn with_max_table_elements(mut self, max_table_elements: usize) -> Self {
+        self.max_table_elements = max_table_elements;
+        self
+    }
+
+    /// Fuel budget for one logical call, including instantiation and `start`.
+    #[must_use]
+    pub const fn fuel_per_call(self) -> u64 {
+        self.fuel_per_call
+    }
+
+    /// Maximum bytes in each linear memory.
+    #[must_use]
+    pub const fn max_memory_bytes(self) -> usize {
+        self.max_memory_bytes
+    }
+
+    /// Maximum elements in each WebAssembly table.
+    #[must_use]
+    pub const fn max_table_elements(self) -> usize {
+        self.max_table_elements
+    }
 }
 
 impl Default for PluginLimits {
     fn default() -> Self {
-        Self {
-            fuel_per_call: 100_000_000,
-            max_memory_bytes: 64 * 1024 * 1024,
-        }
+        Self::new(100_000_000, 64 * 1024 * 1024, 10_000)
     }
 }
 

@@ -204,10 +204,7 @@ fn runaway_plugins_run_out_of_fuel() {
         &[("x", dimensionless())],
         dimensionless(),
     )]);
-    let host = PluginHost::with_limits(PluginLimits {
-        fuel_per_call: 10_000,
-        ..PluginLimits::default()
-    });
+    let host = PluginHost::with_limits(PluginLimits::default().with_fuel_per_call(10_000));
     let module = host.load(&plugin(wat, &manifest)).unwrap();
     assert_eq!(
         module
@@ -231,10 +228,7 @@ fn runaway_start_functions_run_out_of_fuel_at_instantiation() {
         &[("x", dimensionless())],
         dimensionless(),
     )]);
-    let host = PluginHost::with_limits(PluginLimits {
-        fuel_per_call: 10_000,
-        ..PluginLimits::default()
-    });
+    let host = PluginHost::with_limits(PluginLimits::default().with_fuel_per_call(10_000));
     let module = host.load(&plugin(wat, &manifest)).unwrap();
     assert_eq!(
         module
@@ -267,15 +261,59 @@ fn memory_growth_is_capped() {
         dimensionless(),
     )]);
     let max_memory_bytes = 4 * 1024 * 1024; // 64 pages
-    let host = PluginHost::with_limits(PluginLimits {
-        max_memory_bytes,
-        ..PluginLimits::default()
-    });
+    let host =
+        PluginHost::with_limits(PluginLimits::default().with_max_memory_bytes(max_memory_bytes));
     let module = host.load(&plugin(wat, &manifest)).unwrap();
     let grown = module.call(&fn_name("grow"), &f64_values(&[0.0])).unwrap();
     // Started at 1 page; the limiter must stop growth at 64 pages total.
     let grown = f64_value(&grown);
     assert!((grown - 63.0).abs() < f64::EPSILON, "grew {grown} pages");
+}
+
+#[test]
+fn oversized_initial_table_is_rejected_during_instantiation() {
+    let wat = r#"
+    (module
+      (table 5 funcref)
+      (func (export "id") (param f64) (result f64) (local.get 0)))
+    "#;
+    let manifest = manifest(vec![function(
+        "id",
+        &[],
+        &[("x", dimensionless())],
+        dimensionless(),
+    )]);
+    let host = PluginHost::with_limits(PluginLimits::default().with_max_table_elements(4));
+    let module = host.load(&plugin(wat, &manifest)).unwrap();
+
+    assert!(matches!(
+        module
+            .call(&fn_name("id"), &f64_values(&[1.0]))
+            .unwrap_err(),
+        PluginCallError::Trap { .. }
+    ));
+}
+
+#[test]
+fn table_growth_stops_at_the_configured_element_limit() {
+    let wat = r#"
+    (module
+      (table 1 funcref)
+      (func (export "grow") (param f64) (result f64)
+        (f64.convert_i32_s
+          (table.grow (ref.null func) (i32.const 4)))))
+    "#;
+    let manifest = manifest(vec![function(
+        "grow",
+        &[],
+        &[("x", dimensionless())],
+        dimensionless(),
+    )]);
+    let host = PluginHost::with_limits(PluginLimits::default().with_max_table_elements(4));
+    let module = host.load(&plugin(wat, &manifest)).unwrap();
+
+    let previous_size = f64_value(&module.call(&fn_name("grow"), &f64_values(&[0.0])).unwrap());
+    assert!((previous_size + 1.0).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -794,10 +832,7 @@ fn denied_allocator_growth_reports_allocation_failure_before_invoking_the_kernel
         &[("xs", array_kind("D", "I"))],
         quantity_var("D"),
     )]);
-    let host = PluginHost::with_limits(PluginLimits {
-        max_memory_bytes: 64 * 1024,
-        ..PluginLimits::default()
-    });
+    let host = PluginHost::with_limits(PluginLimits::default().with_max_memory_bytes(64 * 1024));
     let module = host.load(&plugin(wat, &manifest)).unwrap();
 
     assert_eq!(
