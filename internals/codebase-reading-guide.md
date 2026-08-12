@@ -1424,12 +1424,13 @@ into an execution plan.
 
 ### Stage 16 - Browser WASM adapter (`graphcal-wasm`)
 
-Note: the order tool groups these files because `lib.rs` re-exports the browser transport types. The practical review order remains project validation, value conversion, diagnostic conversion, then the imperative adapter shell.
+Note: the order tool groups these files because `lib.rs` re-exports the browser transport types. The practical review order remains project validation and size policy, value conversion, bounded JavaScript request decoding, diagnostic conversion, then the imperative adapter shell.
 
 1. `crates/graphcal-wasm/src/project.rs`
 2. `crates/graphcal-wasm/src/output.rs`
-3. `crates/graphcal-wasm/src/diagnostics.rs`
-4. `crates/graphcal-wasm/src/lib.rs`
+3. `crates/graphcal-wasm/src/js_request.rs`
+4. `crates/graphcal-wasm/src/diagnostics.rs`
+5. `crates/graphcal-wasm/src/lib.rs`
 
 ### Stage 17 - WASM plugin host (`graphcal-plugin-host`)
 

@@ -9,6 +9,8 @@
 )]
 
 mod diagnostics;
+#[cfg(target_arch = "wasm32")]
+mod js_request;
 mod output;
 mod project;
 
@@ -28,7 +30,9 @@ pub use output::{
     NoticeView, StructFieldView, UnsupportedCapability, ValueView,
 };
 pub use project::{
-    PlaygroundFile, PlaygroundRequest, ProjectValidationError, RequestErrorKind, RequestErrorView,
+    MAX_PLAYGROUND_CONTENT_BYTES, MAX_PLAYGROUND_FILE_BYTES, MAX_PLAYGROUND_FILES,
+    MAX_PLAYGROUND_PATH_BYTES, MAX_PLAYGROUND_PATH_TOTAL_BYTES, PlaygroundFile, PlaygroundRequest,
+    ProjectPathRole, ProjectValidationError, RequestErrorKind, RequestErrorView,
 };
 
 use crate::diagnostics::compile_error_view;
@@ -101,15 +105,33 @@ fn compile_error_outcome(error: &CompileError, project: &VirtualProject) -> Play
 }
 
 /// JavaScript boundary used by the generated `wasm-bindgen` module.
+///
+/// The request must own exactly `{ entry, files }`; every file must own exactly
+/// `{ path, content }`. Counts and UTF-8 string sizes are validated against the
+/// exported playground limits before any request string enters Wasm memory.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = evaluateProject)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "wasm-bindgen JavaScript exports receive owned JsValue handles"
+)]
 pub fn evaluate_project_js(
     request: wasm_bindgen::JsValue,
 ) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue> {
-    let request = serde_wasm_bindgen::from_value(request).map_err(|error| {
-        wasm_bindgen::JsValue::from_str(&format!("invalid playground request: {error}"))
-    })?;
-    serde_wasm_bindgen::to_value(&evaluate(request)).map_err(|error| {
+    use crate::js_request::{BoundedJsRequest, JsRequestBoundaryError};
+
+    let outcome = match BoundedJsRequest::decode(&request) {
+        Ok(request) => evaluate(request.into_request()),
+        Err(JsRequestBoundaryError::Rejected(error)) => PlaygroundOutcome::Rejected {
+            error: RequestErrorView::from(&error),
+        },
+        Err(JsRequestBoundaryError::InvalidShape(error)) => {
+            return Err(wasm_bindgen::JsValue::from_str(&format!(
+                "invalid playground request: {error}"
+            )));
+        }
+    };
+    serde_wasm_bindgen::to_value(&outcome).map_err(|error| {
         wasm_bindgen::JsValue::from_str(&format!("could not serialize playground result: {error}"))
     })
 }

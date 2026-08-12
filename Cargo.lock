@@ -2006,6 +2006,7 @@ dependencies = [
  "graphcal-eval",
  "graphcal-io",
  "graphcal-package",
+ "js-sys",
  "miette",
  "serde",
  "serde-wasm-bindgen",
