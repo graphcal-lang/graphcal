@@ -749,7 +749,7 @@ fn generate_buffer_function(
                 quote! { pub #fname: #ty }
             });
             let doc = format!(
-                "The result of [`{name}`], one field per declared struct field (quantities in SI                  base units)."
+                "The result of [`{name}`], one field per declared struct field (quantities in SI base units)."
             );
             Some(quote! {
                 #[doc = #doc]

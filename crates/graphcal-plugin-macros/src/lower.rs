@@ -611,7 +611,9 @@ fn unknown_name_error(name: &syn::Ident, key: &str) -> syn::Error {
              expression"
         ),
         "Datetime" => {
-            "`Datetime` values cannot cross the plugin boundary (plugin ABI v1)".to_string()
+            "the plugin ABI does not yet support `Datetime` values; convert explicitly before \
+             crossing the plugin boundary"
+                .to_string()
         }
         _ => format!(
             "unknown dimension `{key}`; expected a dimension variable declared in `<...>`, a \
