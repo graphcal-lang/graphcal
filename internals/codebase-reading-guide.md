@@ -1433,13 +1433,14 @@ Note: the order tool groups these files because `lib.rs` re-exports the browser 
 
 ### Stage 17 - WASM plugin host (`graphcal-plugin-host`)
 
-Note: all five host files are mutually dependent. `convert.rs` is the untrusted-boundary leaf; `host.rs` and `module.rs` wrap engine/module loading; `registry.rs` bridges loaded projects to the evaluator; `lib.rs` re-exports the public surface.
+Note: all six files form a re-export cycle through `lib.rs`. Within it, `cache.rs` is the runtime-agnostic bounded single-flight core and `convert.rs` is the untrusted-boundary leaf; `module.rs` owns validated compiled artifacts, `registry.rs` bridges loaded projects to the evaluator, `host.rs` is the imperative loading/cache shell, and `lib.rs` re-exports the public surface.
 
-1. `crates/graphcal-plugin-host/src/convert.rs`
-2. `crates/graphcal-plugin-host/src/host.rs`
+1. `crates/graphcal-plugin-host/src/cache.rs`
+2. `crates/graphcal-plugin-host/src/convert.rs`
 3. `crates/graphcal-plugin-host/src/module.rs`
 4. `crates/graphcal-plugin-host/src/registry.rs`
-5. `crates/graphcal-plugin-host/src/lib.rs`
+5. `crates/graphcal-plugin-host/src/host.rs`
+6. `crates/graphcal-plugin-host/src/lib.rs`
 
 ### Stage 18 - Formatter (`graphcal-fmt`)
 
