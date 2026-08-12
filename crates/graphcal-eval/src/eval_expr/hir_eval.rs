@@ -35,6 +35,29 @@ pub type HirLocalValueMap<'a> = hir::LocalEnv<'a, RuntimeValue>;
 
 type ResolvedDeclKey = graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 
+fn presentation_instance_for(
+    presentation_values: Option<&PresentationInstanceMap>,
+    key: &RuntimeDeclKey,
+) -> PresentationInstance {
+    presentation_values
+        .and_then(|presentations| presentations.get(key))
+        .map_or_else(PresentationInstance::default, Clone::clone)
+}
+
+#[expect(
+    clippy::option_if_let_else,
+    reason = "a missing sparse sidecar explicitly means that this value has no call identity"
+)]
+fn take_presentation_instance(
+    presentation_values: &mut PresentationInstanceMap,
+    key: &RuntimeDeclKey,
+) -> PresentationInstance {
+    match presentation_values.remove(key) {
+        Some(presentation) => presentation,
+        None => PresentationInstance::None,
+    }
+}
+
 /// Evaluate an already-lowered HIR expression.
 ///
 /// Module-aware TIR construction stores HIR for const/default/node expressions.
@@ -53,7 +76,7 @@ pub fn eval_hir_expr(
 
 /// Evaluate one HIR expression while preserving concrete presentation-call
 /// identities through value-preserving expression forms.
-pub(crate) fn eval_hir_expr_with_presentation(
+pub fn eval_hir_expr_with_presentation(
     expr: &hir::Expr,
     values: &RuntimeValueMap,
     presentation_values: &PresentationInstanceMap,
@@ -119,10 +142,7 @@ fn eval_hir_expr_inner(
         hir::ExprKind::GraphRef(target) => {
             let key = RuntimeDeclKey::resolved(target.value.clone());
             let value = resolve_hir_graph_ref(&target.value, target.span, values, ctx)?;
-            let presentation = presentation_values
-                .and_then(|presentations| presentations.get(&key))
-                .cloned()
-                .unwrap_or_default();
+            let presentation = presentation_instance_for(presentation_values, &key);
             Ok(EvaluatedRuntimeValue::new(
                 clone_hir_graph_ref_value(value),
                 presentation,
@@ -131,12 +151,10 @@ fn eval_hir_expr_inner(
         hir::ExprKind::ConstRef(target) => {
             let value = eval_hir_const_ref(target, values, local_values, ctx)?;
             let presentation = match &target.value {
-                ConstRef::Decl(target) => presentation_values
-                    .and_then(|presentations| {
-                        presentations.get(&RuntimeDeclKey::resolved(target.clone()))
-                    })
-                    .cloned()
-                    .unwrap_or_default(),
+                ConstRef::Decl(target) => presentation_instance_for(
+                    presentation_values,
+                    &RuntimeDeclKey::resolved(target.clone()),
+                ),
                 ConstRef::Builtin(_)
                 | ConstRef::Constructor(_)
                 | ConstRef::TimeScale(_)
@@ -1823,6 +1841,10 @@ fn map_entry_key_span(key: &hir::expr::MapEntryKey) -> Span {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "recursive map evaluation keeps values and sparse presentation entries reordered atomically"
+)]
 fn eval_hir_map_literal(
     map_span: Span,
     entries: &[hir::expr::MapEntry],
@@ -2118,7 +2140,8 @@ fn eval_hir_for_comp_bindings(
 
 #[expect(
     clippy::too_many_lines,
-    reason = "single dispatch over every index-argument category"
+    clippy::single_match_else,
+    reason = "single pattern dispatch keeps borrowed graph references and every index-argument category explicit"
 )]
 fn eval_hir_index_access(
     span: Span,
@@ -2141,12 +2164,10 @@ fn eval_hir_index_access(
                 values,
                 ctx,
             )?);
-            let presentation = presentation_values
-                .and_then(|presentations| {
-                    presentations.get(&RuntimeDeclKey::resolved(target.value.clone()))
-                })
-                .cloned()
-                .unwrap_or_default();
+            let presentation = presentation_instance_for(
+                presentation_values,
+                &RuntimeDeclKey::resolved(target.value.clone()),
+            );
             (value, presentation)
         }
         _ => {
@@ -2519,6 +2540,11 @@ fn check_called_dag_domain_constraint(
         })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "inline-call evaluation keeps the checked DAG environment, semantic values, and presentation sidecars in one transaction"
+)]
 fn eval_hir_dag_call(
     call_span: Span,
     target: &graphcal_compiler::syntax::span::Spanned<graphcal_compiler::dag_id::DagId>,
@@ -2634,7 +2660,7 @@ fn eval_hir_dag_call(
             output.span,
         )
     })?;
-    let output_presentation = dag_presentations.remove(&output_key).unwrap_or_default();
+    let output_presentation = take_presentation_instance(&mut dag_presentations, &output_key);
     let presentation = retain_called_dag_presentation_values(
         dag_tir,
         &output.value,

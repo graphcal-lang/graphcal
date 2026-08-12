@@ -1,16 +1,19 @@
 //! Checked presentation application, coordinate formatting, and display-unit rendering.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::format::{format_number, format_unit_terms_canonical};
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::FieldName;
 use graphcal_compiler::tir::presentation::{
-    IndexedPresentation, LeafPresentation, PresentationIndexSubstitution, PresentationLocalBinder,
-    PresentationMatchPattern, PresentationProvenance, PresentationSelection, UnitPresentation,
+    IndexedPresentation, LeafPresentation, PresentationCallKey, PresentationIndexSubstitution,
+    PresentationLocalBinder, PresentationMatchPattern, PresentationProvenance,
+    PresentationSelection, UnitPresentation,
 };
 
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
@@ -107,105 +110,20 @@ fn attach_presentation_with_locals(
         PresentationProvenance::Struct {
             owning_type,
             fields: presentations,
-        } => {
-            let instance_fields = match instance {
-                None | Some(PresentationInstance::None) => None,
-                Some(PresentationInstance::Struct { fields }) => Some(fields),
-                Some(_) => {
-                    return Err(presentation_error(
-                        ctx,
-                        "checked struct presentation has incompatible runtime invocation provenance",
-                        DiagnosticAnchor::WholeFile,
-                    ));
-                }
-            };
-            match value {
-                Value::Struct { type_name, fields }
-                    if type_name.resolved() == owning_type.resolved() =>
-                {
-                    presentations.iter().try_for_each(|(field, presentation)| {
-                        fields.get_mut(field).map_or_else(
-                            || {
-                                Err(presentation_error(
-                                    ctx,
-                                    format!(
-                                        "checked presentation field `{field}` is absent from runtime struct `{type_name}`"
-                                    ),
-                                    DiagnosticAnchor::WholeFile,
-                                ))
-                            },
-                            |field_value| {
-                                attach_presentation_with_locals(
-                                    field_value,
-                                    presentation,
-                                    instance_fields.and_then(|fields| fields.get(field)),
-                                    ctx,
-                                    values,
-                                    locals,
-                                )
-                            },
-                        )
-                    })
-                }
-                Value::Struct { type_name, .. } => Err(presentation_error(
-                    ctx,
-                    format!(
-                        "checked presentation type `{owning_type}` does not match runtime struct `{type_name}`"
-                    ),
-                    DiagnosticAnchor::WholeFile,
-                )),
-                _ => Err(presentation_error(
-                    ctx,
-                    "checked struct presentation was paired with a non-struct runtime value",
-                    DiagnosticAnchor::WholeFile,
-                )),
-            }
-        }
+        } => attach_struct(
+            value,
+            owning_type,
+            presentations,
+            instance,
+            ctx,
+            values,
+            locals,
+        ),
         PresentationProvenance::Indexed { index, elements } => {
             attach_indexed(value, index, elements, instance, ctx, values, locals)
         }
         PresentationProvenance::DagCall { key, output } => {
-            let (invocation, output_instance) = match instance {
-                Some(PresentationInstance::DagCall { invocation, output }) => {
-                    (*invocation, output.as_ref())
-                }
-                None | Some(PresentationInstance::None) => {
-                    return Err(presentation_error(
-                        ctx,
-                        "checked DAG-call presentation has no runtime invocation identity",
-                        key.span(),
-                    ));
-                }
-                Some(_) => {
-                    return Err(presentation_error(
-                        ctx,
-                        "checked DAG-call presentation has incompatible runtime invocation provenance",
-                        key.span(),
-                    ));
-                }
-            };
-            let calls = ctx.presentation_calls.ok_or_else(|| {
-                presentation_error(
-                    ctx,
-                    "checked DAG-call presentation has no evaluated call store",
-                    key.span(),
-                )
-            })?;
-            let call_values = calls.invocation(key, invocation).map_err(|error| {
-                presentation_error(
-                    ctx,
-                    format!("checked DAG-call presentation values are unavailable: {error}"),
-                    key.span(),
-                )
-            })?;
-            attach_presentation_with_locals(
-                value,
-                output,
-                Some(output_instance),
-                ctx,
-                &call_values,
-                locals,
-            )
+            attach_dag_call(value, key, output, instance, ctx, locals)
         }
         PresentationProvenance::IndexProjection {
             defining_dag,
@@ -228,6 +146,120 @@ fn attach_presentation_with_locals(
             attach_presentation_with_locals(value, selected, instance, ctx, values, locals)
         }
     }
+}
+
+fn attach_struct(
+    value: &mut Value,
+    owning_type: &StructTypeRef,
+    presentations: &HashMap<FieldName, PresentationProvenance>,
+    instance: Option<&PresentationInstance>,
+    ctx: &EvalContext<'_>,
+    values: &RuntimeValueMap,
+    locals: &PresentationLocalEnv<'_>,
+) -> Result<(), GraphcalError> {
+    let instance_fields = match instance {
+        None | Some(PresentationInstance::None) => None,
+        Some(PresentationInstance::Struct { fields }) => Some(fields),
+        Some(_) => {
+            return Err(presentation_error(
+                ctx,
+                "checked struct presentation has incompatible runtime invocation provenance",
+                DiagnosticAnchor::WholeFile,
+            ));
+        }
+    };
+    match value {
+        Value::Struct { type_name, fields }
+            if type_name.resolved() == owning_type.resolved() =>
+        {
+            presentations.iter().try_for_each(|(field, presentation)| {
+                fields.get_mut(field).map_or_else(
+                    || {
+                        Err(presentation_error(
+                            ctx,
+                            format!(
+                                "checked presentation field `{field}` is absent from runtime struct `{type_name}`"
+                            ),
+                            DiagnosticAnchor::WholeFile,
+                        ))
+                    },
+                    |field_value| {
+                        attach_presentation_with_locals(
+                            field_value,
+                            presentation,
+                            instance_fields.and_then(|fields| fields.get(field)),
+                            ctx,
+                            values,
+                            locals,
+                        )
+                    },
+                )
+            })
+        }
+        Value::Struct { type_name, .. } => Err(presentation_error(
+            ctx,
+            format!(
+                "checked presentation type `{owning_type}` does not match runtime struct `{type_name}`"
+            ),
+            DiagnosticAnchor::WholeFile,
+        )),
+        _ => Err(presentation_error(
+            ctx,
+            "checked struct presentation was paired with a non-struct runtime value",
+            DiagnosticAnchor::WholeFile,
+        )),
+    }
+}
+
+fn attach_dag_call(
+    value: &mut Value,
+    key: &PresentationCallKey,
+    output: &PresentationProvenance,
+    instance: Option<&PresentationInstance>,
+    ctx: &EvalContext<'_>,
+    locals: &PresentationLocalEnv<'_>,
+) -> Result<(), GraphcalError> {
+    let (invocation, output_instance) = match instance {
+        Some(PresentationInstance::DagCall { invocation, output }) => {
+            (*invocation, output.as_ref())
+        }
+        None | Some(PresentationInstance::None) => {
+            return Err(presentation_error(
+                ctx,
+                "checked DAG-call presentation has no runtime invocation identity",
+                key.span(),
+            ));
+        }
+        Some(_) => {
+            return Err(presentation_error(
+                ctx,
+                "checked DAG-call presentation has incompatible runtime invocation provenance",
+                key.span(),
+            ));
+        }
+    };
+    let calls = ctx.presentation_calls.ok_or_else(|| {
+        presentation_error(
+            ctx,
+            "checked DAG-call presentation has no evaluated call store",
+            key.span(),
+        )
+    })?;
+    let call_values = calls.invocation(key, invocation).map_err(|error| {
+        presentation_error(
+            ctx,
+            format!("checked DAG-call presentation values are unavailable: {error}"),
+            key.span(),
+        )
+    })?;
+    attach_presentation_with_locals(
+        value,
+        output,
+        Some(output_instance),
+        ctx,
+        &call_values,
+        locals,
+    )
 }
 
 fn attach_indexed(

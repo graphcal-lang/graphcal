@@ -86,6 +86,10 @@ impl RuntimeEvaluation {
 /// violations are returned immediately rather than being fault-isolated as
 /// ordinary user evaluation failures.
 /// Run the core loop with one plan-validated row of runtime parameter bindings.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one dependency-ordered loop keeps value insertion and per-node failure isolation auditable"
+)]
 pub(super) fn run_eval_loop_with_bindings(
     plan: &crate::exec_plan::ExecPlan,
     bindings: &super::bindings::RuntimeParameterBindings,

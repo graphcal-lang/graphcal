@@ -20,7 +20,7 @@ use crate::decl_key::RuntimeDeclKey;
 /// IDs are allocated by one [`crate::execution_facts::EvaluatedPresentationCalls`]
 /// store and are meaningful only for that evaluation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct PresentationInvocationId(u64);
+pub struct PresentationInvocationId(u64);
 
 impl PresentationInvocationId {
     pub(crate) const fn new(raw: u64) -> Self {
@@ -40,7 +40,7 @@ impl fmt::Display for PresentationInvocationId {
 /// `None` deliberately collapses any subtree with no inline-call identity.
 /// Struct and indexed variants therefore contain only non-empty descendants.
 #[derive(Debug, Clone, Default)]
-pub(crate) enum PresentationInstance {
+pub enum PresentationInstance {
     #[default]
     None,
     Struct {
@@ -102,7 +102,7 @@ impl PresentationInstance {
     ) -> Result<Self, PresentationInstanceProjectionError> {
         match self {
             Self::None => Ok(Self::None),
-            Self::Struct { mut fields } => Ok(fields.remove(field).unwrap_or_default()),
+            Self::Struct { mut fields } => Ok(fields.remove(field).unwrap_or_else(Self::default)),
             Self::DagCall { invocation, output } => output
                 .project_field(field)
                 .map(|output| Self::dag_call(invocation, output)),
@@ -120,10 +120,10 @@ impl PresentationInstance {
         };
         match self {
             Self::None => Ok(Self::None),
-            Self::Indexed { mut entries } => entries
-                .swap_remove(key)
-                .unwrap_or_default()
-                .project_indexes(remaining),
+            Self::Indexed { mut entries } => entries.swap_remove(key).map_or_else(
+                || Ok(Self::None),
+                |instance| instance.project_indexes(remaining),
+            ),
             Self::DagCall { invocation, output } => output
                 .project_indexes(keys)
                 .map(|output| Self::dag_call(invocation, output)),
@@ -135,7 +135,7 @@ impl PresentationInstance {
 /// Structural mismatch while applying a value projection to its presentation
 /// instance. A checked program reaching either variant is an internal error.
 #[derive(Debug, Clone, Copy, Error)]
-pub(crate) enum PresentationInstanceProjectionError {
+pub enum PresentationInstanceProjectionError {
     #[error("field projection expected struct presentation provenance")]
     ExpectedStruct,
     #[error("index projection expected indexed presentation provenance")]
@@ -144,7 +144,7 @@ pub(crate) enum PresentationInstanceProjectionError {
 
 /// One semantic runtime value paired atomically with its presentation instance.
 #[derive(Debug, Clone)]
-pub(crate) struct EvaluatedRuntimeValue {
+pub struct EvaluatedRuntimeValue {
     value: RuntimeValue,
     presentation: PresentationInstance,
 }
@@ -175,4 +175,4 @@ impl EvaluatedRuntimeValue {
 }
 
 /// Presentation instances retained beside declaration runtime values.
-pub(crate) type PresentationInstanceMap = HashMap<RuntimeDeclKey, PresentationInstance>;
+pub type PresentationInstanceMap = HashMap<RuntimeDeclKey, PresentationInstance>;

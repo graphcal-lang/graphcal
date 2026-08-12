@@ -641,11 +641,11 @@ node reversed: Length[Order] = {
     else {
         panic!("values must be indexed");
     };
-    assert!(entries.values().all(|value| {
-        matches!(
-            value,
-            graphcal_eval::eval::Value::Quantity { si_value, .. } if *si_value == 6.0
-        )
+    assert!(entries.values().all(|value| match value {
+        graphcal_eval::eval::Value::Quantity { si_value, .. } => {
+            (*si_value - 6.0).abs() < f64::EPSILON
+        }
+        _ => false,
     }));
 
     let displayed =

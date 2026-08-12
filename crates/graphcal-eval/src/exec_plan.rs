@@ -345,6 +345,10 @@ fn check_dag_execution_facts(
     ))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "dependency-ordered const evaluation keeps each canonical DAG pool and its diagnostics together"
+)]
 fn eval_const_pools_for_dags(
     tir: &TIR,
     dag_ids: &HashSet<graphcal_compiler::dag_id::DagId>,

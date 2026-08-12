@@ -81,6 +81,7 @@ impl EvaluatedPresentationCalls {
             previous.is_none(),
             "fresh presentation invocation was reused"
         );
+        drop(state);
         Ok(invocation)
     }
 
@@ -101,7 +102,9 @@ impl EvaluatedPresentationCalls {
         if &call.key != key {
             return Err(PresentationCallValuesError::WrongCallSite { invocation });
         }
-        Ok(Arc::clone(&call.values))
+        let values = Arc::clone(&call.values);
+        drop(state);
+        Ok(values)
     }
 }
 
