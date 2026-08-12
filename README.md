@@ -5,16 +5,17 @@
 
 **A type-safe, unit-aware, Git-friendly reactive programming language for engineering calculations.**
 
-Graphcal replaces the spreadsheets and ad-hoc scripts that engineers reluctantly depend on -- Excel mass budgets, throwaway Python notebooks -- with a single typed, version-controlled, reactive computation graph. The compiler tracks physical dimensions through every operation, so a stray `km + kg` or a missing unit conversion fails at compile time, not in flight. Remember the [Mars Climate Orbiter](https://en.wikipedia.org/wiki/Mars_Climate_Orbiter).
+Graphcal is for engineers who want more confidence than spreadsheets and ad-hoc scripts provide. Write plain-text calculation graphs, let the compiler check types and physical dimensions, and see dependent values update when inputs change.
 
 ![Graphcal in Helix showing inline computed values for a rocket equation calculation](docs/assets/rocket-screenshot.png)
 
-*Graphcal's language server shows computed node values inline, so a plain-text calculation file feels like a live engineering worksheet.*
+*The language server shows computed values inline, turning a text file into a live engineering worksheet.*
+
+## See it in action
+
+This example calculates rocket delta-v. `Velocity` and `Acceleration` are prelude dimensions.
 
 ```gcl
-// rocket.gcl -- the Tsiolkovsky equation
-// `Velocity` and `Acceleration` are prelude dimensions.
-
 param dry_mass: Mass = 1200.0 kg;
 param fuel_mass: Mass = 2800.0 kg;
 param isp: Time = 320.0 s;
@@ -26,112 +27,59 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
 ```sh
-$ graphcal eval rocket.gcl
-dry_mass   = 1200 kg
-fuel_mass  = 2800 kg
-isp        = 320 s
-g0         = 9.80665 m/s^2
-v_exhaust  = 3138.128 m/s
-mass_ratio = 3.333333
-delta_v    = 3778.220768 m/s
+graphcal eval rocket.gcl
+# delta_v = 3778.220768 m/s
 ```
 
-[Try `rocket.gcl` in the browser playground](https://graphcal.org/docs/playground/) without installing anything. Browser project files are validated into normalized absolute virtual paths, so relative escapes and file/directory path conflicts cannot enter the loader.
+[Try the example in the browser playground](https://graphcal.org/docs/playground/) without installing anything.
 
 ## Why Graphcal?
 
-- **Unit-safe.** Physical dimensions—including generic field constraints, unit definitions, and runtime unit-scale expressions—are checked at compile time, conversions are explicit, and public values require matching checked type and constructor metadata instead of dropping field units.
-- **Reactive.** Change a parameter and every dependent value is recomputed automatically.
-- **Git-friendly.** Plain-text `.gcl` files diff and merge cleanly, with no hidden spreadsheet state.
-- **Built for engineering.** Typed axes, dimension-aware linear algebra, assertions with per-index expected-failure tracking, checked structured display provenance, unit-aware plotting, and reusable computation graphs are built in.
-- **Resource-bounded.** Composite eager shapes are checked before allocation, expensive dense kernels use a cooperative work budget, and editor formatting is size-limited, serialized, cancellable, and time-bounded.
-- **Live in your editor.** The language server provides source-accurate diagnostics, canonical project-wide references and safe rename, and inline computed values; edits to dependencies automatically refresh every open transitive importer.
-
-## Installation
-
-Requires the Rust stable toolchain. Get it from [rustup.rs](https://rustup.rs/) if needed.
-
-```sh
-cargo install graphcal --locked
-graphcal --version  # prints the package version and, when available, the build commit SHA
-```
+- **Type- and unit-safe:** dimensional mistakes such as `km + kg` are rejected at compile time.
+- **Reactive:** changing a parameter recomputes its dependents.
+- **Git-friendly:** `.gcl` files are plain text and diff cleanly.
+- **Engineering-focused:** build reusable computation graphs with dimensions, units, assertions, and visualization.
+- **Editor-friendly:** the LSP provides diagnostics, references, rename, and inline computed values.
 
 ## Quickstart
 
+Install the CLI with [Rust](https://rustup.rs/):
+
 ```sh
-# Evaluate a file
-graphcal eval rocket.gcl
-
-# Bind entry-file params to closed values (rest keep their defaults)
-graphcal eval rocket.gcl --set 'isp=450.0 s'
-
-# Serve bounded scalar inputs and public Bool outputs to Tenax over Arrow IPC
-graphcal model serve reliability.gcl --output failure
-
-# Bind from JSON (input errors point back to params.json) or emit JSON
-graphcal eval analysis.gcl --input params.json --format json
-graphcal eval analysis.gcl --output-view all
-graphcal eval analysis.gcl --plot browser
-
-# Canonically format source with AST-checked, precedence-safe parentheses
-graphcal format rocket.gcl
-
-# Export the dependency graph as Graphviz DOT (experimental)
-graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
+cargo install graphcal --locked
 ```
 
-`graphcal format` writes changed sources through synchronized same-directory
-temporary files and atomic replacement, so a failed write cannot truncate the
-only source copy; batch replacement errors are accumulated instead of aborting
-later targets. Rooted disk reads, metadata queries, canonicalization, and
-directory listings are relative to a held directory capability, preventing
-concurrent symlink swaps from escaping after validation.
+Save the example above as `rocket.gcl`, then run:
 
-See the [CLI reference](https://graphcal.org/docs/cli-reference/) for the full command-line interface and the [Tenax integration guide](https://graphcal.org/docs/tenax-integration/) for persistent model serving. `--set` and `--input` accept recursively closed values, not references or computations; indexed input entries deeper than their declared schema are rejected. Imported constants, static units, and prepared structured inputs retain canonical definition-site metadata, so consumers do not need to re-import backing dimensions or schema implementation dependencies they never name. Imports remain compile-time-only blueprints; self-imports and cross-file imports share the same policy, while explicit `include` instances own runtime values, assertions, visualization requests, and dynamic unit scales, with namespace-typed substitutions for selective re-exports. Validated function signatures fail explicitly if dimension-binding provenance is inconsistent. Structural finite-index widening uses typed cardinality forms and never falls back when declared-axis metadata is missing. Unknown qualified dimensions retain structured paths through diagnostics. Civil datetime and epoch literals require an explicit time; date-only strings never imply midnight. DOT exports use opaque renderer-local statement ids so human-readable name collisions cannot merge semantic graph identities. Configured `include` composition may nest to arbitrary acyclic depth while preserving isolated instance paths and rejecting inconsistent owner rebases. Quoted literals used for datetimes, timezones, plot labels, and plugin paths must begin and end on the same physical source line; Graphcal has no multiline string syntax. Package loading, lock generation, and plugin inspection share canonical root capabilities and pre-allocation byte/count budgets; plugin pins use validated portable paths and streaming hashes, while locked source trees reject symlinks and special files. Recursive algebraic types remain ordinary finite runtime values, while transports without recursive-schema support reject them only at the transport boundary.
+```sh
+graphcal eval rocket.gcl
+# Try a different input:
+graphcal eval rocket.gcl --set 'isp=450.0 s'
+```
 
-Git package dependencies must be pinned to full commit hashes and use parsed
-remote HTTPS or SSH URLs. Local paths, `file://`, plain HTTP, unsupported
-schemes, and embedded credentials are rejected before fetching. The current
-lockfile schema rejects unknown fields and requires canonical lowercase SHA-256
-pins; hand-edited lockfiles with custom fields or non-canonical hashes must be
-regenerated with `graphcal deps lock`. Lock dependency cycles are checked with
-an explicit work stack rather than recursive calls, and bounded loaders cap the
-number of package entries before validating the graph. Valid locked checkouts
-are reused offline from typed URL/commit and tree-digest cache paths; per-source
-writer locks and same-cache staged renames keep publication safe across
-concurrent lock and evaluation processes. Only the root lock entry may use the
-fixed path source `.`; every dependency must be Git-backed and reachable from
-that root. See the
-[package dependency guide](https://graphcal.org/docs/language/multi-file/#package-dependencies)
-for supported forms and migration guidance.
+For the full CLI, see the [CLI reference](https://graphcal.org/docs/cli-reference/). For a guided introduction, start with the [tutorial](https://graphcal.org/docs/tutorial/).
 
-Editor snapshots preserve the same rooted filesystem capability as disk loads:
-existing buffers use canonical identities, while unsaved buffers must have an
-authorized existing parent; outside paths and file/directory collisions are
-rejected.
+## Editor support
 
-## Editor Support
+- **VS Code:** install the [Graphcal extension](https://marketplace.visualstudio.com/items?itemName=Graphcal.graphcal).
+- **Zed:** use the [Zed extension](https://github.com/graphcal-lang/zed-graphcal) as a development extension.
+- **Neovim / Helix:** use the [tree-sitter grammar](https://github.com/graphcal-lang/tree-sitter-graphcal) with `graphcal lsp`.
 
-Inlay hints show computed values right next to the source -- install one of the supported integrations and your editor turns into a live notebook.
+See the [editor setup guide](https://graphcal.org/docs/editor-setup/) for details.
 
-- **VS Code** -- install the published [Graphcal extension](https://marketplace.visualstudio.com/items?itemName=Graphcal.graphcal) from the Visual Studio Marketplace
-- **Zed** -- extension source in [`graphcal-lang/zed-graphcal`](https://github.com/graphcal-lang/zed-graphcal) (not yet published; install as a dev extension)
-- **Neovim / Helix** -- tree-sitter grammar in [`graphcal-lang/tree-sitter-graphcal`](https://github.com/graphcal-lang/tree-sitter-graphcal), plus the `graphcal lsp` server
+## Explore further
 
-Setup details for each editor are in the [Editor Setup guide](https://graphcal.org/docs/editor-setup/).
+- [Language reference](https://graphcal.org/docs/language/)
+- [Tenax integration](https://graphcal.org/docs/tenax-integration/)
+- [Documentation home](https://graphcal.org/docs/)
 
-## Design Influences
+## Design influences
 
-- [Numbat](https://numbat.dev) -- dimensions as types, units as values
-- [Gleam](https://gleam.run) -- unified `type` declarations for structs and union types
-- [marimo](https://marimo.io) -- reactive DAG on cells, pure text files
-- [Sguaba](https://github.com/helsing-ai/sguaba) -- phantom-typed coordinate frames
+- [Numbat](https://numbat.dev) — dimensions as types, units as values
+- [Gleam](https://gleam.run) — unified type declarations
+- [marimo](https://marimo.io) — reactive graphs in plain-text files
+- [Sguaba](https://github.com/helsing-ai/sguaba) — typed coordinate frames
 
 ## License
 
-Licensed under either of:
-
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-
-at your option.
+Licensed under either the [MIT License](LICENSE-MIT) or [Apache License, Version 2.0](LICENSE-APACHE), at your option.
