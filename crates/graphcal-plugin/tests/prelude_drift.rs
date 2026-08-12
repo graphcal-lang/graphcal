@@ -132,24 +132,35 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
     // The ABI only speaks base dimensions; derived sugar must never leak
     // its name into the manifest, and spellings must match the prelude's.
     let manifest = PluginManifest::from_json(&GRAPHCAL_PLUGIN_MANIFEST).expect("manifest decodes");
-    for function in &manifest.functions {
-        let kinds = function
-            .params
-            .iter()
-            .map(|param| &param.kind)
-            .chain([&function.result]);
-        for kind in kinds {
-            let graphcal_plugin_abi::ManifestValueKind::Quantity(monomial) = kind else {
-                continue;
-            };
+    let assert_base_factors =
+        |function_name: &str, monomial: &graphcal_plugin_abi::ManifestMonomial| {
             for factor in &monomial.fixed {
                 assert!(
                     PRELUDE_BASE_DIMENSION_NAMES.contains(&factor.dim.as_str()),
-                    "function `{}` leaked non-base dimension `{}` into the manifest",
-                    function.name,
+                    "function `{function_name}` leaked non-base dimension `{}` into the manifest",
                     factor.dim
                 );
             }
+        };
+    for function in &manifest.functions {
+        for param in &function.params {
+            match &param.kind {
+                graphcal_plugin_abi::ManifestParamKind::Quantity(monomial) => {
+                    assert_base_factors(&function.name, monomial);
+                }
+                graphcal_plugin_abi::ManifestParamKind::Bool
+                | graphcal_plugin_abi::ManifestParamKind::Int
+                | graphcal_plugin_abi::ManifestParamKind::Array { .. } => {}
+            }
+        }
+        match &function.result {
+            graphcal_plugin_abi::ManifestResultKind::Quantity(monomial) => {
+                assert_base_factors(&function.name, monomial);
+            }
+            graphcal_plugin_abi::ManifestResultKind::Bool
+            | graphcal_plugin_abi::ManifestResultKind::Int
+            | graphcal_plugin_abi::ManifestResultKind::Array { .. }
+            | graphcal_plugin_abi::ManifestResultKind::Struct { .. } => {}
         }
     }
     // Base-dimension functions must carry exactly their own base name.
@@ -168,7 +179,7 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
             .iter()
             .find(|function| function.name == function_name)
             .expect("declared above");
-        let graphcal_plugin_abi::ManifestValueKind::Quantity(monomial) = &function.result else {
+        let graphcal_plugin_abi::ManifestResultKind::Quantity(monomial) = &function.result else {
             panic!("base-dimension functions return quantities");
         };
         assert_eq!(monomial.fixed.len(), 1, "{function_name}");

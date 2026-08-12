@@ -9,16 +9,16 @@ use std::path::Path;
 use std::process::Command;
 
 use graphcal_plugin_abi::{
-    ManifestFunction, ManifestMonomial, ManifestParam, ManifestRational, ManifestValueKind,
-    ManifestVarPower, PluginManifest,
+    ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind, ManifestRational,
+    ManifestResultKind, ManifestVarPower, PluginManifest,
 };
 
 fn graphcal_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_graphcal"))
 }
 
-fn quantity_var(var: &str) -> ManifestValueKind {
-    ManifestValueKind::Quantity(ManifestMonomial {
+fn quantity_var(var: &str) -> ManifestParamKind {
+    ManifestParamKind::Quantity(ManifestMonomial {
         vars: vec![ManifestVarPower {
             var: var.to_string(),
             pow: ManifestRational { num: 1, den: 1 },
@@ -27,8 +27,8 @@ fn quantity_var(var: &str) -> ManifestValueKind {
     })
 }
 
-fn dimensionless() -> ManifestValueKind {
-    ManifestValueKind::Quantity(ManifestMonomial::default())
+fn dimensionless() -> ManifestParamKind {
+    ManifestParamKind::Quantity(ManifestMonomial::default())
 }
 
 /// The manifest entry for the array `twice` function.
@@ -46,12 +46,12 @@ fn twice_manifest_function() -> ManifestFunction {
         index_vars: vec!["I".to_string()],
         params: vec![ManifestParam {
             name: "xs".to_string(),
-            kind: ManifestValueKind::Array {
+            kind: ManifestParamKind::Array {
                 element: element.clone(),
                 indexes: vec!["I".to_string()],
             },
         }],
-        result: ManifestValueKind::Array {
+        result: ManifestResultKind::Array {
             element,
             indexes: vec!["I".to_string()],
         },
@@ -116,7 +116,7 @@ fn test_module_bytes() -> Vec<u8> {
                         kind: dimensionless(),
                     },
                 ],
-                result: quantity_var("D"),
+                result: quantity_var("D").into(),
             },
             ManifestFunction {
                 name: "step".to_string(),
@@ -125,14 +125,14 @@ fn test_module_bytes() -> Vec<u8> {
                 params: vec![
                     ManifestParam {
                         name: "n".to_string(),
-                        kind: ManifestValueKind::Int,
+                        kind: ManifestParamKind::Int,
                     },
                     ManifestParam {
                         name: "up".to_string(),
-                        kind: ManifestValueKind::Bool,
+                        kind: ManifestParamKind::Bool,
                     },
                 ],
-                result: ManifestValueKind::Int,
+                result: ManifestResultKind::Int,
             },
             twice_manifest_function(),
         ],
@@ -160,7 +160,7 @@ fn non_finite_result_module_bytes() -> Vec<u8> {
             dim_vars: Vec::new(),
             index_vars: Vec::new(),
             params: Vec::new(),
-            result: dimensionless(),
+            result: dimensionless().into(),
         }],
     };
     let wasm = wat::parse_str(wat).expect("non-finite-result WAT compiles");
@@ -189,7 +189,7 @@ fn malicious_name_module_bytes() -> Vec<u8> {
             dim_vars: Vec::new(),
             index_vars: Vec::new(),
             params: Vec::new(),
-            result: dimensionless(),
+            result: dimensionless().into(),
         }],
     };
     let wasm = wat::parse_str(wat).expect("malicious-name WAT compiles");

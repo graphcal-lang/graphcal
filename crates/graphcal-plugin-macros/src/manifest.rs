@@ -6,13 +6,13 @@
 //! format by construction.
 
 use graphcal_plugin_abi::{
-    ManifestDimPower, ManifestFunction, ManifestMonomial, ManifestParam, ManifestRational,
-    ManifestValueKind, ManifestVarPower, PluginManifest,
+    ManifestDimPower, ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind,
+    ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
 };
 use proc_macro2::Span;
 
 use crate::dims;
-use crate::lower::{FieldKindIr, FunctionIr, KindIr, MonomialIr, PluginIr};
+use crate::lower::{FieldKindIr, FunctionIr, MonomialIr, ParamKindIr, PluginIr, ResultKindIr};
 use crate::rational::Rational;
 
 /// Serialize the signature IR as the manifest JSON payload.
@@ -41,7 +41,7 @@ fn function_to_manifest(function: &FunctionIr) -> syn::Result<ManifestFunction> 
         .map(|param| {
             Ok(ManifestParam {
                 name: param.name.to_string(),
-                kind: kind_to_manifest(&param.kind, param.name.span())?,
+                kind: param_kind_to_manifest(&param.kind, param.name.span())?,
             })
         })
         .collect::<syn::Result<Vec<_>>>()?;
@@ -54,7 +54,7 @@ fn function_to_manifest(function: &FunctionIr) -> syn::Result<ManifestFunction> 
             .map(ToString::to_string)
             .collect(),
         params,
-        result: kind_to_manifest(&function.result, function.name.span())?,
+        result: result_kind_to_manifest(&function.result, function.name.span())?,
     };
     let slots = manifest.abi_parameter_slots().unwrap_or(usize::MAX);
     if slots > graphcal_plugin_abi::MAX_ABI_FUNCTION_PARAMS {
@@ -70,18 +70,38 @@ fn function_to_manifest(function: &FunctionIr) -> syn::Result<ManifestFunction> 
     Ok(manifest)
 }
 
-fn kind_to_manifest(kind: &KindIr, fallback_span: Span) -> syn::Result<ManifestValueKind> {
+fn param_kind_to_manifest(
+    kind: &ParamKindIr,
+    fallback_span: Span,
+) -> syn::Result<ManifestParamKind> {
     Ok(match kind {
-        KindIr::Bool => ManifestValueKind::Bool,
-        KindIr::Int => ManifestValueKind::Int,
-        KindIr::Quantity(monomial) => {
-            ManifestValueKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
+        ParamKindIr::Bool => ManifestParamKind::Bool,
+        ParamKindIr::Int => ManifestParamKind::Int,
+        ParamKindIr::Quantity(monomial) => {
+            ManifestParamKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
         }
-        KindIr::Array { element, indexes } => ManifestValueKind::Array {
+        ParamKindIr::Array { element, indexes } => ManifestParamKind::Array {
             element: monomial_to_manifest(element, fallback_span)?,
             indexes: indexes.iter().map(ToString::to_string).collect(),
         },
-        KindIr::Struct(fields) => ManifestValueKind::Struct {
+    })
+}
+
+fn result_kind_to_manifest(
+    kind: &ResultKindIr,
+    fallback_span: Span,
+) -> syn::Result<ManifestResultKind> {
+    Ok(match kind {
+        ResultKindIr::Bool => ManifestResultKind::Bool,
+        ResultKindIr::Int => ManifestResultKind::Int,
+        ResultKindIr::Quantity(monomial) => {
+            ManifestResultKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
+        }
+        ResultKindIr::Array { element, indexes } => ManifestResultKind::Array {
+            element: monomial_to_manifest(element, fallback_span)?,
+            indexes: indexes.iter().map(ToString::to_string).collect(),
+        },
+        ResultKindIr::Struct(fields) => ManifestResultKind::Struct {
             fields: fields
                 .iter()
                 .map(|field| {

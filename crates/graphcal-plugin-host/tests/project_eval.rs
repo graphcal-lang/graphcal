@@ -16,13 +16,13 @@ use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, load_project};
 use graphcal_io::RealFileSystem;
 use graphcal_plugin_abi::{
-    ManifestFunction, ManifestMonomial, ManifestParam, ManifestRational, ManifestValueKind,
-    ManifestVarPower, PluginManifest,
+    ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind, ManifestRational,
+    ManifestResultKind, ManifestVarPower, PluginManifest,
 };
 use graphcal_plugin_host::{PluginHost, register_project_plugins};
 
-fn quantity_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
-    ManifestValueKind::Quantity(ManifestMonomial {
+fn quantity_var(var: &str, num: i32, den: i32) -> ManifestParamKind {
+    ManifestParamKind::Quantity(ManifestMonomial {
         vars: vec![ManifestVarPower {
             var: var.to_string(),
             pow: ManifestRational { num, den },
@@ -31,15 +31,15 @@ fn quantity_var(var: &str, num: i32, den: i32) -> ManifestValueKind {
     })
 }
 
-fn dimensionless() -> ManifestValueKind {
-    ManifestValueKind::Quantity(ManifestMonomial::default())
+fn dimensionless() -> ManifestParamKind {
+    ManifestParamKind::Quantity(ManifestMonomial::default())
 }
 
 fn manifest_fn(
     name: &str,
     dim_vars: &[&str],
-    params: &[(&str, ManifestValueKind)],
-    result: ManifestValueKind,
+    params: &[(&str, ManifestParamKind)],
+    result: impl Into<ManifestResultKind>,
 ) -> ManifestFunction {
     ManifestFunction {
         name: name.to_string(),
@@ -52,7 +52,7 @@ fn manifest_fn(
                 kind: kind.clone(),
             })
             .collect(),
-        result,
+        result: result.into(),
     }
 }
 
@@ -532,7 +532,7 @@ fn scale_plugin() -> Vec<u8> {
         &[
             (
                 "xs",
-                ManifestValueKind::Array {
+                ManifestParamKind::Array {
                     element: ManifestMonomial {
                         vars: vec![ManifestVarPower {
                             var: "D".to_string(),
@@ -545,7 +545,7 @@ fn scale_plugin() -> Vec<u8> {
             ),
             ("k", dimensionless()),
         ],
-        ManifestValueKind::Array {
+        ManifestResultKind::Array {
             element: ManifestMonomial {
                 vars: vec![ManifestVarPower {
                     var: "D".to_string(),
@@ -679,7 +679,7 @@ fn span_plugin() -> Vec<u8> {
         &["D"],
         &[(
             "xs",
-            ManifestValueKind::Array {
+            ManifestParamKind::Array {
                 element: ManifestMonomial {
                     vars: vec![ManifestVarPower {
                         var: "D".to_string(),
@@ -690,7 +690,7 @@ fn span_plugin() -> Vec<u8> {
                 indexes: vec!["I".to_string()],
             },
         )],
-        ManifestValueKind::Struct {
+        ManifestResultKind::Struct {
             fields: vec![
                 ManifestField {
                     name: "lo".to_string(),

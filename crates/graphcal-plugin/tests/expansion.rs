@@ -182,17 +182,17 @@ fn manifest_matches_the_declarations() {
     let span = &manifest.functions[8];
     assert!(matches!(
         &span.result,
-        graphcal_plugin_abi::ManifestValueKind::Struct { fields }
+        graphcal_plugin_abi::ManifestResultKind::Struct { fields }
             if fields.len() == 2 && fields[0].name == "lo" && fields[1].name == "hi"
     ));
     assert!(matches!(
         &rescale.params[0].kind,
-        graphcal_plugin_abi::ManifestValueKind::Array { indexes, .. }
+        graphcal_plugin_abi::ManifestParamKind::Array { indexes, .. }
             if indexes == &["I"]
     ));
     assert!(matches!(
         &rescale.result,
-        graphcal_plugin_abi::ManifestValueKind::Array { indexes, .. }
+        graphcal_plugin_abi::ManifestResultKind::Array { indexes, .. }
             if indexes == &["I"]
     ));
 }

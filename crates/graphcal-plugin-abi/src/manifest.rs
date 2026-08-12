@@ -52,7 +52,7 @@ pub struct ManifestFunction {
     /// Named parameters, in declaration order.
     pub params: Vec<ManifestParam>,
     /// The result kind.
-    pub result: ManifestValueKind,
+    pub result: ManifestResultKind,
 }
 
 impl ManifestFunction {
@@ -63,24 +63,23 @@ impl ManifestFunction {
     #[must_use]
     pub fn abi_parameter_slots(&self) -> Option<usize> {
         let params = self.params.iter().try_fold(0_usize, |slots, param| {
-            slots.checked_add(kind_abi_parameter_slots(&param.kind)?)
+            slots.checked_add(param_kind_abi_parameter_slots(&param.kind)?)
         })?;
         params.checked_add(match &self.result {
-            ManifestValueKind::Array { .. } | ManifestValueKind::Struct { .. } => 1,
-            ManifestValueKind::Quantity(_) | ManifestValueKind::Bool | ManifestValueKind::Int => 0,
+            ManifestResultKind::Array { .. } | ManifestResultKind::Struct { .. } => 1,
+            ManifestResultKind::Quantity(_)
+            | ManifestResultKind::Bool
+            | ManifestResultKind::Int => 0,
         })
     }
 }
 
-const fn kind_abi_parameter_slots(kind: &ManifestValueKind) -> Option<usize> {
+const fn param_kind_abi_parameter_slots(kind: &ManifestParamKind) -> Option<usize> {
     match kind {
-        ManifestValueKind::Quantity(_) | ManifestValueKind::Bool | ManifestValueKind::Int => {
+        ManifestParamKind::Quantity(_) | ManifestParamKind::Bool | ManifestParamKind::Int => {
             Some(1)
         }
-        ManifestValueKind::Array { indexes, .. } => indexes.len().checked_add(1),
-        // Structs are result-only after semantic conversion; retaining one
-        // pointer slot here keeps malformed wire values bounded as well.
-        ManifestValueKind::Struct { .. } => Some(1),
+        ManifestParamKind::Array { indexes, .. } => indexes.len().checked_add(1),
     }
 }
 
@@ -91,17 +90,17 @@ pub struct ManifestParam {
     /// Parameter name (documentation and diagnostics on the host side).
     pub name: String,
     /// The value kind the parameter requires.
-    pub kind: ManifestValueKind,
+    pub kind: ManifestParamKind,
 }
 
-/// The kind of a parameter or result value.
+/// A parameter value kind.
 ///
 /// JSON encoding is externally tagged: `{"quantity": {…}}`, `"bool"`, `"int"`,
-/// `{"array": {"element": {…}, "indexes": ["I", "J"]}}`,
-/// `{"struct": {"fields": [{"name": "root", "kind": {"quantity": {}}}]}}`.
+/// or `{"array": {"element": {…}, "indexes": ["I", "J"]}}`. Structs have no
+/// parameter ABI representation and therefore are not a variant of this type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ManifestValueKind {
+pub enum ManifestParamKind {
     /// A quantity with the dimension described by the monomial.
     Quantity(ManifestMonomial),
     /// A boolean value (crosses the ABI as `1.0`/`0.0`).
@@ -117,14 +116,48 @@ pub enum ManifestValueKind {
         /// [`ManifestFunction::index_vars`]. Never empty after validation.
         indexes: Vec<String>,
     },
-    /// A record described by its flattened field layout (result-only;
-    /// crosses the ABI as one `f64` slot per field, in declaration order).
-    /// The shape is structural — the record's graphcal type name never
-    /// enters the manifest.
+}
+
+/// A result value kind.
+///
+/// The quantity, boolean, integer, and array JSON forms are identical to
+/// [`ManifestParamKind`]. Results additionally permit
+/// `{"struct": {"fields": […]}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManifestResultKind {
+    /// A quantity with the dimension described by the monomial.
+    Quantity(ManifestMonomial),
+    /// A boolean value (crosses the ABI as `1.0`/`0.0`).
+    Bool,
+    /// An integer value (crosses the ABI as an exactly-representable `f64`).
+    Int,
+    /// An array of quantities over one or more index variables (crosses the
+    /// ABI through a host-allocated dense row-major buffer).
+    Array {
+        /// The element dimension monomial.
+        element: ManifestMonomial,
+        /// Index variables in row-major axis order. Never empty after validation.
+        indexes: Vec<String>,
+    },
+    /// A record described by its flattened field layout (crosses the ABI as
+    /// one `f64` slot per field, in declaration order). The shape is
+    /// structural — the record's Graphcal type name never enters the manifest.
     Struct {
         /// The named fields, in declaration order.
         fields: Vec<ManifestField>,
     },
+}
+
+impl From<ManifestParamKind> for ManifestResultKind {
+    fn from(kind: ManifestParamKind) -> Self {
+        match kind {
+            ManifestParamKind::Quantity(monomial) => Self::Quantity(monomial),
+            ManifestParamKind::Bool => Self::Bool,
+            ManifestParamKind::Int => Self::Int,
+            ManifestParamKind::Array { element, indexes } => Self::Array { element, indexes },
+        }
+    }
 }
 
 /// One field of a struct result.
@@ -401,10 +434,10 @@ fn validate_function(function: &ManifestFunction) -> Result<(), ManifestValidati
                 param: param.name.clone(),
             });
         }
-        validate_kind(function, &param.kind)?;
+        validate_param_kind(function, &param.kind)?;
     }
 
-    validate_kind(function, &function.result)?;
+    validate_result_kind(function, &function.result)?;
     let slots = function.abi_parameter_slots().unwrap_or(usize::MAX);
     if slots > crate::MAX_ABI_FUNCTION_PARAMS {
         return Err(ManifestValidationError::TooManyAbiParameters {
@@ -416,34 +449,51 @@ fn validate_function(function: &ManifestFunction) -> Result<(), ManifestValidati
     Ok(())
 }
 
-fn validate_kind(
+fn validate_param_kind(
     function: &ManifestFunction,
-    kind: &ManifestValueKind,
+    kind: &ManifestParamKind,
 ) -> Result<(), ManifestValidationError> {
-    let monomial = match kind {
-        ManifestValueKind::Quantity(monomial) => monomial,
-        ManifestValueKind::Array { element, indexes } => {
-            validate_list_count(
-                indexes.len(),
-                crate::MAX_MANIFEST_ARRAY_AXES,
-                ManifestListRole::ArrayAxes,
-                Some(&function.name),
-            )?;
-            if indexes.is_empty() {
-                return Err(ManifestValidationError::EmptyArrayAxes {
-                    function: function.name.clone(),
-                });
-            }
-            for index in indexes {
-                validate_name(index, NameRole::IndexVar, Some(&function.name))?;
-            }
-            element
-        }
-        ManifestValueKind::Struct { fields } => return validate_struct(function, fields),
-        ManifestValueKind::Bool | ManifestValueKind::Int => return Ok(()),
-    };
+    match kind {
+        ManifestParamKind::Quantity(monomial) => validate_monomial(function, monomial),
+        ManifestParamKind::Array { element, indexes } => validate_array(function, element, indexes),
+        ManifestParamKind::Bool | ManifestParamKind::Int => Ok(()),
+    }
+}
 
-    validate_monomial(function, monomial)
+fn validate_result_kind(
+    function: &ManifestFunction,
+    kind: &ManifestResultKind,
+) -> Result<(), ManifestValidationError> {
+    match kind {
+        ManifestResultKind::Quantity(monomial) => validate_monomial(function, monomial),
+        ManifestResultKind::Array { element, indexes } => {
+            validate_array(function, element, indexes)
+        }
+        ManifestResultKind::Struct { fields } => validate_struct(function, fields),
+        ManifestResultKind::Bool | ManifestResultKind::Int => Ok(()),
+    }
+}
+
+fn validate_array(
+    function: &ManifestFunction,
+    element: &ManifestMonomial,
+    indexes: &[String],
+) -> Result<(), ManifestValidationError> {
+    validate_list_count(
+        indexes.len(),
+        crate::MAX_MANIFEST_ARRAY_AXES,
+        ManifestListRole::ArrayAxes,
+        Some(&function.name),
+    )?;
+    if indexes.is_empty() {
+        return Err(ManifestValidationError::EmptyArrayAxes {
+            function: function.name.clone(),
+        });
+    }
+    for index in indexes {
+        validate_name(index, NameRole::IndexVar, Some(&function.name))?;
+    }
+    validate_monomial(function, element)
 }
 
 fn validate_struct(
@@ -882,8 +932,8 @@ mod tests {
         ManifestRational { num, den }
     }
 
-    fn quantity_var(var: &str) -> ManifestValueKind {
-        ManifestValueKind::Quantity(ManifestMonomial {
+    fn quantity_var(var: &str) -> ManifestParamKind {
+        ManifestParamKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: var.to_string(),
                 pow: rational(1, 1),
@@ -898,7 +948,7 @@ mod tests {
             dim_vars: Vec::new(),
             index_vars: Vec::new(),
             params: Vec::new(),
-            result: ManifestValueKind::Quantity(ManifestMonomial::default()),
+            result: ManifestResultKind::Quantity(ManifestMonomial::default()),
         }
     }
 
@@ -920,10 +970,10 @@ mod tests {
                     },
                     ManifestParam {
                         name: "t".to_string(),
-                        kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
+                        kind: ManifestParamKind::Quantity(ManifestMonomial::default()),
                     },
                 ],
-                result: quantity_var("D"),
+                result: quantity_var("D").into(),
             }],
         }
     }
@@ -939,7 +989,7 @@ mod tests {
                 params: vec![
                     ManifestParam {
                         name: "pressure".to_string(),
-                        kind: ManifestValueKind::Quantity(ManifestMonomial {
+                        kind: ManifestParamKind::Quantity(ManifestMonomial {
                             vars: Vec::new(),
                             fixed: vec![
                                 ManifestDimPower {
@@ -959,14 +1009,14 @@ mod tests {
                     },
                     ManifestParam {
                         name: "steps".to_string(),
-                        kind: ManifestValueKind::Int,
+                        kind: ManifestParamKind::Int,
                     },
                     ManifestParam {
                         name: "clamp".to_string(),
-                        kind: ManifestValueKind::Bool,
+                        kind: ManifestParamKind::Bool,
                     },
                 ],
-                result: ManifestValueKind::Quantity(ManifestMonomial {
+                result: ManifestResultKind::Quantity(ManifestMonomial {
                     vars: Vec::new(),
                     fixed: vec![
                         ManifestDimPower {
@@ -994,7 +1044,7 @@ mod tests {
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
         assert_eq!(
             manifest.functions[0].params[0].kind,
-            ManifestValueKind::Quantity(ManifestMonomial::default())
+            ManifestParamKind::Quantity(ManifestMonomial::default())
         );
         assert!(manifest.functions[0].dim_vars.is_empty());
 
@@ -1020,12 +1070,93 @@ mod tests {
             {"name":"f","params":[{"name":"n","kind":"int"},{"name":"b","kind":"bool"}],"result":"int"}
         ]}"#;
         let manifest = PluginManifest::from_json(json.as_bytes()).unwrap();
-        assert_eq!(manifest.functions[0].params[0].kind, ManifestValueKind::Int);
+        assert_eq!(manifest.functions[0].params[0].kind, ManifestParamKind::Int);
         assert_eq!(
             manifest.functions[0].params[1].kind,
-            ManifestValueKind::Bool
+            ManifestParamKind::Bool
         );
-        assert_eq!(manifest.functions[0].result, ManifestValueKind::Int);
+        assert_eq!(manifest.functions[0].result, ManifestResultKind::Int);
+    }
+
+    #[test]
+    fn every_legal_parameter_and_result_kind_roundtrips() {
+        let dimensionless = ManifestMonomial::default();
+        let manifest = PluginManifest {
+            abi_version: crate::ABI_VERSION,
+            functions: vec![
+                ManifestFunction {
+                    name: "parameters".to_string(),
+                    dim_vars: Vec::new(),
+                    index_vars: vec!["I".to_string()],
+                    params: vec![
+                        ManifestParam {
+                            name: "quantity".to_string(),
+                            kind: ManifestParamKind::Quantity(dimensionless.clone()),
+                        },
+                        ManifestParam {
+                            name: "boolean".to_string(),
+                            kind: ManifestParamKind::Bool,
+                        },
+                        ManifestParam {
+                            name: "integer".to_string(),
+                            kind: ManifestParamKind::Int,
+                        },
+                        ManifestParam {
+                            name: "array".to_string(),
+                            kind: ManifestParamKind::Array {
+                                element: dimensionless.clone(),
+                                indexes: vec!["I".to_string()],
+                            },
+                        },
+                    ],
+                    result: ManifestResultKind::Quantity(dimensionless.clone()),
+                },
+                ManifestFunction {
+                    name: "boolean_result".to_string(),
+                    result: ManifestResultKind::Bool,
+                    ..scalar_function("unused")
+                },
+                ManifestFunction {
+                    name: "integer_result".to_string(),
+                    result: ManifestResultKind::Int,
+                    ..scalar_function("unused")
+                },
+                ManifestFunction {
+                    name: "array_result".to_string(),
+                    index_vars: vec!["I".to_string()],
+                    result: ManifestResultKind::Array {
+                        element: dimensionless,
+                        indexes: vec!["I".to_string()],
+                    },
+                    ..scalar_function("unused")
+                },
+                ManifestFunction {
+                    name: "struct_result".to_string(),
+                    result: ManifestResultKind::Struct {
+                        fields: vec![ManifestField {
+                            name: "ok".to_string(),
+                            kind: ManifestFieldKind::Bool,
+                        }],
+                    },
+                    ..scalar_function("unused")
+                },
+            ],
+        };
+
+        let encoded = manifest.to_json().unwrap();
+        assert_eq!(
+            PluginManifest::from_json(encoded.as_bytes()).unwrap(),
+            manifest
+        );
+    }
+
+    #[test]
+    fn struct_parameter_tag_is_rejected_during_decoding() {
+        let json = r#"{"abi_version":4,"functions":[{"name":"bad","params":[{"name":"value","kind":{"struct":{"fields":[{"name":"ok","kind":"bool"}]}}}],"result":"bool"}]}"#;
+        assert!(matches!(
+            PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+            ManifestDecodeError::Json { .. }
+        ));
     }
 
     #[test]
@@ -1177,7 +1308,7 @@ mod tests {
     #[test]
     fn duplicate_monomial_vars_are_rejected() {
         let mut manifest = lerp_manifest();
-        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
+        let ManifestParamKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
         else {
             panic!("expected quantity kind");
         };
@@ -1198,7 +1329,7 @@ mod tests {
     #[test]
     fn duplicate_fixed_dims_are_rejected() {
         let mut manifest = lerp_manifest();
-        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[2].kind
+        let ManifestParamKind::Quantity(monomial) = &mut manifest.functions[0].params[2].kind
         else {
             panic!("expected quantity kind");
         };
@@ -1222,7 +1353,7 @@ mod tests {
     fn non_positive_denominators_are_rejected() {
         for den in [0, -2] {
             let mut manifest = lerp_manifest();
-            let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
+            let ManifestParamKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
             else {
                 panic!("expected quantity kind");
             };
@@ -1242,7 +1373,7 @@ mod tests {
     #[test]
     fn zero_powers_are_rejected() {
         let mut manifest = lerp_manifest();
-        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
+        let ManifestParamKind::Quantity(monomial) = &mut manifest.functions[0].params[0].kind
         else {
             panic!("expected quantity kind");
         };
@@ -1288,7 +1419,7 @@ mod tests {
                 params: vec![
                     ManifestParam {
                         name: "xs".to_string(),
-                        kind: ManifestValueKind::Array {
+                        kind: ManifestParamKind::Array {
                             element: ManifestMonomial {
                                 vars: vec![ManifestVarPower {
                                     var: "D".to_string(),
@@ -1301,10 +1432,10 @@ mod tests {
                     },
                     ManifestParam {
                         name: "window".to_string(),
-                        kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
+                        kind: ManifestParamKind::Quantity(ManifestMonomial::default()),
                     },
                 ],
-                result: ManifestValueKind::Array {
+                result: ManifestResultKind::Array {
                     element: ManifestMonomial {
                         vars: vec![ManifestVarPower {
                             var: "D".to_string(),
@@ -1393,7 +1524,7 @@ mod tests {
     #[test]
     fn arrays_without_axes_are_rejected() {
         let mut manifest = smooth_manifest();
-        manifest.functions[0].result = ManifestValueKind::Array {
+        manifest.functions[0].result = ManifestResultKind::Array {
             element: ManifestMonomial::default(),
             indexes: Vec::new(),
         };
@@ -1409,7 +1540,7 @@ mod tests {
     #[test]
     fn empty_array_index_names_are_rejected() {
         let mut manifest = smooth_manifest();
-        manifest.functions[0].result = ManifestValueKind::Array {
+        manifest.functions[0].result = ManifestResultKind::Array {
             element: ManifestMonomial::default(),
             indexes: vec![String::new()],
         };
@@ -1436,12 +1567,12 @@ mod tests {
                 index_vars: indexes.clone(),
                 params: vec![ManifestParam {
                     name: "xs".to_string(),
-                    kind: ManifestValueKind::Array {
+                    kind: ManifestParamKind::Array {
                         element: ManifestMonomial::default(),
                         indexes,
                     },
                 }],
-                result: ManifestValueKind::Bool,
+                result: ManifestResultKind::Bool,
             }],
         };
         let json = manifest.to_json().unwrap();
@@ -1449,7 +1580,7 @@ mod tests {
 
         let overflow = "I_overflow".to_string();
         manifest.functions[0].index_vars.push(overflow.clone());
-        let ManifestValueKind::Array { indexes, .. } = &mut manifest.functions[0].params[0].kind
+        let ManifestParamKind::Array { indexes, .. } = &mut manifest.functions[0].params[0].kind
         else {
             panic!("test parameter must remain an array");
         };
@@ -1477,14 +1608,14 @@ mod tests {
         let mut manifest = PluginManifest {
             abi_version: crate::ABI_VERSION,
             functions: vec![ManifestFunction {
-                result: ManifestValueKind::Struct { fields },
+                result: ManifestResultKind::Struct { fields },
                 ..scalar_function("record")
             }],
         };
         let json = manifest.to_json().unwrap();
         PluginManifest::from_json(json.as_bytes()).unwrap();
 
-        let ManifestValueKind::Struct { fields } = &mut manifest.functions[0].result else {
+        let ManifestResultKind::Struct { fields } = &mut manifest.functions[0].result else {
             panic!("test result must remain a struct");
         };
         fields.push(ManifestField {
@@ -1514,7 +1645,7 @@ mod tests {
         let mut manifest = PluginManifest {
             abi_version: crate::ABI_VERSION,
             functions: vec![ManifestFunction {
-                result: ManifestValueKind::Quantity(ManifestMonomial {
+                result: ManifestResultKind::Quantity(ManifestMonomial {
                     vars: Vec::new(),
                     fixed,
                 }),
@@ -1524,7 +1655,7 @@ mod tests {
         let json = manifest.to_json().unwrap();
         PluginManifest::from_json(json.as_bytes()).unwrap();
 
-        let ManifestValueKind::Quantity(monomial) = &mut manifest.functions[0].result else {
+        let ManifestResultKind::Quantity(monomial) = &mut manifest.functions[0].result else {
             panic!("test result must remain a quantity");
         };
         monomial.fixed.push(ManifestDimPower {
@@ -1551,7 +1682,7 @@ mod tests {
             function.params = (0..crate::MAX_ABI_FUNCTION_PARAMS)
                 .map(|index| ManifestParam {
                     name: format!("p{index}"),
-                    kind: ManifestValueKind::Quantity(ManifestMonomial::default()),
+                    kind: ManifestParamKind::Quantity(ManifestMonomial::default()),
                 })
                 .collect();
             assert_eq!(
@@ -1564,7 +1695,7 @@ mod tests {
 
         manifest.functions[0].params.push(ManifestParam {
             name: "overflow".to_string(),
-            kind: ManifestValueKind::Bool,
+            kind: ManifestParamKind::Bool,
         });
         let json = manifest.to_json().unwrap();
         assert_eq!(
@@ -1590,12 +1721,12 @@ mod tests {
             function.index_vars.clone_from(&indexes);
             function.params = vec![ManifestParam {
                 name: "xs".to_string(),
-                kind: ManifestValueKind::Array {
+                kind: ManifestParamKind::Array {
                     element: ManifestMonomial::default(),
                     indexes: indexes.clone(),
                 },
             }];
-            function.result = ManifestValueKind::Array {
+            function.result = ManifestResultKind::Array {
                 element: ManifestMonomial::default(),
                 indexes: indexes.clone(),
             };
@@ -1610,7 +1741,7 @@ mod tests {
         let overflow_index = format!("I{accepted_rank}");
         let function = &mut manifest.functions[0];
         function.index_vars.push(overflow_index.clone());
-        let ManifestValueKind::Array { indexes, .. } = &mut function.params[0].kind else {
+        let ManifestParamKind::Array { indexes, .. } = &mut function.params[0].kind else {
             panic!("test parameter must remain an array");
         };
         indexes.push(overflow_index);

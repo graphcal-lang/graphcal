@@ -37,7 +37,7 @@ fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStre
 
 #[cfg(test)]
 mod tests {
-    use graphcal_plugin_abi::{ManifestValueKind, PluginManifest};
+    use graphcal_plugin_abi::{ManifestParamKind, ManifestResultKind, PluginManifest};
     use quote::{format_ident, quote};
 
     use super::*;
@@ -56,10 +56,17 @@ mod tests {
         expand(input).expect_err("expected an error").to_string()
     }
 
-    fn quantity(kind: &ManifestValueKind) -> &graphcal_plugin_abi::ManifestMonomial {
+    fn param_quantity(kind: &ManifestParamKind) -> &graphcal_plugin_abi::ManifestMonomial {
         match kind {
-            ManifestValueKind::Quantity(monomial) => monomial,
-            other => panic!("expected a quantity kind, got {other:?}"),
+            ManifestParamKind::Quantity(monomial) => monomial,
+            other => panic!("expected a quantity parameter, got {other:?}"),
+        }
+    }
+
+    fn result_quantity(kind: &ManifestResultKind) -> &graphcal_plugin_abi::ManifestMonomial {
+        match kind {
+            ManifestResultKind::Quantity(monomial) => monomial,
+            other => panic!("expected a quantity result, got {other:?}"),
         }
     }
 
@@ -73,12 +80,12 @@ mod tests {
         assert_eq!(function.name, "lerp");
         assert_eq!(function.dim_vars, ["D"]);
         assert_eq!(function.params.len(), 3);
-        let a = quantity(&function.params[0].kind);
+        let a = param_quantity(&function.params[0].kind);
         assert_eq!(a.vars.len(), 1);
         assert_eq!(a.vars[0].var, "D");
         assert_eq!((a.vars[0].pow.num, a.vars[0].pow.den), (1, 1));
         assert!(a.fixed.is_empty());
-        let t = quantity(&function.params[2].kind);
+        let t = param_quantity(&function.params[2].kind);
         assert!(t.vars.is_empty() && t.fixed.is_empty());
     }
 
@@ -88,7 +95,7 @@ mod tests {
             fn density(p: Pressure, t: Temperature) -> Mass / Volume { p / t }
         });
         let function = &manifest.functions[0];
-        let pressure = quantity(&function.params[0].kind);
+        let pressure = param_quantity(&function.params[0].kind);
         let factors: Vec<(&str, i32, i32)> = pressure
             .fixed
             .iter()
@@ -98,7 +105,7 @@ mod tests {
             factors,
             [("Length", -1, 1), ("Time", -2, 1), ("Mass", 1, 1)]
         );
-        let result = quantity(&function.result);
+        let result = result_quantity(&function.result);
         let factors: Vec<(&str, i32, i32)> = result
             .fixed
             .iter()
@@ -113,7 +120,7 @@ mod tests {
             fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> (D1 * D2)^(1/2) { (x * y).sqrt() }
             fn cancel<D: Dim>(x: D, y: D^2) -> D^2 / D * Dimensionless { y / x * 1.0 }
         });
-        let mean = quantity(&manifest.functions[0].result);
+        let mean = result_quantity(&manifest.functions[0].result);
         let powers: Vec<(&str, i32, i32)> = mean
             .vars
             .iter()
@@ -121,7 +128,7 @@ mod tests {
             .collect();
         assert_eq!(powers, [("D1", 1, 2), ("D2", 1, 2)]);
 
-        let cancelled = quantity(&manifest.functions[1].result);
+        let cancelled = result_quantity(&manifest.functions[1].result);
         assert_eq!(cancelled.vars.len(), 1);
         assert_eq!(
             (cancelled.vars[0].pow.num, cancelled.vars[0].pow.den),
@@ -135,9 +142,9 @@ mod tests {
             fn step(n: Int, up: Bool) -> Int { if up { n + 1 } else { n - 1 } }
         });
         let function = &manifest.functions[0];
-        assert_eq!(function.params[0].kind, ManifestValueKind::Int);
-        assert_eq!(function.params[1].kind, ManifestValueKind::Bool);
-        assert_eq!(function.result, ManifestValueKind::Int);
+        assert_eq!(function.params[0].kind, ManifestParamKind::Int);
+        assert_eq!(function.params[1].kind, ManifestParamKind::Bool);
+        assert_eq!(function.result, ManifestResultKind::Int);
     }
 
     #[test]
@@ -146,9 +153,9 @@ mod tests {
             fn f(x: Length^-3, y: Time^(-1/2)) -> Length^(2) { x + y }
         });
         let function = &manifest.functions[0];
-        let x = quantity(&function.params[0].kind);
+        let x = param_quantity(&function.params[0].kind);
         assert_eq!((x.fixed[0].pow.num, x.fixed[0].pow.den), (-3, 1));
-        let y = quantity(&function.params[1].kind);
+        let y = param_quantity(&function.params[1].kind);
         assert_eq!((y.fixed[0].pow.num, y.fixed[0].pow.den), (-1, 2));
     }
 
@@ -301,11 +308,11 @@ mod tests {
         assert_eq!(function.index_vars, ["I"]);
         assert!(matches!(
             &function.params[0].kind,
-            ManifestValueKind::Array { indexes, .. } if indexes == &["I"]
+            ManifestParamKind::Array { indexes, .. } if indexes == &["I"]
         ));
         assert!(matches!(
             &function.result,
-            ManifestValueKind::Array { indexes, .. } if indexes == &["I"]
+            ManifestResultKind::Array { indexes, .. } if indexes == &["I"]
         ));
     }
 
@@ -317,7 +324,7 @@ mod tests {
             }
         });
         let function = &manifest.functions[0];
-        let ManifestValueKind::Struct { fields } = &function.result else {
+        let ManifestResultKind::Struct { fields } = &function.result else {
             panic!("expected a struct result, got {:?}", function.result);
         };
         assert_eq!(fields.len(), 3);
