@@ -7,9 +7,17 @@ use thiserror::Error;
 
 const PROJECT_ROOT: &str = "/playground";
 const MANIFEST_FILE: &str = "graphcal.toml";
-const MAX_FILES: usize = 16;
-const MAX_FILE_BYTES: usize = 256 * 1024;
-const MAX_PROJECT_BYTES: usize = 1024 * 1024;
+
+/// Maximum number of files in one browser playground request.
+pub const MAX_PLAYGROUND_FILES: usize = 16;
+/// Maximum UTF-8 byte length of one file's contents.
+pub const MAX_PLAYGROUND_FILE_BYTES: usize = 256 * 1024;
+/// Maximum aggregate UTF-8 byte length of all file contents.
+pub const MAX_PLAYGROUND_CONTENT_BYTES: usize = 1024 * 1024;
+/// Maximum UTF-8 byte length of an entry path or file path.
+pub const MAX_PLAYGROUND_PATH_BYTES: usize = 1024;
+/// Maximum aggregate UTF-8 byte length of the entry path and all file paths.
+pub const MAX_PLAYGROUND_PATH_TOTAL_BYTES: usize = 16 * 1024;
 
 /// One browser-supplied project evaluation request.
 #[derive(Debug, Clone, Deserialize)]
@@ -27,6 +35,110 @@ pub struct PlaygroundFile {
     pub path: String,
     /// UTF-8 file contents.
     pub content: String,
+}
+
+/// Location of a path within a playground request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectPathRole {
+    /// The request's entry path.
+    Entry,
+    /// One element of the request's file array.
+    File {
+        /// Zero-based position in the file array.
+        index: usize,
+    },
+}
+
+impl std::fmt::Display for ProjectPathRole {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Entry => formatter.write_str("entry path"),
+            Self::File { index } => write!(formatter, "path of project file at index {index}"),
+        }
+    }
+}
+
+/// Validated aggregate request-size state.
+///
+/// Private fields prevent callers from constructing a state that has skipped
+/// an individual or aggregate limit check.
+#[derive(Debug, Clone, Copy)]
+pub struct RequestSizeBudget {
+    content_bytes: usize,
+    path_bytes: usize,
+}
+
+impl RequestSizeBudget {
+    pub const fn for_entry(entry_path_bytes: usize) -> Result<Self, ProjectValidationError> {
+        if entry_path_bytes > MAX_PLAYGROUND_PATH_BYTES {
+            return Err(ProjectValidationError::PathTooLong {
+                role: ProjectPathRole::Entry,
+                maximum: MAX_PLAYGROUND_PATH_BYTES,
+            });
+        }
+        Ok(Self {
+            content_bytes: 0,
+            path_bytes: entry_path_bytes,
+        })
+    }
+
+    pub fn with_file(
+        self,
+        index: usize,
+        path_bytes: usize,
+        content_bytes: usize,
+    ) -> Result<Self, ProjectValidationError> {
+        let role = ProjectPathRole::File { index };
+        if path_bytes > MAX_PLAYGROUND_PATH_BYTES {
+            return Err(ProjectValidationError::PathTooLong {
+                role,
+                maximum: MAX_PLAYGROUND_PATH_BYTES,
+            });
+        }
+        let path_bytes = self
+            .path_bytes
+            .checked_add(path_bytes)
+            .filter(|total| *total <= MAX_PLAYGROUND_PATH_TOTAL_BYTES);
+        let Some(path_bytes) = path_bytes else {
+            return Err(ProjectValidationError::ProjectPathsTooLarge {
+                maximum: MAX_PLAYGROUND_PATH_TOTAL_BYTES,
+            });
+        };
+
+        if content_bytes > MAX_PLAYGROUND_FILE_BYTES {
+            return Err(ProjectValidationError::FileTooLarge {
+                index,
+                maximum: MAX_PLAYGROUND_FILE_BYTES,
+            });
+        }
+        let content_bytes = self
+            .content_bytes
+            .checked_add(content_bytes)
+            .filter(|total| *total <= MAX_PLAYGROUND_CONTENT_BYTES);
+        let Some(content_bytes) = content_bytes else {
+            return Err(ProjectValidationError::ProjectTooLarge {
+                maximum: MAX_PLAYGROUND_CONTENT_BYTES,
+            });
+        };
+
+        Ok(Self {
+            content_bytes,
+            path_bytes,
+        })
+    }
+}
+
+pub const fn validate_file_count(count: usize) -> Result<(), ProjectValidationError> {
+    if count == 0 {
+        return Err(ProjectValidationError::NoFiles);
+    }
+    if count > MAX_PLAYGROUND_FILES {
+        return Err(ProjectValidationError::TooManyFiles {
+            actual: count,
+            maximum: MAX_PLAYGROUND_FILES,
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -113,15 +225,11 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
     type Error = ProjectValidationError;
 
     fn try_from(request: PlaygroundRequest) -> Result<Self, Self::Error> {
-        if request.files.is_empty() {
-            return Err(ProjectValidationError::NoFiles);
-        }
-        if request.files.len() > MAX_FILES {
-            return Err(ProjectValidationError::TooManyFiles {
-                actual: request.files.len(),
-                maximum: MAX_FILES,
-            });
-        }
+        validate_file_count(request.files.len())?;
+        let _validated_sizes = request.files.iter().enumerate().try_fold(
+            RequestSizeBudget::for_entry(request.entry.len())?,
+            |budget, (index, file)| budget.with_file(index, file.path.len(), file.content.len()),
+        )?;
 
         let entry = ProjectFilePath::parse(&request.entry)?;
         if entry.kind != ProjectFileKind::GraphcalSource {
@@ -131,7 +239,6 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
         }
 
         let mut seen = HashSet::with_capacity(request.files.len());
-        let mut total_bytes = 0usize;
         let mut files = Vec::with_capacity(request.files.len());
 
         for file in request.files {
@@ -139,27 +246,6 @@ impl TryFrom<PlaygroundRequest> for VirtualProject {
             if !seen.insert(path.relative.clone()) {
                 return Err(ProjectValidationError::DuplicatePath {
                     path: path.display(),
-                });
-            }
-
-            let file_bytes = file.content.len();
-            if file_bytes > MAX_FILE_BYTES {
-                return Err(ProjectValidationError::FileTooLarge {
-                    path: path.display(),
-                    actual: file_bytes,
-                    maximum: MAX_FILE_BYTES,
-                });
-            }
-            total_bytes = total_bytes.checked_add(file_bytes).ok_or(
-                ProjectValidationError::ProjectTooLarge {
-                    actual: usize::MAX,
-                    maximum: MAX_PROJECT_BYTES,
-                },
-            )?;
-            if total_bytes > MAX_PROJECT_BYTES {
-                return Err(ProjectValidationError::ProjectTooLarge {
-                    actual: total_bytes,
-                    maximum: MAX_PROJECT_BYTES,
                 });
             }
 
@@ -253,14 +339,30 @@ pub enum ProjectValidationError {
     DuplicatePath { path: String },
     #[error("entry file `{path}` is not present in the project")]
     MissingEntry { path: String },
-    #[error("file `{path}` is {actual} bytes; the browser limit is {maximum} bytes per file")]
-    FileTooLarge {
-        path: String,
-        actual: usize,
+    #[error("the {role} exceeds the browser limit of {maximum} UTF-8 bytes")]
+    PathTooLong {
+        /// Entry or indexed file-path location, without retaining rejected text.
+        role: ProjectPathRole,
+        /// Maximum accepted UTF-8 byte length.
         maximum: usize,
     },
-    #[error("project is {actual} bytes; the browser limit is {maximum} bytes")]
-    ProjectTooLarge { actual: usize, maximum: usize },
+    #[error("project paths exceed the browser aggregate limit of {maximum} UTF-8 bytes")]
+    ProjectPathsTooLarge {
+        /// Maximum aggregate UTF-8 byte length.
+        maximum: usize,
+    },
+    #[error("project file at index {index} exceeds the browser limit of {maximum} bytes per file")]
+    FileTooLarge {
+        /// Zero-based position in the request's file array.
+        index: usize,
+        /// Maximum accepted UTF-8 content length.
+        maximum: usize,
+    },
+    #[error("project contents exceed the browser aggregate limit of {maximum} bytes")]
+    ProjectTooLarge {
+        /// Maximum aggregate UTF-8 content length.
+        maximum: usize,
+    },
     #[error("package dependencies are not supported in the browser playground")]
     PackageDependenciesUnsupported,
     #[error("WASM and host-function plugins are not supported in the browser playground")]
@@ -295,6 +397,8 @@ pub enum RequestErrorKind {
     EntryIsNotSource,
     DuplicatePath,
     MissingEntry,
+    PathTooLong,
+    ProjectPathsTooLarge,
     FileTooLarge,
     ProjectTooLarge,
     PackageDependenciesUnsupported,
@@ -312,6 +416,8 @@ impl From<&ProjectValidationError> for RequestErrorKind {
             ProjectValidationError::EntryIsNotSource { .. } => Self::EntryIsNotSource,
             ProjectValidationError::DuplicatePath { .. } => Self::DuplicatePath,
             ProjectValidationError::MissingEntry { .. } => Self::MissingEntry,
+            ProjectValidationError::PathTooLong { .. } => Self::PathTooLong,
+            ProjectValidationError::ProjectPathsTooLarge { .. } => Self::ProjectPathsTooLarge,
             ProjectValidationError::FileTooLarge { .. } => Self::FileTooLarge,
             ProjectValidationError::ProjectTooLarge { .. } => Self::ProjectTooLarge,
             ProjectValidationError::PackageDependenciesUnsupported => {
@@ -392,7 +498,7 @@ mod tests {
 
     #[test]
     fn enforces_file_count_limit() {
-        let files = (0..=MAX_FILES)
+        let files = (0..=MAX_PLAYGROUND_FILES)
             .map(|index| PlaygroundFile {
                 path: format!("{index}.gcl"),
                 content: String::new(),
@@ -406,8 +512,65 @@ mod tests {
         assert_eq!(
             error,
             ProjectValidationError::TooManyFiles {
-                actual: MAX_FILES + 1,
-                maximum: MAX_FILES,
+                actual: MAX_PLAYGROUND_FILES + 1,
+                maximum: MAX_PLAYGROUND_FILES,
+            }
+        );
+    }
+
+    #[test]
+    fn enforces_path_and_aggregate_metadata_limits_before_path_parsing() {
+        let exact_path = format!("{}.gcl", "x".repeat(MAX_PLAYGROUND_PATH_BYTES - 4));
+        assert!(
+            VirtualProject::try_from(request(&exact_path, &[(&exact_path, "")])).is_ok(),
+            "a path exactly at the byte limit should be accepted"
+        );
+
+        let oversized_path = format!("{}.gcl", "x".repeat(MAX_PLAYGROUND_PATH_BYTES - 3));
+        let entry_error = VirtualProject::try_from(request(
+            &oversized_path,
+            &[("main.gcl", "node x: Dimensionless = 1.0;")],
+        ))
+        .unwrap_err();
+        assert_eq!(
+            entry_error,
+            ProjectValidationError::PathTooLong {
+                role: ProjectPathRole::Entry,
+                maximum: MAX_PLAYGROUND_PATH_BYTES,
+            }
+        );
+
+        let file_error = VirtualProject::try_from(request(
+            "main.gcl",
+            &[("main.gcl", ""), (&oversized_path, "")],
+        ))
+        .unwrap_err();
+        assert_eq!(
+            file_error,
+            ProjectValidationError::PathTooLong {
+                role: ProjectPathRole::File { index: 1 },
+                maximum: MAX_PLAYGROUND_PATH_BYTES,
+            }
+        );
+
+        let files: Vec<PlaygroundFile> = (0..MAX_PLAYGROUND_FILES)
+            .map(|index| PlaygroundFile {
+                path: format!(
+                    "{index:02}{}.gcl",
+                    "x".repeat(MAX_PLAYGROUND_PATH_BYTES - 6)
+                ),
+                content: String::new(),
+            })
+            .collect();
+        let aggregate_error = VirtualProject::try_from(PlaygroundRequest {
+            entry: files[0].path.clone(),
+            files,
+        })
+        .unwrap_err();
+        assert_eq!(
+            aggregate_error,
+            ProjectValidationError::ProjectPathsTooLarge {
+                maximum: MAX_PLAYGROUND_PATH_TOTAL_BYTES,
             }
         );
     }
@@ -418,16 +581,15 @@ mod tests {
             entry: "main.gcl".to_string(),
             files: vec![PlaygroundFile {
                 path: "main.gcl".to_string(),
-                content: "x".repeat(MAX_FILE_BYTES + 1),
+                content: "x".repeat(MAX_PLAYGROUND_FILE_BYTES + 1),
             }],
         })
         .unwrap_err();
         assert_eq!(
             error,
             ProjectValidationError::FileTooLarge {
-                path: "main.gcl".to_string(),
-                actual: MAX_FILE_BYTES + 1,
-                maximum: MAX_FILE_BYTES,
+                index: 0,
+                maximum: MAX_PLAYGROUND_FILE_BYTES,
             }
         );
     }
@@ -437,7 +599,11 @@ mod tests {
         let files = (0..5)
             .map(|index| PlaygroundFile {
                 path: format!("{index}.gcl"),
-                content: "x".repeat(if index < 4 { MAX_FILE_BYTES } else { 1 }),
+                content: "x".repeat(if index < 4 {
+                    MAX_PLAYGROUND_FILE_BYTES
+                } else {
+                    1
+                }),
             })
             .collect();
         let error = VirtualProject::try_from(PlaygroundRequest {
@@ -448,8 +614,7 @@ mod tests {
         assert_eq!(
             error,
             ProjectValidationError::ProjectTooLarge {
-                actual: MAX_PROJECT_BYTES + 1,
-                maximum: MAX_PROJECT_BYTES,
+                maximum: MAX_PLAYGROUND_CONTENT_BYTES,
             }
         );
     }
@@ -459,7 +624,7 @@ mod tests {
         let files = (0..4)
             .map(|index| PlaygroundFile {
                 path: format!("{index}.gcl"),
-                content: "x".repeat(MAX_FILE_BYTES),
+                content: "x".repeat(MAX_PLAYGROUND_FILE_BYTES),
             })
             .collect();
         assert!(
