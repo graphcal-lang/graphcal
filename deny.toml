@@ -1,0 +1,52 @@
+# Dependency policy for every workspace feature. Keep exceptions narrow: licenses
+# listed globally are acceptable for any dependency, while copyleft licenses are
+# reviewed per crate.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerability, unsoundness, and unmaintained advisories are errors by default.
+# Every future exception must include a reason and an expiry/tracking issue.
+ignore = []
+
+[licenses]
+include-dev = true
+confidence-threshold = 0.8
+unused-allowed-license = "deny"
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib"
+]
+exceptions = [
+  # Hifitime is a direct dependency. MPL-2.0 is file-level weak copyleft and
+  # does not change Graphcal's MIT OR Apache-2.0 licensing.
+  { allow = ["MPL-2.0"], crate = "hifitime@4" }
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+# Duplicate transitive versions remain visible for periodic dependency cleanup,
+# but are not actionable enough to block changes to the current large graph.
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "simplest-path"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
