@@ -139,3 +139,60 @@ fn collect_children(
     children.sort_by_key(|s| (s.range.start.line, s.range.start.character));
     children
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_sorted_symbols_with_nested_index_variants() {
+        let source = "\
+pub index Mode = { Cruise, Landing };
+index Sample = range(0.0, 1.0, step: 1.0);
+param values: Dimensionless[Mode] = for mode: Mode { 1.0 };
+node total: Dimensionless = sum(@values);
+";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:document-symbols.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+        assert!(
+            analysis.has_no_diagnostics(),
+            "expected clean analysis, got diagnostics: {:?}",
+            analysis.diagnostics
+        );
+
+        let symbols = build_document_symbols(&analysis);
+        let names: Vec<&str> = symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+        assert_eq!(names, ["Mode", "Sample", "values", "total"]);
+        assert!(symbols.windows(2).all(|pair| {
+            let first = &pair[0].range.start;
+            let second = &pair[1].range.start;
+            (first.line, first.character) < (second.line, second.character)
+        }));
+
+        let mode = &symbols[0];
+        assert_eq!(mode.kind, SymbolKind::ENUM);
+        assert_eq!(mode.selection_range.start.line, 0);
+        assert_eq!(mode.selection_range.start.character, 10);
+        assert_eq!(mode.selection_range.end.character, 14);
+        let children = mode.children.as_ref().expect("named index variants");
+        assert_eq!(
+            children
+                .iter()
+                .map(|child| (child.name.as_str(), child.kind))
+                .collect::<Vec<_>>(),
+            [
+                ("Cruise", SymbolKind::ENUM_MEMBER),
+                ("Landing", SymbolKind::ENUM_MEMBER),
+            ]
+        );
+        assert!(children.iter().all(|child| child.children.is_none()));
+
+        assert_eq!(symbols[1].kind, SymbolKind::ENUM);
+        assert!(symbols[1].children.is_none());
+        assert!(
+            symbols[2..]
+                .iter()
+                .all(|symbol| symbol.kind == SymbolKind::VARIABLE && symbol.children.is_none())
+        );
+    }
+}
