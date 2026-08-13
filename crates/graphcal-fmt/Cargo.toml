@@ -18,6 +18,7 @@ thiserror.workspace = true
 unicode-width.workspace = true
 
 [dev-dependencies]
+graphcal-test-support.workspace = true
 insta.workspace = true
 proptest.workspace = true
 

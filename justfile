@@ -20,7 +20,8 @@ hawk:
         --exclude-crate graphcal_plugin \
         --exclude-crate graphcal_plugin_abi \
         --exclude-crate graphcal_plugin_host \
-        --exclude-crate graphcal_tenax
+        --exclude-crate graphcal_tenax \
+        --exclude-crate graphcal_test_support
 
 wasm-test:
     wasm-pack test --node crates/graphcal-wasm

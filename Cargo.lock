@@ -1872,6 +1872,7 @@ dependencies = [
  "graphcal-compiler",
  "graphcal-io",
  "graphcal-package",
+ "graphcal-test-support",
  "hifitime",
  "indexmap",
  "insta",
@@ -1890,6 +1891,7 @@ name = "graphcal-fmt"
 version = "0.0.1-alpha.23"
 dependencies = [
  "graphcal-compiler",
+ "graphcal-test-support",
  "insta",
  "pretty",
  "proptest",
@@ -1996,6 +1998,14 @@ dependencies = [
  "graphcal-eval",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "graphcal-test-support"
+version = "0.0.1-alpha.23"
+dependencies = [
+ "graphcal-compiler",
+ "proptest",
 ]
 
 [[package]]

@@ -1688,3 +1688,23 @@ node b: Dimensionless = if 1.0 > 0.0 {
 // round-trips through the parser.
 idempotency_test!(idempotent_extern_plugin, "invalid/extern_arity.gcl");
 roundtrip_test!(roundtrip_extern_plugin, "invalid/extern_arity.gcl");
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn typed_generated_projects_format_idempotently(
+        project in graphcal_test_support::project::single_file_project_strategy(
+            graphcal_test_support::project::GenerationLimits::SMOKE,
+        )
+    ) {
+        let source = project.render().root_source().to_string();
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("typed generated source failed:\n{source}\n{error}"));
+        prop_assert_eq!(format_source(&formatted).unwrap(), formatted);
+    }
+}

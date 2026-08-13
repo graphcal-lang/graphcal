@@ -37,6 +37,8 @@ jobs:
             max_len: 262144
           - target: plugin_section
             max_len: 524288
+          - target: generated_project
+            max_len: 4096
     env:
       FUZZ_TARGET: ${{ matrix.target }}
       MAX_LEN: ${{ matrix.max_len }}

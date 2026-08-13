@@ -9,9 +9,12 @@ cargo-fuzz = true
 
 [dependencies]
 graphcal-compiler = { path = "../crates/graphcal-compiler", version = "0.0.1-alpha.23" }
+graphcal-eval = { path = "../crates/graphcal-eval", version = "0.0.1-alpha.23" }
 graphcal-fmt = { path = "../crates/graphcal-fmt", version = "0.0.1-alpha.23" }
+graphcal-io = { path = "../crates/graphcal-io", version = "0.0.1-alpha.23" }
 graphcal-package = { path = "../crates/graphcal-package", version = "0.0.1-alpha.23" }
 graphcal-plugin-abi = { path = "../crates/graphcal-plugin-abi", version = "0.0.1-alpha.23" }
+graphcal-test-support = { version = "0.0.1-alpha.23", path = "../crates/graphcal-test-support" }
 libfuzzer-sys = "0.4"
 
 # Keep nightly-only fuzz dependencies out of the stable production workspace.
@@ -56,6 +59,13 @@ bench = false
 [[bin]]
 name = "plugin_section"
 path = "fuzz_targets/plugin_section.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "generated_project"
+path = "fuzz_targets/generated_project.rs"
 test = false
 doc = false
 bench = false

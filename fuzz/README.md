@@ -13,6 +13,7 @@ untrusted syntax and serialization boundaries.
 | `package_lockfile` | 128 KiB UTF-8, 128 packages | Accepted lockfiles serialize deterministically and reparse under the same limit. |
 | `plugin_manifest` | protocol manifest limit | Accepted manifests encode/decode identically. |
 | `plugin_section` | 512 KiB | Extracted manifests embed/extract identically from a minimal Wasm module. |
+| `generated_project` | 4 KiB mapped to a typed model | Valid projects reach checking and evaluation without an internal error. |
 
 ## Local workflow
 
