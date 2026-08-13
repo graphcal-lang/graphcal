@@ -403,6 +403,14 @@ impl AnalysisResult {
 // `AnalysisResult`'s custom `Debug` shape (counts, not contents) is useful only
 // inside test assertion messages; gating it behind `cfg(test)` keeps the
 // release binary from carrying an impl no production code path can call.
+/// One plugin host shared by every analysis test, mirroring the Backend's
+/// process-wide host (and keeping the module cache warm).
+#[cfg(test)]
+fn test_plugin_host() -> &'static graphcal_plugin_host::PluginHost {
+    static HOST: std::sync::OnceLock<graphcal_plugin_host::PluginHost> = std::sync::OnceLock::new();
+    HOST.get_or_init(graphcal_plugin_host::PluginHost::new)
+}
+
 #[cfg(test)]
 impl std::fmt::Debug for AnalysisResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1202,7 +1210,7 @@ fn diagnostics_for_active_uri(uri: &Url, diags: Vec<Diagnostic>) -> HashMap<Url,
 /// Both stages use the same source text, eliminating data provenance mismatches.
 #[cfg(test)]
 pub(crate) fn run_analysis_for_test(uri: &Url, text: &str) -> AnalysisResult {
-    run_analysis(uri, text, &[], tests::test_plugin_host())
+    run_analysis(uri, text, &[], test_plugin_host())
 }
 
 #[cfg(test)]
@@ -2914,14 +2922,6 @@ mod tests {
                 .map(|signature| signature.label.as_str()),
             Some("fn rss<D: Dim, I: Index>(values: D[I]) -> D")
         );
-    }
-
-    /// One plugin host shared by every analysis test, mirroring the
-    /// Backend's process-wide host (and keeping the module cache warm).
-    pub fn test_plugin_host() -> &'static graphcal_plugin_host::PluginHost {
-        static HOST: std::sync::OnceLock<graphcal_plugin_host::PluginHost> =
-            std::sync::OnceLock::new();
-        HOST.get_or_init(graphcal_plugin_host::PluginHost::new)
     }
 
     #[test]

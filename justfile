@@ -8,6 +8,20 @@ lint:
 test:
     cargo test --workspace
 
+# Audit the closed-world CLI surface while preserving documented external crate
+# and ABI boundaries that Hawk cannot observe from the shipped binary.
+# Baseline: zero findings with cargo-hawk 0.1.9 on Rust 1.97.1 (2026-08-14).
+hawk:
+    cargo hawk check -D warnings \
+        --exclude-crate graphcal_compiler \
+        --exclude-crate graphcal_eval \
+        --exclude-crate graphcal_io \
+        --exclude-crate graphcal_package \
+        --exclude-crate graphcal_plugin \
+        --exclude-crate graphcal_plugin_abi \
+        --exclude-crate graphcal_plugin_host \
+        --exclude-crate graphcal_tenax
+
 wasm-test:
     wasm-pack test --node crates/graphcal-wasm
 
