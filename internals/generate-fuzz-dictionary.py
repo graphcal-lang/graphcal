@@ -1,7 +1,4 @@
-#!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.12"
-# ///
+#!/usr/bin/env python3
 """Generate the libFuzzer token dictionary from grammar.ebnf terminals."""
 
 from __future__ import annotations
