@@ -201,4 +201,10 @@ mod tests {
             Err(ExactRationalError::ZeroDenominator)
         );
     }
+
+    #[test]
+    fn display_distinguishes_integers_and_fractions() {
+        assert_eq!(ExactRational::from_integer(-3).to_string(), "-3");
+        assert_eq!(ExactRational::try_new(6, -4).unwrap().to_string(), "-3/2");
+    }
 }

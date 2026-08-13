@@ -400,9 +400,18 @@ mod tests {
     #[test]
     fn custom_section_name_longer_than_body_is_invalid() {
         let mut wasm = EMPTY_MODULE.to_vec();
-        wasm.extend_from_slice(&[0, 2, 200, 0xAA]); // name_len 200 in a 1-byte body
+        wasm.extend_from_slice(&[0, 2, 2, 0xAA]); // name_len 2 in a 1-byte body
         assert_eq!(
             extract_manifest(&wasm).unwrap_err(),
+            SectionError::InvalidSectionName { offset: 10 }
+        );
+
+        // A zero-length custom-section body has no name-length byte. This
+        // pins the body-start offset without relying on wrapping arithmetic.
+        let mut empty_body = EMPTY_MODULE.to_vec();
+        empty_body.extend_from_slice(&[0, 0]);
+        assert_eq!(
+            extract_manifest(&empty_body).unwrap_err(),
             SectionError::InvalidSectionName { offset: 10 }
         );
     }

@@ -1,0 +1,121 @@
+name: Mutation tests
+
+on:
+  pull_request:
+    paths:
+      - ".cargo/mutants*.txt"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutants.yaml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/**/*.rs"
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutants-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_MUTANTS_VERSION: 27.1.0
+
+jobs:
+  changed-region:
+    name: changed-region (informational)
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c # v2.85.9
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
+
+      - name: Create pull-request diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git diff "$BASE_SHA"...HEAD -- '*.rs' > changed.diff
+
+      - name: Test mutants in changed Rust regions
+        run: >-
+          cargo mutants --in-place --no-shuffle -vV
+          --in-diff changed.diff
+
+      - name: Upload changed-region report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutants-changed-${{ github.sha }}
+          path: mutants.out
+          if-no-files-found: ignore
+
+  weekly:
+    name: weekly (${{ matrix.shard.name }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - name: exact
+            package: graphcal-compiler
+            files: -f crates/graphcal-compiler/src/exact_rational.rs -f crates/graphcal-compiler/src/dimension.rs -f crates/graphcal-compiler/src/nat.rs
+          - name: package
+            package: graphcal-package
+            files: -f crates/graphcal-package/src/lib.rs
+          - name: plugin
+            package: graphcal-plugin-abi
+            files: -f crates/graphcal-plugin-abi/src/manifest.rs -f crates/graphcal-plugin-abi/src/section.rs
+          - name: presentation
+            package: graphcal-eval
+            files: -f crates/graphcal-eval/src/runtime_presentation.rs -f crates/graphcal-eval/src/eval/display.rs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - uses: taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c # v2.85.9
+        with:
+          tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
+
+      - name: Run safety-core shard and check ratchet
+        env:
+          MUTANT_PACKAGE: ${{ matrix.shard.package }}
+          MUTANT_FILES: ${{ matrix.shard.files }}
+        run: >-
+          ./internals/run-mutants-ratcheted.py
+          --in-place --no-shuffle
+          -p "$MUTANT_PACKAGE" $MUTANT_FILES
+
+      - name: Upload shard report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutants-${{ matrix.shard.name }}-${{ github.run_id }}
+          path: mutants.out
+          if-no-files-found: ignore

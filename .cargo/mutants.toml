@@ -1,0 +1,15 @@
+# Safety-core mutation configuration. Downstream crates contain important
+# semantic assertions for compiler/evaluator behavior, so every selected mutant
+# is tested against the full workspace rather than only its defining package.
+test_workspace = true
+cap_lints = true
+timeout_multiplier = 3.0
+minimum_test_timeout = 120.0
+build_timeout_multiplier = 3.0
+
+# Test/debug renderers are not semantic runtime behavior. Keep exclusions exact
+# and review them whenever the named implementation moves.
+exclude_re = [
+  "<impl fmt::Debug for Dimension>::fmt",
+  "<impl fmt::Debug for Rational>::fmt"
+]
