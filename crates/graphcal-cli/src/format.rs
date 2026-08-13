@@ -53,12 +53,6 @@ impl TraversalFailure {
     pub const fn source(&self) -> &walkdir::Error {
         &self.source
     }
-
-    /// Consume the wrapper and return the underlying traversal error.
-    #[must_use]
-    pub fn into_source(self) -> walkdir::Error {
-        self.source
-    }
 }
 
 /// A collection statically guaranteed to contain at least one traversal failure.
@@ -85,26 +79,15 @@ impl TraversalFailures {
         self.rest.extend(other.rest);
     }
 
-    /// Number of traversal failures.
+    /// Number of traversal failures. Always at least one.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub const fn count(&self) -> usize {
         1 + self.rest.len()
-    }
-
-    /// This collection is non-empty by construction.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
     }
 
     /// Visit every failure in traversal order.
     pub fn iter(&self) -> impl Iterator<Item = &TraversalFailure> {
         std::iter::once(&self.first).chain(&self.rest)
-    }
-
-    /// Consume and visit every failure in traversal order.
-    pub fn into_failures(self) -> impl Iterator<Item = TraversalFailure> {
-        std::iter::once(self.first).chain(self.rest)
     }
 }
 
@@ -118,7 +101,7 @@ pub struct IncompleteFileDiscovery {
 impl IncompleteFileDiscovery {
     /// Consume the incomplete result without discarding either side.
     #[must_use]
-    pub fn into_parts(self) -> (Vec<PathBuf>, TraversalFailures) {
+    fn into_parts(self) -> (Vec<PathBuf>, TraversalFailures) {
         (self.files, self.failures)
     }
 }
@@ -254,7 +237,7 @@ mod tests {
         };
         let (files, failures) = incomplete.into_parts();
         assert!(files.is_empty());
-        assert_eq!(failures.len(), 1);
+        assert_eq!(failures.count(), 1);
         assert_eq!(failures.iter().next().unwrap().path(), root);
     }
 
@@ -263,6 +246,6 @@ mod tests {
         let first = collect_gcl_files(Path::new("/definitely/missing/graphcal/one"));
         let second = collect_gcl_files(Path::new("/definitely/missing/graphcal/two"));
         let (_, failures) = first.merge(second).into_parts();
-        assert_eq!(failures.unwrap().len(), 2);
+        assert_eq!(failures.unwrap().count(), 2);
     }
 }

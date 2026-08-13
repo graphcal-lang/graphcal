@@ -1,3 +1,9 @@
+# Hawk's closed-world analysis starts at the shipped CLI. The following crates
+# also expose supported Rust or Wasm/plugin-boundary APIs to consumers Hawk
+# cannot observe, so CI excludes them with explicit --exclude-crate flags:
+# graphcal_compiler, graphcal_eval, graphcal_io, graphcal_package,
+# graphcal_plugin, graphcal_plugin_abi, graphcal_plugin_host, graphcal_tenax.
+# graphcal_wasm is not reported because it is consumed only across the Wasm ABI.
 [[production]]
 package = "graphcal"
 bin = "graphcal"

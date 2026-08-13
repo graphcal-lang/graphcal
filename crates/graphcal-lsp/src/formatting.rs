@@ -12,9 +12,7 @@ use crate::convert::LineIndex;
 /// internal formatter failures remain distinct typed errors for the server
 /// boundary to handle explicitly.
 #[cfg(test)]
-pub fn format_document(
-    source: &str,
-) -> Result<Option<Vec<TextEdit>>, Box<graphcal_fmt::FormatError>> {
+fn format_document(source: &str) -> Result<Option<Vec<TextEdit>>, Box<graphcal_fmt::FormatError>> {
     format_document_with(source, |input| {
         graphcal_fmt::format_source(input).map_err(Box::new)
     })

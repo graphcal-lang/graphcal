@@ -131,7 +131,7 @@ pub struct AnalysisInputs {
 impl AnalysisInputs {
     #[cfg(test)]
     #[must_use]
-    pub fn untracked_for_test(root: DocumentIdentity) -> Self {
+    pub(crate) fn untracked_for_test(root: DocumentIdentity) -> Self {
         Self {
             root,
             dependencies: HashSet::new(),
