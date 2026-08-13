@@ -1,0 +1,95 @@
+name: Fuzz smoke tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_FUZZ_VERSION: 0.13.2
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: parser
+            max_len: 65536
+          - target: formatter
+            max_len: 65536
+          - target: package_manifest
+            max_len: 65536
+          - target: package_lockfile
+            max_len: 131072
+          - target: plugin_manifest
+            max_len: 262144
+          - target: plugin_section
+            max_len: 524288
+    env:
+      FUZZ_TARGET: ${{ matrix.target }}
+      MAX_LEN: ${{ matrix.max_len }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nightly Rust
+        run: rustup toolchain install nightly --profile minimal
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
+
+      - uses: taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c # v2.85.9
+        if: matrix.target == 'parser'
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Check generated dictionary
+        run: |
+          ./internals/generate-fuzz-dictionary.py
+          git diff --exit-code fuzz/graphcal.dict
+
+      - name: Check fuzz dependency policy
+        if: matrix.target == 'parser'
+        run: >-
+          cargo deny
+          --manifest-path fuzz/Cargo.toml
+          --config fuzz/deny.toml
+          --locked check
+          --hide-inclusion-graph
+
+      - name: Build fuzz target
+        run: cargo +nightly fuzz build "$FUZZ_TARGET" --fuzz-dir fuzz
+
+      - name: Smoke-test fuzz target
+        run: >-
+          cargo +nightly fuzz run "$FUZZ_TARGET"
+          "fuzz/corpus/$FUZZ_TARGET"
+          --fuzz-dir fuzz --
+          -runs=250
+          -max_len="$MAX_LEN"
+          -timeout=10
+          -dict=fuzz/graphcal.dict
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.sha }}
+          path: fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

@@ -1,0 +1,10 @@
+lock_version = 1
+created_by = "graphcal fuzz seed"
+graphcal_version = "0.0.1-alpha.23"
+stdlib_version = "0.0.1-alpha.23"
+root = "pkg-repro"
+
+[[package]]
+id = "pkg-repro"
+name = "repro"
+source = { path = "." }
