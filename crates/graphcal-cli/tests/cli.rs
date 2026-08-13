@@ -946,6 +946,77 @@ fn eval_complex_text_and_json_output() {
 }
 
 #[test]
+fn eval_reordered_dynamic_dag_presentations_in_text_and_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let source_path = write_temp_file(
+        dir.path(),
+        "presentation-invocations.gcl",
+        r"
+index Rate = { Two, Three };
+index Order = { First, Second };
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+node rates: Dimensionless[Rate] = {
+    Rate.Two: 2.0,
+    Rate.Three: 3.0,
+};
+node values: Length[Rate] = for rate: Rate {
+    @units(rate: @rates[rate]).distance
+};
+node reversed: Length[Order] = {
+    Order.First: @values[Rate.Three],
+    Order.Second: @values[Rate.Two],
+};
+",
+    );
+
+    let text_output = graphcal_bin()
+        .args(["eval", source_path.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        text_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text_output.stderr)
+    );
+    let text = String::from_utf8(text_output.stdout).unwrap();
+    let reversed = text
+        .lines()
+        .filter(|line| line.starts_with("reversed["))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reversed,
+        [
+            "reversed[First]  = 1 DynamicM",
+            "reversed[Second] = 1 DynamicM"
+        ],
+        "text output:\n{text}"
+    );
+
+    let json_output = graphcal_bin()
+        .args(["eval", source_path.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        json_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json_output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&json_output.stdout).unwrap();
+    let first = &json["node"]["reversed"]["entries"]["First"];
+    let second = &json["node"]["reversed"]["entries"]["Second"];
+    assert_eq!(first["si_value"], 3.0);
+    assert_eq!(first["display_value"], 1.0);
+    assert_eq!(first["unit"], "DynamicM");
+    assert_eq!(second["si_value"], 2.0);
+    assert_eq!(second["display_value"], 1.0);
+    assert_eq!(second["unit"], "DynamicM");
+}
+
+#[test]
 fn eval_coordinate_keys_use_axis_display_metadata_in_text_and_json() {
     let dir = tempfile::tempdir().unwrap();
     let source_path = dir.path().join("coordinate-key-display.gcl");

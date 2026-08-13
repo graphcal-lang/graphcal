@@ -345,6 +345,10 @@ fn check_dag_execution_facts(
     ))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "dependency-ordered const evaluation keeps each canonical DAG pool and its diagnostics together"
+)]
 fn eval_const_pools_for_dags(
     tir: &TIR,
     dag_ids: &HashSet<graphcal_compiler::dag_id::DagId>,
@@ -420,6 +424,7 @@ fn eval_const_pools_for_dags(
             current_dag: dag,
             current_decl: Some(key.clone()),
             root_values: Some(&values),
+            root_presentation_instances: None,
             checked_execution_facts: None,
             presentation_calls: None,
             struct_field_constraints: None,
@@ -492,6 +497,7 @@ pub fn eval_consts_from_tir_with_cancellation(
             current_dag: tir.root(),
             current_decl: Some(key.as_resolved().clone()),
             root_values: Some(&visible_values),
+            root_presentation_instances: None,
             checked_execution_facts: None,
             presentation_calls: None,
             struct_field_constraints: None,
@@ -775,6 +781,7 @@ fn resolve_domain_constraints_for_dag(
         current_dag: dag,
         current_decl: None,
         root_values: Some(&visible_const_values),
+        root_presentation_instances: None,
         checked_execution_facts: None,
         presentation_calls: None,
         struct_field_constraints: None,
@@ -1216,6 +1223,7 @@ fn resolve_application_field_constraints(
         current_dag: dag,
         current_decl: None,
         root_values: Some(&visible_const_values),
+        root_presentation_instances: None,
         checked_execution_facts: None,
         presentation_calls: None,
         struct_field_constraints: None,

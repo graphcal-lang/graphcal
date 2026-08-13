@@ -444,30 +444,34 @@ node called: Length = @units().distance;
 }
 
 fn dynamic_call_display_values(value: &graphcal_eval::eval::Value) -> Result<Vec<f64>, String> {
-    let graphcal_eval::eval::Value::Indexed { entries, .. } = value else {
-        return Err(format!(
-            "expected indexed dynamic-call output, got {value:?}"
-        ));
-    };
-    entries
-        .values()
-        .map(|entry| {
-            let graphcal_eval::eval::Value::Quantity {
-                si_value,
-                display_unit,
-                ..
-            } = entry
-            else {
-                return Err(format!("expected quantity call output, got {entry:?}"));
-            };
+    match value {
+        graphcal_eval::eval::Value::Quantity {
+            si_value,
+            display_unit,
+            ..
+        } => {
             let label = display_unit.as_ref().map(|unit| unit.label.as_str());
             if label != Some("DynamicM") {
                 return Err(format!("expected DynamicM presentation, got {label:?}"));
             }
             graphcal_eval::eval::quantity_display_value(*si_value, display_unit.as_ref())
+                .map(|value| vec![value])
                 .map_err(|error| error.to_string())
-        })
-        .collect()
+        }
+        graphcal_eval::eval::Value::Struct { fields, .. } => fields
+            .values()
+            .map(dynamic_call_display_values)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|nested| nested.into_iter().flatten().collect()),
+        graphcal_eval::eval::Value::Indexed { entries, .. } => entries
+            .values()
+            .map(dynamic_call_display_values)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|nested| nested.into_iter().flatten().collect()),
+        other => Err(format!(
+            "expected dynamic-call presentation tree, got {other:?}"
+        )),
+    }
 }
 
 #[test]
@@ -492,6 +496,207 @@ node values: Length[Rate] = for rate: Rate {
 
     let displayed =
         dynamic_call_display_values(successful_node(&result, "values").unwrap()).unwrap();
+    assert_eq!(displayed, [1.0, 1.0]);
+}
+
+#[test]
+fn reused_dag_call_result_keeps_one_presentation_invocation() {
+    let result = compile_and_eval(
+        r"
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+node original: Length = @units(rate: 2.0).distance;
+node copies: Length[Fin(2)] = for i: Fin(2) { @original };
+",
+    )
+    .unwrap();
+
+    let displayed =
+        dynamic_call_display_values(successful_node(&result, "copies").unwrap()).unwrap();
+    assert_eq!(displayed, [1.0, 1.0]);
+}
+
+#[test]
+fn reordered_dag_call_results_keep_their_presentation_invocations() {
+    let result = compile_and_eval(
+        r"
+index Rate = { Two, Three };
+index Order = { First, Second };
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+node rates: Dimensionless[Rate] = {
+    Rate.Two: 2.0,
+    Rate.Three: 3.0,
+};
+node values: Length[Rate] = for rate: Rate {
+    @units(rate: @rates[rate]).distance
+};
+node reversed: Length[Order] = {
+    Order.First: @values[Rate.Three],
+    Order.Second: @values[Rate.Two],
+};
+node authored_reverse: Length[Order] = {
+    Order.Second: @values[Rate.Two],
+    Order.First: @values[Rate.Three],
+};
+node selected: Length[Order] = for order: Order {
+    match order {
+        Order.First => @values[Rate.Three],
+        Order.Second => @values[Rate.Two],
+    }
+};
+plot reordered = {
+    mark: point,
+    encode: { x: @selected },
+};
+",
+    )
+    .unwrap();
+
+    for node in ["reversed", "authored_reverse", "selected"] {
+        let displayed =
+            dynamic_call_display_values(successful_node(&result, node).unwrap()).unwrap();
+        assert_eq!(displayed, [1.0, 1.0], "node `{node}`");
+    }
+
+    let plot = result.plots.first().expect("reordered plot must render");
+    let (_, values) = plot.encodings.first().expect("plot must contain x data");
+    let graphcal_eval::eval::PlotFieldValue::Numbers(values) = values else {
+        panic!("expected numeric plot data, got {values:?}");
+    };
+    assert_eq!(values, &[1.0, 1.0]);
+    assert_eq!(
+        plot.encoding_meta
+            .first()
+            .and_then(|(_, metadata)| metadata.unit_label.as_deref()),
+        Some("DynamicM")
+    );
+}
+
+#[test]
+fn repeated_and_structured_projections_keep_presentation_invocations() {
+    let result = compile_and_eval(
+        r"
+index Rate = { Two, Three };
+index Selection = { First, Second, Third };
+type Pair { Pair(left: Length, right: Length) }
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+node rates: Dimensionless[Rate] = {
+    Rate.Two: 2.0,
+    Rate.Three: 3.0,
+};
+node values: Length[Rate] = for rate: Rate {
+    @units(rate: @rates[rate]).distance
+};
+node selected: Length[Selection] = {
+    Selection.First: @values[Rate.Three],
+    Selection.Second: @values[Rate.Three],
+    Selection.Third: @values[Rate.Two],
+};
+node packed: Pair = Pair(
+    right: @values[Rate.Two],
+    left: @values[Rate.Three],
+);
+node only_three: Length = @values[Rate.Three];
+",
+    )
+    .unwrap();
+
+    let selected =
+        dynamic_call_display_values(successful_node(&result, "selected").unwrap()).unwrap();
+    assert_eq!(selected, [1.0, 1.0, 1.0]);
+    let packed = dynamic_call_display_values(successful_node(&result, "packed").unwrap()).unwrap();
+    assert_eq!(packed, [1.0, 1.0]);
+    let only_three =
+        dynamic_call_display_values(successful_node(&result, "only_three").unwrap()).unwrap();
+    assert_eq!(only_three, [1.0]);
+}
+
+#[test]
+fn equal_si_values_keep_distinct_presentation_invocations() {
+    let result = compile_and_eval(
+        r"
+index Rate = { Two, Three };
+index Order = { First, Second };
+dag units {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node fixed: Length = 6.0 m -> DynamicM;
+}
+node rates: Dimensionless[Rate] = {
+    Rate.Two: 2.0,
+    Rate.Three: 3.0,
+};
+node values: Length[Rate] = for rate: Rate {
+    @units(rate: @rates[rate]).fixed
+};
+node reversed: Length[Order] = {
+    Order.First: @values[Rate.Three],
+    Order.Second: @values[Rate.Two],
+};
+",
+    )
+    .unwrap();
+
+    let graphcal_eval::eval::Value::Indexed { entries, .. } =
+        successful_node(&result, "values").unwrap()
+    else {
+        panic!("values must be indexed");
+    };
+    assert!(entries.values().all(|value| match value {
+        graphcal_eval::eval::Value::Quantity { si_value, .. } => {
+            (*si_value - 6.0).abs() < f64::EPSILON
+        }
+        _ => false,
+    }));
+
+    let displayed =
+        dynamic_call_display_values(successful_node(&result, "reversed").unwrap()).unwrap();
+    assert_eq!(displayed, [2.0, 3.0]);
+}
+
+#[test]
+fn nested_dag_calls_keep_each_presentation_invocation() {
+    let result = compile_and_eval(
+        r"
+index Rate = { Two, Three };
+index Order = { First, Second };
+dag inner {
+    param rate: Dimensionless;
+    unit DynamicM: Length = (@rate) m;
+    pub node distance: Length = 1.0 DynamicM;
+}
+dag outer {
+    param rate: Dimensionless;
+    pub node distance: Length = @inner(rate: @rate).distance;
+}
+node rates: Dimensionless[Rate] = {
+    Rate.Two: 2.0,
+    Rate.Three: 3.0,
+};
+node values: Length[Rate] = for rate: Rate {
+    @outer(rate: @rates[rate]).distance
+};
+node reversed: Length[Order] = {
+    Order.First: @values[Rate.Three],
+    Order.Second: @values[Rate.Two],
+};
+",
+    )
+    .unwrap();
+
+    let displayed =
+        dynamic_call_display_values(successful_node(&result, "reversed").unwrap()).unwrap();
     assert_eq!(displayed, [1.0, 1.0]);
 }
 

@@ -3,11 +3,13 @@
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::registry::declared_type::StructTypeRef;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::registry::format::{format_number, format_unit_terms_canonical};
 use graphcal_compiler::registry::runtime_value::RuntimeValue;
 use graphcal_compiler::syntax::decl_name::ResolvedDeclName;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::FieldName;
 use graphcal_compiler::tir::presentation::{
     IndexedPresentation, LeafPresentation, PresentationCallKey, PresentationIndexSubstitution,
     PresentationLocalBinder, PresentationMatchPattern, PresentationProvenance,
@@ -15,24 +17,9 @@ use graphcal_compiler::tir::presentation::{
 };
 
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValueMap, eval_hir_expr};
+use crate::runtime_presentation::PresentationInstance;
 
 use super::types::{DisplayUnit, Value};
-
-#[derive(Default)]
-struct PresentationApplicationState {
-    call_invocations: HashMap<PresentationCallKey, usize>,
-}
-
-impl PresentationApplicationState {
-    fn next_call(&mut self, key: &PresentationCallKey) -> Result<usize, &'static str> {
-        let invocation = self.call_invocations.entry(key.clone()).or_default();
-        let current = *invocation;
-        *invocation = invocation
-            .checked_add(1)
-            .ok_or("presentation-call invocation counter overflow")?;
-        Ok(current)
-    }
-}
 
 /// Persistent owner-qualified environment for presentation-only HIR locals.
 ///
@@ -95,26 +82,27 @@ impl<'a> PresentationLocalEnv<'a> {
 pub(super) fn attach_presentation(
     value: &mut Value,
     presentation: &PresentationProvenance,
+    instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
 ) -> Result<(), GraphcalError> {
     attach_presentation_with_locals(
         value,
         presentation,
+        instance,
         ctx,
         values,
         &PresentationLocalEnv::root(),
-        &mut PresentationApplicationState::default(),
     )
 }
 
 fn attach_presentation_with_locals(
     value: &mut Value,
     presentation: &PresentationProvenance,
+    instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
     locals: &PresentationLocalEnv<'_>,
-    state: &mut PresentationApplicationState,
 ) -> Result<(), GraphcalError> {
     match presentation {
         PresentationProvenance::None => Ok(()),
@@ -122,76 +110,20 @@ fn attach_presentation_with_locals(
         PresentationProvenance::Struct {
             owning_type,
             fields: presentations,
-        } => match value {
-            Value::Struct { type_name, fields }
-                if type_name.resolved() == owning_type.resolved() =>
-            {
-                presentations.iter().try_for_each(|(field, presentation)| {
-                    fields.get_mut(field).map_or_else(
-                        || {
-                            Err(presentation_error(
-                                ctx,
-                                format!(
-                                    "checked presentation field `{field}` is absent from runtime struct `{type_name}`"
-                                ),
-                                DiagnosticAnchor::WholeFile,
-                            ))
-                        },
-                        |field_value| {
-                            attach_presentation_with_locals(
-                                field_value,
-                                presentation,
-                                ctx,
-                                values,
-                                locals,
-                                state,
-                            )
-                        },
-                    )
-                })
-            }
-            Value::Struct { type_name, .. } => Err(presentation_error(
-                ctx,
-                format!(
-                    "checked presentation type `{owning_type}` does not match runtime struct `{type_name}`"
-                ),
-                DiagnosticAnchor::WholeFile,
-            )),
-            _ => Err(presentation_error(
-                ctx,
-                "checked struct presentation was paired with a non-struct runtime value",
-                DiagnosticAnchor::WholeFile,
-            )),
-        },
+        } => attach_struct(
+            value,
+            owning_type,
+            presentations,
+            instance,
+            ctx,
+            values,
+            locals,
+        ),
         PresentationProvenance::Indexed { index, elements } => {
-            attach_indexed(value, index, elements, ctx, values, locals, state)
+            attach_indexed(value, index, elements, instance, ctx, values, locals)
         }
         PresentationProvenance::DagCall { key, output } => {
-            let invocation = state
-                .next_call(key)
-                .map_err(|message| presentation_error(ctx, message, key.span()))?;
-            let calls = ctx.presentation_calls.ok_or_else(|| {
-                presentation_error(
-                    ctx,
-                    "checked DAG-call presentation has no evaluated call store",
-                    key.span(),
-                )
-            })?;
-            let call_values = calls.invocation(key, invocation).map_err(|error| {
-                presentation_error(
-                    ctx,
-                    format!("checked DAG-call presentation values are unavailable: {error}"),
-                    key.span(),
-                )
-            })?;
-            attach_presentation_with_locals(
-                value,
-                output,
-                ctx,
-                &call_values,
-                locals,
-                state,
-            )
+            attach_dag_call(value, key, output, instance, ctx, locals)
         }
         PresentationProvenance::IndexProjection {
             defining_dag,
@@ -204,27 +136,152 @@ fn attach_presentation_with_locals(
             owner,
             substitutions,
             output,
+            instance,
             ctx,
             values,
             locals,
-            state,
         ),
         PresentationProvenance::Select(selection) => {
             let selected = select_presentation(selection, ctx, values, locals)?;
-            attach_presentation_with_locals(value, selected, ctx, values, locals, state)
+            attach_presentation_with_locals(value, selected, instance, ctx, values, locals)
         }
     }
+}
+
+fn attach_struct(
+    value: &mut Value,
+    owning_type: &StructTypeRef,
+    presentations: &HashMap<FieldName, PresentationProvenance>,
+    instance: Option<&PresentationInstance>,
+    ctx: &EvalContext<'_>,
+    values: &RuntimeValueMap,
+    locals: &PresentationLocalEnv<'_>,
+) -> Result<(), GraphcalError> {
+    let instance_fields = match instance {
+        None | Some(PresentationInstance::None) => None,
+        Some(PresentationInstance::Struct { fields }) => Some(fields),
+        Some(_) => {
+            return Err(presentation_error(
+                ctx,
+                "checked struct presentation has incompatible runtime invocation provenance",
+                DiagnosticAnchor::WholeFile,
+            ));
+        }
+    };
+    match value {
+        Value::Struct { type_name, fields }
+            if type_name.resolved() == owning_type.resolved() =>
+        {
+            presentations.iter().try_for_each(|(field, presentation)| {
+                fields.get_mut(field).map_or_else(
+                    || {
+                        Err(presentation_error(
+                            ctx,
+                            format!(
+                                "checked presentation field `{field}` is absent from runtime struct `{type_name}`"
+                            ),
+                            DiagnosticAnchor::WholeFile,
+                        ))
+                    },
+                    |field_value| {
+                        attach_presentation_with_locals(
+                            field_value,
+                            presentation,
+                            instance_fields.and_then(|fields| fields.get(field)),
+                            ctx,
+                            values,
+                            locals,
+                        )
+                    },
+                )
+            })
+        }
+        Value::Struct { type_name, .. } => Err(presentation_error(
+            ctx,
+            format!(
+                "checked presentation type `{owning_type}` does not match runtime struct `{type_name}`"
+            ),
+            DiagnosticAnchor::WholeFile,
+        )),
+        _ => Err(presentation_error(
+            ctx,
+            "checked struct presentation was paired with a non-struct runtime value",
+            DiagnosticAnchor::WholeFile,
+        )),
+    }
+}
+
+fn attach_dag_call(
+    value: &mut Value,
+    key: &PresentationCallKey,
+    output: &PresentationProvenance,
+    instance: Option<&PresentationInstance>,
+    ctx: &EvalContext<'_>,
+    locals: &PresentationLocalEnv<'_>,
+) -> Result<(), GraphcalError> {
+    let (invocation, output_instance) = match instance {
+        Some(PresentationInstance::DagCall { invocation, output }) => {
+            (*invocation, output.as_ref())
+        }
+        None | Some(PresentationInstance::None) => {
+            return Err(presentation_error(
+                ctx,
+                "checked DAG-call presentation has no runtime invocation identity",
+                key.span(),
+            ));
+        }
+        Some(_) => {
+            return Err(presentation_error(
+                ctx,
+                "checked DAG-call presentation has incompatible runtime invocation provenance",
+                key.span(),
+            ));
+        }
+    };
+    let calls = ctx.presentation_calls.ok_or_else(|| {
+        presentation_error(
+            ctx,
+            "checked DAG-call presentation has no evaluated call store",
+            key.span(),
+        )
+    })?;
+    let call_values = calls.invocation(key, invocation).map_err(|error| {
+        presentation_error(
+            ctx,
+            format!("checked DAG-call presentation values are unavailable: {error}"),
+            key.span(),
+        )
+    })?;
+    attach_presentation_with_locals(
+        value,
+        output,
+        Some(output_instance),
+        ctx,
+        &call_values,
+        locals,
+    )
 }
 
 fn attach_indexed(
     value: &mut Value,
     index: &graphcal_compiler::registry::declared_type::IndexTypeRef,
     elements: &IndexedPresentation,
+    instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
     locals: &PresentationLocalEnv<'_>,
-    state: &mut PresentationApplicationState,
 ) -> Result<(), GraphcalError> {
+    let instance_entries = match instance {
+        None | Some(PresentationInstance::None) => None,
+        Some(PresentationInstance::Indexed { entries }) => Some(entries),
+        Some(_) => {
+            return Err(presentation_error(
+                ctx,
+                "checked indexed presentation has incompatible runtime invocation provenance",
+                DiagnosticAnchor::WholeFile,
+            ));
+        }
+    };
     match value {
         Value::Indexed {
             index_name,
@@ -232,18 +289,29 @@ fn attach_indexed(
             ..
         } if index_name.matches_ref(index) => match elements {
             IndexedPresentation::Uniform { binder, element } => {
-                entries.iter_mut().try_for_each(|(key, entry)| match binder {
-                    Some(binder) => {
-                        let binding = presentation_index_binding(index, key, ctx)?;
-                        let child = locals.child(vec![(binder.clone(), binding)]);
-                        attach_presentation_with_locals(
-                            entry, element, ctx, values, &child, state,
-                        )
-                    }
-                    None => {
-                        attach_presentation_with_locals(
-                            entry, element, ctx, values, locals, state,
-                        )
+                entries.iter_mut().try_for_each(|(key, entry)| {
+                    let entry_instance = instance_entries.and_then(|entries| entries.get(key));
+                    match binder {
+                        Some(binder) => {
+                            let binding = presentation_index_binding(index, key, ctx)?;
+                            let child = locals.child(vec![(binder.clone(), binding)]);
+                            attach_presentation_with_locals(
+                                entry,
+                                element,
+                                entry_instance,
+                                ctx,
+                                values,
+                                &child,
+                            )
+                        }
+                        None => attach_presentation_with_locals(
+                            entry,
+                            element,
+                            entry_instance,
+                            ctx,
+                            values,
+                            locals,
+                        ),
                     }
                 })
             }
@@ -264,10 +332,10 @@ fn attach_indexed(
                             attach_presentation_with_locals(
                                 entry,
                                 presentation,
+                                instance_entries.and_then(|entries| entries.get(key)),
                                 ctx,
                                 values,
                                 locals,
-                                state,
                             )
                         },
                     )
@@ -290,7 +358,7 @@ fn attach_indexed(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "projection application carries checked context, values, locals, and call state"
+    reason = "projection application carries checked context, values, locals, and invocation provenance"
 )]
 fn attach_index_projection(
     value: &mut Value,
@@ -298,10 +366,10 @@ fn attach_index_projection(
     owner: &ResolvedDeclName,
     substitutions: &[PresentationIndexSubstitution],
     output: &PresentationProvenance,
+    instance: Option<&PresentationInstance>,
     ctx: &EvalContext<'_>,
     values: &RuntimeValueMap,
     locals: &PresentationLocalEnv<'_>,
-    state: &mut PresentationApplicationState,
 ) -> Result<(), GraphcalError> {
     let first = substitutions.first().ok_or_else(|| {
         presentation_error(
@@ -320,7 +388,7 @@ fn attach_index_projection(
         })
         .collect::<Result<Vec<_>, GraphcalError>>()?;
     let child = locals.child(bindings);
-    attach_presentation_with_locals(value, output, ctx, values, &child, state)
+    attach_presentation_with_locals(value, output, instance, ctx, values, &child)
 }
 
 fn evaluate_index_substitution(

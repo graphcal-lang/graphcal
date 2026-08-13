@@ -20,3 +20,4 @@ pub(crate) mod inline_dag;
 pub mod loader;
 pub mod package_cache;
 pub mod project_compiler;
+pub(crate) mod runtime_presentation;

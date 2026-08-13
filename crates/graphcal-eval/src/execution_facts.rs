@@ -1,6 +1,7 @@
 //! Immutable checked facts required to execute canonical DAG bodies.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use miette::NamedSource;
@@ -16,10 +17,36 @@ use crate::domain_check::ResolvedDomainConstraint;
 
 pub type RuntimeValueMap = HashMap<RuntimeDeclKey, RuntimeValue>;
 
+/// Opaque identity of one presentation-relevant inline DAG invocation.
+///
+/// IDs are allocated by one [`EvaluatedPresentationCalls`] store and are
+/// meaningful only for that evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PresentationInvocationId(u64);
+
+impl fmt::Display for PresentationInvocationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// One retained inline-call environment and its checked static call site.
+#[derive(Debug)]
+struct EvaluatedPresentationCall {
+    key: PresentationCallKey,
+    values: Arc<RuntimeValueMap>,
+}
+
+#[derive(Debug, Default)]
+struct EvaluatedPresentationCallState {
+    next_invocation: u64,
+    by_invocation: HashMap<PresentationInvocationId, EvaluatedPresentationCall>,
+}
+
 /// Runtime environments retained for presentation-relevant inline DAG calls.
 #[derive(Debug, Default)]
 pub struct EvaluatedPresentationCalls {
-    by_call: Mutex<HashMap<PresentationCallKey, Vec<Arc<RuntimeValueMap>>>>,
+    state: Mutex<EvaluatedPresentationCallState>,
 }
 
 /// Failure to retain or retrieve one evaluated call environment.
@@ -27,39 +54,70 @@ pub struct EvaluatedPresentationCalls {
 pub enum PresentationCallValuesError {
     #[error("evaluated presentation-call storage is poisoned")]
     Poisoned,
+    #[error("presentation-call invocation identity space is exhausted")]
+    IdentityExhausted,
     #[error("evaluated presentation-call invocation {invocation} is missing")]
-    Missing { invocation: usize },
+    Missing {
+        invocation: PresentationInvocationId,
+    },
+    #[error("evaluated presentation-call invocation {invocation} belongs to another call site")]
+    WrongCallSite {
+        invocation: PresentationInvocationId,
+    },
 }
 
 impl EvaluatedPresentationCalls {
-    /// Retain one invocation in deterministic evaluation order.
+    /// Retain one invocation and return its evaluation-scoped identity.
     pub fn record(
         &self,
         key: PresentationCallKey,
         values: RuntimeValueMap,
-    ) -> Result<(), PresentationCallValuesError> {
-        self.by_call
+    ) -> Result<PresentationInvocationId, PresentationCallValuesError> {
+        let mut state = self
+            .state
             .lock()
-            .map_err(|_| PresentationCallValuesError::Poisoned)?
-            .entry(key)
-            .or_default()
-            .push(Arc::new(values));
-        Ok(())
+            .map_err(|_| PresentationCallValuesError::Poisoned)?;
+        let next_invocation = state
+            .next_invocation
+            .checked_add(1)
+            .ok_or(PresentationCallValuesError::IdentityExhausted)?;
+        let invocation = PresentationInvocationId(state.next_invocation);
+        state.next_invocation = next_invocation;
+        let previous = state.by_invocation.insert(
+            invocation,
+            EvaluatedPresentationCall {
+                key,
+                values: Arc::new(values),
+            },
+        );
+        debug_assert!(
+            previous.is_none(),
+            "fresh presentation invocation was reused"
+        );
+        drop(state);
+        Ok(invocation)
     }
 
-    /// Retrieve one invocation by its deterministic presentation traversal index.
+    /// Retrieve one invocation by identity and verify its static call site.
     pub fn invocation(
         &self,
         key: &PresentationCallKey,
-        invocation: usize,
+        invocation: PresentationInvocationId,
     ) -> Result<Arc<RuntimeValueMap>, PresentationCallValuesError> {
-        self.by_call
+        let state = self
+            .state
             .lock()
-            .map_err(|_| PresentationCallValuesError::Poisoned)?
-            .get(key)
-            .and_then(|invocations| invocations.get(invocation))
-            .cloned()
-            .ok_or(PresentationCallValuesError::Missing { invocation })
+            .map_err(|_| PresentationCallValuesError::Poisoned)?;
+        let call = state
+            .by_invocation
+            .get(&invocation)
+            .ok_or(PresentationCallValuesError::Missing { invocation })?;
+        if &call.key != key {
+            return Err(PresentationCallValuesError::WrongCallSite { invocation });
+        }
+        let values = Arc::clone(&call.values);
+        drop(state);
+        Ok(values)
     }
 }
 
