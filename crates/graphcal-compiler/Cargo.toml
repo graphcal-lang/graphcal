@@ -10,6 +10,9 @@ license.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+test-cancellation = []
+
 [dependencies]
 hifitime.workspace = true
 indexmap.workspace = true

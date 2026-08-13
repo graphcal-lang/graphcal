@@ -4,6 +4,7 @@
     reason = "the LSP is an imperative shell where missing editor metadata deliberately degrades to an empty response"
 )]
 
+mod analysis_schedule_state;
 mod code_actions;
 mod completion;
 mod convert;

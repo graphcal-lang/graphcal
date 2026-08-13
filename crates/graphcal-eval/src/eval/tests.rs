@@ -622,6 +622,47 @@ fn checked_project_preparation_does_not_recompile_dependencies() {
 }
 
 #[test]
+fn cancellation_is_observed_at_every_pipeline_checkpoint() {
+    use std::collections::HashMap;
+
+    let source = "node values: Dimensionless[Fin(32)] = \
+                  for i: Fin(32) { 1.0 };";
+    let project = crate::loader::LoadedProject::from_source(source, "cancel.gcl").unwrap();
+    let first_success = (0..512).find(|successful_checkpoints| {
+        let cancellation =
+            graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(
+                *successful_checkpoints,
+            );
+        compile_and_eval_from_project_with_cancellation(&project, &HashMap::new(), &cancellation)
+            .is_ok()
+    });
+    let Some(checkpoint_count) = first_success else {
+        panic!("bounded project did not complete within the checkpoint sweep");
+    };
+    assert!(
+        checkpoint_count > 1,
+        "pipeline must expose internal checkpoints"
+    );
+
+    for successful_checkpoints in 0..checkpoint_count {
+        let cancellation =
+            graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(
+                successful_checkpoints,
+            );
+        let error = compile_and_eval_from_project_with_cancellation(
+            &project,
+            &HashMap::new(),
+            &cancellation,
+        )
+        .expect_err("every pre-completion cancellation point must unwind");
+        assert!(
+            error.is_cancelled(),
+            "checkpoint {successful_checkpoints} produced the wrong outcome: {error:?}"
+        );
+    }
+}
+
+#[test]
 fn cancellation_stops_an_in_flight_evaluation() {
     use std::{
         collections::HashMap,

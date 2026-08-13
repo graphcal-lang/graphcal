@@ -629,6 +629,7 @@ The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 
 | Path                        | Feature                                           |
 | --------------------------- | ------------------------------------------------- |
+| `analysis_schedule_state.rs` | Pure per-document scheduling and cancellation state |
 | `server.rs`                 | Server lifecycle and `run_analysis()`             |
 | `diagnostics.rs`            | Compiler/evaluator diagnostics to LSP diagnostics |
 | `symbol_table.rs`           | Typed `SymbolKey` index from decl shells + tolerantly lowered HIR |
@@ -1500,23 +1501,24 @@ then the request features, and finally the imperative server shell.
 4. `crates/graphcal-lsp/src/nominal_type_index.rs`
 5. `crates/graphcal-lsp/src/symbol_table.rs`
 6. `crates/graphcal-lsp/src/project_symbols.rs`
-7. `crates/graphcal-lsp/src/workspace_revision.rs`
-8. `crates/graphcal-lsp/src/diagnostics.rs`
-9. `crates/graphcal-lsp/src/resolve.rs`
-10. `crates/graphcal-lsp/src/completion.rs`
-11. `crates/graphcal-lsp/src/signature_help.rs`
-12. `crates/graphcal-lsp/src/inlay_hints.rs`
-13. `crates/graphcal-lsp/src/document_symbols.rs`
-14. `crates/graphcal-lsp/src/document_links.rs`
-15. `crates/graphcal-lsp/src/code_actions.rs`
-16. `crates/graphcal-lsp/src/goto_definition.rs`
-17. `crates/graphcal-lsp/src/references.rs`
-18. `crates/graphcal-lsp/src/rename.rs`
-19. `crates/graphcal-lsp/src/hover.rs`
-20. `crates/graphcal-lsp/src/formatting.rs`
-21. `crates/graphcal-lsp/src/formatting_scheduler.rs`
-22. `crates/graphcal-lsp/src/server.rs`
-23. `crates/graphcal-lsp/src/lib.rs`
+7. `crates/graphcal-lsp/src/formatting.rs`
+8. `crates/graphcal-lsp/src/workspace_revision.rs`
+9. `crates/graphcal-lsp/src/analysis_schedule_state.rs`
+10. `crates/graphcal-lsp/src/diagnostics.rs`
+11. `crates/graphcal-lsp/src/resolve.rs`
+12. `crates/graphcal-lsp/src/completion.rs`
+13. `crates/graphcal-lsp/src/signature_help.rs`
+14. `crates/graphcal-lsp/src/inlay_hints.rs`
+15. `crates/graphcal-lsp/src/document_symbols.rs`
+16. `crates/graphcal-lsp/src/document_links.rs`
+17. `crates/graphcal-lsp/src/code_actions.rs`
+18. `crates/graphcal-lsp/src/goto_definition.rs`
+19. `crates/graphcal-lsp/src/references.rs`
+20. `crates/graphcal-lsp/src/rename.rs`
+21. `crates/graphcal-lsp/src/hover.rs`
+22. `crates/graphcal-lsp/src/formatting_scheduler.rs`
+23. `crates/graphcal-lsp/src/server.rs`
+24. `crates/graphcal-lsp/src/lib.rs`
 
 ### Stage 22 - CLI plugin support and integration tests
 
@@ -1524,17 +1526,18 @@ then the request features, and finally the imperative server shell.
 2. `crates/graphcal-cli/src/plugin.rs`
 3. `crates/graphcal-plugin/tests/expansion.rs`
 4. `crates/graphcal-plugin/tests/prelude_drift.rs`
-5. `crates/graphcal-eval/tests/declaration_order.rs`
-6. `crates/graphcal-eval/tests/edge_case_bugs.rs`
-7. `crates/graphcal-eval/tests/phase0_regressions.rs`
-8. `crates/graphcal-eval/tests/error_snapshots.rs`
-9. `crates/graphcal-eval/tests/generated_projects.rs`
-10. `crates/graphcal-plugin-host/tests/runtime.rs`
-11. `crates/graphcal-plugin-host/tests/project_eval.rs`
-12. `crates/graphcal-fmt/tests/format_tests.rs`
-13. `crates/graphcal-cli/tests/cli.rs`
-14. `crates/graphcal-cli/tests/plugin_cmd.rs`
-15. `crates/graphcal-cli/tests/plugin_e2e.rs`
-16. `crates/graphcal-cli/tests/dump.rs`
-17. `crates/graphcal-wasm/tests/tutorial_examples.rs`
-18. `crates/graphcal-wasm/tests/wasm_runtime.rs`
+5. `crates/graphcal-plugin/tests/abi_memory.rs`
+6. `crates/graphcal-eval/tests/declaration_order.rs`
+7. `crates/graphcal-eval/tests/edge_case_bugs.rs`
+8. `crates/graphcal-eval/tests/phase0_regressions.rs`
+9. `crates/graphcal-eval/tests/error_snapshots.rs`
+10. `crates/graphcal-eval/tests/generated_projects.rs`
+11. `crates/graphcal-plugin-host/tests/runtime.rs`
+12. `crates/graphcal-plugin-host/tests/project_eval.rs`
+13. `crates/graphcal-fmt/tests/format_tests.rs`
+14. `crates/graphcal-cli/tests/cli.rs`
+15. `crates/graphcal-cli/tests/plugin_cmd.rs`
+16. `crates/graphcal-cli/tests/plugin_e2e.rs`
+17. `crates/graphcal-cli/tests/dump.rs`
+18. `crates/graphcal-wasm/tests/tutorial_examples.rs`
+19. `crates/graphcal-wasm/tests/wasm_runtime.rs`

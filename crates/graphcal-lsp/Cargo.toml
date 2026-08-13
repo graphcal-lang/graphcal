@@ -29,3 +29,6 @@ workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target."cfg(loom)".dependencies]
+loom = "0.7"
