@@ -1,6 +1,7 @@
 #![no_main]
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_eval::eval::{CompileError, compile_and_eval_project};
@@ -9,14 +10,22 @@ use graphcal_test_support::bytes::project_from_bytes;
 use graphcal_test_support::project::GenerationLimits;
 use libfuzzer_sys::fuzz_target;
 
-const MAX_INPUT_BYTES: usize = 4 * 1024;
 const VIRTUAL_ROOT: &str = "/generated";
 
+/// `GRAPHCAL_FUZZ_PROJECT_LIMITS=deep` widens generation bounds and the input
+/// budget for long local or nightly campaigns; CI smoke runs use the default.
+static CAMPAIGN: LazyLock<(GenerationLimits, usize)> =
+    LazyLock::new(|| match std::env::var("GRAPHCAL_FUZZ_PROJECT_LIMITS") {
+        Ok(mode) if mode == "deep" => (GenerationLimits::DEEP, 16 * 1024),
+        _ => (GenerationLimits::SMOKE, 4 * 1024),
+    });
+
 fuzz_target!(|data: &[u8]| {
-    if data.len() > MAX_INPUT_BYTES {
+    let (limits, max_input_bytes) = *CAMPAIGN;
+    if data.len() > max_input_bytes {
         return;
     }
-    let project = project_from_bytes(data, GenerationLimits::SMOKE);
+    let project = project_from_bytes(data, limits);
     let rendered = project.render();
     let root = VirtualAbsolutePath::new(VIRTUAL_ROOT).expect("static virtual root");
     let mut fs = InMemoryFileSystem::new();
