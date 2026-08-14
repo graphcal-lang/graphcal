@@ -1420,11 +1420,21 @@ into an execution plan.
 30. `crates/graphcal-eval/src/graph_ir/mod.rs`
 31. `crates/graphcal-eval/src/graph_ir/dot.rs`
 
-### Stage 15 - Tenax Arrow transport (`graphcal-tenax`)
+### Stage 15 - Typed test generation (`graphcal-test-support`)
+
+The non-published support crate keeps generated semantic models typed until the
+source/filesystem boundary. Read the project algebra and renderer before the
+byte adapter shared with libFuzzer.
+
+1. `crates/graphcal-test-support/src/lib.rs`
+2. `crates/graphcal-test-support/src/project.rs`
+3. `crates/graphcal-test-support/src/bytes.rs`
+
+### Stage 16 - Tenax Arrow transport (`graphcal-tenax`)
 
 1. `crates/graphcal-tenax/src/lib.rs`
 
-### Stage 16 - Browser WASM adapter (`graphcal-wasm`)
+### Stage 17 - Browser WASM adapter (`graphcal-wasm`)
 
 Note: the order tool groups these files because `lib.rs` re-exports the browser transport types. The practical review order remains project validation and size policy, value conversion, bounded JavaScript request decoding, diagnostic conversion, then the imperative adapter shell.
 
@@ -1434,7 +1444,7 @@ Note: the order tool groups these files because `lib.rs` re-exports the browser 
 4. `crates/graphcal-wasm/src/diagnostics.rs`
 5. `crates/graphcal-wasm/src/lib.rs`
 
-### Stage 17 - WASM plugin host (`graphcal-plugin-host`)
+### Stage 18 - WASM plugin host (`graphcal-plugin-host`)
 
 Note: all six files form a re-export cycle through `lib.rs`. Within it, `cache.rs` is the runtime-agnostic bounded single-flight core and `convert.rs` is the untrusted-boundary leaf; `module.rs` owns validated compiled artifacts, `registry.rs` bridges loaded projects to the evaluator, `host.rs` is the imperative loading/cache shell, and `lib.rs` re-exports the public surface.
 
@@ -1445,7 +1455,7 @@ Note: all six files form a re-export cycle through `lib.rs`. Within it, `cache.r
 5. `crates/graphcal-plugin-host/src/host.rs`
 6. `crates/graphcal-plugin-host/src/lib.rs`
 
-### Stage 18 - Formatter (`graphcal-fmt`)
+### Stage 19 - Formatter (`graphcal-fmt`)
 
 Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod.rs` form a mutually dependent group. `lib.rs` is the public formatting API shell and appears first in the generated order.
 
@@ -1455,7 +1465,7 @@ Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod
 4. `crates/graphcal-fmt/src/format/decl.rs`
 5. `crates/graphcal-fmt/src/format/mod.rs`
 
-### Stage 19 - LSP prelude and CLI shell
+### Stage 20 - LSP prelude and CLI shell
 
 Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent group. `main.rs` consumes the `graphcal` library target's `format` module as well as binary-local modules, so the CLI package is ordered as one shell group here.
 
@@ -1478,7 +1488,7 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 17. `crates/graphcal-cli/src/deps.rs`
 18. `crates/graphcal-cli/src/lib.rs`
 
-### Stage 20 - Language server (`graphcal-lsp`)
+### Stage 21 - Language server (`graphcal-lsp`)
 
 Note: feature modules reference `server::AnalysisResult`, while `server.rs`
 orchestrates those features. Read the typed indexing and revision cores first,
@@ -1508,7 +1518,7 @@ then the request features, and finally the imperative server shell.
 22. `crates/graphcal-lsp/src/server.rs`
 23. `crates/graphcal-lsp/src/lib.rs`
 
-### Stage 21 - CLI plugin support and integration tests
+### Stage 22 - CLI plugin support and integration tests
 
 1. `crates/graphcal-cli/build.rs`
 2. `crates/graphcal-cli/src/plugin.rs`
@@ -1518,12 +1528,13 @@ then the request features, and finally the imperative server shell.
 6. `crates/graphcal-eval/tests/edge_case_bugs.rs`
 7. `crates/graphcal-eval/tests/phase0_regressions.rs`
 8. `crates/graphcal-eval/tests/error_snapshots.rs`
-9. `crates/graphcal-plugin-host/tests/runtime.rs`
-10. `crates/graphcal-plugin-host/tests/project_eval.rs`
-11. `crates/graphcal-fmt/tests/format_tests.rs`
-12. `crates/graphcal-cli/tests/cli.rs`
-13. `crates/graphcal-cli/tests/plugin_cmd.rs`
-14. `crates/graphcal-cli/tests/plugin_e2e.rs`
-15. `crates/graphcal-cli/tests/dump.rs`
-16. `crates/graphcal-wasm/tests/tutorial_examples.rs`
-17. `crates/graphcal-wasm/tests/wasm_runtime.rs`
+9. `crates/graphcal-eval/tests/generated_projects.rs`
+10. `crates/graphcal-plugin-host/tests/runtime.rs`
+11. `crates/graphcal-plugin-host/tests/project_eval.rs`
+12. `crates/graphcal-fmt/tests/format_tests.rs`
+13. `crates/graphcal-cli/tests/cli.rs`
+14. `crates/graphcal-cli/tests/plugin_cmd.rs`
+15. `crates/graphcal-cli/tests/plugin_e2e.rs`
+16. `crates/graphcal-cli/tests/dump.rs`
+17. `crates/graphcal-wasm/tests/tutorial_examples.rs`
+18. `crates/graphcal-wasm/tests/wasm_runtime.rs`

@@ -1,0 +1,18 @@
+[package]
+name = "graphcal-test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Typed generators and semantic test oracles for Graphcal"
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+graphcal-compiler = { workspace = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

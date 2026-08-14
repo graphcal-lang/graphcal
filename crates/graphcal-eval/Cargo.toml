@@ -23,6 +23,7 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+graphcal-test-support.workspace = true
 insta.workspace = true
 proptest.workspace = true
 rand.workspace = true

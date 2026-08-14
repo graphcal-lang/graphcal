@@ -529,7 +529,6 @@ pub fn eval_consts_from_tir_with_cancellation(
     Ok(local_const_values)
 }
 
-#[expect(dead_code, reason = "used only by the root-only const helper")]
 fn const_eval_order(
     dag: &DagTIR,
     src: &NamedSource<Arc<String>>,
@@ -538,7 +537,6 @@ fn const_eval_order(
     const_eval_order_resolved(dag, &dag.semantic().dependencies, src, cancellation)
 }
 
-#[expect(dead_code, reason = "used only by the root-only const helper")]
 fn const_eval_order_resolved(
     dag: &DagTIR,
     deps: &ResolvedDagDependencies,
