@@ -80,6 +80,17 @@ impl Parser<'_> {
             self.parse_table_single(&indexes, &[])?
         };
 
+        // Empty named-axis tables are not valid maps. In 2D+, header and
+        // slice labels also live only on entries, so accepting no data rows
+        // could not round-trip through the table-literal AST.
+        if entries.is_empty()
+            && indexes
+                .iter()
+                .any(|index| matches!(index, TableIndexSpec::Named(_)))
+        {
+            return Err(self.missing_table_data_row());
+        }
+
         let (_, end_span) = self.expect(Token::RBrace)?;
         let span = start_span.merge(end_span);
 
@@ -179,6 +190,19 @@ impl Parser<'_> {
         match columns {
             TableColumnKeys::Named(keys) => self.table_count_from_len(keys.len(), span),
             TableColumnKeys::Finite { cardinality, .. } => Ok(*cardinality),
+        }
+    }
+
+    fn missing_table_data_row(&mut self) -> ParseError {
+        const EXPECTED: &str = "at least one table data row";
+
+        let found = self
+            .lexer
+            .peek_with_span()
+            .map(|(token, span)| (token.to_string(), span));
+        match found {
+            Some((token, span)) => self.unexpected_token(EXPECTED, &token, span),
+            None => self.unexpected_eof(EXPECTED),
         }
     }
 
@@ -470,8 +494,13 @@ impl Parser<'_> {
 
             self.expect(Token::RBracket)?;
 
-            // Parse the 2D table for this slice
+            // Parse the 2D table for this slice. Slice labels and named
+            // column headers are represented only by the resulting entries;
+            // accepting an empty section would silently discard them.
             let slice_entries = self.parse_table_single(indexes, &prefix_keys)?;
+            if slice_entries.is_empty() {
+                return Err(self.missing_table_data_row());
+            }
             entries.extend(slice_entries);
         }
 
@@ -755,6 +784,48 @@ mod tests {
             },
             _ => panic!("expected param"),
         }
+    }
+
+    #[test]
+    fn named_tables_require_at_least_one_data_row() {
+        let sources = ["param v: M = table[M] {};", "param m:M = table[P,M]{ :o;};"];
+
+        for source in sources {
+            let error = Parser::new(source).parse_file().unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    ParseError::UnexpectedToken {
+                        ref expected,
+                        ref found,
+                        ..
+                    } if expected == "at least one table data row" && found == "}"
+                ),
+                "unexpected error for {source}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sliced_tables_require_data_rows_in_every_section() {
+        let source = r"param m: M = table[T, P, M] {
+            [T.Empty]
+            : o;
+
+            [T.Full]
+            : o;
+            r: 1;
+        };";
+
+        let error = Parser::new(source).parse_file().unwrap_err();
+        assert!(matches!(
+            error,
+            ParseError::UnexpectedToken {
+                ref expected,
+                ref found,
+                ..
+            } if expected == "at least one table data row" && found == "["
+        ));
     }
 
     #[test]

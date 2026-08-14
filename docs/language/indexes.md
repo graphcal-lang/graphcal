@@ -553,6 +553,8 @@ param delta_v: Velocity[Maneuver] = table[Maneuver] {
 
 Named axes in `table[...]` accept the same full paths as indexed types, including module-qualified paths such as `mission.Maneuver`. Labels in ordinary table bodies are bare (`Departure`, not `Maneuver.Departure`) because `table[...]` explicitly supplies exactly one owner for each row or column axis. Rows are terminated with `;`.
 
+A table that uses a named axis must contain at least one data row. An empty body, or a 2D column header without a following data row, is a parse error. Every 3D+ slice section must likewise contain at least one data row.
+
 ### 2D Table
 
 ```
