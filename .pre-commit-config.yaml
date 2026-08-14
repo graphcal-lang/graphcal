@@ -41,3 +41,13 @@ repos:
     rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa  # frozen: v1.29.0
     hooks:
       - id: zizmor
+
+  # zizmor audits workflow *security*; it does not validate the Actions schema.
+  # A job-level `if:` referencing the `matrix` context passed zizmor but made
+  # GitHub fail to load the workflow entirely — a 0-job run that reported the
+  # file path instead of the workflow name, so the mutation ratchet silently
+  # gated nothing. actionlint checks context availability per key and catches it.
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca  # frozen: v1.7.12
+    hooks:
+      - id: actionlint
