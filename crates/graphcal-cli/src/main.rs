@@ -786,7 +786,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     if let Some(failures) = traversal_failures {
         eprintln!(
             "source discovery was incomplete: {} traversal error(s)",
-            failures.len()
+            failures.count()
         );
         process::exit(2);
     }
@@ -887,7 +887,7 @@ fn run_format(paths: &[PathBuf], check: bool) {
     if let Some(failures) = traversal_failures {
         eprintln!(
             "source discovery was incomplete: {} traversal error(s)",
-            failures.len()
+            failures.count()
         );
         process::exit(2);
     }
