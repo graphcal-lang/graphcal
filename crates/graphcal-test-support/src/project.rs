@@ -33,6 +33,14 @@ impl GenerationLimits {
         files: 3,
         index_variants: 4,
     };
+
+    /// Deeper bounds for long local or nightly fuzz campaigns.
+    pub const DEEP: Self = Self {
+        expression_depth: 7,
+        declarations_per_file: 32,
+        files: 5,
+        index_variants: 8,
+    };
 }
 
 /// One generated Graphcal source project before rendering to text.
