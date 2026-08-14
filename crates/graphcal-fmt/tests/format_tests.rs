@@ -518,6 +518,22 @@ fn parse_error_returns_err() {
 }
 
 #[test]
+fn header_only_table_returns_parse_error_instead_of_internal_formatter_error() {
+    let source = "param m:M = table[P,M]{ :o;};";
+    let error = format_source(source).expect_err("header-only table must be rejected");
+
+    assert!(matches!(
+        error,
+        graphcal_fmt::FormatError::Parse(
+            graphcal_compiler::syntax::parser::ParseError::UnexpectedToken {
+                ref expected,
+                ..
+            }
+        ) if expected == "at least one table data row"
+    ));
+}
+
+#[test]
 fn format_dimension_decl() {
     let source = "dim Velocity = Length / Time;\n";
     let formatted = format_source(source).unwrap();
