@@ -18,7 +18,9 @@ repos:
       - id: check-symlinks
       - id: mixed-line-ending
         args: [--fix=lf]
+      # Rust crate attributes such as `#![no_main]` are not Unix shebangs.
       - id: check-shebang-scripts-are-executable
+        exclude: ^fuzz/fuzz_targets/.*\.rs$
       - id: check-executables-have-shebangs
       - id: check-illegal-windows-names
       - id: fix-byte-order-marker
