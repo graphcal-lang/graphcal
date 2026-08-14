@@ -41,13 +41,7 @@ impl PackageCacheRoot {
     pub fn from_environment() -> Result<Self, PackageCacheRootError> {
         let configured = std::env::var_os(CACHE_ENV)
             .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("XDG_CACHE_HOME").map(|path| PathBuf::from(path).join("graphcal"))
-            })
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
-            })
+            .or_else(platform_cache_directory)
             .ok_or(PackageCacheRootError::Unavailable)?;
         Self::from_path(configured)
     }
@@ -85,6 +79,31 @@ impl PackageCacheRoot {
             .join("locks")
             .join(format!("{}.lock", source.cache_key()))
     }
+}
+
+/// Per-platform default cache directory, used when [`CACHE_ENV`] is unset.
+///
+/// Unix follows the XDG base directory specification. Windows has no XDG
+/// convention and sets neither `XDG_CACHE_HOME` nor `HOME`, so probing only
+/// those leaves every Windows user unable to resolve a cache root at all; it
+/// uses the conventional per-user local application data directory instead.
+#[cfg(not(windows))]
+fn platform_cache_directory() -> Option<PathBuf> {
+    std::env::var_os("XDG_CACHE_HOME")
+        .map(|base| PathBuf::from(base).join("graphcal"))
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
+        })
+}
+
+#[cfg(windows)]
+fn platform_cache_directory() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|base| PathBuf::from(base).join("graphcal").join("cache"))
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
+        })
 }
 
 /// Failure to derive a package cache root.

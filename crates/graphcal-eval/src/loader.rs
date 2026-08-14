@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -1067,10 +1067,20 @@ impl LoadedProject {
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
         // `name` is also a diagnostic label and may be an absolute virtual URI
-        // path. A standalone in-memory file has no filesystem hierarchy, so an
-        // absolute label contributes only its leaf to semantic DAG identity.
+        // path. A standalone in-memory file has no filesystem hierarchy, so a
+        // rooted label contributes only its leaf to semantic DAG identity.
         // Relative labels remain strict, canonical module paths.
-        let semantic_path = match (path.is_absolute(), path.file_name()) {
+        //
+        // This tests for a root/prefix component rather than calling
+        // `Path::is_absolute`. Virtual URI labels are POSIX-style
+        // (`/playground/main.gcl`) regardless of host OS, but `is_absolute` is
+        // host-dependent: Windows requires a drive prefix, so it reports those
+        // labels as relative and they then fail the strict relative-path
+        // validation below.
+        let is_rooted = path.components().next().is_some_and(|component| {
+            matches!(component, Component::RootDir | Component::Prefix(_))
+        });
+        let semantic_path = match (is_rooted, path.file_name()) {
             (true, Some(file_name)) => Path::new(file_name),
             _ => path.as_path(),
         };

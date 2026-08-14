@@ -109,6 +109,29 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Install wasm32 target (plugin end-to-end tests)
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: windows
+
+      # `--no-fail-fast` so a failure in one crate does not mask the remaining
+      # crates. Windows is the newest platform here, so a round of CI should
+      # report every portability gap at once rather than one per push.
+      - name: Test native workspace on Windows
+        run: cargo test --workspace --no-fail-fast
+
   wasm:
     runs-on: ubuntu-latest
     env:
@@ -200,13 +223,13 @@ jobs:
       - uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
 
   collect:
-    needs: [checks, public-surface, dependency-policy, test, wasm, coverage, msrv, typos]
+    needs: [checks, public-surface, dependency-policy, test, windows, wasm, coverage, msrv, typos]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"

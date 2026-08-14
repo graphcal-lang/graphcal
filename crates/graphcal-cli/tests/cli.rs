@@ -7,11 +7,19 @@ use std::process::Command;
 #[cfg(unix)]
 use std::{os::unix::fs::PermissionsExt, process::Stdio, sync::OnceLock};
 
+/// Unix builds route Git's SSH transport through a stub so package tests never
+/// touch a real remote. Other platforms have no such hook, so they invoke the
+/// binary unconfigured.
+#[cfg(unix)]
 fn graphcal_bin() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_graphcal"));
-    #[cfg(unix)]
     command.env("GIT_SSH", test_ssh_command());
     command
+}
+
+#[cfg(not(unix))]
+fn graphcal_bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_graphcal"))
 }
 
 #[cfg(unix)]
@@ -89,12 +97,19 @@ fn fixtures_root() -> PathBuf {
     p
 }
 
+/// Absolute path to a fixture, as a string so it can sit alongside `&str`
+/// literals in `Command::args` arrays.
+///
+/// Built from [`fixtures_root`] rather than by trimming `CARGO_MANIFEST_DIR`
+/// textually: the separator inside such a literal is platform-specific, so a
+/// hardcoded `crates/graphcal-cli` silently fails to match on Windows and
+/// leaves the crate directory on the front of every fixture path.
 fn fixture(name: &str) -> String {
-    format!(
-        "{}/tests/fixtures/{}",
-        env!("CARGO_MANIFEST_DIR").trim_end_matches("crates/graphcal-cli"),
-        name
-    )
+    fixtures_root()
+        .join(name)
+        .into_os_string()
+        .into_string()
+        .expect("fixture path is valid UTF-8")
 }
 
 fn write_temp_file(root: &Path, rel: &str, source: &str) -> PathBuf {
@@ -198,6 +213,7 @@ fn create_git_package(root: &Path, package: &str, module_source: &str) -> String
     init_git_package(root, package, "", module_source)
 }
 
+#[cfg(unix)]
 fn update_git_package_module(
     root: &Path,
     package: &str,
@@ -225,6 +241,7 @@ fn write_package_project(root: &Path, manifest_dependencies: &str, main_source: 
     main
 }
 
+#[cfg(unix)]
 fn find_cached_file(root: &Path, suffix: &Path) -> Option<PathBuf> {
     for entry in std::fs::read_dir(root).ok()? {
         let entry = entry.ok()?;

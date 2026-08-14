@@ -1517,7 +1517,16 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             .unwrap();
 
         let contention = fs2::FileExt::try_lock_exclusive(&second).unwrap_err();
-        assert_eq!(contention.kind(), std::io::ErrorKind::WouldBlock);
+        // Contention surfaces a platform-specific OS error: `EWOULDBLOCK` on Unix,
+        // `ERROR_LOCK_VIOLATION` on Windows. Only the former maps to
+        // `ErrorKind::WouldBlock`; the latter decodes to `ErrorKind::Uncategorized`,
+        // a catch-all too coarse to distinguish contention from an unrelated
+        // failure. Compare the raw OS code against the one fs2 itself designates
+        // for a contended try-lock.
+        assert_eq!(
+            contention.raw_os_error(),
+            fs2::lock_contended_error().raw_os_error()
+        );
         drop(first);
         fs2::FileExt::try_lock_exclusive(&second).unwrap();
         fs2::FileExt::unlock(&second).unwrap();
