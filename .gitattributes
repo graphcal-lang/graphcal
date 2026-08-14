@@ -1,0 +1,19 @@
+# Line endings
+#
+# `graphcal format` emits LF unconditionally — a canonical formatter has one
+# canonical output, and line endings are part of it. A CRLF working copy
+# therefore reports every source file as unformatted and would be rewritten
+# wholesale on the next `graphcal format` run.
+#
+# Git for Windows defaults to `core.autocrlf=true`, so without this file a
+# Windows checkout converts every tracked text file to CRLF. Pin the working
+# tree to LF on all platforms rather than relying on each contributor's local
+# Git configuration.
+* text=auto eol=lf
+
+# Binary fixtures must never be line-ending converted. `text=auto` already
+# applies Git's binary heuristic, but state the known types explicitly so a
+# misdetected fixture cannot be silently corrupted.
+*.png binary
+*.bin binary
+*.wasm binary

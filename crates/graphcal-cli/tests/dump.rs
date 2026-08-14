@@ -40,7 +40,15 @@ fn source_prints_raw_debug_output() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("SourceUnit"));
     assert!(stdout.contains("rocket.gcl"));
-    assert!(stdout.contains(&path.canonicalize().unwrap().to_string_lossy().to_string()));
+    // Compare path *components*, not the canonicalized string: Windows
+    // canonicalization returns a `\\?\C:\...` verbatim prefix that the CLI does
+    // not print, so a whole-string match is Unix-only.
+    for component in ["fixtures", "valid", "rocket.gcl"] {
+        assert!(
+            stdout.contains(component),
+            "expected `{component}` in dump output:\n{stdout}"
+        );
+    }
     assert!(stdout.contains("param isp"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("experimental"));
 }
