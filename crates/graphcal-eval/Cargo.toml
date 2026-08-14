@@ -23,6 +23,7 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+graphcal-compiler = { workspace = true, features = ["test-cancellation"] }
 graphcal-test-support.workspace = true
 insta.workspace = true
 proptest.workspace = true

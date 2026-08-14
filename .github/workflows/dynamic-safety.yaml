@@ -1,0 +1,114 @@
+name: Dynamic safety
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/dynamic-safety.yaml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/graphcal-compiler/**"
+      - "crates/graphcal-eval/**"
+      - "crates/graphcal-lsp/**"
+      - "crates/graphcal-plugin/**"
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_WARNINGS: deny
+  SAFETY_NIGHTLY: nightly-2026-02-21
+
+jobs:
+  plugin-miri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Miri toolchain
+        run: rustup toolchain install "$SAFETY_NIGHTLY" --profile minimal --component miri,rust-src
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: dynamic-safety-miri
+
+      - name: Prepare Miri sysroot
+        run: cargo "+$SAFETY_NIGHTLY" miri setup
+
+      - name: Exercise plugin ABI under Miri
+        env:
+          MIRIFLAGS: -Zmiri-symbolic-alignment-check -Zmiri-tree-borrows
+        run: cargo "+$SAFETY_NIGHTLY" miri test -p graphcal-plugin --test abi_memory
+
+  plugin-asan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned sanitizer toolchain
+        run: >-
+          rustup toolchain install "$SAFETY_NIGHTLY" --profile minimal
+          --component llvm-tools-preview,rust-src
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: dynamic-safety-asan
+
+      - name: Exercise plugin ABI under AddressSanitizer
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+        run: >-
+          cargo "+$SAFETY_NIGHTLY" test -Zbuild-std
+          --target x86_64-unknown-linux-gnu
+          -p graphcal-plugin --test abi_memory
+
+  lsp-loom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: dynamic-safety-loom
+
+      - name: Exhaust LSP scheduling interleavings
+        env:
+          RUSTFLAGS: --cfg loom --check-cfg=cfg(loom)
+        run: >-
+          cargo test -p graphcal-lsp --release
+          analysis_schedule_state::loom_tests -- --test-threads=1
+
+  collect:
+    needs: [plugin-miri, plugin-asan, lsp-loom]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        env:
+          MIRI_RESULT: ${{ needs.plugin-miri.result }}
+          ASAN_RESULT: ${{ needs.plugin-asan.result }}
+          LOOM_RESULT: ${{ needs.lsp-loom.result }}
+        run: |
+          for result in "$MIRI_RESULT" "$ASAN_RESULT" "$LOOM_RESULT"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "One or more dynamic-safety jobs failed"
+              exit 1
+            fi
+          done
+          echo "Dynamic-safety jobs passed"

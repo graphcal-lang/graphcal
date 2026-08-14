@@ -102,6 +102,7 @@ unwrap_used = { level = "warn", priority = 1 }
 [workspace.lints.rust]
 # missing-docs = "warn"
 unsafe-code = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
 [profile.release]
 overflow-checks = true

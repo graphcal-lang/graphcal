@@ -989,19 +989,22 @@ field_init
    Multi-axis map literals use tuple keys:
      { (I1.V1, I2.V2): expr1, (I1.V1, I2.V3): expr2, ... }
    All labels of the index (or all label tuples) must be present
-   (totality requirement). *)
-map_literal
-   = "{", map_entry, { ",", map_entry }, [ "," ], "}";
+   (totality requirement).
 
-map_entry
-   = single_key_entry
-   | tuple_key_entry;
+   A literal commits to one of the two entry forms; the forms cannot be
+   mixed within a single literal. Tuple keys denote rank two or more, so
+   a one-element parenthesized key is not a tuple key. Together these
+   keep the entry form recoverable from any single entry, which is what
+   lets formatted output reparse to the same literal. *)
+map_literal
+   = "{", single_key_entry, { ",", single_key_entry }, [ "," ], "}"
+   | "{", tuple_key_entry, { ",", tuple_key_entry }, [ "," ], "}";
 
 single_key_entry
    = ident_path, ":", expr;              (* path must contain at least two segments *)
 
 tuple_key_entry
-   = "(", ident_path,
+   = "(", ident_path, ",", ident_path,
      { ",", ident_path }, ")", ":", expr;  (* each key path must contain at least two segments *)
 
 (* --- Table expression (syntax sugar, desugars to map_literal) ---     *)

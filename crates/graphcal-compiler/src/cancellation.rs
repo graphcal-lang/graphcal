@@ -28,6 +28,8 @@ impl CancellationSource {
     pub fn token(&self) -> CancellationToken {
         CancellationToken {
             state: Some(Arc::clone(&self.state)),
+            #[cfg(feature = "test-cancellation")]
+            deterministic: None,
         }
     }
 
@@ -50,6 +52,14 @@ impl CancellationSource {
 #[derive(Clone, Debug)]
 pub struct CancellationToken {
     state: Option<Arc<AtomicBool>>,
+    #[cfg(feature = "test-cancellation")]
+    deterministic: Option<Arc<DeterministicCancellation>>,
+}
+
+#[cfg(feature = "test-cancellation")]
+#[derive(Debug)]
+struct DeterministicCancellation {
+    remaining_successful_checkpoints: std::sync::atomic::AtomicUsize,
 }
 
 impl CancellationToken {
@@ -59,7 +69,24 @@ impl CancellationToken {
     /// controlled implementation without allocating cancellation state.
     #[must_use]
     pub const fn unbounded() -> Self {
-        Self { state: None }
+        Self {
+            state: None,
+            #[cfg(feature = "test-cancellation")]
+            deterministic: None,
+        }
+    }
+
+    /// Test-only token that cancels after an exact number of successful calls.
+    #[cfg(feature = "test-cancellation")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn cancel_after_successful_checkpoints(checkpoints: usize) -> Self {
+        Self {
+            state: None,
+            deterministic: Some(Arc::new(DeterministicCancellation {
+                remaining_successful_checkpoints: std::sync::atomic::AtomicUsize::new(checkpoints),
+            })),
+        }
     }
 
     /// Whether cancellation has been requested.
@@ -68,6 +95,28 @@ impl CancellationToken {
         self.state
             .as_ref()
             .is_some_and(|state| state.load(Ordering::Relaxed))
+            || self.deterministic_is_cancelled()
+    }
+
+    #[cfg(feature = "test-cancellation")]
+    fn deterministic_is_cancelled(&self) -> bool {
+        self.deterministic.as_ref().is_some_and(|state| {
+            state
+                .remaining_successful_checkpoints
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_err()
+        })
+    }
+
+    #[cfg(not(feature = "test-cancellation"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the feature-gated implementation reads per-token deterministic state"
+    )]
+    const fn deterministic_is_cancelled(&self) -> bool {
+        false
     }
 
     /// Return [`Cancelled`] once cancellation has been requested.

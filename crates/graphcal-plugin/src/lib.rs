@@ -550,6 +550,23 @@ pub mod __rt {
         unsafe { std::alloc::dealloc(ptr, buffer_layout(size)) }
     }
 
+    /// Validate that an ABI pointer has the required `f64` alignment.
+    ///
+    /// This check runs before constructing any reference, so a malicious or
+    /// broken host gets a controlled failure instead of immediate undefined
+    /// behavior. Allocation bounds and initialization remain host invariants.
+    fn validate_f64_pointer<T>(ptr: *const T, len: u32, role: &str) {
+        if len == 0 {
+            return;
+        }
+        if ptr.is_null() {
+            crate::fail!("{role}: non-empty ABI buffer pointer is null");
+        }
+        if !(ptr as usize).is_multiple_of(std::mem::align_of::<f64>()) {
+            crate::fail!("{role}: ABI buffer pointer is not aligned for f64");
+        }
+    }
+
     /// View one host-written array parameter as a slice.
     ///
     /// # Safety
@@ -562,8 +579,10 @@ pub mod __rt {
         unsafe_code,
         reason = "viewing host-written plugin memory is inherently raw"
     )]
-    pub const unsafe fn slice_from_abi<'call>(ptr: *const f64, len: u32) -> &'call [f64] {
-        // SAFETY: forwarded from the caller.
+    pub unsafe fn slice_from_abi<'call>(ptr: *const f64, len: u32, param: &str) -> &'call [f64] {
+        validate_f64_pointer(ptr, len, &format!("parameter `{param}`"));
+        // SAFETY: allocation bounds and initialization are forwarded from the
+        // caller after validating the pointer properties visible at this layer.
         unsafe { std::slice::from_raw_parts(ptr, len as usize) }
     }
 
@@ -605,7 +624,7 @@ pub mod __rt {
             crate::fail!("parameter `{param}`: shape {shape:?} does not contain {len} elements");
         }
         // SAFETY: forwarded from the caller after shape cardinality validation.
-        let values = unsafe { slice_from_abi(ptr, len) };
+        let values = unsafe { slice_from_abi(ptr, len, param) };
         crate::ArrayView { shape, values }
     }
 
@@ -633,6 +652,9 @@ pub mod __rt {
                 array.shape()
             );
         }
+        let output_len = u32::try_from(array.values().len())
+            .unwrap_or_else(|_| crate::fail!("{function}: result buffer exceeds the 32-bit ABI"));
+        validate_f64_pointer(out, output_len, function);
         // SAFETY: the host allocated the product of `expected_shape` f64
         // slots, and `Array::new` guarantees that product equals values.len().
         unsafe {
@@ -653,6 +675,7 @@ pub mod __rt {
                 values.len()
             );
         }
+        validate_f64_pointer(out, expected_len, function);
         // SAFETY: checked against the host-allocated slot count above.
         unsafe {
             std::ptr::copy_nonoverlapping(values.as_ptr(), out, values.len());

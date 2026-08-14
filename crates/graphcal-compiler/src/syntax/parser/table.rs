@@ -152,6 +152,21 @@ impl Parser<'_> {
         Spanned::new(IndexEntryKey::position(position), span)
     }
 
+    /// Build one map-entry key from a parsed `Index.Variant` path.
+    ///
+    /// Map-literal keys always name their axis directly, so they carry no
+    /// additional index spans; those only arise for shared-axis table headers.
+    fn named_map_entry_key(
+        index: Spanned<NamePath>,
+        variant: Spanned<IndexVariantName>,
+    ) -> MapEntryKey {
+        MapEntryKey {
+            index: Self::named_index_spanned_owned(index),
+            additional_index_spans: Vec::new(),
+            variant: Self::named_entry_key_spanned(variant),
+        }
+    }
+
     pub(super) fn table_count_from_len(&self, count: usize, span: Span) -> Result<u64, ParseError> {
         u64::try_from(count).map_err(|_| ParseError::InvalidNumber {
             reason: "table value count does not fit in u64".to_string(),
@@ -476,11 +491,7 @@ impl Parser<'_> {
         self.expect(Token::Colon)?;
         let value = self.parse_expr()?;
         let mut entries = vec![MapEntry {
-            keys: NonEmpty::singleton(MapEntryKey {
-                index: Self::named_index_spanned_owned(first_index),
-                additional_index_spans: Vec::new(),
-                variant: Self::named_entry_key_spanned(first_variant),
-            }),
+            keys: NonEmpty::singleton(Self::named_map_entry_key(first_index, first_variant)),
             value,
         }];
         // Parse remaining entries
@@ -489,15 +500,21 @@ impl Parser<'_> {
             if self.lexer.peek() == Some(&Token::RBrace) {
                 break; // trailing comma
             }
+            // The first entry fixed this literal's key grammar as scalar. A
+            // later `(` would introduce a tuple key, giving the literal mixed
+            // key ranks that no formatted rendering could round-trip.
+            if let Some((&Token::LParen, span)) = self.lexer.peek_with_span() {
+                return Err(self.unexpected_token(
+                    "single-key map entry (`Index.Variant: value`)",
+                    &Token::LParen.to_string(),
+                    span,
+                ));
+            }
             let (index, variant, _) = self.parse_index_variant_path()?;
             self.expect(Token::Colon)?;
             let value = self.parse_expr()?;
             entries.push(MapEntry {
-                keys: NonEmpty::singleton(MapEntryKey {
-                    index: Self::named_index_spanned_owned(index),
-                    additional_index_spans: Vec::new(),
-                    variant: Self::named_entry_key_spanned(variant),
-                }),
+                keys: NonEmpty::singleton(Self::named_map_entry_key(index, variant)),
                 value,
             });
         }
@@ -520,20 +537,18 @@ impl Parser<'_> {
             }
             self.expect(Token::LParen)?;
             let (index, variant, _) = self.parse_index_variant_path()?;
-            let first_key = MapEntryKey {
-                index: Self::named_index_spanned_owned(index),
-                additional_index_spans: Vec::new(),
-                variant: Self::named_entry_key_spanned(variant),
-            };
-            let mut rest_keys = Vec::new();
+            let first_key = Self::named_map_entry_key(index, variant);
+            // Tuple syntax denotes a key of rank two or more. A single
+            // parenthesized key would build a rank-1 entry indistinguishable
+            // from scalar syntax, which the formatter would then re-render in
+            // scalar form and change the literal's grammar.
+            self.expect(Token::Comma)?;
+            let (index, variant, _) = self.parse_index_variant_path()?;
+            let mut rest_keys = vec![Self::named_map_entry_key(index, variant)];
             while self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
                 let (index, variant, _) = self.parse_index_variant_path()?;
-                rest_keys.push(MapEntryKey {
-                    index: Self::named_index_spanned_owned(index),
-                    additional_index_spans: Vec::new(),
-                    variant: Self::named_entry_key_spanned(variant),
-                });
+                rest_keys.push(Self::named_map_entry_key(index, variant));
             }
             self.expect(Token::RParen)?;
             self.expect(Token::Colon)?;
@@ -544,6 +559,20 @@ impl Parser<'_> {
             });
             if self.lexer.peek() == Some(&Token::Comma) {
                 self.lexer.next_token();
+                // Mirror of the scalar path: this literal's grammar is tuple,
+                // so a bare identifier here would mix key ranks.
+                let scalar_key = self
+                    .lexer
+                    .peek_with_span()
+                    .filter(|(token, _)| token.is_identifier())
+                    .map(|(token, span)| (token.to_string(), span));
+                if let Some((found, span)) = scalar_key {
+                    return Err(self.unexpected_token(
+                        "tuple-key map entry (`(Index.Variant, ...): value`)",
+                        &found,
+                        span,
+                    ));
+                }
             } else {
                 break;
             }
@@ -589,6 +618,38 @@ mod tests {
         match spec {
             TableIndexSpec::Finite { cardinality, .. } => *cardinality,
             TableIndexSpec::Named(_) => panic!("expected Finite spec"),
+        }
+    }
+
+    /// Tuple key syntax denotes rank two or more. Accepting a single
+    /// parenthesized key would build an entry indistinguishable from scalar
+    /// syntax, which the formatter re-renders unparenthesized.
+    #[test]
+    fn tuple_key_map_requires_at_least_two_keys() {
+        let source = "param x: Dimensionless[A] = { (A.One): 1.0 };";
+        let error = Parser::new(source).parse_file().unwrap_err();
+
+        let ParseError::UnexpectedToken { found, .. } = error else {
+            panic!("expected unexpected-token error, got {error:?}");
+        };
+        assert_eq!(found, ")");
+    }
+
+    /// A map literal's first entry fixes its key grammar. Mixing ranks would
+    /// produce an AST whose formatted rendering no longer reparses, since the
+    /// parser selects the map grammar from the first entry alone.
+    #[test]
+    fn map_literal_rejects_mixed_key_ranks() {
+        let scalar_first = "param x: Dimensionless[A, B] = { A.One: 1.0, (A.One, B.Two): 2.0 };";
+        let tuple_first = "param x: Dimensionless[A, B] = { (A.One, B.Two): 2.0, A.One: 1.0 };";
+
+        for (source, expected_found) in [(scalar_first, "("), (tuple_first, "identifier")] {
+            let error = Parser::new(source).parse_file().unwrap_err();
+
+            let ParseError::UnexpectedToken { found, .. } = error else {
+                panic!("expected unexpected-token error for {source}, got {error:?}");
+            };
+            assert_eq!(found, expected_found, "source: {source}");
         }
     }
 

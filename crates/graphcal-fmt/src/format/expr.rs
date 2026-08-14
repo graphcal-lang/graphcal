@@ -1,6 +1,6 @@
 use graphcal_compiler::syntax::ast::{
-    BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MatchArm, MatchPattern,
-    ModulePath, ParamBinding, PatternBinding, TableIndexSpec, UnaryOp,
+    BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MapEntryKey, MatchArm,
+    MatchPattern, ModulePath, ParamBinding, PatternBinding, TableIndexSpec, UnaryOp,
 };
 use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
@@ -569,18 +569,16 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
         // Drain leading comments before this entry
         let leading = fmt.drain_comments_before(e.value.span.offset());
 
-        let key_doc = if e.keys.len() == 1 {
-            RcDoc::text(format!(
-                "{}.{}",
-                e.keys[0].index.value, e.keys[0].variant.value
-            ))
-        } else {
-            let key_parts: Vec<String> = e
-                .keys
-                .iter()
-                .map(|k| format!("{}.{}", k.index.value, k.variant.value))
-                .collect();
-            RcDoc::text(format!("({})", key_parts.join(", ")))
+        // The parser guarantees a map literal never mixes key ranks: scalar
+        // syntax always yields exactly one key, tuple syntax always two or
+        // more. Rendering each rank in its own syntax therefore round-trips.
+        let render_key = |key: &MapEntryKey| format!("{}.{}", key.index.value, key.variant.value);
+        let key_doc = match e.keys.as_slice() {
+            [key] => RcDoc::text(render_key(key)),
+            keys => {
+                let key_parts: Vec<String> = keys.iter().map(render_key).collect();
+                RcDoc::text(format!("({})", key_parts.join(", ")))
+            }
         };
         let entry_doc = key_doc
             .append(RcDoc::text(": "))

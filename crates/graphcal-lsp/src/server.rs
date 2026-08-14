@@ -22,6 +22,7 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
+use crate::analysis_schedule_state::AnalysisScheduleState;
 use crate::convert::position_to_byte_offset;
 use crate::diagnostics::{compile_error_to_diagnostics_grouped, eval_result_to_diagnostics};
 use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
@@ -184,23 +185,21 @@ const MAX_CONCURRENT_ANALYSES: usize = 2;
 struct AnalysisScheduler {
     /// Closing entries remain only while old work is unwinding. A quick reopen
     /// reuses that gate; quiescent closed entries are removed.
-    states: Mutex<HashMap<Url, AnalysisScheduleState>>,
+    states: Mutex<HashMap<Url, ScheduledDocumentState>>,
     global_gate: Arc<Semaphore>,
 }
 
 #[derive(Debug)]
-struct AnalysisScheduleState {
+struct ScheduledDocumentState {
+    core: AnalysisScheduleState,
     document_gate: Arc<Semaphore>,
-    cancellations: HashMap<u64, CancellationSource>,
-    is_open: bool,
 }
 
-impl AnalysisScheduleState {
+impl ScheduledDocumentState {
     fn new(is_open: bool) -> Self {
         Self {
+            core: AnalysisScheduleState::new(is_open),
             document_gate: Arc::new(Semaphore::new(1)),
-            cancellations: HashMap::new(),
-            is_open,
         }
     }
 }
@@ -218,14 +217,13 @@ impl AnalysisScheduler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .entry(uri.clone())
-            .and_modify(|state| state.is_open = true)
-            .or_insert_with(|| AnalysisScheduleState::new(true));
+            .and_modify(|state| state.core.open())
+            .or_insert_with(|| ScheduledDocumentState::new(true));
     }
 
     /// Register one revision before it waits for a worker permit. A later edit
     /// can therefore cancel queued as well as running work.
     fn register(&self, uri: &Url, generation: u64) -> ScheduledAnalysis {
-        let source = CancellationSource::new();
         let mut states = self
             .states
             .lock()
@@ -235,10 +233,8 @@ impl AnalysisScheduler {
         // first. Keep it closed so `finish` can remove it.
         let state = states
             .entry(uri.clone())
-            .or_insert_with(|| AnalysisScheduleState::new(false));
-        if let Some(replaced) = state.cancellations.insert(generation, source.clone()) {
-            replaced.cancel();
-        }
+            .or_insert_with(|| ScheduledDocumentState::new(false));
+        let source = state.core.register(generation);
         let document_gate = Arc::clone(&state.document_gate);
         drop(states);
         ScheduledAnalysis {
@@ -254,9 +250,7 @@ impl AnalysisScheduler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(state) = states.get(uri) {
-            for source in state.cancellations.values() {
-                source.cancel();
-            }
+            state.core.cancel_all();
         }
     }
 
@@ -265,13 +259,7 @@ impl AnalysisScheduler {
             .states
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let remove = states.get_mut(uri).is_some_and(|state| {
-            state.is_open = false;
-            for source in state.cancellations.values() {
-                source.cancel();
-            }
-            state.cancellations.is_empty()
-        });
+        let remove = states.get_mut(uri).is_some_and(|state| state.core.close());
         if remove {
             states.remove(uri);
         }
@@ -283,9 +271,7 @@ impl AnalysisScheduler {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for state in states.values() {
-            for source in state.cancellations.values() {
-                source.cancel();
-            }
+            state.core.cancel_all();
         }
     }
 
@@ -294,10 +280,9 @@ impl AnalysisScheduler {
             .states
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let remove = states.get_mut(uri).is_some_and(|state| {
-            state.cancellations.remove(&generation);
-            !state.is_open && state.cancellations.is_empty()
-        });
+        let remove = states
+            .get_mut(uri)
+            .is_some_and(|state| state.core.finish(generation));
         if remove {
             states.remove(uri);
         }
