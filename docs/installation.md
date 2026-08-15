@@ -13,10 +13,10 @@ If you don't have Rust installed, get it from [rustup.rs](https://rustup.rs/).
 ## Install from crates.io
 
 ```bash
-cargo install graphcal --locked
+cargo install graphcal --version '^0.0.1-alpha' --locked
 ```
 
-This downloads Graphcal from [crates.io](https://crates.io/crates/graphcal), builds it, and installs the `graphcal` binary to `~/.cargo/bin/`.
+The explicit version requirement is necessary while Graphcal is published as a pre-release. This downloads the latest compatible Graphcal release from [crates.io](https://crates.io/crates/graphcal), builds it, and installs the `graphcal` binary to `~/.cargo/bin/`.
 
 ## Verify Installation
 
