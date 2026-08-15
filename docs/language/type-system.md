@@ -8,6 +8,9 @@ This page is the formal reference for Graphcal's type system. It describes the c
 
 For introductory material, see the [tutorial](../tutorial/index.md). For specific features, see [Dimensions & Units](dimensions-and-units.md), [Algebraic Data Types](algebraic-data-types.md), [Indexes](indexes.md), and [DAG Blocks](functions.md).
 
+!!! note "Experimental machine-checked model"
+    The repository contains an initial [Lean model of this static ontology](https://github.com/graphcal-lang/graphcal/tree/main/formal/lean). It currently establishes kind separation, kind-correct type formers, invariant-preserving semantic representations, and deterministic contextual quantity elaboration. Its documented scope does not yet include term typing, the production Rust checker, or runtime type safety.
+
 ## Type-Level Domains and Notation
 
 The capital letters in the definitions below are **metavariables**, not names
