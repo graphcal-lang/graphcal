@@ -46,7 +46,7 @@ graphcal eval rocket.gcl
 Install the CLI with [Rust](https://rustup.rs/):
 
 ```sh
-cargo install graphcal --locked
+cargo install graphcal --version '^0.0.1-alpha' --locked
 ```
 
 Save the example above as `rocket.gcl`, then run:
