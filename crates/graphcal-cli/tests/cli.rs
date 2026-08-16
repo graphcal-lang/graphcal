@@ -5510,9 +5510,9 @@ fn dot_statement_id_for_label<'a>(dot: &'a str, label_prefix: &str) -> &'a str {
 }
 
 #[test]
-fn graph_rocket_dot_output() {
+fn graph_rocket_flat_dot_output() {
     let output = graphcal_bin()
-        .args(["graph", &fixture("valid/rocket.gcl")])
+        .args(["graph", &fixture("valid/rocket.gcl"), "--view", "flat"])
         .output()
         .expect("failed to run graphcal");
 
@@ -5548,6 +5548,19 @@ fn graph_rocket_dot_output() {
 }
 "#
     );
+}
+
+#[test]
+fn graph_default_view_is_grouped() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/rocket.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("subgraph \"cluster_c0\" {"));
+    assert!(stdout.contains("label=\"module rocket::rocket\";"));
 }
 
 #[test]
@@ -5620,6 +5633,80 @@ fn graph_grouped_view_distinguishes_repeated_include_instances() {
 }
 
 #[test]
+fn graph_max_depth_collapses_included_dag_internals() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/instantiated_import_multi/src/rocket/main.gcl"),
+            "-L",
+            "1",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\"s1\" [label=\"7 values hidden\""));
+    assert!(stdout.contains("\"s2\" [label=\"7 values hidden\""));
+    assert!(stdout.contains("\"s1\" -> \"n14\" [ltail=\"cluster_c1\"]"));
+    assert!(!stdout.contains("mass_ratio\\nDimensionless"));
+}
+
+#[test]
+fn graph_max_depth_expands_only_requested_composition_levels() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/diamond_assert/src/graph/main.gcl"),
+            "-L",
+            "2",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("template graph::src.graph.left"));
+    assert!(stdout.contains("template graph::src.graph.right"));
+    assert!(stdout.contains("template graph::src.graph.shared"));
+    assert!(stdout.contains("1 value hidden"));
+    assert!(stdout.contains("doubled\\nDimensionless"));
+}
+
+#[test]
+fn graph_max_depth_requires_grouped_view() {
+    for view in ["flat", "module"] {
+        let output = graphcal_bin()
+            .args([
+                "graph",
+                &fixture("valid/rocket.gcl"),
+                "--view",
+                view,
+                "-L",
+                "1",
+            ])
+            .output()
+            .expect("failed to run graphcal");
+
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("can only be used with `--view grouped`"));
+    }
+}
+
+#[test]
+fn graph_zero_max_depth_is_rejected() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/rocket.gcl"), "-L", "0"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("non-zero type"));
+}
+
+#[test]
 fn graph_module_view_collapses_declaration_wiring() {
     let output = graphcal_bin()
         .args([
@@ -5656,6 +5743,8 @@ fn graph_imported_values_render_as_external_nodes() {
         .args([
             "graph",
             &fixture("valid/multi/rocket_split/src/lib/main.gcl"),
+            "--view",
+            "flat",
         ])
         .output()
         .expect("failed to run graphcal");

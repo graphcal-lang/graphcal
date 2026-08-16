@@ -27,8 +27,10 @@ mod plugin;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process;
+use thiserror::Error;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
@@ -146,8 +148,11 @@ enum Commands {
         #[arg(long, value_enum, default_value = "dot")]
         format: GraphFormat,
         /// Composition detail: declarations only, grouped DAGs, or DAG overview
-        #[arg(long, value_enum, default_value = "flat")]
+        #[arg(long, value_enum, default_value = "grouped")]
         view: GraphView,
+        /// Grouped-view composition levels to display (root is level 1)
+        #[arg(short = 'L', long, value_name = "DEPTH")]
+        max_depth: Option<NonZeroUsize>,
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
@@ -237,12 +242,26 @@ enum GraphView {
     Module,
 }
 
-impl From<GraphView> for graphcal_eval::graph_ir::dot::GraphView {
-    fn from(view: GraphView) -> Self {
-        match view {
-            GraphView::Flat => Self::Flat,
-            GraphView::Grouped => Self::Grouped,
-            GraphView::Module => Self::Module,
+#[derive(Debug, Error)]
+enum GraphViewSelectionError {
+    #[error("`-L/--max-depth` can only be used with `--view grouped`")]
+    MaxDepthRequiresGrouped,
+}
+
+impl GraphView {
+    const fn select(
+        self,
+        max_depth: Option<NonZeroUsize>,
+    ) -> Result<graphcal_eval::graph_ir::dot::GraphView, GraphViewSelectionError> {
+        match (self, max_depth) {
+            (Self::Flat, None) => Ok(graphcal_eval::graph_ir::dot::GraphView::Flat),
+            (Self::Grouped, max_depth) => {
+                Ok(graphcal_eval::graph_ir::dot::GraphView::Grouped { max_depth })
+            }
+            (Self::Module, None) => Ok(graphcal_eval::graph_ir::dot::GraphView::Module),
+            (Self::Flat | Self::Module, Some(_)) => {
+                Err(GraphViewSelectionError::MaxDepthRequiresGrouped)
+            }
         }
     }
 }
@@ -343,9 +362,10 @@ fn run_command(cli: Cli) {
             file,
             format,
             view,
+            max_depth,
             root,
         } => {
-            run_graph(&file, &format, view, root.as_deref());
+            run_graph(&file, &format, view, max_depth, root.as_deref());
         }
         Commands::Model { command } => match command {
             ModelCommands::Serve { file, output, root } => {
@@ -827,7 +847,21 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 /// `graphcal graph`: compile to TIR, project the dependency graph IR, and
 /// print it in the requested export format. The projection and rendering are
 /// pure (`graphcal_eval::graph_ir`); this shell only does I/O.
-fn run_graph(file: &Path, format: &GraphFormat, view: GraphView, project_root: Option<&Path>) {
+fn run_graph(
+    file: &Path,
+    format: &GraphFormat,
+    view: GraphView,
+    max_depth: Option<NonZeroUsize>,
+    project_root: Option<&Path>,
+) {
+    let view = match view.select(max_depth) {
+        Ok(view) => view,
+        Err(error) => {
+            eprintln!("error: {error}");
+            process::exit(2);
+        }
+    };
+
     // On stderr so stdout stays a clean pipe into `dot`.
     eprintln!(
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
@@ -840,7 +874,7 @@ fn run_graph(file: &Path, format: &GraphFormat, view: GraphView, project_root: O
         Ok(checked) => match graphcal_eval::graph_ir::project_tir(checked.tir()) {
             Ok(ir) => match format {
                 GraphFormat::Dot => {
-                    print!("{}", graphcal_eval::graph_ir::dot::render(&ir, view.into()));
+                    print!("{}", graphcal_eval::graph_ir::dot::render(&ir, view));
                 }
             },
             Err(error) => {

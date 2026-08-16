@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+use std::num::NonZeroUsize;
 
 use graphcal_compiler::dag_id::{DagHierarchyEdge, DagId};
 
@@ -16,8 +17,13 @@ pub enum GraphView {
     /// Every declaration and dependency edge without composition boundaries.
     Flat,
     /// Every declaration and dependency edge, clustered by source module or
-    /// concrete include instance.
-    Grouped,
+    /// concrete include instance. When `max_depth` is set, clusters at that
+    /// composition depth are collapsed to summary nodes.
+    Grouped {
+        /// Positive number of composition levels to display. Level 1 expands
+        /// the root and collapses its direct child DAGs.
+        max_depth: Option<NonZeroUsize>,
+    },
     /// One node per source module/include instance with declaration-level edges
     /// collapsed to module-level dataflow.
     Module,
@@ -40,6 +46,15 @@ impl std::fmt::Display for DotClusterId {
         // Graphviz recognizes a subgraph as a cluster only when its identifier
         // starts with `cluster`.
         write!(formatter, "cluster_c{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DotSummaryNodeId(usize);
+
+impl std::fmt::Display for DotSummaryNodeId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "s{}", self.0)
     }
 }
 
@@ -90,6 +105,10 @@ impl RendererIds {
 
     fn cluster(&self, identity: &DagId) -> DotClusterId {
         self.clusters[identity]
+    }
+
+    fn summary(&self, identity: &DagId) -> DotSummaryNodeId {
+        DotSummaryNodeId(self.cluster(identity).0)
     }
 }
 
@@ -170,12 +189,92 @@ impl RendererLabels {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum GroupedEndpoint {
+    Node(GraphNodeId),
+    Collapsed(DagId),
+}
+
+impl GroupedEndpoint {
+    const fn owner(&self) -> &DagId {
+        match self {
+            Self::Node(node) => node.owner(),
+            Self::Collapsed(owner) => owner,
+        }
+    }
+
+    fn dot_id(&self, ids: &RendererIds) -> DotGroupedEndpointId {
+        match self {
+            Self::Node(node) => DotGroupedEndpointId::Node(ids.node(node)),
+            Self::Collapsed(owner) => DotGroupedEndpointId::Summary(ids.summary(owner)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DotGroupedEndpointId {
+    Node(DotNodeId),
+    Summary(DotSummaryNodeId),
+}
+
+impl std::fmt::Display for DotGroupedEndpointId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Node(node) => node.fmt(formatter),
+            Self::Summary(summary) => summary.fmt(formatter),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct GroupedEdge {
+    from: GroupedEndpoint,
+    to: GroupedEndpoint,
+}
+
+struct GroupedRenderPlan {
+    collapsed: BTreeSet<DagId>,
+    edges: BTreeSet<GroupedEdge>,
+}
+
+impl GroupedRenderPlan {
+    fn for_graph(ir: &GraphIr, max_depth: Option<NonZeroUsize>) -> Self {
+        let collapsed = max_depth.map_or_else(BTreeSet::new, |max_depth| {
+            ir.clusters
+                .iter()
+                .filter(|cluster| {
+                    cluster.parent.is_some() && composition_depth(ir, cluster) == max_depth.get()
+                })
+                .map(|cluster| cluster.dag_id.clone())
+                .collect()
+        });
+        let edges = ir
+            .edges
+            .iter()
+            .filter_map(|edge| {
+                let from = grouped_endpoint(ir, &collapsed, &edge.from);
+                let to = grouped_endpoint(ir, &collapsed, &edge.to);
+                (from != to).then_some(GroupedEdge { from, to })
+            })
+            .collect();
+        Self { collapsed, edges }
+    }
+}
+
+struct GroupedRenderer<'a> {
+    ir: &'a GraphIr,
+    plan: &'a GroupedRenderPlan,
+    node_lookup: &'a BTreeMap<GraphNodeId, &'a GraphNode>,
+    ids: &'a RendererIds,
+    labels: &'a RendererLabels,
+}
+
 /// Render the graph as Graphviz DOT text in the requested view.
 #[must_use]
 pub fn render(ir: &GraphIr, view: GraphView) -> String {
     match view {
         GraphView::Flat => render_flat(ir),
-        GraphView::Grouped => render_grouped(ir),
+        GraphView::Grouped { max_depth } => render_grouped(ir, max_depth),
         GraphView::Module => render_modules(ir),
     }
 }
@@ -199,15 +298,23 @@ fn render_flat(ir: &GraphIr) -> String {
     out
 }
 
-fn render_grouped(ir: &GraphIr) -> String {
+fn render_grouped(ir: &GraphIr, max_depth: Option<NonZeroUsize>) -> String {
     let ids = RendererIds::for_graph(ir);
     let labels = RendererLabels::for_graph(ir);
+    let plan = GroupedRenderPlan::for_graph(ir, max_depth);
     let node_lookup: BTreeMap<GraphNodeId, &GraphNode> = ir
         .nodes
         .iter()
         .chain(&ir.external)
         .map(|node| (node.id.clone(), node))
         .collect();
+    let renderer = GroupedRenderer {
+        ir,
+        plan: &plan,
+        node_lookup: &node_lookup,
+        ids: &ids,
+        labels: &labels,
+    };
     let mut out = graph_header();
     out.push_str("    compound=true;\n");
     out.push_str("    newrank=true;\n");
@@ -218,27 +325,18 @@ fn render_grouped(ir: &GraphIr) -> String {
         .iter()
         .filter(|cluster| cluster.parent.is_none())
     {
-        render_cluster(&mut out, cluster, ir, &node_lookup, &ids, &labels, 1);
+        renderer.render_cluster(&mut out, cluster, 1);
     }
     render_grouped_legend(&mut out);
 
-    for edge in &ir.edges {
+    for edge in &plan.edges {
         let attrs = grouped_edge_attrs(ir, &ids, edge.from.owner(), edge.to.owner());
+        let from = edge.from.dot_id(&ids);
+        let to = edge.to.dot_id(&ids);
         if attrs.is_empty() {
-            let _ = writeln!(
-                out,
-                "    \"{}\" -> \"{}\";",
-                ids.node(&edge.from),
-                ids.node(&edge.to)
-            );
+            let _ = writeln!(out, "    \"{from}\" -> \"{to}\";");
         } else {
-            let _ = writeln!(
-                out,
-                "    \"{}\" -> \"{}\" [{}];",
-                ids.node(&edge.from),
-                ids.node(&edge.to),
-                attrs.join(", ")
-            );
+            let _ = writeln!(out, "    \"{from}\" -> \"{to}\" [{}];", attrs.join(", "));
         }
     }
     out.push_str("}\n");
@@ -318,42 +416,66 @@ fn render_plain_edges(out: &mut String, ir: &GraphIr, ids: &RendererIds) {
     }
 }
 
-fn render_cluster(
-    out: &mut String,
-    cluster: &GraphCluster,
-    ir: &GraphIr,
-    node_lookup: &BTreeMap<GraphNodeId, &GraphNode>,
-    ids: &RendererIds,
-    labels: &RendererLabels,
-    indent: usize,
-) {
-    let pad = "    ".repeat(indent);
-    let child_indent = indent.saturating_add(1);
-    let inner_pad = "    ".repeat(child_indent);
-    let _ = writeln!(out, "{pad}subgraph \"{}\" {{", ids.cluster(&cluster.dag_id));
-    let _ = writeln!(out, "{inner_pad}label=\"{}\";", cluster_label(cluster));
-    let _ = writeln!(out, "{inner_pad}{}", cluster_style(cluster));
+impl GroupedRenderer<'_> {
+    fn render_cluster(&self, out: &mut String, cluster: &GraphCluster, indent: usize) {
+        let pad = "    ".repeat(indent);
+        let child_indent = indent.saturating_add(1);
+        let inner_pad = "    ".repeat(child_indent);
+        let _ = writeln!(
+            out,
+            "{pad}subgraph \"{}\" {{",
+            self.ids.cluster(&cluster.dag_id)
+        );
+        let _ = writeln!(out, "{inner_pad}label=\"{}\";", cluster_label(cluster));
+        let _ = writeln!(out, "{inner_pad}{}", cluster_style(cluster));
 
-    render_nodes(
-        out,
-        cluster
-            .node_ids
-            .iter()
-            .filter_map(|identity| node_lookup.get(identity).copied()),
-        child_indent,
-        ids,
-        labels,
-        false,
-        true,
-    );
-    for child in ir
-        .clusters
-        .iter()
-        .filter(|candidate| candidate.parent.as_ref() == Some(&cluster.dag_id))
-    {
-        render_cluster(out, child, ir, node_lookup, ids, labels, child_indent);
+        if self.plan.collapsed.contains(&cluster.dag_id) {
+            self.render_collapsed_summary(out, cluster, child_indent);
+        } else {
+            render_nodes(
+                out,
+                cluster
+                    .node_ids
+                    .iter()
+                    .filter_map(|identity| self.node_lookup.get(identity).copied()),
+                child_indent,
+                self.ids,
+                self.labels,
+                false,
+                true,
+            );
+            for child in self
+                .ir
+                .clusters
+                .iter()
+                .filter(|candidate| candidate.parent.as_ref() == Some(&cluster.dag_id))
+            {
+                self.render_cluster(out, child, child_indent);
+            }
+        }
+        let _ = writeln!(out, "{pad}}}");
     }
-    let _ = writeln!(out, "{pad}}}");
+
+    fn render_collapsed_summary(&self, out: &mut String, cluster: &GraphCluster, indent: usize) {
+        let hidden = hidden_node_count(self.ir, &cluster.dag_id);
+        let noun = if hidden == 1 { "value" } else { "values" };
+        let pad = "    ".repeat(indent);
+        let _ = writeln!(
+            out,
+            "{pad}\"{}\" [label=\"{hidden} {noun} hidden\", shape=box, style=\"rounded,dashed\", color=\"#607D8B\"];",
+            self.ids.summary(&cluster.dag_id)
+        );
+    }
+}
+
+fn hidden_node_count(ir: &GraphIr, owner: &DagId) -> usize {
+    ir.clusters
+        .iter()
+        .filter(|cluster| {
+            &cluster.dag_id == owner || is_cluster_descendant(ir, &cluster.dag_id, owner)
+        })
+        .flat_map(|cluster| &cluster.node_ids)
+        .count()
 }
 
 fn render_nodes<'a>(
@@ -409,6 +531,39 @@ const fn cluster_style(cluster: &GraphCluster) -> &'static str {
         }
         GraphClusterKind::ExternalModule => "color=\"#9E9E9E\"; style=\"rounded,dashed\";",
     }
+}
+
+fn composition_depth(ir: &GraphIr, cluster: &GraphCluster) -> usize {
+    std::iter::successors(cluster.parent.as_ref(), |owner| {
+        ir.clusters
+            .iter()
+            .find(|candidate| &candidate.dag_id == *owner)
+            .and_then(|parent| parent.parent.as_ref())
+    })
+    .count()
+}
+
+fn grouped_endpoint(
+    ir: &GraphIr,
+    collapsed: &BTreeSet<DagId>,
+    node: &GraphNodeId,
+) -> GroupedEndpoint {
+    let owner_cluster = ir
+        .clusters
+        .iter()
+        .find(|cluster| &cluster.dag_id == node.owner());
+    let collapsed_owner = std::iter::successors(owner_cluster, |cluster| {
+        cluster.parent.as_ref().and_then(|parent| {
+            ir.clusters
+                .iter()
+                .find(|candidate| &candidate.dag_id == parent)
+        })
+    })
+    .find(|cluster| collapsed.contains(&cluster.dag_id));
+    collapsed_owner.map_or_else(
+        || GroupedEndpoint::Node(node.clone()),
+        |cluster| GroupedEndpoint::Collapsed(cluster.dag_id.clone()),
+    )
 }
 
 fn grouped_edge_attrs(ir: &GraphIr, ids: &RendererIds, from: &DagId, to: &DagId) -> Vec<String> {
@@ -500,6 +655,7 @@ fn render_grouped_legend(out: &mut String) {
             "        \"legend_node\" [label=\"calculated node\", shape=box];\n",
             "        \"legend_output\" [label=\"public output\", shape=box, peripheries=2, color=\"#2E7D32\", penwidth=2];\n",
             "        \"legend_external\" [label=\"external value\", shape=box, style=dashed];\n",
+            "        \"legend_collapsed\" [label=\"collapsed DAG\\nvalues hidden\", shape=box, style=\"rounded,dashed\"];\n",
             "    }\n",
         )
     );
@@ -649,13 +805,27 @@ mod tests {
 
     #[test]
     fn grouped_view_emits_real_nested_clusters_and_routed_edges() {
-        let dot = render(&sample_ir(), GraphView::Grouped);
+        let dot = render(&sample_ir(), GraphView::Grouped { max_depth: None });
         assert!(dot.contains("compound=true;"));
         assert!(dot.contains("subgraph \"cluster_c0\" {"));
         assert!(dot.contains("subgraph \"cluster_c1\" {"));
         assert!(dot.contains("label=\"dag test::main.child\";"));
         assert!(dot.contains("peripheries=2"));
         assert!(dot.contains("ltail=\"cluster_c2\", lhead=\"cluster_c1\""));
+    }
+
+    #[test]
+    fn grouped_depth_collapses_frontier_and_redirects_edges() {
+        let dot = render(
+            &sample_ir(),
+            GraphView::Grouped {
+                max_depth: NonZeroUsize::new(1),
+            },
+        );
+
+        assert!(dot.contains("\"s1\" [label=\"1 value hidden\""));
+        assert!(!dot.contains("output\\nReal"));
+        assert!(dot.contains("\"n2\" -> \"s1\" [ltail=\"cluster_c2\", lhead=\"cluster_c1\"]"));
     }
 
     #[test]

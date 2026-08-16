@@ -808,7 +808,8 @@ graphcal graph [OPTIONS] <FILE>
 | Option | Description |
 |--------|-------------|
 | `--format <FORMAT>` | Output format: `dot` (default; currently the only format) |
-| `--view <VIEW>` | Composition detail: `flat` (default), `grouped`, or `module` |
+| `--view <VIEW>` | Composition detail: `grouped` (default), `flat`, or `module` |
+| `-L, --max-depth <DEPTH>` | Positive number of grouped composition levels to display |
 | `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 
 The three views support overview-to-detail workflows:
@@ -816,20 +817,30 @@ The three views support overview-to-detail workflows:
 - **`flat`:** every declaration and dependency edge, without composition
   boundaries. Repeated declaration names are owner-qualified so the detailed
   debugging view remains unambiguous.
-- **`grouped`:** the same declaration-level graph, placed in real Graphviz
-  `cluster_*` subgraphs for the root module, inline DAG definitions, concrete
-  include instances, and referenced external modules. Clusters nest according
-  to composition, include labels identify their reusable template, and
-  cross-cluster edges are routed through cluster boundaries.
+- **`grouped` (default):** the same declaration-level graph, placed in real
+  Graphviz `cluster_*` subgraphs for the root module, inline DAG definitions,
+  concrete include instances, and referenced external modules. Clusters nest
+  according to composition, include labels identify their reusable template,
+  and cross-cluster edges are routed through cluster boundaries.
 - **`module`:** one node per source module or include instance. Internal wiring
   is hidden, declaration dependencies are collapsed into deduplicated
   module-level dataflow edges, and dashed edges show containment or
   instantiation.
 
+`-L`/`--max-depth` limits expansion in the grouped view using `tree -L`-style
+levels. The root is level 1: `-L 1` shows root declarations and collapses each
+direct child DAG to a summary; `-L 2` expands direct children and collapses
+grandchildren. A summary reports how many declaration values its whole hidden
+subtree contains. Dependencies crossing a collapsed boundary are redirected to
+the summary and deduplicated, so module-level dataflow remains visible rather
+than silently disappearing. Omitting `-L` fully expands every cluster. The
+option is rejected with `flat` and `module` views.
+
 The output is deterministic (declarations keep source order, edges are sorted),
 so exported graphs diff cleanly in version control. DOT statement identifiers
-(`n0`, `n1`, …, `cluster_c0`, `cluster_c1`, …, and `m0`, `m1`, …) are opaque
-renderer-local ids; semantic compiler names appear only as labels. This
+(`n0`, `n1`, …, collapsed summaries `s0`, `s1`, …, clusters `cluster_c0`,
+`cluster_c1`, …, and modules `m0`, `m1`, …) are opaque renderer-local ids;
+semantic compiler names appear only as labels. This
 prevents Graphviz from merging separate package versions or source modules and
 concrete instances that happen to have the same display path.
 
@@ -843,18 +854,14 @@ concrete instances that happen to have the same display path.
 **Examples:**
 
 ```bash
-# Print Graphviz DOT text to stdout
-$ graphcal graph rocket.gcl
-digraph graphcal {
-    rankdir=LR;
-    node [fontname="Helvetica,Arial,sans-serif"];
-    "n0" [label="dry_mass\nMass", shape=ellipse];
-    ...
-    "n3" -> "n5";
-}
+# Render the default composition-preserving graph to SVG
+graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
 
-# Render a composition-preserving detailed graph to SVG
-graphcal graph rocket.gcl --view grouped | dot -Tsvg -o rocket.svg
+# Keep root detail but collapse direct child DAG internals
+graphcal graph composed-model.gcl -L 1 | dot -Tsvg -o overview.svg
+
+# Expand direct child DAGs but collapse nested children
+graphcal graph composed-model.gcl -L 2 | dot -Tsvg -o two-levels.svg
 
 # Render an architecture overview with one node per DAG
 graphcal graph rocket.gcl --view module | dot -Tsvg -o rocket-modules.svg
