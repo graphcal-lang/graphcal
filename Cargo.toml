@@ -22,12 +22,7 @@ arrow-array = "59.1.0"
 arrow-ipc = "59.1.0"
 arrow-schema = "59.1.0"
 clap = { version = "4.5.58", features = ["derive"] }
-gix = { version = "0.86.0", default-features = false, features = [
-  "blocking-http-transport-reqwest-rust-tls",
-  "parallel",
-  "sha1",
-  "worktree-mutation"
-] }
+gix = { version = "0.86.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "parallel", "sha1", "worktree-mutation"] }
 graphcal-compiler = { path = "crates/graphcal-compiler", version = "0.0.1-alpha.23" }
 graphcal-eval = { path = "crates/graphcal-eval", version = "0.0.1-alpha.23" }
 graphcal-fmt = { path = "crates/graphcal-fmt", version = "0.0.1-alpha.23" }
@@ -77,8 +72,8 @@ complexity = { level = "warn", priority = -1 }
 correctness = { level = "deny", priority = -1 }  # deny-by-default
 dbg_macro = { level = "warn", priority = 1 }
 decimal_literal_representation = { level = "warn", priority = 1 }
-disallowed_methods = { level = "warn", priority = 1 }
 derive_partial_eq_without_eq = { level = "allow", priority = 1 }  # We implement `Eq` only when necessary
+disallowed_methods = { level = "warn", priority = 1 }
 else_if_without_else = { level = "warn", priority = 1 }
 expect_used = { level = "warn", priority = 1 }
 indexing_slicing = { level = "allow", priority = 1 }  # TODO: change to "warn" later
@@ -100,12 +95,25 @@ unreachable = { level = "warn", priority = 1 }
 unwrap_used = { level = "warn", priority = 1 }
 
 [workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 # missing-docs = "warn"
 unsafe-code = "warn"
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
+
+# Keep useful backtraces while minimizing debug-build codegen and link time.
+[profile.dev]
+debug = "line-tables-only"
+
+# Dependencies generally do not need source-level debug information.
+[profile.dev.package."*"]
+debug = false
 
 [profile.release]
 overflow-checks = true
+
+# Opt in to full workspace debug information when using a debugger.
+[profile.debugging]
+inherits = "dev"
+debug = true
 
 # Release-optimized binaries with symbols for sampling profilers such as samply.
 [profile.profiling]
