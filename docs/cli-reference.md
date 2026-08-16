@@ -789,8 +789,9 @@ Export the dependency graph of a `.gcl` file as text for external rendering
 tools. The graph is a one-way projection of the compiled program: `param`,
 `const node`, and `node` declarations become vertices; every `@` reference
 becomes a directed edge from the value being read to the declaration reading
-it. Inline `dag` blocks render as nested clusters. Assertions, plots, figures,
-and layers are not part of the dataflow and are omitted.
+it. The projection retains source-module and concrete include-instance
+provenance, including the reusable template behind each instance. Assertions,
+plots, figures, and layers are not part of the dataflow and are omitted.
 
 ```bash
 graphcal graph [OPTIONS] <FILE>
@@ -807,14 +808,30 @@ graphcal graph [OPTIONS] <FILE>
 | Option | Description |
 |--------|-------------|
 | `--format <FORMAT>` | Output format: `dot` (default; currently the only format) |
+| `--view <VIEW>` | Composition detail: `flat` (default), `grouped`, or `module` |
 | `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
+
+The three views support overview-to-detail workflows:
+
+- **`flat`:** every declaration and dependency edge, without composition
+  boundaries. Repeated declaration names are owner-qualified so the detailed
+  debugging view remains unambiguous.
+- **`grouped`:** the same declaration-level graph, placed in real Graphviz
+  `cluster_*` subgraphs for the root module, inline DAG definitions, concrete
+  include instances, and referenced external modules. Clusters nest according
+  to composition, include labels identify their reusable template, and
+  cross-cluster edges are routed through cluster boundaries.
+- **`module`:** one node per source module or include instance. Internal wiring
+  is hidden, declaration dependencies are collapsed into deduplicated
+  module-level dataflow edges, and dashed edges show containment or
+  instantiation.
 
 The output is deterministic (declarations keep source order, edges are sorted),
 so exported graphs diff cleanly in version control. DOT statement identifiers
-(`n0`, `n1`, … and `c0`, `c1`, …) are opaque renderer-local ids; semantic
-compiler names appear only as labels. This prevents Graphviz from merging
-separate package versions or source modules and concrete instances that happen
-to have the same display path.
+(`n0`, `n1`, …, `cluster_c0`, `cluster_c1`, …, and `m0`, `m1`, …) are opaque
+renderer-local ids; semantic compiler names appear only as labels. This
+prevents Graphviz from merging separate package versions or source modules and
+concrete instances that happen to have the same display path.
 
 **Exit codes:**
 
@@ -836,17 +853,21 @@ digraph graphcal {
     "n3" -> "n5";
 }
 
-# Render to SVG with Graphviz
-graphcal graph rocket.gcl | dot -Tsvg -o rocket.svg
+# Render a composition-preserving detailed graph to SVG
+graphcal graph rocket.gcl --view grouped | dot -Tsvg -o rocket.svg
+
+# Render an architecture overview with one node per DAG
+graphcal graph rocket.gcl --view module | dot -Tsvg -o rocket-modules.svg
 ```
 
-Node styling encodes the declaration kind: `param` declarations are ellipses
-(the graph's inputs), `const node` declarations are rounded boxes, `node`
-declarations are plain boxes, and values imported from other files are dashed
-boxes. Each vertex's label shows the declaration name and its resolved type.
-When multiple external declarations share the same ordinary display path, their
-labels add package identity and distinguish lexical (`.`) from concrete-instance
-(`@`) hierarchy edges.
+In declaration-level views, `param` declarations are ellipses (the graph's
+inputs), `const node` declarations are rounded boxes, `node` declarations are
+plain boxes, public calculated outputs have a green double border, and values
+imported from other files are dashed boxes. Each vertex's label shows the
+declaration name and its resolved type. Grouped and module views include a
+legend. When multiple declarations share an ordinary display path, qualified
+labels add package identity and distinguish lexical (`.`) from
+concrete-instance (`@`) hierarchy edges.
 
 ---
 

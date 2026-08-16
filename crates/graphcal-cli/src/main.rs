@@ -145,6 +145,9 @@ enum Commands {
         /// Output format
         #[arg(long, value_enum, default_value = "dot")]
         format: GraphFormat,
+        /// Composition detail: declarations only, grouped DAGs, or DAG overview
+        #[arg(long, value_enum, default_value = "flat")]
+        view: GraphView,
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
@@ -222,6 +225,26 @@ enum PluginCommands {
 enum GraphFormat {
     /// Graphviz DOT text (pipe to `dot -Tsvg` to render)
     Dot,
+}
+
+#[derive(ValueEnum, Clone, Copy)]
+enum GraphView {
+    /// Every declaration and dependency without composition boundaries
+    Flat,
+    /// Detailed declarations clustered by source module and include instance
+    Grouped,
+    /// One node per source module or include instance
+    Module,
+}
+
+impl From<GraphView> for graphcal_eval::graph_ir::dot::GraphView {
+    fn from(view: GraphView) -> Self {
+        match view {
+            GraphView::Flat => Self::Flat,
+            GraphView::Grouped => Self::Grouped,
+            GraphView::Module => Self::Module,
+        }
+    }
 }
 
 #[derive(ValueEnum, Clone)]
@@ -316,8 +339,13 @@ fn run_command(cli: Cli) {
                 process::exit(2);
             }
         },
-        Commands::Graph { file, format, root } => {
-            run_graph(&file, &format, root.as_deref());
+        Commands::Graph {
+            file,
+            format,
+            view,
+            root,
+        } => {
+            run_graph(&file, &format, view, root.as_deref());
         }
         Commands::Model { command } => match command {
             ModelCommands::Serve { file, output, root } => {
@@ -799,7 +827,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
 /// `graphcal graph`: compile to TIR, project the dependency graph IR, and
 /// print it in the requested export format. The projection and rendering are
 /// pure (`graphcal_eval::graph_ir`); this shell only does I/O.
-fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
+fn run_graph(file: &Path, format: &GraphFormat, view: GraphView, project_root: Option<&Path>) {
     // On stderr so stdout stays a clean pipe into `dot`.
     eprintln!(
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
@@ -811,7 +839,9 @@ fn run_graph(file: &Path, format: &GraphFormat, project_root: Option<&Path>) {
     match outcome {
         Ok(checked) => match graphcal_eval::graph_ir::project_tir(checked.tir()) {
             Ok(ir) => match format {
-                GraphFormat::Dot => print!("{}", graphcal_eval::graph_ir::dot::render(&ir)),
+                GraphFormat::Dot => {
+                    print!("{}", graphcal_eval::graph_ir::dot::render(&ir, view.into()));
+                }
             },
             Err(error) => {
                 eprintln!("internal graph projection error: {error}");

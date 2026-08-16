@@ -5568,19 +5568,24 @@ fn graph_explicit_dot_format_matches_default() {
 #[test]
 fn graph_inline_dag_renders_cluster() {
     let output = graphcal_bin()
-        .args(["graph", &fixture("valid/inline_dag_call_basic/main.gcl")])
+        .args([
+            "graph",
+            &fixture("valid/inline_dag_call_basic/main.gcl"),
+            "--view",
+            "grouped",
+        ])
         .output()
         .expect("failed to run graphcal");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("subgraph \"c0\" {"),
-        "inline dag block should render as a cluster:\n{stdout}"
+        stdout.contains("subgraph \"cluster_c1\" {"),
+        "inline dag block should render as a real Graphviz cluster:\n{stdout}"
     );
     assert!(
-        stdout.contains("label=\"dag scale\";"),
-        "cluster should carry the dag's name as its label:\n{stdout}"
+        stdout.contains("label=\"dag main::main.scale\";"),
+        "cluster should carry the qualified dag name as its label:\n{stdout}"
     );
     let input = dot_statement_id_for_label(&stdout, "v\\n");
     let result = dot_statement_id_for_label(&stdout, "result\\n");
@@ -5588,6 +5593,51 @@ fn graph_inline_dag_renders_cluster() {
         stdout.contains(&format!("\"{input}\" -> \"{result}\";")),
         "cluster-internal dataflow should be present:\n{stdout}"
     );
+}
+
+#[test]
+fn graph_grouped_view_distinguishes_repeated_include_instances() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/instantiated_import_multi/src/rocket/main.gcl"),
+            "--view",
+            "grouped",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("compound=true;"));
+    assert!(stdout.contains("include stage_1\\ntemplate rocket::src.rocket.lib"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket::src.rocket.lib"));
+    assert_eq!(stdout.matches("style=\"rounded,filled\"").count(), 2);
+    assert!(
+        stdout.lines().any(|line| line.contains("ltail=\"cluster_")),
+        "cross-instance edges should route through cluster boundaries:\n{stdout}"
+    );
+}
+
+#[test]
+fn graph_module_view_collapses_declaration_wiring() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/instantiated_import_multi/src/rocket/main.gcl"),
+            "--view",
+            "module",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("include stage_1\\ntemplate rocket::src.rocket.lib"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket::src.rocket.lib"));
+    assert!(stdout.contains("label=\"instantiates\""));
+    assert!(!stdout.contains("mass_ratio\\nDimensionless"));
+    assert!(!stdout.contains("total_dv\\nVelocity"));
 }
 
 #[test]

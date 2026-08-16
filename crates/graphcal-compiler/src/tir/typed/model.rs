@@ -1725,6 +1725,15 @@ impl DagTIR {
         &self.instances
     }
 
+    /// Value ports that callers may project from this DAG.
+    ///
+    /// The set contains public nodes and annotation-free parameter ports after
+    /// the DAG's external interface has been checked.
+    #[must_use]
+    pub const fn projectable_outputs(&self) -> &std::collections::HashSet<DeclName> {
+        &self.projectable_outputs
+    }
+
     /// Build identity-to-record indexes after all declaration vectors are installed.
     pub(super) fn index_declaration_records(&mut self) -> Result<(), DeclarationIndexError> {
         let mut index = DagDeclarationIndex::default();

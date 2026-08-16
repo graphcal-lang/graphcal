@@ -8,7 +8,20 @@ use std::fmt::Write as _;
 
 use graphcal_compiler::dag_id::{DagHierarchyEdge, DagId};
 
-use super::{GraphCluster, GraphIr, GraphNode, GraphNodeId, GraphNodeKind};
+use super::{GraphCluster, GraphClusterKind, GraphIr, GraphNode, GraphNodeId, GraphNodeKind};
+
+/// Level of composition detail emitted into DOT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphView {
+    /// Every declaration and dependency edge without composition boundaries.
+    Flat,
+    /// Every declaration and dependency edge, clustered by source module or
+    /// concrete include instance.
+    Grouped,
+    /// One node per source module/include instance with declaration-level edges
+    /// collapsed to module-level dataflow.
+    Module,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DotNodeId(usize);
@@ -24,7 +37,18 @@ struct DotClusterId(usize);
 
 impl std::fmt::Display for DotClusterId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "c{}", self.0)
+        // Graphviz recognizes a subgraph as a cluster only when its identifier
+        // starts with `cluster`.
+        write!(formatter, "cluster_c{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DotModuleId(usize);
+
+impl std::fmt::Display for DotModuleId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "m{}", self.0)
     }
 }
 
@@ -39,24 +63,16 @@ impl RendererIds {
             nodes: BTreeMap::new(),
             clusters: BTreeMap::new(),
         };
-        for node in ir
-            .root
-            .nodes
-            .iter()
-            .chain(ir.children.iter().flat_map(|cluster| &cluster.nodes))
-            .chain(&ir.external)
-        {
+        for node in ir.nodes.iter().chain(&ir.external) {
             ids.register_node(&node.id);
         }
         for edge in &ir.edges {
             ids.register_node(&edge.from);
             ids.register_node(&edge.to);
         }
-        for cluster in &ir.children {
-            if !ids.clusters.contains_key(&cluster.dag_id) {
-                ids.clusters
-                    .insert(cluster.dag_id.clone(), DotClusterId(ids.clusters.len()));
-            }
+        for cluster in &ir.clusters {
+            ids.clusters
+                .insert(cluster.dag_id.clone(), DotClusterId(ids.clusters.len()));
         }
         ids
     }
@@ -77,56 +93,221 @@ impl RendererIds {
     }
 }
 
+struct ModuleRendererIds {
+    modules: BTreeMap<DagId, DotModuleId>,
+}
+
+impl ModuleRendererIds {
+    fn for_graph(ir: &GraphIr) -> Self {
+        let modules = ir
+            .clusters
+            .iter()
+            .enumerate()
+            .map(|(index, cluster)| (cluster.dag_id.clone(), DotModuleId(index)))
+            .collect();
+        Self { modules }
+    }
+
+    fn module(&self, identity: &DagId) -> DotModuleId {
+        self.modules[identity]
+    }
+}
+
 struct RendererLabels {
+    ambiguous_internal_names: BTreeSet<String>,
     ambiguous_external_names: BTreeSet<String>,
 }
 
 impl RendererLabels {
     fn for_graph(ir: &GraphIr) -> Self {
-        let mut counts = BTreeMap::<String, usize>::new();
+        let mut internal_counts = BTreeMap::<String, usize>::new();
+        for node in &ir.nodes {
+            internal_counts
+                .entry(node.id.as_str().to_string())
+                .and_modify(|count| *count = 2)
+                .or_insert(1);
+        }
+
+        let mut external_counts = BTreeMap::<String, usize>::new();
         for node in &ir.external {
-            counts
+            external_counts
                 .entry(node.id.to_string())
                 .and_modify(|count| *count = 2)
                 .or_insert(1);
         }
+
         Self {
-            ambiguous_external_names: counts
+            ambiguous_internal_names: internal_counts
+                .into_iter()
+                .filter_map(|(name, count)| (count > 1).then_some(name))
+                .collect(),
+            ambiguous_external_names: external_counts
                 .into_iter()
                 .filter_map(|(name, count)| (count > 1).then_some(name))
                 .collect(),
         }
     }
 
-    fn node_name(&self, node: &GraphNode) -> String {
-        if node.kind != GraphNodeKind::External {
-            return node.id.as_str().to_string();
-        }
-        let display = node.id.to_string();
-        if self.ambiguous_external_names.contains(&display) {
-            qualified_decl_label(&node.id)
-        } else {
-            display
+    fn node_name(&self, node: &GraphNode, qualify_internal: bool) -> String {
+        match node.kind {
+            GraphNodeKind::External => {
+                let display = node.id.to_string();
+                if self.ambiguous_external_names.contains(&display) {
+                    qualified_decl_label(&node.id)
+                } else {
+                    display
+                }
+            }
+            GraphNodeKind::Const | GraphNodeKind::Param | GraphNodeKind::Node
+                if qualify_internal && self.ambiguous_internal_names.contains(node.id.as_str()) =>
+            {
+                qualified_decl_label(&node.id)
+            }
+            GraphNodeKind::Const | GraphNodeKind::Param | GraphNodeKind::Node => {
+                node.id.as_str().to_string()
+            }
         }
     }
 }
 
-/// Render the graph as Graphviz DOT text.
+/// Render the graph as Graphviz DOT text in the requested view.
 #[must_use]
-pub fn render(ir: &GraphIr) -> String {
+pub fn render(ir: &GraphIr, view: GraphView) -> String {
+    match view {
+        GraphView::Flat => render_flat(ir),
+        GraphView::Grouped => render_grouped(ir),
+        GraphView::Module => render_modules(ir),
+    }
+}
+
+fn render_flat(ir: &GraphIr) -> String {
     let ids = RendererIds::for_graph(ir);
     let labels = RendererLabels::for_graph(ir);
-    let mut out = String::new();
-    out.push_str("digraph graphcal {\n");
-    out.push_str("    rankdir=LR;\n");
-    out.push_str("    node [fontname=\"Helvetica,Arial,sans-serif\"];\n");
+    let mut out = graph_header();
 
-    render_nodes(&mut out, &ir.root.nodes, 1, &ids, &labels);
-    for cluster in &ir.children {
-        render_cluster(&mut out, cluster, &ids, &labels);
+    render_nodes(
+        &mut out,
+        ir.nodes.iter().chain(&ir.external),
+        1,
+        &ids,
+        &labels,
+        true,
+        false,
+    );
+    render_plain_edges(&mut out, ir, &ids);
+    out.push_str("}\n");
+    out
+}
+
+fn render_grouped(ir: &GraphIr) -> String {
+    let ids = RendererIds::for_graph(ir);
+    let labels = RendererLabels::for_graph(ir);
+    let node_lookup: BTreeMap<GraphNodeId, &GraphNode> = ir
+        .nodes
+        .iter()
+        .chain(&ir.external)
+        .map(|node| (node.id.clone(), node))
+        .collect();
+    let mut out = graph_header();
+    out.push_str("    compound=true;\n");
+    out.push_str("    newrank=true;\n");
+    out.push_str("    edge [fontname=\"Helvetica,Arial,sans-serif\"];\n");
+
+    for cluster in ir
+        .clusters
+        .iter()
+        .filter(|cluster| cluster.parent.is_none())
+    {
+        render_cluster(&mut out, cluster, ir, &node_lookup, &ids, &labels, 1);
     }
-    render_nodes(&mut out, &ir.external, 1, &ids, &labels);
+    render_grouped_legend(&mut out);
 
+    for edge in &ir.edges {
+        let attrs = grouped_edge_attrs(ir, &ids, edge.from.owner(), edge.to.owner());
+        if attrs.is_empty() {
+            let _ = writeln!(
+                out,
+                "    \"{}\" -> \"{}\";",
+                ids.node(&edge.from),
+                ids.node(&edge.to)
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "    \"{}\" -> \"{}\" [{}];",
+                ids.node(&edge.from),
+                ids.node(&edge.to),
+                attrs.join(", ")
+            );
+        }
+    }
+    out.push_str("}\n");
+    out
+}
+
+fn render_modules(ir: &GraphIr) -> String {
+    let ids = ModuleRendererIds::for_graph(ir);
+    let mut out = graph_header();
+    out.push_str("    edge [fontname=\"Helvetica,Arial,sans-serif\"];\n");
+
+    for cluster in &ir.clusters {
+        let attrs = module_attrs(cluster);
+        let _ = writeln!(out, "    \"{}\" [{}];", ids.module(&cluster.dag_id), attrs);
+    }
+
+    // Composition edges make containment and repeated instantiation explicit,
+    // independently of whether data happens to flow across the boundary.
+    for cluster in ir
+        .clusters
+        .iter()
+        .filter(|cluster| cluster.parent.is_some())
+    {
+        if let Some(parent) = &cluster.parent {
+            let relation = match &cluster.kind {
+                GraphClusterKind::Instance { .. } => "instantiates",
+                GraphClusterKind::SourceModule | GraphClusterKind::ExternalModule => "contains",
+            };
+            let _ = writeln!(
+                out,
+                "    \"{}\" -> \"{}\" [label=\"{relation}\", style=dashed, color=\"#90A4AE\", fontcolor=\"#607D8B\", arrowhead=none, constraint=false];",
+                ids.module(parent),
+                ids.module(&cluster.dag_id)
+            );
+        }
+    }
+
+    let module_edges: BTreeSet<(DagId, DagId)> = ir
+        .edges
+        .iter()
+        .filter_map(|edge| {
+            let from = edge.from.owner();
+            let to = edge.to.owner();
+            (from != to).then(|| (from.clone(), to.clone()))
+        })
+        .collect();
+    for (from, to) in module_edges {
+        let _ = writeln!(
+            out,
+            "    \"{}\" -> \"{}\" [color=\"#37474F\", penwidth=1.5];",
+            ids.module(&from),
+            ids.module(&to)
+        );
+    }
+    render_module_legend(&mut out);
+    out.push_str("}\n");
+    out
+}
+
+fn graph_header() -> String {
+    concat!(
+        "digraph graphcal {\n",
+        "    rankdir=LR;\n",
+        "    node [fontname=\"Helvetica,Arial,sans-serif\"];\n",
+    )
+    .to_string()
+}
+
+fn render_plain_edges(out: &mut String, ir: &GraphIr, ids: &RendererIds) {
     for edge in &ir.edges {
         let _ = writeln!(
             out,
@@ -135,54 +316,210 @@ pub fn render(ir: &GraphIr) -> String {
             ids.node(&edge.to)
         );
     }
-    out.push_str("}\n");
-    out
 }
 
 fn render_cluster(
     out: &mut String,
     cluster: &GraphCluster,
+    ir: &GraphIr,
+    node_lookup: &BTreeMap<GraphNodeId, &GraphNode>,
     ids: &RendererIds,
     labels: &RendererLabels,
+    indent: usize,
 ) {
-    let _ = writeln!(out, "    subgraph \"{}\" {{", ids.cluster(&cluster.dag_id));
-    let _ = writeln!(
+    let pad = "    ".repeat(indent);
+    let child_indent = indent.saturating_add(1);
+    let inner_pad = "    ".repeat(child_indent);
+    let _ = writeln!(out, "{pad}subgraph \"{}\" {{", ids.cluster(&cluster.dag_id));
+    let _ = writeln!(out, "{inner_pad}label=\"{}\";", cluster_label(cluster));
+    let _ = writeln!(out, "{inner_pad}{}", cluster_style(cluster));
+
+    render_nodes(
         out,
-        "        label=\"dag {}\";",
-        escape(cluster.dag_id.name())
+        cluster
+            .node_ids
+            .iter()
+            .filter_map(|identity| node_lookup.get(identity).copied()),
+        child_indent,
+        ids,
+        labels,
+        false,
+        true,
     );
-    render_nodes(out, &cluster.nodes, 2, ids, labels);
-    out.push_str("    }\n");
+    for child in ir
+        .clusters
+        .iter()
+        .filter(|candidate| candidate.parent.as_ref() == Some(&cluster.dag_id))
+    {
+        render_cluster(out, child, ir, node_lookup, ids, labels, child_indent);
+    }
+    let _ = writeln!(out, "{pad}}}");
 }
 
-fn render_nodes(
+fn render_nodes<'a>(
     out: &mut String,
-    nodes: &[GraphNode],
+    nodes: impl IntoIterator<Item = &'a GraphNode>,
     indent: usize,
     ids: &RendererIds,
     labels: &RendererLabels,
+    qualify_internal: bool,
+    emphasize_output: bool,
 ) {
     let pad = "    ".repeat(indent);
     for node in nodes {
-        let attrs = node_attrs(node, labels);
+        let attrs = node_attrs(node, labels, qualify_internal, emphasize_output);
         let _ = writeln!(out, "{pad}\"{}\" [{attrs}];", ids.node(&node.id));
     }
 }
 
-fn node_attrs(node: &GraphNode, labels: &RendererLabels) -> String {
-    let name = escape(&labels.node_name(node));
+fn node_attrs(
+    node: &GraphNode,
+    labels: &RendererLabels,
+    qualify_internal: bool,
+    emphasize_output: bool,
+) -> String {
+    let name = escape(&labels.node_name(node, qualify_internal));
     let label = node
         .type_label
         .as_ref()
         .map_or_else(|| name.clone(), |ty| format!("{name}\\n{}", escape(ty)));
-    match node.kind {
+    let mut attrs = match node.kind {
         GraphNodeKind::Const => format!("label=\"{label}\", shape=box, style=rounded"),
         GraphNodeKind::Param => format!("label=\"{label}\", shape=ellipse"),
         GraphNodeKind::Node => format!("label=\"{label}\", shape=box"),
         GraphNodeKind::External => {
             format!("label=\"{label}\", shape=box, style=dashed")
         }
+    };
+    if emphasize_output && node.is_public_output {
+        attrs.push_str(", peripheries=2, color=\"#2E7D32\", penwidth=2");
     }
+    attrs
+}
+
+fn cluster_label(cluster: &GraphCluster) -> String {
+    escape(&cluster_label_text(cluster))
+}
+
+const fn cluster_style(cluster: &GraphCluster) -> &'static str {
+    match &cluster.kind {
+        GraphClusterKind::SourceModule => "color=\"#607D8B\"; style=\"rounded\"; penwidth=1.5;",
+        GraphClusterKind::Instance { .. } => {
+            "color=\"#1976D2\"; fillcolor=\"#E3F2FD\"; style=\"rounded,filled\"; penwidth=1.5;"
+        }
+        GraphClusterKind::ExternalModule => "color=\"#9E9E9E\"; style=\"rounded,dashed\";",
+    }
+}
+
+fn grouped_edge_attrs(ir: &GraphIr, ids: &RendererIds, from: &DagId, to: &DagId) -> Vec<String> {
+    if from == to {
+        return Vec::new();
+    }
+    let from_cluster = ir.clusters.iter().any(|cluster| &cluster.dag_id == from);
+    let to_cluster = ir.clusters.iter().any(|cluster| &cluster.dag_id == to);
+    if !from_cluster || !to_cluster {
+        return Vec::new();
+    }
+
+    if is_cluster_descendant(ir, from, to) {
+        vec![format!("ltail=\"{}\"", ids.cluster(from))]
+    } else if is_cluster_descendant(ir, to, from) {
+        vec![format!("lhead=\"{}\"", ids.cluster(to))]
+    } else {
+        vec![
+            format!("ltail=\"{}\"", ids.cluster(from)),
+            format!("lhead=\"{}\"", ids.cluster(to)),
+        ]
+    }
+}
+
+fn is_cluster_descendant(ir: &GraphIr, child: &DagId, ancestor: &DagId) -> bool {
+    let mut current = ir
+        .clusters
+        .iter()
+        .find(|cluster| &cluster.dag_id == child)
+        .and_then(|cluster| cluster.parent.as_ref());
+    while let Some(owner) = current {
+        if owner == ancestor {
+            return true;
+        }
+        current = ir
+            .clusters
+            .iter()
+            .find(|cluster| &cluster.dag_id == owner)
+            .and_then(|cluster| cluster.parent.as_ref());
+    }
+    false
+}
+
+fn module_attrs(cluster: &GraphCluster) -> String {
+    let label = escape(&cluster_label_text(cluster));
+    match &cluster.kind {
+        GraphClusterKind::SourceModule if cluster.parent.is_none() => format!(
+            "label=\"{label}\", shape=component, style=\"rounded,filled\", fillcolor=\"#ECEFF1\", color=\"#455A64\", penwidth=2"
+        ),
+        GraphClusterKind::SourceModule => format!(
+            "label=\"{label}\", shape=component, style=\"rounded,filled\", fillcolor=\"#ECEFF1\", color=\"#607D8B\""
+        ),
+        GraphClusterKind::Instance { .. } => format!(
+            "label=\"{label}\", shape=folder, style=filled, fillcolor=\"#E3F2FD\", color=\"#1976D2\", penwidth=1.5"
+        ),
+        GraphClusterKind::ExternalModule => {
+            format!("label=\"{label}\", shape=component, style=dashed, color=\"#9E9E9E\"")
+        }
+    }
+}
+
+fn cluster_label_text(cluster: &GraphCluster) -> String {
+    match &cluster.kind {
+        GraphClusterKind::SourceModule if cluster.parent.is_none() => {
+            format!("module {}", qualified_dag_label(&cluster.dag_id))
+        }
+        GraphClusterKind::SourceModule => {
+            format!("dag {}", qualified_dag_label(&cluster.dag_id))
+        }
+        GraphClusterKind::Instance { template } => format!(
+            "include {}\ntemplate {}",
+            cluster.dag_id.name(),
+            qualified_dag_label(template)
+        ),
+        GraphClusterKind::ExternalModule => {
+            format!("external {}", qualified_dag_label(&cluster.dag_id))
+        }
+    }
+}
+
+fn render_grouped_legend(out: &mut String) {
+    out.push_str(
+        concat!(
+            "    subgraph \"cluster_legend\" {\n",
+            "        label=\"Legend\";\n",
+            "        color=\"#CFD8DC\"; style=rounded;\n",
+            "        \"legend_param\" [label=\"parameter\", shape=ellipse];\n",
+            "        \"legend_const\" [label=\"const node\", shape=box, style=rounded];\n",
+            "        \"legend_node\" [label=\"calculated node\", shape=box];\n",
+            "        \"legend_output\" [label=\"public output\", shape=box, peripheries=2, color=\"#2E7D32\", penwidth=2];\n",
+            "        \"legend_external\" [label=\"external value\", shape=box, style=dashed];\n",
+            "    }\n",
+        )
+    );
+}
+
+fn render_module_legend(out: &mut String) {
+    out.push_str(
+        concat!(
+            "    subgraph \"cluster_legend\" {\n",
+            "        label=\"Legend\";\n",
+            "        color=\"#CFD8DC\"; style=rounded;\n",
+            "        \"legend_source\" [label=\"source module / dag\", shape=component, style=filled, fillcolor=\"#ECEFF1\"];\n",
+            "        \"legend_instance\" [label=\"include instance\", shape=folder, style=filled, fillcolor=\"#E3F2FD\"];\n",
+            "        \"legend_external_module\" [label=\"external module\", shape=component, style=dashed];\n",
+            "        \"legend_flow_from\" [label=\"\", shape=point];\n",
+            "        \"legend_flow_to\" [label=\"dataflow\", shape=plaintext];\n",
+            "        \"legend_flow_from\" -> \"legend_flow_to\" [color=\"#37474F\", penwidth=1.5];\n",
+            "    }\n",
+        )
+    );
 }
 
 fn qualified_decl_label(identity: &GraphNodeId) -> String {
@@ -240,40 +577,61 @@ mod tests {
         ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid(name))
     }
 
-    #[test]
-    fn renders_stable_dot() {
+    fn sample_ir() -> GraphIr {
         let root_id = DagId::root_in_package("test", "main");
         let child_id = root_id.child("child");
         let external_id = DagId::root_in_package("test", "external");
-        let ir = GraphIr {
-            root: GraphCluster {
-                dag_id: root_id.clone(),
-                nodes: vec![GraphNode {
+        GraphIr {
+            nodes: vec![
+                GraphNode {
                     id: id(&root_id, "input"),
                     kind: GraphNodeKind::Param,
+                    is_public_output: false,
                     type_label: Some("Real".into()),
-                }],
-            },
-            children: vec![GraphCluster {
-                dag_id: child_id.clone(),
-                nodes: vec![GraphNode {
+                },
+                GraphNode {
                     id: id(&child_id, "output"),
                     kind: GraphNodeKind::Node,
+                    is_public_output: true,
                     type_label: Some("Real".into()),
-                }],
-            }],
+                },
+            ],
+            clusters: vec![
+                GraphCluster {
+                    dag_id: root_id.clone(),
+                    parent: None,
+                    kind: GraphClusterKind::SourceModule,
+                    node_ids: vec![id(&root_id, "input")],
+                },
+                GraphCluster {
+                    dag_id: child_id.clone(),
+                    parent: Some(root_id),
+                    kind: GraphClusterKind::SourceModule,
+                    node_ids: vec![id(&child_id, "output")],
+                },
+                GraphCluster {
+                    dag_id: external_id.clone(),
+                    parent: None,
+                    kind: GraphClusterKind::ExternalModule,
+                    node_ids: vec![id(&external_id, "source")],
+                },
+            ],
             external: vec![GraphNode {
                 id: id(&external_id, "source"),
                 kind: GraphNodeKind::External,
+                is_public_output: false,
                 type_label: None,
             }],
             edges: vec![GraphEdge {
                 from: id(&external_id, "source"),
                 to: id(&child_id, "output"),
             }],
-        };
+        }
+    }
 
-        let dot = render(&ir);
+    #[test]
+    fn renders_stable_flat_dot() {
+        let dot = render(&sample_ir(), GraphView::Flat);
         assert_eq!(
             dot,
             concat!(
@@ -281,15 +639,33 @@ mod tests {
                 "    rankdir=LR;\n",
                 "    node [fontname=\"Helvetica,Arial,sans-serif\"];\n",
                 "    \"n0\" [label=\"input\\nReal\", shape=ellipse];\n",
-                "    subgraph \"c0\" {\n",
-                "        label=\"dag child\";\n",
-                "        \"n1\" [label=\"output\\nReal\", shape=box];\n",
-                "    }\n",
+                "    \"n1\" [label=\"output\\nReal\", shape=box];\n",
                 "    \"n2\" [label=\"external.source\", shape=box, style=dashed];\n",
                 "    \"n2\" -> \"n1\";\n",
                 "}\n",
             )
         );
+    }
+
+    #[test]
+    fn grouped_view_emits_real_nested_clusters_and_routed_edges() {
+        let dot = render(&sample_ir(), GraphView::Grouped);
+        assert!(dot.contains("compound=true;"));
+        assert!(dot.contains("subgraph \"cluster_c0\" {"));
+        assert!(dot.contains("subgraph \"cluster_c1\" {"));
+        assert!(dot.contains("label=\"dag test::main.child\";"));
+        assert!(dot.contains("peripheries=2"));
+        assert!(dot.contains("ltail=\"cluster_c2\", lhead=\"cluster_c1\""));
+    }
+
+    #[test]
+    fn module_view_collapses_declarations_to_dag_edges() {
+        let dot = render(&sample_ir(), GraphView::Module);
+        assert!(dot.contains("\"m0\" [label=\"module test::main\""));
+        assert!(dot.contains("\"m1\" [label=\"dag test::main.child\""));
+        assert!(dot.contains("\"m2\" [label=\"external test::external\""));
+        assert!(dot.contains("\"m2\" -> \"m1\" [color=\"#37474F\""));
+        assert!(!dot.contains("input\\nReal"));
     }
 
     #[test]
@@ -304,21 +680,31 @@ mod tests {
             .map(|owner| GraphNode {
                 id: id(&owner, "value"),
                 kind: GraphNodeKind::External,
+                is_public_output: false,
                 type_label: None,
             })
-            .collect();
+            .collect::<Vec<_>>();
         let root_id = DagId::root_in_package("test", "main");
         let ir = GraphIr {
-            root: GraphCluster {
+            nodes: Vec::new(),
+            clusters: std::iter::once(GraphCluster {
                 dag_id: root_id,
-                nodes: Vec::new(),
-            },
-            children: Vec::new(),
+                parent: None,
+                kind: GraphClusterKind::SourceModule,
+                node_ids: Vec::new(),
+            })
+            .chain(external.iter().map(|node| GraphCluster {
+                dag_id: node.id.owner().clone(),
+                parent: None,
+                kind: GraphClusterKind::ExternalModule,
+                node_ids: vec![node.id.clone()],
+            }))
+            .collect(),
             external,
             edges: Vec::new(),
         };
 
-        let dot = render(&ir);
+        let dot = render(&ir, GraphView::Flat);
         let statement_ids: Vec<_> = dot
             .lines()
             .filter(|line| line.contains("style=dashed"))
