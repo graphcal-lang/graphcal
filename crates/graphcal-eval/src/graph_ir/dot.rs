@@ -196,13 +196,6 @@ enum GroupedEndpoint {
 }
 
 impl GroupedEndpoint {
-    const fn owner(&self) -> &DagId {
-        match self {
-            Self::Node(node) => node.owner(),
-            Self::Collapsed(owner) => owner,
-        }
-    }
-
     fn dot_id(&self, ids: &RendererIds) -> DotGroupedEndpointId {
         match self {
             Self::Node(node) => DotGroupedEndpointId::Node(ids.node(node)),
@@ -316,7 +309,6 @@ fn render_grouped(ir: &GraphIr, max_depth: Option<NonZeroUsize>) -> String {
         labels: &labels,
     };
     let mut out = graph_header();
-    out.push_str("    compound=true;\n");
     out.push_str("    newrank=true;\n");
     out.push_str("    edge [fontname=\"Helvetica,Arial,sans-serif\"];\n");
 
@@ -330,14 +322,9 @@ fn render_grouped(ir: &GraphIr, max_depth: Option<NonZeroUsize>) -> String {
     render_grouped_legend(&mut out);
 
     for edge in &plan.edges {
-        let attrs = grouped_edge_attrs(ir, &ids, edge.from.owner(), edge.to.owner());
         let from = edge.from.dot_id(&ids);
         let to = edge.to.dot_id(&ids);
-        if attrs.is_empty() {
-            let _ = writeln!(out, "    \"{from}\" -> \"{to}\";");
-        } else {
-            let _ = writeln!(out, "    \"{from}\" -> \"{to}\" [{}];", attrs.join(", "));
-        }
+        let _ = writeln!(out, "    \"{from}\" -> \"{to}\";");
     }
     out.push_str("}\n");
     out
@@ -566,28 +553,6 @@ fn grouped_endpoint(
     )
 }
 
-fn grouped_edge_attrs(ir: &GraphIr, ids: &RendererIds, from: &DagId, to: &DagId) -> Vec<String> {
-    if from == to {
-        return Vec::new();
-    }
-    let from_cluster = ir.clusters.iter().any(|cluster| &cluster.dag_id == from);
-    let to_cluster = ir.clusters.iter().any(|cluster| &cluster.dag_id == to);
-    if !from_cluster || !to_cluster {
-        return Vec::new();
-    }
-
-    if is_cluster_descendant(ir, from, to) {
-        vec![format!("ltail=\"{}\"", ids.cluster(from))]
-    } else if is_cluster_descendant(ir, to, from) {
-        vec![format!("lhead=\"{}\"", ids.cluster(to))]
-    } else {
-        vec![
-            format!("ltail=\"{}\"", ids.cluster(from)),
-            format!("lhead=\"{}\"", ids.cluster(to)),
-        ]
-    }
-}
-
 fn is_cluster_descendant(ir: &GraphIr, child: &DagId, ancestor: &DagId) -> bool {
     let mut current = ir
         .clusters
@@ -680,14 +645,23 @@ fn render_module_legend(out: &mut String) {
 
 fn qualified_decl_label(identity: &GraphNodeId) -> String {
     format!(
-        "{}.{}",
-        qualified_dag_label(identity.owner()),
-        identity.as_str()
+        "{}.{}\npackage {}",
+        dag_path_label(identity.owner()),
+        identity.as_str(),
+        identity.owner().package()
     )
 }
 
 fn qualified_dag_label(identity: &DagId) -> String {
-    let mut label = format!("{}::{}", identity.package(), identity.segments().first());
+    format!(
+        "{}\npackage {}",
+        dag_path_label(identity),
+        identity.package()
+    )
+}
+
+fn dag_path_label(identity: &DagId) -> String {
+    let mut label = identity.segments().first().to_string();
     for (edge, segment) in identity
         .hierarchy_edges()
         .iter()
@@ -804,14 +778,15 @@ mod tests {
     }
 
     #[test]
-    fn grouped_view_emits_real_nested_clusters_and_routed_edges() {
+    fn grouped_view_emits_real_nested_clusters_and_node_to_node_edges() {
         let dot = render(&sample_ir(), GraphView::Grouped { max_depth: None });
-        assert!(dot.contains("compound=true;"));
         assert!(dot.contains("subgraph \"cluster_c0\" {"));
         assert!(dot.contains("subgraph \"cluster_c1\" {"));
-        assert!(dot.contains("label=\"dag test::main.child\";"));
+        assert!(dot.contains("label=\"dag main.child\\npackage test\";"));
         assert!(dot.contains("peripheries=2"));
-        assert!(dot.contains("ltail=\"cluster_c2\", lhead=\"cluster_c1\""));
+        assert!(dot.contains("\"n2\" -> \"n1\";"));
+        assert!(!dot.contains("lhead="));
+        assert!(!dot.contains("ltail="));
     }
 
     #[test]
@@ -825,15 +800,15 @@ mod tests {
 
         assert!(dot.contains("\"s1\" [label=\"1 value hidden\""));
         assert!(!dot.contains("output\\nReal"));
-        assert!(dot.contains("\"n2\" -> \"s1\" [ltail=\"cluster_c2\", lhead=\"cluster_c1\"]"));
+        assert!(dot.contains("\"n2\" -> \"s1\";"));
     }
 
     #[test]
     fn module_view_collapses_declarations_to_dag_edges() {
         let dot = render(&sample_ir(), GraphView::Module);
-        assert!(dot.contains("\"m0\" [label=\"module test::main\""));
-        assert!(dot.contains("\"m1\" [label=\"dag test::main.child\""));
-        assert!(dot.contains("\"m2\" [label=\"external test::external\""));
+        assert!(dot.contains("\"m0\" [label=\"module main\\npackage test\""));
+        assert!(dot.contains("\"m1\" [label=\"dag main.child\\npackage test\""));
+        assert!(dot.contains("\"m2\" [label=\"external external\\npackage test\""));
         assert!(dot.contains("\"m2\" -> \"m1\" [color=\"#37474F\""));
         assert!(!dot.contains("input\\nReal"));
     }
@@ -885,10 +860,11 @@ mod tests {
             statement_ids.iter().copied().collect::<BTreeSet<_>>().len(),
             4
         );
-        assert!(dot.contains("package-a::lib.value"));
-        assert!(dot.contains("package-b::lib.value"));
-        assert!(dot.contains("package-a::model.defaults.value"));
-        assert!(dot.contains("package-a::model@defaults.value"));
+        assert!(dot.contains("lib.value\\npackage package-a"));
+        assert!(dot.contains("lib.value\\npackage package-b"));
+        assert!(dot.contains("model.defaults.value\\npackage package-a"));
+        assert!(dot.contains("model@defaults.value\\npackage package-a"));
+        assert!(!dot.contains("::"));
     }
 
     #[test]

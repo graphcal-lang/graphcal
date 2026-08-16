@@ -5560,7 +5560,7 @@ fn graph_default_view_is_grouped() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("subgraph \"cluster_c0\" {"));
-    assert!(stdout.contains("label=\"module rocket::rocket\";"));
+    assert!(stdout.contains("label=\"module rocket\\npackage rocket\";"));
 }
 
 #[test]
@@ -5597,7 +5597,7 @@ fn graph_inline_dag_renders_cluster() {
         "inline dag block should render as a real Graphviz cluster:\n{stdout}"
     );
     assert!(
-        stdout.contains("label=\"dag main::main.scale\";"),
+        stdout.contains("label=\"dag main.scale\\npackage main\";"),
         "cluster should carry the qualified dag name as its label:\n{stdout}"
     );
     let input = dot_statement_id_for_label(&stdout, "v\\n");
@@ -5605,6 +5605,29 @@ fn graph_inline_dag_renders_cluster() {
     assert!(
         stdout.contains(&format!("\"{input}\" -> \"{result}\";")),
         "cluster-internal dataflow should be present:\n{stdout}"
+    );
+}
+
+#[test]
+fn graph_grouped_binding_edges_target_receiving_params() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/inline_dag_namespace/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let provided = dot_statement_id_for_label(&stdout, "speed\\n");
+    let bound_param_count = stdout
+        .lines()
+        .filter(|line| line.contains("label=\"v\\n"))
+        .filter_map(|line| line.split('"').nth(1))
+        .filter(|param| stdout.contains(&format!("\"{provided}\" -> \"{param}\";")))
+        .count();
+
+    assert_eq!(
+        bound_param_count, 2,
+        "each include binding should point to its receiving param node:\n{stdout}"
     );
 }
 
@@ -5622,14 +5645,14 @@ fn graph_grouped_view_distinguishes_repeated_include_instances() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("compound=true;"));
-    assert!(stdout.contains("include stage_1\\ntemplate rocket::src.rocket.lib"));
-    assert!(stdout.contains("include stage_2\\ntemplate rocket::src.rocket.lib"));
+    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
     assert_eq!(stdout.matches("style=\"rounded,filled\"").count(), 2);
-    assert!(
-        stdout.lines().any(|line| line.contains("ltail=\"cluster_")),
-        "cross-instance edges should route through cluster boundaries:\n{stdout}"
-    );
+    assert!(stdout.contains("\"n6\" -> \"n14\";"));
+    assert!(stdout.contains("\"n13\" -> \"n14\";"));
+    assert!(!stdout.contains("lhead="));
+    assert!(!stdout.contains("ltail="));
+    assert!(!stdout.contains("::"));
 }
 
 #[test]
@@ -5648,7 +5671,7 @@ fn graph_max_depth_collapses_included_dag_internals() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\"s1\" [label=\"7 values hidden\""));
     assert!(stdout.contains("\"s2\" [label=\"7 values hidden\""));
-    assert!(stdout.contains("\"s1\" -> \"n14\" [ltail=\"cluster_c1\"]"));
+    assert!(stdout.contains("\"s1\" -> \"n14\";"));
     assert!(!stdout.contains("mass_ratio\\nDimensionless"));
 }
 
@@ -5666,9 +5689,9 @@ fn graph_max_depth_expands_only_requested_composition_levels() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("template graph::src.graph.left"));
-    assert!(stdout.contains("template graph::src.graph.right"));
-    assert!(stdout.contains("template graph::src.graph.shared"));
+    assert!(stdout.contains("template src.graph.left\\npackage graph"));
+    assert!(stdout.contains("template src.graph.right\\npackage graph"));
+    assert!(stdout.contains("template src.graph.shared\\npackage graph"));
     assert!(stdout.contains("1 value hidden"));
     assert!(stdout.contains("doubled\\nDimensionless"));
 }
@@ -5720,8 +5743,8 @@ fn graph_module_view_collapses_declaration_wiring() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("include stage_1\\ntemplate rocket::src.rocket.lib"));
-    assert!(stdout.contains("include stage_2\\ntemplate rocket::src.rocket.lib"));
+    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
     assert!(stdout.contains("label=\"instantiates\""));
     assert!(!stdout.contains("mass_ratio\\nDimensionless"));
     assert!(!stdout.contains("total_dv\\nVelocity"));

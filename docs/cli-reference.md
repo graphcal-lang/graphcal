@@ -821,7 +821,9 @@ The three views support overview-to-detail workflows:
   Graphviz `cluster_*` subgraphs for the root module, inline DAG definitions,
   concrete include instances, and referenced external modules. Clusters nest
   according to composition, include labels identify their reusable template,
-  and cross-cluster edges are routed through cluster boundaries.
+  and cross-cluster edges connect the actual source and receiving declaration
+  nodes. Parameter bindings therefore terminate at the bound parameter rather
+  than at the receiving cluster border.
 - **`module`:** one node per source module or include instance. Internal wiring
   is hidden, declaration dependencies are collapsed into deduplicated
   module-level dataflow edges, and dashed edges show containment or
@@ -873,8 +875,9 @@ plain boxes, public calculated outputs have a green double border, and values
 imported from other files are dashed boxes. Each vertex's label shows the
 declaration name and its resolved type. Grouped and module views include a
 legend. When multiple declarations share an ordinary display path, qualified
-labels add package identity and distinguish lexical (`.`) from
-concrete-instance (`@`) hierarchy edges.
+labels put package identity on a separate `package …` line and distinguish
+lexical (`.`) from concrete-instance (`@`) hierarchy edges. DOT labels never
+invent a `::` separator that is not part of Graphcal path syntax.
 
 ---
 
