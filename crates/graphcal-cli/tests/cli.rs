@@ -5510,9 +5510,9 @@ fn dot_statement_id_for_label<'a>(dot: &'a str, label_prefix: &str) -> &'a str {
 }
 
 #[test]
-fn graph_rocket_dot_output() {
+fn graph_rocket_flat_dot_output() {
     let output = graphcal_bin()
-        .args(["graph", &fixture("valid/rocket.gcl")])
+        .args(["graph", &fixture("valid/rocket.gcl"), "--view", "flat"])
         .output()
         .expect("failed to run graphcal");
 
@@ -5551,6 +5551,19 @@ fn graph_rocket_dot_output() {
 }
 
 #[test]
+fn graph_default_view_is_grouped() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/rocket.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("subgraph \"cluster_c0\" {"));
+    assert!(stdout.contains("label=\"module rocket\\npackage rocket\";"));
+}
+
+#[test]
 fn graph_explicit_dot_format_matches_default() {
     let default_out = graphcal_bin()
         .args(["graph", &fixture("valid/rocket.gcl")])
@@ -5568,19 +5581,24 @@ fn graph_explicit_dot_format_matches_default() {
 #[test]
 fn graph_inline_dag_renders_cluster() {
     let output = graphcal_bin()
-        .args(["graph", &fixture("valid/inline_dag_call_basic/main.gcl")])
+        .args([
+            "graph",
+            &fixture("valid/inline_dag_call_basic/main.gcl"),
+            "--view",
+            "grouped",
+        ])
         .output()
         .expect("failed to run graphcal");
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("subgraph \"c0\" {"),
-        "inline dag block should render as a cluster:\n{stdout}"
+        stdout.contains("subgraph \"cluster_c1\" {"),
+        "inline dag block should render as a real Graphviz cluster:\n{stdout}"
     );
     assert!(
-        stdout.contains("label=\"dag scale\";"),
-        "cluster should carry the dag's name as its label:\n{stdout}"
+        stdout.contains("label=\"dag main.scale\\npackage main\";"),
+        "cluster should carry the qualified dag name as its label:\n{stdout}"
     );
     let input = dot_statement_id_for_label(&stdout, "v\\n");
     let result = dot_statement_id_for_label(&stdout, "result\\n");
@@ -5588,6 +5606,148 @@ fn graph_inline_dag_renders_cluster() {
         stdout.contains(&format!("\"{input}\" -> \"{result}\";")),
         "cluster-internal dataflow should be present:\n{stdout}"
     );
+}
+
+#[test]
+fn graph_grouped_binding_edges_target_receiving_params() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/inline_dag_namespace/main.gcl")])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let provided = dot_statement_id_for_label(&stdout, "speed\\n");
+    let bound_param_count = stdout
+        .lines()
+        .filter(|line| line.contains("label=\"v\\n"))
+        .filter_map(|line| line.split('"').nth(1))
+        .filter(|param| stdout.contains(&format!("\"{provided}\" -> \"{param}\";")))
+        .count();
+
+    assert_eq!(
+        bound_param_count, 2,
+        "each include binding should point to its receiving param node:\n{stdout}"
+    );
+}
+
+#[test]
+fn graph_grouped_view_distinguishes_repeated_include_instances() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/instantiated_import_multi/src/rocket/main.gcl"),
+            "--view",
+            "grouped",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert_eq!(stdout.matches("style=\"rounded,filled\"").count(), 2);
+    assert!(stdout.contains("\"n6\" -> \"n14\";"));
+    assert!(stdout.contains("\"n13\" -> \"n14\";"));
+    assert!(!stdout.contains("lhead="));
+    assert!(!stdout.contains("ltail="));
+    assert!(!stdout.contains("::"));
+}
+
+#[test]
+fn graph_max_depth_collapses_included_dag_internals() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/instantiated_import_multi/src/rocket/main.gcl"),
+            "-L",
+            "1",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\"s1\" [label=\"7 values hidden\""));
+    assert!(stdout.contains("\"s2\" [label=\"7 values hidden\""));
+    assert!(stdout.contains("\"s1\" -> \"n14\";"));
+    assert!(!stdout.contains("mass_ratio\\nDimensionless"));
+}
+
+#[test]
+fn graph_max_depth_expands_only_requested_composition_levels() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/diamond_assert/src/graph/main.gcl"),
+            "-L",
+            "2",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("template src.graph.left\\npackage graph"));
+    assert!(stdout.contains("template src.graph.right\\npackage graph"));
+    assert!(stdout.contains("template src.graph.shared\\npackage graph"));
+    assert!(stdout.contains("1 value hidden"));
+    assert!(stdout.contains("doubled\\nDimensionless"));
+}
+
+#[test]
+fn graph_max_depth_requires_grouped_view() {
+    for view in ["flat", "module"] {
+        let output = graphcal_bin()
+            .args([
+                "graph",
+                &fixture("valid/rocket.gcl"),
+                "--view",
+                view,
+                "-L",
+                "1",
+            ])
+            .output()
+            .expect("failed to run graphcal");
+
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("can only be used with `--view grouped`"));
+    }
+}
+
+#[test]
+fn graph_zero_max_depth_is_rejected() {
+    let output = graphcal_bin()
+        .args(["graph", &fixture("valid/rocket.gcl"), "-L", "0"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("non-zero type"));
+}
+
+#[test]
+fn graph_module_view_collapses_declaration_wiring() {
+    let output = graphcal_bin()
+        .args([
+            "graph",
+            &fixture("valid/multi/instantiated_import_multi/src/rocket/main.gcl"),
+            "--view",
+            "module",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("label=\"instantiates\""));
+    assert!(!stdout.contains("mass_ratio\\nDimensionless"));
+    assert!(!stdout.contains("total_dv\\nVelocity"));
 }
 
 #[test]
@@ -5606,6 +5766,8 @@ fn graph_imported_values_render_as_external_nodes() {
         .args([
             "graph",
             &fixture("valid/multi/rocket_split/src/lib/main.gcl"),
+            "--view",
+            "flat",
         ])
         .output()
         .expect("failed to run graphcal");
