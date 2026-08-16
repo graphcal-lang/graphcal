@@ -43,6 +43,9 @@ ignore = true
 # but are not actionable enough to block changes to the current large graph.
 multiple-versions = "warn"
 wildcards = "deny"
+# Cargo omits path-only dev-dependencies from published manifests. Permit that
+# publishing-safe case while continuing to deny registry wildcards.
+allow-wildcard-paths = true
 highlight = "simplest-path"
 
 [sources]
