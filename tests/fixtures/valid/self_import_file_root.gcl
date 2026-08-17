@@ -1,0 +1,24 @@
+// A file-root self-import addresses this file through its own package name.
+// Every namespace marker resolves against this file's declarations, and a
+// module's own private declarations stay reachable (no boundary is crossed).
+type Panel {
+    Panel(width: Length),
+}
+
+dim Jerk = Length / Time^3;
+
+const unit mile: Length = 1609.344 m;
+
+index Phase = { Cruise, Descent };
+
+const node panel_width: Length = 3.0 m;
+
+import self_import_file_root.{ type Panel, Panel, dim Jerk, unit mile, index Phase, panel_width };
+
+node panel: Panel = Panel(width: @panel_width);
+node jerk: Jerk = 2.0 m/s^3;
+node in_miles: Length = @panel_width -> mile;
+node per_phase: Length[Phase] = {
+    Phase.Cruise: 1.0 m,
+    Phase.Descent: 2.0 m,
+};

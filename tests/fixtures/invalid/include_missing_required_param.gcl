@@ -1,0 +1,14 @@
+// Error: the include leaves the required param `fuel_mass` unbound (G004).
+//
+// A `param` without a default is a required input port. An include merges the
+// DAG body under an instance scope, so an unbound port becomes an
+// instance-qualified name that neither `--set` nor `--input` can address: the
+// instantiation site is the only place it can ever be supplied.
+dag rocket_stage {
+    param dry_mass: Mass;
+    param fuel_mass: Mass;
+
+    pub node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
+}
+
+include rocket_stage(dry_mass: 800.0 kg).{ mass_ratio };

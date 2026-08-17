@@ -1147,6 +1147,13 @@ fn error_required_param_unsatisfied() {
 }
 
 #[test]
+fn error_include_missing_required_param() {
+    let source = include_str!("../../../tests/fixtures/invalid/include_missing_required_param.gcl");
+    let rendered = render_error(source, "include_missing_required_param.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_required_index_not_pub() {
     let source = include_str!("../../../tests/fixtures/invalid/required_index_not_pub.gcl");
     let rendered = render_error(source, "required_index_not_pub.gcl");

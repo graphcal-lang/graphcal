@@ -1,0 +1,7 @@
+// engine.gcl -- library DAG with two required input ports.
+param dry_mass: Mass;
+param isp: Time;
+
+pub const node g0: Acceleration = 9.80665 m/s^2;
+pub node v_exhaust: Velocity = @isp * @g0;
+pub node thrust_scale: Dimensionless = @dry_mass / 1000.0 kg;

@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+assertion_line: 1153
+expression: rendered
+---
+missing required binding(s) ["fuel_mass"] when instantiating `rocket_stage`
+    Diagnostic severity: error
+Begin snippet for include_missing_required_param.gcl starting at line 13, column 1
+
+snippet line 13: 
+snippet line 14: include rocket_stage(dry_mass: 800.0 kg).{ mass_ratio };
+    label at line 14, columns 9 to 20: missing binding(s)
+diagnostic help: every required `param` declared in the DAG must be bound at each `include` or call site
+diagnostic code: graphcal::G004

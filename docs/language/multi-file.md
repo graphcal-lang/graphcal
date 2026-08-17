@@ -535,7 +535,12 @@ dag analyze {
 Self-imports use exactly the same pure-import policy as cross-file imports:
 constants, constructors, DAGs, and marked type-system names are compile-time
 items; params and nodes require an instance; assertions and visualization
-requests are rejected because there is no hidden enclosing-file instance.
+requests are rejected because there is no hidden enclosing-file instance. The
+policy does not depend on where the self-import is written — a file root, an
+inline DAG body, and a fully qualified self-address are all checked the same
+way, so `import dynamics.{ some_param };` is an `M020` and a brace item that
+names nothing in the file is an `M003`. Because a self-import crosses no module
+boundary, it may name the file's own private declarations.
 
 In a real package, the same reference uses the full package path:
 
@@ -1092,11 +1097,25 @@ pub node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 
 ```graphcal
 // main.gcl
-include lib.rocket_engine(dry_mass: 800.0 kg) as engine;
+include lib.rocket_engine(dry_mass: 800.0 kg, fuel_mass: 2400.0 kg) as engine;
 node dv: Velocity = @engine.delta_v;
 ```
 
-If a required param is not provided, the compiler emits error `O003`.
+Every required param of an instantiated DAG must be bound at the
+instantiation site. An `include` — or the equivalent
+[`@dag(args).out` call](functions.md#dag-calls-expression-form) — that leaves
+one unbound is rejected while checking with error `G004`, because an included
+DAG's ports live inside its instance scope and `--set` / `--input` reach only
+the entry file's own params:
+
+```graphcal
+// REJECTED (G004): `fuel_mass` is required and unbound
+include lib.rocket_engine(dry_mass: 800.0 kg) as engine;
+```
+
+A required param of the *entry* file has no instantiation site; its value comes
+from `--set` / `--input`, and a missing one is reported at evaluation time as
+`O003`.
 
 ### Index bindings
 

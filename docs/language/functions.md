@@ -112,7 +112,11 @@ include hohmann_transfer(
 ).{ total_dv as transfer_dv, dv1 as departure_dv };
 ```
 
-- Parameters are passed as named arguments.
+- Parameters are passed as named arguments. Every param the DAG declares
+  without a default is required: leaving one unbound is a `G004` check error,
+  because an instantiated DAG's ports are reachable only from its
+  instantiation site (see
+  [Required parameters](multi-file.md#required-parameters)).
 - Output nodes are selected and optionally aliased with `as` inside the
   `.{ ... }` brace list.
 - The selected outputs become regular nodes in the enclosing DAG and can

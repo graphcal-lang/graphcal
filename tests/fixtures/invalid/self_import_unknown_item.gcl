@@ -1,0 +1,11 @@
+// Error: the file-root self-import names a declaration this file does not
+// have (M003).
+//
+// `import <file_stem>.{ … }` is the file's own package address, so its brace
+// list follows the same pure-import policy as any other import: inside a dag
+// body, through a fully qualified self-address, or here at the file root.
+const node span_length: Length = 12.0 m;
+
+import self_import_unknown_item.{ span_width };
+
+node doubled: Length = @span_length * 2.0;

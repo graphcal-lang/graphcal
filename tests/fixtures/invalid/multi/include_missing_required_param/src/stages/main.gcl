@@ -1,0 +1,6 @@
+// Error: the include binds `dry_mass` but leaves the required `isp` unbound
+// (G004). The file-root include path enforces the same rule as an inline
+// `dag` include and as the `@dag(...).out` call form.
+include stages.engine(dry_mass: 800.0 kg) as engine;
+
+node scale: Dimensionless = @engine.thrust_scale;

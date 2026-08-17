@@ -102,6 +102,14 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             .collect();
     recursion::check_dag_recursion(&dag_definitions, file_src)?;
 
+    validate_file_root_self_imports(
+        loaded_file,
+        file_dag_id,
+        &dag_definitions,
+        file_src,
+        cancellation,
+    )?;
+
     for (_declaration, import, target) in loaded_file.imports_with_targets() {
         cancellation.checkpoint()?;
         process_pure_import(
@@ -219,6 +227,123 @@ impl DepDeclIndex<'_> {
     fn is_plot(&self, name: &str) -> bool {
         self.plots.contains(name)
     }
+}
+
+/// Apply the pure-import policy to a file root's own single-segment
+/// self-import (`import <file_stem>.{ … };`).
+///
+/// The loader resolves such a path to this very file and therefore records no
+/// module target for it, so the ordinary [`process_pure_import`] pass never
+/// sees it. Without this pass a file-root self-import would accept items the
+/// same declaration is rejected for everywhere else: inside a dag body
+/// (`preprocess_dag_body_self_imports`) and through a fully qualified
+/// self-address, which does carry a resolved target. Item eligibility is the
+/// module's own policy, so visibility is not re-checked here — a file may name
+/// its private declarations.
+///
+/// `dag_definitions` carries this file's inline DAG names so the pass keeps the
+/// loader's precedence: a single segment that names an inline DAG addresses that
+/// DAG module, not the enclosing file, even when the two share a name.
+fn validate_file_root_self_imports(
+    loaded_file: &crate::loader::LoadedFile,
+    file_dag_id: &graphcal_compiler::dag_id::DagId,
+    dag_definitions: &HashMap<DeclName, &graphcal_compiler::desugar::desugared_ast::DagDecl>,
+    file_src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<(), CompileError> {
+    let ast = loaded_file.ast();
+    for declaration in &ast.declarations {
+        cancellation.checkpoint()?;
+        let DeclKind::Import(import_decl) = &declaration.kind else {
+            continue;
+        };
+        let [segment] = import_decl.path.segments() else {
+            continue;
+        };
+        if segment.name.as_str() != file_dag_id.name()
+            || dag_definitions.contains_key(segment.name.as_str())
+        {
+            continue;
+        }
+        let graphcal_compiler::syntax::ast::ImportKind::Selective(items) = &import_decl.kind else {
+            continue;
+        };
+        for item in items {
+            let orig_name = &item.name.name;
+            let span = item.name.span;
+            let not_found = || {
+                CompileError::Eval(crate::import_surface::import_item_not_found_error(
+                    ast,
+                    orig_name,
+                    item.namespace,
+                    &import_decl.path.display_path(),
+                    file_src,
+                    span,
+                ))
+            };
+            if !crate::import_surface::file_import_item_presence(
+                ast,
+                orig_name.as_str(),
+                item.namespace,
+            )
+            .is_present()
+            {
+                return Err(not_found());
+            }
+            if item.namespace != ImportItemNamespace::Term {
+                continue;
+            }
+            match pure_import_term_disposition(&ast.declarations, orig_name)
+                .ok_or_else(not_found)?
+            {
+                PureImportTermDisposition::BindConstant
+                | PureImportTermDisposition::ResolverOnly => {}
+                PureImportTermDisposition::Reject(reason) => {
+                    return Err(CompileError::Eval(
+                        reason.diagnostic(orig_name, file_src, span),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject an instantiation site that leaves a required value port unbound.
+///
+/// A `param` without a default is a required input port. Every instantiation
+/// site must supply it: `--set` / `--input` reach only the entry DAG's own
+/// unqualified ports, so a required port left unbound by an `include` becomes an
+/// instance-qualified port that no caller can ever address. The inline-call form
+/// `@dag(args).out` enforces the same rule during type inference, and an
+/// `include` is the same instantiation written as a declaration, so both report
+/// [`GraphcalError::MissingDagBindings`].
+fn ensure_required_params_bound(
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    bindings: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    dag_name: &str,
+    file_src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), CompileError> {
+    let mut missing: Vec<String> = declarations
+        .iter()
+        .filter_map(|decl| match &decl.kind {
+            DeclKind::Param(param) if param.value.is_none() => Some(&param.name.value),
+            _ => None,
+        })
+        .filter(|name| !bindings.contains_key(*name))
+        .map(ToString::to_string)
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    missing.sort();
+    Err(CompileError::Eval(GraphcalError::MissingDagBindings {
+        missing,
+        dag_name: dag_name.to_string(),
+        src: file_src.clone(),
+        span: span.into(),
+    }))
 }
 
 fn ensure_include_item_selectable(
@@ -788,6 +913,15 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         }
     }
 
+    // Required value ports must always be bound, exactly as for an inline call.
+    ensure_required_params_bound(
+        &dep_loaded.ast().declarations,
+        &bindings,
+        &dep_path_display,
+        file_src,
+        include_decl.path.span(),
+    )?;
+
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
@@ -999,6 +1133,15 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             }));
         }
     }
+
+    // Strict binding check: all required value ports must be bound.
+    ensure_required_params_bound(
+        &dag_body.declarations,
+        &bindings,
+        dag_name,
+        file_src,
+        include_decl.path.span(),
+    )?;
 
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items

@@ -1,0 +1,8 @@
+// Error: `import` cannot bring a runtime param into scope, not even through
+// the file's own package address (M020). Runtime values cross a module
+// boundary as include bindings or DAG-call arguments.
+param cabin_pressure: Pressure = 101.325 kPa;
+
+import self_import_runtime_item.{ cabin_pressure };
+
+node margin: Pressure = @cabin_pressure - 50.0 kPa;

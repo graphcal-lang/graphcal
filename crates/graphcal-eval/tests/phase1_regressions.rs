@@ -505,10 +505,15 @@ param wrapper: Wrapper = @seed;
 param extracted: Dimensionless = @wrapper.value.x;
 pub node out: Dimensionless = @extracted;
 ";
+    // `seed` is a required value port, so the include must bind it (G004);
+    // the reconciliation failure under test concerns the `Record` override.
     let main = r"
 type Other { Other(x: Dimensionless) }
-import reconcile.library.{ type Wrapper };
-include reconcile.library(Record: Other) as instance;
+import reconcile.library.{ type Wrapper, Wrapper, Record };
+include reconcile.library(
+    Record: Other,
+    seed: Wrapper(value: Record(x: 2.0)),
+) as instance;
 ";
 
     assert_type_override_requires_reconciliation(library, main, "extracted");
