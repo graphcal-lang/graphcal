@@ -11,6 +11,10 @@ Graphcal be made extensible enough that most of those features can be built
 *outside* the core — by users, as packages and extensions — rather than
 implemented inside the language?**
 
+The catalog is filed for discussion as
+[#1411](https://github.com/graphcal-lang/graphcal/issues/1411); comments
+belong there.
+
 It is an options catalog, not a design proposal. Options overlap, some are
 mutually exclusive, and none are ranked by feasibility or preference — the
 goal is breadth. Each mechanism has an ID (`A1`, `C3`, …) so later discussion
@@ -81,12 +85,12 @@ distinct reasons — and each reason names a family of mechanisms:
 
 | Gap | Symptom in #1401 | Mechanism family |
 |-----|------------------|------------------|
-| G1. Value vocabulary too narrow | complex numbers, text, datetimes, ragged/sparse data, keys | **A** — widen the kernel seam |
-| G2. No compile-time participation | FFT bin counts, schema checks, prepared shapes | **B** — extensions in the checking phase |
-| G3. No higher-order calls or protocols | root finding, ODE, `iterate_until` need a *function* argument | **C** — higher-order and protocol seams |
-| G4. No effectful boundary story | CSV/XLSX import, reports, lineage | **D** — staged effect boundaries |
-| G5. Vocabulary closed to packages | tables, graphs, calendars, temperature points want new *types* | **E** — in-language extensibility |
-| G6. Syntax and presentation closed | LP modeling blocks, stencil sugar, new plot encodings | **F** — syntax participation |
+| Value vocabulary too narrow | complex numbers, text, datetimes, ragged/sparse data, keys | **A** — widen the kernel seam |
+| No compile-time participation | FFT bin counts, schema checks, prepared shapes | **B** — extensions in the checking phase |
+| No higher-order calls or protocols | root finding, ODE, `iterate_until` need a *function* argument | **C** — higher-order and protocol seams |
+| No effectful boundary story | CSV/XLSX import, reports, lineage | **D** — staged effect boundaries |
+| Vocabulary closed to packages | tables, graphs, calendars, temperature points want new *types* | **E** — in-language extensibility |
+| Syntax and presentation closed | LP modeling blocks, stencil sugar, new plot encodings | **F** — syntax participation |
 
 Group **G** collects the ecosystem mechanics (tooling, distribution, trust)
 that make any of the above adoptable.
