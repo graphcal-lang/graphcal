@@ -1,0 +1,8 @@
+// BUG variant: binding one required param but not the other also passes
+// `graphcal check` and dies with internal error X001 at eval.
+dag scale {
+    param factor: Dimensionless;
+    param offset: Dimensionless;
+    node out: Dimensionless = @factor * 2.0 + @offset;
+}
+include scale(factor: 3.0).{ out };

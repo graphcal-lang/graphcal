@@ -1,0 +1,9 @@
+// CONTRAST (correctly rejected): the same unbound-required-param mistake in
+// the inline DAG-call expression form is caught by `graphcal check`:
+//   G004: missing required binding(s) ["offset"] in DAG call
+dag scale {
+    param factor: Dimensionless;
+    param offset: Dimensionless;
+    pub node out: Dimensionless = @factor * 2.0 + @offset;
+}
+node use: Dimensionless = @scale(factor: 3.0).out;

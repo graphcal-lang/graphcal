@@ -1,0 +1,2 @@
+param gain: Dimensionless;
+pub node amplified: Dimensionless = @gain * 10.0;

@@ -1,0 +1,7 @@
+// BUG: `base unit` on a PRELUDE dimension is accepted and silently aliases
+// the SI base unit: 1 furlong becomes exactly 1 m (real furlong: 201.168 m).
+// Docs restrict `base unit` to user-defined base dimensions.
+// eval prints:  track = 5 furlong ; track_m = 5 m
+base unit furlong: Length;
+node track: Length = 5.0 furlong;
+node track_m: Length = @track -> m;

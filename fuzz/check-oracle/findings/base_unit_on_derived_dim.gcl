@@ -1,0 +1,5 @@
+// BUG variant: `base unit` on a DERIVED dimension is accepted too; the new
+// unit silently becomes the SI-coherent scale (here: 1 kt == 1 m/s).
+base unit kt: Velocity;
+node speed: Velocity = 10.0 kt;
+node speed_si: Velocity = @speed -> m/s;   // 10 m/s — not 10 knots

@@ -1,0 +1,5 @@
+// MINOR: a literal `-0.0` tolerance passes the A015 negative-literal check
+// (`value < 0.0` is false for -0.0). `+/- -0.1` is rejected as documented.
+// Semantically equal to zero tolerance, so impact is cosmetic.
+param measured: Length = 1.0 m;
+assert exact = @measured ~= 1.0 m +/- -0.0 m;

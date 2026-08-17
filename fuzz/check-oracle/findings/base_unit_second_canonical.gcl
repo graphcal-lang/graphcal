@@ -1,0 +1,11 @@
+// BUG: two `base unit` declarations for one dimension are accepted; both get
+// scale 1.0, so 1 bit silently EQUALS 1 nat (assertion passes, conversion is
+// the identity). Docs (docs/language/dimensions-and-units.md): a base unit
+// "defines THE canonical unit for a user-defined base dimension" (singular).
+base dim Information;
+base unit bit: Information;
+base unit nat: Information;
+
+node one_bit: Information = 1.0 bit;
+node in_nats: Information = @one_bit -> nat;   // prints "1 nat"
+assert bit_equals_nat = 1.0 bit == 1.0 nat;    // PASSES

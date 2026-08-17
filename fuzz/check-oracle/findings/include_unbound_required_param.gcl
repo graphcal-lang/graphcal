@@ -1,0 +1,13 @@
+// BUG: `graphcal check` accepts an `include` that leaves a required dag
+// param unbound. Docs (docs/language/computation-model.md, "Parameters"):
+// "A param without a default is **required**. Leaving a required port
+// unsatisfied is a compile error."
+// `graphcal eval` then fails with an INTERNAL error:
+//   X001: TIR runtime declaration missing for `...<include@...>.factor`
+// The equivalent inline call `@scale().out` is correctly rejected with G004.
+dag scale {
+    param factor: Dimensionless;
+    node out: Dimensionless = @factor * 2.0;
+}
+include scale().{ out };
+node use: Dimensionless = @out + 1.0;

@@ -1,0 +1,5 @@
+// BUG variant (cross-file): `include app.lib()` leaves required `gain`
+// unbound; `graphcal check` passes, `graphcal eval` reports internal error
+// X001: TIR runtime declaration missing for `src.app.main.<include@8>.gain`.
+include app.lib().{ amplified };
+node result: Dimensionless = @amplified + 1.0;

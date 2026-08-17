@@ -1,0 +1,5 @@
+// BUG variant: `base unit` on Temperature bypasses the D014 affine-unit
+// guard (`const unit celsius: Temperature = 1.0 K;` is rejected with D014,
+// but this is accepted) and silently equals Kelvin.
+base unit celsius: Temperature;
+node room: Temperature = 295.0 celsius;
