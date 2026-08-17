@@ -61,6 +61,28 @@ fn write_pipeline_project(
     (directory, source_root.join(root))
 }
 
+fn assert_missing_dag_bindings(
+    error: CompileError,
+    expected_dag_name: &str,
+    expected_missing: &[&str],
+) {
+    match error {
+        CompileError::Eval(GraphcalError::MissingDagBindings {
+            missing, dag_name, ..
+        }) => {
+            assert_eq!(dag_name, expected_dag_name);
+            assert_eq!(
+                missing,
+                expected_missing
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+            );
+        }
+        other => panic!("expected MissingDagBindings, got {other:?}"),
+    }
+}
+
 #[test]
 fn prepared_interface_contains_only_direct_hir_source_declarations() {
     let (_directory, root) = write_pipeline_project(
@@ -152,6 +174,57 @@ fn repeated_empty_includes_keep_distinct_output_names() {
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert_quantity_value(&result, "first.output", 2.0);
     assert_quantity_value(&result, "second.output", 2.0);
+}
+
+#[test]
+fn check_rejects_all_unbound_required_params_in_same_file_include() {
+    let error = compile_to_tir(
+        "dag scale {\n\
+         param factor: Dimensionless;\n\
+         param value: Dimensionless;\n\
+         pub node out: Dimensionless = @factor * @value;\n\
+         }\n\
+         include scale().{ out };\n",
+        "test.gcl",
+    )
+    .expect_err("an include must bind every required param");
+
+    assert_missing_dag_bindings(error, "scale", &["factor", "value"]);
+}
+
+#[test]
+fn check_rejects_partially_bound_required_params_in_same_file_include() {
+    let error = compile_to_tir(
+        "dag scale {\n\
+         param factor: Dimensionless;\n\
+         param value: Dimensionless;\n\
+         pub node out: Dimensionless = @factor * @value;\n\
+         }\n\
+         include scale(value: 3.0).{ out };\n",
+        "test.gcl",
+    )
+    .expect_err("a partial include must report its remaining required params");
+
+    assert_missing_dag_bindings(error, "scale", &["factor"]);
+}
+
+#[test]
+fn check_rejects_unbound_required_params_in_cross_file_include() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param factor: Dimensionless;\n\
+                 pub node out: Dimensionless = @factor * 2.0;\n",
+            ),
+            ("main.gcl", "include pipeline.lib().{ out };\n"),
+        ],
+        "main.gcl",
+    );
+
+    let error = compile_to_tir_project(&root, None, &fs())
+        .expect_err("a cross-file include must bind every required param");
+    assert_missing_dag_bindings(error, "pipeline.lib", &["factor"]);
 }
 
 #[test]

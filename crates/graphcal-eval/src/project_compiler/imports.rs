@@ -41,6 +41,8 @@ impl OtherDeclKind {
 /// `declarations` four or five times per binding.
 struct DepDeclIndex<'a> {
     params: HashSet<DeclName>,
+    /// Param declaration names whose value must be supplied at each instantiation.
+    required_params: HashSet<DeclName>,
     /// Plot declaration names (requestable through include brace lists; #847).
     plots: HashSet<DeclName>,
     types: HashSet<StructTypeName>,
@@ -451,6 +453,7 @@ fn build_dep_decl_index(
     decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
 ) -> DepDeclIndex<'_> {
     let mut params = HashSet::new();
+    let mut required_params = HashSet::new();
     let mut plots = HashSet::new();
     let mut types = HashSet::new();
     let mut dims = HashSet::new();
@@ -461,6 +464,9 @@ fn build_dep_decl_index(
         match &d.kind {
             DeclKind::Param(p) => {
                 params.insert(p.name.value.clone());
+                if p.value.is_none() {
+                    required_params.insert(p.name.value.clone());
+                }
             }
             DeclKind::Type(t) => {
                 types.insert(t.name.value.clone());
@@ -491,6 +497,7 @@ fn build_dep_decl_index(
     }
     DepDeclIndex {
         params,
+        required_params,
         plots,
         types,
         dims,
@@ -586,6 +593,32 @@ fn classify_param_bindings(
         }));
     }
     Ok(out)
+}
+
+fn validate_required_param_bindings(
+    dep_index: &DepDeclIndex<'_>,
+    bindings: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
+    dag_name: &str,
+    file_src: &NamedSource<Arc<String>>,
+    include_span: Span,
+) -> Result<(), CompileError> {
+    let mut missing = dep_index
+        .required_params
+        .iter()
+        .filter(|name| !bindings.contains_key(*name))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    missing.sort();
+    Err(CompileError::Eval(GraphcalError::MissingDagBindings {
+        missing,
+        dag_name: dag_name.to_string(),
+        src: file_src.clone(),
+        span: include_span.into(),
+    }))
 }
 
 /// Process every file-root DAG include, deferring its concrete instance for
@@ -787,6 +820,13 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             }));
         }
     }
+    validate_required_param_bindings(
+        &dep_index,
+        &bindings,
+        &dep_path_display,
+        file_src,
+        decl.span,
+    )?;
 
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
@@ -999,6 +1039,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             }));
         }
     }
+    validate_required_param_bindings(&dep_index, &bindings, dag_name, file_src, decl.span)?;
 
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items

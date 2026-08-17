@@ -507,8 +507,11 @@ pub node out: Dimensionless = @extracted;
 ";
     let main = r"
 type Other { Other(x: Dimensionless) }
-import reconcile.library.{ type Wrapper };
-include reconcile.library(Record: Other) as instance;
+import reconcile.library.{ type Wrapper, Wrapper, Record };
+include reconcile.library(
+    Record: Other,
+    seed: Wrapper(value: Record(x: 1.0)),
+) as instance;
 ";
 
     assert_type_override_requires_reconciliation(library, main, "extracted");

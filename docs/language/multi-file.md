@@ -1096,7 +1096,9 @@ include lib.rocket_engine(dry_mass: 800.0 kg) as engine;
 node dv: Velocity = @engine.delta_v;
 ```
 
-If a required param is not provided, the compiler emits error `O003`.
+If an `include` or inline DAG call omits a required param, the compiler emits
+`G004` at that instantiation site. If an entry-DAG param remains unsatisfied
+when preparing evaluation, the compiler emits `O003` at its declaration.
 
 ### Index bindings
 

@@ -2023,10 +2023,12 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("missing required binding(s) {missing:?} in DAG call to `{dag_name}`")]
+    #[error("missing required binding(s) {missing:?} when instantiating DAG `{dag_name}`")]
     #[diagnostic(
         code(graphcal::G004),
-        help("every required `param` declared in the DAG must be bound at each call site")
+        help(
+            "every required `param` declared in the DAG must be bound at each `include` or call site"
+        )
     )]
     MissingDagBindings {
         missing: Vec<String>,
