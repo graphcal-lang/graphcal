@@ -5,7 +5,10 @@ test_workspace = true
 cap_lints = true
 timeout_multiplier = 3.0
 minimum_test_timeout = 120.0
-build_timeout_multiplier = 3.0
+
+# A mutant invalidates downstream crates while the unmutated baseline build can
+# be almost a no-op, so a baseline-relative build timeout is not representative.
+# Keep cargo-mutants' default of no build timeout to avoid spurious CI findings.
 
 # Test/debug renderers are not semantic runtime behavior. Keep exclusions exact
 # and review them whenever the named implementation moves.
