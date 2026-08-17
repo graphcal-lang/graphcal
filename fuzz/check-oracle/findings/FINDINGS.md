@@ -16,6 +16,12 @@ Final run (seed 20260818): 3,378 files checked — 1,922 expected-fail probes
 (1,874 correctly rejected), 1,456 expected-pass controls (1,454 correctly
 accepted). The 48 surviving probes reduce to the findings below.
 
+Filed issues: [#1413](https://github.com/graphcal-lang/graphcal/issues/1413)
+(Bug 1), [#1414](https://github.com/graphcal-lang/graphcal/issues/1414)
+(Bug 2), [#1415](https://github.com/graphcal-lang/graphcal/issues/1415)
+(minor), [#1416](https://github.com/graphcal-lang/graphcal/issues/1416) and
+[#1417](https://github.com/graphcal-lang/graphcal/issues/1417) (divergences).
+
 ## Bug 1 — `include` accepts unbound required params, then eval hits an internal error
 
 **Files:** `include_unbound_required_param.gcl`,
