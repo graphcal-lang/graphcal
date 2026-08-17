@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::desugar::desugared_ast::{DagDecl, DimExpr, TypeExpr, UnitExpr};
-use crate::dimension::{BaseDimId, Dimension, Rational, RationalError};
+use crate::dimension::{BaseDimId, Dimension, RationalError};
 use crate::registry::dimension_registry::{
     DimensionResolveError, assert_base_dim_names_cover,
     format_dimension_preferring_alias_after_validation, resolve_dim_expr_detailed_impl,
@@ -10,7 +10,7 @@ use crate::registry::dimension_registry::{
 use crate::registry::unit::{resolve_unit_dimension_impl, resolve_unit_expr_impl};
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::decl_name::DeclName;
-use crate::syntax::dimension::{DimName, UnitRef};
+use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::index_name::IndexName;
 use crate::syntax::type_name::{ConstructorName, StructTypeName};
 
@@ -28,7 +28,7 @@ pub use super::type_def::{
     StructField, TypeDef, TypeDefError, TypeDefKind, TypeGenericConstraint, TypeGenericParam,
     TypeRegistry, UnionMemberDef,
 };
-pub(crate) use super::unit::UnitResolveError;
+pub(crate) use super::unit::{BaseUnitRegistrationError, UnitResolveError};
 pub use super::unit::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitInfo, UnitRegistry, UnitScale, pow_scale,
 };
@@ -220,10 +220,6 @@ impl RegistryBuilder {
 
     // -- Mutation methods (only on builder) --
 
-    /// Register a new base dimension (`base dim Foo;`).
-    ///
-    /// The caller provides the [`BaseDimId`] which encodes the dimension's
-    /// identity (prelude name or user-defined file+name).
     /// Mark a base dimension as affine-prone: its real-world units (e.g.
     /// Celsius/Fahrenheit on Temperature) need offset conversions that unit
     /// definitions cannot express, so user unit definitions on the bare
@@ -237,13 +233,14 @@ impl RegistryBuilder {
     /// `Temperature / Time`) stay allowed: offsets cancel in differences.
     #[must_use]
     pub(crate) fn is_affine_prone(&self, dim: &Dimension) -> bool {
-        let mut iter = dim.iter();
-        let Some((id, &exp)) = iter.next() else {
-            return false;
-        };
-        iter.next().is_none() && exp == Rational::ONE && self.affine_prone_dims.contains(id)
+        dim.base_dimension_id()
+            .is_some_and(|id| self.affine_prone_dims.contains(id))
     }
 
+    /// Register a new base dimension (`base dim Foo;`).
+    ///
+    /// The caller provides the [`BaseDimId`] which encodes the dimension's
+    /// identity (prelude name or user-defined file+name).
     pub fn register_base_dimension(&mut self, name: DimName, id: BaseDimId) -> BaseDimId {
         let dim = Dimension::base(id.clone());
         self.base_dim_names.insert(id.clone(), name.to_string());
@@ -266,12 +263,36 @@ impl RegistryBuilder {
         id
     }
 
-    /// Record an SI symbol for an existing base dimension.
-    ///
-    /// Used when the first base unit for a user-defined dimension is declared
-    /// (e.g., `base unit bit: Information;` records `"bit"` as the symbol).
+    /// Record an SI symbol for an existing base dimension while importing
+    /// already-validated registry metadata.
     pub fn set_base_dim_symbol(&mut self, id: BaseDimId, symbol: String) {
         self.base_dim_symbols.entry(id).or_insert(symbol);
+    }
+
+    /// Register the one canonical unit of a base dimension.
+    ///
+    /// This operation updates the display metadata and unit registry atomically,
+    /// so source lowering cannot install a scale-1 alias without proving that the
+    /// dimension is a bare base dimension with no canonical unit yet.
+    pub(crate) fn register_base_unit(
+        &mut self,
+        name: UnitName,
+        dimension: Dimension,
+    ) -> Result<(), BaseUnitRegistrationError> {
+        let base_dimension = dimension
+            .base_dimension_id()
+            .cloned()
+            .ok_or(BaseUnitRegistrationError::NotBaseDimension)?;
+        if let Some(existing) = self.base_dim_symbols.get(&base_dimension) {
+            return Err(BaseUnitRegistrationError::AlreadyRegistered {
+                existing: existing.clone(),
+            });
+        }
+
+        self.base_dim_symbols
+            .insert(base_dimension, name.to_string());
+        self.register_unit(name, dimension, PositiveFiniteScale::new_unchecked(1.0));
+        Ok(())
     }
 
     /// Register a named dimension.
@@ -481,7 +502,7 @@ impl RegistryBuilder {
 mod tests {
     use super::*;
     use crate::desugar::desugared_ast::TypeExprKind;
-    use crate::dimension::BaseDimId;
+    use crate::dimension::{BaseDimId, Rational};
     use crate::registry::prelude::load_prelude;
     use crate::syntax::ast::{DimExprItem, DimTerm, MulDivOp, UnitExprItem};
     use crate::syntax::dimension::UnitName;
@@ -820,6 +841,67 @@ mod tests {
         assert_eq!(
             r.dimensions.base_dim_symbols().get(&id),
             Some(&"m".to_string())
+        );
+    }
+
+    #[test]
+    fn register_base_unit_records_unit_and_canonical_symbol() {
+        let mut b = RegistryBuilder::new();
+        let info_id = user_dim_id("Information");
+        b.register_base_dimension(DimName::expect_valid("Information"), info_id.clone());
+        b.register_base_unit(
+            UnitName::expect_valid("bit"),
+            Dimension::base(info_id.clone()),
+        )
+        .unwrap();
+
+        let registry = b.try_build().unwrap();
+        assert_eq!(
+            registry.dimensions.base_dim_symbols().get(&info_id),
+            Some(&"bit".to_string())
+        );
+        let unit = registry
+            .units
+            .get_unit(&UnitRef::local(UnitName::expect_valid("bit")))
+            .unwrap();
+        assert_eq!(unit.dimension, Dimension::base(info_id));
+        assert_eq!(
+            unit.scale,
+            UnitScale::Static(PositiveFiniteScale::new_unchecked(1.0))
+        );
+    }
+
+    #[test]
+    fn register_base_unit_rejects_aliases_and_non_base_dimensions_atomically() {
+        let mut b = RegistryBuilder::new();
+        load_prelude(&mut b).unwrap();
+        let info_id = user_dim_id("Information");
+        b.register_base_dimension(DimName::expect_valid("Information"), info_id.clone());
+        b.register_base_unit(
+            UnitName::expect_valid("bit"),
+            Dimension::base(info_id.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            b.register_base_unit(UnitName::expect_valid("nat"), Dimension::base(info_id),),
+            Err(BaseUnitRegistrationError::AlreadyRegistered {
+                existing: "bit".to_string(),
+            })
+        );
+        assert!(
+            b.get_unit(&UnitRef::local(UnitName::expect_valid("nat")))
+                .is_none()
+        );
+
+        let velocity = (Dimension::base(length_id()) / Dimension::base(time_id())).unwrap();
+        assert_eq!(
+            b.register_base_unit(UnitName::expect_valid("kt"), velocity),
+            Err(BaseUnitRegistrationError::NotBaseDimension)
+        );
+        assert!(
+            b.get_unit(&UnitRef::local(UnitName::expect_valid("kt")))
+                .is_none()
         );
     }
 

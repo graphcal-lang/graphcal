@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cannot declare `furlong` as the base unit of dimension `Length`
+    Diagnostic severity: error
+Begin snippet for base_unit_prelude_dimension.gcl starting at line 1, column 1
+
+snippet line 1: // Length already has the canonical base unit `m`.
+snippet line 2: base unit furlong: Length;
+    label at line 2, columns 11 to 17: `Length` already has canonical base unit `m`
+diagnostic help: a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`
+diagnostic code: graphcal::D036

@@ -1,0 +1,2 @@
+// Derived dimensions use explicit unit definitions.
+base unit kt: Velocity;

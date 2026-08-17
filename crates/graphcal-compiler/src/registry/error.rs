@@ -911,6 +911,19 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cannot declare `{name}` as the base unit of dimension `{dim}`")]
+    #[diagnostic(code(graphcal::D036), help("{help}"))]
+    InvalidBaseUnitDeclaration {
+        name: UnitName,
+        dim: String,
+        reason: String,
+        help: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("{reason}")]
+        span: SourceSpan,
+    },
+
     #[error("user-defined units on dimension `{dim}` are not supported")]
     #[diagnostic(
         code(graphcal::D014),
@@ -2180,6 +2193,7 @@ impl GraphcalError {
             | Self::ConversionDimensionMismatch { src, .. }
             | Self::NestedConversion { src, .. }
             | Self::IneffectiveConversion { src, .. }
+            | Self::InvalidBaseUnitDeclaration { src, .. }
             | Self::AffineProneUnitDefinition { src, .. }
             | Self::UnknownStructType { src, .. }
             | Self::UnknownField { src, .. }

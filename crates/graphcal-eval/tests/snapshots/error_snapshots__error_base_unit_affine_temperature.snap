@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cannot declare `celsius` as the base unit of dimension `Temperature`
+    Diagnostic severity: error
+Begin snippet for base_unit_affine_temperature.gcl starting at line 1, column 1
+
+snippet line 1: // A base-unit declaration must not bypass Temperature's unit safeguards.
+snippet line 2: base unit celsius: Temperature;
+    label at line 2, columns 11 to 17: `Temperature` already has canonical base unit `K`
+diagnostic help: a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`
+diagnostic code: graphcal::D036

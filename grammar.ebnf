@@ -292,9 +292,9 @@ dimension_decl
    1. Base unit (no body):     base unit bit: Information;
    2. Const unit:              const unit kbit: Information = 1000 bit;
    3. Runtime unit:            unit EUR: Money = (@rate) USD;
-   The no-body form requires the `base` prefix; plain `unit X: Dim;`
-   is a parse error. `const node` bodies may only use prelude/base/const
-   units. *)
+   The no-body form requires the `base` prefix and may define only the one
+   canonical unit of a bare base dimension; plain `unit X: Dim;` is a parse
+   error. `const node` bodies may only use prelude/base/const units. *)
 unit_decl
    = "base", "unit", IDENT, ":", dim_expr, ";"
    | [ "const" ], "unit", IDENT, ":", dim_expr, "=", unit_def, ";";

@@ -138,7 +138,7 @@ node rate: Bandwidth = 100.0 bit / s;
 node transfer_time: Time = @storage / @rate;
 ```
 
-A `base dim Information;` declaration creates a new base dimension.
+A `base dim Information;` declaration creates a new base dimension. Its single `base unit` declaration establishes the canonical scale; every additional unit must define an explicit scale with `const unit` or `unit`.
 
 ## What You Learned
 

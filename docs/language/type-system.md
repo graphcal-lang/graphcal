@@ -371,9 +371,9 @@ this table is the complete inventory of declaration forms:
 
 | Declaration | Introduces | Universe | Classified by |
 |-------------|-----------|----------|---------------|
-| `base dim Length;` | a base dimension | type | `Dim` |
+| `base dim Information;` | a base dimension | type | `Dim` |
 | `dim Velocity = Length / Time;` | a derived dimension (transparent alias) | type | `Dim` |
-| `base unit m: Length;` | a base unit | unit | its dimension |
+| `base unit bit: Information;` | the one canonical unit of a user-defined base dimension | unit | its dimension |
 | `const unit km: Length = 1000 m;` | a compile-time-scaled unit | unit | its dimension |
 | `unit EUR: Money = (@rate) USD;` | a runtime-scaled unit | unit | its dimension |
 | `type A<...> { C1(...), C2, ... }` | an algebraic type and its constructors | type; constructors in the constructor namespace | `Type`; constructors form values of `A` |

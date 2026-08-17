@@ -1,0 +1,2 @@
+// Length already has the canonical base unit `m`.
+base unit furlong: Length;
