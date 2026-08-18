@@ -957,7 +957,7 @@ impl UnitConstness {
 }
 
 /// Unit declaration: `const unit km: Length = 1000 m;`, `unit EUR: Money = (@rate) USD;`,
-/// or `base unit m: Length;`.
+/// or `base unit bit: Information;`.
 #[derive(Debug, Clone)]
 pub struct UnitDecl<P: Phase = Raw> {
     pub visibility: Visibility,
@@ -966,7 +966,7 @@ pub struct UnitDecl<P: Phase = Raw> {
     /// The dimension this unit measures.
     pub dim_type: DimExpr,
     /// Scale definition: `(scale_value, base_unit_expr)`.
-    /// `None` iff this is a base unit (`base unit m: Length;`).
+    /// `None` iff this is a base unit (`base unit bit: Information;`).
     pub definition: Option<UnitDef<P>>,
 }
 

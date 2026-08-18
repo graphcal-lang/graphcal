@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cannot declare `nat` as the base unit of dimension `Information`
+    Diagnostic severity: error
+Begin snippet for base_unit_duplicate.gcl starting at line 3, column 1
+
+snippet line 3: base unit bit: Information;
+snippet line 4: base unit nat: Information;
+    label at line 4, columns 11 to 13: `Information` already has canonical base unit `bit`
+diagnostic help: a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`
+diagnostic code: graphcal::D036

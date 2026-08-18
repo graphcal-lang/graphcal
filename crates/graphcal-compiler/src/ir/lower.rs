@@ -19,7 +19,7 @@ use crate::desugar::desugared_ast::{
     PlotDecl, TypeExpr,
 };
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::dimension::{Dimension, Rational};
+use crate::dimension::Dimension;
 use crate::ir::imported_binding::HirImportedBinding;
 use crate::ir::instance::{InstanceBindingEnvironment, InstanceIndexBindingTarget, InstanceRecord};
 use crate::ir::resolve::{
@@ -3812,99 +3812,107 @@ fn register_unit_decl(
     let dim = registry
         .resolve_dim_expr_detailed(&u.dim_type)
         .map_err(|err| dimension_resolve_error(err, src, u.dim_type.span))?;
-    if u.definition.is_some() && registry.is_affine_prone(&dim) {
+    let Some(def) = &u.definition else {
+        registry
+            .register_base_unit(u.name.value.clone(), dim.clone())
+            .map_err(|error| {
+                let dim = registry.format_dimension(&dim);
+                let (reason, help) = match error {
+                    types::BaseUnitRegistrationError::NotBaseDimension => (
+                        format!("`{dim}` is not a base dimension"),
+                        format!(
+                            "`base unit` can only define the canonical unit of a bare base dimension; define `{}` with an explicit `const unit` or `unit` scale instead",
+                            u.name.value
+                        ),
+                    ),
+                    types::BaseUnitRegistrationError::AlreadyRegistered { existing } => (
+                        format!("`{dim}` already has canonical base unit `{existing}`"),
+                        "a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`"
+                            .to_string(),
+                    ),
+                };
+                GraphcalError::InvalidBaseUnitDeclaration {
+                    name: u.name.value.clone(),
+                    dim,
+                    reason,
+                    help,
+                    src: src.clone(),
+                    span: u.name.span.into(),
+                }
+            })?;
+        return Ok(None);
+    };
+
+    if registry.is_affine_prone(&dim) {
         return Err(GraphcalError::AffineProneUnitDefinition {
             dim: registry.format_dimension(&dim),
             src: src.clone(),
             span: u.name.span.into(),
         });
     }
-    let mut dynamic_unit_scale = None;
-    let scale = if let Some(def) = &u.definition {
-        if u.constness.is_const() {
-            if let Some(graph_ref) = first_graph_ref(&def.scale_expr) {
-                return Err(GraphcalError::GraphRefInConstUnit {
-                    name: graph_ref.value,
-                    src: src.clone(),
-                    span: graph_ref.span.into(),
-                });
-            }
-            if let Some(unit_name) = first_non_const_unit_ref(registry, &def.unit_expr) {
-                return Err(GraphcalError::NonConstUnitInConst {
-                    name: unit_name.value.clone(),
-                    src: src.clone(),
-                    span: unit_name.span.into(),
-                });
-            }
-        }
-        let resolved_definition = resolve_unit_definition(registry, &def.unit_expr, src)?;
-        if resolved_definition.dimension != dim {
-            return Err(GraphcalError::UnitDefinitionDimensionMismatch {
-                name: u.name.value.clone(),
-                declared: registry.format_dimension(&dim),
-                definition: registry.format_dimension(&resolved_definition.dimension),
+    if u.constness.is_const() {
+        if let Some(graph_ref) = first_graph_ref(&def.scale_expr) {
+            return Err(GraphcalError::GraphRefInConstUnit {
+                name: graph_ref.value,
                 src: src.clone(),
-                span: def.unit_expr.span.into(),
+                span: graph_ref.span.into(),
             });
         }
-        if contains_graph_ref(&def.scale_expr) {
-            // Preserve the validated definition in IR so strict HIR lowering,
-            // policy checking, dependency collection, and type checking all
-            // consume the same source-qualified semantic entry.
-            dynamic_unit_scale = Some(UnfrozenDynamicUnitScaleEntry {
-                spelling: UnitRef::local(u.name.value.clone()),
-                expr: def.scale_expr.clone(),
-                unit_owner: dag_id.clone(),
-                body_resolution_owner: dag_id.clone(),
-                declared_dimension: dim.clone(),
-                base_unit_dimension: resolved_definition.dimension.clone(),
-                span: def.scale_expr.span,
-                src: BodySource::own(),
+        if let Some(unit_name) = first_non_const_unit_ref(registry, &def.unit_expr) {
+            return Err(GraphcalError::NonConstUnitInConst {
+                name: unit_name.value.clone(),
+                src: src.clone(),
+                span: unit_name.span.into(),
             });
-            UnitScale::Dynamic {
-                base_unit_scale: resolved_definition.base_scale,
-            }
-        } else {
-            // Static scale value. A plain `unit` with no `@` still remains a
-            // runtime unit for const-context policy; `const unit` is the
-            // surface marker that makes it available to `const node`.
-            let scale_expr = validate_positive_finite_scale(
-                eval_scale_expr(&def.scale_expr, src)?,
-                "unit scale expression",
-                src,
-                def.scale_expr.span,
-            )?;
-            let scale = multiply_positive_scales(
-                scale_expr,
-                resolved_definition.base_scale,
-                "unit scale",
-                src,
-                def.span,
-            )?;
-            UnitScale::Static(scale)
-        }
-    } else {
-        UnitScale::Static(validate_positive_finite_scale(
-            1.0,
-            "base unit scale",
-            src,
-            u.name.span,
-        )?)
-    };
-    // If this is a base unit (scale=1, no definition) for a single
-    // base dimension, record the unit name as the SI symbol for
-    // that dimension. This handles user-defined dimensions like
-    // `base unit bit: Information;` → symbol "bit" for Information.
-    if u.definition.is_none() {
-        // Check if this dimension is a single base dimension
-        let mut iter = dim.iter();
-        if let Some((id, &exp)) = iter.next()
-            && iter.next().is_none()
-            && exp == Rational::ONE
-        {
-            registry.set_base_dim_symbol(id.clone(), u.name.value.to_string());
         }
     }
+    let resolved_definition = resolve_unit_definition(registry, &def.unit_expr, src)?;
+    if resolved_definition.dimension != dim {
+        return Err(GraphcalError::UnitDefinitionDimensionMismatch {
+            name: u.name.value.clone(),
+            declared: registry.format_dimension(&dim),
+            definition: registry.format_dimension(&resolved_definition.dimension),
+            src: src.clone(),
+            span: def.unit_expr.span.into(),
+        });
+    }
+    let mut dynamic_unit_scale = None;
+    let scale = if contains_graph_ref(&def.scale_expr) {
+        // Preserve the validated definition in IR so strict HIR lowering,
+        // policy checking, dependency collection, and type checking all
+        // consume the same source-qualified semantic entry.
+        dynamic_unit_scale = Some(UnfrozenDynamicUnitScaleEntry {
+            spelling: UnitRef::local(u.name.value.clone()),
+            expr: def.scale_expr.clone(),
+            unit_owner: dag_id.clone(),
+            body_resolution_owner: dag_id.clone(),
+            declared_dimension: dim.clone(),
+            base_unit_dimension: resolved_definition.dimension.clone(),
+            span: def.scale_expr.span,
+            src: BodySource::own(),
+        });
+        UnitScale::Dynamic {
+            base_unit_scale: resolved_definition.base_scale,
+        }
+    } else {
+        // Static scale value. A plain `unit` with no `@` still remains a
+        // runtime unit for const-context policy; `const unit` is the
+        // surface marker that makes it available to `const node`.
+        let scale_expr = validate_positive_finite_scale(
+            eval_scale_expr(&def.scale_expr, src)?,
+            "unit scale expression",
+            src,
+            def.scale_expr.span,
+        )?;
+        let scale = multiply_positive_scales(
+            scale_expr,
+            resolved_definition.base_scale,
+            "unit scale",
+            src,
+            def.span,
+        )?;
+        UnitScale::Static(scale)
+    };
     registry.register_unit_with_scale(u.name.value.clone(), dim, scale, u.constness);
     Ok(dynamic_unit_scale)
 }

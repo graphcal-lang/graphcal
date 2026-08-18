@@ -1,0 +1,4 @@
+// A dimension has exactly one canonical base unit.
+base dim Information;
+base unit bit: Information;
+base unit nat: Information;

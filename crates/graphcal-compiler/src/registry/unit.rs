@@ -7,6 +7,14 @@ use crate::dimension::{Dimension, Rational, RationalError};
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::dimension::UnitRef;
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub(crate) enum BaseUnitRegistrationError {
+    #[error("the declared dimension is not a base dimension")]
+    NotBaseDimension,
+    #[error("the dimension already has canonical base unit `{existing}`")]
+    AlreadyRegistered { existing: String },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PositiveFiniteScaleError {
     #[error("scale must be finite")]

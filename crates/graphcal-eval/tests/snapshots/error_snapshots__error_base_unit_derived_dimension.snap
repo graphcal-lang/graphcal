@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+cannot declare `kt` as the base unit of dimension `Velocity`
+    Diagnostic severity: error
+Begin snippet for base_unit_derived_dimension.gcl starting at line 1, column 1
+
+snippet line 1: // Derived dimensions use explicit unit definitions.
+snippet line 2: base unit kt: Velocity;
+    label at line 2, columns 11 to 12: `Velocity` is not a base dimension
+diagnostic help: `base unit` can only define the canonical unit of a bare base dimension; define `kt` with an explicit `const unit` or `unit` scale instead
+diagnostic code: graphcal::D036

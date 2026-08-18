@@ -458,6 +458,27 @@ mod tests {
     }
 
     #[test]
+    fn invalid_base_unit_reports_code_and_name_range() {
+        let diagnostics = produce_diagnostics("base unit furlong: Length;", "test.gcl");
+        let diagnostic = diagnostics
+            .iter()
+            .find(|diagnostic| {
+                diagnostic.code.as_ref().is_some_and(
+                    |code| matches!(code, NumberOrString::String(value) if value == "graphcal::D036"),
+                )
+            })
+            .expect("expected invalid-base-unit diagnostic");
+
+        assert!(
+            diagnostic
+                .message
+                .contains("base unit of dimension `Length`")
+        );
+        assert_eq!(diagnostic.range.start, Position::new(0, 10));
+        assert_eq!(diagnostic.range.end, Position::new(0, 17));
+    }
+
+    #[test]
     fn reassigned_codes_survive_lsp_conversion_by_variant() {
         use std::sync::Arc;
 

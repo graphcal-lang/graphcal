@@ -1,0 +1,2 @@
+// A base-unit declaration must not bypass Temperature's unit safeguards.
+base unit celsius: Temperature;

@@ -329,13 +329,21 @@ impl Dimension {
         self.exponents.is_empty()
     }
 
+    /// Return the base-dimension identity when this dimension consists of
+    /// exactly one base dimension to the first power.
+    #[must_use]
+    pub(crate) fn base_dimension_id(&self) -> Option<&BaseDimId> {
+        match self.exponents.iter().next() {
+            Some((id, &Rational::ONE)) if self.exponents.len() == 1 => Some(id),
+            _ => None,
+        }
+    }
+
     /// Returns true when this dimension cannot be represented by a single base
     /// dimension to the first power.
     #[must_use]
     pub(crate) fn is_compound(&self) -> bool {
-        !self.exponents.is_empty()
-            && (self.exponents.len() != 1
-                || self.exponents.values().next().copied() != Some(Rational::ONE))
+        !self.exponents.is_empty() && self.base_dimension_id().is_none()
     }
 
     /// Get the exponent for a specific base dimension (zero if absent).
@@ -650,6 +658,29 @@ mod tests {
     fn dimension_dimensionless() {
         assert!(Dimension::dimensionless().is_dimensionless());
         assert!(!Dimension::base(length()).is_dimensionless());
+    }
+
+    #[test]
+    fn base_dimension_id_requires_exactly_one_first_power_term() {
+        let length_id = length();
+        assert_eq!(
+            Dimension::base(length_id.clone()).base_dimension_id(),
+            Some(&length_id)
+        );
+        assert!(Dimension::dimensionless().base_dimension_id().is_none());
+        assert!(
+            Dimension::base(length())
+                .pow(2)
+                .unwrap()
+                .base_dimension_id()
+                .is_none()
+        );
+        assert!(
+            (Dimension::base(length()) / Dimension::base(time()))
+                .unwrap()
+                .base_dimension_id()
+                .is_none()
+        );
     }
 
     #[test]

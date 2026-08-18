@@ -430,6 +430,34 @@ fn error_convert_in_assert() {
 }
 
 #[test]
+fn error_base_unit_duplicate() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_duplicate.gcl");
+    let rendered = render_error(source, "base_unit_duplicate.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_prelude_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_prelude_dimension.gcl");
+    let rendered = render_error(source, "base_unit_prelude_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_derived_dimension() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_derived_dimension.gcl");
+    let rendered = render_error(source, "base_unit_derived_dimension.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_affine_temperature() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_affine_temperature.gcl");
+    let rendered = render_error(source, "base_unit_affine_temperature.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_affine_temperature_unit() {
     let source = include_str!("../../../tests/fixtures/invalid/affine_temperature_unit.gcl");
     let rendered = render_error(source, "affine_temperature_unit.gcl");
