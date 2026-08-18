@@ -33,6 +33,7 @@ impl Parser<'_> {
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
+                    doc: None,
                     attributes: vec![],
                     kind: DeclKind::Type(TypeDecl {
                         visibility: BindableVisibility::Private,
@@ -96,6 +97,7 @@ impl Parser<'_> {
                 let (_, end_span) = self.expect(Token::RBrace)?;
                 let span = start_span.merge(end_span);
                 Ok(Declaration {
+                    doc: None,
                     attributes: vec![],
                     kind: DeclKind::Type(TypeDecl {
                         visibility: BindableVisibility::Private,

@@ -341,15 +341,20 @@ impl FormatEquivalent for File {
 
 impl FormatEquivalent for Declaration {
     fn format_equivalent(&self, other: &Self) -> bool {
+        // `doc` is documentary metadata re-derived from comments on every
+        // parse; the formatter preserves comments separately, so it must not
+        // participate in equivalence.
         let Self {
             attributes,
             kind,
             span: _,
+            doc: _,
         } = self;
         let Self {
             attributes: other_attributes,
             kind: other_kind,
             span: _,
+            doc: _,
         } = other;
         attributes.format_equivalent(other_attributes) && kind.format_equivalent(other_kind)
     }

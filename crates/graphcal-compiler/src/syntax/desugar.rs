@@ -107,6 +107,7 @@ impl ExpandedSlotDecl {
             attributes: vec![],
             kind,
             span,
+            doc: None,
         }
     }
 }

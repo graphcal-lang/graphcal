@@ -64,6 +64,10 @@ pub struct Declaration<P: Phase = Raw> {
     pub attributes: Vec<Attribute>,
     pub kind: DeclKind<P>,
     pub span: Span,
+    /// The `///` doc block immediately preceding this declaration, when one
+    /// exists. Attached by the parser (see `syntax::doc_attach`); purely
+    /// documentary, so it never affects semantics or format equivalence.
+    pub doc: Option<crate::syntax::comments::DocComment>,
 }
 
 #[derive(Debug, Clone)]

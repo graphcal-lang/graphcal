@@ -380,6 +380,7 @@ impl Parser<'_> {
         })?;
 
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Sugar(crate::syntax::ast::RawDeclSugar::Multi(multi)),
             span: surface_span,

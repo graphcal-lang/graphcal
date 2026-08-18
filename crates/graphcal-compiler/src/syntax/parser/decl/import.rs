@@ -43,6 +43,7 @@ impl Parser<'_> {
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
             span,
@@ -81,6 +82,7 @@ impl Parser<'_> {
         let (_, end_span) = self.expect(Token::RBrace)?;
 
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::PluginImport(crate::syntax::ast::PluginImportDecl {
                 path: crate::syntax::span::Spanned::new(path, path_span),
@@ -212,6 +214,7 @@ impl Parser<'_> {
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Include(crate::syntax::ast::IncludeDecl {
                 path,

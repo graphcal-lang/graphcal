@@ -84,6 +84,10 @@ impl<'src> ParserTokenStream<'src> {
         self.lexer.into_source_metadata()
     }
 
+    pub(super) const fn source_metadata(&self) -> &SourceMetadata {
+        self.lexer.source_metadata()
+    }
+
     #[cfg(test)]
     pub(super) fn cancel_after_successful_checkpoints(&mut self, successful_checkpoints: usize) {
         self.cancellation = CancellationPolicy::bounded(

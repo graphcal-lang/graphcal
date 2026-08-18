@@ -19,6 +19,7 @@ impl Parser<'_> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = base_span.merge(semi_span);
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::BaseDimension(BaseDimDecl {
                 visibility: Visibility::Private,
@@ -46,6 +47,7 @@ impl Parser<'_> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Dimension(DimDecl {
                 visibility: BindableVisibility::Private,
@@ -126,6 +128,7 @@ impl Parser<'_> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Unit(crate::syntax::ast::UnitDecl {
                 visibility: Visibility::Private,

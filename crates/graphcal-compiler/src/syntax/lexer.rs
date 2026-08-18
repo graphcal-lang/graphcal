@@ -186,6 +186,11 @@ impl<'src> Lexer<'src> {
     pub(crate) fn into_source_metadata(self) -> SourceMetadata {
         self.source_metadata
     }
+
+    #[must_use]
+    pub(crate) const fn source_metadata(&self) -> &SourceMetadata {
+        &self.source_metadata
+    }
 }
 
 fn read_next_token(
