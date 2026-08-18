@@ -104,7 +104,7 @@ impl<P: Phase> DeclKind<P> {
     /// variant carries a name. `Import` and `Include` have no name and return
     /// `None`.
     #[must_use]
-    pub(crate) fn name_and_span(&self) -> Option<(&str, Span)> {
+    pub fn name_and_span(&self) -> Option<(&str, Span)> {
         match self {
             Self::Param(p) => Some((p.name.value.as_str(), p.name.span)),
             Self::Node(n) => Some((n.name.value.as_str(), n.name.span)),
