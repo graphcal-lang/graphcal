@@ -58,6 +58,25 @@ impl RawDeclSugar {
 pub struct File<P: Phase = Raw> {
     pub declarations: Vec<Declaration<P>>,
 }
+
+impl<P: Phase> File<P> {
+    /// Whether any declaration (including inside nested `dag` bodies) is a
+    /// plugin import. Environments without a plugin host (the browser wasm
+    /// engine) use this to reject plugin projects loudly and early.
+    #[must_use]
+    pub fn uses_plugins(&self) -> bool {
+        fn any_plugin<P: Phase>(declarations: &[Declaration<P>]) -> bool {
+            declarations
+                .iter()
+                .any(|declaration| match &declaration.kind {
+                    DeclKind::PluginImport(_) => true,
+                    DeclKind::Dag(dag) => any_plugin(&dag.body),
+                    _ => false,
+                })
+        }
+        any_plugin(&self.declarations)
+    }
+}
 /// A top-level declaration.
 #[derive(Debug, Clone)]
 pub struct Declaration<P: Phase = Raw> {

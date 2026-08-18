@@ -21,10 +21,10 @@ use graphcal_eval::host_fns::demo_registry;
 use graphcal_eval::loader::load_project;
 use serde::{Deserialize, Serialize};
 
+use crate::PlaygroundRequest;
 use crate::diagnostics::{DiagnosticView, compile_error_view};
 use crate::output::EvaluationView;
 use crate::project::{ProjectValidationError, RequestErrorView, VirtualProject};
-use crate::{PlaygroundRequest, declarations_use_plugins};
 
 /// Maximum UTF-8 size of one binding expression string.
 pub const MAX_BINDING_EXPR_BYTES: usize = 4096;
@@ -77,7 +77,7 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
     if loaded
         .files()
         .values()
-        .any(|file| declarations_use_plugins(&file.ast().declarations))
+        .any(|file| file.ast().uses_plugins())
     {
         let error = ProjectValidationError::PluginsUnsupported;
         return PrepareOutcome::Rejected {
@@ -536,5 +536,37 @@ assert positive = @delta_v > 0.0 m/s;
         };
         assert_eq!(index, "Mode");
         assert_eq!(variants, &["Nominal".to_string(), "Safe".to_string()]);
+    }
+
+    /// The hydration runtime emits these exact expression shapes from its
+    /// controls: checkbox -> `true`/`false`, stepper -> integer text,
+    /// select -> `Index.Variant`. Each must bind as a closed value.
+    #[test]
+    fn control_emitted_expressions_bind() {
+        let prepared = prepare_ok(
+            "pub index Mode = { Nominal, Safe };\n\
+             param enabled: Bool = true;\n\
+             param retries: Int(min: 0, max: 5) = 1;\n\
+             param mode: Key<Mode> = Mode.Nominal;\n\
+             node out: Dimensionless = if @enabled { 1.0 } else { 0.0 };\n",
+        );
+        let outcome = prepared.evaluate(&[
+            BindingRequest {
+                name: "enabled".to_string(),
+                expr: "false".to_string(),
+            },
+            BindingRequest {
+                name: "retries".to_string(),
+                expr: "3".to_string(),
+            },
+            BindingRequest {
+                name: "mode".to_string(),
+                expr: "Mode.Safe".to_string(),
+            },
+        ]);
+        let EvaluateOutcome::Evaluated { evaluation } = outcome else {
+            panic!("expected evaluation, got {outcome:?}");
+        };
+        assert!(!evaluation.has_errors);
     }
 }
