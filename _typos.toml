@@ -1,0 +1,5 @@
+# Vendored third-party browser bundles are minified code, not prose: their
+# shortened identifiers trip the checker, and its auto-fix would corrupt the
+# files (see crates/graphcal-report/assets/README.md for provenance).
+[files]
+extend-exclude = ["crates/graphcal-report/assets/*.min.js"]
