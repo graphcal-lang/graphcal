@@ -46,6 +46,7 @@ CRATE_ORDER = [
     "graphcal-plugin-macros",
     "graphcal-plugin",
     "graphcal-eval",
+    "graphcal-report",
     "graphcal-test-support",
     "graphcal-tenax",
     "graphcal-wasm",

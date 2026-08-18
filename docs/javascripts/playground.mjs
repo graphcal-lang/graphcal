@@ -3,6 +3,38 @@ const WORKER_URL = new URL("playground-worker.mjs", import.meta.url);
 const EVALUATION_TIMEOUT_MS = 10_000;
 const AUTO_RUN_DELAY_MS = 400;
 
+// Vendored Vega bundles (copied from crates/graphcal-report/assets by the
+// docs build). Classic UMD scripts, loaded lazily the first time a figure
+// must render so text-only sessions never pay for them.
+const VEGA_SCRIPT_URLS = ["vega.min.js", "vega-lite.min.js", "vega-embed.min.js"].map(
+  (name) => new URL(`../assets/playground/vega/${name}`, import.meta.url),
+);
+let vegaRuntime;
+
+function loadClassicScript(url) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = url;
+    script.addEventListener("load", resolve);
+    script.addEventListener("error", () => reject(new Error(`failed to load ${url}`)));
+    document.head.append(script);
+  });
+}
+
+function ensureVega() {
+  vegaRuntime ??= (async () => {
+    for (const url of VEGA_SCRIPT_URLS) {
+      // Sequential: vega-lite needs vega, vega-embed needs both.
+      await loadClassicScript(url);
+    }
+    if (typeof globalThis.vegaEmbed !== "function") {
+      throw new Error("vega-embed did not initialize");
+    }
+    return globalThis.vegaEmbed;
+  })();
+  return vegaRuntime;
+}
+
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -98,7 +130,7 @@ class GraphcalPlayground extends HTMLElement {
     const scope = element(
       "p",
       "gc-playground__scope",
-      "Experimental browser v1 for alpha-stage Graphcal. Local single- and multi-file projects are supported; package dependencies, plugins, and plot rendering are not.",
+      "Experimental browser v1 for alpha-stage Graphcal. Local single- and multi-file projects are supported; package dependencies and plugins are not.",
     );
 
     this.replaceChildren(header, layout, scope);
@@ -330,7 +362,30 @@ class GraphcalPlayground extends HTMLElement {
       this.output.append(assertions);
     }
 
+    const figures = evaluation.figures ?? [];
+    if (figures.length > 0) {
+      this.output.append(element("h3", "gc-playground__output-title", "Plots"));
+      for (const figure of figures) {
+        const container = element("figure", "gc-playground__figure");
+        container.append(element("figcaption", "gc-playground__figure-name", figure.name));
+        const target = element("div", "gc-playground__figure-view");
+        container.append(target);
+        this.output.append(container);
+        this.renderFigure(target, figure);
+      }
+    }
+
     this.output.append(element("p", "gc-playground__version", `Graphcal ${evaluation.compiler_version} · running locally in WebAssembly`));
+  }
+
+  renderFigure(target, figure) {
+    ensureVega()
+      .then((vegaEmbed) => vegaEmbed(target, figure.spec, { actions: false }))
+      .catch((error) => {
+        target.replaceChildren(
+          this.renderMessage("error", `Plot ${figure.name} failed to render: ${error.message ?? error}`),
+        );
+      });
   }
 
   renderValue(value) {

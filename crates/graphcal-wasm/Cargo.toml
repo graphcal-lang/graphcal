@@ -19,8 +19,10 @@ graphcal-compiler.workspace = true
 graphcal-eval.workspace = true
 graphcal-io.workspace = true
 graphcal-package.workspace = true
+graphcal-report.workspace = true
 miette.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

@@ -560,19 +560,28 @@ The public API is re-exported from `eval/mod.rs`, including
 `compile_and_eval_project`, `compile_to_tir_project`, and
 `compile_and_eval_from_project`.
 
-### 2.3 `graphcal-fmt`
+### 2.3 `graphcal-report`
+
+The functional core for rendering evaluated projects into shareable documents.
+Pure projections from evaluated plot specs to Vega-Lite JSON (`vega.rs`), plus
+self-contained HTML plot pages (`plot_page.rs`) that inline vendored
+vega/vega-lite/vega-embed bundles (`vega_assets.rs`, `assets/`) so output works
+offline and from `file://` paths. Consumed by the CLI (`--plot`) and the
+browser WASM adapter (playground figures). No file, process, or network I/O.
+
+### 2.4 `graphcal-fmt`
 
 The formatter parses `File<Raw>` and prints it with the `pretty` crate.
 Formatting modules are split by syntax family under `src/format/`.
 
-### 2.4 `graphcal-io`
+### 2.5 `graphcal-io`
 
 `graphcal-io` isolates filesystem access behind `FileSystemReader`.
 Implementations include real, in-memory, and overlay filesystems. The loader
 uses this crate so tests and editor integrations can run deterministically
 without direct disk coupling.
 
-### 2.5 `graphcal-package`
+### 2.6 `graphcal-package`
 
 `graphcal-package` is a pure package-management domain crate. It has no Git,
 filesystem, cache, or CLI I/O; callers provide manifest text, lockfile text,
@@ -585,7 +594,7 @@ validation of the locked package graph. Keep credentials, cache paths, and Git
 commands outside this crate; it should remain the functional core for package
 resolution.
 
-### 2.6 `graphcal-cli`
+### 2.7 `graphcal-cli`
 
 The CLI is the imperative shell around the library pipeline and package
 management commands. The package has both a binary target (`main.rs`) and a small
@@ -621,9 +630,11 @@ Key files:
 - `display.rs` renders normal eval text output.
 - `dump.rs` selects one pipeline boundary and pretty-prints its unstable Rust
   `Debug` representation.
-- `plot.rs` renders plot/figure/layer output.
+- Plot/figure/layer rendering lives in `graphcal-report` (Vega-Lite
+  projection plus self-contained HTML pages with vendored Vega bundles);
+  the CLI consumes it for `--plot` output.
 
-### 2.7 `graphcal-lsp`
+### 2.8 `graphcal-lsp`
 
 The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 
@@ -655,7 +666,7 @@ includes. Deliberate empty-symbol-table and empty-resolver fallbacks leave the
 synchronous core as typed `AnalysisDegradation` values; the async server shell
 renders them through `window/logMessage`.
 
-### 2.8 Editors and Grammars
+### 2.9 Editors and Grammars
 
 Syntax/editor surfaces live outside the Rust workspace:
 
@@ -1198,18 +1209,19 @@ Note: `token.rs`, `comments.rs`, and `lexer.rs` are mutually dependent.
 
 ### Stage 2 - Core AST, parser entry, and traversal
 
-Note: `syntax/ast/value.rs`, `syntax/ast/decl.rs`, `syntax/ast/format_equivalent.rs`, `syntax/ast.rs`, and `syntax/parser/mod.rs` are mutually dependent; they are ordered with reusable AST pieces first.
+Note: `syntax/ast/value.rs`, `syntax/doc_attach.rs`, `syntax/ast/decl.rs`, `syntax/ast/format_equivalent.rs`, `syntax/ast.rs`, and `syntax/parser/mod.rs` are mutually dependent (the parser attaches doc blocks, and declarations carry them); they are ordered with reusable AST pieces first.
 
 1. `crates/graphcal-compiler/src/syntax/ast/common.rs`
 2. `crates/graphcal-compiler/src/exact_rational.rs`
 3. `crates/graphcal-compiler/src/dimension.rs`
 4. `crates/graphcal-compiler/src/cancellation.rs`
 5. `crates/graphcal-compiler/src/syntax/ast/value.rs`
-6. `crates/graphcal-compiler/src/syntax/ast/decl.rs`
-7. `crates/graphcal-compiler/src/syntax/ast/format_equivalent.rs`
-8. `crates/graphcal-compiler/src/syntax/ast.rs`
-9. `crates/graphcal-compiler/src/syntax/parser/mod.rs`
-10. `crates/graphcal-compiler/src/syntax/visitor.rs`
+6. `crates/graphcal-compiler/src/syntax/doc_attach.rs`
+7. `crates/graphcal-compiler/src/syntax/ast/decl.rs`
+8. `crates/graphcal-compiler/src/syntax/ast/format_equivalent.rs`
+9. `crates/graphcal-compiler/src/syntax/ast.rs`
+10. `crates/graphcal-compiler/src/syntax/parser/mod.rs`
+11. `crates/graphcal-compiler/src/syntax/visitor.rs`
 
 ### Stage 3 - Parser submodules and surface desugaring
 
@@ -1435,17 +1447,30 @@ byte adapter shared with libFuzzer.
 
 1. `crates/graphcal-tenax/src/lib.rs`
 
-### Stage 17 - Browser WASM adapter (`graphcal-wasm`)
+### Stage 17 - Report rendering (`graphcal-report`)
 
-Note: the order tool groups these files because `lib.rs` re-exports the browser transport types. The practical review order remains project validation and size policy, value conversion, bounded JavaScript request decoding, diagnostic conversion, then the imperative adapter shell.
+The functional core for rendering evaluated projects into shareable documents:
+escaping and vendored Vega assets are dependency-free leaves; the Vega-Lite
+projection and the self-contained plot page consume evaluated specs.
+
+1. `crates/graphcal-report/src/lib.rs`
+2. `crates/graphcal-report/src/escape.rs`
+3. `crates/graphcal-report/src/vega_assets.rs`
+4. `crates/graphcal-report/src/vega.rs`
+5. `crates/graphcal-report/src/plot_page.rs`
+
+### Stage 18 - Browser WASM adapter (`graphcal-wasm`)
+
+Note: the order tool groups these files because `lib.rs` re-exports the browser transport types. The practical review order remains project validation and size policy, value conversion, bounded JavaScript request decoding, diagnostic conversion, the prepare-once evaluation surface, then the imperative adapter shell.
 
 1. `crates/graphcal-wasm/src/project.rs`
 2. `crates/graphcal-wasm/src/output.rs`
 3. `crates/graphcal-wasm/src/js_request.rs`
 4. `crates/graphcal-wasm/src/diagnostics.rs`
-5. `crates/graphcal-wasm/src/lib.rs`
+5. `crates/graphcal-wasm/src/prepared.rs`
+6. `crates/graphcal-wasm/src/lib.rs`
 
-### Stage 18 - WASM plugin host (`graphcal-plugin-host`)
+### Stage 19 - WASM plugin host (`graphcal-plugin-host`)
 
 Note: all six files form a re-export cycle through `lib.rs`. Within it, `cache.rs` is the runtime-agnostic bounded single-flight core and `convert.rs` is the untrusted-boundary leaf; `module.rs` owns validated compiled artifacts, `registry.rs` bridges loaded projects to the evaluator, `host.rs` is the imperative loading/cache shell, and `lib.rs` re-exports the public surface.
 
@@ -1456,7 +1481,7 @@ Note: all six files form a re-export cycle through `lib.rs`. Within it, `cache.r
 5. `crates/graphcal-plugin-host/src/host.rs`
 6. `crates/graphcal-plugin-host/src/lib.rs`
 
-### Stage 19 - Formatter (`graphcal-fmt`)
+### Stage 20 - Formatter (`graphcal-fmt`)
 
 Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod.rs` form a mutually dependent group. `lib.rs` is the public formatting API shell and appears first in the generated order.
 
@@ -1466,7 +1491,7 @@ Note: `format/type_expr.rs`, `format/expr.rs`, `format/decl.rs`, and `format/mod
 4. `crates/graphcal-fmt/src/format/decl.rs`
 5. `crates/graphcal-fmt/src/format/mod.rs`
 
-### Stage 20 - LSP prelude and CLI shell
+### Stage 21 - LSP prelude and CLI shell
 
 Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent group. `main.rs` consumes the `graphcal` library target's `format` module as well as binary-local modules, so the CLI package is ordered as one shell group here.
 
@@ -1479,17 +1504,16 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 7. `crates/graphcal-lsp/src/project_symbols.rs`
 8. `crates/graphcal-lsp/src/formatting.rs`
 9. `crates/graphcal-cli/src/display.rs`
-10. `crates/graphcal-cli/src/plot.rs`
-11. `crates/graphcal-cli/src/format.rs`
-12. `crates/graphcal-cli/src/json_input.rs`
-13. `crates/graphcal-cli/src/overrides.rs`
-14. `crates/graphcal-cli/src/model.rs`
-15. `crates/graphcal-cli/src/main.rs`
-16. `crates/graphcal-cli/src/dump.rs`
-17. `crates/graphcal-cli/src/deps.rs`
-18. `crates/graphcal-cli/src/lib.rs`
+10. `crates/graphcal-cli/src/format.rs`
+11. `crates/graphcal-cli/src/json_input.rs`
+12. `crates/graphcal-cli/src/overrides.rs`
+13. `crates/graphcal-cli/src/model.rs`
+14. `crates/graphcal-cli/src/main.rs`
+15. `crates/graphcal-cli/src/dump.rs`
+16. `crates/graphcal-cli/src/deps.rs`
+17. `crates/graphcal-cli/src/lib.rs`
 
-### Stage 21 - Language server (`graphcal-lsp`)
+### Stage 22 - Language server (`graphcal-lsp`)
 
 Note: feature modules reference `server::AnalysisResult`, while `server.rs`
 orchestrates those features. Read the typed indexing and revision cores first,
@@ -1520,7 +1544,7 @@ then the request features, and finally the imperative server shell.
 23. `crates/graphcal-lsp/src/server.rs`
 24. `crates/graphcal-lsp/src/lib.rs`
 
-### Stage 22 - CLI plugin support and integration tests
+### Stage 23 - CLI plugin support and integration tests
 
 1. `crates/graphcal-cli/build.rs`
 2. `crates/graphcal-cli/src/plugin.rs`

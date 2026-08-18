@@ -26,11 +26,15 @@ hawk:
 wasm-test:
     wasm-pack test --node crates/graphcal-wasm
 
-# Build the browser adapter and wasm-bindgen glue consumed by Zensical.
+# Build the browser adapter and wasm-bindgen glue consumed by Zensical, and
+# stage the vendored Vega bundles the playground loads for plot rendering.
 wasm-playground:
     rm -rf docs/assets/playground/pkg
     wasm-pack build crates/graphcal-wasm --target web --out-dir ../../docs/assets/playground/pkg --release --no-typescript --no-pack
     rm -f docs/assets/playground/pkg/.gitignore
+    rm -rf docs/assets/playground/vega
+    mkdir -p docs/assets/playground/vega
+    cp crates/graphcal-report/assets/vega.min.js crates/graphcal-report/assets/vega-lite.min.js crates/graphcal-report/assets/vega-embed.min.js docs/assets/playground/vega/
 
 # Populate the published site root: redirect stub, CNAME, robots.txt, and a
 # copy of the themed 404 page that GitHub Pages serves for unmatched paths.
@@ -44,6 +48,9 @@ docs-build: wasm-playground
     just docs-assemble
     test -s site/docs/assets/playground/pkg/graphcal_wasm.js
     test -s site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm
+    test -s site/docs/assets/playground/vega/vega.min.js
+    test -s site/docs/assets/playground/vega/vega-lite.min.js
+    test -s site/docs/assets/playground/vega/vega-embed.min.js
     test "$(wc -c < site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm)" -le 5242880
     node --check docs/javascripts/playground.mjs
     node --check docs/javascripts/playground-worker.mjs

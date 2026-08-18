@@ -14,8 +14,16 @@ pub struct EvaluationView {
     pub compiler_version: &'static str,
     pub values: Vec<DeclarationView>,
     pub assertions: Vec<AssertionView>,
+    pub figures: Vec<FigureView>,
     pub notices: Vec<NoticeView>,
     pub has_errors: bool,
+}
+
+/// One renderable figure: a Vega-Lite spec ready for `vegaEmbed`.
+#[derive(Debug, Clone, Serialize)]
+pub struct FigureView {
+    pub name: String,
+    pub spec: serde_json::Value,
 }
 
 impl From<&EvalResult> for EvaluationView {
@@ -44,13 +52,28 @@ impl From<&EvalResult> for EvaluationView {
             .collect();
 
         let mut notices = Vec::new();
-        if !result.plots.is_empty() || !result.figures.is_empty() || !result.layers.is_empty() {
-            notices.push(NoticeView::UnsupportedCapability {
-                capability: UnsupportedCapability::PlotRendering,
-                message: "plot and figure declarations are evaluated, but browser plot rendering is not available yet"
-                    .to_string(),
-            });
-        }
+        let figures = match graphcal_report::vega::build_figures(
+            &result.plots,
+            &result.figures,
+            &result.layers,
+        ) {
+            Ok(figures) => figures
+                .into_iter()
+                .map(|figure| FigureView {
+                    name: figure.name,
+                    spec: figure.spec,
+                })
+                .collect(),
+            Err(error) => {
+                // Resolution rejects unknown plot references at compile
+                // time (#843): reaching this is a compiler bug, reported
+                // loudly rather than silently dropping figures.
+                notices.push(NoticeView::InternalError {
+                    message: error.to_string(),
+                });
+                Vec::new()
+            }
+        };
         notices.extend(
             result
                 .plot_errors
@@ -65,6 +88,7 @@ impl From<&EvalResult> for EvaluationView {
             compiler_version: env!("CARGO_PKG_VERSION"),
             values,
             assertions,
+            figures,
             notices,
             has_errors: result.has_errors(),
         }
@@ -419,20 +443,15 @@ impl From<&AssertResult> for AssertionOutcomeView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NoticeView {
-    UnsupportedCapability {
-        capability: UnsupportedCapability,
-        message: String,
-    },
     PlotError {
         name: String,
         message: String,
     },
-}
-
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum UnsupportedCapability {
-    PlotRendering,
+    /// A compiler invariant failed while assembling browser output. Shown to
+    /// the user instead of silently dropping the affected output.
+    InternalError {
+        message: String,
+    },
 }
 
 #[cfg(test)]
@@ -440,6 +459,22 @@ mod tests {
     use graphcal_eval::eval::compile_and_eval;
 
     use super::*;
+
+    #[test]
+    fn plots_render_as_vega_lite_figures() {
+        let result = compile_and_eval(
+            "node y: Dimensionless = 2.0;\nplot p = { mark: line, encode: { x: 1.0, y: @y } };",
+        )
+        .unwrap();
+        let view = EvaluationView::from(&result);
+        assert_eq!(view.figures.len(), 1);
+        assert_eq!(view.figures[0].name, "p");
+        assert_eq!(
+            view.figures[0].spec["$schema"],
+            serde_json::json!("https://vega.github.io/schema/vega-lite/v5.json")
+        );
+        assert!(view.notices.is_empty());
+    }
 
     #[test]
     fn indexed_values_remain_structured() {

@@ -43,6 +43,14 @@ jobs:
             --no-typescript \
             --no-pack
           rm -f docs/assets/playground/pkg/.gitignore
+          # Stage the vendored Vega bundles the playground loads for plot
+          # rendering (mirrors the `wasm-playground` recipe in the justfile).
+          rm -rf docs/assets/playground/vega
+          mkdir -p docs/assets/playground/vega
+          cp crates/graphcal-report/assets/vega.min.js \
+            crates/graphcal-report/assets/vega-lite.min.js \
+            crates/graphcal-report/assets/vega-embed.min.js \
+            docs/assets/playground/vega/
       - run: zensical build --clean
       - name: Assemble published site root
         run: |
@@ -63,6 +71,9 @@ jobs:
           test -s site/docs/assets/playground/pkg/graphcal_wasm.js
           test -s site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm
           test -s site/docs/javascripts/playground-worker.mjs
+          test -s site/docs/assets/playground/vega/vega.min.js
+          test -s site/docs/assets/playground/vega/vega-lite.min.js
+          test -s site/docs/assets/playground/vega/vega-embed.min.js
           # Keep the initial raw WebAssembly download within the 5 MiB v1 budget.
           wasm_bytes=$(wc -c < site/docs/assets/playground/pkg/graphcal_wasm_bg.wasm)
           test "$wasm_bytes" -le 5242880
