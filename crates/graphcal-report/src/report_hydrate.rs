@@ -14,7 +14,7 @@ use serde_json::json;
 use crate::escape::escape_json_for_script;
 
 /// The report runtime script embedded into hydrated pages.
-pub(crate) const REPORT_RUNTIME_JS: &str = include_str!("report_runtime.js");
+const REPORT_RUNTIME_JS: &str = include_str!("report_runtime.js");
 
 /// The browser engine bundle produced by `wasm-pack --target no-modules`.
 pub struct EngineBundle<'a> {

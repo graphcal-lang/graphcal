@@ -104,7 +104,7 @@ pub fn build_figures(
 /// (quantitative/temporal) — Vega-Lite requires selection params on child
 /// views for composed specs, and scale-bound intervals need a continuous
 /// scale to act on.
-pub fn add_pan_zoom(spec: &mut JsonValue) {
+pub(crate) fn add_pan_zoom(spec: &mut JsonValue) {
     if spec.get("mark").is_none() || spec.get("params").is_some() {
         return;
     }

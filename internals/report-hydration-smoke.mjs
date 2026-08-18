@@ -70,4 +70,12 @@ assert.equal(rejected.errors[0].name, "isp");
 const injection = prepared.evaluateBindings([{ name: "isp", expr: "@g0 * 40.0 s^2/m" }]);
 assert.equal(injection.status, "binding_errors", "readers bind closed values only");
 
+// The controls must emit real-literal syntax: `1200 kg` is not a quantity
+// literal, `1200.0 kg` is. The runtime derives its initial field text and
+// slider expressions with a forced decimal point for exactly this reason.
+const integerStyle = prepared.evaluateBindings([{ name: "dry_mass", expr: "1200 kg" }]);
+assert.equal(integerStyle.status, "binding_errors", "integer-style quantity text must be rejected");
+const decimalStyle = prepared.evaluateBindings([{ name: "dry_mass", expr: "1200.0 kg" }]);
+assert.equal(decimalStyle.status, "evaluated", "decimal-style quantity text must bind");
+
 console.log("report hydration smoke: ok");

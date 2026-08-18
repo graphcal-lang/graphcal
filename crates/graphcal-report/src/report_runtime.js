@@ -121,25 +121,48 @@
     return document.querySelector('#inputs [data-decl="' + selectorEscape(name) + '"]');
   }
 
-  function baselineExprFor(port) {
+  // Format a number as a valid Graphcal real literal: integral values need
+  // an explicit decimal point (`1200 kg` is not a quantity literal,
+  // `1200.0 kg` is).
+  function numberLiteral(value) {
+    var text = String(value);
+    return /^-?[0-9]+$/.test(text) ? text + ".0" : text;
+  }
+
+  // Derive a valid closed-literal expression from one evaluated param view,
+  // or null when the value has no single-line literal form (structured
+  // values: the reader replaces the field wholesale).
+  function exprFromView(view) {
+    if (!view) return null;
+    if (view.kind === "quantity") {
+      return numberLiteral(view.value) + (view.unit ? " " + view.unit : "");
+    }
+    if (view.kind === "bool") return String(view.value);
+    if (view.kind === "int") return view.decimal;
+    if (view.kind === "label") return view.index + "." + view.variant;
+    return null;
+  }
+
+  function baselineExprFor(port, paramView) {
     for (var i = 0; i < baselineBindings.length; i += 1) {
       if (baselineBindings[i].name === port.name) return baselineBindings[i].expr;
     }
-    // The static card body shows the baseline value in full literal syntax
-    // (value plus canonical unit label), which is a valid closed expression.
-    var card = cardFor(port.name);
-    var value = card ? card.querySelector('[data-role="value"]') : null;
-    return value ? value.textContent.trim() : "";
+    // No build-time override: derive the literal from the evaluated baseline
+    // value. Never scrape display text — its formatting (`1200 kg`) is not
+    // literal syntax.
+    return exprFromView(paramView);
   }
 
-  function makeControl(port) {
+  function makeControl(port, paramView) {
     var card = cardFor(port.name);
     if (!card) return null;
     var holder = element("div", "control");
     var errorLine = element("p", "control-error");
     errorLine.hidden = true;
 
-    var initialExpr = baselineExprFor(port);
+    // Empty means "leave unbound": evaluation falls back to the compiled
+    // default, so an unedited control never sends a binding.
+    var initialExpr = baselineExprFor(port, paramView) || "";
     var control = {
       name: port.name,
       initialExpr: initialExpr,
@@ -191,6 +214,7 @@
       var field = element("input", "control-field");
       field.type = "text";
       field.value = initialExpr;
+      field.placeholder = "closed value literal";
       field.spellcheck = false;
       field.addEventListener("input", function () {
         commit(field.value);
@@ -221,7 +245,9 @@
         var unitSuffix =
           isBoundedQuantity && port.control.unit ? " " + port.control.unit : "";
         slider.addEventListener("input", function () {
-          var expr = slider.value + unitSuffix;
+          var expr = isBoundedQuantity
+            ? numberLiteral(Number(slider.value)) + unitSuffix
+            : slider.value;
           field.value = expr;
           commit(expr);
         });
@@ -237,9 +263,16 @@
     return control;
   }
 
-  function buildControls(ports) {
+  function buildControls(ports, evaluation) {
+    var paramViews = {};
+    for (var v = 0; v < evaluation.values.length; v += 1) {
+      var declaration = evaluation.values[v];
+      if (declaration.declaration_kind === "param" && declaration.outcome.status === "value") {
+        paramViews[declaration.name] = declaration.outcome.value;
+      }
+    }
     for (var i = 0; i < ports.length; i += 1) {
-      var control = makeControl(ports[i]);
+      var control = makeControl(ports[i], paramViews[ports[i].name]);
       if (control) controls.set(control.name, control);
     }
     resetButton.addEventListener("click", function () {
@@ -493,6 +526,13 @@
   var debounceTimer = null;
   var evaluateQueued = false;
   var ready = false;
+  var storedPorts = [];
+
+  // Before the controls exist (the first evaluation seeds them), replay the
+  // build-time baseline bindings so the initial result matches the page.
+  function activeBindings() {
+    return controls.size > 0 ? currentBindings() : baselineBindings;
+  }
 
   function scheduleEvaluate() {
     if (debounceTimer) clearTimeout(debounceTimer);
@@ -521,17 +561,17 @@
       setStatus("evaluation timed out · restarting engine", "warn");
       startWorker();
     }, EVALUATION_TIMEOUT_MS);
-    worker.postMessage({ type: "evaluate", id: requestId, bindings: currentBindings() });
+    worker.postMessage({ type: "evaluate", id: requestId, bindings: activeBindings() });
   }
 
   function handleMessage(event) {
     var msg = event.data;
     if (msg.type === "ready") {
       ready = true;
-      if (controls.size === 0) buildControls(msg.ports);
-      setStatus("live", "ok");
-      // Verify the baseline (and pick up slider positions) with one initial
-      // evaluation over the embedded baseline bindings.
+      storedPorts = msg.ports;
+      // The first evaluation (over the baseline bindings) both verifies the
+      // static page and supplies the evaluated param values the controls
+      // seed their literal expressions from.
       evaluateQueued = false;
       runEvaluate();
       return;
@@ -540,6 +580,9 @@
       if (msg.id !== activeRequest) return;
       clearTimeout(timeoutTimer);
       activeRequest = null;
+      if (controls.size === 0 && msg.outcome.status === "evaluated") {
+        buildControls(storedPorts, msg.outcome.evaluation);
+      }
       applyOutcome(msg.outcome);
       if (evaluateQueued) {
         evaluateQueued = false;
