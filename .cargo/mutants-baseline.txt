@@ -27,16 +27,27 @@ crates/graphcal-compiler/src/nat.rs	NatPolyForm::variables	FnValue	BTreeSet::new
 
 # Package acceptance/error behavior not directly distinguished by existing tests.
 crates/graphcal-package/src/lib.rs	parse_scp_git_url	BinaryOperator	&&
+crates/graphcal-package/src/lib.rs	parse_scp_git_url	MatchArmGuard	true
+crates/graphcal-package/src/lib.rs	parse_required_ssh_user	BinaryOperator	&&
+crates/graphcal-package/src/lib.rs	is_ambiguous_raw_path_component	BinaryOperator	&&
+crates/graphcal-package/src/lib.rs	<impl fmt::Display for PackageSourceDirectoryErrorReason>::fmt	FnValue	Ok(Default::default())
 crates/graphcal-package/src/lib.rs	is_valid_name	FnValue	true
 crates/graphcal-package/src/lib.rs	is_valid_name	BinaryOperator	||
 crates/graphcal-package/src/lib.rs	Lockfile::reject_dependency_cycles	MatchArmGuard	false
 crates/graphcal-package/src/lib.rs	<impl fmt::Display for LockedDependencyCycle>::fmt	FnValue	Ok(Default::default())
 crates/graphcal-package/src/lib.rs	ValidatedLockfile<'_>::bind_manifests	BinaryOperator	||
+crates/graphcal-package/src/lib.rs	ValidatedLockfile<'_>::bind_manifests	MatchArmGuard	true
+crates/graphcal-package/src/lib.rs	required_u64	FnValue	Ok(1)
+crates/graphcal-package/src/lib.rs	push_kv_inline_table	BinaryOperator	<
+crates/graphcal-package/src/lib.rs	push_escaped_string	MatchArmGuard	false
 
 # Plugin diagnostics/size-limit behavior not directly distinguished by tests.
+crates/graphcal-plugin-abi/src/manifest.rs	<impl Write for ManifestJsonWriter>::write	BinaryOperator	>=
 crates/graphcal-plugin-abi/src/manifest.rs	PluginManifest::to_json	MatchArmGuard	true
 crates/graphcal-plugin-abi/src/manifest.rs	<impl std::fmt::Display for NameRole>::fmt	FnValue	Ok(Default::default())
 crates/graphcal-plugin-abi/src/manifest.rs	<impl std::fmt::Display for ManifestListRole>::fmt	FnValue	Ok(Default::default())
+crates/graphcal-plugin-abi/src/manifest.rs	function_context	FnValue	String::new()
+crates/graphcal-plugin-abi/src/manifest.rs	function_context	FnValue	"xyzzy".into()
 
 # The two offset mutations were killed by the added malformed-section assertion;
 # they remain only to make the pre-fix pilot report reproducibly checkable.
@@ -46,6 +57,17 @@ crates/graphcal-plugin-abi/src/section.rs	SectionWalker<'a>::next_section	Binary
 crates/graphcal-plugin-abi/src/section.rs	SectionWalker<'a>::next_section	BinaryOperator	-=
 crates/graphcal-plugin-abi/src/section.rs	encode_leb128_u32	BinaryOperator	!=
 
-# Presentation display constraints not directly distinguished by current tests.
+# Presentation matching, projection, and formatting behavior not directly
+# distinguished by current tests.
 crates/graphcal-eval/src/eval/display.rs	attach_struct	MatchArmGuard	true
+crates/graphcal-eval/src/eval/display.rs	attach_struct	MatchArm
+crates/graphcal-eval/src/eval/display.rs	attach_indexed	MatchArm
+crates/graphcal-eval/src/eval/display.rs	attach_indexed	MatchArmGuard	true
+crates/graphcal-eval/src/eval/display.rs	attach_leaf	MatchArmGuard	true
+crates/graphcal-eval/src/eval/display.rs	presentation_pattern_matches	BinaryOperator	||
+crates/graphcal-eval/src/eval/display.rs	format_coordinate	FnValue	String::new()
+crates/graphcal-eval/src/eval/display.rs	format_coordinate	FnValue	"xyzzy".into()
+crates/graphcal-eval/src/eval/display.rs	format_coordinate_exact	FnValue	String::new()
 crates/graphcal-eval/src/eval/display.rs	format_coordinate_exact	FnValue	"xyzzy".into()
+crates/graphcal-eval/src/runtime_presentation.rs	PresentationInstance::is_none	FnValue	false
+crates/graphcal-eval/src/runtime_presentation.rs	PresentationInstance::project_field	FnValue	Ok(Default::default())
