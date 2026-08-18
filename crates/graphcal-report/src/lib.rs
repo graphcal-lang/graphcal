@@ -6,7 +6,7 @@
 //! ([`plot_page`]). All file, process, and network I/O stays in the consumers
 //! (CLI, wasm adapter).
 
-pub mod escape;
+pub(crate) mod escape;
 pub mod plot_page;
 pub mod vega;
-pub mod vega_assets;
+pub(crate) mod vega_assets;

@@ -42,11 +42,11 @@ impl std::fmt::Display for PlotOwnerKind {
 #[error("internal error: {owner_kind} `{owner}` references unknown plot `{plot}`")]
 pub struct UnknownPlotReference {
     /// Which composition kind held the dangling reference.
-    pub owner_kind: PlotOwnerKind,
+    owner_kind: PlotOwnerKind,
     /// The figure/layer declaration holding the reference.
-    pub owner: ScopedName,
+    owner: ScopedName,
     /// The referenced plot name that could not be found.
-    pub plot: ScopedName,
+    plot: ScopedName,
 }
 
 /// Build figures from evaluated plot, figure, and layer specs.
