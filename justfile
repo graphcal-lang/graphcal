@@ -26,6 +26,19 @@ hawk:
 wasm-test:
     wasm-pack test --node crates/graphcal-wasm
 
+# Build the no-modules engine bundle consumed by hydrated reports
+# (`graphcal report build` embeds it; see docs/cli-reference.md).
+wasm-report:
+    rm -rf target/wasm-report/pkg
+    wasm-pack build crates/graphcal-wasm --target no-modules --out-dir ../../target/wasm-report/pkg --release --no-typescript --no-pack
+    rm -f target/wasm-report/pkg/.gitignore
+
+# Build a hydrated demo report with the real engine and drive its embedded
+# payload through the prepared-project API under Node.
+report-smoke: wasm-report
+    cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl --output target/wasm-report/rocket.report.html
+    node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
+
 # Build the browser adapter and wasm-bindgen glue consumed by Zensical, and
 # stage the vendored Vega bundles the playground loads for plot rendering.
 wasm-playground:

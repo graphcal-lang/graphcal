@@ -55,8 +55,9 @@ Save the example above as `rocket.gcl`, then run:
 graphcal eval rocket.gcl
 # Try a different input:
 graphcal eval rocket.gcl --set 'isp=450.0 s'
-# Build a shareable, self-contained HTML report (experimental):
-graphcal report build rocket.gcl
+# Build a shareable, self-contained HTML report (experimental; drop --static
+# for an interactive page once you build the wasm engine, see the CLI reference):
+graphcal report build rocket.gcl --static
 ```
 
 For the full CLI, see the [CLI reference](https://graphcal.org/docs/cli-reference/). For a guided introduction, start with the [tutorial](https://graphcal.org/docs/tutorial/).

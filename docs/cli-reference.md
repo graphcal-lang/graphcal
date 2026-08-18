@@ -535,8 +535,9 @@ syntax.
 
 ## `graphcal report build`
 
-Build a shareable, self-contained HTML report derived entirely from the model
-— no presentation layer to author. This feature is **experimental**.
+Build a shareable, self-contained, **interactive** HTML report derived
+entirely from the model — no presentation layer to author. This feature is
+**experimental**.
 
 ```bash
 graphcal report build model.gcl
@@ -547,17 +548,44 @@ path). The page is derived from what the model already declares:
 
 | Report section | Derived from |
 |---|---|
-| Inputs | `param` declarations with their baseline values |
+| Inputs | `param` declarations: every entry param becomes a control |
 | Values | `const`/`node` declarations in declaration order; indexed values render as grids |
-| Plots | `plot`/`figure`/`layer` declarations, rendered with inlined Vega bundles |
+| Plots | `plot`/`figure`/`layer` declarations, rendered with inlined Vega bundles; single-view charts with a continuous axis get pan/zoom |
 | Checks | `assert` results as pass/fail badges |
 | Captions | `///` doc comments attached to declarations |
 | Provenance | compiler version, SHA-256 of every source file, baseline parameter values, and a copy-pasteable reproduction command |
 
-The artifact is a single file with all assets inlined: it works offline, from
-`file://` paths, and as an email attachment. Values and checks render without
-JavaScript; charts need it. Output is deterministic — identical sources and
-compiler produce a byte-identical page, and there is no build timestamp.
+The controls follow the param's type and domain constraints: a unit-checked
+entry field for quantities (plus a slider when finite `min`/`max` bounds are
+declared), a checkbox for `Bool`, a stepper for `Int`, a select for
+`Key<Index>` over a named index, and a full closed-literal field for
+everything else. Readers bind closed typed values under the same rules as
+`eval --set` — wrong or missing units are rejected at the input box, values
+clamp to declared domains, and expressions are never injected into the
+prepared model. Edits re-evaluate the embedded engine (the same compiler and
+evaluator as this CLI, compiled to WebAssembly, running in a Web Worker) and
+patch values, grids, badges, and charts in place. The moment any input
+differs from the as-published baseline, a persistent banner appears with a
+one-click reset.
+
+The artifact is a single file with everything inlined — engine, sources,
+Vega bundles, styles: it works offline, from `file://` paths, and as an
+email attachment. The static baseline renders without JavaScript; charts and
+interactivity need it. Output is deterministic — identical sources, engine,
+and compiler produce a byte-identical page, and there is no build timestamp.
+
+**Engine bundle.** Hydration embeds a WebAssembly build of the evaluator,
+which is not bundled with the CLI binary. Build it once with
+`just wasm-report` (requires [wasm-pack](https://rustwasm.github.io/wasm-pack/)),
+or point `--engine-dir` (or `$GRAPHCAL_REPORT_ENGINE_DIR`) at any
+`wasm-pack build crates/graphcal-wasm --target no-modules` output. Without
+an engine the build fails with recovery instructions; `--static` builds a
+non-interactive report that needs no engine.
+
+Models the browser engine cannot run — plugin imports, package
+dependencies — fail loudly at build time with the reason; build them with
+`--static` instead (the baseline is still computed natively, plugins
+included).
 
 Options:
 
@@ -565,13 +593,15 @@ Options:
 |--------|-------------|
 | `-o, --output <FILE>` | Output HTML path (default: the model path with a `.report.html` extension) |
 | `--markdown <FILE.md>` | Also write a deterministic Markdown rendering for CI diffing |
-| `--set 'name=value'` | Bind a param to a closed value for the baseline (same rules as `eval --set`) |
-| `--input <FILE>` | JSON input file for param values |
+| `--set 'name=value'` | Bind a param to a closed value for the baseline (same rules as `eval --set`); replayed as the initial control values |
+| `--input <FILE>` | JSON input file for param values (static reports only) |
 | `--root <DIR>` | Project root directory (overrides automatic `graphcal.toml` detection) |
+| `--static` | Build a non-interactive report: no embedded engine, no controls |
+| `--engine-dir <DIR>` | Directory holding the browser engine bundle (default: `$GRAPHCAL_REPORT_ENGINE_DIR`, then `target/wasm-report/pkg`) |
 
 Exit codes: `0` success; `1` the report was written but contains evaluation
 errors or failed assertions (rendered as error chips and FAIL badges); `2` the
-project failed to compile (nothing is written).
+project failed to compile or cannot hydrate (nothing is written).
 
 ---
 

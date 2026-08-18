@@ -164,6 +164,23 @@ jobs:
       - name: Test browser evaluator on Wasm
         run: wasm-pack test --node crates/graphcal-wasm
 
+      - name: Smoke-test hydrated report artifacts
+        run: |
+          # Mirrors the `report-smoke` recipe in the justfile: build the
+          # no-modules engine, build a hydrated report with it, and drive
+          # the embedded payload through the prepared-project API in Node.
+          rm -rf target/wasm-report/pkg
+          wasm-pack build crates/graphcal-wasm \
+            --target no-modules \
+            --out-dir ../../target/wasm-report/pkg \
+            --release \
+            --no-typescript \
+            --no-pack
+          rm -f target/wasm-report/pkg/.gitignore
+          cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl \
+            --output target/wasm-report/rocket.report.html
+          node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
+
   coverage:
     runs-on: ubuntu-latest
     steps:
