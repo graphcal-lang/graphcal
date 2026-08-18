@@ -29,10 +29,10 @@ pub enum ValueBody {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GridTable {
     /// Inner-axis key labels, in first-seen order.
-    pub columns: Vec<String>,
+    pub(crate) columns: Vec<String>,
     /// Outer-axis rows: label plus one cell per column (empty string when a
     /// row has no value for that column).
-    pub rows: Vec<(String, Vec<String>)>,
+    pub(crate) rows: Vec<(String, Vec<String>)>,
 }
 
 /// Format one non-indexed value the way the CLI's text output does.
@@ -76,7 +76,7 @@ fn index_depth(value: &Value) -> usize {
 /// # Errors
 ///
 /// Returns the first display-unit projection error encountered in any leaf.
-pub fn project_value_body(
+pub(crate) fn project_value_body(
     value: &Value,
     symbols: &BTreeMap<BaseDimId, String>,
 ) -> Result<ValueBody, DisplayProjectionError> {

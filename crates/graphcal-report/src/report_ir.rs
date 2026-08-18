@@ -17,7 +17,7 @@ use crate::vega::{RenderedFigure, UnknownPlotReference, build_figures};
 /// One complete auto-report at baseline values.
 pub struct ReportDocument {
     /// Page title (normally the entry model name).
-    pub title: String,
+    pub(crate) title: String,
     /// Entry parameters in declaration order.
     pub params: Vec<ValueCard>,
     /// Constants and nodes in declaration order.
@@ -25,20 +25,20 @@ pub struct ReportDocument {
     /// Renderable figures in declaration order, with optional captions.
     pub figures: Vec<FigureCard>,
     /// Plot declarations that failed to evaluate.
-    pub plot_errors: Vec<CheckMessage>,
+    pub(crate) plot_errors: Vec<CheckMessage>,
     /// Assertion results in declaration order.
     pub checks: Vec<CheckRow>,
     /// Build provenance rendered in the footer.
-    pub provenance: Provenance,
+    pub(crate) provenance: Provenance,
 }
 
 /// One evaluated declaration card.
 pub struct ValueCard {
     pub name: String,
-    pub kind: DeclType,
+    pub(crate) kind: DeclType,
     /// Caption from the declaration's `///` doc block.
     pub doc: Option<String>,
-    pub body: CardBody,
+    pub(crate) body: CardBody,
 }
 
 /// Display body of one card.
@@ -53,17 +53,17 @@ pub enum CardBody {
 
 /// One renderable figure with optional caption.
 pub struct FigureCard {
-    pub figure: RenderedFigure,
-    pub doc: Option<String>,
+    pub(crate) figure: RenderedFigure,
+    pub(crate) doc: Option<String>,
 }
 
 /// One assertion result row.
 pub struct CheckRow {
-    pub name: String,
-    pub status: CheckStatus,
-    pub message: Option<String>,
+    pub(crate) name: String,
+    pub(crate) status: CheckStatus,
+    pub(crate) message: Option<String>,
     /// Declarations this check is declared to cover (`#[assumes]`).
-    pub affected: Vec<String>,
+    pub(crate) affected: Vec<String>,
 }
 
 /// Assertion outcome family.
@@ -76,8 +76,8 @@ pub enum CheckStatus {
 
 /// A named non-fatal message (currently: plot evaluation failures).
 pub struct CheckMessage {
-    pub name: String,
-    pub message: String,
+    pub(crate) name: String,
+    pub(crate) message: String,
 }
 
 /// Deterministic build provenance. Deliberately excludes wall-clock
