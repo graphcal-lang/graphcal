@@ -27,6 +27,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`dump`](#graphcal-dump) | Debug-print compiler/evaluator pipeline artifacts (experimental) |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
 | [`model serve`](#graphcal-model-serve) | Serve a prepared model over Tenax stdio Arrow IPC |
+| [`report build`](#graphcal-report-build) | Build a self-contained HTML report from a model (experimental) |
 | [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
 | [`plugin new`](#graphcal-plugin-new) | Scaffold a WASM plugin crate using the Rust SDK (experimental) |
 | [`plugin test`](#graphcal-plugin-test) | Validate a built `.wasm` plugin module and call its functions (experimental) |
@@ -529,6 +530,48 @@ opens nothing.
 
 See the [Plot Declarations](language/plots.md) reference for the language
 syntax.
+
+---
+
+## `graphcal report build`
+
+Build a shareable, self-contained HTML report derived entirely from the model
+— no presentation layer to author. This feature is **experimental**.
+
+```bash
+graphcal report build model.gcl
+```
+
+Writes `model.report.html` next to the model (`-o`/`--output` overrides the
+path). The page is derived from what the model already declares:
+
+| Report section | Derived from |
+|---|---|
+| Inputs | `param` declarations with their baseline values |
+| Values | `const`/`node` declarations in declaration order; indexed values render as grids |
+| Plots | `plot`/`figure`/`layer` declarations, rendered with inlined Vega bundles |
+| Checks | `assert` results as pass/fail badges |
+| Captions | `///` doc comments attached to declarations |
+| Provenance | compiler version, SHA-256 of every source file, baseline parameter values, and a copy-pasteable reproduction command |
+
+The artifact is a single file with all assets inlined: it works offline, from
+`file://` paths, and as an email attachment. Values and checks render without
+JavaScript; charts need it. Output is deterministic — identical sources and
+compiler produce a byte-identical page, and there is no build timestamp.
+
+Options:
+
+| Option | Description |
+|--------|-------------|
+| `-o, --output <FILE>` | Output HTML path (default: the model path with a `.report.html` extension) |
+| `--markdown <FILE.md>` | Also write a deterministic Markdown rendering for CI diffing |
+| `--set 'name=value'` | Bind a param to a closed value for the baseline (same rules as `eval --set`) |
+| `--input <FILE>` | JSON input file for param values |
+| `--root <DIR>` | Project root directory (overrides automatic `graphcal.toml` detection) |
+
+Exit codes: `0` success; `1` the report was written but contains evaluation
+errors or failed assertions (rendered as error chips and FAIL badges); `2` the
+project failed to compile (nothing is written).
 
 ---
 
