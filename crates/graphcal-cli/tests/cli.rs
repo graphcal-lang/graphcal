@@ -4835,6 +4835,12 @@ fn eval_plot_html_file_output() {
         html.contains("vegaEmbed"),
         "expected Vega-Embed HTML page: {html}"
     );
+    // The page inlines the vendored Vega bundles: no network dependency, so it
+    // renders offline and from `file://` paths.
+    assert!(
+        !html.contains("cdn.jsdelivr.net"),
+        "expected a self-contained page without CDN script references"
+    );
     // Normal evaluation output still goes to stdout in HTML file mode.
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(

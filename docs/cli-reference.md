@@ -481,8 +481,9 @@ When a file contains `plot`, `figure`, or `layer` declarations, use the
 `--plot` option to render them. Three output modes are available:
 
 **Browser mode** generates a self-contained HTML file with all figures
-(rendered via [Vega-Embed](https://github.com/vega/vega-embed)) and opens
-it in the default browser. Normal evaluation output is still printed according
+(rendered via [Vega-Embed](https://github.com/vega/vega-embed), with the
+Vega bundles inlined so the page needs no network access and works from
+`file://` paths) and opens it in the default browser. Normal evaluation output is still printed according
 to `--format`:
 
 ```bash

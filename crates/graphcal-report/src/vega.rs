@@ -1,8 +1,12 @@
+//! Pure projection from evaluated plot specs to Vega-Lite JSON.
+
 use graphcal_compiler::syntax::ast::{EncodingChannel, MarkType};
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{
     AxisMeta, CompositionProperty, FigureSpec, LayerSpec, PlotFieldValue, PlotProperty, PlotSpec,
 };
 use serde_json::{Value as JsonValue, json};
+use thiserror::Error;
 
 /// A rendered figure ready for output.
 pub struct RenderedFigure {
@@ -12,16 +16,54 @@ pub struct RenderedFigure {
     pub spec: JsonValue,
 }
 
+/// The kind of composition declaration that referenced a plot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlotOwnerKind {
+    /// A `figure` declaration.
+    Figure,
+    /// A `layer` declaration.
+    Layer,
+}
+
+impl std::fmt::Display for PlotOwnerKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Figure => formatter.write_str("figure"),
+            Self::Layer => formatter.write_str("layer"),
+        }
+    }
+}
+
+/// A figure/layer referenced a plot name absent from the evaluated plot set.
+///
+/// Unknown names are rejected at resolution time (#843), so hitting this is an
+/// internal-invariant failure of the compiler, not a user-facing contract.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("internal error: {owner_kind} `{owner}` references unknown plot `{plot}`")]
+pub struct UnknownPlotReference {
+    /// Which composition kind held the dangling reference.
+    pub owner_kind: PlotOwnerKind,
+    /// The figure/layer declaration holding the reference.
+    pub owner: ScopedName,
+    /// The referenced plot name that could not be found.
+    pub plot: ScopedName,
+}
+
 /// Build figures from evaluated plot, figure, and layer specs.
 ///
 /// - Each `pub` `PlotSpec` produces one standalone figure.
 /// - Each `FigureSpec` produces one combined figure with `hconcat`.
 /// - Each `LayerSpec` produces one combined figure with `layer`.
+///
+/// # Errors
+///
+/// Returns [`UnknownPlotReference`] when a figure/layer references a plot that
+/// is not in `plots` — a compiler invariant violation (#843).
 pub fn build_figures(
     plots: &[PlotSpec],
     figures: &[FigureSpec],
     layers: &[LayerSpec],
-) -> Vec<RenderedFigure> {
+) -> Result<Vec<RenderedFigure>, UnknownPlotReference> {
     let mut result = Vec::new();
 
     // Standalone figures from displayed plots (#[hidden] plots are only
@@ -40,7 +82,7 @@ pub fn build_figures(
     for fig in figures {
         result.push(RenderedFigure {
             name: fig.name.to_string(),
-            spec: build_figure_spec(fig, plots),
+            spec: build_figure_spec(fig, plots)?,
         });
     }
 
@@ -48,11 +90,11 @@ pub fn build_figures(
     for layer in layers {
         result.push(RenderedFigure {
             name: layer.name.to_string(),
-            spec: build_layer_spec(layer, plots),
+            spec: build_layer_spec(layer, plots)?,
         });
     }
 
-    result
+    Ok(result)
 }
 
 /// Build a Vega-Lite spec from one `PlotSpec`.
@@ -88,31 +130,34 @@ fn build_single_spec(spec: &PlotSpec) -> JsonValue {
 }
 
 /// Resolve the plots referenced by a figure/layer.
-///
-/// Unknown names are rejected at resolution time (#843), so the lookup
-/// here always succeeds for well-formed input; the warning is a defensive
-/// backstop, not a user-facing contract.
 fn referenced_plots<'a>(
-    owner_kind: &str,
-    owner_name: &graphcal_compiler::syntax::module_name::ScopedName,
-    plot_names: &[graphcal_compiler::syntax::module_name::ScopedName],
+    owner_kind: PlotOwnerKind,
+    owner_name: &ScopedName,
+    plot_names: &[ScopedName],
     all_plots: &'a [PlotSpec],
-) -> Vec<&'a PlotSpec> {
+) -> Result<Vec<&'a PlotSpec>, UnknownPlotReference> {
     plot_names
         .iter()
-        .filter_map(|name| {
-            let found = all_plots.iter().find(|p| p.name == *name);
-            if found.is_none() {
-                eprintln!("warning: {owner_kind} `{owner_name}` references unknown plot `{name}`");
-            }
-            found
+        .map(|name| {
+            all_plots
+                .iter()
+                .find(|p| p.name == *name)
+                .ok_or_else(|| UnknownPlotReference {
+                    owner_kind,
+                    owner: owner_name.clone(),
+                    plot: name.clone(),
+                })
         })
         .collect()
 }
 
 /// Build a Vega-Lite `hconcat` spec from a `FigureSpec`.
-fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
-    let referenced = referenced_plots("figure", &fig.name, &fig.plot_names, all_plots);
+fn build_figure_spec(
+    fig: &FigureSpec,
+    all_plots: &[PlotSpec],
+) -> Result<JsonValue, UnknownPlotReference> {
+    let referenced =
+        referenced_plots(PlotOwnerKind::Figure, &fig.name, &fig.plot_names, all_plots)?;
 
     let sub_specs: Vec<JsonValue> = referenced
         .iter()
@@ -128,12 +173,20 @@ fn build_figure_spec(fig: &FigureSpec, all_plots: &[PlotSpec]) -> JsonValue {
         vl["title"] = json!(title);
     }
 
-    vl
+    Ok(vl)
 }
 
 /// Build a Vega-Lite `layer` spec from a `LayerSpec`.
-fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
-    let referenced = referenced_plots("layer", &layer.name, &layer.plot_names, all_plots);
+fn build_layer_spec(
+    layer: &LayerSpec,
+    all_plots: &[PlotSpec],
+) -> Result<JsonValue, UnknownPlotReference> {
+    let referenced = referenced_plots(
+        PlotOwnerKind::Layer,
+        &layer.name,
+        &layer.plot_names,
+        all_plots,
+    )?;
 
     // Each sub-spec is a layer entry: mark + encoding + data (no $schema).
     let sub_specs: Vec<JsonValue> = referenced
@@ -164,7 +217,7 @@ fn build_layer_spec(layer: &LayerSpec, all_plots: &[PlotSpec]) -> JsonValue {
         vl["height"] = json!(h);
     }
 
-    vl
+    Ok(vl)
 }
 
 /// Build the `"data": { "values": [...] }` array from a plot spec's encoding channels.
@@ -355,120 +408,9 @@ fn get_number_property<P: PartialEq>(properties: &[(P, PlotFieldValue)], prop: &
         })
 }
 
-/// HTML-escape a string to prevent XSS when interpolated into HTML content.
-fn html_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#x27;"),
-            _ => out.push(ch),
-        }
-    }
-    out
-}
-
-/// Escape a JSON string for safe embedding inside an HTML `<script>` element.
-///
-/// `serde_json` does not escape `</`, so a user-controlled string containing
-/// `</script>` would close the script tag. Replace `<` with `\u003c` to neutralize
-/// any `</script>` or `<!--` sequences in the JSON payload.
-fn escape_json_for_script(s: &str) -> String {
-    s.replace('<', r"\u003c")
-}
-
-/// Render all figures as a single HTML page using Vega-Embed.
-///
-/// # Errors
-///
-/// Returns an error if any figure's spec cannot be serialized to JSON.
-pub fn render_html(figures: &[RenderedFigure]) -> Result<String, serde_json::Error> {
-    use std::fmt::Write;
-    let mut divs = String::new();
-    for (i, fig) in figures.iter().enumerate() {
-        let div_id = format!("graphcal-plot-{i}");
-        let spec_json = escape_json_for_script(&serde_json::to_string(&fig.spec)?);
-        let escaped_name = html_escape(&fig.name);
-        let _ = write!(
-            divs,
-            r#"<div style="margin-bottom: 2em;">
-<h3>{escaped_name}</h3>
-<div id="{div_id}"></div>
-<script>vegaEmbed('#{div_id}', {spec_json}).catch(console.error);</script>
-</div>
-"#,
-        );
-    }
-    Ok(format!(
-        r#"<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Graphcal Plots</title>
-  <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
-  <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
-  <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
-  <style>
-    body {{ font-family: system-ui, -apple-system, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }}
-    h3 {{ color: #333; }}
-  </style>
-</head>
-<body>
-{divs}
-</body>
-</html>"#
-    ))
-}
-
-/// Render all figures as a JSON array of `{{ "name": "...", "spec": {{...}} }}`.
-///
-/// # Errors
-///
-/// Returns an error if JSON serialization fails. Previously this was masked by
-/// `unwrap_or_else(|_| "[]".to_string())`, which produced a confusing empty
-/// result with no signal to the user.
-pub fn render_json(figures: &[RenderedFigure]) -> Result<String, serde_json::Error> {
-    let entries: Vec<JsonValue> = figures
-        .iter()
-        .map(|fig| {
-            json!({
-                "name": fig.name,
-                "spec": fig.spec,
-            })
-        })
-        .collect();
-    serde_json::to_string_pretty(&entries)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn script_close_sequence_in_title_is_escaped() {
-        let rendered = vec![RenderedFigure {
-            name: "legitimate title".to_string(),
-            spec: json!({"title": "</script><script>alert(1)</script>"}),
-        }];
-        let html = render_html(&rendered).unwrap();
-        // The raw `</script>` from the JSON payload must not appear verbatim
-        // inside the emitted `<script>` block; the `<` must be escaped to `\u003c`.
-        let script_block = html
-            .split("vegaEmbed")
-            .nth(1)
-            .expect("expected a vegaEmbed script block");
-        assert!(
-            !script_block.contains("</script><script>alert(1)"),
-            "unescaped </script> sequence leaked into the script block: {script_block}"
-        );
-        assert!(
-            script_block.contains(r"\u003c/script>\u003cscript>alert(1)"),
-            "expected `<` to be escaped as `\\u003c` in emitted script block: {script_block}"
-        );
-    }
 
     #[test]
     fn vega_data_preserves_exact_int_boundary_and_datetime_nanoseconds() {
@@ -485,18 +427,9 @@ plot p = {
 "#,
         )
         .unwrap();
-        let figures = build_figures(&result.plots, &result.figures, &result.layers);
+        let figures = build_figures(&result.plots, &result.figures, &result.layers).unwrap();
         let row = &figures[0].spec["data"]["values"][0];
         assert_eq!(row["x"], json!(9_007_199_254_740_992.0));
         assert_eq!(row["y"], json!("2026-01-01T00:00:00.000000001Z"));
-    }
-
-    #[test]
-    fn html_escape_handles_critical_characters() {
-        assert_eq!(
-            html_escape("<img src=x onerror=alert(1)>"),
-            "&lt;img src=x onerror=alert(1)&gt;"
-        );
-        assert_eq!(html_escape("\"'&"), "&quot;&#x27;&amp;");
     }
 }

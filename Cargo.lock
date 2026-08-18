@@ -1846,6 +1846,7 @@ dependencies = [
  "graphcal-package",
  "graphcal-plugin-abi",
  "graphcal-plugin-host",
+ "graphcal-report",
  "graphcal-tenax",
  "indexmap",
  "insta",
@@ -2001,6 +2002,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
+]
+
+[[package]]
+name = "graphcal-report"
+version = "0.0.1-alpha.25"
+dependencies = [
+ "graphcal-compiler",
+ "graphcal-eval",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
