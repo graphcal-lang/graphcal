@@ -9,14 +9,24 @@ use std::fmt::Write;
 
 use crate::escape::{escape_json_for_script, html_escape};
 use crate::plot_page::VegaScriptSource;
+use crate::report_hydrate::{Hydration, render_hydration_block};
 use crate::report_ir::{CardBody, CheckStatus, ReportDocument, ValueCard};
 use crate::value_display::{GridTable, ValueBody};
 
 const REPORT_CSS: &str = include_str!("report_style.css");
 
 /// Render the complete standalone report page.
+///
+/// With `hydration`, the page additionally embeds the browser engine, the
+/// project sources, and the runtime script that synthesizes controls and
+/// re-evaluates on input. The static baseline stays byte-for-byte intact
+/// underneath: hydration is enhancement, never a prerequisite.
 #[must_use]
-pub fn render_report_html(document: &ReportDocument, scripts: VegaScriptSource) -> String {
+pub fn render_report_html(
+    document: &ReportDocument,
+    scripts: VegaScriptSource,
+    hydration: Option<&Hydration<'_>>,
+) -> String {
     let mut body = String::new();
     let title = html_escape(&document.title);
     let _ = writeln!(body, "<header><h1>{title}</h1></header>");
@@ -116,9 +126,10 @@ pub fn render_report_html(document: &ReportDocument, scripts: VegaScriptSource) 
     } else {
         crate::plot_page::vega_script_tags(scripts)
     };
+    let hydration_block = hydration.map_or_else(String::new, render_hydration_block);
 
     format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n{vega_scripts}\n<style>{REPORT_CSS}</style>\n</head>\n<body>\n<main>\n{body}</main>\n</body>\n</html>\n"
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n{vega_scripts}\n<style>{REPORT_CSS}</style>\n</head>\n<body>\n<main>\n{body}</main>\n{hydration_block}</body>\n</html>\n"
     )
 }
 

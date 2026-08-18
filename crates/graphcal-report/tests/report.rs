@@ -93,8 +93,8 @@ fn document_derives_sections_from_the_model_alone() {
 #[test]
 fn html_report_is_self_contained_and_deterministic() {
     let document = build_document(DELTA_V);
-    let html = render_report_html(&document, VegaScriptSource::Inline);
-    let again = render_report_html(&build_document(DELTA_V), VegaScriptSource::Inline);
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let again = render_report_html(&build_document(DELTA_V), VegaScriptSource::Inline, None);
     assert_eq!(html, again, "report output must be byte-deterministic");
 
     assert!(html.contains("Specific impulse of the qualified engine."));
@@ -112,7 +112,7 @@ fn html_report_is_self_contained_and_deterministic() {
 #[test]
 fn vega_scripts_are_omitted_without_figures() {
     let document = build_document("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;");
-    let html = render_report_html(&document, VegaScriptSource::Inline);
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
     assert!(!html.contains("vegaEmbed"));
     assert!(html.contains("data-decl=\"y\""));
 }
@@ -137,7 +137,7 @@ param x: Dimensionless = 1.0;
 node y: Dimensionless = @x;
 ";
     let document = build_document(source);
-    let html = render_report_html(&document, VegaScriptSource::Inline);
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
     assert!(!html.contains("<script>alert(1)</script>"));
     assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
 }
@@ -165,10 +165,54 @@ assert bad_is_finite = @bad < 10.0;
         },
     })
     .unwrap();
-    let html = render_report_html(&document, VegaScriptSource::Inline);
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
     assert!(html.contains("error-chip"));
     assert!(
         html.contains("data-decl=\"good\""),
         "healthy values must still render"
     );
+}
+
+#[test]
+fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
+    use graphcal_report::report_hydrate::{EngineBundle, Hydration, HydrationProject};
+
+    let document = build_document(DELTA_V);
+    let hydration = Hydration {
+        engine: EngineBundle {
+            glue_js: "let wasm_bindgen = function () {};",
+            wasm: b"\x00asm\x01\x00\x00\x00",
+        },
+        project: HydrationProject {
+            entry: "deltav.gcl".to_string(),
+            files: vec![("deltav.gcl".to_string(), DELTA_V.to_string())],
+        },
+        baseline_bindings: vec![("isp".to_string(), "450.0 s".to_string())],
+    };
+    let html = render_report_html(&document, VegaScriptSource::Inline, Some(&hydration));
+
+    // Payload blocks and the runtime are embedded once each.
+    for marker in [
+        "id=\"graphcal-project\"",
+        "id=\"graphcal-baseline\"",
+        "id=\"graphcal-engine-glue\"",
+        "id=\"graphcal-engine-wasm\"",
+        "Graphcal report hydration runtime",
+    ] {
+        assert_eq!(
+            html.matches(marker).count(),
+            1,
+            "expected exactly one `{marker}`"
+        );
+    }
+    // The static baseline stays intact underneath.
+    assert!(html.contains("data-decl=\"delta_v\""));
+    assert!(html.contains("data-check=\"delta_v_positive\""));
+    // The figure carries the pan/zoom binding.
+    assert!(html.contains("graphcal_pan_zoom"));
+    // Hydration only appends: the static prefix is byte-identical.
+    let static_html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let static_main = static_html.split("</main>").next().unwrap();
+    let hydrated_main = html.split("</main>").next().unwrap();
+    assert_eq!(static_main, hydrated_main);
 }

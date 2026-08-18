@@ -9,6 +9,7 @@
 pub(crate) mod escape;
 pub mod plot_page;
 pub mod report_html;
+pub mod report_hydrate;
 pub mod report_ir;
 pub mod report_markdown;
 pub mod value_display;

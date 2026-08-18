@@ -97,6 +97,34 @@ pub fn build_figures(
     Ok(result)
 }
 
+/// Add an interval pan/zoom binding to one single-view spec.
+///
+/// Applies only when the spec is a unit view (has a top-level `mark`), has no
+/// params yet, and at least one positional encoding is continuous
+/// (quantitative/temporal) — Vega-Lite requires selection params on child
+/// views for composed specs, and scale-bound intervals need a continuous
+/// scale to act on.
+pub fn add_pan_zoom(spec: &mut JsonValue) {
+    if spec.get("mark").is_none() || spec.get("params").is_some() {
+        return;
+    }
+    let continuous = ["x", "y"].iter().any(|channel| {
+        spec.get("encoding")
+            .and_then(|encoding| encoding.get(channel))
+            .and_then(|channel_spec| channel_spec.get("type"))
+            .and_then(JsonValue::as_str)
+            .is_some_and(|kind| matches!(kind, "quantitative" | "temporal"))
+    });
+    if !continuous {
+        return;
+    }
+    spec["params"] = json!([{
+        "name": "graphcal_pan_zoom",
+        "select": "interval",
+        "bind": "scales",
+    }]);
+}
+
 /// Build a Vega-Lite spec from one `PlotSpec`.
 fn build_single_spec(spec: &PlotSpec) -> JsonValue {
     let mut vl = json!({

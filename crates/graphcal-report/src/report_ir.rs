@@ -171,9 +171,12 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
 
     let figures = build_figures(&result.plots, &result.figures, &result.layers)?
         .into_iter()
-        .map(|figure| FigureCard {
-            doc: inputs.docs.get(&figure.name).cloned(),
-            figure,
+        .map(|mut figure| {
+            crate::vega::add_pan_zoom(&mut figure.spec);
+            FigureCard {
+                doc: inputs.docs.get(&figure.name).cloned(),
+                figure,
+            }
         })
         .collect();
 
