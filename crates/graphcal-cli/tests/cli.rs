@@ -6386,3 +6386,225 @@ fn model_serve_rejects_private_output_before_writing_stdout() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("private"), "stderr: {stderr}");
 }
+
+// --- graphcal report build (experimental auto-reports, #1410) ---
+
+const REPORT_MODEL: &str = "\
+/// Specific impulse of the qualified engine.
+param isp: Time(min: 200.0 s, max: 460.0 s) = 320.0 s;
+param dry_mass: Mass = 1200.0 kg;
+param fuel_mass: Mass = 2800.0 kg;
+const node g0: Acceleration = 9.80665 m/s^2;
+node v_exhaust: Velocity = @isp * @g0;
+/// Achievable delta-v at the current fuel load.
+node delta_v: Velocity = @v_exhaust * ln((@dry_mass + @fuel_mass) / @dry_mass) -> km/s;
+assert delta_v_positive = @delta_v > 0.0 m/s;
+pub index Steps = { S1, S2 };
+node per_step: Velocity[Steps] = for s: Steps { @delta_v / 2.0 };
+plot dv_plot = {
+    mark: line,
+    encode: {
+        x: for s: Steps { 1.0 },
+        y: for s: Steps { @per_step[s] -> km/s },
+    },
+};
+";
+
+#[test]
+fn report_build_writes_self_contained_html_and_markdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let html_path = dir.path().join("out.html");
+    let md_path = dir.path().join("out.md");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--output"])
+        .arg(&html_path)
+        .args(["--markdown"])
+        .arg(&md_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    // Controls/values/checks derived from the model alone, with doc captions.
+    assert!(html.contains("data-decl=\"isp\""), "param card missing");
+    assert!(html.contains("Specific impulse of the qualified engine."));
+    assert!(html.contains("data-decl=\"delta_v\""));
+    assert!(html.contains("data-check=\"delta_v_positive\""));
+    assert!(html.contains("vegaEmbed"), "plot must render");
+    // Self-contained: vendored Vega, no CDN, and a provenance footer.
+    assert!(!html.contains("cdn.jsdelivr.net"));
+    assert!(html.contains("sha256:"));
+    assert!(html.contains("graphcal eval"));
+
+    let markdown = std::fs::read_to_string(&md_path).unwrap();
+    assert!(markdown.contains("## Inputs"));
+    assert!(markdown.contains("- PASS `delta_v_positive`"));
+}
+
+#[test]
+fn report_build_provenance_pins_source_digest_and_baseline() {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--set", "isp=450.0 s", "--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&html_path).unwrap();
+
+    // The digest is the real SHA-256 of the source, rendered as lowercase hex.
+    let mut hasher = Sha256::new();
+    hasher.update(REPORT_MODEL.as_bytes());
+    let expected = hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        });
+    assert!(
+        html.contains(&format!("sha256:{expected}")),
+        "provenance must carry the exact source digest: {html}"
+    );
+
+    // The baseline list itself (not just the value cards) records the
+    // overridden parameter values.
+    assert!(html.contains("<dt>Baseline</dt>"));
+    assert!(
+        html.contains("<li><code>isp</code> = 450 s</li>"),
+        "provenance baseline must list the overridden param"
+    );
+}
+
+#[test]
+fn report_build_default_output_is_next_to_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.path().join("deltav.report.html").is_file());
+}
+
+#[test]
+fn report_build_is_byte_deterministic() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let first = dir.path().join("first.html");
+    let second = dir.path().join("second.html");
+    for path in [&first, &second] {
+        let output = graphcal_bin()
+            .args(["report", "build"])
+            .arg(&model)
+            .args(["--output"])
+            .arg(path)
+            .output()
+            .expect("failed to run graphcal");
+        assert!(output.status.success());
+    }
+    assert_eq!(
+        std::fs::read(&first).unwrap(),
+        std::fs::read(&second).unwrap(),
+        "identical sources must produce byte-identical reports"
+    );
+}
+
+#[test]
+fn report_build_set_override_changes_baseline_and_repro_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--set", "isp=450.0 s", "--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains("450 s"), "overridden baseline must display");
+    assert!(
+        html.contains("--set"),
+        "repro command must carry the override"
+    );
+}
+
+#[test]
+fn report_build_with_failing_assertion_still_writes_page_and_exits_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "failing.gcl",
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x * 2.0;\nassert impossible = @y < 0.0;\n",
+    );
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(1));
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    assert!(
+        html.contains(">FAIL<"),
+        "failed check must render as a badge"
+    );
+}
+
+#[test]
+fn report_build_compile_error_exits_2_without_artifact() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "broken.gcl",
+        "node bad: Dimensionless = 1.0 kg + 1.0 s;\n",
+    );
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!html_path.exists());
+}

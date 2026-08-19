@@ -23,6 +23,7 @@ mod json_input;
 mod model;
 mod overrides;
 mod plugin;
+mod report;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::HashSet;
@@ -165,6 +166,11 @@ enum Commands {
     Deps {
         #[command(subcommand)]
         command: DepsCommands,
+    },
+    /// Build shareable interactive report artifacts (experimental)
+    Report {
+        #[command(subcommand)]
+        command: report::ReportCommands,
     },
     /// Scaffold and test WASM plugin modules (experimental)
     Plugin {
@@ -376,6 +382,7 @@ fn run_command(cli: Cli) {
                 run_deps_lock(root.as_deref());
             }
         },
+        Commands::Report { command } => run_report(command),
         Commands::Plugin { command } => match command {
             PluginCommands::New { name, dir } => {
                 run_plugin_new(&name, dir.as_deref());
@@ -421,6 +428,38 @@ fn run_command(cli: Cli) {
                 root.as_deref(),
                 plot_output.as_ref(),
             );
+        }
+    }
+}
+
+/// `graphcal report`: build report artifacts.
+///
+/// Exit codes: 1 when artifacts were written but the evaluation contains
+/// errors, 2 for compile/setup/write failures.
+fn run_report(command: report::ReportCommands) {
+    match command {
+        report::ReportCommands::Build(args) => {
+            let overrides = match parse_overrides_with_sources(
+                &args.set,
+                args.input.as_deref(),
+                args.input_max_bytes,
+            ) {
+                Ok(o) => o,
+                Err(e) => report_override_error(&e),
+            };
+            match report::run_build(&args, &overrides, VERSION) {
+                Ok(report::ReportStatus::Success) => {}
+                Ok(report::ReportStatus::ProgramErrors) => process::exit(1),
+                Err(error) => {
+                    match error {
+                        report::ReportError::Compile(compile_error) => {
+                            eprintln!("{:?}", miette::Report::new(*compile_error));
+                        }
+                        other => eprintln!("error: {other}"),
+                    }
+                    process::exit(2);
+                }
+            }
         }
     }
 }

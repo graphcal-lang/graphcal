@@ -566,7 +566,11 @@ The functional core for rendering evaluated projects into shareable documents.
 Pure projections from evaluated plot specs to Vega-Lite JSON (`vega.rs`), plus
 self-contained HTML plot pages (`plot_page.rs`) that inline vendored
 vega/vega-lite/vega-embed bundles (`vega_assets.rs`, `assets/`) so output works
-offline and from `file://` paths. Consumed by the CLI (`--plot`) and the
+offline and from `file://` paths. The auto-report pipeline (#1410) lives here
+too: `value_display.rs` projects runtime values into scalar/entry/grid bodies,
+`report_ir.rs` derives the typed `ReportDocument` (cards, figures, checks,
+provenance, `///` captions), and `report_html.rs` / `report_markdown.rs` render
+it deterministically. Consumed by the CLI (`--plot`, `report build`) and the
 browser WASM adapter (playground figures). No file, process, or network I/O.
 
 ### 2.4 `graphcal-fmt`
@@ -611,6 +615,7 @@ Subcommands:
 | `dump`   | Debug-print pipeline artifacts (experimental) |
 | `graph`  | Export a dependency graph                    |
 | `deps`   | Manage package dependencies / lockfiles      |
+| `report` | Build shareable HTML report artifacts (experimental) |
 | `lsp`    | Start the language server                    |
 
 Key files:
@@ -630,6 +635,9 @@ Key files:
 - `display.rs` renders normal eval text output.
 - `dump.rs` selects one pipeline boundary and pretty-prints its unstable Rust
   `Debug` representation.
+- `report.rs` is the imperative shell for `graphcal report build`: project
+  loading, override binding, source digests, and artifact writes around the
+  pure document assembly in `graphcal-report`.
 - Plot/figure/layer rendering lives in `graphcal-report` (Vega-Lite
   projection plus self-contained HTML pages with vendored Vega bundles);
   the CLI consumes it for `--plot` output.
@@ -1458,6 +1466,10 @@ projection and the self-contained plot page consume evaluated specs.
 3. `crates/graphcal-report/src/vega_assets.rs`
 4. `crates/graphcal-report/src/vega.rs`
 5. `crates/graphcal-report/src/plot_page.rs`
+6. `crates/graphcal-report/src/value_display.rs`
+7. `crates/graphcal-report/src/report_ir.rs`
+8. `crates/graphcal-report/src/report_html.rs`
+9. `crates/graphcal-report/src/report_markdown.rs`
 
 ### Stage 18 - Browser WASM adapter (`graphcal-wasm`)
 
@@ -1507,11 +1519,12 @@ Note: `json_input.rs`, `overrides.rs`, and `main.rs` form a mutually dependent g
 10. `crates/graphcal-cli/src/format.rs`
 11. `crates/graphcal-cli/src/json_input.rs`
 12. `crates/graphcal-cli/src/overrides.rs`
-13. `crates/graphcal-cli/src/model.rs`
-14. `crates/graphcal-cli/src/main.rs`
-15. `crates/graphcal-cli/src/dump.rs`
-16. `crates/graphcal-cli/src/deps.rs`
-17. `crates/graphcal-cli/src/lib.rs`
+13. `crates/graphcal-cli/src/report.rs`
+14. `crates/graphcal-cli/src/model.rs`
+15. `crates/graphcal-cli/src/main.rs`
+16. `crates/graphcal-cli/src/dump.rs`
+17. `crates/graphcal-cli/src/deps.rs`
+18. `crates/graphcal-cli/src/lib.rs`
 
 ### Stage 22 - Language server (`graphcal-lsp`)
 

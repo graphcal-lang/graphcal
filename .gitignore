@@ -16,6 +16,10 @@ target
 # Proptest persistence files
 **/*.proptest-regressions
 
+# Generated report artifacts (`graphcal report build` default output;
+# cargo-hawk also exercises the binary against fixture models)
+*.report.html
+
 # Zensical documentation build output
 site/
 

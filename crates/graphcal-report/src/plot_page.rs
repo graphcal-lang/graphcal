@@ -18,7 +18,7 @@ pub enum VegaScriptSource {
 }
 
 /// The `<head>` script elements loading the Vega stack.
-fn vega_script_tags(source: VegaScriptSource) -> String {
+pub(crate) fn vega_script_tags(source: VegaScriptSource) -> String {
     match source {
         VegaScriptSource::Inline => format!(
             "<!-- vega {} / vega-lite {} / vega-embed {} — BSD-3-Clause, (c) University of \
