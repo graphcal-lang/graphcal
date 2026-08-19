@@ -6459,7 +6459,7 @@ fn report_build_provenance_pins_source_digest_and_baseline() {
     let html_path = dir.path().join("out.html");
 
     let output = graphcal_bin()
-        .args(["report", "build"])
+        .args(["report", "build", "--static"])
         .arg(&model)
         .args(["--set", "isp=450.0 s", "--output"])
         .arg(&html_path)
