@@ -5871,6 +5871,47 @@ node result: Dimensionless = @outer().out;
 }
 
 #[test]
+fn same_file_inline_dag_include_rejects_private_selected_output() {
+    let source = "\
+dag stage {
+    param thrust: Force;
+    node internal_scratch: Force = @thrust * 2.0;
+    pub node reported: Force = @thrust;
+}
+
+include stage(thrust: 10.0 N).{ internal_scratch };
+node used: Force = @internal_scratch;
+";
+
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::ImportPrivateItem { name, .. })
+            if name == "internal_scratch"
+    ));
+}
+
+#[test]
+fn same_file_inline_dag_include_alias_hides_private_output() {
+    let source = "\
+dag stage {
+    param thrust: Force;
+    node internal_scratch: Force = @thrust * 2.0;
+    pub node reported: Force = @thrust;
+}
+
+include stage(thrust: 10.0 N) as inst;
+node used: Force = @inst.internal_scratch;
+";
+
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::UnknownGraphRef { .. })
+    ));
+}
+
+#[test]
 fn inline_dag_include_and_call_share_body_import_semantics() {
     let (_dir, root) = setup_inline_semantics_project(
         &[
@@ -6053,7 +6094,7 @@ fn inline_dag_from_source() {
 dag add_velocities {
     param a: Velocity;
     param b: Velocity;
-    node sum: Velocity = @a + @b;
+    pub node sum: Velocity = @a + @b;
 }
 
 param v1: Velocity = 10.0 m/s;

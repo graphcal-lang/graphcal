@@ -634,18 +634,12 @@ fn process_dag_body_include_declarations<'a>(
             continue;
         };
         let target_file_id = target.source_file();
-        let boundary = if target_file_id == loaded_dag.parent_dag_id() {
-            imports::IncludeVisibilityBoundary::Local
-        } else {
-            imports::IncludeVisibilityBoundary::CrossModule
-        };
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
                 dag_def: target_dag.declaration(target_file),
                 dag_id: target.target(),
                 dag_name: target.target().name(),
                 parent_dag_id: target_file_id,
-                boundary,
             },
             include_decl,
             decl,

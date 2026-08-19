@@ -6,7 +6,7 @@ pub type TransferResult {
 dag build_transfer {
     import inline_dag_type_import_without_constructor.{ type TransferResult };
 
-    node result: TransferResult = TransferResult(value: 1.0);
+    pub node result: TransferResult = TransferResult(value: 1.0);
 }
 
 include build_transfer().{ result };

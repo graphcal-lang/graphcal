@@ -13,7 +13,7 @@ pub index R = { A, B };
 
 dag mydag {
     param x: Length;
-    node out: Length = @x -> km;
+    pub node out: Length = @x -> km;
 }
 
 param a: Length = 1500.0 m;

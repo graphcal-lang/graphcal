@@ -25,7 +25,7 @@ dag hohmann_transfer {
     node v2: Velocity = sqrt(@gm_earth / @r2);
     node dv1: Velocity = sqrt(2.0 * @gm_earth * @r2 / (@r1 * (@r1 + @r2))) - @v1;
     node dv2: Velocity = @v2 - sqrt(2.0 * @gm_earth * @r1 / (@r2 * (@r1 + @r2)));
-    node result: TransferResult = TransferResult(
+    pub node result: TransferResult = TransferResult(
         dv1: @dv1,
         dv2: @dv2,
         total_dv: @dv1 + @dv2,

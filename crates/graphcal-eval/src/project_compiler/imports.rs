@@ -54,24 +54,11 @@ struct DepDeclIndex<'a> {
     other: HashMap<DeclName, OtherDeclKind>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::project_compiler) enum IncludeVisibilityBoundary {
-    Local,
-    CrossModule,
-}
-
-impl IncludeVisibilityBoundary {
-    const fn crosses_module_boundary(self) -> bool {
-        matches!(self, Self::CrossModule)
-    }
-}
-
 pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
     pub(in crate::project_compiler) dag_def: &'a graphcal_compiler::desugar::desugared_ast::DagDecl,
     pub(in crate::project_compiler) dag_id: &'a graphcal_compiler::dag_id::DagId,
     pub(in crate::project_compiler) dag_name: &'a str,
     pub(in crate::project_compiler) parent_dag_id: &'a graphcal_compiler::dag_id::DagId,
-    pub(in crate::project_compiler) boundary: IncludeVisibilityBoundary,
 }
 
 /// Populate one file body's pure imports and concrete include requests.
@@ -152,7 +139,6 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
                 dag_id: &dag_id,
                 dag_name,
                 parent_dag_id: file_dag_id,
-                boundary: IncludeVisibilityBoundary::Local,
             },
             include,
             declaration,
@@ -186,18 +172,12 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
                 span: include.path.leaf().span.into(),
             }));
         }
-        let boundary = if target.source_file() == file_dag_id {
-            IncludeVisibilityBoundary::Local
-        } else {
-            IncludeVisibilityBoundary::CrossModule
-        };
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 dag_def: target_dag.declaration(target_loaded),
                 dag_id: target.target(),
                 dag_name: target.target().name(),
                 parent_dag_id: target.source_file(),
-                boundary,
             },
             include,
             declaration,
@@ -227,15 +207,12 @@ fn ensure_include_item_selectable(
     file: &graphcal_compiler::desugar::desugared_ast::File,
     name: &str,
     namespace: ImportItemNamespace,
-    boundary: IncludeVisibilityBoundary,
     file_path: &str,
     file_src: &NamedSource<Arc<String>>,
     span: Span,
 ) -> Result<(), CompileError> {
     let presence = file_import_item_presence(file, name, namespace);
-    if presence.can_select_output()
-        || (!boundary.crosses_module_boundary() && presence.is_present())
-    {
+    if presence.can_select_output() {
         return Ok(());
     }
     match presence {
@@ -274,18 +251,11 @@ fn reject_runtime_unit_import(
 
 fn include_value_decl(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
-    boundary: IncludeVisibilityBoundary,
 ) -> Option<(DeclName, bool)> {
     match &decl.kind {
         DeclKind::Param(p) => Some((p.name.value.clone(), false)),
-        DeclKind::ConstNode(c)
-            if !boundary.crosses_module_boundary() || c.visibility.is_public() =>
-        {
-            Some((c.name.value.clone(), true))
-        }
-        DeclKind::Node(n) if !boundary.crosses_module_boundary() || n.visibility.is_public() => {
-            Some((n.name.value.clone(), false))
-        }
+        DeclKind::ConstNode(c) if c.visibility.is_public() => Some((c.name.value.clone(), true)),
+        DeclKind::Node(n) if n.visibility.is_public() => Some((n.name.value.clone(), false)),
         _ => None,
     }
 }
@@ -305,8 +275,8 @@ fn value_decl_identity(
 ///
 /// A brace include exposes exactly its selected value aliases. A whole-instance
 /// include exposes param ports and explicitly exported consts/nodes under the
-/// instance prefix. Private merged declarations remain debug-only even when a
-/// same-module caller could name them.
+/// instance prefix. Private merged declarations remain debug-only and cannot be
+/// named by the including DAG.
 fn include_surface_outputs(
     declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     prefix: &ModuleAliasName,
@@ -706,7 +676,6 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     dep_loaded.ast(),
                     orig_name,
                     import_item.namespace,
-                    IncludeVisibilityBoundary::CrossModule,
                     &include_decl.path.display_path(),
                     file_src,
                     import_item.name.span,
@@ -768,9 +737,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
             // Register all dep names under the prefix for scope checking.
             let import_span = include_decl.path.span();
             for dep_decl in &dep_loaded.ast().declarations {
-                if let Some((name, is_const)) =
-                    include_value_decl(dep_decl, IncludeVisibilityBoundary::CrossModule)
-                {
+                if let Some((name, is_const)) = include_value_decl(dep_decl) {
                     let scoped = ScopedName::qualified(prefix.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
@@ -883,7 +850,6 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     let dag_name = target.dag_name;
     let dag_id = target.dag_id;
     let parent_dag_id = target.parent_dag_id;
-    let boundary = target.boundary;
 
     // As for file-root includes, only the module form introduces an alias.
     // Selective inline-DAG includes receive an opaque private merge scope.
@@ -943,7 +909,6 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                     &dag_body,
                     orig_name,
                     import_item.namespace,
-                    boundary,
                     dag_name,
                     file_src,
                     import_item.name.span,
@@ -1011,7 +976,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
             // Register all DAG body names under the prefix.
             let import_span = include_decl.path.span();
             for dep_decl in &dag_body.declarations {
-                if let Some((name, is_const)) = include_value_decl(dep_decl, boundary) {
+                if let Some((name, is_const)) = include_value_decl(dep_decl) {
                     let scoped = ScopedName::qualified(prefix.clone(), name);
                     if is_const {
                         ctx.imported_names.const_names.push((scoped, import_span));
