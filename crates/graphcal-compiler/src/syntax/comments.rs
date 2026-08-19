@@ -58,10 +58,50 @@ impl Comment {
     pub fn lexeme(&self) -> String {
         format!("{}{}", self.delimiter.lexeme(), self.body.as_str())
     }
+
+    /// Whether this is a `///` doc comment (`////` is a line comment).
+    #[must_use]
+    pub(crate) const fn is_doc(&self) -> bool {
+        matches!(self.delimiter, CommentDelimiter::Doc)
+    }
+
+    /// The text after the comment delimiter, excluding the line ending.
+    #[must_use]
+    pub(crate) fn body_text(&self) -> &str {
+        self.body.as_str()
+    }
 }
 
 /// A comment paired with its source span.
 pub type SpannedComment = Spanned<Comment>;
+
+/// One documentation block: the contiguous `///` lines immediately preceding
+/// a declaration, attached to it by the parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocComment {
+    text: String,
+    span: Span,
+}
+
+impl DocComment {
+    #[must_use]
+    pub(crate) const fn new(text: String, span: Span) -> Self {
+        Self { text, span }
+    }
+
+    /// The documentation text: one line per `///` line, with the delimiter
+    /// and at most one leading space removed, joined with `\n`.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Source span covering every line of the block.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+}
 
 /// A blank line represented by the span from the previous line ending through
 /// the line ending that completes the blank line.

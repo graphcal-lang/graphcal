@@ -22,7 +22,6 @@ mod dump;
 mod json_input;
 mod model;
 mod overrides;
-mod plot;
 mod plugin;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -671,63 +670,8 @@ fn handle_eval(
             // Handle --plot output. JSON plot mode has a pipe-friendly stdout
             // contract: the entire stdout stream is the figure array, so normal
             // evaluation output is suppressed above.
-            let mut plot_output_failed = false;
-            if let Some(plot_mode) = plot_output {
-                let rendered = plot::build_figures(&result.plots, &result.figures, &result.layers);
-                let no_plot_decls = result.plots.is_empty()
-                    && result.plot_errors.is_empty()
-                    && result.figures.is_empty()
-                    && result.layers.is_empty();
-                if no_plot_decls {
-                    eprintln!("warning: no plot declarations found");
-                }
-                let no_displayed_plots =
-                    matches!(plot_mode, PlotOutput::Browser | PlotOutput::HtmlFile(_))
-                        && rendered.is_empty()
-                        && !no_plot_decls;
-                if no_displayed_plots {
-                    eprintln!(
-                        "error: no displayed plots to render (all selected plots may be #[hidden])"
-                    );
-                    plot_output_failed = true;
-                }
-                match plot_mode {
-                    PlotOutput::Browser | PlotOutput::HtmlFile(_) if rendered.is_empty() => {}
-                    PlotOutput::HtmlFile(path) => {
-                        let html = plot::render_html(&rendered)
-                            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
-                        std::fs::write(path, html).unwrap_or_else(|e| {
-                            bail_with(&format!("could not write {}", path.display()), e, 2)
-                        });
-                        eprintln!("wrote plots to {}", path.display());
-                    }
-                    PlotOutput::Browser => {
-                        let html = plot::render_html(&rendered)
-                            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
-                        let mut tmp = tempfile::Builder::new()
-                            .prefix("graphcal_plot_")
-                            .suffix(".html")
-                            .tempfile()
-                            .unwrap_or_else(|e| bail_with("could not create temp file", e, 2));
-                        std::io::Write::write_all(&mut tmp, html.as_bytes())
-                            .unwrap_or_else(|e| bail_with("could not write HTML", e, 2));
-                        // Keep the temp file so the browser has time to read it.
-                        // The OS will clean it up on reboot.
-                        let path = tmp.into_temp_path();
-                        let kept = path
-                            .keep()
-                            .unwrap_or_else(|e| bail_with("could not persist temp file", e, 2));
-                        if let Err(e) = open::that(&kept) {
-                            bail_with("could not open browser", e, 2);
-                        }
-                    }
-                    PlotOutput::Json => {
-                        let json = plot::render_json(&rendered)
-                            .unwrap_or_else(|e| bail_with("could not render plots as JSON", e, 2));
-                        println!("{json}");
-                    }
-                }
-            }
+            let plot_output_failed =
+                plot_output.is_some_and(|plot_mode| handle_plot_output(&result, plot_mode));
 
             if result.has_errors() || plot_output_failed {
                 process::exit(1);
@@ -738,6 +682,72 @@ fn handle_eval(
             process::exit(2);
         }
     }
+}
+
+/// Render `--plot` output for one evaluated result.
+///
+/// Returns whether plot output failed in a way that must produce a non-zero
+/// exit (currently: an HTML/browser mode with nothing displayable).
+fn handle_plot_output(result: &EvalResult, plot_mode: &PlotOutput) -> bool {
+    let rendered =
+        graphcal_report::vega::build_figures(&result.plots, &result.figures, &result.layers)
+            .unwrap_or_else(|e| bail_with("could not assemble figures", e, 2));
+    let no_plot_decls = result.plots.is_empty()
+        && result.plot_errors.is_empty()
+        && result.figures.is_empty()
+        && result.layers.is_empty();
+    if no_plot_decls {
+        eprintln!("warning: no plot declarations found");
+    }
+    let no_displayed_plots = matches!(plot_mode, PlotOutput::Browser | PlotOutput::HtmlFile(_))
+        && rendered.is_empty()
+        && !no_plot_decls;
+    if no_displayed_plots {
+        eprintln!("error: no displayed plots to render (all selected plots may be #[hidden])");
+    }
+    match plot_mode {
+        PlotOutput::Browser | PlotOutput::HtmlFile(_) if rendered.is_empty() => {}
+        PlotOutput::HtmlFile(path) => {
+            let html = graphcal_report::plot_page::render_html(
+                &rendered,
+                graphcal_report::plot_page::VegaScriptSource::Inline,
+            )
+            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+            std::fs::write(path, html).unwrap_or_else(|e| {
+                bail_with(&format!("could not write {}", path.display()), e, 2)
+            });
+            eprintln!("wrote plots to {}", path.display());
+        }
+        PlotOutput::Browser => {
+            let html = graphcal_report::plot_page::render_html(
+                &rendered,
+                graphcal_report::plot_page::VegaScriptSource::Inline,
+            )
+            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+            let mut tmp = tempfile::Builder::new()
+                .prefix("graphcal_plot_")
+                .suffix(".html")
+                .tempfile()
+                .unwrap_or_else(|e| bail_with("could not create temp file", e, 2));
+            std::io::Write::write_all(&mut tmp, html.as_bytes())
+                .unwrap_or_else(|e| bail_with("could not write HTML", e, 2));
+            // Keep the temp file so the browser has time to read it.
+            // The OS will clean it up on reboot.
+            let path = tmp.into_temp_path();
+            let kept = path
+                .keep()
+                .unwrap_or_else(|e| bail_with("could not persist temp file", e, 2));
+            if let Err(e) = open::that(&kept) {
+                bail_with("could not open browser", e, 2);
+            }
+        }
+        PlotOutput::Json => {
+            let json = graphcal_report::plot_page::render_json(&rendered)
+                .unwrap_or_else(|e| bail_with("could not render plots as JSON", e, 2));
+            println!("{json}");
+        }
+    }
+    no_displayed_plots
 }
 
 /// Resolve CLI path arguments without erasing incomplete directory traversal.

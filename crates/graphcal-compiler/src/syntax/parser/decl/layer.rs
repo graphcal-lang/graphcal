@@ -8,6 +8,7 @@ impl Parser<'_> {
     pub(super) fn parse_layer(&mut self) -> Result<Declaration, ParseError> {
         let parts = self.parse_composition_decl_parts(Token::Layer, "layer")?;
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Layer(LayerDecl {
                 visibility: Visibility::Private,

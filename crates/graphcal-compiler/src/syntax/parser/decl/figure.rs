@@ -8,6 +8,7 @@ impl Parser<'_> {
     pub(super) fn parse_figure(&mut self) -> Result<Declaration, ParseError> {
         let parts = self.parse_composition_decl_parts(Token::Figure, "figure")?;
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Figure(FigureDecl {
                 visibility: Visibility::Private,

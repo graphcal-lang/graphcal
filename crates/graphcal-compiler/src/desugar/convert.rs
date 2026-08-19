@@ -62,22 +62,25 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
         attributes,
         kind,
         span,
+        doc,
     } = d;
     match kind {
         DeclKind::Sugar(RawDeclSugar::Multi(multi)) => {
             // `expand_multi_decl` produces `Declaration<Raw>` values (one per
             // slot, all Param/Node/ConstNode — never `Sugar`). Lift each to
             // `Declaration<Desugared>` so the rest of the pass sees a uniform
-            // post-desugar type.
+            // post-desugar type. A doc block above the multi-decl documents
+            // every expanded slot.
             crate::syntax::desugar::expand_multi_decl(&multi)
                 .into_iter()
-                .map(lift_slot_decl)
+                .map(|slot| lift_slot_decl(slot, doc.clone()))
                 .collect()
         }
         other => vec![Declaration {
             attributes,
             kind: convert_decl_kind_non_sugar(other),
             span,
+            doc,
         }],
     }
 }
@@ -86,7 +89,10 @@ fn convert_decl(d: Declaration<Raw>) -> Vec<Declaration<Desugared>> {
 ///
 /// [`ExpandedSlotDecl`] can only hold `Param` / `Node` / `ConstNode`, so no
 /// unreachable `Sugar` arm (and no panic) is needed here.
-fn lift_slot_decl(d: crate::syntax::desugar::ExpandedSlotDecl) -> Declaration<Desugared> {
+fn lift_slot_decl(
+    d: crate::syntax::desugar::ExpandedSlotDecl,
+    doc: Option<crate::syntax::comments::DocComment>,
+) -> Declaration<Desugared> {
     use crate::syntax::desugar::ExpandedSlotDecl;
     let (kind, span) = match d {
         ExpandedSlotDecl::Param(p, span) => (DeclKind::Param(p.into()), span),
@@ -97,6 +103,7 @@ fn lift_slot_decl(d: crate::syntax::desugar::ExpandedSlotDecl) -> Declaration<De
         attributes: vec![],
         kind,
         span,
+        doc,
     }
 }
 

@@ -1846,6 +1846,7 @@ dependencies = [
  "graphcal-package",
  "graphcal-plugin-abi",
  "graphcal-plugin-host",
+ "graphcal-report",
  "graphcal-tenax",
  "indexmap",
  "insta",
@@ -2004,6 +2005,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "graphcal-report"
+version = "0.0.1-alpha.25"
+dependencies = [
+ "graphcal-compiler",
+ "graphcal-eval",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "graphcal-tenax"
 version = "0.0.1-alpha.25"
 dependencies = [
@@ -2032,6 +2043,7 @@ dependencies = [
  "graphcal-eval",
  "graphcal-io",
  "graphcal-package",
+ "graphcal-report",
  "js-sys",
  "miette",
  "serde",

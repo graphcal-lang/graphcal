@@ -46,6 +46,7 @@ mod tests {
                     value: Some(Expr::new(ExprKind::Number(1.0), Span::new(27, 3))),
                 }),
                 span: Span::new(0, 31),
+                doc: None,
             }],
         };
         assert_eq!(file.declarations.len(), 1);

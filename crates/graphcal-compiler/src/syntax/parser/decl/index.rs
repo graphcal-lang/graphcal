@@ -32,6 +32,7 @@ impl Parser<'_> {
             }
         };
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Index(IndexDecl {
                 visibility: BindableVisibility::Private,

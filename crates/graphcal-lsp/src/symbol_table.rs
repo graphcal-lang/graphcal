@@ -246,6 +246,7 @@ impl<'a> HirRefCollector<'a> {
         table.insert_definition(
             key.clone(),
             DefinitionInfo {
+                doc: None,
                 name: local.name.to_string(),
                 category: SymbolCategory::LocalVar,
                 name_span: local.span,
@@ -814,6 +815,8 @@ pub struct DefinitionInfo {
     /// `None` for builtins, fields, and local variables (concepts that have
     /// no surface annotation).
     pub visibility: Option<BindableVisibility>,
+    /// The `///` doc block preceding the declaration, rendered in hover.
+    pub doc: Option<String>,
 }
 
 impl DefinitionInfo {
@@ -1201,6 +1204,7 @@ impl SymbolTable {
         self.insert_definition(
             key,
             DefinitionInfo {
+                doc: None,
                 name,
                 category,
                 name_span,
@@ -1372,7 +1376,29 @@ pub fn build_from_ast(
     // Build the sorted `defs_by_name_span` index for O(log n) lookups and
     // precompute inlay-hint candidate positions.
     table.finalize(source);
+    apply_doc_comments(&ast.declarations, &mut table);
     table
+}
+
+/// Copy each declaration's attached `///` doc block onto the definitions
+/// registered for it, matching by full-declaration span (one span maps to
+/// several definitions for expanded multi-decls).
+fn apply_doc_comments(
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    table: &mut SymbolTable,
+) {
+    for declaration in declarations {
+        if let Some(doc) = &declaration.doc {
+            for definition in table.definitions.entries.values_mut() {
+                if definition.decl_span == declaration.span && definition.doc.is_none() {
+                    definition.doc = Some(doc.text().to_string());
+                }
+            }
+        }
+        if let DeclKind::Dag(dag) = &declaration.kind {
+            apply_doc_comments(&dag.body, table);
+        }
+    }
 }
 
 #[expect(
@@ -1502,6 +1528,7 @@ fn register_builtins(table: &mut SymbolTable) {
         table.insert_definition(
             SymbolKey::BuiltinConstant(*constant),
             DefinitionInfo {
+                doc: None,
                 name: name.to_string(),
                 category: SymbolCategory::BuiltinConst,
                 name_span: Span::new(0, 0),
@@ -1534,6 +1561,7 @@ fn register_builtins(table: &mut SymbolTable) {
         table.insert_definition(
             SymbolKey::BuiltinFunction(*name),
             DefinitionInfo {
+                doc: None,
                 name: spelling.to_string(),
                 category: SymbolCategory::BuiltinFn,
                 name_span: Span::new(0, 0),
@@ -1746,6 +1774,7 @@ fn collect_type_decl(
             table.insert_definition(
                 key.clone(),
                 DefinitionInfo {
+                    doc: None,
                     name: param.name.value.to_string(),
                     category: SymbolCategory::GenericParam,
                     name_span: param.name.span,
@@ -1781,6 +1810,7 @@ fn collect_type_decl(
             table.insert_definition(
                 SymbolKey::Constructor(constructor_id.clone()),
                 DefinitionInfo {
+                    doc: None,
                     name: constructor_name.clone(),
                     category: SymbolCategory::Constructor,
                     name_span: member.name.span,
@@ -1798,6 +1828,7 @@ fn collect_type_decl(
                             field.name.value.clone(),
                         )),
                         DefinitionInfo {
+                            doc: None,
                             name: field.name.value.to_string(),
                             category: SymbolCategory::Field,
                             name_span: field.name.span,
@@ -1858,6 +1889,7 @@ fn collect_index_decl(
                 table.insert_definition(
                     key,
                     DefinitionInfo {
+                        doc: None,
                         name: vname,
                         category: SymbolCategory::IndexVariant,
                         name_span: variant.span,
@@ -2055,6 +2087,7 @@ fn collect_plugin_import_decl(
                 function.name.value.clone(),
             )),
             DefinitionInfo {
+                doc: None,
                 name: format!("{}.{}", p.alias.value, function.name.value),
                 category: SymbolCategory::ExternFn,
                 name_span: function.name.span,
@@ -2651,6 +2684,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &TIR, dag_id: &DagId) {
                     table.insert_definition(
                         field_key,
                         DefinitionInfo {
+                            doc: None,
                             name: field.name().to_string(),
                             category: SymbolCategory::Field,
                             name_span: Span::new(0, 0),

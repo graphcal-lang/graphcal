@@ -692,7 +692,15 @@ impl<'src> Parser<'src> {
         while self.lexer.peek().is_some() {
             declarations.push(self.parse_declaration()?);
         }
-        Ok(crate::syntax::ast::File { declarations })
+        let mut file = crate::syntax::ast::File { declarations };
+        // The lexer has consumed (and recorded) every comment by now, so doc
+        // blocks can be attached to the declarations they precede.
+        crate::syntax::doc_attach::attach_doc_comments(
+            &mut file,
+            &self.source,
+            self.lexer.source_metadata(),
+        );
+        Ok(file)
     }
 
     // --- Helper methods ---

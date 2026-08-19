@@ -12,6 +12,7 @@ mod diagnostics;
 #[cfg(target_arch = "wasm32")]
 mod js_request;
 mod output;
+mod prepared;
 mod project;
 
 use std::collections::HashMap;
@@ -26,8 +27,12 @@ pub use diagnostics::{
 };
 pub use output::{
     AssertionOutcomeView, AssertionView, DeclarationKindView, DeclarationOutcomeView,
-    DeclarationView, EvaluationView, IndexEntryKeyView, IndexedEntryView, NodeErrorView,
-    NoticeView, StructFieldView, UnsupportedCapability, ValueView,
+    DeclarationView, EvaluationView, FigureView, IndexEntryKeyView, IndexedEntryView,
+    NodeErrorView, NoticeView, StructFieldView, ValueView,
+};
+pub use prepared::{
+    BindingErrorView, BindingRequest, ControlView, EvaluateOutcome, MAX_BINDING_EXPR_BYTES,
+    ParameterPortView, PrepareOutcome, PreparedPlayground, prepare,
 };
 pub use project::{
     MAX_PLAYGROUND_CONTENT_BYTES, MAX_PLAYGROUND_FILE_BYTES, MAX_PLAYGROUND_FILES,
@@ -88,7 +93,7 @@ pub fn evaluate(request: PlaygroundRequest) -> PlaygroundOutcome {
     }
 }
 
-fn declarations_use_plugins(declarations: &[Declaration]) -> bool {
+pub(crate) fn declarations_use_plugins(declarations: &[Declaration]) -> bool {
     declarations
         .iter()
         .any(|declaration| match &declaration.kind {

@@ -15,7 +15,11 @@ pub fn hover(analysis: &AnalysisResult, offset: usize) -> Option<Hover> {
         SymbolLocation::Local(def) => *def,
         SymbolLocation::Imported(imported) => &imported.definition,
     };
-    let content = format_hover(definition);
+    let mut content = format_hover(definition);
+    if let Some(doc) = &definition.doc {
+        content.push_str("\n\n---\n\n");
+        content.push_str(doc);
+    }
     Some(Hover {
         contents: HoverContents::Markup(MarkupContent {
             kind: MarkupKind::Markdown,
@@ -160,6 +164,40 @@ node high: Dimensionless = maximum(@values);
                 markup.value
             );
         }
+    }
+
+    #[test]
+    fn doc_comment_renders_in_hover() {
+        let source = "\
+/// Specific impulse of the qualified engine.
+/// Second line of the caption.
+param isp: Dimensionless = 320.0;
+node undocumented: Dimensionless = @isp * 2.0;
+";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:doc-hover.gcl").unwrap();
+        let analysis = crate::server::run_analysis_for_test(&uri, source);
+
+        let result = hover(&analysis, source.find("isp:").unwrap()).unwrap();
+        let HoverContents::Markup(markup) = result.contents else {
+            panic!("param hover should be Markdown");
+        };
+        assert!(
+            markup
+                .value
+                .contains("Specific impulse of the qualified engine.\nSecond line of the caption."),
+            "hover should include the attached doc block: {}",
+            markup.value
+        );
+
+        let result = hover(&analysis, source.find("undocumented:").unwrap()).unwrap();
+        let HoverContents::Markup(markup) = result.contents else {
+            panic!("node hover should be Markdown");
+        };
+        assert!(
+            !markup.value.contains("Specific impulse"),
+            "undocumented node must not inherit another declaration's doc: {}",
+            markup.value
+        );
     }
 
     #[test]

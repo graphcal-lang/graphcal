@@ -14,13 +14,21 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Optimize the shipped wasm for size instead of wasm-pack's default speed
+# pass: the playground and hydrated reports carry this binary inline, and the
+# CI budget caps the raw download at 5 MiB.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz"]
+
 [dependencies]
 graphcal-compiler.workspace = true
 graphcal-eval.workspace = true
 graphcal-io.workspace = true
 graphcal-package.workspace = true
+graphcal-report.workspace = true
 miette.workspace = true
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]

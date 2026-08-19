@@ -21,6 +21,7 @@ graphcal-io = { workspace = true }
 graphcal-lsp = { workspace = true }
 graphcal-package = { workspace = true }
 graphcal-plugin-host.workspace = true
+graphcal-report = { workspace = true }
 graphcal-tenax = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 open = { workspace = true }

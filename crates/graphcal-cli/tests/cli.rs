@@ -4835,12 +4835,78 @@ fn eval_plot_html_file_output() {
         html.contains("vegaEmbed"),
         "expected Vega-Embed HTML page: {html}"
     );
+    // The page inlines the vendored Vega bundles: no network dependency, so it
+    // renders offline and from `file://` paths.
+    assert!(
+        !html.contains("cdn.jsdelivr.net"),
+        "expected a self-contained page without CDN script references"
+    );
     // Normal evaluation output still goes to stdout in HTML file mode.
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         !stdout.trim().is_empty(),
         "expected normal eval output on stdout in HTML file mode"
     );
+}
+
+#[test]
+fn eval_plot_html_file_with_no_plot_declarations_warns_and_writes_nothing() {
+    // A plot-less model in HTML mode warns and succeeds; no artifact appears
+    // and the run must not be treated as a plot failure.
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "plain.gcl",
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\n",
+    );
+    let out_path = dir.path().join("plots.html");
+
+    let output = graphcal_bin()
+        .args(["eval"])
+        .arg(&model)
+        .args(["--plot"])
+        .arg(&out_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "a plot-less model must not fail HTML plot mode; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no plot declarations found"),
+        "stderr: {stderr}"
+    );
+    assert!(!out_path.exists());
+}
+
+#[test]
+fn eval_plot_html_file_with_only_hidden_plots_fails_without_artifact() {
+    // All-hidden plots leave nothing displayable: exit 1 and, critically,
+    // no HTML artifact — an empty page must not masquerade as plot output.
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "hidden.gcl",
+        "#[hidden]\nplot p = { mark: line, encode: { x: 1.0, y: 2.0 } };\nnode y: Dimensionless = 1.0;\n",
+    );
+    let out_path = dir.path().join("plots.html");
+
+    let output = graphcal_bin()
+        .args(["eval"])
+        .arg(&model)
+        .args(["--plot"])
+        .arg(&out_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no displayed plots to render"),
+        "stderr: {stderr}"
+    );
+    assert!(!out_path.exists());
 }
 
 #[test]

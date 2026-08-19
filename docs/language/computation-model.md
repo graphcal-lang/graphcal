@@ -158,3 +158,17 @@ Graphcal supports line comments:
 // This is a comment
 param mass: Mass = 100.0 kg;  // inline comment
 ```
+
+A `///` doc comment documents the declaration that follows it. A doc block is
+a contiguous run of `///` lines placed directly above the declaration (no
+blank line or `//` comment in between); it attaches through any leading
+attributes. Doc comments never change program semantics — they surface in
+editor hover (LSP) and as captions in generated output:
+
+```
+/// Specific impulse of the qualified engine.
+param isp: Time = 320.0 s;
+```
+
+Note that `////` (four or more slashes) is an ordinary line comment, and a
+`///` comment placed at the end of a code line documents nothing.

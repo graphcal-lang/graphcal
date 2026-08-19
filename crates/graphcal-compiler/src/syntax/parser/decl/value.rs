@@ -74,6 +74,7 @@ impl Parser<'_> {
         let span = kind_span.merge(semi_span);
 
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: decl_kind,
             span,
@@ -106,6 +107,7 @@ impl Parser<'_> {
         let (_, semi_span) = self.expect(Token::Semicolon)?;
         let span = start_span.merge(semi_span);
         Ok(Declaration {
+            doc: None,
             attributes: vec![],
             kind: DeclKind::Assert(AssertDecl {
                 visibility: Visibility::Private,
