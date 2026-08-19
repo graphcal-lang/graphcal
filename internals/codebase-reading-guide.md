@@ -570,8 +570,12 @@ offline and from `file://` paths. The auto-report pipeline (#1410) lives here
 too: `value_display.rs` projects runtime values into scalar/entry/grid bodies,
 `report_ir.rs` derives the typed `ReportDocument` (cards, figures, checks,
 provenance, `///` captions), and `report_html.rs` / `report_markdown.rs` render
-it deterministically. Consumed by the CLI (`--plot`, `report build`) and the
-browser WASM adapter (playground figures). No file, process, or network I/O.
+it deterministically. `report_hydrate.rs` packages the interactive layer —
+the no-modules wasm engine, project sources, and baseline bindings — behind
+`report_runtime.js`, which synthesizes controls from typed parameter ports and
+re-evaluates in a Web Worker. Consumed by the CLI (`--plot`, `report build`)
+and the browser WASM adapter (playground figures). No file, process, or
+network I/O.
 
 ### 2.4 `graphcal-fmt`
 
@@ -1467,9 +1471,10 @@ projection and the self-contained plot page consume evaluated specs.
 4. `crates/graphcal-report/src/vega.rs`
 5. `crates/graphcal-report/src/plot_page.rs`
 6. `crates/graphcal-report/src/value_display.rs`
-7. `crates/graphcal-report/src/report_ir.rs`
-8. `crates/graphcal-report/src/report_html.rs`
-9. `crates/graphcal-report/src/report_markdown.rs`
+7. `crates/graphcal-report/src/report_hydrate.rs`
+8. `crates/graphcal-report/src/report_ir.rs`
+9. `crates/graphcal-report/src/report_html.rs`
+10. `crates/graphcal-report/src/report_markdown.rs`
 
 ### Stage 18 - Browser WASM adapter (`graphcal-wasm`)
 

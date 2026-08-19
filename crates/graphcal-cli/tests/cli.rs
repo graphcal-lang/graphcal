@@ -6418,7 +6418,7 @@ fn report_build_writes_self_contained_html_and_markdown() {
     let md_path = dir.path().join("out.md");
 
     let output = graphcal_bin()
-        .args(["report", "build"])
+        .args(["report", "build", "--static"])
         .arg(&model)
         .args(["--output"])
         .arg(&html_path)
@@ -6459,7 +6459,7 @@ fn report_build_provenance_pins_source_digest_and_baseline() {
     let html_path = dir.path().join("out.html");
 
     let output = graphcal_bin()
-        .args(["report", "build"])
+        .args(["report", "build", "--static"])
         .arg(&model)
         .args(["--set", "isp=450.0 s", "--output"])
         .arg(&html_path)
@@ -6502,7 +6502,7 @@ fn report_build_default_output_is_next_to_the_model() {
     let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
 
     let output = graphcal_bin()
-        .args(["report", "build"])
+        .args(["report", "build", "--static"])
         .arg(&model)
         .output()
         .expect("failed to run graphcal");
@@ -6522,7 +6522,7 @@ fn report_build_is_byte_deterministic() {
     let second = dir.path().join("second.html");
     for path in [&first, &second] {
         let output = graphcal_bin()
-            .args(["report", "build"])
+            .args(["report", "build", "--static"])
             .arg(&model)
             .args(["--output"])
             .arg(path)
@@ -6544,7 +6544,7 @@ fn report_build_set_override_changes_baseline_and_repro_line() {
     let html_path = dir.path().join("out.html");
 
     let output = graphcal_bin()
-        .args(["report", "build"])
+        .args(["report", "build", "--static"])
         .arg(&model)
         .args(["--set", "isp=450.0 s", "--output"])
         .arg(&html_path)
@@ -6574,7 +6574,7 @@ fn report_build_with_failing_assertion_still_writes_page_and_exits_1() {
     let html_path = dir.path().join("out.html");
 
     let output = graphcal_bin()
-        .args(["report", "build"])
+        .args(["report", "build", "--static"])
         .arg(&model)
         .args(["--output"])
         .arg(&html_path)
@@ -6599,7 +6599,7 @@ fn report_build_compile_error_exits_2_without_artifact() {
     let html_path = dir.path().join("out.html");
 
     let output = graphcal_bin()
-        .args(["report", "build"])
+        .args(["report", "build", "--static"])
         .arg(&model)
         .args(["--output"])
         .arg(&html_path)
@@ -6607,4 +6607,228 @@ fn report_build_compile_error_exits_2_without_artifact() {
         .expect("failed to run graphcal");
     assert_eq!(output.status.code(), Some(2));
     assert!(!html_path.exists());
+}
+
+fn write_fake_engine(dir: &Path) -> PathBuf {
+    let engine_dir = dir.join("engine");
+    std::fs::create_dir_all(&engine_dir).unwrap();
+    std::fs::write(
+        engine_dir.join("graphcal_wasm.js"),
+        "var wasm_bindgen = function () {};\n",
+    )
+    .unwrap();
+    std::fs::write(
+        engine_dir.join("graphcal_wasm_bg.wasm"),
+        b"\x00asm\x01\x00\x00\x00",
+    )
+    .unwrap();
+    engine_dir
+}
+
+#[test]
+fn report_build_hydrated_embeds_engine_project_and_runtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let engine_dir = write_fake_engine(dir.path());
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--engine-dir"])
+        .arg(&engine_dir)
+        .args(["--set", "isp=450.0 s", "--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    // Project sources, baseline bindings, engine payloads, and the runtime.
+    assert!(html.contains("id=\"graphcal-project\""));
+    // Exact project-relative naming: an absolute or fabricated entry name
+    // would ship an artifact the browser engine rejects.
+    assert!(html.contains("\"entry\":\"deltav.gcl\""));
+    assert!(html.contains("id=\"graphcal-baseline\""));
+    // The baseline binding payload itself carries the override (the repro
+    // line elsewhere also mentions it, so check the JSON fields).
+    assert!(html.contains("\"name\":\"isp\""));
+    assert!(html.contains("\"expr\":\"450.0 s\""));
+    assert!(html.contains("id=\"graphcal-engine-glue\""));
+    assert!(html.contains("id=\"graphcal-engine-wasm\""));
+    assert!(html.contains("Graphcal report hydration runtime"));
+    // The static baseline is intact underneath the hydration layer.
+    assert!(html.contains("data-decl=\"delta_v\""));
+    // Pan/zoom is bound on the continuous-axis figure.
+    assert!(html.contains("graphcal_pan_zoom"));
+}
+
+#[test]
+fn report_build_engine_dir_with_partial_bundle_reports_engine_missing() {
+    // One present file must not pass the bundle check: both the glue and the
+    // wasm are required, and a half-present dir is "not found", not a read
+    // error halfway through packaging.
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let engine_dir = dir.path().join("engine");
+    std::fs::create_dir_all(&engine_dir).unwrap();
+    std::fs::write(
+        engine_dir.join("graphcal_wasm.js"),
+        "var wasm_bindgen = function () {};\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--engine-dir"])
+        .arg(&engine_dir)
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("was not found at"), "stderr: {stderr}");
+}
+
+#[test]
+fn report_build_hydrated_ships_dependency_free_manifest() {
+    // A manifest without [dependencies] is not a reason to refuse hydration:
+    // it ships in the payload so browser module resolution matches disk.
+    let dir = tempfile::tempdir().unwrap();
+    let engine_dir = write_fake_engine(dir.path());
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args([
+            "report",
+            "build",
+            &fixture("valid/multi/rocket_split/src/lib/main.gcl"),
+        ])
+        .args(["--engine-dir"])
+        .arg(&engine_dir)
+        .args(["--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains("\"entry\":\"src/lib/main.gcl\""));
+    assert!(html.contains("\"path\":\"graphcal.toml\""));
+}
+
+#[cfg(unix)]
+#[test]
+fn report_build_hydrated_rejects_package_dependencies() {
+    // Locked-and-cached git dependencies evaluate natively, but the browser
+    // engine cannot fetch them: the hydrated build must refuse loudly.
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    let main = write_package_project(
+        &project,
+        &format!(
+            "[dependencies]\nunits_v1 = {{ package = \"units\", git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units_v1.lib.{ one };\nnode two: Dimensionless = @one + 1.0;\n",
+    );
+    let cache = dir.path().join("cache");
+    let lock = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        lock.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+
+    let engine_dir = write_fake_engine(dir.path());
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&main)
+        .args(["--root", project.to_str().unwrap(), "--engine-dir"])
+        .arg(&engine_dir)
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("package dependencies"), "stderr: {stderr}");
+    assert!(stderr.contains("--static"), "stderr: {stderr}");
+
+    // The same project builds statically: the baseline is computed natively.
+    let html_path = dir.path().join("out.html");
+    let static_build = graphcal_bin()
+        .args(["report", "build", "--static"])
+        .arg(&main)
+        .args(["--root", project.to_str().unwrap(), "--output"])
+        .arg(&html_path)
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        static_build.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&static_build.stderr)
+    );
+    assert!(html_path.is_file());
+}
+
+#[test]
+fn report_build_without_engine_fails_loudly_with_recovery_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--engine-dir"])
+        .arg(dir.path().join("nonexistent"))
+        .args(["--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!html_path.exists());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--static"), "stderr: {stderr}");
+    assert!(stderr.contains("wasm-report"), "stderr: {stderr}");
+}
+
+#[test]
+fn report_build_hydrated_rejects_input_file_baselines() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let engine_dir = write_fake_engine(dir.path());
+    let input = dir.path().join("input.json");
+    std::fs::write(&input, "{\"isp\": \"450.0 s\"}").unwrap();
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--engine-dir"])
+        .arg(&engine_dir)
+        .args(["--input"])
+        .arg(&input)
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--set"), "stderr: {stderr}");
+    assert!(stderr.contains("--static"), "stderr: {stderr}");
 }

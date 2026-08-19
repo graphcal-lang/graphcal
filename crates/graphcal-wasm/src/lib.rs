@@ -17,7 +17,6 @@ mod project;
 
 use std::collections::HashMap;
 
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration};
 use graphcal_eval::eval::{CompileError, compile_and_eval_from_project};
 use graphcal_eval::loader::load_project;
 use serde::Serialize;
@@ -77,7 +76,7 @@ pub fn evaluate(request: PlaygroundRequest) -> PlaygroundOutcome {
     if loaded
         .files()
         .values()
-        .any(|file| declarations_use_plugins(&file.ast().declarations))
+        .any(|file| file.ast().uses_plugins())
     {
         let error = ProjectValidationError::PluginsUnsupported;
         return PlaygroundOutcome::Rejected {
@@ -91,16 +90,6 @@ pub fn evaluate(request: PlaygroundRequest) -> PlaygroundOutcome {
         },
         Err(error) => compile_error_outcome(&error, &project),
     }
-}
-
-pub(crate) fn declarations_use_plugins(declarations: &[Declaration]) -> bool {
-    declarations
-        .iter()
-        .any(|declaration| match &declaration.kind {
-            DeclKind::PluginImport(_) => true,
-            DeclKind::Dag(dag) => declarations_use_plugins(&dag.body),
-            _ => false,
-        })
 }
 
 fn compile_error_outcome(error: &CompileError, project: &VirtualProject) -> PlaygroundOutcome {
