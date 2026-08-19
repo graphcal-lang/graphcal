@@ -9,7 +9,7 @@ dag circular_velocity {
 
     param alt: Length;
 
-    node v: Velocity = sqrt(@gm / (@r_earth + @alt));
+    pub node v: Velocity = sqrt(@gm / (@r_earth + @alt));
 }
 
 param altitude: Length = 400000.0 m;

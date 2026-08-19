@@ -6094,7 +6094,7 @@ fn inline_dag_from_source() {
 dag add_velocities {
     param a: Velocity;
     param b: Velocity;
-    node sum: Velocity = @a + @b;
+    pub node sum: Velocity = @a + @b;
 }
 
 param v1: Velocity = 10.0 m/s;
