@@ -222,12 +222,21 @@ fn project_root_dir(
         .and_then(|root| root.canonicalize().ok())
 }
 
-/// A loaded file's project-relative display name; `None` when it does not
-/// live under the project root.
+/// A loaded file's project-relative name; `None` when it does not live under
+/// the project root. Components join with `/` on every platform: the
+/// hydration payload feeds the browser engine's virtual filesystem, which
+/// requires forward-slash relative paths, and provenance names stay
+/// OS-independent.
 fn relative_source_name(path: &Path, root_dir: Option<&Path>) -> Option<String> {
     root_dir
         .and_then(|root| path.strip_prefix(root).ok())
-        .map(|relative| relative.display().to_string())
+        .map(|relative| {
+            relative
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
 }
 
 /// SHA-256 digests of every loaded source, named relative to the project
@@ -309,6 +318,28 @@ fn hydration_project(
     }
 
     let root_dir = project_root_dir(&args.file, args.root.as_deref(), fs);
+
+    // The manifest drives module resolution in the browser exactly as on
+    // disk, so ship it when the project has one — but dependency-carrying
+    // projects are gated FIRST: locked-and-cached packages load from outside
+    // the project root, and the out-of-root diagnostic below would otherwise
+    // mask the actual reason hydration cannot work.
+    let manifest = root_dir
+        .as_deref()
+        .and_then(|root| std::fs::read_to_string(root.join("graphcal.toml")).ok());
+    if let Some(content) = &manifest {
+        match graphcal_package::parse_manifest_str(content) {
+            Ok(parsed) if !parsed.dependencies.is_empty() => {
+                return Err(ReportError::HydrationUnsupported {
+                    reason: "the project declares package dependencies, which the browser \
+                             engine cannot fetch"
+                        .to_string(),
+                });
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+
     let entry_name = args
         .file
         .canonicalize()
@@ -327,24 +358,8 @@ fn hydration_project(
         files.push((name, file.source().to_string()));
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // The manifest drives module resolution in the browser exactly as on
-    // disk, so ship it when the project has one.
-    if let Some(root) = &root_dir {
-        let manifest_path = root.join("graphcal.toml");
-        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
-            match graphcal_package::parse_manifest_str(&content) {
-                Ok(parsed) if !parsed.dependencies.is_empty() => {
-                    return Err(ReportError::HydrationUnsupported {
-                        reason: "the project declares package dependencies, which the browser \
-                                 engine cannot fetch"
-                            .to_string(),
-                    });
-                }
-                Ok(_) | Err(_) => {}
-            }
-            files.push(("graphcal.toml".to_string(), content));
-        }
+    if let Some(content) = manifest {
+        files.push(("graphcal.toml".to_string(), content));
     }
 
     let entry = entry_name
