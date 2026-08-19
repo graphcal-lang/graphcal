@@ -284,10 +284,11 @@ node t: Force = @thrust;
 | `include path.dag(args).{x as y};`                              | Same, renamed                                         |
 | `include path.dag(args) as a.{x};`                              | parse error — alias and brace mutually exclusive      |
 
-Across module boundaries, the DAG named by `path.dag` must be `pub`, and
-each output selected through a brace list or reached through an include alias
-must be public. Renaming an output does not change its visibility. Private
-nodes inside the included DAG remain implementation details.
+Each output selected through a brace list or reached through an include alias
+must be public, including for a same-file DAG. Across a module boundary, the
+DAG named by `path.dag` must also be `pub`. Renaming an output does not change
+its visibility. Private nodes inside the included DAG remain implementation
+details.
 
 `graphcal eval` therefore shows only the entry DAG and the include's selected
 or projectable outputs by default. Use `--output-view all` when debugging to

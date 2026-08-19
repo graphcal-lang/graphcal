@@ -145,9 +145,9 @@ include lib.orbital.hohmann_transfer(gm: @gm_earth, r1: @r1, r2: @r2)
 The path before `(` is absolute from the package root. See
 [Multi-File Projects](multi-file.md) for the full path-resolution rules.
 
-Across a module boundary, the DAG declaration must be `pub`, and every
-selected or alias-accessed output must be public. Private nodes inside the
-DAG are available only to the DAG body itself.
+Every selected or alias-accessed output must be public, including for same-file
+includes. Across a module boundary, the DAG declaration itself must also be
+`pub`. Private nodes inside the DAG are available only to the DAG body itself.
 
 ## DAG Calls (Expression Form)
 

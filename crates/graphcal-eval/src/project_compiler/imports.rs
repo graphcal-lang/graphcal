@@ -275,8 +275,8 @@ fn value_decl_identity(
 ///
 /// A brace include exposes exactly its selected value aliases. A whole-instance
 /// include exposes param ports and explicitly exported consts/nodes under the
-/// instance prefix. Private merged declarations remain debug-only even when a
-/// same-module caller could name them.
+/// instance prefix. Private merged declarations remain debug-only and cannot be
+/// named by the including DAG.
 fn include_surface_outputs(
     declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     prefix: &ModuleAliasName,
