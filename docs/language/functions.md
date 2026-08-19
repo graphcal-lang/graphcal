@@ -20,7 +20,7 @@ dim GravParam = Length^3 / Time^2;
 dag orbital_velocity {
     param gm: GravParam;
     param r: Length;
-    node v: Velocity = sqrt(@gm / @r);
+    pub node v: Velocity = sqrt(@gm / @r);
 }
 ```
 
@@ -87,9 +87,9 @@ dag hohmann_transfer {
 
     node v1: Velocity = sqrt(@gm / @r1);
     node v2: Velocity = sqrt(@gm / @r2);
-    node dv1: Velocity = sqrt(2.0 * @gm * @r2 / (@r1 * (@r1 + @r2))) - @v1;
+    pub node dv1: Velocity = sqrt(2.0 * @gm * @r2 / (@r1 * (@r1 + @r2))) - @v1;
     node dv2: Velocity = @v2 - sqrt(2.0 * @gm * @r1 / (@r2 * (@r1 + @r2)));
-    node total_dv: Velocity = @dv1 + @dv2;
+    pub node total_dv: Velocity = @dv1 + @dv2;
 }
 ```
 
@@ -204,7 +204,7 @@ import myproject.constants.{ gm_earth, r_earth };
 dag orbital_velocity {
     param gm: GravParam;
     param r: Length;
-    node v: Velocity = sqrt(@gm / @r);
+    pub node v: Velocity = sqrt(@gm / @r);
 }
 
 include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt)
