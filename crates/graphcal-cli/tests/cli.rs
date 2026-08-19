@@ -6450,6 +6450,53 @@ fn report_build_writes_self_contained_html_and_markdown() {
 }
 
 #[test]
+fn report_build_provenance_pins_source_digest_and_baseline() {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--set", "isp=450.0 s", "--output"])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&html_path).unwrap();
+
+    // The digest is the real SHA-256 of the source, rendered as lowercase hex.
+    let mut hasher = Sha256::new();
+    hasher.update(REPORT_MODEL.as_bytes());
+    let expected = hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        });
+    assert!(
+        html.contains(&format!("sha256:{expected}")),
+        "provenance must carry the exact source digest: {html}"
+    );
+
+    // The baseline list itself (not just the value cards) records the
+    // overridden parameter values.
+    assert!(html.contains("<dt>Baseline</dt>"));
+    assert!(
+        html.contains("<li><code>isp</code> = 450 s</li>"),
+        "provenance baseline must list the overridden param"
+    );
+}
+
+#[test]
 fn report_build_default_output_is_next_to_the_model() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
