@@ -30,7 +30,7 @@ wasm-test:
 # (`graphcal report build` embeds it; see docs/cli-reference.md).
 wasm-report:
     rm -rf target/wasm-report/pkg
-    wasm-pack build crates/graphcal-wasm --target no-modules --out-dir ../../target/wasm-report/pkg --release --no-typescript --no-pack
+    wasm-pack build crates/graphcal-wasm --target no-modules --out-dir ../../target/wasm-report/pkg --profile wasm-release --no-typescript --no-pack
     rm -f target/wasm-report/pkg/.gitignore
 
 # Build a hydrated demo report with the real engine and drive its embedded
@@ -43,7 +43,7 @@ report-smoke: wasm-report
 # stage the vendored Vega bundles the playground loads for plot rendering.
 wasm-playground:
     rm -rf docs/assets/playground/pkg
-    wasm-pack build crates/graphcal-wasm --target web --out-dir ../../docs/assets/playground/pkg --release --no-typescript --no-pack
+    wasm-pack build crates/graphcal-wasm --target web --out-dir ../../docs/assets/playground/pkg --profile wasm-release --no-typescript --no-pack
     rm -f docs/assets/playground/pkg/.gitignore
     rm -rf docs/assets/playground/vega
     mkdir -p docs/assets/playground/vega

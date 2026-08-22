@@ -112,6 +112,13 @@ debug = false
 [profile.release]
 overflow-checks = true
 
+# Keep shipped browser/report WebAssembly small without slowing every native
+# release build. wasm-pack selects this profile explicitly.
+[profile.wasm-release]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
 # Opt in to full workspace debug information when using a debugger.
 [profile.debugging]
 inherits = "dev"

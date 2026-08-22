@@ -39,7 +39,7 @@ jobs:
           wasm-pack build crates/graphcal-wasm \
             --target web \
             --out-dir ../../docs/assets/playground/pkg \
-            --release \
+            --profile wasm-release \
             --no-typescript \
             --no-pack
           rm -f docs/assets/playground/pkg/.gitignore
