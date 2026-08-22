@@ -1,0 +1,6 @@
+name = "graphcal"
+version = "0.1.0"
+defaultTargets = ["Graphcal"]
+
+[[lean_lib]]
+name = "Graphcal"

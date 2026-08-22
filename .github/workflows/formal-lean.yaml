@@ -1,0 +1,33 @@
+name: Formal Lean
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "formal/lean/**"
+      - ".github/workflows/formal-lean.yaml"
+  pull_request:
+    paths:
+      - "formal/lean/**"
+      - ".github/workflows/formal-lean.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: leanprover/lean-action@38fbc41a8c28c4cbaec22d7f7de508ec2e7c0dd9 # v1.5.0
+        with:
+          lake-package-directory: formal/lean
+          build: true
+          build-args: "--wfail"
+          test: false
+          lint: false
+          leanchecker: true
