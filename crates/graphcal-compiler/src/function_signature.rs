@@ -1,8 +1,8 @@
 //! Function-signature IR: the typed dimensional calling convention shared by
 //! built-in and externally-provided (plugin) functions.
 //!
-//! A [`FunctionSignature`] describes how a quantity-kernel function interacts
-//! with the type system: which dimension variables it declares, what value
+//! A [`FunctionSignature`] describes how a typed kernel function interacts
+//! with the type system: which dimension and index variables it declares, what value
 //! kind each named parameter requires, and how the result kind is computed
 //! from the bound dimension variables. Param and result dimensions are
 //! [`DimMonomial`]s — products of dimension-variable powers and a fixed
@@ -143,24 +143,36 @@ pub enum DimMonomialEvalError {
     Overflow(#[from] RationalError),
 }
 
-/// The kind of a parameter or result value in a function signature.
+/// One scalar value kind supported by a function signature.
+///
+/// The same closed set is used for standalone values and indexed leaves, so
+/// `Bool[I]` and `Int[I]` retain their semantic kinds instead of being
+/// disguised as dimensionless quantities.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValueKind {
+pub enum ScalarValueKind {
     /// A quantity with the dimension given by the monomial.
     Quantity(DimMonomial),
     /// A boolean value.
     Bool,
     /// An integer value.
     Int,
-    /// An array of quantities over declared axis variables: `element[I, J]`.
+}
+
+/// The kind of a parameter or result value in a function signature.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueKind {
+    /// A standalone scalar value.
+    Scalar(ScalarValueKind),
+    /// An indexed scalar collection over declared axis variables:
+    /// `element[I, J]`.
     ///
-    /// Elements are quantities whose dimension is given by the monomial; each
-    /// axis variable is bound by an argument's concrete typed index at the call
-    /// site. Every result axis must reuse a variable bound by some parameter —
-    /// a function can reorder axes but cannot invent an output extent.
+    /// Each axis variable is bound by an argument's concrete typed index at
+    /// the call site. Every result axis must reuse a variable bound by some
+    /// parameter — a function can reorder axes but cannot invent an output
+    /// extent.
     Indexed {
-        /// The element dimension monomial.
-        element: DimMonomial,
+        /// The semantic scalar element kind.
+        element: ScalarValueKind,
         /// Index variables naming the array's axes, in row-major order.
         indexes: NonEmpty<IndexVarName>,
     },
@@ -236,16 +248,34 @@ impl StructShape {
 }
 
 impl ValueKind {
+    /// A boolean scalar.
+    #[must_use]
+    pub const fn bool() -> Self {
+        Self::Scalar(ScalarValueKind::Bool)
+    }
+
+    /// An integer scalar.
+    #[must_use]
+    pub const fn int() -> Self {
+        Self::Scalar(ScalarValueKind::Int)
+    }
+
+    /// A quantity scalar with the given dimension monomial.
+    #[must_use]
+    pub const fn quantity_monomial(monomial: DimMonomial) -> Self {
+        Self::Scalar(ScalarValueKind::Quantity(monomial))
+    }
+
     /// A dimensionless quantity.
     #[must_use]
     pub const fn dimensionless() -> Self {
-        Self::Quantity(DimMonomial::dimensionless())
+        Self::quantity_monomial(DimMonomial::dimensionless())
     }
 
     /// A quantity with a concrete fixed dimension.
     #[must_use]
     const fn quantity(dim: Dimension) -> Self {
-        Self::Quantity(DimMonomial::fixed(dim))
+        Self::quantity_monomial(DimMonomial::fixed(dim))
     }
 }
 
@@ -316,8 +346,8 @@ impl FunctionSignature {
         let mut bound: HashSet<&DimVarName> = HashSet::new();
         let mut used_indexes: HashSet<&IndexVarName> = HashSet::new();
         for param in &params {
-            let monomial = match &param.kind {
-                ValueKind::Quantity(monomial) => monomial,
+            let scalar = match &param.kind {
+                ValueKind::Scalar(scalar) => scalar,
                 ValueKind::Indexed { element, indexes } => {
                     for index in indexes {
                         if !declared_indexes.contains(index) {
@@ -332,7 +362,9 @@ impl FunctionSignature {
                         param: param.name.clone(),
                     });
                 }
-                ValueKind::Bool | ValueKind::Int => continue,
+            };
+            let ScalarValueKind::Quantity(monomial) = scalar else {
+                continue;
             };
             validate_monomial_factors(monomial)?;
             if let Some(var) = monomial.as_bare_var() {
@@ -356,7 +388,7 @@ impl FunctionSignature {
         }
 
         let result_monomial = match &result {
-            ValueKind::Quantity(monomial) => Some(monomial),
+            ValueKind::Scalar(ScalarValueKind::Quantity(monomial)) => Some(monomial),
             ValueKind::Indexed { element, indexes } => {
                 for index in indexes {
                     if !declared_indexes.contains(index) {
@@ -366,11 +398,14 @@ impl FunctionSignature {
                         return Err(SignatureError::UnboundResultIndexVar { var: index.clone() });
                     }
                 }
-                Some(element)
+                match element {
+                    ScalarValueKind::Quantity(monomial) => Some(monomial),
+                    ScalarValueKind::Bool | ScalarValueKind::Int => None,
+                }
             }
-            // Struct fields are concrete (validated by StructShape::try_new);
-            // no variables to bind.
-            ValueKind::Bool | ValueKind::Int | ValueKind::Struct(_) => None,
+            // Bool, Int, and struct fields carry no dimension variables.
+            ValueKind::Scalar(ScalarValueKind::Bool | ScalarValueKind::Int)
+            | ValueKind::Struct(_) => None,
         };
         if let Some(monomial) = result_monomial {
             validate_monomial_factors(monomial)?;
@@ -530,16 +565,22 @@ struct CanonicalSignature {
 /// [`ValueKind`] in canonical form.
 #[derive(PartialEq, Eq)]
 enum CanonicalValueKind {
-    Quantity(CanonicalMonomial),
-    Bool,
-    Int,
+    Scalar(CanonicalScalarValueKind),
     Indexed {
-        element: CanonicalMonomial,
+        element: CanonicalScalarValueKind,
         indexes: Vec<usize>,
     },
     /// Struct shapes carry no variables; field names, order, and kinds are
     /// the contract and compare verbatim.
     Struct(StructShape),
+}
+
+/// [`ScalarValueKind`] in canonical form.
+#[derive(PartialEq, Eq)]
+enum CanonicalScalarValueKind {
+    Quantity(CanonicalMonomial),
+    Bool,
+    Int,
 }
 
 /// [`DimMonomial`] in canonical form: variable factors as
@@ -559,19 +600,30 @@ struct CanonicalOrder<'a> {
 
 fn canonical_kind<'a>(kind: &'a ValueKind, order: &mut CanonicalOrder<'a>) -> CanonicalValueKind {
     match kind {
-        ValueKind::Bool => CanonicalValueKind::Bool,
-        ValueKind::Int => CanonicalValueKind::Int,
-        ValueKind::Quantity(monomial) => {
-            CanonicalValueKind::Quantity(canonical_monomial(monomial, order))
+        ValueKind::Scalar(scalar) => {
+            CanonicalValueKind::Scalar(canonical_scalar_kind(scalar, order))
         }
         ValueKind::Indexed { element, indexes } => CanonicalValueKind::Indexed {
-            element: canonical_monomial(element, order),
+            element: canonical_scalar_kind(element, order),
             indexes: indexes
                 .iter()
                 .map(|index| occurrence_index(&mut order.indexes, index))
                 .collect(),
         },
         ValueKind::Struct(shape) => CanonicalValueKind::Struct(shape.clone()),
+    }
+}
+
+fn canonical_scalar_kind<'a>(
+    kind: &'a ScalarValueKind,
+    order: &mut CanonicalOrder<'a>,
+) -> CanonicalScalarValueKind {
+    match kind {
+        ScalarValueKind::Quantity(monomial) => {
+            CanonicalScalarValueKind::Quantity(canonical_monomial(monomial, order))
+        }
+        ScalarValueKind::Bool => CanonicalScalarValueKind::Bool,
+        ScalarValueKind::Int => CanonicalScalarValueKind::Int,
     }
 }
 
@@ -606,16 +658,17 @@ fn format_value_kind(
     format_dim: &mut impl FnMut(&Dimension) -> String,
 ) -> String {
     match kind {
-        ValueKind::Bool => "Bool".to_string(),
-        ValueKind::Int => "Int".to_string(),
-        ValueKind::Quantity(monomial) => format_monomial(monomial, format_dim),
+        ValueKind::Scalar(scalar) => format_scalar_value_kind(scalar, format_dim),
         ValueKind::Indexed { element, indexes } => {
             let indexes = indexes
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("{}[{indexes}]", format_monomial(element, format_dim))
+            format!(
+                "{}[{indexes}]",
+                format_scalar_value_kind(element, format_dim)
+            )
         }
         ValueKind::Struct(shape) => {
             let fields: Vec<String> = shape
@@ -639,6 +692,17 @@ fn format_value_kind(
                 .collect();
             format!("{{ {} }}", fields.join(", "))
         }
+    }
+}
+
+fn format_scalar_value_kind(
+    kind: &ScalarValueKind,
+    format_dim: &mut impl FnMut(&Dimension) -> String,
+) -> String {
+    match kind {
+        ScalarValueKind::Quantity(monomial) => format_monomial(monomial, format_dim),
+        ScalarValueKind::Bool => "Bool".to_string(),
+        ScalarValueKind::Int => "Int".to_string(),
     }
 }
 
@@ -875,9 +939,9 @@ impl FunctionSignature {
             vec![d.clone()],
             vec![param(
                 name,
-                ValueKind::Quantity(DimMonomial::var(d.clone())),
+                ValueKind::quantity_monomial(DimMonomial::var(d.clone())),
             )],
-            ValueKind::Quantity(DimMonomial::var(d)),
+            ValueKind::quantity_monomial(DimMonomial::var(d)),
         )
     }
 
@@ -887,7 +951,10 @@ impl FunctionSignature {
         let d = dim_var_d();
         expect_signature(
             vec![d.clone()],
-            vec![param(name, ValueKind::Quantity(DimMonomial::var(d)))],
+            vec![param(
+                name,
+                ValueKind::quantity_monomial(DimMonomial::var(d)),
+            )],
             ValueKind::quantity(output),
         )
     }
@@ -900,9 +967,9 @@ impl FunctionSignature {
             vec![d.clone()],
             vec![typed_param(
                 name,
-                ValueKind::Quantity(DimMonomial::var(d.clone())),
+                ValueKind::quantity_monomial(DimMonomial::var(d.clone())),
             )],
-            ValueKind::Quantity(DimMonomial::var_pow(d, power)),
+            ValueKind::quantity_monomial(DimMonomial::var_pow(d, power)),
         )
     }
 
@@ -914,9 +981,9 @@ impl FunctionSignature {
             vec![d.clone()],
             names
                 .iter()
-                .map(|&n| param(n, ValueKind::Quantity(DimMonomial::var(d.clone()))))
+                .map(|&n| param(n, ValueKind::quantity_monomial(DimMonomial::var(d.clone()))))
                 .collect(),
-            ValueKind::Quantity(DimMonomial::var(d)),
+            ValueKind::quantity_monomial(DimMonomial::var(d)),
         )
     }
 
@@ -928,7 +995,7 @@ impl FunctionSignature {
             vec![d.clone()],
             names
                 .iter()
-                .map(|&n| param(n, ValueKind::Quantity(DimMonomial::var(d.clone()))))
+                .map(|&n| param(n, ValueKind::quantity_monomial(DimMonomial::var(d.clone()))))
                 .collect(),
             ValueKind::quantity(output),
         )
@@ -967,10 +1034,16 @@ mod tests {
             vec![var("D1"), var("D2")],
             Vec::new(),
             vec![
-                param("force", ValueKind::Quantity(DimMonomial::var(var("D1")))),
-                param("arm", ValueKind::Quantity(DimMonomial::var(var("D2")))),
+                param(
+                    "force",
+                    ValueKind::quantity_monomial(DimMonomial::var(var("D1"))),
+                ),
+                param(
+                    "arm",
+                    ValueKind::quantity_monomial(DimMonomial::var(var("D2"))),
+                ),
             ],
-            ValueKind::Quantity(DimMonomial {
+            ValueKind::quantity_monomial(DimMonomial {
                 vars: vec![
                     DimVarPower {
                         var: var("D1"),
@@ -989,7 +1062,7 @@ mod tests {
         let l = length();
         let t = time();
         let bindings = [(var("D1"), l.clone()), (var("D2"), t.clone())];
-        let ValueKind::Quantity(result) = sig.result() else {
+        let ValueKind::Scalar(ScalarValueKind::Quantity(result)) = sig.result() else {
             panic!("expected quantity result");
         };
         let dim = result
@@ -1007,14 +1080,17 @@ mod tests {
             vec![
                 param(
                     "x",
-                    ValueKind::Quantity(DimMonomial::var_pow(
+                    ValueKind::quantity_monomial(DimMonomial::var_pow(
                         var("D"),
                         Rational::try_new(2, 1).unwrap(),
                     )),
                 ),
-                param("y", ValueKind::Quantity(DimMonomial::var(var("D")))),
+                param(
+                    "y",
+                    ValueKind::quantity_monomial(DimMonomial::var(var("D"))),
+                ),
             ],
-            ValueKind::Quantity(DimMonomial::var(var("D"))),
+            ValueKind::quantity_monomial(DimMonomial::var(var("D"))),
         )
         .unwrap_err();
         assert!(matches!(err, SignatureError::UseBeforeBinding { .. }));
@@ -1025,7 +1101,10 @@ mod tests {
         let err = FunctionSignature::try_new(
             Vec::new(),
             Vec::new(),
-            vec![param("x", ValueKind::Quantity(DimMonomial::var(var("D"))))],
+            vec![param(
+                "x",
+                ValueKind::quantity_monomial(DimMonomial::var(var("D"))),
+            )],
             ValueKind::dimensionless(),
         )
         .unwrap_err();
@@ -1049,8 +1128,11 @@ mod tests {
         let sig = FunctionSignature::try_new(
             Vec::new(),
             Vec::new(),
-            vec![param("flag", ValueKind::Bool), param("n", ValueKind::Int)],
-            ValueKind::Int,
+            vec![
+                param("flag", ValueKind::bool()),
+                param("n", ValueKind::int()),
+            ],
+            ValueKind::int(),
         )
         .unwrap();
         assert_eq!(sig.arity(), 2);
@@ -1062,11 +1144,11 @@ mod tests {
             Vec::new(),
             Vec::new(),
             vec![
-                param("value", ValueKind::Bool),
-                param("other", ValueKind::Int),
-                param("value", ValueKind::Int),
+                param("value", ValueKind::bool()),
+                param("other", ValueKind::int()),
+                param("value", ValueKind::int()),
             ],
-            ValueKind::Int,
+            ValueKind::int(),
         )
         .unwrap_err();
         assert_eq!(
@@ -1102,7 +1184,7 @@ mod tests {
     }
 
     fn bare(name: &str) -> ValueKind {
-        ValueKind::Quantity(DimMonomial::var(var(name)))
+        ValueKind::quantity_monomial(DimMonomial::var(var(name)))
     }
 
     #[test]
@@ -1135,7 +1217,7 @@ mod tests {
     #[test]
     fn equivalence_ignores_monomial_factor_order_and_binder_order() {
         let product = |first: &str, second: &str| {
-            ValueKind::Quantity(DimMonomial {
+            ValueKind::quantity_monomial(DimMonomial {
                 vars: vec![
                     DimVarPower {
                         var: var(first),
@@ -1189,10 +1271,10 @@ mod tests {
                 ))
         );
         assert!(
-            !sig(&[], &[ValueKind::Bool], ValueKind::Int).structurally_equivalent(&sig(
+            !sig(&[], &[ValueKind::bool()], ValueKind::int()).structurally_equivalent(&sig(
                 &[],
-                &[ValueKind::Int],
-                ValueKind::Int
+                &[ValueKind::int()],
+                ValueKind::int()
             ))
         );
         assert!(
@@ -1226,7 +1308,7 @@ mod tests {
 
     fn array(dim_var: &str, index_var: &str) -> ValueKind {
         ValueKind::Indexed {
-            element: DimMonomial::var(var(dim_var)),
+            element: ScalarValueKind::Quantity(DimMonomial::var(var(dim_var))),
             indexes: NonEmpty::singleton(ivar(index_var)),
         }
     }
@@ -1245,6 +1327,65 @@ mod tests {
         .unwrap()
     }
 
+    fn scalar_array(element: ScalarValueKind, index_var: &str) -> ValueKind {
+        ValueKind::Indexed {
+            element,
+            indexes: NonEmpty::singleton(ivar(index_var)),
+        }
+    }
+
+    #[test]
+    fn bool_and_int_arrays_bind_indexes_without_binding_dimensions() {
+        for element in [ScalarValueKind::Bool, ScalarValueKind::Int] {
+            let signature = FunctionSignature::try_new(
+                Vec::new(),
+                vec![ivar("I")],
+                vec![param("values", scalar_array(element.clone(), "I"))],
+                scalar_array(element, "I"),
+            )
+            .unwrap();
+            assert!(signature.dim_vars().is_empty());
+        }
+
+        let bool_signature = FunctionSignature::try_new(
+            Vec::new(),
+            vec![ivar("I")],
+            vec![param("values", scalar_array(ScalarValueKind::Bool, "I"))],
+            scalar_array(ScalarValueKind::Bool, "I"),
+        )
+        .unwrap();
+        assert_eq!(
+            bool_signature.format_with(|_| String::new()),
+            "<I: Index>(values: Bool[I]) -> Bool[I]"
+        );
+
+        let int_signature = FunctionSignature::try_new(
+            Vec::new(),
+            vec![ivar("I"), ivar("J")],
+            vec![param(
+                "values",
+                ValueKind::Indexed {
+                    element: ScalarValueKind::Int,
+                    indexes: NonEmpty::try_from_vec(vec![ivar("I"), ivar("J")]).unwrap(),
+                },
+            )],
+            scalar_array(ScalarValueKind::Int, "I"),
+        )
+        .unwrap();
+        assert_eq!(
+            int_signature.format_with(|_| String::new()),
+            "<I: Index, J: Index>(values: Int[I, J]) -> Int[I]"
+        );
+        let int_one_axis = FunctionSignature::try_new(
+            Vec::new(),
+            vec![ivar("K")],
+            vec![param("values", scalar_array(ScalarValueKind::Int, "K"))],
+            scalar_array(ScalarValueKind::Int, "K"),
+        )
+        .unwrap();
+        assert!(!bool_signature.structurally_equivalent(&int_one_axis));
+    }
+
     #[test]
     fn array_element_binds_dimension_variable() {
         // `xs: D[I]` is a binding occurrence for `D`: the checker reads the
@@ -1257,7 +1398,7 @@ mod tests {
     #[test]
     fn multi_axis_results_may_reorder_bound_axes() {
         let matrix = |left: &str, right: &str| ValueKind::Indexed {
-            element: DimMonomial::var(var("D")),
+            element: ScalarValueKind::Quantity(DimMonomial::var(var("D"))),
             indexes: NonEmpty::try_from_vec(vec![ivar(left), ivar(right)]).unwrap(),
         };
         let signature = FunctionSignature::try_new(
@@ -1270,7 +1411,7 @@ mod tests {
         assert_eq!(
             signature.result(),
             &ValueKind::Indexed {
-                element: DimMonomial::var(var("D")),
+                element: ScalarValueKind::Quantity(DimMonomial::var(var("D"))),
                 indexes: NonEmpty::try_from_vec(vec![ivar("J"), ivar("I")]).unwrap(),
             }
         );
@@ -1334,7 +1475,10 @@ mod tests {
             vec![param(
                 "xs",
                 ValueKind::Indexed {
-                    element: DimMonomial::var_pow(var("D"), Rational::try_new(2, 1).unwrap()),
+                    element: ScalarValueKind::Quantity(DimMonomial::var_pow(
+                        var("D"),
+                        Rational::try_new(2, 1).unwrap(),
+                    )),
                     indexes: NonEmpty::singleton(ivar("I")),
                 },
             )],
@@ -1435,7 +1579,7 @@ mod tests {
                 "x",
                 ValueKind::Struct(shape(&[("lo", StructFieldKind::Int)])),
             )],
-            ValueKind::Int,
+            ValueKind::int(),
         )
         .unwrap_err();
         assert!(matches!(err, SignatureError::StructParam { .. }));

@@ -13,7 +13,7 @@
 //!   module beyond the section layout;
 //! - the protocol constants below.
 //!
-//! # ABI v4 contract
+//! # ABI v5 contract
 //!
 //! A graphcal plugin is a **core WebAssembly module** (not a component) that:
 //!
@@ -26,7 +26,9 @@
 //!     integers and `Bool` parameters as `1.0`/`0.0`);
 //!   - each rank-`R` array parameter is `(i32 ptr, i32 extent_0, …,
 //!     i32 extent_R-1)`: row-major dense little-endian `f64` elements in a
-//!     host-allocated 8-byte-aligned buffer inside the plugin's own memory;
+//!     host-allocated 8-byte-aligned buffer inside the plugin's own memory.
+//!     Quantity elements must be finite, `Bool` elements are numeric zero or
+//!     one, and `Int` elements follow the scalar lossless binary64 policy;
 //!   - a quantity, `Int`, or `Bool` result is the single `f64` return value;
 //!     an array or struct result turns the return into one trailing
 //!     `i32 out_ptr` parameter (and no return values). An array writes exactly
@@ -54,19 +56,19 @@
 //!
 //! Dimensions in the manifest are expressed structurally as exponent vectors
 //! over the prelude base dimensions only; user-defined base dimensions never
-//! cross the binary boundary in ABI v4. Array element dimensions reuse the
-//! quantity monomial encoding; index variables are opaque names bound per call
-//! — a plugin never learns an index's identity, only each buffer's ordered
-//! shape.
+//! cross the binary boundary in ABI v5. Array elements carry an explicit
+//! quantity, `Bool`, or `Int` semantic kind; index variables are opaque names
+//! bound per call — a plugin never learns an index's identity, only each
+//! buffer's ordered shape.
 
 pub mod manifest;
 pub mod section;
 
 pub use manifest::{
-    ManifestDecodeError, ManifestDimPower, ManifestEmbedError, ManifestEncodeError, ManifestField,
-    ManifestFieldKind, ManifestFromWasmError, ManifestFunction, ManifestListRole, ManifestMonomial,
-    ManifestParam, ManifestParamKind, ManifestRational, ManifestResultKind,
-    ManifestValidationError, ManifestVarPower, NameRole, PluginManifest,
+    ManifestArrayElementKind, ManifestDecodeError, ManifestDimPower, ManifestEmbedError,
+    ManifestEncodeError, ManifestField, ManifestFieldKind, ManifestFromWasmError, ManifestFunction,
+    ManifestListRole, ManifestMonomial, ManifestParam, ManifestParamKind, ManifestRational,
+    ManifestResultKind, ManifestValidationError, ManifestVarPower, NameRole, PluginManifest,
 };
 pub use section::{SectionError, embed_manifest};
 
@@ -74,12 +76,13 @@ pub use section::{SectionError, embed_manifest};
 ///
 /// Stored in [`PluginManifest::abi_version`]; a manifest with any other
 /// version is rejected at decode time so hosts can report "plugin requires a
-/// newer/older graphcal" instead of a shape error. Version 4 adds multi-axis
-/// array shapes and carries one extent per axis. Version 3 renamed the quantity
-/// manifest kind from `scalar` to `quantity`; version 2 introduced arrays and
-/// allocator exports. Older modules are not accepted; rebuild against the
-/// current SDK.
-pub const ABI_VERSION: u32 = 4;
+/// newer/older graphcal" instead of a shape error. Version 5 gives array
+/// elements an explicit quantity, `Bool`, or `Int` kind. Version 4 added
+/// multi-axis array shapes; version 3 renamed
+/// the quantity manifest kind from `scalar` to `quantity`; version 2 introduced
+/// arrays and allocator exports. Older modules are not accepted; rebuild
+/// against the current SDK.
+pub const ABI_VERSION: u32 = 5;
 
 /// Name of the wasm custom section holding the JSON-encoded manifest.
 pub const MANIFEST_SECTION: &str = "graphcal-manifest";

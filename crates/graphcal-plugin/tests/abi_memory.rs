@@ -30,7 +30,7 @@ fn sdk_abi_memory_round_trip() {
     // exact byte size, alignment, and lifetime required by the copied array.
     unsafe {
         std::ptr::copy_nonoverlapping(values.as_ptr().cast::<u8>(), pointer, size as usize);
-        let view = __rt::array_view_from_abi(pointer.cast(), 3, &[3], "values");
+        let view = __rt::quantity_array_view_from_abi(pointer.cast(), 3, &[3], "values");
         assert_eq!(view.values(), values);
         __rt::buffer_free(pointer, size);
     }
@@ -46,12 +46,59 @@ fn sdk_abi_result_writers_fill_exact_storage() {
     // SAFETY: both output pointers name the exact initialized, writable slot
     // counts declared to the helpers and remain live for the calls.
     unsafe {
-        __rt::write_array_result(&array, array_output.as_mut_ptr(), &[2, 2], "array_result");
+        __rt::write_quantity_array_result(
+            &array,
+            array_output.as_mut_ptr(),
+            &[2, 2],
+            "array_result",
+        );
         __rt::write_slots(&slots, slot_output.as_mut_ptr(), 3, "struct_result");
     }
 
     assert_eq!(array_output, [1.0, 2.0, 3.0, 4.0]);
     assert_eq!(slot_output, slots);
+}
+
+#[test]
+fn sdk_abi_bool_and_int_arrays_are_typed_and_validated() {
+    let bool_raw = [1.0, -0.0, 0.0];
+    // SAFETY: `bool_raw` supplies exactly the three initialized, aligned slots.
+    let bools = unsafe { __rt::bool_array_view_from_abi(bool_raw.as_ptr(), 3, &[3], "bools") };
+    assert_eq!(bools.values(), [true, false, false]);
+
+    let int_raw = [1.0, -0.0, 18_014_398_509_481_984.0];
+    // SAFETY: `int_raw` supplies exactly the three initialized, aligned slots.
+    let ints = unsafe { __rt::int_array_view_from_abi(int_raw.as_ptr(), 3, &[3], "ints") };
+    assert_eq!(ints.values(), [1, 0, 1_i64 << 54]);
+
+    let invalid_bool = [0.0, 0.5];
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: the pointer and shape are valid; only the semantic element is invalid.
+            unsafe { __rt::bool_array_view_from_abi(invalid_bool.as_ptr(), 2, &[2], "bools") }
+        }))
+        .is_err()
+    );
+    let invalid_int = [1.0, 2.5];
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            // SAFETY: the pointer and shape are valid; only the semantic element is invalid.
+            unsafe { __rt::int_array_view_from_abi(invalid_int.as_ptr(), 2, &[2], "ints") }
+        }))
+        .is_err()
+    );
+
+    let bool_result = Array::vector(vec![true, false]).unwrap();
+    let int_result = Array::vector(vec![1_i64, -2]).unwrap();
+    let mut bool_output = [f64::NAN; 2];
+    let mut int_output = [f64::NAN; 2];
+    // SAFETY: each output has exactly the two writable slots declared by its shape.
+    unsafe {
+        __rt::write_bool_array_result(&bool_result, bool_output.as_mut_ptr(), &[2], "bools");
+        __rt::write_int_array_result(&int_result, int_output.as_mut_ptr(), &[2], "ints");
+    }
+    assert_eq!(bool_output, [1.0, 0.0]);
+    assert_eq!(int_output, [1.0, -2.0]);
 }
 
 #[test]
@@ -68,7 +115,7 @@ fn sdk_abi_rejects_misaligned_nonempty_pointers_before_dereference() {
     let read = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: this deliberately violates the documented alignment
         // precondition to verify the boundary's pre-dereference guard.
-        unsafe { __rt::array_view_from_abi(misaligned.cast(), 1, &[1], "bad") }
+        unsafe { __rt::quantity_array_view_from_abi(misaligned.cast(), 1, &[1], "bad") }
     }));
     assert!(read.is_err());
 
@@ -90,7 +137,7 @@ fn sdk_abi_rejects_shape_and_slot_length_mismatches_before_copy() {
     let bad_shape = catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: the pointer itself is valid for both elements; the deliberate
         // shape mismatch is rejected before the slice is exposed.
-        unsafe { __rt::array_view_from_abi(input.as_ptr(), 2, &[3], "bad") }
+        unsafe { __rt::quantity_array_view_from_abi(input.as_ptr(), 2, &[3], "bad") }
     }));
     assert!(bad_shape.is_err());
 

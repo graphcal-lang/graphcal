@@ -12,7 +12,9 @@ use miette::NamedSource;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::dimension::Dimension;
-use crate::function_signature::{DimMonomial, DimMonomialEvalError, FunctionSignature, ValueKind};
+use crate::function_signature::{
+    DimMonomial, DimMonomialEvalError, FunctionSignature, ScalarValueKind, ValueKind,
+};
 use crate::registry::error::GraphcalError;
 use crate::registry::types::SemanticRegistry;
 use crate::syntax::dimension::DimVarName;
@@ -22,8 +24,8 @@ use crate::syntax::span::{Span, Spanned};
 /// Check quantity argument dimensions against `sig` and compute the result
 /// dimension.
 ///
-/// Arguments are quantity dimensions; callers verify non-quantity parameter kinds
-/// ([`ValueKind::Bool`]/[`ValueKind::Int`]) before reaching this walk. All
+/// Arguments are quantity dimensions; callers verify non-quantity scalar kinds
+/// before reaching this walk. All
 /// built-in registry signatures are all-quantity, so built-in inference calls
 /// this directly.
 pub(super) fn infer_fn_dim(
@@ -51,7 +53,7 @@ pub(super) fn infer_fn_dim(
     let mut bindings: HashMap<DimVarName, Dimension> = HashMap::new();
 
     for (param, arg) in sig.params().iter().zip(args) {
-        let ValueKind::Quantity(monomial) = &param.kind else {
+        let ValueKind::Scalar(ScalarValueKind::Quantity(monomial)) = &param.kind else {
             return Err(GraphcalError::internal_error(
                 format!(
                     "signature for `{fn_name}` has a non-quantity parameter `{}` in the quantity checking path",
@@ -74,7 +76,7 @@ pub(super) fn infer_fn_dim(
         )?;
     }
 
-    let ValueKind::Quantity(result) = sig.result() else {
+    let ValueKind::Scalar(ScalarValueKind::Quantity(result)) = sig.result() else {
         return Err(GraphcalError::internal_error(
             format!(
                 "signature for `{fn_name}` has a non-quantity result in the quantity checking path"
@@ -189,7 +191,9 @@ fn eval_monomial(
 /// variable, for "must have the same dimension as `x`" diagnostics.
 fn first_binding_param<'a>(sig: &'a FunctionSignature, var: &DimVarName) -> Option<&'a str> {
     sig.params().iter().find_map(|p| match &p.kind {
-        ValueKind::Quantity(monomial) if monomial.as_bare_var() == Some(var) => {
+        ValueKind::Scalar(ScalarValueKind::Quantity(monomial))
+            if monomial.as_bare_var() == Some(var) =>
+        {
             Some(p.name.as_str())
         }
         _ => None,

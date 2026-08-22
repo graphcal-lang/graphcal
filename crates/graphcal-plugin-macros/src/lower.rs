@@ -69,13 +69,18 @@ pub struct ParamIr {
     pub kind: ParamKindIr,
 }
 
-/// A validated parameter kind. Structs have no parameter representation.
-pub enum ParamKindIr {
+/// A validated scalar kind shared by standalone and indexed values.
+pub enum ScalarKindIr {
     Bool,
     Int,
     Quantity(MonomialIr),
+}
+
+/// A validated parameter kind. Structs have no parameter representation.
+pub enum ParamKindIr {
+    Scalar(ScalarKindIr),
     Array {
-        element: MonomialIr,
+        element: ScalarKindIr,
         /// Non-empty axis list in row-major order (enforced by parsing).
         indexes: Vec<syn::Ident>,
     },
@@ -83,11 +88,9 @@ pub enum ParamKindIr {
 
 /// A validated result kind.
 pub enum ResultKindIr {
-    Bool,
-    Int,
-    Quantity(MonomialIr),
+    Scalar(ScalarKindIr),
     Array {
-        element: MonomialIr,
+        element: ScalarKindIr,
         /// Non-empty axis list in row-major order (enforced by parsing).
         indexes: Vec<syn::Ident>,
     },
@@ -97,9 +100,7 @@ pub enum ResultKindIr {
 impl From<ParamKindIr> for ResultKindIr {
     fn from(kind: ParamKindIr) -> Self {
         match kind {
-            ParamKindIr::Bool => Self::Bool,
-            ParamKindIr::Int => Self::Int,
-            ParamKindIr::Quantity(monomial) => Self::Quantity(monomial),
+            ParamKindIr::Scalar(scalar) => Self::Scalar(scalar),
             ParamKindIr::Array { element, indexes } => Self::Array { element, indexes },
         }
     }
@@ -242,13 +243,16 @@ fn lower_params(
             ));
         }
         let kind = lower_type(&param.ty, binders, index_binders)?;
-        let monomial = match &kind {
-            ParamKindIr::Quantity(monomial) => Some(monomial),
+        let scalar = match &kind {
+            ParamKindIr::Scalar(scalar) => scalar,
             ParamKindIr::Array { element, indexes } => {
                 used_indexes.extend(indexes.iter().map(ToString::to_string));
-                Some(element)
+                element
             }
-            ParamKindIr::Bool | ParamKindIr::Int => None,
+        };
+        let monomial = match scalar {
+            ScalarKindIr::Quantity(monomial) => Some(monomial),
+            ScalarKindIr::Bool | ScalarKindIr::Int => None,
         };
         if let Some(monomial) = monomial {
             match monomial.as_bare_var() {
@@ -293,8 +297,8 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
     } = lower_params(decl, &binders, &index_binders)?;
 
     let result = lower_result(&decl.result, &binders, &index_binders)?;
-    let result_monomial = match &result {
-        ResultKindIr::Quantity(monomial) => Some(monomial),
+    let result_scalar = match &result {
+        ResultKindIr::Scalar(scalar) => Some(scalar),
         ResultKindIr::Array { element, indexes } => {
             for index in indexes {
                 if !used_indexes.contains(&index.to_string()) {
@@ -309,8 +313,12 @@ fn lower_function(decl: &PluginFnDecl) -> syn::Result<FunctionIr> {
             }
             Some(element)
         }
-        ResultKindIr::Bool | ResultKindIr::Int | ResultKindIr::Struct(_) => None,
+        ResultKindIr::Struct(_) => None,
     };
+    let result_monomial = result_scalar.and_then(|scalar| match scalar {
+        ScalarKindIr::Quantity(monomial) => Some(monomial),
+        ScalarKindIr::Bool | ScalarKindIr::Int => None,
+    });
     if let Some(monomial) = result_monomial {
         for factor in &monomial.vars {
             if !bound.contains(&factor.name) {
@@ -394,9 +402,11 @@ fn lower_result(
                         &empty,
                         &empty,
                     )? {
-                        ParamKindIr::Bool => FieldKindIr::Bool,
-                        ParamKindIr::Int => FieldKindIr::Int,
-                        ParamKindIr::Quantity(monomial) => FieldKindIr::Quantity(monomial),
+                        ParamKindIr::Scalar(ScalarKindIr::Bool) => FieldKindIr::Bool,
+                        ParamKindIr::Scalar(ScalarKindIr::Int) => FieldKindIr::Int,
+                        ParamKindIr::Scalar(ScalarKindIr::Quantity(monomial)) => {
+                            FieldKindIr::Quantity(monomial)
+                        }
                         ParamKindIr::Array { .. } => {
                             return Err(syn::Error::new(
                                 field.name.span(),
@@ -449,31 +459,31 @@ const fn clone_exponent(exponent: &ExponentAst) -> ExponentAst {
     }
 }
 
-/// Lower one type position: a lone `Bool`/`Int`, a dimension monomial, or
-/// an array of quantities over one or more declared index variables.
+/// Lower one type position: a scalar kind or an indexed scalar collection
+/// over one or more declared index variables.
 fn lower_type(
     ty: &TypeAst,
     binders: &HashSet<String>,
     index_binders: &HashSet<String>,
 ) -> syn::Result<ParamKindIr> {
     let expr = &ty.element;
-    if let (DimTermAst::Named { name, pow: None }, true) = (&expr.first, expr.rest.is_empty()) {
+    let scalar = if let (DimTermAst::Named { name, pow: None }, true) =
+        (&expr.first, expr.rest.is_empty())
+    {
         match name.to_string().as_str() {
-            "Bool" | "Int" if ty.indexes.is_some() => {
-                return Err(syn::Error::new(
-                    name.span(),
-                    "array elements must be quantities in this phase",
-                ));
+            "Bool" => ScalarKindIr::Bool,
+            "Int" => ScalarKindIr::Int,
+            _ => {
+                let mut acc = MonomialAcc::default();
+                lower_expr(expr, binders, Rational::ONE, &mut acc)?;
+                ScalarKindIr::Quantity(acc.into_monomial())
             }
-            "Bool" => return Ok(ParamKindIr::Bool),
-            "Int" => return Ok(ParamKindIr::Int),
-            _ => {}
         }
-    }
-
-    let mut acc = MonomialAcc::default();
-    lower_expr(expr, binders, Rational::ONE, &mut acc)?;
-    let element = acc.into_monomial();
+    } else {
+        let mut acc = MonomialAcc::default();
+        lower_expr(expr, binders, Rational::ONE, &mut acc)?;
+        ScalarKindIr::Quantity(acc.into_monomial())
+    };
     match &ty.indexes {
         Some(indexes) => {
             for index in indexes {
@@ -488,11 +498,11 @@ fn lower_type(
                 }
             }
             Ok(ParamKindIr::Array {
-                element,
+                element: scalar,
                 indexes: indexes.clone(),
             })
         }
-        None => Ok(ParamKindIr::Quantity(element)),
+        None => Ok(ParamKindIr::Scalar(scalar)),
     }
 }
 

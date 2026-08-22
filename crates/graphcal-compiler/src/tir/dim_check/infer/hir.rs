@@ -1657,7 +1657,7 @@ fn infer_extern_fn_call(
     builtin_fns: &crate::registry::builtins::BuiltinFunctions,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    use crate::function_signature::ValueKind;
+    use crate::function_signature::{ScalarValueKind, ValueKind};
 
     use super::super::builtins::{check_quantity_param, eval_result_monomial};
 
@@ -1697,7 +1697,7 @@ fn infer_extern_fn_call(
             src,
         )?;
         match &param.kind {
-            ValueKind::Bool => {
+            ValueKind::Scalar(ScalarValueKind::Bool) => {
                 if !matches!(arg_type, InferredType::Bool) {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Bool".to_string(),
@@ -1708,7 +1708,7 @@ fn infer_extern_fn_call(
                     });
                 }
             }
-            ValueKind::Int => {
+            ValueKind::Scalar(ScalarValueKind::Int) => {
                 if arg_type != InferredType::Int {
                     return Err(GraphcalError::DimensionMismatch {
                         expected: "Int".to_string(),
@@ -1719,7 +1719,7 @@ fn infer_extern_fn_call(
                     });
                 }
             }
-            ValueKind::Quantity(monomial) => {
+            ValueKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
                 let arg_dim = expect_quantity(&arg_type, registry, src, arg.span)?;
                 check_quantity_param(
                     &display_name,
@@ -1753,10 +1753,7 @@ fn infer_extern_fn_call(
                     } = current
                     else {
                         return Err(GraphcalError::DimensionMismatch {
-                            expected: format!(
-                                "a rank-{} indexed quantity collection",
-                                indexes.len()
-                            ),
+                            expected: format!("a rank-{} indexed collection", indexes.len()),
                             found: format_inferred_type(&arg_type, registry),
                             help: format!(
                                 "parameter `{}` of `{display_name}` takes one axis for each declared index variable",
@@ -1769,30 +1766,63 @@ fn infer_extern_fn_call(
                     arg_indexes.push(arg_index);
                     current = element;
                 }
-                let Some(arg_dim) = current.quantity_dimension().cloned() else {
-                    return Err(GraphcalError::DimensionMismatch {
-                        expected: format!("a rank-{} indexed quantity collection", indexes.len()),
-                        found: format_inferred_type(&arg_type, registry),
-                        help: format!(
-                            "parameter `{}` of `{display_name}` requires exactly {} axes and quantity elements",
-                            param.name,
-                            indexes.len()
-                        ),
-                        src: src.clone(),
-                        span: arg.span.into(),
-                    });
-                };
-                check_quantity_param(
-                    &display_name,
-                    sig,
-                    &param.name,
-                    element,
-                    &arg_dim,
-                    &mut bindings,
-                    registry,
-                    src,
-                    arg.span,
-                )?;
+                match element {
+                    ScalarValueKind::Quantity(monomial) => {
+                        let Some(arg_dim) = current.quantity_dimension().cloned() else {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: format!(
+                                    "a rank-{} indexed quantity collection",
+                                    indexes.len()
+                                ),
+                                found: format_inferred_type(&arg_type, registry),
+                                help: format!(
+                                    "parameter `{}` of `{display_name}` requires quantity elements",
+                                    param.name
+                                ),
+                                src: src.clone(),
+                                span: arg.span.into(),
+                            });
+                        };
+                        check_quantity_param(
+                            &display_name,
+                            sig,
+                            &param.name,
+                            monomial,
+                            &arg_dim,
+                            &mut bindings,
+                            registry,
+                            src,
+                            arg.span,
+                        )?;
+                    }
+                    scalar @ (ScalarValueKind::Bool | ScalarValueKind::Int) => {
+                        let name = if matches!(scalar, ScalarValueKind::Bool) {
+                            "Bool"
+                        } else {
+                            "Int"
+                        };
+                        let matches = matches!(
+                            (scalar, current),
+                            (ScalarValueKind::Bool, InferredType::Bool)
+                                | (ScalarValueKind::Int, InferredType::Int)
+                        );
+                        if !matches {
+                            return Err(GraphcalError::DimensionMismatch {
+                                expected: format!(
+                                    "{name} with exactly {} indexed axes",
+                                    indexes.len()
+                                ),
+                                found: format_inferred_type(&arg_type, registry),
+                                help: format!(
+                                    "parameter `{}` of `{display_name}` requires {name} elements",
+                                    param.name
+                                ),
+                                src: src.clone(),
+                                span: arg.span.into(),
+                            });
+                        }
+                    }
+                }
                 for (index, arg_index) in indexes.iter().zip(arg_indexes) {
                     match index_bindings.entry(index.clone()) {
                         std::collections::hash_map::Entry::Vacant(slot) => {
@@ -1821,34 +1851,38 @@ fn infer_extern_fn_call(
     }
 
     match sig.result() {
-        ValueKind::Bool => Ok(InferredType::Bool),
-        ValueKind::Int => Ok(InferredType::Int),
-        ValueKind::Quantity(monomial) => {
+        ValueKind::Scalar(ScalarValueKind::Bool) => Ok(InferredType::Bool),
+        ValueKind::Scalar(ScalarValueKind::Int) => Ok(InferredType::Int),
+        ValueKind::Scalar(ScalarValueKind::Quantity(monomial)) => {
             eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
                 .map(InferredType::Quantity)
         }
         ValueKind::Indexed { element, indexes } => {
-            let dim = eval_result_monomial(&display_name, element, &bindings, src, callee_span)?;
-            indexes.iter().rev().try_fold(
-                InferredType::Quantity(dim),
-                |element, index| {
-                    let Some(bound) = index_bindings.get(index) else {
-                        // try_new guarantees every result index variable indexes
-                        // some parameter, so this is a compiler bug.
-                        return Err(GraphcalError::InternalError {
-                            message: format!(
-                                "result index variable `{index}` of `{display_name}` was not bound by any argument"
-                            ),
-                            src: src.clone(),
-                            span: callee_span.into(),
-                        });
-                    };
-                    Ok(InferredType::Indexed {
-                        element: Box::new(element),
-                        index: bound.clone(),
-                    })
-                },
-            )
+            let leaf = match element {
+                ScalarValueKind::Quantity(monomial) => {
+                    eval_result_monomial(&display_name, monomial, &bindings, src, callee_span)
+                        .map(InferredType::Quantity)?
+                }
+                ScalarValueKind::Bool => InferredType::Bool,
+                ScalarValueKind::Int => InferredType::Int,
+            };
+            indexes.iter().rev().try_fold(leaf, |element, index| {
+                let Some(bound) = index_bindings.get(index) else {
+                    // try_new guarantees every result index variable indexes
+                    // some parameter, so this is a compiler bug.
+                    return Err(GraphcalError::InternalError {
+                        message: format!(
+                            "result index variable `{index}` of `{display_name}` was not bound by any argument"
+                        ),
+                        src: src.clone(),
+                        span: callee_span.into(),
+                    });
+                };
+                Ok(InferredType::Indexed {
+                    element: Box::new(element),
+                    index: bound.clone(),
+                })
+            })
         }
         ValueKind::Struct(_) => {
             // The nominal identity lives on the entry (the shape in the

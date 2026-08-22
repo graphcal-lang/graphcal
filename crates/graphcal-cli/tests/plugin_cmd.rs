@@ -9,8 +9,8 @@ use std::path::Path;
 use std::process::Command;
 
 use graphcal_plugin_abi::{
-    ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind, ManifestRational,
-    ManifestResultKind, ManifestVarPower, PluginManifest,
+    ManifestArrayElementKind, ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind,
+    ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
 };
 
 fn graphcal_bin() -> Command {
@@ -47,12 +47,12 @@ fn twice_manifest_function() -> ManifestFunction {
         params: vec![ManifestParam {
             name: "xs".to_string(),
             kind: ManifestParamKind::Array {
-                element: element.clone(),
+                element: ManifestArrayElementKind::Quantity(element.clone()),
                 indexes: vec!["I".to_string()],
             },
         }],
         result: ManifestResultKind::Array {
-            element,
+            element: ManifestArrayElementKind::Quantity(element),
             indexes: vec!["I".to_string()],
         },
     }
@@ -147,6 +147,65 @@ fn write_test_module(dir: &Path) -> std::path::PathBuf {
     path
 }
 
+fn semantic_array_module_bytes() -> Vec<u8> {
+    let wat = r#"
+    (module
+      (memory (export "memory") 1)
+      (global $bump (mut i32) (i32.const 1024))
+      (func (export "graphcal_alloc") (param $size i32) (result i32)
+        (local $ptr i32)
+        (local.set $ptr (global.get $bump))
+        (global.set $bump (i32.add (global.get $bump) (local.get $size)))
+        (local.get $ptr))
+      (func (export "graphcal_free") (param i32 i32))
+      (func (export "echo_bool") (param $ptr i32) (param $len i32) (param $out i32)
+        (local $i i32)
+        (block $done
+          (loop $loop
+            (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+            (f64.store
+              (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 8)))
+              (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop))))
+      (func (export "echo_int") (param $ptr i32) (param $len i32) (param $out i32)
+        (local $i i32)
+        (block $done
+          (loop $loop
+            (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+            (f64.store
+              (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 8)))
+              (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $loop)))))
+    "#;
+    let function = |name: &str, element: ManifestArrayElementKind| ManifestFunction {
+        name: name.to_string(),
+        dim_vars: Vec::new(),
+        index_vars: vec!["I".to_string()],
+        params: vec![ManifestParam {
+            name: "values".to_string(),
+            kind: ManifestParamKind::Array {
+                element: element.clone(),
+                indexes: vec!["I".to_string()],
+            },
+        }],
+        result: ManifestResultKind::Array {
+            element,
+            indexes: vec!["I".to_string()],
+        },
+    };
+    let manifest = PluginManifest {
+        abi_version: graphcal_plugin_abi::ABI_VERSION,
+        functions: vec![
+            function("echo_bool", ManifestArrayElementKind::Bool),
+            function("echo_int", ManifestArrayElementKind::Int),
+        ],
+    };
+    let wasm = wat::parse_str(wat).expect("semantic-array WAT compiles");
+    manifest.embed_into(&wasm).expect("manifest embeds")
+}
+
 fn non_finite_result_module_bytes() -> Vec<u8> {
     let wat = r#"
     (module
@@ -213,7 +272,7 @@ fn plugin_test_reports_identity_and_import_block() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("sha256: "), "{stdout}");
-    assert!(stdout.contains("abi: version 4, 3 function(s)"), "{stdout}");
+    assert!(stdout.contains("abi: version 5, 3 function(s)"), "{stdout}");
     assert!(stdout.contains("as kernels {"), "{stdout}");
     assert!(
         stdout.contains("fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;"),
@@ -278,6 +337,42 @@ fn plugin_test_calls_functions_with_typed_arguments() {
         stdout.contains("twice([1.5,2.0,-3.0]) = [3, 4, -6]"),
         "{stdout}"
     );
+}
+
+#[test]
+fn plugin_test_calls_bool_and_int_arrays_with_semantic_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let module = dir.path().join("semantic-arrays.wasm");
+    std::fs::write(&module, semantic_array_module_bytes()).unwrap();
+
+    for (function, argument, expected) in [
+        ("echo_bool", "[true,false,true]", "[true, false, true]"),
+        ("echo_int", "[1,-2,3]", "[1, -2, 3]"),
+    ] {
+        let output = graphcal_bin()
+            .args(["plugin", "test"])
+            .arg(&module)
+            .args(["--call", function, argument])
+            .output()
+            .expect("failed to run graphcal");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains(expected), "{stdout}");
+    }
+
+    for (function, invalid) in [("echo_bool", "[1,0]"), ("echo_int", "[1.5]")] {
+        let output = graphcal_bin()
+            .args(["plugin", "test"])
+            .arg(&module)
+            .args(["--call", function, invalid])
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2));
+    }
 }
 
 #[test]

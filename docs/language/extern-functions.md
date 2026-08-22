@@ -44,8 +44,9 @@ import plugin "plugins/fluids.wasm" as fluids {
   function namespace closed.
 - Each `fn` declares **named parameters** and a **result type**. Parameter
   and result types may be `Bool`, `Int`, quantity types written as dimension
-  expressions, or arrays of quantities over one or more declared index
-  variables (`xs: D[I]`, `matrix: D[I, J]`); the result
+  expressions, or arrays of any of those scalar kinds over one or more declared
+  index variables (`flags: Bool[I]`, `counts: Int[I]`, `xs: D[I]`,
+  `matrix: D[I, J]`); the result
   may additionally be a record type in scope (see
   [Record-Shaped Results](#record-shaped-results)).
 
@@ -98,13 +99,15 @@ boundary.
 ## Arrays over Index Variables
 
 A signature may also declare *index variables* (`I: Index`) and take or
-return arrays of quantities over them:
+return arrays of quantities, booleans, or integers over them:
 
 ```
 import plugin "plugins/dsp.wasm" as dsp {
     fn smooth<D: Dim, I: Index>(xs: D[I], window: Dimensionless) -> D[I];
     fn total<D: Dim, I: Index>(xs: D[I]) -> D;
     fn transpose<D: Dim, I: Index, J: Index>(matrix: D[I, J]) -> D[J, I];
+    fn invert<I: Index>(flags: Bool[I]) -> Bool[I];
+    fn increment<I: Index>(counts: Int[I]) -> Int[I];
 }
 
 index Maneuver = { Departure, Correction, Insertion };
@@ -119,8 +122,8 @@ variables:
   Concrete declared indexes (`Velocity[Maneuver]`) and structural indexes
   (`D[Fin(3)]`) cannot be written directly in an extern signature, but either
   can bind a variable at a call site. Index variables are parametric: the
-  plugin sees ordered extents and dense row-major SI values, never an index's
-  identity or labels.
+  plugin sees ordered extents and dense row-major typed values, never an
+  index's identity or labels.
 - Two parameters sharing an index variable must be passed arrays over the
   *same* index.
 - **Every result axis must reuse an index variable that indexes some
@@ -128,10 +131,12 @@ variables:
   invent output extents. Result axes may be reordered (`D[I, J] -> D[J, I]`)
   and are rebuilt over exactly the binding arguments' typed indexes and keys,
   ready for indexing and `for` comprehensions like any other array.
-- A bare array element (`xs: D[I]`) is a binding occurrence for `D`, just
-  like a bare quantity parameter.
-- Array elements are quantities in this phase (`Bool[I]`/`Int[I]` are not
-  supported). Arrays have one or more axes; each axis is non-empty.
+- A bare quantity-array element (`xs: D[I]`) is a binding occurrence for `D`,
+  just like a bare quantity parameter. Bool and Int arrays do not participate
+  in dimension-variable binding.
+- The leaf kind is checked exactly: `Bool[I]`, `Int[I]`, and `Dimensionless[I]`
+  are distinct types with no implicit conversion. Arrays have one or more axes;
+  each axis is non-empty.
 
 ## Record-Shaped Results
 
@@ -206,14 +211,15 @@ deterministic interpreter. The module must satisfy the ABI, all checked
 at load time before any plugin code runs:
 
 - **Manifest.** The module embeds a JSON manifest in a custom section
-  named `graphcal-manifest`, declaring `abi_version: 4` and each provided
+  named `graphcal-manifest`, declaring `abi_version: 5` and each provided
   function's dimensional signature (dimension and index variables, named
   parameters, the result — including array kinds and struct field
   layouts). Fixed dimensions are spelled structurally over the eight
   prelude base dimensions (`Length`, `Time`, `Mass`, `Temperature`,
   `ElectricCurrent`, `Amount`, `LuminousIntensity`, `Angle`) with rational
   exponents — `Velocity` is `Length^1 * Time^-1`. Quantity kinds use the
-  `"quantity"` JSON tag. ABI v2's former `"scalar"` tag is not accepted;
+  `"quantity"` JSON tag. Array entries carry an explicit quantity, `"bool"`,
+  or `"int"` element kind. ABI v2's former `"scalar"` tag is not accepted;
   rebuild plugins with the current SDK. User-defined base dimensions cannot
   cross the binary boundary. The JSON payload is limited to 256 KiB and 256
   functions. Names are at most 256 UTF-8 bytes; each function may declare at
@@ -227,7 +233,11 @@ at load time before any plugin code runs:
   units for quantities; `Int` as exactly-representable integers, `Bool` as
   `1.0`/`0.0`). A rank-`R` array parameter is an `i32` pointer followed by
   `R` `i32` extents, pointing at the shape product of dense little-endian
-  row-major `f64` elements. A quantity/`Bool`/`Int` result is the single `f64`
+  row-major `f64` elements. Quantity elements must be finite, Bool elements
+  must be numeric `0.0` or `1.0` (`-0.0` is false), and Int elements use the
+  same exact binary64 policy as scalar Int. Every element is validated before
+  entering typed runtime/plugin code and again on results. A
+  quantity/`Bool`/`Int` result is the single `f64`
   return value; an array or struct result replaces the return with one trailing
   `i32` out-pointer the plugin fills — the product of the signature-bound
   result extents for an array, or one slot per field for a struct. The complete
@@ -300,9 +310,11 @@ graphcal_plugin::plugin! {
 }
 ```
 
-Under the ABI v4 SDK, array parameters such as `D[I, J]` arrive as
-`graphcal_plugin::ArrayView` values with an ordered shape and flattened
-row-major SI data; array bodies return a validated `graphcal_plugin::Array`.
+Under the ABI v5 SDK, array parameters arrive as borrowed typed views:
+`ArrayView<'_, f64>` for quantities, `ArrayView<'_, bool>` for Bool, and
+`ArrayView<'_, i64>` for Int. They expose an ordered shape and flattened
+row-major typed data; array bodies return the corresponding validated
+`graphcal_plugin::Array<T>`.
 A Rust declaration may spell a record result structurally, for example
 `-> { lo: Pressure, hi: Pressure }`; the macro generates the corresponding
 named output type (`SpanOutput` for `span`) used by the body. `Bool`, `Int`, and

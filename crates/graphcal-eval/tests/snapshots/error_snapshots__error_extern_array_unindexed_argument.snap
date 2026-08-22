@@ -2,7 +2,7 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-dimension mismatch: expected a rank-1 indexed quantity collection, found Length
+dimension mismatch: expected a rank-1 indexed collection, found Length
     Diagnostic severity: error
 Begin snippet for extern_array_unindexed_argument.gcl starting at line 5, column 1
 

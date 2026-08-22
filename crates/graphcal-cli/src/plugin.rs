@@ -11,14 +11,14 @@ use std::path::{Path, PathBuf};
 
 use graphcal_compiler::dimension::{Dimension, Rational};
 use graphcal_compiler::function_signature::{
-    DimMonomial, FunctionSignature, StructFieldKind, ValueKind,
+    DimMonomial, FunctionSignature, ScalarValueKind, StructFieldKind, ValueKind,
 };
 use graphcal_compiler::registry::format::format_exponent;
 use graphcal_compiler::syntax::token::{SourceIdentifier, SourceIdentifierError};
 use graphcal_eval::eval::format_number;
 use graphcal_eval::host_abi::{
-    ValidatedHostFieldValue, ValidatedHostResult, decode_result, encode_bool, encode_int,
-    validate_quantity,
+    ValidatedHostArrayValues, ValidatedHostFieldValue, ValidatedHostResult, decode_result,
+    encode_bool, encode_int, validate_quantity,
 };
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_host::PluginModule;
@@ -211,7 +211,7 @@ mod tests {
         let values = [1.0, 3.0];
         let xs = graphcal_plugin::ArrayView::new(&[2], &values).unwrap();
         assert_eq!(
-            super::share(xs),
+            super::share(&xs),
             graphcal_plugin::Array::vector(vec![0.25, 0.75]).unwrap()
         );
     }
@@ -651,12 +651,10 @@ fn render_declaration(function: &RenderableFunction<'_>) -> String {
 
 fn render_value_kind(kind: &ValueKind) -> String {
     match kind {
-        ValueKind::Bool => "Bool".to_string(),
-        ValueKind::Int => "Int".to_string(),
-        ValueKind::Quantity(monomial) => render_monomial(monomial),
+        ValueKind::Scalar(scalar) => render_scalar_value_kind(scalar),
         ValueKind::Indexed { element, indexes } => format!(
             "{}[{}]",
-            render_monomial(element),
+            render_scalar_value_kind(element),
             indexes
                 .iter()
                 .map(ToString::to_string)
@@ -672,6 +670,14 @@ fn render_value_kind(kind: &ValueKind) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+    }
+}
+
+fn render_scalar_value_kind(kind: &ScalarValueKind) -> String {
+    match kind {
+        ScalarValueKind::Bool => "Bool".to_string(),
+        ScalarValueKind::Int => "Int".to_string(),
+        ScalarValueKind::Quantity(monomial) => render_monomial(monomial),
     }
 }
 
@@ -754,14 +760,38 @@ pub enum CallArgError {
     },
 }
 
-fn parse_dense_array(text: &str, rank: usize) -> Result<HostArray, String> {
-    fn flatten(value: &serde_json::Value, rank: usize) -> Result<(Vec<usize>, Vec<f64>), String> {
+fn parse_dense_array(
+    text: &str,
+    rank: usize,
+    element: &ScalarValueKind,
+) -> Result<HostArray, String> {
+    fn flatten(
+        value: &serde_json::Value,
+        rank: usize,
+        element: &ScalarValueKind,
+    ) -> Result<(Vec<usize>, Vec<f64>), String> {
         if rank == 0 {
-            let value = value
-                .as_f64()
-                .ok_or_else(|| "array leaves must be JSON numbers".to_string())?;
-            let finite = validate_quantity(value).map_err(|error| error.to_string())?;
-            return Ok((Vec::new(), vec![finite.get()]));
+            let value = match element {
+                ScalarValueKind::Quantity(_) => {
+                    let value = value
+                        .as_f64()
+                        .ok_or_else(|| "quantity array leaves must be JSON numbers".to_string())?;
+                    validate_quantity(value)
+                        .map(graphcal_eval::host_abi::FiniteHostQuantity::get)
+                        .map_err(|error| error.to_string())?
+                }
+                ScalarValueKind::Bool => value
+                    .as_bool()
+                    .map(encode_bool)
+                    .ok_or_else(|| "Bool array leaves must be JSON booleans".to_string())?,
+                ScalarValueKind::Int => {
+                    let value = value
+                        .as_i64()
+                        .ok_or_else(|| "Int array leaves must be JSON integers".to_string())?;
+                    encode_int(value).map_err(|error| error.to_string())?
+                }
+            };
+            return Ok((Vec::new(), vec![value]));
         }
         let items = value
             .as_array()
@@ -771,7 +801,7 @@ fn parse_dense_array(text: &str, rank: usize) -> Result<HostArray, String> {
         }
         let children = items
             .iter()
-            .map(|item| flatten(item, rank - 1))
+            .map(|item| flatten(item, rank - 1, element))
             .collect::<Result<Vec<_>, _>>()?;
         let first_shape = children
             .first()
@@ -792,18 +822,22 @@ fn parse_dense_array(text: &str, rank: usize) -> Result<HostArray, String> {
 
     let value: serde_json::Value =
         serde_json::from_str(text).map_err(|error| format!("invalid JSON array: {error}"))?;
-    let (shape, values) = flatten(&value, rank)?;
+    let (shape, values) = flatten(&value, rank, element)?;
     HostArray::try_new(shape, values).map_err(|error| error.to_string())
 }
 
-fn render_dense_array(shape: &[usize], values: &[f64]) -> Result<String, String> {
+fn render_dense_array<T>(
+    shape: &[usize],
+    values: &[T],
+    render_value: impl Fn(&T) -> String + Copy,
+) -> Result<String, String> {
     match shape {
         [] => Err("array result has no axes".to_string()),
         [_] => Ok(format!(
             "[{}]",
             values
                 .iter()
-                .map(|value| format_number(*value))
+                .map(render_value)
                 .collect::<Vec<_>>()
                 .join(", ")
         )),
@@ -819,7 +853,7 @@ fn render_dense_array(shape: &[usize], values: &[f64]) -> Result<String, String>
                 return Err("array result values do not match its shape".to_string());
             }
             let children = chunks
-                .map(|chunk| render_dense_array(remaining, chunk))
+                .map(|chunk| render_dense_array(remaining, chunk, render_value))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(format!("[{}]", children.join(", ")))
         }
@@ -852,18 +886,18 @@ pub fn parse_call_args(
                 expected: expected.to_string(),
             };
             match &param.kind {
-                ValueKind::Bool => match text.as_str() {
+                ValueKind::Scalar(ScalarValueKind::Bool) => match text.as_str() {
                     "true" => Ok(HostFnValue::F64(encode_bool(true))),
                     "false" => Ok(HostFnValue::F64(encode_bool(false))),
                     _ => Err(invalid("expected `true` or `false`")),
                 },
-                ValueKind::Int => {
+                ValueKind::Scalar(ScalarValueKind::Int) => {
                     let value: i64 = text.parse().map_err(|_| invalid("expected an integer"))?;
                     encode_int(value)
                         .map(HostFnValue::F64)
                         .map_err(|error| invalid(&error.to_string()))
                 }
-                ValueKind::Quantity(_) => {
+                ValueKind::Scalar(ScalarValueKind::Quantity(_)) => {
                     let value = text
                         .parse::<f64>()
                         .map_err(|_| invalid("expected a number (in SI base units)"))?;
@@ -873,9 +907,11 @@ pub fn parse_call_args(
                 }
                 // Struct parameters never pass signature validation.
                 ValueKind::Struct(_) => Err(invalid("struct parameters are not supported")),
-                ValueKind::Indexed { indexes, .. } => parse_dense_array(text, indexes.len())
-                    .map(HostFnValue::Array)
-                    .map_err(|error| invalid(&error)),
+                ValueKind::Indexed { element, indexes } => {
+                    parse_dense_array(text, indexes.len(), element)
+                        .map(HostFnValue::Array)
+                        .map_err(|error| invalid(&error))
+                }
             }
         })
         .collect()
@@ -897,19 +933,23 @@ pub fn render_result(signature: &FunctionSignature, value: &HostFnValue) -> Resu
                 None => rendered,
             })
         }
-        ValidatedHostResult::Array(array) => {
-            let values = array
-                .values()
-                .iter()
-                .map(|value| value.get())
-                .collect::<Vec<_>>();
-            let rendered = render_dense_array(array.shape(), &values)?;
-            let dim = render_quantity_result_dimension(array.element());
-            Ok(match dim {
-                Some(dim) => format!("{rendered} [{dim}, SI base units]"),
-                None => rendered,
-            })
-        }
+        ValidatedHostResult::Array(array) => match array.values() {
+            ValidatedHostArrayValues::Quantity { element, values } => {
+                let rendered =
+                    render_dense_array(array.shape(), values, |value| format_number(value.get()))?;
+                let dim = render_quantity_result_dimension(element);
+                Ok(match dim {
+                    Some(dim) => format!("{rendered} [{dim}, SI base units]"),
+                    None => rendered,
+                })
+            }
+            ValidatedHostArrayValues::Bool(values) => {
+                render_dense_array(array.shape(), values, ToString::to_string)
+            }
+            ValidatedHostArrayValues::Int(values) => {
+                render_dense_array(array.shape(), values, ToString::to_string)
+            }
+        },
         ValidatedHostResult::Struct(fields) => {
             let fields = fields
                 .iter()
@@ -948,6 +988,8 @@ mod tests {
     use graphcal_compiler::registry::prelude::prelude_base_dimension;
     use graphcal_compiler::syntax::dimension::DimVarName;
     use graphcal_compiler::syntax::function_name::FnParamName;
+    use graphcal_compiler::syntax::index_name::IndexVarName;
+    use graphcal_compiler::syntax::non_empty::NonEmpty;
 
     use super::*;
 
@@ -959,18 +1001,18 @@ mod tests {
             vec![
                 FunctionParam {
                     name: FnParamName::expect_valid("a"),
-                    kind: ValueKind::Quantity(DimMonomial::var(var())),
+                    kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("b"),
-                    kind: ValueKind::Quantity(DimMonomial::var(var())),
+                    kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("t"),
                     kind: ValueKind::dimensionless(),
                 },
             ],
-            ValueKind::Quantity(DimMonomial::var(var())),
+            ValueKind::quantity_monomial(DimMonomial::var(var())),
         )
         .expect("valid signature")
     }
@@ -982,14 +1024,14 @@ mod tests {
             vec![
                 FunctionParam {
                     name: FnParamName::expect_valid("n"),
-                    kind: ValueKind::Int,
+                    kind: ValueKind::int(),
                 },
                 FunctionParam {
                     name: FnParamName::expect_valid("up"),
-                    kind: ValueKind::Bool,
+                    kind: ValueKind::bool(),
                 },
             ],
-            ValueKind::Int,
+            ValueKind::int(),
         )
         .expect("valid signature")
     }
@@ -1100,9 +1142,9 @@ mod tests {
             Vec::new(),
             vec![FunctionParam {
                 name: FnParamName::expect_valid("p"),
-                kind: ValueKind::Quantity(DimMonomial::fixed(pressure)),
+                kind: ValueKind::quantity_monomial(DimMonomial::fixed(pressure)),
             }],
-            ValueKind::Quantity(DimMonomial::fixed(sqrt_len)),
+            ValueKind::quantity_monomial(DimMonomial::fixed(sqrt_len)),
         )
         .expect("valid signature");
         assert_eq!(
@@ -1230,17 +1272,79 @@ mod tests {
         }
     }
 
+    fn array_signature(element: ScalarValueKind) -> FunctionSignature {
+        let index = IndexVarName::expect_valid("I");
+        FunctionSignature::try_new(
+            Vec::new(),
+            vec![index.clone()],
+            vec![FunctionParam {
+                name: FnParamName::expect_valid("values"),
+                kind: ValueKind::Indexed {
+                    element: element.clone(),
+                    indexes: NonEmpty::singleton(index.clone()),
+                },
+            }],
+            ValueKind::Indexed {
+                element,
+                indexes: NonEmpty::singleton(index),
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn bool_and_int_call_arrays_parse_and_render_semantically() {
+        let bool_signature = array_signature(ScalarValueKind::Bool);
+        assert_eq!(
+            parse_call_args("invert", &bool_signature, &["[true,false]".into()]).unwrap(),
+            [HostFnValue::Array(
+                HostArray::vector(vec![1.0, 0.0]).unwrap()
+            )]
+        );
+        assert!(parse_call_args("invert", &bool_signature, &["[1,0]".into()]).is_err());
+        assert_eq!(
+            render_result(
+                &bool_signature,
+                &HostFnValue::Array(HostArray::vector(vec![1.0, -0.0]).unwrap())
+            )
+            .unwrap(),
+            "[true, false]"
+        );
+
+        let int_signature = array_signature(ScalarValueKind::Int);
+        assert_eq!(
+            parse_call_args("increment", &int_signature, &["[1,-2,3]".into()]).unwrap(),
+            [HostFnValue::Array(
+                HostArray::vector(vec![1.0, -2.0, 3.0]).unwrap()
+            )]
+        );
+        assert!(parse_call_args("increment", &int_signature, &["[1.5]".into()]).is_err());
+        assert!(
+            parse_call_args("increment", &int_signature, &["[9007199254740993]".into()]).is_err()
+        );
+        assert_eq!(
+            render_result(
+                &int_signature,
+                &HostFnValue::Array(HostArray::vector(vec![1.0, -2.0, 3.0]).unwrap())
+            )
+            .unwrap(),
+            "[1, -2, 3]"
+        );
+    }
+
     #[test]
     fn multi_axis_call_arrays_parse_and_render_rectangular_json() {
-        let array = parse_dense_array("[[1, 2, 3], [4, 5, 6]]", 2).unwrap();
+        let element = ScalarValueKind::Quantity(DimMonomial::fixed(Dimension::dimensionless()));
+        let array = parse_dense_array("[[1, 2, 3], [4, 5, 6]]", 2, &element).unwrap();
         assert_eq!(array.shape(), [2, 3]);
         assert_eq!(array.values(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         assert_eq!(
-            render_dense_array(array.shape(), array.values()).unwrap(),
+            render_dense_array(array.shape(), array.values(), |value| format_number(*value))
+                .unwrap(),
             "[[1, 2, 3], [4, 5, 6]]"
         );
-        assert!(parse_dense_array("[1, 2, 3]", 2).is_err());
-        assert!(parse_dense_array("[[1, 2], [3]]", 2).is_err());
+        assert!(parse_dense_array("[1, 2, 3]", 2, &element).is_err());
+        assert!(parse_dense_array("[[1, 2], [3]]", 2, &element).is_err());
     }
 
     #[test]
@@ -1264,7 +1368,7 @@ mod tests {
                 name: FnParamName::expect_valid("x"),
                 kind: ValueKind::dimensionless(),
             }],
-            ValueKind::Bool,
+            ValueKind::bool(),
         )
         .expect("valid signature");
         assert_eq!(
@@ -1294,7 +1398,7 @@ mod tests {
                 name: FnParamName::expect_valid("x"),
                 kind: ValueKind::dimensionless(),
             }],
-            ValueKind::Quantity(DimMonomial::fixed(velocity)),
+            ValueKind::quantity_monomial(DimMonomial::fixed(velocity)),
         )
         .expect("valid signature");
         assert_eq!(

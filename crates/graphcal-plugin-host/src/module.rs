@@ -10,9 +10,10 @@
 
 use std::{marker::PhantomData, num::NonZeroU32};
 
-use graphcal_compiler::function_signature::{FunctionSignature, ValueKind};
-use graphcal_compiler::syntax::function_name::FnName;
+use graphcal_compiler::function_signature::{FunctionSignature, ScalarValueKind, ValueKind};
+use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
 use graphcal_compiler::syntax::index_name::IndexVarName;
+use graphcal_eval::host_abi::{decode_bool, decode_int, validate_quantity};
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
     ALLOC_EXPORT, BUFFER_ALIGN, FAIL_IMPORT_MODULE, FAIL_IMPORT_NAME, FREE_EXPORT,
@@ -403,11 +404,26 @@ impl PluginModule {
             std::collections::HashMap::new();
         for (param, arg) in signature.params().iter().zip(args) {
             match (&param.kind, arg) {
-                (
-                    ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int,
-                    HostFnValue::F64(value),
-                ) => params.push(wasmi::Val::F64((*value).into())),
-                (ValueKind::Indexed { indexes, .. }, HostFnValue::Array(array)) => {
+                (ValueKind::Scalar(kind), HostFnValue::F64(value)) => {
+                    validate_scalar_argument(kind, *value).map_err(|message| {
+                        PluginCallError::InvalidArgument {
+                            parameter: param.name.clone(),
+                            location: PluginArgumentLocation::Scalar,
+                            message,
+                        }
+                    })?;
+                    params.push(wasmi::Val::F64((*value).into()));
+                }
+                (ValueKind::Indexed { element, indexes }, HostFnValue::Array(array)) => {
+                    for (index, value) in array.values().iter().copied().enumerate() {
+                        validate_scalar_argument(element, value).map_err(|message| {
+                            PluginCallError::InvalidArgument {
+                                parameter: param.name.clone(),
+                                location: PluginArgumentLocation::ArrayElement(index),
+                                message,
+                            }
+                        })?;
+                    }
                     if array.shape().len() != indexes.len() {
                         return Err(PluginCallError::Internal {
                             message: format!(
@@ -508,7 +524,7 @@ impl PluginModule {
             // A struct result is a fixed-size out-buffer: one f64 slot per
             // flattened field, in declaration order.
             ValueKind::Struct(shape) => (shape.fields().len(), OutBufferKind::Record),
-            ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => return Ok(None),
+            ValueKind::Scalar(_) => return Ok(None),
         };
         let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
         let allocation = buffers.alloc(live, self.limits.fuel_per_call(), len)?;
@@ -756,6 +772,15 @@ impl BufferProtocol {
     }
 }
 
+fn validate_scalar_argument(kind: &ScalarValueKind, value: f64) -> Result<(), String> {
+    match kind {
+        ScalarValueKind::Quantity(_) => validate_quantity(value).map(|_| ()),
+        ScalarValueKind::Bool => decode_bool(value).map(|_| ()),
+        ScalarValueKind::Int => decode_int(value).map(|_| ()),
+    }
+    .map_err(|error| error.to_string())
+}
+
 /// Whether any parameter or the result of `signature` crosses as a buffer.
 fn signature_uses_buffers(signature: &FunctionSignature) -> bool {
     signature
@@ -789,7 +814,7 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
     let mut params = Vec::new();
     for param in signature.params() {
         match &param.kind {
-            ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => {
+            ValueKind::Scalar(_) => {
                 params.push(wasmi::ValType::F64);
             }
             ValueKind::Indexed { indexes, .. } => {
@@ -802,7 +827,7 @@ fn expected_wasm_type(signature: &FunctionSignature) -> ExpectedWasmType {
         }
     }
     let results = match signature.result() {
-        ValueKind::Quantity(_) | ValueKind::Bool | ValueKind::Int => vec![wasmi::ValType::F64],
+        ValueKind::Scalar(_) => vec![wasmi::ValType::F64],
         ValueKind::Indexed { .. } | ValueKind::Struct(_) => {
             params.push(wasmi::ValType::I32);
             Vec::new()
@@ -1131,6 +1156,24 @@ pub enum PluginLoadError {
     },
 }
 
+/// Typed location of a malformed plugin argument slot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginArgumentLocation {
+    /// A standalone scalar parameter.
+    Scalar,
+    /// One row-major array element.
+    ArrayElement(usize),
+}
+
+impl std::fmt::Display for PluginArgumentLocation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scalar => formatter.write_str("scalar slot"),
+            Self::ArrayElement(index) => write!(formatter, "flat array element #{index}"),
+        }
+    }
+}
+
 /// Error from calling a plugin function.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum PluginCallError {
@@ -1159,6 +1202,16 @@ pub enum PluginCallError {
     UnknownFunction {
         /// The unknown function.
         function: FnName,
+    },
+    /// A raw argument slot violates its declared scalar kind.
+    #[error("plugin argument `{parameter}` has an invalid {location}: {message}")]
+    InvalidArgument {
+        /// Declared parameter identity.
+        parameter: FnParamName,
+        /// Scalar or row-major array location.
+        location: PluginArgumentLocation,
+        /// Scalar ABI validation error.
+        message: String,
     },
     /// An array argument exceeds the plugin's 32-bit address space.
     #[error("an array of {elements} element(s) cannot fit in plugin memory")]
