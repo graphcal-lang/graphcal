@@ -13,9 +13,11 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::{DeclKind, IncludeDecl, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::module_name::IncludeInstanceScope;
 use graphcal_compiler::syntax::phase::Phase;
+use graphcal_compiler::syntax::plugin::{ExternFnKey, PluginPath};
 use graphcal_io::{
     ByteLimit, FileSystemEntryKind, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy,
     RealFileSystem, SourceTreeHashLimits, hash_source_tree,
@@ -709,6 +711,50 @@ impl LoadedFile {
     }
 }
 
+/// Fuel policy resolved from the root package manifest into compiler-owned
+/// plugin and function identities.
+#[derive(Debug, Clone, Default)]
+pub struct PluginCallPolicy {
+    default_fuel_per_call: Option<u64>,
+    function_fuel_per_call: HashMap<ExternFnKey, u64>,
+}
+
+impl PluginCallPolicy {
+    fn from_manifest(policy: &graphcal_package::PluginExecutionPolicy) -> Self {
+        let function_fuel_per_call = policy
+            .function_limits()
+            .map(|(selector, budget)| {
+                (
+                    ExternFnKey {
+                        plugin: PluginPath::new(selector.plugin().to_string()),
+                        name: FnName::expect_valid(selector.function().as_str()),
+                    },
+                    budget.get(),
+                )
+            })
+            .collect();
+        Self {
+            default_fuel_per_call: policy
+                .default_fuel_per_call()
+                .map(graphcal_package::PluginFuelBudget::get),
+            function_fuel_per_call,
+        }
+    }
+
+    /// Resolve one function's configured budget, with a function override
+    /// taking precedence over the project-wide default.
+    #[must_use]
+    pub fn fuel_per_call(&self, plugin: &PluginPath, function: &FnName) -> Option<u64> {
+        self.function_fuel_per_call
+            .get(&ExternFnKey {
+                plugin: plugin.clone(),
+                name: function.clone(),
+            })
+            .copied()
+            .or(self.default_fuel_per_call)
+    }
+}
+
 /// A loaded project: a root file plus all transitively imported files.
 #[derive(Debug)]
 pub struct LoadedProject {
@@ -732,6 +778,8 @@ pub struct LoadedProject {
     /// and neither do wasm imports declared by dependency packages (those
     /// are rejected at verification time).
     plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+    /// Root-package plugin fuel settings resolved to typed function identities.
+    plugin_call_policy: PluginCallPolicy,
 }
 
 /// Outcome of locating and reading one wasm plugin file.
@@ -751,6 +799,42 @@ fn wasm_plugin_paths(
         }
         _ => None,
     })
+}
+
+fn validate_plugin_call_policy(
+    files: &HashMap<DagId, LoadedFile>,
+    policy: &PluginCallPolicy,
+) -> Result<(), CompileError> {
+    let declared_functions = files
+        .values()
+        .flat_map(|file| file.ast.declarations.iter())
+        .filter_map(|declaration| match &declaration.kind {
+            DeclKind::PluginImport(plugin) => Some(plugin),
+            _ => None,
+        })
+        .flat_map(|plugin| {
+            plugin.functions.iter().map(|function| ExternFnKey {
+                plugin: plugin.path.value.clone(),
+                name: function.name.value.clone(),
+            })
+        })
+        .collect::<HashSet<_>>();
+
+    policy
+        .function_fuel_per_call
+        .keys()
+        .find(|configured| {
+            declared_functions
+                .iter()
+                .any(|declared| declared.plugin == configured.plugin)
+                && !declared_functions.contains(*configured)
+        })
+        .map_or(Ok(()), |configured| {
+            Err(loader_manifest_error(format!(
+                "plugin fuel limit selects undeclared function `{}.{}`",
+                configured.plugin, configured.name
+            )))
+        })
 }
 
 /// Resolve and read every wasm plugin declared by the given file ASTs.
@@ -954,6 +1038,7 @@ impl LoadedProject {
         root: DagId,
         load_order: Vec<DagId>,
         plugins: HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry>,
+        plugin_call_policy: PluginCallPolicy,
     ) -> Self {
         let dag_owners = files
             .iter()
@@ -971,6 +1056,7 @@ impl LoadedProject {
             load_order,
             dag_owners,
             plugins,
+            plugin_call_policy,
         }
     }
 
@@ -1025,6 +1111,12 @@ impl LoadedProject {
         &self,
     ) -> &HashMap<graphcal_compiler::syntax::plugin::PluginPath, PluginFileEntry> {
         &self.plugins
+    }
+
+    /// Root-package fuel policy for vendored plugin calls.
+    #[must_use]
+    pub const fn plugin_call_policy(&self) -> &PluginCallPolicy {
+        &self.plugin_call_policy
     }
 
     /// Build a single-file project from in-memory source text.
@@ -1117,6 +1209,7 @@ impl LoadedProject {
             dag_id.clone(),
             vec![dag_id],
             plugins,
+            PluginCallPolicy::default(),
         ))
     }
 
@@ -1796,12 +1889,19 @@ fn load_project_with_budget_state<F: FileSystemReader>(
         let pins = load_plugin_pins(&project_root, fs, budget, cancellation)?;
         apply_plugin_pins(&mut plugins, &pins);
     }
+    let plugin_call_policy = manifest
+        .as_ref()
+        .map_or_else(PluginCallPolicy::default, |manifest| {
+            PluginCallPolicy::from_manifest(&manifest.plugin_execution_policy)
+        });
+    validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
     Ok(LoadedProject::from_parts(
         files,
         root_dag_id,
         load_order,
         plugins,
+        plugin_call_policy,
     ))
 }
 
@@ -1864,6 +1964,8 @@ fn load_locked_package_project<F: FileSystemReader>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, CompileError> {
     cancellation.checkpoint()?;
+    let plugin_call_policy =
+        PluginCallPolicy::from_manifest(&root_manifest.plugin_execution_policy);
     let context =
         PackageLoadContext::from_lockfile(project_root, root_manifest, fs, budget, cancellation)?;
     let root_package = context.graph.root().clone();
@@ -1907,12 +2009,14 @@ fn load_locked_package_project<F: FileSystemReader>(
         cancellation,
     )?;
     apply_plugin_pins(&mut plugins, &context.plugin_pins);
+    validate_plugin_call_policy(&files, &plugin_call_policy)?;
     cancellation.checkpoint()?;
     Ok(LoadedProject::from_parts(
         files,
         root_dag_id,
         load_order,
         plugins,
+        plugin_call_policy,
     ))
 }
 
@@ -3504,6 +3608,36 @@ mod tests {
         assert!(rendered.contains("sha256_hex: \"digest\""));
         assert!(!rendered.contains("private-wasm-payload"));
         assert!(!rendered.contains("112, 114, 105, 118, 97, 116, 101"));
+    }
+
+    #[test]
+    fn plugin_call_policy_prefers_function_budget_then_project_default() {
+        let manifest = parse_manifest_str(
+            r#"
+[package]
+name = "project"
+
+[plugins]
+fuel_per_call = 200000000
+
+[[plugins.function_limits]]
+plugin = "plugins/solver.wasm"
+function = "heavy"
+fuel_per_call = 900000000
+"#,
+        )
+        .unwrap();
+        let policy = PluginCallPolicy::from_manifest(&manifest.plugin_execution_policy);
+        let plugin = PluginPath::new("plugins/solver.wasm");
+
+        assert_eq!(
+            policy.fuel_per_call(&plugin, &FnName::expect_valid("heavy")),
+            Some(900_000_000)
+        );
+        assert_eq!(
+            policy.fuel_per_call(&plugin, &FnName::expect_valid("light")),
+            Some(200_000_000)
+        );
     }
 
     struct CanonicalizeCountingFileSystem {

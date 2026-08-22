@@ -20,6 +20,11 @@ crate-type = ["cdylib", "rlib"]
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = ["-Oz"]
 
+# wasm-pack maps every Cargo custom profile to this metadata profile. Shipped
+# playground/report builds use the workspace's `wasm-release` profile.
+[package.metadata.wasm-pack.profile.custom]
+wasm-opt = ["-Oz"]
+
 [dependencies]
 graphcal-compiler.workspace = true
 graphcal-eval.workspace = true

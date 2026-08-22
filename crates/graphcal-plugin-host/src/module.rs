@@ -3,8 +3,9 @@
 //! Loading a [`PluginModule`] performs every load-time check the ABI demands
 //! — manifest extraction and typed conversion, the import ban (purity by
 //! construction), the memory-export rule, and per-function wasm type
-//! verification — before any plugin code runs. [`PluginModule::call`] then
-//! executes one function under the configured fuel and memory bounds, with
+//! verification — before any plugin code runs. [`PluginModule::call`] and
+//! [`PluginModule::call_with_fuel_per_call`] then execute one function under
+//! the configured fuel and memory bounds, with
 //! failure messages, traps, and fuel exhaustion mapped to
 //! [`PluginCallError`].
 
@@ -248,16 +249,36 @@ impl PluginModule {
         function: &FnName,
         args: &[HostFnValue],
     ) -> Result<HostFnValue, PluginCallError> {
+        self.call_with_fuel_per_call(function, args, self.limits.fuel_per_call())
+    }
+
+    /// Call one function with an explicit fuel budget while preserving every
+    /// other host-enforced module and instance limit.
+    ///
+    /// This is the project-policy boundary: compiled module identity and cache
+    /// entries remain independent of the calling project's fuel selection.
+    /// Instantiation, `start`, allocator round-trips, the kernel, and
+    /// deallocation all share this one budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginCallError`] under the same conditions as [`Self::call`].
+    pub fn call_with_fuel_per_call(
+        &self,
+        function: &FnName,
+        args: &[HostFnValue],
+        fuel_per_call: u64,
+    ) -> Result<HostFnValue, PluginCallError> {
         let signature =
             self.signature(function)
                 .ok_or_else(|| PluginCallError::UnknownFunction {
                     function: function.clone(),
                 })?;
-        let mut instance = self.instantiate()?;
-        self.call_in(&mut instance, function, signature, args)
+        let mut instance = self.instantiate(fuel_per_call)?;
+        Self::call_in(&mut instance, function, signature, args, fuel_per_call)
     }
 
-    fn instantiate(&self) -> Result<CallInstance<'_>, PluginCallError> {
+    fn instantiate(&self, fuel_per_call: u64) -> Result<CallInstance<'_>, PluginCallError> {
         let limiter = wasmi::StoreLimitsBuilder::new()
             .memory_size(self.limits.max_memory_bytes())
             .table_elements(self.limits.max_table_elements())
@@ -274,7 +295,7 @@ impl PluginModule {
         );
         store.limiter(|state| &mut state.limits);
         // The start function (if any) is plugin code: meter it like a call.
-        set_fuel(&mut store, self.limits.fuel_per_call())?;
+        set_fuel(&mut store, fuel_per_call)?;
 
         let mut linker = wasmi::Linker::new(&self.engine);
         linker
@@ -285,7 +306,7 @@ impl PluginModule {
 
         let instance = linker
             .instantiate_and_start(&mut store, &self.module)
-            .map_err(|err| error_from_wasm(&mut store, &err, self.limits.fuel_per_call()))?;
+            .map_err(|err| error_from_wasm(&mut store, &err, fuel_per_call))?;
         Ok(CallInstance {
             store,
             instance,
@@ -294,11 +315,11 @@ impl PluginModule {
     }
 
     fn call_in(
-        &self,
         live: &mut CallInstance<'_>,
         function: &FnName,
         signature: &FunctionSignature,
         args: &[HostFnValue],
+        fuel_per_call: u64,
     ) -> Result<HostFnValue, PluginCallError> {
         if args.len() != signature.arity() {
             return Err(PluginCallError::Internal {
@@ -329,7 +350,7 @@ impl PluginModule {
         };
 
         let (params, out_buffer) =
-            self.marshal_params(live, function, signature, args, &mut buffers)?;
+            Self::marshal_params(live, function, signature, args, &mut buffers, fuel_per_call)?;
 
         let mut results = if out_buffer.is_some() {
             Vec::new()
@@ -337,7 +358,7 @@ impl PluginModule {
             vec![wasmi::Val::F64(0.0.into())]
         };
         func.call(&mut live.store, &params, &mut results)
-            .map_err(|err| error_from_wasm(&mut live.store, &err, self.limits.fuel_per_call()))?;
+            .map_err(|err| error_from_wasm(&mut live.store, &err, fuel_per_call))?;
 
         let value = match (out_buffer, buffers.as_ref()) {
             (Some(out), Some(buffers)) => {
@@ -377,7 +398,7 @@ impl PluginModule {
         // Pair every host allocation with the ABI's required free even though
         // the call-scoped instance is discarded immediately afterward.
         if let Some(buffers) = buffers {
-            buffers.free_all(live, self.limits.fuel_per_call())?;
+            buffers.free_all(live, fuel_per_call)?;
         }
         Ok(value)
     }
@@ -386,12 +407,12 @@ impl PluginModule {
     /// `f64`s, arrays as a pointer plus one extent per declared axis, and a
     /// trailing out-pointer for array and record results.
     fn marshal_params(
-        &self,
         live: &mut CallInstance<'_>,
         function: &FnName,
         signature: &FunctionSignature,
         args: &[HostFnValue],
         buffers: &mut Option<BufferProtocol>,
+        fuel_per_call: u64,
     ) -> Result<(Vec<wasmi::Val>, Option<OutBuffer>), PluginCallError> {
         let protocol_missing = || PluginCallError::Internal {
             message: format!(
@@ -453,8 +474,7 @@ impl PluginModule {
                         }
                     }
                     let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-                    let pointer =
-                        buffers.write_buffer(live, self.limits.fuel_per_call(), array.values())?;
+                    let pointer = buffers.write_buffer(live, fuel_per_call, array.values())?;
                     params.push(wasmi::Val::I32(pointer.as_abi_i32()));
                     for extent in array.shape() {
                         let extent = u32::try_from(*extent)
@@ -473,12 +493,13 @@ impl PluginModule {
             }
         }
 
-        let out_buffer = self.allocate_result_buffer(
+        let out_buffer = Self::allocate_result_buffer(
             live,
             function,
             signature.result(),
             &bound_extents,
             buffers,
+            fuel_per_call,
         )?;
         if let Some(out) = &out_buffer {
             params.push(wasmi::Val::I32(out.allocation.pointer().as_abi_i32()));
@@ -487,12 +508,12 @@ impl PluginModule {
     }
 
     fn allocate_result_buffer(
-        &self,
         live: &mut CallInstance<'_>,
         function: &FnName,
         result: &ValueKind,
         bound_extents: &std::collections::HashMap<IndexVarName, usize>,
         buffers: &mut Option<BufferProtocol>,
+        fuel_per_call: u64,
     ) -> Result<Option<OutBuffer>, PluginCallError> {
         let protocol_missing = || PluginCallError::Internal {
             message: format!(
@@ -527,7 +548,7 @@ impl PluginModule {
             ValueKind::Scalar(_) => return Ok(None),
         };
         let buffers = buffers.as_mut().ok_or_else(protocol_missing)?;
-        let allocation = buffers.alloc(live, self.limits.fuel_per_call(), len)?;
+        let allocation = buffers.alloc(live, fuel_per_call, len)?;
         Ok(Some(OutBuffer { allocation, kind }))
     }
 }

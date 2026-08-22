@@ -292,6 +292,42 @@ fn runaway_plugins_run_out_of_fuel() {
 }
 
 #[test]
+fn an_explicit_call_budget_overrides_the_module_default() {
+    let wat = r#"
+    (module
+      (func (export "work") (param f64) (result f64)
+        (local $i i32)
+        (block $done
+          (loop $work
+            (br_if $done (i32.ge_u (local.get $i) (i32.const 1000)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $work)))
+        (local.get 0)))
+    "#;
+    let manifest = manifest(vec![function(
+        "work",
+        &[],
+        &[("x", dimensionless())],
+        dimensionless(),
+    )]);
+    let host = PluginHost::with_limits(PluginLimits::default().with_fuel_per_call(100));
+    let module = host.load(&plugin(wat, &manifest)).unwrap();
+
+    assert_eq!(
+        module
+            .call(&fn_name("work"), &f64_values(&[7.0]))
+            .unwrap_err(),
+        PluginCallError::OutOfFuel { fuel: 100 }
+    );
+    let value = f64_value(
+        &module
+            .call_with_fuel_per_call(&fn_name("work"), &f64_values(&[7.0]), 100_000)
+            .unwrap(),
+    );
+    assert!((value - 7.0).abs() < f64::EPSILON);
+}
+
+#[test]
 fn runaway_start_functions_run_out_of_fuel_at_instantiation() {
     let wat = r#"
     (module
