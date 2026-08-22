@@ -222,8 +222,8 @@ graphcal plugin test target/wasm32-unknown-unknown/release/fluid_props.wasm \
 
 `graphcal plugin test` runs every load-time ABI check (manifest, import
 ban, export types), prints the module's SHA-256 and a **paste-ready
-`import plugin` block**, and `--call` executes one function under the same
-fuel and memory limits evaluation uses — arguments in SI base units,
+`import plugin` block**, and `--call` executes one function under the default
+fuel and memory limits — arguments in SI base units,
 `true`/`false` for `Bool`, integers for `Int`, and rectangular JSON arrays
 with the declared rank. Array leaves follow their element kind: booleans
 (`[true,false]`), integers (`[1,-2,3]`), or SI numbers
@@ -232,6 +232,11 @@ JSON input, and fractional values are not accepted as Int input. For
 struct-returning functions the import block
 is preceded by a suggested record declaration (rename it freely — the
 loader compares shapes, not names).
+
+If a production kernel legitimately needs more than the default 100,000,000
+fuel units, configure the narrowest project/function override in
+`graphcal.toml`; standalone `plugin test --call` deliberately remains on the
+host default. See [Project Fuel Policies](language/extern-functions.md#project-fuel-policies).
 
 ## 5. Vendor, declare, pin
 
@@ -267,7 +272,8 @@ with a reviewable `graphcal.lock` diff. See
   crate.
 - Plugins may import nothing (the SDK's failure channel is the one
   exception, wired automatically), so crates that pull in I/O, threads,
-  or randomness will be rejected at load time.
+  or operating-system randomness will be rejected at load time. Pure seeded
+  pseudo-random generators implemented inside the module remain valid.
 - Keep vocabulary in `.gcl`: plugins cannot define units, dimensions, or
   types.
 

@@ -87,6 +87,28 @@ fn lerp_plugin() -> Vec<u8> {
     )
 }
 
+fn finite_work_plugin() -> Vec<u8> {
+    plugin_bytes(
+        r#"
+        (module
+          (func (export "work") (param f64) (result f64)
+            (local $i i32)
+            (block $done
+              (loop $work
+                (br_if $done (i32.ge_u (local.get $i) (i32.const 1000)))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $work)))
+            (local.get 0)))
+        "#,
+        vec![manifest_fn(
+            "work",
+            &[],
+            &[("x", dimensionless())],
+            dimensionless(),
+        )],
+    )
+}
+
 /// Write a single-file project with a vendored plugin, load it, build the
 /// registry, and evaluate.
 fn eval_project_with_plugin(
@@ -464,6 +486,112 @@ fn correctly_pinned_plugins_evaluate() {
     let result = eval_package_project(dir.path(), &bytes, Some(&sha)).unwrap();
     let value = value_for(&result, "mid");
     assert!((value.si_value().unwrap() - 2.0).abs() < 1e-12, "{value:?}");
+}
+
+#[test]
+fn package_function_fuel_override_is_applied_by_the_registry() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = finite_work_plugin();
+    let sha = sha256_hex(&bytes);
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        r#"
+[package]
+name = "proj"
+
+[[plugins.function_limits]]
+plugin = "plugins/work.wasm"
+function = "work"
+fuel_per_call = 100000
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src/proj")).unwrap();
+    std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+    std::fs::write(dir.path().join("plugins/work.wasm"), &bytes).unwrap();
+    let root = dir.path().join("src/proj/main.gcl");
+    std::fs::write(
+        &root,
+        r#"
+import plugin "plugins/work.wasm" as worker {
+    fn work(x: Dimensionless) -> Dimensionless;
+}
+node result: Dimensionless = worker.work(7.0);
+"#,
+    )
+    .unwrap();
+    let lockfile = graphcal_package::Lockfile {
+        lock_version: graphcal_package::LOCK_VERSION,
+        created_by: "test".to_string(),
+        graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
+        stdlib_version: graphcal_package::STDLIB_VERSION.to_string(),
+        root: graphcal_package::PackageInstanceId::new("pkg-proj").unwrap(),
+        packages: vec![graphcal_package::LockedPackage {
+            id: graphcal_package::PackageInstanceId::new("pkg-proj").unwrap(),
+            name: graphcal_package::PackageName::new("proj").unwrap(),
+            source_dir: graphcal_package::PackageSourceDirectory::new("src").unwrap(),
+            source: graphcal_package::PackageSource::Root,
+            dependencies: std::collections::BTreeMap::new(),
+        }],
+        plugins: vec![graphcal_package::LockedPlugin::new("plugins/work.wasm", sha).unwrap()],
+    };
+    std::fs::write(
+        dir.path().join("graphcal.lock"),
+        lockfile.to_deterministic_toml(),
+    )
+    .unwrap();
+
+    let fs = RealFileSystem::default();
+    let project = load_project(&root, None, &fs).unwrap();
+    let mut registry = HostFunctionRegistry::new();
+    let host = PluginHost::with_limits(
+        graphcal_plugin_host::PluginLimits::default().with_fuel_per_call(100),
+    );
+    register_project_plugins(&host, &project, &mut registry);
+    let result = graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
+        &project,
+        &HashMap::new(),
+        &registry,
+    )
+    .unwrap();
+
+    assert!((value_for(&result, "result").si_value().unwrap() - 7.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn package_rejects_a_fuel_override_for_an_undeclared_function() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        r#"
+[package]
+name = "proj"
+
+[[plugins.function_limits]]
+plugin = "plugins/demo.wasm"
+function = "missing"
+fuel_per_call = 200000000
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("src/proj")).unwrap();
+    let root = dir.path().join("src/proj/main.gcl");
+    std::fs::write(
+        &root,
+        format!("{LERP_IMPORT}\nnode result: Dimensionless = 1.0;"),
+    )
+    .unwrap();
+
+    let fs = RealFileSystem::default();
+    let err = load_project(&root, None, &fs).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            CompileError::Eval(GraphcalError::ManifestError { ref message })
+                if message.contains("plugins/demo.wasm.missing")
+        ),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[test]

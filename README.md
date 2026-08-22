@@ -40,6 +40,7 @@ graphcal eval rocket.gcl
 - **Git-friendly:** `.gcl` files are plain text and diff cleanly.
 - **Engineering-focused:** build reusable computation graphs with dimensions, units, assertions, and visualization.
 - **Editor-friendly:** the LSP provides diagnostics, references, rename, and inline computed values.
+- **Sandboxed extensibility:** call pinned pure WebAssembly kernels.
 
 ## Quickstart
 

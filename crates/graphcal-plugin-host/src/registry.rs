@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use graphcal_eval::host_fns::{HostFnError, HostFunctionRegistry, PluginRegistrationError};
-use graphcal_eval::loader::LoadedProject;
+use graphcal_eval::loader::{LoadedProject, PluginCallPolicy};
 
 use crate::host::PluginHost;
 use crate::module::{PluginLoadError, PluginModule};
@@ -37,7 +37,13 @@ pub fn register_project_plugins(
             continue;
         };
         match host.load(plugin.bytes()) {
-            Ok(module) => register_module_functions(plugin_path, &module, registry),
+            Ok(module) => register_module_functions(
+                plugin_path,
+                &module,
+                project.plugin_call_policy(),
+                host.limits().fuel_per_call(),
+                registry,
+            ),
             Err(PluginLoadError::ForbiddenImport { module, name }) => {
                 registry.record_plugin_failure(
                     plugin_path.clone(),
@@ -60,18 +66,23 @@ pub fn register_project_plugins(
 fn register_module_functions(
     plugin_path: &graphcal_compiler::syntax::plugin::PluginPath,
     module: &Arc<PluginModule>,
+    policy: &PluginCallPolicy,
+    host_default_fuel_per_call: u64,
     registry: &mut HostFunctionRegistry,
 ) {
     for (name, signature) in module.functions() {
         let module = Arc::clone(module);
         let function_name = name.clone();
+        let fuel_per_call = policy
+            .fuel_per_call(plugin_path, name)
+            .unwrap_or(host_default_fuel_per_call);
         registry.register_with_signature(
             plugin_path.clone(),
             name.clone(),
             signature.clone(),
             move |args| {
                 module
-                    .call(&function_name, args)
+                    .call_with_fuel_per_call(&function_name, args, fuel_per_call)
                     .map_err(|err| HostFnError::new(err.to_string()))
             },
         );

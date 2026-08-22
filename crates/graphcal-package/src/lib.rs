@@ -17,6 +17,12 @@ use url::{Host, Url};
 pub const LOCK_VERSION: u64 = 1;
 /// Current standard-library identity recorded by the MVP lockfile.
 pub const STDLIB_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Largest per-call plugin fuel budget a project manifest may request.
+///
+/// The project may raise the default host budget for reviewed heavy kernels,
+/// but the hard ceiling keeps plugin execution finitely bounded even when an
+/// untrusted project is opened in the language server.
+pub const MAX_CONFIGURED_PLUGIN_FUEL_PER_CALL: u64 = 2_000_000_000;
 
 /// A package's real `[package].name`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -721,7 +727,152 @@ fn is_valid_name(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// Parsed `graphcal.toml` package section and direct dependencies.
+/// A positive, hard-capped fuel budget requested by `graphcal.toml`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PluginFuelBudget(u64);
+
+impl PluginFuelBudget {
+    /// Validate one project-controlled per-call fuel budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginFuelBudgetError`] for zero or values above the hard
+    /// project-configurable ceiling.
+    pub const fn new(value: u64) -> Result<Self, PluginFuelBudgetError> {
+        if value == 0 {
+            Err(PluginFuelBudgetError::Zero)
+        } else if value > MAX_CONFIGURED_PLUGIN_FUEL_PER_CALL {
+            Err(PluginFuelBudgetError::ExceedsMaximum {
+                value,
+                maximum: MAX_CONFIGURED_PLUGIN_FUEL_PER_CALL,
+            })
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    /// Raw wasmi fuel units for one logical plugin call.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Invalid project-controlled plugin fuel budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum PluginFuelBudgetError {
+    /// Zero would make every call fail during instantiation.
+    #[error("fuel budget must be positive")]
+    Zero,
+    /// The request exceeded Graphcal's hard project-configurable ceiling.
+    #[error("fuel budget {value} exceeds the maximum {maximum}")]
+    ExceedsMaximum { value: u64, maximum: u64 },
+}
+
+/// A validated extern-function leaf name used in a manifest fuel selector.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PluginFunctionName(String);
+
+impl PluginFunctionName {
+    /// Parse one function leaf name from `graphcal.toml`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PluginFunctionNameError`] for names that cannot identify one
+    /// Graphcal extern function leaf.
+    pub fn new(value: impl Into<String>) -> Result<Self, PluginFunctionNameError> {
+        let value = value.into();
+        if value.is_empty() {
+            return Err(PluginFunctionNameError::Empty);
+        }
+        if value.contains('.') {
+            return Err(PluginFunctionNameError::ContainsDot);
+        }
+        if value.len() > 256 {
+            return Err(PluginFunctionNameError::TooLong { bytes: value.len() });
+        }
+        Ok(Self(value))
+    }
+
+    /// Function leaf text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for PluginFunctionName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Invalid function name in a project plugin-policy selector.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum PluginFunctionNameError {
+    /// A selector must name one function.
+    #[error("function name cannot be empty")]
+    Empty,
+    /// Dots would encode a path instead of one leaf.
+    #[error("function name cannot contain `.`")]
+    ContainsDot,
+    /// Plugin ABI names are bounded before module compilation.
+    #[error("function name is {bytes} bytes; maximum is 256")]
+    TooLong { bytes: usize },
+}
+
+/// Typed identity of one project-configured plugin function.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PluginFunctionSelector {
+    plugin: PluginArtifactPath,
+    function: PluginFunctionName,
+}
+
+impl PluginFunctionSelector {
+    /// Construct a selector from separately validated identity components.
+    #[must_use]
+    pub const fn new(plugin: PluginArtifactPath, function: PluginFunctionName) -> Self {
+        Self { plugin, function }
+    }
+
+    /// Selected root-relative WASM plugin artifact.
+    #[must_use]
+    pub const fn plugin(&self) -> &PluginArtifactPath {
+        &self.plugin
+    }
+
+    /// Selected extern-function leaf.
+    #[must_use]
+    pub const fn function(&self) -> &PluginFunctionName {
+        &self.function
+    }
+}
+
+/// Project-controlled plugin execution policy parsed from `[plugins]`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginExecutionPolicy {
+    default_fuel_per_call: Option<PluginFuelBudget>,
+    function_limits: BTreeMap<PluginFunctionSelector, PluginFuelBudget>,
+}
+
+impl PluginExecutionPolicy {
+    /// Optional project-wide fuel budget; absent means the embedder default.
+    #[must_use]
+    pub const fn default_fuel_per_call(&self) -> Option<PluginFuelBudget> {
+        self.default_fuel_per_call
+    }
+
+    /// Function-specific overrides in deterministic selector order.
+    pub fn function_limits(
+        &self,
+    ) -> impl Iterator<Item = (&PluginFunctionSelector, PluginFuelBudget)> {
+        self.function_limits
+            .iter()
+            .map(|(selector, budget)| (selector, *budget))
+    }
+}
+
+/// Parsed `graphcal.toml` package section, direct dependencies, and execution policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageManifest {
     /// Real package name.
@@ -730,6 +881,8 @@ pub struct PackageManifest {
     pub source_dir: PackageSourceDirectory,
     /// Direct dependencies keyed by local source-visible alias.
     pub dependencies: BTreeMap<DependencyName, DependencySpec>,
+    /// Explicit plugin execution budgets owned by this package.
+    pub plugin_execution_policy: PluginExecutionPolicy,
 }
 
 /// One direct dependency declaration in `graphcal.toml`.
@@ -811,6 +964,30 @@ pub enum ManifestError {
         package: PackageName,
         dependency: DependencyName,
     },
+    /// A plugin fuel value was not an integer in the accepted range.
+    #[error(
+        "field `{field}` in graphcal.toml must be an integer between 1 and {maximum}, got {value}"
+    )]
+    InvalidPluginFuel {
+        field: String,
+        value: i64,
+        maximum: u64,
+    },
+    /// A function selector contained an invalid plugin artifact path.
+    #[error("invalid plugin selector path in graphcal.toml: {0}")]
+    InvalidPluginPath(PluginArtifactPathError),
+    /// A function selector contained an invalid function leaf.
+    #[error("invalid plugin function `{function}` in graphcal.toml: {source}")]
+    InvalidPluginFunction {
+        function: String,
+        source: PluginFunctionNameError,
+    },
+    /// Two function-limit entries selected the same typed function identity.
+    #[error("duplicate plugin fuel limit for `{plugin}` function `{function}`")]
+    DuplicatePluginFunctionLimit {
+        plugin: PluginArtifactPath,
+        function: PluginFunctionName,
+    },
 }
 
 /// Parse a Graphcal manifest from TOML text.
@@ -825,7 +1002,11 @@ pub fn parse_manifest_str(content: &str) -> Result<PackageManifest, ManifestErro
         .map_err(|e| ManifestError::TomlParseError {
             message: e.to_string(),
         })?;
-    reject_unknown_fields(&root, &["package", "dependencies"], "graphcal.toml")?;
+    reject_unknown_fields(
+        &root,
+        &["package", "dependencies", "plugins"],
+        "graphcal.toml",
+    )?;
 
     let package = match root.get("package") {
         Some(Value::Table(package)) => package,
@@ -848,11 +1029,13 @@ pub fn parse_manifest_str(content: &str) -> Result<PackageManifest, ManifestErro
         manifest_optional_string(package, "source_dir", "[package].source_dir")?.unwrap_or("src");
     let source_dir = parse_source_dir(source_dir_str)?;
     let dependencies = parse_manifest_dependencies(root.get("dependencies"), &name)?;
+    let plugin_execution_policy = parse_plugin_execution_policy(root.get("plugins"))?;
 
     Ok(PackageManifest {
         name,
         source_dir,
         dependencies,
+        plugin_execution_policy,
     })
 }
 
@@ -900,6 +1083,112 @@ fn parse_source_dir(value: &str) -> Result<PackageSourceDirectory, ManifestError
         dir: value.to_string(),
         reason: error.reason,
     })
+}
+
+fn parse_plugin_execution_policy(
+    item: Option<&Value>,
+) -> Result<PluginExecutionPolicy, ManifestError> {
+    let Some(item) = item else {
+        return Ok(PluginExecutionPolicy::default());
+    };
+    let Some(table) = item.as_table() else {
+        return Err(ManifestError::InvalidType {
+            field: "[plugins]".to_string(),
+            expected: "a table",
+        });
+    };
+    reject_unknown_fields(table, &["fuel_per_call", "function_limits"], "[plugins]")?;
+
+    let default_fuel_per_call = table
+        .get("fuel_per_call")
+        .map(|value| parse_plugin_fuel(value, "[plugins].fuel_per_call"))
+        .transpose()?;
+    let function_limits =
+        match table.get("function_limits") {
+            None => BTreeMap::new(),
+            Some(Value::Array(entries)) => entries.iter().enumerate().try_fold(
+                BTreeMap::new(),
+                |mut limits, (index, entry)| {
+                    let Some(entry) = entry.as_table() else {
+                        return Err(ManifestError::InvalidType {
+                            field: format!("[plugins].function_limits[{index}]"),
+                            expected: "a table",
+                        });
+                    };
+                    reject_unknown_fields(
+                        entry,
+                        &["plugin", "function", "fuel_per_call"],
+                        "[[plugins.function_limits]]",
+                    )?;
+                    let plugin = PluginArtifactPath::new(manifest_required_string(
+                        entry,
+                        "plugin",
+                        "[[plugins.function_limits]].plugin",
+                    )?)
+                    .map_err(ManifestError::InvalidPluginPath)?;
+                    let function_text = manifest_required_string(
+                        entry,
+                        "function",
+                        "[[plugins.function_limits]].function",
+                    )?;
+                    let function = PluginFunctionName::new(function_text).map_err(|source| {
+                        ManifestError::InvalidPluginFunction {
+                            function: function_text.to_string(),
+                            source,
+                        }
+                    })?;
+                    let budget = parse_plugin_fuel(
+                        entry
+                            .get("fuel_per_call")
+                            .ok_or(ManifestError::MissingField {
+                                field: "[[plugins.function_limits]].fuel_per_call",
+                            })?,
+                        &format!("[plugins].function_limits[{index}].fuel_per_call"),
+                    )?;
+                    let selector = PluginFunctionSelector::new(plugin, function);
+                    match limits.entry(selector) {
+                        std::collections::btree_map::Entry::Vacant(slot) => {
+                            slot.insert(budget);
+                        }
+                        std::collections::btree_map::Entry::Occupied(existing) => {
+                            return Err(ManifestError::DuplicatePluginFunctionLimit {
+                                plugin: existing.key().plugin().clone(),
+                                function: existing.key().function().clone(),
+                            });
+                        }
+                    }
+                    Ok(limits)
+                },
+            )?,
+            Some(_) => {
+                return Err(ManifestError::InvalidType {
+                    field: "[plugins].function_limits".to_string(),
+                    expected: "an array of tables",
+                });
+            }
+        };
+
+    Ok(PluginExecutionPolicy {
+        default_fuel_per_call,
+        function_limits,
+    })
+}
+
+fn parse_plugin_fuel(value: &Value, field: &str) -> Result<PluginFuelBudget, ManifestError> {
+    let Value::Integer(value) = value else {
+        return Err(ManifestError::InvalidType {
+            field: field.to_string(),
+            expected: "an integer",
+        });
+    };
+    u64::try_from(*value)
+        .ok()
+        .and_then(|value| PluginFuelBudget::new(value).ok())
+        .ok_or_else(|| ManifestError::InvalidPluginFuel {
+            field: field.to_string(),
+            value: *value,
+            maximum: MAX_CONFIGURED_PLUGIN_FUEL_PER_CALL,
+        })
 }
 
 fn parse_manifest_dependencies(
@@ -2635,6 +2924,7 @@ mod tests {
                     name: pkg("mission"),
                     source_dir: source_dir("src"),
                     dependencies: BTreeMap::from([(dep("units"), dependency_spec)]),
+                    plugin_execution_policy: PluginExecutionPolicy::default(),
                 },
             ),
             (
@@ -2643,6 +2933,7 @@ mod tests {
                     name: pkg("units"),
                     source_dir: source_dir("src"),
                     dependencies: BTreeMap::new(),
+                    plugin_execution_policy: PluginExecutionPolicy::default(),
                 },
             ),
         ]);
@@ -2683,6 +2974,7 @@ mod tests {
                 name: pkg("bridge"),
                 source_dir: source_dir("src"),
                 dependencies: BTreeMap::from([(dep("units"), units_spec)]),
+                plugin_execution_policy: PluginExecutionPolicy::default(),
             },
         );
         (missing_edge, missing_edge_manifests)
@@ -2708,6 +3000,103 @@ units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev =
         let spec = manifest.dependencies.get(&dep("units_v1")).unwrap();
         assert_eq!(spec.expected_package_name(&dep("units_v1")), pkg("units"));
         assert_eq!(spec.git.rev, hash('1'));
+    }
+
+    #[test]
+    fn manifest_parses_project_and_function_plugin_fuel_budgets() {
+        let manifest = parse_manifest_str(
+            r#"
+[package]
+name = "mission"
+
+[plugins]
+fuel_per_call = 250000000
+
+[[plugins.function_limits]]
+plugin = "plugins/solver.wasm"
+function = "solve"
+fuel_per_call = 1500000000
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            manifest
+                .plugin_execution_policy
+                .default_fuel_per_call()
+                .map(PluginFuelBudget::get),
+            Some(250_000_000)
+        );
+        let limits = manifest
+            .plugin_execution_policy
+            .function_limits()
+            .collect::<Vec<_>>();
+        assert_eq!(limits.len(), 1);
+        assert_eq!(limits[0].0.plugin().to_string(), "plugins/solver.wasm");
+        assert_eq!(limits[0].0.function().as_str(), "solve");
+        assert_eq!(limits[0].1.get(), 1_500_000_000);
+    }
+
+    #[test]
+    fn manifest_rejects_unbounded_or_duplicate_plugin_fuel_budgets() {
+        for value in ["0", "-1", "2000000001"] {
+            let source =
+                format!("[package]\nname = \"mission\"\n[plugins]\nfuel_per_call = {value}\n");
+            assert!(matches!(
+                parse_manifest_str(&source),
+                Err(ManifestError::InvalidPluginFuel { .. })
+            ));
+        }
+
+        let duplicate = r#"
+[package]
+name = "mission"
+
+[[plugins.function_limits]]
+plugin = "plugins/solver.wasm"
+function = "solve"
+fuel_per_call = 200000000
+
+[[plugins.function_limits]]
+plugin = "plugins/solver.wasm"
+function = "solve"
+fuel_per_call = 300000000
+"#;
+        assert!(matches!(
+            parse_manifest_str(duplicate),
+            Err(ManifestError::DuplicatePluginFunctionLimit { .. })
+        ));
+    }
+
+    #[test]
+    fn manifest_rejects_invalid_plugin_function_selectors() {
+        let invalid_path = r#"
+[package]
+name = "mission"
+
+[[plugins.function_limits]]
+plugin = "../solver.wasm"
+function = "solve"
+fuel_per_call = 200000000
+"#;
+        assert!(matches!(
+            parse_manifest_str(invalid_path),
+            Err(ManifestError::InvalidPluginPath(_))
+        ));
+
+        let invalid_function = r#"
+[package]
+name = "mission"
+
+[[plugins.function_limits]]
+plugin = "plugins/solver.wasm"
+function = "solver.solve"
+fuel_per_call = 200000000
+"#;
+        assert!(matches!(
+            parse_manifest_str(invalid_function),
+            Err(ManifestError::InvalidPluginFunction { .. })
+        ));
     }
 
     #[test]
@@ -2774,6 +3163,16 @@ units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev =
                 "a table",
             ),
             (
+                "[package]\nname = \"mission\"\n[plugins]\nfuel_per_call = \"many\"\n",
+                "[plugins].fuel_per_call",
+                "an integer",
+            ),
+            (
+                "plugins = []\n[package]\nname = \"mission\"\n",
+                "[plugins]",
+                "a table",
+            ),
+            (
                 "[package]\nname = \"mission\"\n[dependencies]\nunits = { git = 1, rev = \"1111111111111111111111111111111111111111\" }\n",
                 "[dependencies].units.git",
                 "a string",
@@ -2812,6 +3211,11 @@ units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev =
                 "[package]\nname = \"mission\"\n[tool]\nmode = \"unsafe\"\n",
                 "graphcal.toml",
                 "tool",
+            ),
+            (
+                "[package]\nname = \"mission\"\n[plugins]\nunknown = true\n",
+                "[plugins]",
+                "unknown",
             ),
         ] {
             let err = parse_manifest_str(source).unwrap_err();
@@ -3624,6 +4028,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 name: pkg("extra"),
                 source_dir: source_dir("src"),
                 dependencies: BTreeMap::new(),
+                plugin_execution_policy: PluginExecutionPolicy::default(),
             },
         );
         assert!(matches!(
@@ -3727,6 +4132,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                     name: pkg("mission"),
                     source_dir: source_dir("src"),
                     dependencies: manifest_deps,
+                    plugin_execution_policy: PluginExecutionPolicy::default(),
                 },
             ),
             (
@@ -3735,6 +4141,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                     name: pkg("wrong_units"),
                     source_dir: source_dir("src"),
                     dependencies: BTreeMap::new(),
+                    plugin_execution_policy: PluginExecutionPolicy::default(),
                 },
             ),
         ]);
