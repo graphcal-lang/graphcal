@@ -62,7 +62,7 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
 
-      - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
+      - uses: taiki-e/install-action@b27e114ddbae5cc01df19a22cf70a124d5177567 # v2.86.0
         if: matrix.target == 'parser'
         with:
           tool: cargo-deny@0.20.2
