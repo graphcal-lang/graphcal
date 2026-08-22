@@ -37,7 +37,9 @@ fn expand(input: proc_macro2::TokenStream) -> syn::Result<proc_macro2::TokenStre
 
 #[cfg(test)]
 mod tests {
-    use graphcal_plugin_abi::{ManifestParamKind, ManifestResultKind, PluginManifest};
+    use graphcal_plugin_abi::{
+        ManifestArrayElementKind, ManifestParamKind, ManifestResultKind, PluginManifest,
+    };
     use quote::{format_ident, quote};
 
     use super::*;
@@ -309,6 +311,8 @@ mod tests {
                 let _ = window;
                 xs.to_vec()
             }
+            fn invert<I: Index>(values: Bool[I]) -> Bool[I] { values.to_vec() }
+            fn increment<I: Index>(values: Int[I]) -> Int[I] { values.to_vec() }
         });
         let function = &manifest.functions[0];
         assert_eq!(function.dim_vars, ["D"]);
@@ -319,7 +323,31 @@ mod tests {
         ));
         assert!(matches!(
             &function.result,
-            ManifestResultKind::Array { indexes, .. } if indexes == &["I"]
+            ManifestResultKind::Array {
+                element: ManifestArrayElementKind::Quantity(_),
+                indexes,
+            } if indexes == &["I"]
+        ));
+        assert!(matches!(
+            &manifest.functions[1].params[0].kind,
+            ManifestParamKind::Array {
+                element: ManifestArrayElementKind::Bool,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &manifest.functions[1].result,
+            ManifestResultKind::Array {
+                element: ManifestArrayElementKind::Bool,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &manifest.functions[2].params[0].kind,
+            ManifestParamKind::Array {
+                element: ManifestArrayElementKind::Int,
+                ..
+            }
         ));
     }
 
@@ -399,10 +427,10 @@ mod tests {
         );
 
         let message = error_of(quote! {
-            fn f<I: Index>(xs: Bool[I]) -> Dimensionless { 0.0 }
+            fn f<D: Dim, I: Index>(xs: Bool[I]) -> Bool[I] { xs.to_vec() }
         });
         assert!(
-            message.contains("array elements must be quantities"),
+            message.contains("dimension variable `D` is never bound"),
             "got: {message}"
         );
 

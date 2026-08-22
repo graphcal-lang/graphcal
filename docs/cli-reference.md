@@ -194,7 +194,7 @@ graphcal plugin test <MODULE> [--call <FUNCTION> [ARGS]...]
 | Argument | Description |
 |----------|-------------|
 | `<MODULE>` | Path to the `.wasm` plugin module |
-| `[ARGS]...` | Arguments for `--call`: finite numbers in SI base units for quantity parameters, `true`/`false` for `Bool`, integers exactly representable by the binary64 plugin ABI for `Int` |
+| `[ARGS]...` | Arguments for `--call`: finite numbers in SI base units for quantities, `true`/`false` for `Bool`, exactly representable integers for `Int`, and rectangular JSON arrays whose leaves use the declared element kind |
 
 **Options:**
 
@@ -220,7 +220,7 @@ zero rather than treated as a distinct encoding.
 $ graphcal plugin test plugins/fluid_props.wasm --call lerp 1.0 3.0 0.5
 plugin: plugins/fluid_props.wasm
 sha256: 3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855c
-abi: version 3, 2 function(s)
+abi: version 5, 2 function(s)
 
 import plugin "plugins/fluid_props.wasm" as fluid_props {
     fn air_density(p: Length^-1 * Mass * Time^-2, t: Temperature) -> Length^-3 * Mass;
@@ -237,7 +237,13 @@ structural. Array arguments to `--call` are bracketed literals
 (`--call share [1.0,3.0]`) and array results render the same way; for
 struct-returning functions the import block is preceded by a suggested
 record declaration to paste alongside it. Because the block is source code,
-manifest function, parameter, generic, and result-field names must be valid
+Bool arrays use JSON booleans (`[true,false]`), Int arrays use JSON integers
+(`[1,-2,3]`), and quantity arrays use JSON numbers in SI base units. Numeric
+`0`/`1` are not accepted for Bool leaves; fractional or non-lossless numbers
+are not accepted for Int leaves. Results render with the same semantic JSON
+leaf kinds.
+
+Because the block is source code, manifest function, parameter, generic, and result-field names must be valid
 Graphcal identifiers rather than reserved keywords. A module whose wire names
 cannot be represented safely is rejected instead of interpolating those names
 into the block. Graphcal string literals do not currently have an escape syntax,

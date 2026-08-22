@@ -471,11 +471,11 @@ import_decl
    `Bool`, `Int`, dimension expressions over dimensions in scope and the
    declared dim variables — with rational powers and cross-variable
    products (e.g. `fn torque<D1: Dim, D2: Dim>(f: D1, arm: D2) -> D1 * D2;`)
-   — or arrays of quantities over one or more declared index variables
-   (e.g. `fn transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I];`).
-   Each dim variable must first appear as a bare `var` parameter or bare
-   array element (its binding occurrence) before any compound use. A
-   Every result axis must reuse an index variable that indexes some array
+   — or indexed collections of any supported scalar kind over one or more
+   declared index variables (e.g. `Bool[I]`, `Int[I]`, or `D[I, J]`). Each
+   dim variable must first appear as a bare `var` parameter or bare quantity-
+   array element (its binding occurrence) before any compound use. Every
+   result axis must reuse an index variable that indexes some array
    parameter: extern functions may reorder axes but cannot invent extents.
 
    In Phase A the path string carries no filesystem semantics; it names

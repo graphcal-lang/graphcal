@@ -5288,12 +5288,12 @@ fn resolve_extern_value_kind(
         });
     }
     match &type_ann.kind {
-        TypeExprKind::Bool => Ok(ValueKind::Bool),
-        TypeExprKind::Int => Ok(ValueKind::Int),
+        TypeExprKind::Bool => Ok(ValueKind::bool()),
+        TypeExprKind::Int => Ok(ValueKind::int()),
         TypeExprKind::Dimensionless => Ok(ValueKind::dimensionless()),
         TypeExprKind::DimExpr(dim_expr) => {
             resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)
-                .map(ValueKind::Quantity)
+                .map(ValueKind::quantity_monomial)
         }
         TypeExprKind::Indexed { base, indexes } => {
             resolve_extern_array_kind(
@@ -5311,7 +5311,7 @@ fn resolve_extern_value_kind(
         | TypeExprKind::KeyApplication { .. }
         | TypeExprKind::TypeApplication { .. } => Err(GraphcalError::InvalidExternSignature {
             message:
-                "extern function signatures support Bool, Int, quantity types, and arrays of quantities over one or more declared index variables"
+                "extern function signatures support Bool, Int, quantity types, and indexed scalar collections over one or more declared index variables"
                     .to_string(),
             src: src.clone(),
             span: type_ann.span.into(),
@@ -5606,7 +5606,7 @@ fn resolve_extern_array_kind(
     src: &NamedSource<Arc<String>>,
 ) -> Result<crate::function_signature::ValueKind, GraphcalError> {
     use crate::desugar::desugared_ast::TypeExprKind;
-    use crate::function_signature::{DimMonomial, ValueKind};
+    use crate::function_signature::{DimMonomial, ScalarValueKind, ValueKind};
     use crate::syntax::ast::IndexExpr;
 
     let resolved_indexes = indexes
@@ -5647,13 +5647,15 @@ fn resolve_extern_array_kind(
         });
     }
     let element = match &base.kind {
-        TypeExprKind::Dimensionless => DimMonomial::dimensionless(),
-        TypeExprKind::DimExpr(dim_expr) => {
-            resolve_extern_dim_monomial(dim_expr, dim_vars, registry, src)?
-        }
+        TypeExprKind::Bool => ScalarValueKind::Bool,
+        TypeExprKind::Int => ScalarValueKind::Int,
+        TypeExprKind::Dimensionless => ScalarValueKind::Quantity(DimMonomial::dimensionless()),
+        TypeExprKind::DimExpr(dim_expr) => ScalarValueKind::Quantity(resolve_extern_dim_monomial(
+            dim_expr, dim_vars, registry, src,
+        )?),
         _ => {
             return Err(GraphcalError::InvalidExternSignature {
-                message: "extern array elements must be quantities in this phase".to_string(),
+                message: "extern array elements must be Bool, Int, or quantities".to_string(),
                 src: src.clone(),
                 span: base.span.into(),
             });

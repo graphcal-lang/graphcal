@@ -1489,7 +1489,9 @@ fn build_extern_fn_signatures(
     tir: &graphcal_compiler::tir::typed::TIR,
     cancellation: &CancellationToken,
 ) -> std::result::Result<HashMap<String, FnSignatureInfo>, Cancelled> {
-    use graphcal_compiler::function_signature::ValueKind as ExternValueKind;
+    use graphcal_compiler::function_signature::{
+        ScalarValueKind as ExternScalarValueKind, ValueKind as ExternValueKind,
+    };
 
     let mut sigs = HashMap::new();
     for function in tir.extern_functions().values() {
@@ -1515,17 +1517,20 @@ fn build_extern_fn_signatures(
                 parts.join(" * ")
             }
         };
+        let format_scalar = |kind: &ExternScalarValueKind| match kind {
+            ExternScalarValueKind::Bool => "Bool".to_string(),
+            ExternScalarValueKind::Int => "Int".to_string(),
+            ExternScalarValueKind::Quantity(monomial) => format_monomial(monomial),
+        };
         let format_kind = |kind: &ExternValueKind| match kind {
-            ExternValueKind::Bool => "Bool".to_string(),
-            ExternValueKind::Int => "Int".to_string(),
-            ExternValueKind::Quantity(monomial) => format_monomial(monomial),
+            ExternValueKind::Scalar(scalar) => format_scalar(scalar),
             ExternValueKind::Indexed { element, indexes } => {
                 let indexes = indexes
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{}[{indexes}]", format_monomial(element))
+                format!("{}[{indexes}]", format_scalar(element))
             }
             ExternValueKind::Struct(_) => function
                 .result_struct
@@ -1685,17 +1690,22 @@ fn builtin_signature_parts(
 }
 
 fn value_kind_display(kind: &ValueKind) -> std::result::Result<String, String> {
+    use graphcal_compiler::function_signature::ScalarValueKind;
+
+    let scalar_display = |scalar: &ScalarValueKind| match scalar {
+        ScalarValueKind::Bool => Ok("Bool".to_string()),
+        ScalarValueKind::Int => Ok("Int".to_string()),
+        ScalarValueKind::Quantity(monomial) => monomial_display(monomial),
+    };
     match kind {
-        ValueKind::Bool => Ok("Bool".to_string()),
-        ValueKind::Int => Ok("Int".to_string()),
-        ValueKind::Quantity(monomial) => monomial_display(monomial),
+        ValueKind::Scalar(scalar) => scalar_display(scalar),
         ValueKind::Indexed { element, indexes } => {
             let indexes = indexes
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ");
-            Ok(format!("{}[{indexes}]", monomial_display(element)?))
+            Ok(format!("{}[{indexes}]", scalar_display(element)?))
         }
         // Builtins never declare struct results; extern hovers render the
         // nominal type through their own path above.
@@ -2823,7 +2833,12 @@ mod tests {
     use std::collections::BTreeMap;
 
     use graphcal_compiler::dimension::Dimension;
-    use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+    use graphcal_compiler::function_signature::{
+        FunctionParam, ScalarValueKind, ValueKind as SignatureValueKind,
+    };
+    use graphcal_compiler::syntax::function_name::FnParamName;
+    use graphcal_compiler::syntax::index_name::{IndexName, IndexVarName, IndexVariantName};
+    use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use graphcal_eval::eval::Value;
     use indexmap::IndexMap;
@@ -2841,6 +2856,32 @@ mod tests {
             .iter()
             .find(|binding| binding.spelling().to_string() == spelling)
             .map(VisibleBinding::target)
+    }
+
+    #[test]
+    fn lsp_signature_display_preserves_bool_and_int_array_kinds() {
+        let index = IndexVarName::expect_valid("I");
+        for (element, expected) in [
+            (ScalarValueKind::Bool, "Bool[I]"),
+            (ScalarValueKind::Int, "Int[I]"),
+        ] {
+            let kind = SignatureValueKind::Indexed {
+                element: element.clone(),
+                indexes: NonEmpty::singleton(index.clone()),
+            };
+            assert_eq!(value_kind_display(&kind).unwrap(), expected);
+            let signature = FunctionSignature::try_new(
+                Vec::new(),
+                vec![index.clone()],
+                vec![FunctionParam {
+                    name: FnParamName::expect_valid("values"),
+                    kind: kind.clone(),
+                }],
+                kind,
+            )
+            .unwrap();
+            assert!(signature.format_with(|_| String::new()).contains(expected));
+        }
     }
 
     #[test]

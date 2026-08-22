@@ -1234,33 +1234,65 @@ impl BoundExternIndex {
     }
 }
 
+enum FlattenedExternArrayValues {
+    Quantity(Vec<f64>),
+    Bool(Vec<bool>),
+    Int(Vec<i64>),
+}
+
+impl FlattenedExternArrayValues {
+    fn append(&mut self, other: Self) -> Result<(), ()> {
+        match (self, other) {
+            (Self::Quantity(values), Self::Quantity(other)) => values.extend(other),
+            (Self::Bool(values), Self::Bool(other)) => values.extend(other),
+            (Self::Int(values), Self::Int(other)) => values.extend(other),
+            _ => return Err(()),
+        }
+        Ok(())
+    }
+}
+
 struct FlattenedExternArray {
     axes: Vec<BoundExternIndex>,
-    values: Vec<f64>,
+    values: FlattenedExternArrayValues,
 }
 
 fn flatten_extern_array(
     value: &RuntimeValue,
+    expected: &graphcal_compiler::function_signature::ScalarValueKind,
     ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<FlattenedExternArray, GraphcalError> {
-    match value {
-        RuntimeValue::Quantity(value) => Ok(FlattenedExternArray {
+    use graphcal_compiler::function_signature::ScalarValueKind;
+
+    match (expected, value) {
+        (ScalarValueKind::Quantity(_), RuntimeValue::Quantity(value)) => Ok(FlattenedExternArray {
             axes: Vec::new(),
-            values: vec![*value],
+            values: FlattenedExternArrayValues::Quantity(vec![*value]),
         }),
-        RuntimeValue::Indexed {
-            index_name,
-            entries,
-        } => {
-            let children = entries
+        (ScalarValueKind::Bool, RuntimeValue::Bool(value)) => Ok(FlattenedExternArray {
+            axes: Vec::new(),
+            values: FlattenedExternArrayValues::Bool(vec![*value]),
+        }),
+        (ScalarValueKind::Int, RuntimeValue::Int(value)) => Ok(FlattenedExternArray {
+            axes: Vec::new(),
+            values: FlattenedExternArrayValues::Int(vec![*value]),
+        }),
+        (
+            _,
+            RuntimeValue::Indexed {
+                index_name,
+                entries,
+            },
+        ) => {
+            let mut children = entries
                 .values()
-                .map(|value| flatten_extern_array(value, ctx, span))
+                .map(|value| flatten_extern_array(value, expected, ctx, span))
                 .collect::<Result<Vec<_>, _>>()?;
-            let (first, rest) = children.split_first().ok_or_else(|| {
+            let first = children.first().ok_or_else(|| {
                 ctx.internal_error("extern array unexpectedly had an empty axis", span)
             })?;
-            if rest.iter().any(|child| {
+            if children.iter().skip(1).any(|child| {
                 child.axes.len() != first.axes.len()
                     || child
                         .axes
@@ -1273,39 +1305,45 @@ fn flatten_extern_array(
                     span,
                 ));
             }
+            let mut first = children.remove(0);
+            for child in children {
+                first.values.append(child.values).map_err(|()| {
+                    ctx.eval_error("extern array mixes scalar element kinds", span)
+                })?;
+            }
             let mut axes = Vec::with_capacity(first.axes.len().saturating_add(1));
             axes.push(BoundExternIndex {
                 index_name: index_name.clone(),
                 keys: entries.keys().cloned().collect(),
             });
-            axes.extend(first.axes.iter().cloned());
-            let values = children
-                .into_iter()
-                .flat_map(|child| child.values)
-                .collect();
-            Ok(FlattenedExternArray { axes, values })
+            axes.extend(first.axes);
+            Ok(FlattenedExternArray {
+                axes,
+                values: first.values,
+            })
         }
-        RuntimeValue::Complex(_)
-        | RuntimeValue::Bool(_)
-        | RuntimeValue::Int(_)
-        | RuntimeValue::Label { .. }
-        | RuntimeValue::CoordinateLabel { .. }
-        | RuntimeValue::Datetime(_)
-        | RuntimeValue::Struct { .. } => {
+        (ScalarValueKind::Quantity(_), _) => {
             Err(ctx.eval_error("extern array elements must be quantities", span))
+        }
+        (ScalarValueKind::Bool, _) => {
+            Err(ctx.eval_error("extern array elements must be Bool values", span))
+        }
+        (ScalarValueKind::Int, _) => {
+            Err(ctx.eval_error("extern array elements must be Int values", span))
         }
     }
 }
 
-fn rebuild_extern_array(
+fn rebuild_extern_array<T>(
     bound_axes: &[BoundExternIndex],
-    values: &[f64],
+    values: &[T],
+    make_leaf: impl Fn(&T) -> RuntimeValue + Copy,
     ctx: &EvalContext<'_>,
     span: Span,
 ) -> Result<RuntimeValue, GraphcalError> {
     match bound_axes.split_first() {
         None => match values {
-            [value] => Ok(RuntimeValue::Quantity(*value)),
+            [value] => Ok(make_leaf(value)),
             _ => {
                 Err(ctx.internal_error("extern array leaf did not contain exactly one value", span))
             }
@@ -1329,7 +1367,8 @@ fn rebuild_extern_array(
                 .cloned()
                 .zip(chunks)
                 .map(|(key, values)| {
-                    rebuild_extern_array(remaining, values, ctx, span).map(|value| (key, value))
+                    rebuild_extern_array(remaining, values, make_leaf, ctx, span)
+                        .map(|value| (key, value))
                 })
                 .collect::<Result<IndexMap<_, _>, _>>()?;
             Ok(RuntimeValue::Indexed {
@@ -1363,11 +1402,11 @@ fn eval_hir_extern_fn(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalContext<'_>,
 ) -> Result<RuntimeValue, GraphcalError> {
-    use graphcal_compiler::function_signature::ValueKind;
+    use graphcal_compiler::function_signature::{ScalarValueKind, ValueKind};
 
     use crate::host_abi::{
-        ValidatedHostFieldValue, ValidatedHostResult, decode_result, encode_bool, encode_int,
-        validate_quantity,
+        ValidatedHostArrayValues, ValidatedHostFieldValue, ValidatedHostResult, decode_result,
+        encode_bool, encode_int, validate_quantity,
     };
     use crate::host_fns::{HostArray, HostFnValue};
 
@@ -1413,7 +1452,7 @@ fn eval_hir_extern_fn(
     for (param, arg) in signature.params().iter().zip(args) {
         let value = eval_hir_expr(arg, values, local_values, ctx)?;
         let converted = match (&param.kind, value) {
-            (ValueKind::Quantity(_), value) => {
+            (ValueKind::Scalar(ScalarValueKind::Quantity(_)), value) => {
                 let value = value
                     .expect_quantity("extern function argument")
                     .map_err(|error| ctx.eval_error(error.to_string(), arg.span))?;
@@ -1428,7 +1467,7 @@ fn eval_hir_extern_fn(
                 })?;
                 HostFnValue::F64(value.get())
             }
-            (ValueKind::Int, RuntimeValue::Int(value)) => {
+            (ValueKind::Scalar(ScalarValueKind::Int), RuntimeValue::Int(value)) => {
                 let value = encode_int(value).map_err(|error| {
                     ctx.eval_error(
                         format!(
@@ -1440,9 +1479,11 @@ fn eval_hir_extern_fn(
                 })?;
                 HostFnValue::F64(value)
             }
-            (ValueKind::Bool, RuntimeValue::Bool(value)) => HostFnValue::F64(encode_bool(value)),
-            (ValueKind::Indexed { indexes, .. }, value) => {
-                let flattened = flatten_extern_array(&value, ctx, arg.span)?;
+            (ValueKind::Scalar(ScalarValueKind::Bool), RuntimeValue::Bool(value)) => {
+                HostFnValue::F64(encode_bool(value))
+            }
+            (ValueKind::Indexed { element, indexes }, value) => {
+                let flattened = flatten_extern_array(&value, element, ctx, arg.span)?;
                 if flattened.axes.len() != indexes.len() {
                     return Err(ctx.internal_error(
                         format!(
@@ -1473,23 +1514,43 @@ fn eval_hir_extern_fn(
                     }
                 }
                 let shape = flattened.axes.iter().map(|axis| axis.keys.len()).collect();
-                let encoded_values = flattened
-                    .values
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        let value = validate_quantity(value).map_err(|error| {
-                            ctx.eval_error(
-                                format!(
-                                    "extern function `{ext}` parameter `{}` has an invalid quantity at flat array index {index}: {error}",
-                                    param.name
-                                ),
-                                arg.span,
-                            )
-                        })?;
-                        Ok::<_, GraphcalError>(value.get())
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                let encoded_values = match flattened.values {
+                    FlattenedExternArrayValues::Quantity(values) => values
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            validate_quantity(value)
+                                .map(crate::host_abi::FiniteHostQuantity::get)
+                                .map_err(|error| {
+                                ctx.eval_error(
+                                    format!(
+                                        "extern function `{ext}` parameter `{}` has an invalid quantity at flat array index {index}: {error}",
+                                        param.name
+                                    ),
+                                    arg.span,
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    FlattenedExternArrayValues::Bool(values) => {
+                        values.into_iter().map(encode_bool).collect()
+                    }
+                    FlattenedExternArrayValues::Int(values) => values
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            encode_int(value).map_err(|error| {
+                                ctx.eval_error(
+                                    format!(
+                                        "extern function `{ext}` parameter `{}` has an invalid Int at flat array index {index}: {error}",
+                                        param.name
+                                    ),
+                                    arg.span,
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                };
                 let array = HostArray::try_new(shape, encoded_values).map_err(|error| {
                     ctx.internal_error(
                         format!("failed to flatten extern array argument: {error}"),
@@ -1498,7 +1559,7 @@ fn eval_hir_extern_fn(
                 })?;
                 HostFnValue::Array(array)
             }
-            (ValueKind::Int | ValueKind::Bool | ValueKind::Struct(_), _) => {
+            (ValueKind::Scalar(_) | ValueKind::Struct(_), _) => {
                 return Err(ctx.internal_error(
                     format!(
                         "extern function `{ext}` parameter `{}` received a value of the wrong kind after dimension checking",
@@ -1557,12 +1618,29 @@ fn eval_hir_extern_fn(
                     expr.span,
                 ));
             }
-            let values = array
-                .values()
-                .iter()
-                .map(|value| value.get())
-                .collect::<Vec<_>>();
-            rebuild_extern_array(&axes, &values, ctx, expr.span)
+            match array.values() {
+                ValidatedHostArrayValues::Quantity { values, .. } => rebuild_extern_array(
+                    &axes,
+                    values,
+                    |value| RuntimeValue::Quantity(value.get()),
+                    ctx,
+                    expr.span,
+                ),
+                ValidatedHostArrayValues::Bool(values) => rebuild_extern_array(
+                    &axes,
+                    values,
+                    |value| RuntimeValue::Bool(*value),
+                    ctx,
+                    expr.span,
+                ),
+                ValidatedHostArrayValues::Int(values) => rebuild_extern_array(
+                    &axes,
+                    values,
+                    |value| RuntimeValue::Int(*value),
+                    ctx,
+                    expr.span,
+                ),
+            }
         }
         ValidatedHostResult::Struct(fields) => {
             use graphcal_compiler::registry::declared_type::StructTypeRef;

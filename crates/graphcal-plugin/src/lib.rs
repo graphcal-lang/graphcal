@@ -38,8 +38,9 @@
 //!   `Bool` parameters arrive in the body as `bool`, `Int` parameters as
 //!   `i64`, and quantity parameters as `f64` SI values;
 //! - for functions with array parameters or results (`xs: D[I, J]`), the
-//!   buffer-protocol plumbing: the body sees shaped [`ArrayView`] values and
-//!   returns validated [`Array`] values, while the generated wasm wrapper and
+//!   buffer-protocol plumbing: the body sees shaped typed [`ArrayView`] values
+//!   (`f64`, `bool`, or `i64`) and returns matching validated [`Array`] values,
+//!   while the generated wasm wrapper and
 //!   the `graphcal_alloc`/`graphcal_free` exports move row-major SI buffers and
 //!   ordered extents across the boundary;
 //! - for struct-shaped results (`-> { lo: Pressure, hi: Pressure }`), a named
@@ -116,9 +117,10 @@
 /// Each function is `fn name<Vars>(params) -> Result { body }`, with
 /// binders written `name: constraint` (`D: Dim` for dimension variables,
 /// `I: Index` for index variables). Parameter and result types are `Bool`,
-/// `Int`, dimension expressions, or arrays of quantities over one or more
-/// declared index variables (`xs: D[I]`, `matrix: D[I, J]`,
-/// `-> Dimensionless[J, I]`). Results may additionally be braced struct
+/// `Int`, dimension expressions, or arrays of those scalar kinds over one or
+/// more declared index variables (`flags: Bool[I]`, `counts: Int[I]`,
+/// `xs: D[I]`, `matrix: D[I, J]`, `-> Dimensionless[J, I]`). Results may
+/// additionally be braced struct
 /// shapes with named `Bool`, `Int`, or concrete-quantity fields
 /// (`-> { root: Dimensionless, iters: Int }`). Dimension expressions range
 /// over:
@@ -145,12 +147,14 @@
 /// # In the body
 ///
 /// Parameters are in scope with their declared names and natural Rust types:
-/// `f64` (SI) for quantities, `bool` for `Bool`, `i64` for `Int`, and
-/// [`ArrayView`] for arrays. An `ArrayView` exposes the ordered multi-axis
-/// shape through [`ArrayView::shape`] and flattened row-major SI values through
-/// [`ArrayView::values`] or [`ArrayView::iter`].
+/// `f64` (SI) for quantities, `bool` for `Bool`, `i64` for `Int`, and a
+/// borrowed typed [`ArrayView`] for arrays. Quantity, Bool, and Int arrays use
+/// `ArrayView<'_, f64>`, `ArrayView<'_, bool>`, and `ArrayView<'_, i64>`.
+/// A view exposes the ordered multi-axis shape through [`ArrayView::shape`]
+/// and flattened row-major typed values through [`ArrayView::values`],
+/// [`ArrayView::get`], or [`ArrayView::iter`].
 ///
-/// The body evaluates to `f64`, `bool`, `i64`, a validated [`Array`], or the
+/// The body evaluates to `f64`, `bool`, `i64`, a matching validated [`Array`], or the
 /// generated named output struct that matches the declared result. An array's
 /// shape must equal the result-axis extents in result order, including any axis
 /// reordering. A function named `pressure_span` with a struct result returns
@@ -171,70 +175,126 @@
 /// functions can live anywhere in the crate and be called from the bodies.
 pub use graphcal_plugin_macros::plugin;
 
-/// Borrowed dense array parameter passed to a plugin body.
+/// Dense typed array parameter passed to a plugin body.
 ///
-/// Values are row-major SI quantities; `shape()` lists axis extents in the
+/// `T` is `f64` for quantity arrays, `bool` for `Bool` arrays, and `i64` for
+/// `Int` arrays. Values are row-major; `shape()` lists axis extents in the
 /// declaration's order. Index identities remain host-side and never cross the
 /// plugin boundary.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ArrayView<'a> {
-    shape: &'a [usize],
-    values: &'a [f64],
+///
+/// Generated natural functions borrow each view, so an array occupies one
+/// pointer in their internal Rust ABI. They therefore cannot become wider than
+/// the accepted raw plugin signature merely because Rust slices are fat
+/// pointers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayView<'a, T = f64> {
+    data: ArrayViewData<'a, T>,
 }
 
-impl<'a> ArrayView<'a> {
-    /// Build a borrowed array view after validating its shape.
+#[derive(Debug, Clone, PartialEq)]
+struct ArrayViewData<'a, T> {
+    shape: &'a [usize],
+    values: ArrayViewValues<'a, T>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ArrayViewValues<'a, T> {
+    Borrowed(&'a [T]),
+    Owned(Vec<T>),
+}
+
+impl<T> ArrayViewValues<'_, T> {
+    const fn as_slice(&self) -> &[T] {
+        match self {
+            Self::Borrowed(values) => values,
+            Self::Owned(values) => values.as_slice(),
+        }
+    }
+}
+
+impl<'a, T> ArrayView<'a, T> {
+    /// Build a borrowed typed array view after validating its shape.
     ///
     /// # Errors
     ///
     /// Returns [`ArrayShapeError`] when the shape is invalid or does not match
     /// `values.len()`.
-    pub fn new(shape: &'a [usize], values: &'a [f64]) -> Result<Self, ArrayShapeError> {
+    pub fn new(shape: &'a [usize], values: &'a [T]) -> Result<Self, ArrayShapeError> {
         validate_array_shape(shape, values.len())?;
-        Ok(Self { shape, values })
+        Ok(Self {
+            data: ArrayViewData {
+                shape,
+                values: ArrayViewValues::Borrowed(values),
+            },
+        })
+    }
+
+    fn from_owned(shape: &'a [usize], values: Vec<T>) -> Result<Self, ArrayShapeError> {
+        validate_array_shape(shape, values.len())?;
+        Ok(Self {
+            data: ArrayViewData {
+                shape,
+                values: ArrayViewValues::Owned(values),
+            },
+        })
     }
 
     /// Ordered row-major shape.
     #[must_use]
-    pub const fn shape(self) -> &'a [usize] {
-        self.shape
+    pub const fn shape(&self) -> &'a [usize] {
+        self.data.shape
     }
 
-    /// Flattened row-major SI values.
+    /// Flattened row-major typed values.
     #[must_use]
-    pub const fn values(self) -> &'a [f64] {
-        self.values
+    pub const fn values(&self) -> &[T] {
+        self.data.values.as_slice()
     }
 
     /// Number of axes.
     #[must_use]
-    pub const fn rank(self) -> usize {
-        self.shape.len()
+    pub const fn rank(&self) -> usize {
+        self.data.shape.len()
     }
 
     /// Number of flattened elements.
     #[must_use]
-    pub const fn len(self) -> usize {
-        self.values.len()
+    pub const fn len(&self) -> usize {
+        self.data.values.as_slice().len()
     }
 
     /// Arrays crossing the plugin boundary are never empty.
     #[must_use]
-    pub const fn is_empty(self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         false
     }
 
-    /// Iterate flattened row-major values.
-    pub fn iter(self) -> std::slice::Iter<'a, f64> {
-        self.values.iter()
+    /// Get one value by row-major flat index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<&T> {
+        self.data.values.as_slice().get(index)
+    }
+
+    /// Iterate flattened row-major typed values.
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.data.values.as_slice().iter()
     }
 }
 
-/// Owned dense array returned by a plugin body.
+impl<'view, T> IntoIterator for &'view ArrayView<'_, T> {
+    type Item = &'view T;
+    type IntoIter = std::slice::Iter<'view, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// Owned dense typed array returned by a plugin body.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Array {
+pub struct Array<T = f64> {
     shape: Vec<usize>,
-    values: Vec<f64>,
+    values: Vec<T>,
 }
 
 fn validate_array_shape(shape: &[usize], values: usize) -> Result<(), ArrayShapeError> {
@@ -257,14 +317,14 @@ fn validate_array_shape(shape: &[usize], values: usize) -> Result<(), ArrayShape
     }
 }
 
-impl Array {
-    /// Build an array after validating a non-empty shape and its element count.
+impl<T> Array<T> {
+    /// Build a typed array after validating a non-empty shape and its element count.
     ///
     /// # Errors
     ///
     /// Returns [`ArrayShapeError`] for an empty/zero axis, cardinality
     /// overflow, or a value count that differs from the shape product.
-    pub fn new(shape: Vec<usize>, values: Vec<f64>) -> Result<Self, ArrayShapeError> {
+    pub fn new(shape: Vec<usize>, values: Vec<T>) -> Result<Self, ArrayShapeError> {
         validate_array_shape(&shape, values.len())?;
         Ok(Self { shape, values })
     }
@@ -274,7 +334,7 @@ impl Array {
     /// # Errors
     ///
     /// Returns [`ArrayShapeError::EmptyAxis`] when `values` is empty.
-    pub fn vector(values: Vec<f64>) -> Result<Self, ArrayShapeError> {
+    pub fn vector(values: Vec<T>) -> Result<Self, ArrayShapeError> {
         if values.is_empty() {
             return Err(ArrayShapeError::EmptyAxis);
         }
@@ -289,13 +349,13 @@ impl Array {
 
     /// Flattened row-major SI values.
     #[must_use]
-    pub fn values(&self) -> &[f64] {
+    pub fn values(&self) -> &[T] {
         &self.values
     }
 
     /// Consume the array into its shape and flattened values.
     #[must_use]
-    pub fn into_parts(self) -> (Vec<usize>, Vec<f64>) {
+    pub fn into_parts(self) -> (Vec<usize>, Vec<T>) {
         (self.shape, self.values)
     }
 }
@@ -437,12 +497,22 @@ pub mod __rt {
     /// host contract and fails the call rather than being reinterpreted.
     #[must_use]
     pub fn bool_from_abi(raw: f64, param: &str) -> bool {
-        if raw.to_bits() == 1.0_f64.to_bits() {
-            true
-        } else if raw.to_bits() == 0.0_f64.to_bits() {
-            false
-        } else {
+        decode_bool_abi(raw).unwrap_or_else(|| {
             crate::fail!("parameter `{param}`: expected a Bool encoded as 1.0 or 0.0, got {raw}")
+        })
+    }
+
+    #[expect(
+        clippy::float_cmp,
+        reason = "the Bool ABI uses exact numeric encodings and accepts signed zero"
+    )]
+    fn decode_bool_abi(raw: f64) -> Option<bool> {
+        if raw == 0.0 {
+            Some(false)
+        } else if raw == 1.0 {
+            Some(true)
+        } else {
+            None
         }
     }
 
@@ -457,26 +527,25 @@ pub mod __rt {
     /// The ABI contract requires an exactly-representable integer;
     /// anything else fails the call.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the deliberate f64->i128 truncation is proven exact by the bit round-trip"
-    )]
     pub fn int_from_abi(raw: f64, param: &str) -> i64 {
-        // NaN and infinities saturate/zero in the cast and then fail the
-        // bit round-trip, as do fractional values and out-of-range ones.
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "round-trip comparison detects any loss"
-        )]
-        let exact = i64::try_from(raw as i128)
-            .ok()
-            .filter(|value| (*value as f64).to_bits() == raw.to_bits());
-        exact.unwrap_or_else(|| {
+        decode_int_abi(raw).unwrap_or_else(|| {
             crate::fail!(
                 "parameter `{param}`: expected an Int encoded as an exactly-representable \
                  integer, got {raw}"
             )
         })
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::float_cmp,
+        reason = "the checked f64/i128/i64 round trip enforces the exact Int ABI and accepts signed zero"
+    )]
+    fn decode_int_abi(raw: f64) -> Option<i64> {
+        i64::try_from(raw as i128)
+            .ok()
+            .filter(|value| (*value as f64) == raw)
     }
 
     /// Convert an `Int` result onto the raw ABI.
@@ -485,19 +554,20 @@ pub mod __rt {
     /// (beyond ±2^53 some integers are not, and silently rounding one
     /// would be an implicit conversion).
     #[must_use]
+    pub fn int_to_abi(value: i64) -> f64 {
+        encode_int_abi(value).unwrap_or_else(|| {
+            crate::fail!("Int result {value} is not exactly representable as an f64")
+        })
+    }
+
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
-        reason = "round-trip comparison through i128 detects any loss, including at i64::MAX \
-                  where the i64 cast saturates and would false-positive"
+        reason = "round-trip comparison through i128 detects any loss, including at i64::MAX"
     )]
-    pub fn int_to_abi(value: i64) -> f64 {
+    fn encode_int_abi(value: i64) -> Option<f64> {
         let raw = value as f64;
-        if raw as i128 == i128::from(value) {
-            raw
-        } else {
-            crate::fail!("Int result {value} is not exactly representable as an f64")
-        }
+        (raw as i128 == i128::from(value)).then_some(raw)
     }
 
     // -- Buffer protocol (arrays over index variables, issue #25 Phase D) --
@@ -600,7 +670,16 @@ pub mod __rt {
         }
     }
 
-    /// Decode one host-written array parameter with its ordered shape.
+    fn validate_view_shape(shape: &[usize], len: u32, param: &str) {
+        let expected = shape
+            .iter()
+            .try_fold(1_usize, |size, extent| size.checked_mul(*extent));
+        if expected != Some(len as usize) {
+            crate::fail!("parameter `{param}`: shape {shape:?} does not contain {len} elements");
+        }
+    }
+
+    /// Decode and validate a quantity-array parameter.
     ///
     /// # Safety
     ///
@@ -611,21 +690,99 @@ pub mod __rt {
         unsafe_code,
         reason = "viewing host-written plugin memory is inherently raw"
     )]
-    pub unsafe fn array_view_from_abi<'call>(
+    pub unsafe fn quantity_array_view_from_abi<'call>(
         ptr: *const f64,
         len: u32,
         shape: &'call [usize],
         param: &str,
-    ) -> crate::ArrayView<'call> {
-        let expected = shape
-            .iter()
-            .try_fold(1_usize, |size, extent| size.checked_mul(*extent));
-        if expected != Some(len as usize) {
-            crate::fail!("parameter `{param}`: shape {shape:?} does not contain {len} elements");
-        }
+    ) -> crate::ArrayView<'call, f64> {
+        validate_view_shape(shape, len, param);
         // SAFETY: forwarded from the caller after shape cardinality validation.
         let values = unsafe { slice_from_abi(ptr, len, param) };
-        crate::ArrayView { shape, values }
+        if let Some((index, value)) = values
+            .iter()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+        {
+            crate::fail!(
+                "parameter `{param}`: invalid quantity array element at flat index {index}: \
+                 expected a finite value, got {value}"
+            );
+        }
+        crate::ArrayView::new(shape, values)
+            .unwrap_or_else(|error| crate::fail!("parameter `{param}`: {error}"))
+    }
+
+    /// Decode and validate a `Bool`-array parameter into typed storage.
+    ///
+    /// # Safety
+    ///
+    /// The same pointer and shape requirements as
+    /// [`quantity_array_view_from_abi`] apply.
+    #[must_use]
+    #[expect(
+        unsafe_code,
+        reason = "viewing host-written plugin memory is inherently raw"
+    )]
+    pub unsafe fn bool_array_view_from_abi<'call>(
+        ptr: *const f64,
+        len: u32,
+        shape: &'call [usize],
+        param: &str,
+    ) -> crate::ArrayView<'call, bool> {
+        validate_view_shape(shape, len, param);
+        // SAFETY: forwarded from the caller after shape cardinality validation.
+        let raw = unsafe { slice_from_abi(ptr, len, param) };
+        let values = raw
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                decode_bool_abi(*value).unwrap_or_else(|| {
+                    crate::fail!(
+                        "parameter `{param}`: invalid Bool array element at flat index {index}: \
+                         expected 1.0 or 0.0, got {value}"
+                    )
+                })
+            })
+            .collect();
+        crate::ArrayView::from_owned(shape, values)
+            .unwrap_or_else(|error| crate::fail!("parameter `{param}`: {error}"))
+    }
+
+    /// Decode and validate an `Int`-array parameter into typed storage.
+    ///
+    /// # Safety
+    ///
+    /// The same pointer and shape requirements as
+    /// [`quantity_array_view_from_abi`] apply.
+    #[must_use]
+    #[expect(
+        unsafe_code,
+        reason = "viewing host-written plugin memory is inherently raw"
+    )]
+    pub unsafe fn int_array_view_from_abi<'call>(
+        ptr: *const f64,
+        len: u32,
+        shape: &'call [usize],
+        param: &str,
+    ) -> crate::ArrayView<'call, i64> {
+        validate_view_shape(shape, len, param);
+        // SAFETY: forwarded from the caller after shape cardinality validation.
+        let raw = unsafe { slice_from_abi(ptr, len, param) };
+        let values = raw
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                decode_int_abi(*value).unwrap_or_else(|| {
+                    crate::fail!(
+                        "parameter `{param}`: invalid Int array element at flat index {index}: \
+                         expected an exactly-representable integer, got {value}"
+                    )
+                })
+            })
+            .collect();
+        crate::ArrayView::from_owned(shape, values)
+            .unwrap_or_else(|error| crate::fail!("parameter `{param}`: {error}"))
     }
 
     /// Write an array result through the host-allocated out-pointer.
@@ -639,8 +796,9 @@ pub mod __rt {
     /// `out` must point at the product of `expected_shape` writable `f64`
     /// slots allocated by the host.
     #[expect(unsafe_code, reason = "writing through the host-allocated out-pointer")]
-    pub unsafe fn write_array_result(
-        array: &crate::Array,
+    unsafe fn write_encoded_array_result<T>(
+        array: &crate::Array<T>,
+        values: &[f64],
         out: *mut f64,
         expected_shape: &[usize],
         function: &str,
@@ -652,14 +810,90 @@ pub mod __rt {
                 array.shape()
             );
         }
-        let output_len = u32::try_from(array.values().len())
+        let output_len = u32::try_from(values.len())
             .unwrap_or_else(|_| crate::fail!("{function}: result buffer exceeds the 32-bit ABI"));
         validate_f64_pointer(out, output_len, function);
         // SAFETY: the host allocated the product of `expected_shape` f64
         // slots, and `Array::new` guarantees that product equals values.len().
-        unsafe {
-            std::ptr::copy_nonoverlapping(array.values().as_ptr(), out, array.values().len());
+        unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), out, values.len()) }
+    }
+
+    /// Validate and write a quantity-array result.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point at the signature-bound number of writable slots.
+    #[expect(unsafe_code, reason = "writing through the host-allocated out-pointer")]
+    pub unsafe fn write_quantity_array_result(
+        array: &crate::Array<f64>,
+        out: *mut f64,
+        expected_shape: &[usize],
+        function: &str,
+    ) {
+        if let Some((index, value)) = array
+            .values()
+            .iter()
+            .enumerate()
+            .find(|(_, value)| !value.is_finite())
+        {
+            crate::fail!(
+                "{function}: invalid quantity result element at flat index {index}: \
+                 expected a finite value, got {value}"
+            );
         }
+        // SAFETY: forwarded from the generated wrapper.
+        unsafe { write_encoded_array_result(array, array.values(), out, expected_shape, function) }
+    }
+
+    /// Encode and write a `Bool`-array result.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point at the signature-bound number of writable slots.
+    #[expect(unsafe_code, reason = "writing through the host-allocated out-pointer")]
+    pub unsafe fn write_bool_array_result(
+        array: &crate::Array<bool>,
+        out: *mut f64,
+        expected_shape: &[usize],
+        function: &str,
+    ) {
+        let values = array
+            .values()
+            .iter()
+            .copied()
+            .map(bool_to_abi)
+            .collect::<Vec<_>>();
+        // SAFETY: forwarded from the generated wrapper.
+        unsafe { write_encoded_array_result(array, &values, out, expected_shape, function) }
+    }
+
+    /// Encode and write an `Int`-array result.
+    ///
+    /// # Safety
+    ///
+    /// `out` must point at the signature-bound number of writable slots.
+    #[expect(unsafe_code, reason = "writing through the host-allocated out-pointer")]
+    pub unsafe fn write_int_array_result(
+        array: &crate::Array<i64>,
+        out: *mut f64,
+        expected_shape: &[usize],
+        function: &str,
+    ) {
+        let values = array
+            .values()
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                encode_int_abi(*value).unwrap_or_else(|| {
+                    crate::fail!(
+                        "{function}: Int result element at flat index {index} ({value}) is not \
+                         exactly representable as an f64"
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        // SAFETY: forwarded from the generated wrapper.
+        unsafe { write_encoded_array_result(array, &values, out, expected_shape, function) }
     }
 
     /// Write fixed-layout record slots through a host-allocated out-pointer.
@@ -693,13 +927,19 @@ mod tests {
     }
 
     #[test]
+    fn scalar_decoders_accept_signed_zero() {
+        assert!(!__rt::bool_from_abi(-0.0, "flag"));
+        assert_eq!(__rt::int_from_abi(-0.0, "count"), 0);
+    }
+
+    #[test]
     fn arrays_validate_rank_extents_and_cardinality() {
         assert_eq!(
-            Array::new(Vec::new(), Vec::new()),
+            Array::<f64>::new(Vec::new(), Vec::new()),
             Err(ArrayShapeError::NoAxes)
         );
         assert_eq!(
-            Array::new(vec![2, 0], Vec::new()),
+            Array::<f64>::new(vec![2, 0], Vec::new()),
             Err(ArrayShapeError::EmptyAxis)
         );
         assert_eq!(

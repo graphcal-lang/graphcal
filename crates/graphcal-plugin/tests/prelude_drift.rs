@@ -111,16 +111,19 @@ fn visit_monomials(
         match &param.kind {
             graphcal_plugin_abi::ManifestParamKind::Quantity(monomial)
             | graphcal_plugin_abi::ManifestParamKind::Array {
-                element: monomial, ..
+                element: graphcal_plugin_abi::ManifestArrayElementKind::Quantity(monomial),
+                ..
             } => visit(monomial),
             graphcal_plugin_abi::ManifestParamKind::Bool
-            | graphcal_plugin_abi::ManifestParamKind::Int => {}
+            | graphcal_plugin_abi::ManifestParamKind::Int
+            | graphcal_plugin_abi::ManifestParamKind::Array { .. } => {}
         }
     }
     match &function.result {
         graphcal_plugin_abi::ManifestResultKind::Quantity(monomial)
         | graphcal_plugin_abi::ManifestResultKind::Array {
-            element: monomial, ..
+            element: graphcal_plugin_abi::ManifestArrayElementKind::Quantity(monomial),
+            ..
         } => visit(monomial),
         graphcal_plugin_abi::ManifestResultKind::Struct { fields } => {
             for field in fields {
@@ -132,7 +135,8 @@ fn visit_monomials(
             }
         }
         graphcal_plugin_abi::ManifestResultKind::Bool
-        | graphcal_plugin_abi::ManifestResultKind::Int => {}
+        | graphcal_plugin_abi::ManifestResultKind::Int
+        | graphcal_plugin_abi::ManifestResultKind::Array { .. } => {}
     }
 }
 
@@ -192,9 +196,12 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
         .iter()
         .find(|function| function.name == "f_array")
         .expect("array drift probe is declared");
-    let graphcal_plugin_abi::ManifestParamKind::Array { element, .. } = &array.params[0].kind
+    let graphcal_plugin_abi::ManifestParamKind::Array {
+        element: graphcal_plugin_abi::ManifestArrayElementKind::Quantity(element),
+        ..
+    } = &array.params[0].kind
     else {
-        panic!("array drift probe must keep an array parameter");
+        panic!("array drift probe must keep a quantity-array parameter");
     };
     assert_eq!(
         element
@@ -204,8 +211,12 @@ fn manifest_fixed_dimensions_stay_in_the_base_alphabet() {
             .collect::<Vec<_>>(),
         ["Length", "Time"]
     );
-    let graphcal_plugin_abi::ManifestResultKind::Array { element, .. } = &array.result else {
-        panic!("array drift probe must keep an array result");
+    let graphcal_plugin_abi::ManifestResultKind::Array {
+        element: graphcal_plugin_abi::ManifestArrayElementKind::Quantity(element),
+        ..
+    } = &array.result
+    else {
+        panic!("array drift probe must keep a quantity-array result");
     };
     assert_eq!(
         element

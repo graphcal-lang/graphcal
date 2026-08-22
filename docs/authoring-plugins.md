@@ -101,8 +101,9 @@ pasted verbatim into the `.gcl` import site.
 ### Signature syntax
 
 Parameter and result types are `Bool`, `Int`, dimension expressions, or
-arrays of quantities over one or more declared index variables (`xs: D[I]`,
-`matrix: D[I, J]`); a result may also be a braced struct shape
+arrays of any of those scalar kinds over one or more declared index variables
+(`flags: Bool[I]`, `counts: Int[I]`, `xs: D[I]`, `matrix: D[I, J]`); a result
+may also be a braced struct shape
 (`-> { lo: Pressure, hi: Pressure }`).
 Dimension expressions are built from:
 
@@ -141,11 +142,13 @@ fields must match the shape — names, order, and kinds.
 ### In the body
 
 Parameters arrive with their declared names and natural Rust types —
-`f64` for quantities, `bool` for `Bool`, `i64` for `Int`, and
-`graphcal_plugin::ArrayView` for arrays. `ArrayView::shape()` returns extents
-in signature order and `values()` returns dense row-major SI values. An array
-body returns a validated `graphcal_plugin::Array`; its shape must exactly match
-the extents bound by the result's axis list. Other results are `f64`, `bool`,
+`f64` for quantities, `bool` for `Bool`, `i64` for `Int`, and borrowed typed
+array views: `ArrayView<'_, f64>`, `ArrayView<'_, bool>`, or
+`ArrayView<'_, i64>`. `ArrayView::shape()` returns extents in signature order;
+`values()`, `get()`, and `iter()` expose dense row-major values of that Rust
+type. An array body returns the corresponding validated `Array<f64>`,
+`Array<bool>`, or `Array<i64>`; its shape must exactly match the extents bound
+by the result's axis list. Other results are `f64`, `bool`,
 `i64`, or the generated `...Output` struct. Array-moving functions still
 compile natively, so `cargo test` needs no wasm toolchain.
 
@@ -168,6 +171,23 @@ kernel math in SI throughout.
 Dimension variables are parametric: the body never learns which dimension
 `D` was bound to, so dimension-polymorphic kernels must be
 dimension-uniform (interpolation yes, `sin` of a `D` no).
+
+For example, a `Bool[I]` body never observes the raw numeric buffer:
+
+```rust
+graphcal_plugin::plugin! {
+    fn invert<I: Index>(values: Bool[I]) -> Bool[I] {
+        let inverted = values.iter().map(|value| !value).collect();
+        graphcal_plugin::Array::new(values.shape().to_vec(), inverted)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
+    }
+}
+```
+
+The wrapper validates and decodes every element before entering this body.
+Quantity elements must be finite, Bool elements must be numeric zero or one
+(`-0.0` is false), and Int elements must satisfy the scalar exact-binary64
+policy. Result elements are encoded and checked under the same policy.
 
 ### Failures and panics
 
@@ -205,7 +225,10 @@ ban, export types), prints the module's SHA-256 and a **paste-ready
 `import plugin` block**, and `--call` executes one function under the same
 fuel and memory limits evaluation uses — arguments in SI base units,
 `true`/`false` for `Bool`, integers for `Int`, and rectangular JSON arrays
-with the declared rank (`[1.0,2.5,3]`, `[[1,2],[3,4]]`). For
+with the declared rank. Array leaves follow their element kind: booleans
+(`[true,false]`), integers (`[1,-2,3]`), or SI numbers
+(`[1.0,2.5,3]`, `[[1,2],[3,4]]`). Numeric `0`/`1` are not accepted as Bool
+JSON input, and fractional values are not accepted as Int input. For
 struct-returning functions the import block
 is preceded by a suggested record declaration (rename it freely — the
 loader compares shapes, not names).
@@ -232,13 +255,13 @@ The lockfile is the trust boundary: plugin bytes can only change together
 with a reviewable `graphcal.lock` diff. See
 [Trust: Lockfile Pins](language/extern-functions.md#trust-lockfile-pins).
 
-## Scope and limits (ABI v4)
+## Scope and limits (ABI v5)
 
-- Values are SI quantities, `Bool`, `Int`, non-empty multi-axis arrays of
-  quantities, and record-shaped results with concrete fields. Not crossing
-  the boundary yet: `Datetime` (use explicit `to_jd`/`from_jd`-style
-  conversions), `Bool`/`Int` array elements, struct parameters, generic
-  records, and dimension-variable struct fields.
+- Values are SI quantities, `Bool`, `Int`, non-empty multi-axis arrays of all
+  three scalar kinds, and record-shaped results with concrete fields. Not
+  crossing the boundary yet: `Datetime` (use explicit
+  `to_jd`/`from_jd`-style conversions), struct parameters, generic records,
+  and dimension-variable struct fields.
 - One `plugin!` block per plugin (a second block fails the wasm link with
   a duplicate-symbol error); helper functions can live anywhere in the
   crate.
@@ -255,7 +278,10 @@ core wasm module satisfying the [module
 contract](language/extern-functions.md#wasm-plugin-modules): exports
 whose wasm types follow their signatures (one `f64` per quantity/`Bool`/`Int`
 slot, an `i32` pointer followed by one `i32` extent per array axis, and a
-trailing out-pointer for array/struct results), the
+trailing out-pointer for array/struct results). Array buffers use finite `f64`
+for quantities, numeric `0.0`/`1.0` for `Bool`, and the scalar lossless
+binary64 policy for `Int`; every element is validated at the boundary. The
+module must also provide the
 `graphcal_alloc`/`graphcal_free` pair when buffers are involved, a
 `graphcal-manifest` custom section, and no imports beyond the optional
 `graphcal::fail`. For non-Rust toolchains,
