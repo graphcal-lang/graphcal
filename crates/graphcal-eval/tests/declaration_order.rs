@@ -72,7 +72,7 @@ fn reassemble(slices: &[&str]) -> String {
 enum Permutation {
     /// Reassemble the declarations in their original order. This exercises the
     /// slice/rejoin machinery on its own, so a failure here is a harness bug
-    /// (a dropped semicolon, a mis-measured span) rather than an
+    /// (a dropped semicolon, a wrongly measured span) rather than an
     /// order-dependence bug in the language.
     Identity,
     /// Shuffle the declarations with a seeded RNG.
@@ -623,7 +623,7 @@ fn all_valid_fixtures_are_declaration_order_independent() {
         checked += 1;
 
         // Reassembling in the original order isolates harness bugs (a dropped
-        // semicolon, a mis-measured span) from genuine order-dependence, and
+        // semicolon, a wrongly measured span) from genuine order-dependence, and
         // is the baseline the shuffles are measured against for reordering.
         let identity = prepared.permute(Permutation::Identity);
         let mut reordered = false;
