@@ -100,21 +100,11 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          - name: exact
-            package: graphcal-compiler
-            files: -f crates/graphcal-compiler/src/exact_rational.rs -f crates/graphcal-compiler/src/dimension.rs -f crates/graphcal-compiler/src/nat.rs
-          - name: package
-            package: graphcal-package
-            files: -f crates/graphcal-package/src/lib.rs
-          - name: plugin-manifest
+          # Temporary smoke-test shard; restore the full five-shard matrix after
+          # verifying the aggregation workflow.
+          - name: smoke
             package: graphcal-plugin-abi
-            files: -f crates/graphcal-plugin-abi/src/manifest.rs
-          - name: plugin-section
-            package: graphcal-plugin-abi
-            files: -f crates/graphcal-plugin-abi/src/section.rs
-          - name: presentation
-            package: graphcal-eval
-            files: -f crates/graphcal-eval/src/runtime_presentation.rs -f crates/graphcal-eval/src/eval/display.rs
+            files: -f crates/graphcal-plugin-abi/src/section.rs -F encode_leb128_u32$
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,10 +186,13 @@ jobs:
       - name: Add new findings to the baseline
         run: |
           shopt -s nullglob
-          reports=(mutation-reports/*/outcomes.json)
-          markers=(mutation-reports/*/graphcal-campaign-complete)
-          if (( ${#reports[@]} != 5 || ${#markers[@]} != 5 )); then
-            printf 'Expected 5 complete mutation reports; found %s reports and %s completion markers.\n' \
+          reports=(mutation-reports/outcomes.json mutation-reports/*/outcomes.json)
+          markers=(
+            mutation-reports/graphcal-campaign-complete
+            mutation-reports/*/graphcal-campaign-complete
+          )
+          if (( ${#reports[@]} != 1 || ${#markers[@]} != 1 )); then
+            printf 'Expected 1 complete mutation report; found %s reports and %s completion markers.\n' \
               "${#reports[@]}" "${#markers[@]}" >&2
             exit 1
           fi
