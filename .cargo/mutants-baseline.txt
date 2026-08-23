@@ -1,7 +1,8 @@
 # Known viable survivors from the 2026-08-14 safety-core pilot.
 # Format: source file<TAB>function<TAB>mutant genre<TAB>replacement.
 # A baseline entry is a review queue, not a permanent exemption. Scheduled
-# shards may observe only a subset; any finding outside this set fails CI.
+# shards reject findings outside this set, then open a PR that appends them as
+# explicitly unreviewed work so the campaign's findings are not lost.
 
 # The denominator is proven nonzero before normalization, so `< 0` and `<= 0`
 # are equivalent at this branch.
@@ -54,6 +55,8 @@ crates/graphcal-plugin-abi/src/manifest.rs	function_context	FnValue	"xyzzy".into
 crates/graphcal-plugin-abi/src/section.rs	SectionWalker<'a>::next_section	BinaryOperator	+
 crates/graphcal-plugin-abi/src/section.rs	SectionWalker<'a>::next_section	BinaryOperator	/
 # These section mutations make progress impossible and are availability findings.
+# Scheduled campaigns exclude them because both repeatedly terminated the GitHub
+# runner before cargo-mutants could report its timeout.
 crates/graphcal-plugin-abi/src/section.rs	SectionWalker<'a>::next_section	BinaryOperator	-=
 crates/graphcal-plugin-abi/src/section.rs	encode_leb128_u32	BinaryOperator	!=
 

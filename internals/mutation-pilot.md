@@ -31,7 +31,12 @@ mutants were rerun independently and both were caught. Runtime presentation had
 no survivors. This provides the acceptance proof that deliberately weakened
 operators/bodies are killed.
 
-Every remaining finding, including two nonterminating plugin-section mutants,
-is normalized and explained in `.cargo/mutants-baseline.txt`. Scheduled CI
-rejects findings not in that reviewed baseline. Exact debug-renderer exclusions
-are non-semantic and narrowly named in `.cargo/mutants.toml`.
+Every remaining pilot finding, including two nonterminating plugin-section
+mutants, is normalized and explained in `.cargo/mutants-baseline.txt`. Scheduled
+shards reject findings not in that baseline, then an aggregation job records the
+new findings in a pull request so failed campaigns do not lose their results.
+Automatically added findings remain an unreviewed work queue until a follow-up
+change resolves or explains them. Non-semantic debug-renderer exclusions and
+known runner-terminating section mutations are narrowly named in
+`.cargo/mutants.toml`; the latter remain recorded in the baseline as availability
+findings.
