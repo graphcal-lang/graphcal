@@ -282,6 +282,43 @@ at load time before any plugin code runs:
   math is compiled into the module, so results are bit-identical across
   platforms.
 
+### Project Fuel Policies
+
+Every plugin call receives 100,000,000 fuel units by default. A reviewed
+multi-file project may raise or lower that budget globally, or only for named
+heavy functions, in `graphcal.toml`:
+
+```toml
+[package]
+name = "simulation"
+
+[plugins]
+fuel_per_call = 250_000_000
+
+[[plugins.function_limits]]
+plugin = "plugins/solver.wasm"
+function = "solve"
+fuel_per_call = 1_500_000_000
+```
+
+A function-specific entry takes precedence over `[plugins].fuel_per_call`; when
+neither exists, the embedder's default applies. Each configured value must be
+between 1 and 2,000,000,000 inclusive. This hard maximum preserves a finite
+availability bound when a project is opened by the language server.
+
+Selectors are structured as separate plugin path and function fields rather
+than a combined string. The plugin path must be a portable root-relative
+`.wasm` path. Whenever that plugin is loaded by an entry point, the selector
+must match one of its declared extern functions; a stale or misspelled function
+for an active plugin is a manifest error. The selected budget
+covers one complete logical call — fresh instantiation and `start`, allocator
+round-trips, the kernel body, and deallocation. Memory, table, encoded-module,
+strict compilation, and cache limits are unchanged.
+
+Keep overrides narrow and benchmark them. Fuel bounds work as deterministic
+circuit breakers, not runtime deadlines; a large value can make editor
+re-evaluation less responsive even though the call remains sandboxed.
+
 To report a domain failure (say, an out-of-range property lookup), a
 plugin calls `graphcal::fail` with a UTF-8 message; the call is aborted
 and the message surfaces in the node's diagnostic. Traps and exhausted

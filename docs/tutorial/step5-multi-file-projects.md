@@ -44,6 +44,15 @@ rocket_project/
       main.gcl
 ```
 
+### Optional plugin execution policy
+
+Projects that call reviewed WebAssembly kernels may also set bounded fuel
+budgets in the manifest. A project-wide `[plugins].fuel_per_call` value applies
+to every vendored plugin function; a `[[plugins.function_limits]]` entry can
+override one separately identified plugin path and function. See
+[Project Fuel Policies](../language/extern-functions.md#project-fuel-policies)
+for precedence, validation, and the hard maximum.
+
 ### `constants.gcl`
 
 ```graphcal

@@ -173,7 +173,7 @@ jobs:
           wasm-pack build crates/graphcal-wasm \
             --target no-modules \
             --out-dir ../../target/wasm-report/pkg \
-            --release \
+            --profile wasm-release \
             --no-typescript \
             --no-pack
           rm -f target/wasm-report/pkg/.gitignore
