@@ -29,7 +29,8 @@ ordinary private declaration that becomes implicitly public. The declaration
 kind itself supplies the external-input role, so params never take `pub` or
 `pub(bind)`:
 
-- A param in the entry DAG can be supplied with `--set` or `--input`.
+- A param in the entry DAG can be supplied with `--param`, `--params-json`, or
+  `--params-json-file`.
 - A param in a callable DAG can be supplied by name in an `include` binding or
   inline DAG call.
 - Its effective value is also externally readable: callers may select it from

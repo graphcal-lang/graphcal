@@ -56,7 +56,8 @@ mass_ratio       = 3.333333
 
 ### Parameters (`param`)
 
-Parameters are inputs to your calculation. They have default values but can be overridden from the command line:
+Parameters are inputs to your calculation. Their defaults can be replaced by
+explicit command-line bindings:
 
 ```
 param dry_mass: Dimensionless = 1200.0;
@@ -97,12 +98,13 @@ The `@` prefix is how you reference values in the computation graph:
 - Bare `NAME` references a built-in constant (`PI`, `E`, `TAU`, etc.)
 - The `@` sigil makes it visually clear which values participate in the computation
 
-## Overriding Parameters
+## Binding Parameters
 
-You can override parameter values from the command line using `--set`. Params not given via `--set` keep their declared defaults:
+You can bind parameter values from the command line using repeatable `--param`
+options. Params not given on the command line keep their declared defaults:
 
 ```bash
-$ graphcal eval mass_budget.gcl --set 'dry_mass=1200.0' --set 'fuel_mass=3500.0'
+$ graphcal eval mass_budget.gcl --param 'dry_mass=1200.0' --param 'fuel_mass=3500.0'
 dry_mass         = 1200
 fuel_mass        = 3500
 margin_factor    = 1.1
@@ -128,7 +130,7 @@ Graphcal recommends the following naming conventions:
 - **`node`** for computed values in the reactive graph
 - **`const node`** for compile-time constants
 - **`@`** sigil to reference graph values
-- **`--set`** to override parameters from the command line
+- **`--param`** to bind parameters from the command line
 
 ## Next Step
 

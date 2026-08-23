@@ -368,8 +368,8 @@ one-at-a-time screening workflow.
 | IF THEN ELSE | `if cond { } else { }` | ✅ (exhaustive `else` required) |
 | ZIDZ / XIDZ | `if` guard | 🟡 divergent philosophy: error-by-default is safer; explicit guard is easy |
 | Units check | dimensions as types, rational exponents | ✅ **stronger** (see §3.2) |
-| Data variables (exogenous series) | `--input` JSON / literal tables | ❌ no series binding, alignment, or interpolation modes (§4.6) |
-| `.cin` changes / run configurations | `--set` / `--input`; case tables proposed | 🟡 overrides exist; no named multi-run scenario artifact (#897, §5.1) |
+| Data variables (exogenous series) | parameter JSON / literal tables | ❌ no series binding, alignment, or interpolation modes (§4.6) |
+| `.cin` changes / run configurations | `--param` / parameter JSON; case tables proposed | 🟡 bindings exist; no named multi-run scenario artifact (#897, §5.1) |
 | Datasets / Runs Compare | — | ❌ single-shot eval; no behavioral diff metrics (§5.1) |
 | Based On / Resume a run | — | ❌ no checkpoint/restart state (§5.1) |
 | Reference Modes | literal series + plots, assembled manually | 🟡 no draw/import/overlay workflow (§6.1) |
@@ -592,7 +592,7 @@ Vensim's `FINAL TIME`, `TIME STEP`, `INITIAL TIME`, `SAVEPER` are *ordinary
 model equations* (`FINAL TIME = INITIAL TIME + 100` is legal) — changeable
 per-run from the UI, changes files, or scripts. Graphcal coordinate-index bounds
 must be **compile-time constants** (runtime values rejected; verified in
-`ir/lower.rs`); `--set` cannot touch an index; `pub(bind) index` moves the
+`ir/lower.rs`); `--param` cannot touch an index; `pub(bind) index` moves the
 choice to another *file*, still compile time. Consequences: no "run to 2100
 instead of 2050" without editing source; no dt-halving convergence check from
 the CLI; blocks sweep tooling (§5.2) from varying horizons. Also missing:
@@ -609,11 +609,11 @@ Vensim: data variables are first-class citizens — imported from
 CSV/XLS/ODBC, carrying interpolation modes (`:INTERPOLATE:`, `:RAW:`,
 `:HOLD BACKWARD:`, `:LOOK FORWARD:`), graphable against model runs, drivable
 into calibration payoffs. Graphcal: params can be indexed, so a series *can*
-enter as a literal `table` or `--input` JSON keyed by named labels — but
+enter as a literal `table` or parameter JSON keyed by named labels — but
 (verified) JSON indexed-param entries work for **named-label** indexes, there
 is no CSV/spreadsheet ingestion, no binding of an external series onto a
 *coordinate* axis, no resampling/alignment (no index mapping at all), and the
-1 MiB default `--input` cap is sized for parameters, not datasets.
+1 MiB default parameter-JSON cap is sized for parameters, not datasets.
 
 Needed for parity: bind external series → `D[T]` params (with explicit
 alignment/interpolation policy against the model's axis), CSV/XLSX readers at
@@ -746,7 +746,7 @@ endogenous variable's equation, force a false inequality true, apply timed
 RC inputs with grace periods, pass the replacement through downstream
 feedback, and run multiple interventions for one Boolean condition. Implementing
 that safely needs a typed intervention target and an evaluation-plan
-transformation, not merely `--set` on params. It also needs clear behavior when
+transformation, not merely `--param` bindings. It also needs clear behavior when
 an intervention creates an algebraic loop and a policy for retaining or
 throwing away generated runs. Treat equation-level intervention as a separate,
 later design after scenario tests.

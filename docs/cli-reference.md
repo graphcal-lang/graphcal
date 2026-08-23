@@ -271,12 +271,19 @@ graphcal eval [OPTIONS] <FILE>
 |--------|-------------|
 | `--format <FORMAT>` | Output format: `text` (default) or `json` |
 | `--output-view <VIEW>` | Values to display: `surface` (default) or `all` |
-| `--set <SET>` | Bind a param to a closed value: `--set 'name=value'` (repeatable) |
-| `--input <INPUT>` | JSON input file for param values |
+| `--param <NAME=VALUE>` | Bind one param to a closed Graphcal value (repeatable) |
+| `--params-json <JSON>` | Bind params from an inline JSON object |
+| `--params-json-file <FILE>` | Bind params from a JSON file; `-` reads stdin |
+| `--params-json-max-bytes <BYTES>` | Maximum size of the JSON parameter document (default: 1 MiB) |
 | `--plot <MODE>` | Plot output mode: `browser` (open in browser), `json` (print only plot JSON to stdout), or a path ending in `.html` (write a self-contained HTML page) |
 | `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 
-When both `--set` and `--input` are provided, `--set` takes precedence.
+`--params-json` and `--params-json-file` are mutually exclusive. Repeatable
+`--param` bindings may supplement the selected JSON document, but every
+parameter name must occur in exactly one CLI source. Repeating a `--param`, or
+binding the same name directly and in JSON, is an error rather than a
+last-write-wins override. `--params-json-max-bytes` is valid only when one of
+the JSON sources is selected.
 
 Binding names are unqualified parameter names declared directly in the entry
 file. Imported and included implementation parameters are not independently
@@ -284,8 +291,8 @@ addressable; expose an entry parameter and pass it into the dependency instead.
 Qualified strings such as `module.x=...` are rejected at the CLI boundary
 instead of being interpreted as leaf names.
 
-Entry-file params are the entry DAG's named input ports. Ports not supplied via
-`--set` or `--input` keep their declared defaults; ports without a default are
+Entry-file params are the entry DAG's named input ports. Ports not supplied by
+any parameter option keep their declared defaults; ports without a default are
 required and must be supplied.
 
 Values are recursively **closed**. Accepted forms include finite quantities,
@@ -299,9 +306,12 @@ units, conditionals, comprehensions, matches, scans, and unfolds are rejected.
 This keeps CLI input as typed data rather than injecting a second computation
 into the prepared DAG.
 
-Semantic errors while validating a structured value supplied by `--input` are
-reported against the JSON input file and include the affected entry parameter
-name, rather than being attributed to the first line of the `.gcl` file.
+The same bounded JSON parser handles inline strings, files, and stdin. Semantic
+errors point to the parameter key in the source, labelled with the file path,
+`<--params-json>`, or `<stdin>`, and include the affected entry parameter name.
+Inline JSON is convenient for small generated invocations, but it may be
+recorded in shell history, process listings, or CI logs; use a file or stdin for
+sensitive or large parameter documents.
 
 The default `--output-view surface` prints every const, param, and node declared
 by the entry DAG plus the outputs intentionally exposed by each include. A
@@ -325,8 +335,8 @@ never unexplained.
 Output entries (text and JSON) are keyed by the full alias-qualified path for
 whole-instance includes (e.g. `good.out`, `good.v_positive`), so multiple
 instantiations of the same DAG never collide and JSON output never silently
-drops an instance. This qualification applies only to output names — the
-`--set` override surface is unaffected.
+drops an instance. This qualification applies only to output names — the CLI parameter-binding
+surface is unaffected.
 
 **Exit codes:**
 
@@ -334,7 +344,7 @@ drops an instance. This qualification applies only to output names — the
 |------|---------|
 | `0` | Success, all assertions pass |
 | `1` | Assertion failure or evaluation error |
-| `2` | Compile error (parse or type check), invalid `--set`/`--input` argument, or internal I/O error |
+| `2` | Compile error (parse or type check), invalid CLI parameter argument, or internal I/O error |
 
 **Examples:**
 
@@ -351,8 +361,8 @@ delta_v    = 3778.220768 m/s
 ```
 
 ```bash
-# Override all parameters
-$ graphcal eval rocket.gcl --set 'dry_mass=1200.0 kg' --set 'fuel_mass=3500.0 kg' --set 'isp=320.0 s'
+# Bind all parameters directly
+$ graphcal eval rocket.gcl --param 'dry_mass=1200.0 kg' --param 'fuel_mass=3500.0 kg' --param 'isp=320.0 s'
 dry_mass   = 1200 kg
 fuel_mass  = 3500 kg
 isp        = 320 s
@@ -364,7 +374,14 @@ delta_v    = 4284.300858 m/s
 
 ```bash
 # Provide a required param (param declared without a default value)
-graphcal eval engine.gcl --set 'dry_mass=800.0 kg'
+graphcal eval engine.gcl --param 'dry_mass=800.0 kg'
+
+# Bind several params from inline JSON
+graphcal eval engine.gcl --params-json '{"dry_mass":"800.0 kg","mode":"Mode.Nominal"}'
+
+# Read the same JSON schema from a file or stdin
+graphcal eval engine.gcl --params-json-file scenario.json
+generate-scenario | graphcal eval engine.gcl --params-json-file -
 ```
 
 The JSON parser preserves module-qualified constructor and index paths inside
@@ -566,7 +583,7 @@ entry field for quantities (plus a slider when finite `min`/`max` bounds are
 declared), a checkbox for `Bool`, a stepper for `Int`, a select for
 `Key<Index>` over a named index, and a full closed-literal field for
 everything else. Readers bind closed typed values under the same rules as
-`eval --set` — wrong or missing units are rejected at the input box, values
+`eval --param` — wrong or missing units are rejected at the input box, values
 clamp to declared domains, and expressions are never injected into the
 prepared model. Edits re-evaluate the embedded engine (the same compiler and
 evaluator as this CLI, compiled to WebAssembly, running in a Web Worker) and
@@ -599,8 +616,10 @@ Options:
 |--------|-------------|
 | `-o, --output <FILE>` | Output HTML path (default: the model path with a `.report.html` extension) |
 | `--markdown <FILE.md>` | Also write a deterministic Markdown rendering for CI diffing |
-| `--set 'name=value'` | Bind a param to a closed value for the baseline (same rules as `eval --set`); replayed as the initial control values |
-| `--input <FILE>` | JSON input file for param values (static reports only) |
+| `--param 'name=value'` | Bind a param to a closed value for the baseline (same rules as `eval --param`); replayed as the initial control value |
+| `--params-json <JSON>` | Bind baseline params from inline JSON (static reports only) |
+| `--params-json-file <FILE>` | Bind baseline params from a JSON file or `-` for stdin (static reports only) |
+| `--params-json-max-bytes <BYTES>` | Maximum JSON parameter document size (default: 1 MiB) |
 | `--root <DIR>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 | `--static` | Build a non-interactive report: no embedded engine, no controls |
 | `--engine-dir <DIR>` | Directory holding the browser engine bundle (default: `$GRAPHCAL_REPORT_ENGINE_DIR`, then `target/wasm-report/pkg`) |
@@ -844,12 +863,13 @@ graphcal dump modules src/mission/main.gcl --root .
 graphcal dump hir model.gcl
 graphcal dump tir model.gcl
 graphcal dump plan model.gcl
-graphcal dump runtime model.gcl --set 'mass=1200 kg'
-graphcal dump result model.gcl --input params.json
+graphcal dump runtime model.gcl --param 'mass=1200 kg'
+graphcal dump result model.gcl --params-json-file params.json
 ```
 
 Every stage accepts `--root`. `runtime` and `result` additionally reuse the
-bounded `--set`, `--input`, and `--input-max-bytes` parser from `graphcal eval`.
+bounded `--param`, `--params-json`, `--params-json-file`, and
+`--params-json-max-bytes` parser from `graphcal eval`.
 A failed stage prints the normal diagnostic and exits with code `2`. A completed
 runtime/result dump containing node, assertion, or plot failures is still
 printed and exits with code `1`.

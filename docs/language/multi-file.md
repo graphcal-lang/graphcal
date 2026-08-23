@@ -871,7 +871,8 @@ creates a named DAG input port:
 - `param x: T = expr;` is an input port with a default;
 - every param in a callable DAG belongs to its named include/call signature;
 - the effective value of a callable-DAG param may also be selected or projected;
-- params in the entry DAG belong to the `--set` / `--input` surface.
+- params in the entry DAG belong to the `--param` / `--params-json` /
+  `--params-json-file` surface.
 
 Because `pub` would add no state to an input port, both annotated spellings are
 parse errors:
@@ -1076,8 +1077,8 @@ include nasa.rocket.compute_thrust(dry_mass: @my_mass).{ thrust };
 ### Required parameters
 
 A `param` declared without a default value is **required** — the
-importer must supply it via an `include` binding (or, for entry-point
-files, via `--set` / `--input` on the command line):
+importer must supply it via an `include` binding (or, for entry-point files,
+via `--param`, `--params-json`, or `--params-json-file` on the command line):
 
 ```graphcal
 // lib/rocket_engine.gcl
@@ -1197,8 +1198,8 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
   `pub(bind)`.
 - Binding a `node`, `const node`, or unknown name is a compile error.
 - Required input ports of an included/called DAG must be provided by bindings;
-  required input ports of the entry DAG must be provided by `--set` or
-  `--input`.
+  required input ports of the entry DAG must be provided by `--param`,
+  `--params-json`, or `--params-json-file`.
 - All required indexes must be provided by bindings.
 - Index binding values must be a compatible index name in the importer's scope
   or a concrete structural `Fin(N)` argument. An outer generic DAG may forward

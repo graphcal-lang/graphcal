@@ -1,4 +1,4 @@
-//! Convert a JSON input file into parameter overrides (`HashMap<DeclName, Expr>`).
+//! Convert a JSON parameter document into parameter bindings (`HashMap<DeclName, Expr>`).
 //!
 //! The JSON schema uses expression strings for leaf values and
 //! JSON objects for structs, tagged unions, and named-label indexed params.
@@ -376,10 +376,10 @@ fn parse_exact_number(source: &str, path: &JsonPath) -> Result<ExactJsonNumber, 
 // Error type
 // ---------------------------------------------------------------------------
 
-/// Errors that can occur when converting a JSON input file to overrides.
+/// Errors that can occur when converting a JSON parameter document to bindings.
 #[derive(Debug)]
 pub enum JsonInputError {
-    /// The JSON file could not be parsed.
+    /// The JSON document could not be parsed.
     Json(serde_json::Error),
     /// The top-level JSON value is not an object.
     TopLevelNotObject,
@@ -393,7 +393,7 @@ pub enum JsonInputError {
     /// A GCL expression string could not be parsed.
     ///
     /// Carries the typed [`graphcal_compiler::syntax::parser::ParseError`]
-    /// (like the sibling `--set` path)
+    /// (like the sibling `--param` path)
     /// instead of a pre-rendered message, so miette can render the span
     /// and source context.
     ParseFailed {

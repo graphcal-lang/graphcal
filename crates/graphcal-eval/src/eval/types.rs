@@ -1003,10 +1003,10 @@ pub enum CompileError {
         name: DeclName,
         /// Original compiler/evaluator error rendered at the boundary.
         reason: String,
-        /// External input source, such as a JSON file.
+        /// External parameter source, such as inline JSON, stdin, or a file.
         #[source_code]
         src: NamedSource<Arc<String>>,
-        /// Span identifying the parameter in the external input.
+        /// Span identifying the parameter in the external document.
         #[label("value for parameter `{name}`")]
         span: SourceSpan,
     },

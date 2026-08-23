@@ -88,7 +88,7 @@ pub struct Provenance {
     pub compiler_version: String,
     /// Every source file with its SHA-256 content digest, in load order.
     pub sources: Vec<SourceDigest>,
-    /// Baseline parameter values as displayed (after `--set` overrides).
+    /// Baseline parameter values as displayed (after CLI parameter bindings).
     pub baseline_params: Vec<(String, String)>,
     /// Copy-pasteable command reproducing the baseline evaluation.
     pub repro_command: String,

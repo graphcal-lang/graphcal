@@ -1,23 +1,23 @@
-//! Typed parsing for CLI parameter overrides (`--set` / `--input`).
+//! Typed parsing for CLI parameter bindings.
 //!
-//! The Eval subcommand accepts two override sources:
+//! Evaluation commands accept direct bindings through repeatable
+//! `--param name=value` arguments and one optional JSON parameter document from
+//! `--params-json` or `--params-json-file`. All forms cross the CLI boundary
+//! into typed parameter names immediately; closed-shape, type, dimension,
+//! completeness, and constraint checks happen later against the prepared entry
+//! ports.
 //!
-//! * `--set name=value` — one value per `--set` flag, parsed with the GCL
-//!   expression parser and then restricted by the prepared closed-value compiler.
-//! * `--input path.json` — a JSON file with a [`json_input`] schema.
-//!
-//! `--set` takes precedence over `--input` on name collision. Both sources are
-//! resolved into a temporary `HashMap<DeclName, Expr>` at this I/O boundary;
-//! closed-shape, type, dimension, completeness, and constraint checks happen
-//! later against the prepared entry ports.
-//!
-//! [`json_input`]: crate::json_input
+//! Direct and JSON bindings may be combined only when their parameter names are
+//! disjoint. A repeated name is an error rather than an implicit precedence
+//! rule.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use clap::Args;
 use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::names::NameAtomError;
@@ -27,64 +27,165 @@ use thiserror::Error;
 
 use crate::json_input::{self, JsonInputError};
 
-/// Default max size for an `--input` JSON file: 1 MiB.
-///
-/// Chosen to fit all realistic parameter payloads while still rejecting an
-/// accidental `--input some-huge-dataset.json` with a clear error instead of
-/// silently OOM-ing inside `serde_json`.
-pub const DEFAULT_INPUT_MAX_BYTES: u64 = 1024 * 1024;
+/// Default maximum size for a JSON parameter document: 1 MiB.
+pub const DEFAULT_PARAMS_JSON_MAX_BYTES: u64 = 1024 * 1024;
 
-/// Parsed CLI overrides plus the source to use for diagnostics from structured
-/// input files.
+/// Shared parameter-binding arguments for every command that evaluates a model.
+#[derive(Args, Debug, Default)]
+pub struct ParameterArgs {
+    /// Bind one param to a closed Graphcal value; repeatable
+    #[arg(long, value_name = "NAME=VALUE", help_heading = "Parameter bindings")]
+    param: Vec<String>,
+    /// Bind params from an inline JSON object
+    #[arg(
+        long,
+        value_name = "JSON",
+        group = "params_json_source",
+        help_heading = "Parameter bindings"
+    )]
+    params_json: Option<String>,
+    /// Bind params from a JSON file; use `-` to read stdin
+    #[arg(
+        long,
+        value_name = "FILE",
+        group = "params_json_source",
+        help_heading = "Parameter bindings"
+    )]
+    params_json_file: Option<PathBuf>,
+    /// Maximum JSON parameter document size in bytes; defaults to 1 MiB
+    #[arg(
+        long,
+        value_name = "BYTES",
+        requires = "params_json_source",
+        help_heading = "Parameter bindings"
+    )]
+    params_json_max_bytes: Option<u64>,
+}
+
+impl ParameterArgs {
+    fn json_source(&self) -> Result<Option<ParameterJsonSource>, OverrideParseError> {
+        match (&self.params_json, &self.params_json_file) {
+            (Some(_), Some(_)) => Err(OverrideParseError::ConflictingJsonSources),
+            (Some(json), None) => Ok(Some(ParameterJsonSource::Inline(json.clone()))),
+            (None, Some(path)) if path == Path::new("-") => Ok(Some(ParameterJsonSource::Stdin)),
+            (None, Some(path)) => Ok(Some(ParameterJsonSource::File(path.clone()))),
+            (None, None) => Ok(None),
+        }
+    }
+}
+
+/// The explicitly selected source of a bulk JSON parameter document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParameterJsonSource {
+    /// JSON supplied directly as the `--params-json` argument.
+    Inline(String),
+    /// JSON read from the path supplied to `--params-json-file`.
+    File(PathBuf),
+    /// JSON read from stdin via `--params-json-file -`.
+    Stdin,
+}
+
+/// One validated direct `--param` binding, retaining its source spelling for
+/// report hydration and reproduction commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectParameterBinding {
+    /// Typed entry-parameter name.
+    pub name: DeclName,
+    /// Closed Graphcal value syntax supplied after `=`.
+    pub expression: String,
+}
+
+/// Parsed CLI bindings plus source metadata for diagnostics and report replay.
 #[derive(Debug)]
 pub struct ParsedOverrides {
     /// Values keyed by their typed entry parameter names.
     pub values: HashMap<DeclName, Expr>,
-    /// Diagnostic sources for values that came from `--input` rather than
-    /// `--set`. The source is keyed by the same typed parameter name as the
-    /// value map, not by a formatted composite string.
-    pub input_sources: HashMap<DeclName, InputOverrideSource>,
+    /// Diagnostic sources for values synthesized from a JSON document.
+    pub json_sources: HashMap<DeclName, JsonOverrideSource>,
+    /// Direct bindings in command-line order.
+    pub direct_parameters: Vec<DirectParameterBinding>,
+    /// Bulk JSON source selected for this invocation, including an empty object.
+    pub json_source: Option<ParameterJsonSource>,
+    /// Explicit JSON size limit selected for reproduction, if any.
+    pub json_max_bytes: Option<u64>,
 }
 
-/// Source information for one value synthesized from a JSON input file.
+/// Source information for one value synthesized from a JSON parameter document.
 #[derive(Debug, Clone)]
-pub struct InputOverrideSource {
-    /// The JSON file displayed by miette.
+pub struct JsonOverrideSource {
+    /// The JSON document displayed by miette.
     pub source: NamedSource<Arc<String>>,
-    /// Span of the top-level parameter key in the JSON input.
+    /// Span of the top-level parameter key in the JSON document.
     pub span: SourceSpan,
 }
 
-/// Errors that can occur when parsing CLI overrides.
+/// Diagnostic identity of a JSON parameter document without its contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParameterJsonOrigin {
+    /// The `--params-json` command-line argument.
+    Inline,
+    /// A filesystem path supplied through `--params-json-file`.
+    File(PathBuf),
+    /// Standard input selected with `--params-json-file -`.
+    Stdin,
+}
+
+impl ParameterJsonOrigin {
+    fn diagnostic_name(&self) -> String {
+        match self {
+            Self::Inline => "<--params-json>".to_string(),
+            Self::File(path) => path.display().to_string(),
+            Self::Stdin => "<stdin>".to_string(),
+        }
+    }
+}
+
+impl fmt::Display for ParameterJsonOrigin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Inline => formatter.write_str("`--params-json`"),
+            Self::File(path) => write!(formatter, "file {}", path.display()),
+            Self::Stdin => formatter.write_str("stdin"),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LoadedParameterJson {
+    origin: ParameterJsonOrigin,
+    text: String,
+}
+
+/// Errors that can occur when parsing CLI parameter bindings.
 #[derive(Debug, Error, Diagnostic)]
 pub enum OverrideParseError {
-    /// A `--set` argument is missing the `=` separator.
-    #[error("invalid --set format: {raw:?} (expected 'name=value')")]
+    /// A `--param` argument is missing the `=` separator.
+    #[error("invalid --param format: {raw:?} (expected 'name=value')")]
     #[diagnostic(code(graphcal::cli::O001))]
     InvalidFormat {
         /// The raw string as received from the command line.
         raw: String,
     },
 
-    /// A `--set` argument has an empty name (e.g. `=42`).
-    #[error("invalid --set format: {raw:?} (name is empty)")]
+    /// A `--param` argument has an empty name (e.g. `=42`).
+    #[error("invalid --param format: {raw:?} (name is empty)")]
     #[diagnostic(code(graphcal::cli::O002))]
     EmptyName {
         /// The raw string as received from the command line.
         raw: String,
     },
 
-    /// A `--set` argument has an empty expression (e.g. `x=`).
-    #[error("invalid --set format: {raw:?} (expression is empty)")]
+    /// A `--param` argument has an empty expression (e.g. `x=`).
+    #[error("invalid --param format: {raw:?} (expression is empty)")]
     #[diagnostic(code(graphcal::cli::O003))]
     EmptyExpression {
         /// The raw string as received from the command line.
         raw: String,
     },
 
-    /// A `--set` name is not an unqualified parameter leaf name.
+    /// A `--param` name is not an unqualified parameter leaf name.
     #[error(
-        "invalid --set name `{name}` in {raw:?}: override names must be unqualified parameter names ({reason})"
+        "invalid --param name `{name}` in {raw:?}: binding names must be unqualified parameter names ({reason})"
     )]
     #[diagnostic(code(graphcal::cli::O008))]
     InvalidName {
@@ -96,12 +197,12 @@ pub enum OverrideParseError {
         reason: NameAtomError,
     },
 
-    /// A `--set` value failed to parse as GCL value syntax.
-    #[error("failed to parse --set value for `{name}`: {source}")]
+    /// A `--param` value failed to parse as Graphcal value syntax.
+    #[error("failed to parse --param value for `{name}`: {source}")]
     #[diagnostic(code(graphcal::cli::O004))]
     ExpressionParse {
-        /// The name of the param being overridden.
-        name: String,
+        /// The typed name of the param being bound.
+        name: DeclName,
         /// The underlying parser error.
         ///
         /// Boxed because `ParseError` carries source / span context that makes
@@ -110,138 +211,177 @@ pub enum OverrideParseError {
         source: Box<ParseError>,
     },
 
-    /// The same override name was provided more than once.
-    #[error("duplicate override for `{name}`")]
-    #[diagnostic(code(graphcal::cli::O008))]
-    DuplicateOverride { name: DeclName },
+    /// The same parameter name was supplied by more than one CLI source.
+    #[error("duplicate parameter binding for `{name}`")]
+    #[diagnostic(code(graphcal::cli::O009))]
+    DuplicateParameterBinding { name: DeclName },
 
-    /// An `--input` JSON file could not be opened / read.
-    #[error("cannot read input file {}: {source}", path.display())]
+    /// Both mutually exclusive bulk JSON sources were supplied.
+    #[error("`--params-json` and `--params-json-file` cannot be used together")]
+    #[diagnostic(code(graphcal::cli::O010))]
+    ConflictingJsonSources,
+
+    /// A JSON size limit was supplied without a JSON source.
+    #[error("`--params-json-max-bytes` requires `--params-json` or `--params-json-file`")]
+    #[diagnostic(code(graphcal::cli::O011))]
+    JsonLimitWithoutSource,
+
+    /// A JSON parameter document could not be opened or read.
+    #[error("cannot read parameter JSON from {origin}: {source}")]
     #[diagnostic(code(graphcal::cli::O005))]
-    InputFileRead {
-        /// The path that could not be read.
-        path: PathBuf,
+    JsonRead {
+        /// Where the JSON was read from.
+        origin: ParameterJsonOrigin,
         /// The underlying I/O error.
         #[source]
         source: io::Error,
     },
 
-    /// An `--input` JSON file exceeded the configured size cap.
+    /// A JSON parameter document exceeded the configured size cap.
     #[error(
-        "input file {} is {size} bytes, exceeds limit of {limit} bytes (use --input-max-bytes to override)",
-        path.display()
+        "parameter JSON from {origin} is {size} bytes, exceeds limit of {limit} bytes (use --params-json-max-bytes to override)"
     )]
     #[diagnostic(code(graphcal::cli::O006))]
-    InputFileTooLarge {
-        /// The offending input path.
-        path: PathBuf,
-        /// The file size in bytes.
+    JsonTooLarge {
+        /// Where the JSON was supplied.
+        origin: ParameterJsonOrigin,
+        /// The document size in bytes.
         size: u64,
         /// The active limit in bytes.
         limit: u64,
     },
 
-    /// An `--input` JSON file failed to parse per the JSON-input schema.
-    #[error("cannot parse input file {}: {source}", path.display())]
+    /// A JSON parameter document failed to match the parameter schema.
+    #[error("cannot parse parameter JSON from {origin}: {source}")]
     #[diagnostic(code(graphcal::cli::O007))]
-    InputFileParse {
-        /// The offending input path.
-        path: PathBuf,
+    JsonParse {
+        /// Where the JSON was supplied.
+        origin: ParameterJsonOrigin,
         /// The underlying schema error.
         #[source]
         source: JsonInputError,
     },
 }
 
-/// Parse `--set` overrides and an optional `--input` JSON file into a combined
-/// overrides map.
+/// Parse direct and bulk JSON parameter arguments into one binding map.
 ///
-/// `--set` values take precedence over `--input` values for the same name.
-/// `input_max_bytes` caps the `--input` file size; `None` uses
-/// [`DEFAULT_INPUT_MAX_BYTES`].
+/// The JSON size limit applies equally to inline, file, and stdin documents;
+/// `None` uses [`DEFAULT_PARAMS_JSON_MAX_BYTES`]. A parameter name may occur in
+/// only one source.
 ///
 /// # Errors
 ///
-/// Returns [`OverrideParseError`] if any `--set` entry is malformed, if
-/// `--input` cannot be read, is too large, or fails to match the JSON-input
-/// schema. The returned value retains the source of structured input values so
-/// their later semantic diagnostics can point to the JSON file.
+/// Returns [`OverrideParseError`] for malformed direct bindings, invalid source
+/// combinations, bounded-read failures, invalid JSON parameter documents, or
+/// duplicate names across any source.
 pub fn parse_overrides_with_sources(
-    set: &[String],
-    input: Option<&Path>,
-    input_max_bytes: Option<u64>,
+    args: &ParameterArgs,
 ) -> Result<ParsedOverrides, OverrideParseError> {
-    let mut overrides = HashMap::new();
-    let mut input_sources = HashMap::new();
+    let json_source = args.json_source()?;
+    if args.params_json_max_bytes.is_some() && json_source.is_none() {
+        return Err(OverrideParseError::JsonLimitWithoutSource);
+    }
 
-    for s in set {
-        let Some((name, value_str)) = s.split_once('=') else {
-            return Err(OverrideParseError::InvalidFormat { raw: s.clone() });
-        };
-        let name = name.trim();
-        let value_str = value_str.trim();
-        if name.is_empty() {
-            return Err(OverrideParseError::EmptyName { raw: s.clone() });
-        }
-        if value_str.is_empty() {
-            return Err(OverrideParseError::EmptyExpression { raw: s.clone() });
-        }
-        let override_name = DeclName::try_new(name.to_string()).map_err(|reason| {
-            OverrideParseError::InvalidName {
-                raw: s.clone(),
-                name: name.to_string(),
-                reason,
-            }
-        })?;
-        let raw_expr = graphcal_compiler::syntax::parser::Parser::new(value_str)
+    let mut overrides = HashMap::new();
+    let mut json_sources = HashMap::new();
+    let mut direct_parameters = Vec::new();
+
+    for raw in &args.param {
+        let binding = DirectParameterBinding::parse(raw)?;
+        let raw_expr = graphcal_compiler::syntax::parser::Parser::new(&binding.expression)
             .parse_single_expr()
-            .map_err(|e| OverrideParseError::ExpressionParse {
-                name: name.to_string(),
-                source: Box::new(e),
+            .map_err(|source| OverrideParseError::ExpressionParse {
+                name: binding.name.clone(),
+                source: Box::new(source),
             })?;
-        let previous = overrides.insert(override_name.clone(), resolve_override_expr(raw_expr));
-        if previous.is_some() {
-            return Err(OverrideParseError::DuplicateOverride {
-                name: override_name,
-            });
+        match overrides.entry(binding.name.clone()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(resolve_parameter_expr(raw_expr));
+                direct_parameters.push(binding);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                return Err(OverrideParseError::DuplicateParameterBinding { name: binding.name });
+            }
         }
     }
 
-    if let Some(input_path) = input {
-        let limit = input_max_bytes.unwrap_or(DEFAULT_INPUT_MAX_BYTES);
-
-        let json_str = read_input_file_limited(input_path, limit)?;
-        let json_overrides = json_input::json_to_overrides(&json_str).map_err(|e| {
-            OverrideParseError::InputFileParse {
-                path: input_path.to_path_buf(),
-                source: e,
+    if let Some(source) = &json_source {
+        let limit = args
+            .params_json_max_bytes
+            .unwrap_or(DEFAULT_PARAMS_JSON_MAX_BYTES);
+        let loaded = load_parameter_json(source, limit)?;
+        let json_overrides = json_input::json_to_overrides(&loaded.text).map_err(|source| {
+            OverrideParseError::JsonParse {
+                origin: loaded.origin.clone(),
+                source,
             }
         })?;
-        let parameter_spans = top_level_parameter_spans(&json_str);
-        let input_source = NamedSource::new(input_path.display().to_string(), Arc::new(json_str));
-        for (name, expr) in json_overrides {
-            if let std::collections::hash_map::Entry::Vacant(entry) = overrides.entry(name.clone())
-            {
-                entry.insert(resolve_override_expr(expr));
-                let span = parameter_spans
-                    .get(&name)
-                    .copied()
-                    .unwrap_or_else(|| (0usize, 0usize).into());
-                input_sources.insert(
-                    name,
-                    InputOverrideSource {
-                        source: input_source.clone(),
-                        span,
-                    },
-                );
+        let parameter_spans = top_level_parameter_spans(&loaded.text);
+        let diagnostic_source =
+            NamedSource::new(loaded.origin.diagnostic_name(), Arc::new(loaded.text));
+        for (name, expression) in json_overrides {
+            match overrides.entry(name.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(resolve_parameter_expr(expression));
+                    let span = parameter_spans
+                        .get(&name)
+                        .copied()
+                        .unwrap_or_else(|| (0usize, 0usize).into());
+                    json_sources.insert(
+                        name,
+                        JsonOverrideSource {
+                            source: diagnostic_source.clone(),
+                            span,
+                        },
+                    );
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {
+                    return Err(OverrideParseError::DuplicateParameterBinding { name });
+                }
             }
         }
     }
 
     Ok(ParsedOverrides {
         values: overrides,
-        input_sources,
+        json_sources,
+        direct_parameters,
+        json_source,
+        json_max_bytes: args.params_json_max_bytes,
     })
+}
+
+impl DirectParameterBinding {
+    fn parse(raw: &str) -> Result<Self, OverrideParseError> {
+        let Some((name, expression)) = raw.split_once('=') else {
+            return Err(OverrideParseError::InvalidFormat {
+                raw: raw.to_string(),
+            });
+        };
+        let name = name.trim();
+        let expression = expression.trim();
+        if name.is_empty() {
+            return Err(OverrideParseError::EmptyName {
+                raw: raw.to_string(),
+            });
+        }
+        if expression.is_empty() {
+            return Err(OverrideParseError::EmptyExpression {
+                raw: raw.to_string(),
+            });
+        }
+        let name = DeclName::try_new(name.to_string()).map_err(|reason| {
+            OverrideParseError::InvalidName {
+                raw: raw.to_string(),
+                name: name.to_string(),
+                reason,
+            }
+        })?;
+        Ok(Self {
+            name,
+            expression: expression.to_string(),
+        })
+    }
 }
 
 /// Locate top-level object keys after serde has validated the JSON. This small
@@ -293,57 +433,92 @@ fn top_level_parameter_spans(json: &str) -> HashMap<DeclName, SourceSpan> {
     spans
 }
 
-fn read_input_file_limited(path: &Path, limit: u64) -> Result<String, OverrideParseError> {
-    let mut file =
-        std::fs::File::open(path).map_err(|source| OverrideParseError::InputFileRead {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    let metadata = file
+fn load_parameter_json(
+    source: &ParameterJsonSource,
+    limit: u64,
+) -> Result<LoadedParameterJson, OverrideParseError> {
+    match source {
+        ParameterJsonSource::Inline(text) => {
+            let origin = ParameterJsonOrigin::Inline;
+            let size = u64::try_from(text.len()).unwrap_or(u64::MAX);
+            ensure_json_size(&origin, size, limit)?;
+            Ok(LoadedParameterJson {
+                origin,
+                text: text.clone(),
+            })
+        }
+        ParameterJsonSource::File(path) => read_parameter_json_file(path, limit),
+        ParameterJsonSource::Stdin => {
+            let origin = ParameterJsonOrigin::Stdin;
+            read_parameter_json_bounded(std::io::stdin().lock(), origin, limit)
+        }
+    }
+}
+
+fn read_parameter_json_file(
+    path: &Path,
+    limit: u64,
+) -> Result<LoadedParameterJson, OverrideParseError> {
+    let origin = ParameterJsonOrigin::File(path.to_path_buf());
+    let file = std::fs::File::open(path).map_err(|source| OverrideParseError::JsonRead {
+        origin: origin.clone(),
+        source,
+    })?;
+    let size = file
         .metadata()
-        .map_err(|source| OverrideParseError::InputFileRead {
-            path: path.to_path_buf(),
+        .map_err(|source| OverrideParseError::JsonRead {
+            origin: origin.clone(),
+            source,
+        })?
+        .len();
+    ensure_json_size(&origin, size, limit)?;
+    read_parameter_json_bounded(file, origin, limit)
+}
+
+fn read_parameter_json_bounded(
+    reader: impl Read,
+    origin: ParameterJsonOrigin,
+    limit: u64,
+) -> Result<LoadedParameterJson, OverrideParseError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|source| OverrideParseError::JsonRead {
+            origin: origin.clone(),
             source,
         })?;
-    let size = metadata.len();
+    let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    ensure_json_size(&origin, size, limit)?;
+    let text = String::from_utf8(bytes).map_err(|source| OverrideParseError::JsonRead {
+        origin: origin.clone(),
+        source: io::Error::new(io::ErrorKind::InvalidData, source),
+    })?;
+    Ok(LoadedParameterJson { origin, text })
+}
+
+fn ensure_json_size(
+    origin: &ParameterJsonOrigin,
+    size: u64,
+    limit: u64,
+) -> Result<(), OverrideParseError> {
     if size > limit {
-        return Err(OverrideParseError::InputFileTooLarge {
-            path: path.to_path_buf(),
+        return Err(OverrideParseError::JsonTooLarge {
+            origin: origin.clone(),
             size,
             limit,
         });
     }
-
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|source| OverrideParseError::InputFileRead {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    let read_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    if read_size > limit {
-        return Err(OverrideParseError::InputFileTooLarge {
-            path: path.to_path_buf(),
-            size: read_size,
-            limit,
-        });
-    }
-    String::from_utf8(bytes).map_err(|source| OverrideParseError::InputFileRead {
-        path: path.to_path_buf(),
-        source: io::Error::new(io::ErrorKind::InvalidData, source),
-    })
+    Ok(())
 }
 
-/// Lift a raw override expression into the desugared AST.
+/// Lift a raw parameter expression into the desugared AST.
 ///
-/// Override expressions are user-provided literals — they never carry sugar
-/// variants, so the `Raw → Desugared` lift is a structural rebind. Reference
-/// resolution happens once, in HIR lowering, when the override replaces the
-/// target param's default in the compiled file's scope. Shared by the
-/// `--set` and `--input` paths so the lift contract lives in one place.
-fn resolve_override_expr(
+/// CLI parameter expressions are user-provided literals — they never carry
+/// sugar variants, so the `Raw → Desugared` lift is a structural rebind.
+/// Reference resolution happens once, in HIR lowering, when the binding
+/// replaces the target param's default in the compiled file's scope.
+fn resolve_parameter_expr(
     raw: graphcal_compiler::syntax::ast::Expr,
 ) -> graphcal_compiler::desugar::desugared_ast::Expr {
     raw.into()
@@ -353,83 +528,114 @@ fn resolve_override_expr(
 mod tests {
     use super::*;
 
-    fn parse_overrides(
-        set: &[String],
-        input: Option<&Path>,
-        input_max_bytes: Option<u64>,
-    ) -> Result<HashMap<DeclName, Expr>, OverrideParseError> {
-        super::parse_overrides_with_sources(set, input, input_max_bytes).map(|parsed| parsed.values)
+    #[test]
+    fn default_json_size_limit_is_one_mebibyte() {
+        assert_eq!(DEFAULT_PARAMS_JSON_MAX_BYTES, 0x10_0000);
     }
 
     #[test]
-    fn parse_overrides_happy_path() {
-        let set = vec!["x=1.0 m".to_string(), "y=2".to_string()];
-        let overrides = parse_overrides(&set, None, None).unwrap();
-        assert_eq!(overrides.len(), 2);
+    fn json_origins_have_explicit_display_names() {
+        assert_eq!(ParameterJsonOrigin::Inline.to_string(), "`--params-json`");
+        assert_eq!(
+            ParameterJsonOrigin::File(PathBuf::from("params.json")).to_string(),
+            "file params.json"
+        );
+        assert_eq!(ParameterJsonOrigin::Stdin.to_string(), "stdin");
+    }
+
+    #[test]
+    fn json_size_limit_is_inclusive() {
+        let origin = ParameterJsonOrigin::Inline;
+        assert!(ensure_json_size(&origin, 42, 42).is_ok());
+        assert!(matches!(
+            ensure_json_size(&origin, 43, 42),
+            Err(OverrideParseError::JsonTooLarge {
+                size: 43,
+                limit: 42,
+                ..
+            })
+        ));
+    }
+
+    fn direct_args(parameters: &[&str]) -> ParameterArgs {
+        ParameterArgs {
+            param: parameters
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            ..ParameterArgs::default()
+        }
+    }
+
+    fn parse_values(args: &ParameterArgs) -> Result<HashMap<DeclName, Expr>, OverrideParseError> {
+        parse_overrides_with_sources(args).map(|parsed| parsed.values)
+    }
+
+    #[test]
+    fn direct_parameters_parse_and_retain_typed_source_values() {
+        let args = direct_args(&["x=1.0 m", "y=2"]);
+        let parsed = parse_overrides_with_sources(&args).unwrap();
+
+        assert_eq!(parsed.values.len(), 2);
+        assert_eq!(
+            parsed.direct_parameters,
+            [
+                DirectParameterBinding {
+                    name: DeclName::expect_valid("x"),
+                    expression: "1.0 m".to_string(),
+                },
+                DirectParameterBinding {
+                    name: DeclName::expect_valid("y"),
+                    expression: "2".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn direct_parameter_trims_whitespace() {
+        let overrides = parse_values(&direct_args(&["  x  =  42  "])).unwrap();
         assert!(overrides.contains_key(&DeclName::expect_valid("x")));
-        assert!(overrides.contains_key(&DeclName::expect_valid("y")));
     }
 
     #[test]
-    fn parse_overrides_trims_whitespace() {
-        let set = vec!["  x  =  42  ".to_string()];
-        let overrides = parse_overrides(&set, None, None).unwrap();
-        assert!(overrides.contains_key(&DeclName::expect_valid("x")));
+    fn direct_parameter_requires_equals() {
+        let err = parse_values(&direct_args(&["just_a_name"])).unwrap_err();
+        assert!(matches!(err, OverrideParseError::InvalidFormat { .. }));
     }
 
     #[test]
-    fn parse_overrides_missing_equals() {
-        let set = vec!["just_a_name".to_string()];
-        let err = parse_overrides(&set, None, None).unwrap_err();
+    fn direct_parameters_reject_duplicate_name() {
+        let err = parse_values(&direct_args(&["x=1", "x=2"])).unwrap_err();
         assert!(
-            matches!(err, OverrideParseError::InvalidFormat { .. }),
-            "unexpected error: {err}"
+            matches!(err, OverrideParseError::DuplicateParameterBinding { name } if name.as_str() == "x")
         );
     }
 
     #[test]
-    fn parse_overrides_rejects_duplicate_set_name() {
-        let set = vec!["x=1".to_string(), "x=2".to_string()];
-        let err = parse_overrides(&set, None, None).unwrap_err();
-        assert!(
-            matches!(err, OverrideParseError::DuplicateOverride { name } if name.as_str() == "x")
-        );
+    fn direct_parameter_rejects_empty_name() {
+        let err = parse_values(&direct_args(&["=42"])).unwrap_err();
+        assert!(matches!(err, OverrideParseError::EmptyName { .. }));
     }
 
     #[test]
-    fn parse_overrides_empty_name() {
-        let set = vec!["=42".to_string()];
-        let err = parse_overrides(&set, None, None).unwrap_err();
-        assert!(
-            matches!(err, OverrideParseError::EmptyName { .. }),
-            "unexpected error: {err}"
-        );
+    fn direct_parameter_rejects_empty_expression() {
+        let err = parse_values(&direct_args(&["x="])).unwrap_err();
+        assert!(matches!(err, OverrideParseError::EmptyExpression { .. }));
     }
 
     #[test]
-    fn parse_overrides_empty_expression() {
-        let set = vec!["x=".to_string()];
-        let err = parse_overrides(&set, None, None).unwrap_err();
-        assert!(
-            matches!(err, OverrideParseError::EmptyExpression { .. }),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_overrides_unparsable_expression() {
-        let set = vec!["x=###".to_string()];
-        let err = parse_overrides(&set, None, None).unwrap_err();
+    fn direct_parameter_rejects_unparsable_expression() {
+        let err = parse_values(&direct_args(&["x=###"])).unwrap_err();
         match err {
-            OverrideParseError::ExpressionParse { name, .. } => assert_eq!(name, "x"),
+            OverrideParseError::ExpressionParse { name, .. } => assert_eq!(name.as_str(), "x"),
             other => panic!("unexpected error: {other}"),
         }
     }
 
     #[test]
-    fn parse_overrides_rejects_qualified_name_without_panicking() {
-        let set = vec!["module.x=1".to_string()];
-        let err = parse_overrides(&set, None, None).unwrap_err();
+    fn direct_parameter_rejects_qualified_name_without_panicking() {
+        let err = parse_values(&direct_args(&["module.x=1"])).unwrap_err();
         assert!(
             matches!(err, OverrideParseError::InvalidName { ref name, .. } if name == "module.x"),
             "unexpected error: {err}",
@@ -437,27 +643,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_overrides_missing_input_file() {
-        let missing = Path::new("/nonexistent/path/file.json");
-        let err = parse_overrides(&[], Some(missing), None).unwrap_err();
-        assert!(
-            matches!(err, OverrideParseError::InputFileRead { .. }),
-            "unexpected error: {err}"
-        );
+    fn missing_json_parameter_file_is_an_error() {
+        let args = ParameterArgs {
+            params_json_file: Some(PathBuf::from("/nonexistent/path/file.json")),
+            ..ParameterArgs::default()
+        };
+        let err = parse_values(&args).unwrap_err();
+        assert!(matches!(err, OverrideParseError::JsonRead { .. }));
     }
 
     #[test]
-    fn parse_overrides_input_file_too_large() {
+    fn json_parameter_file_obeys_size_limit() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("input.json");
-        // Write ~2 KiB of JSON.
+        let path = dir.path().join("params.json");
         let payload = format!("{{\"x\": {}}}", "1".repeat(2048));
-        std::fs::write(&path, &payload).unwrap();
+        std::fs::write(&path, payload).unwrap();
+        let args = ParameterArgs {
+            params_json_file: Some(path),
+            params_json_max_bytes: Some(256),
+            ..ParameterArgs::default()
+        };
 
-        // Set limit to 256 bytes — file is larger.
-        let err = parse_overrides(&[], Some(&path), Some(256)).unwrap_err();
+        let err = parse_values(&args).unwrap_err();
         match err {
-            OverrideParseError::InputFileTooLarge { size, limit, .. } => {
+            OverrideParseError::JsonTooLarge { size, limit, .. } => {
                 assert_eq!(limit, 256);
                 assert!(size > 256);
             }
@@ -466,43 +675,100 @@ mod tests {
     }
 
     #[test]
-    fn parse_overrides_input_file_within_limit_succeeds() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("input.json");
-        std::fs::write(&path, r#"{"x": "1.0 m"}"#).unwrap();
-
-        let overrides = parse_overrides(&[], Some(&path), Some(DEFAULT_INPUT_MAX_BYTES)).unwrap();
-        assert!(overrides.contains_key(&DeclName::expect_valid("x")));
+    fn inline_json_obeys_size_limit() {
+        let args = ParameterArgs {
+            params_json: Some(r#"{"x":"123"}"#.to_string()),
+            params_json_max_bytes: Some(4),
+            ..ParameterArgs::default()
+        };
+        assert!(matches!(
+            parse_values(&args),
+            Err(OverrideParseError::JsonTooLarge {
+                origin: ParameterJsonOrigin::Inline,
+                ..
+            })
+        ));
     }
 
     #[test]
-    fn parse_overrides_retains_top_level_json_key_span() {
+    fn json_parameter_file_within_limit_succeeds() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("input.json");
-        std::fs::write(
-            &path,
-            "{\n  \"matrix\": {\"index\": \"Row\", \"entries\": {}}\n}",
-        )
-        .unwrap();
+        let path = dir.path().join("params.json");
+        std::fs::write(&path, r#"{"x": "1.0 m"}"#).unwrap();
+        let args = ParameterArgs {
+            params_json_file: Some(path.clone()),
+            params_json_max_bytes: Some(DEFAULT_PARAMS_JSON_MAX_BYTES),
+            ..ParameterArgs::default()
+        };
 
-        let parsed = parse_overrides_with_sources(&[], Some(&path), None).unwrap();
-        let source = &parsed.input_sources[&DeclName::expect_valid("matrix")];
+        let parsed = parse_overrides_with_sources(&args).unwrap();
+        assert!(parsed.values.contains_key(&DeclName::expect_valid("x")));
+        assert_eq!(parsed.json_source, Some(ParameterJsonSource::File(path)));
+    }
+
+    #[test]
+    fn inline_json_retains_top_level_key_span_and_virtual_source() {
+        let args = ParameterArgs {
+            params_json: Some(
+                "{\n  \"matrix\": {\"index\": \"Row\", \"entries\": {}}\n}".to_string(),
+            ),
+            ..ParameterArgs::default()
+        };
+
+        let parsed = parse_overrides_with_sources(&args).unwrap();
+        let source = &parsed.json_sources[&DeclName::expect_valid("matrix")];
         assert_eq!(source.span.offset(), 4);
         assert_eq!(source.span.len(), 8);
+        assert_eq!(source.source.name(), "<--params-json>");
     }
 
     #[test]
-    fn parse_overrides_set_precedence_over_input() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("input.json");
-        std::fs::write(&path, r#"{"x": "10.0"}"#).unwrap();
+    fn direct_and_json_parameters_must_be_disjoint() {
+        let args = ParameterArgs {
+            param: vec!["x=42".to_string()],
+            params_json: Some(r#"{"x": "10.0"}"#.to_string()),
+            ..ParameterArgs::default()
+        };
 
-        let set = vec!["x=42".to_string()];
-        let overrides = parse_overrides(&set, Some(&path), None).unwrap();
-        // `x` from --set wins. We just assert that there is exactly one entry
-        // (the name-uniqueness proves precedence — the actual expr shape is
-        // tested in json_input / parser tests).
-        assert_eq!(overrides.len(), 1);
-        assert!(overrides.contains_key(&DeclName::expect_valid("x")));
+        let err = parse_values(&args).unwrap_err();
+        assert!(
+            matches!(err, OverrideParseError::DuplicateParameterBinding { name } if name.as_str() == "x")
+        );
+    }
+
+    #[test]
+    fn direct_and_json_parameters_can_supply_disjoint_names() {
+        let args = ParameterArgs {
+            param: vec!["x=42".to_string()],
+            params_json: Some(r#"{"y": "10.0"}"#.to_string()),
+            ..ParameterArgs::default()
+        };
+        let overrides = parse_values(&args).unwrap();
+        assert_eq!(overrides.len(), 2);
+    }
+
+    #[test]
+    fn json_limit_requires_a_json_source_even_outside_clap() {
+        let args = ParameterArgs {
+            params_json_max_bytes: Some(42),
+            ..ParameterArgs::default()
+        };
+        assert!(matches!(
+            parse_values(&args),
+            Err(OverrideParseError::JsonLimitWithoutSource)
+        ));
+    }
+
+    #[test]
+    fn json_sources_are_mutually_exclusive_even_outside_clap() {
+        let args = ParameterArgs {
+            params_json: Some("{}".to_string()),
+            params_json_file: Some(PathBuf::from("params.json")),
+            ..ParameterArgs::default()
+        };
+        assert!(matches!(
+            parse_values(&args),
+            Err(OverrideParseError::ConflictingJsonSources)
+        ));
     }
 }

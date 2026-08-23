@@ -21,7 +21,7 @@ use graphcal_report::report_ir::{
 };
 use graphcal_report::report_markdown::render_report_markdown;
 
-use crate::overrides::{InputOverrideSource, ParsedOverrides};
+use crate::overrides::{JsonOverrideSource, ParameterArgs, ParameterJsonSource, ParsedOverrides};
 
 /// Default engine bundle location, produced by `just wasm-report`.
 const DEFAULT_ENGINE_DIR: &str = "target/wasm-report/pkg";
@@ -44,15 +44,8 @@ pub struct BuildArgs {
     /// Also write a deterministic Markdown rendering for CI diffing
     #[arg(long, value_name = "FILE.md")]
     pub markdown: Option<PathBuf>,
-    /// Bind a param to a closed value: --set 'name=value'
-    #[arg(long)]
-    pub set: Vec<String>,
-    /// JSON input file for param values
-    #[arg(long)]
-    pub input: Option<PathBuf>,
-    /// Maximum size (in bytes) of the --input JSON file. Defaults to 1 MiB.
-    #[arg(long)]
-    pub input_max_bytes: Option<u64>,
+    #[command(flatten)]
+    pub parameters: ParameterArgs,
     /// Project root directory (overrides automatic graphcal.toml detection)
     #[arg(long)]
     pub root: Option<PathBuf>,
@@ -121,6 +114,7 @@ pub fn run_build(
     overrides: &ParsedOverrides,
     compiler_version: &str,
 ) -> Result<ReportStatus, ReportError> {
+    validate_hydration_parameter_source(args, overrides)?;
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let (project, host_fns) =
         crate::load_project_with_plugins(&args.file, args.root.as_deref(), &fs)?;
@@ -128,8 +122,8 @@ pub fn run_build(
 
     let mut bindings = prepared.binding_builder();
     for (name, expression) in &overrides.values {
-        match overrides.input_sources.get(name) {
-            Some(InputOverrideSource { source, span }) => {
+        match overrides.json_sources.get(name) {
+            Some(JsonOverrideSource { source, span }) => {
                 bindings.bind_external_expression(name, expression, source, *span)?;
             }
             None => bindings.bind_expression(name, expression)?,
@@ -146,7 +140,7 @@ pub fn run_build(
         compiler_version: compiler_version.to_string(),
         sources: source_digests(&project, &args.file, args.root.as_deref(), &fs),
         baseline_params: baseline_params(&result),
-        repro_command: repro_command(args),
+        repro_command: repro_command(args, overrides),
     };
     let document = build_report(ReportInputs {
         title: &title,
@@ -165,7 +159,7 @@ pub fn run_build(
         Some((glue_js, wasm)) => Some(Hydration {
             engine: EngineBundle { glue_js, wasm },
             project: hydration_project(&project, args, &fs)?,
-            baseline_bindings: baseline_binding_strings(args)?,
+            baseline_bindings: baseline_binding_strings(overrides),
         }),
     };
 
@@ -294,6 +288,19 @@ fn load_engine_bundle(args: &BuildArgs) -> Result<(String, Vec<u8>), ReportError
     Ok((glue, wasm))
 }
 
+fn validate_hydration_parameter_source(
+    args: &BuildArgs,
+    overrides: &ParsedOverrides,
+) -> Result<(), ReportError> {
+    if !args.static_only && overrides.json_source.is_some() {
+        return Err(ReportError::HydrationUnsupported {
+            reason: "JSON parameter baselines cannot be replayed in the browser; use --param"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
 /// Assemble the in-memory project shipped to the browser engine, rejecting
 /// everything the engine cannot run — loudly, at build time.
 fn hydration_project(
@@ -301,11 +308,6 @@ fn hydration_project(
     args: &BuildArgs,
     fs: &graphcal_io::RealFileSystem,
 ) -> Result<HydrationProject, ReportError> {
-    if args.input.is_some() {
-        return Err(ReportError::HydrationUnsupported {
-            reason: "--input baselines cannot be replayed in the browser; use --set".to_string(),
-        });
-    }
     if project
         .files()
         .values()
@@ -370,19 +372,13 @@ fn hydration_project(
     Ok(HydrationProject { entry, files })
 }
 
-/// Baseline `--set` bindings replayed as the hydrated report's initial
+/// Baseline `--param` bindings replayed as the hydrated report's initial
 /// control values.
-fn baseline_binding_strings(args: &BuildArgs) -> Result<Vec<(String, String)>, ReportError> {
-    args.set
+fn baseline_binding_strings(overrides: &ParsedOverrides) -> Vec<(String, String)> {
+    overrides
+        .direct_parameters
         .iter()
-        .map(|entry| {
-            entry
-                .split_once('=')
-                .map(|(name, expr)| (name.trim().to_string(), expr.trim().to_string()))
-                .ok_or_else(|| ReportError::HydrationUnsupported {
-                    reason: format!("malformed --set entry `{entry}`"),
-                })
-        })
+        .map(|binding| (binding.name.to_string(), binding.expression.clone()))
         .collect()
 }
 
@@ -414,23 +410,56 @@ fn baseline_params(result: &EvalResult) -> Vec<(String, String)> {
 }
 
 /// The copy-pasteable command line reproducing this baseline evaluation.
-fn repro_command(args: &BuildArgs) -> String {
+fn repro_command(args: &BuildArgs, overrides: &ParsedOverrides) -> String {
     let mut parts = vec![
         "graphcal".to_string(),
         "eval".to_string(),
-        args.file.display().to_string(),
+        shell_quote(&args.file.display().to_string()),
     ];
     if let Some(root) = &args.root {
         parts.push("--root".to_string());
-        parts.push(root.display().to_string());
+        parts.push(shell_quote(&root.display().to_string()));
     }
-    for set in &args.set {
-        parts.push("--set".to_string());
-        parts.push(format!("'{set}'"));
+    for binding in &overrides.direct_parameters {
+        parts.push("--param".to_string());
+        parts.push(shell_quote(&format!(
+            "{}={}",
+            binding.name, binding.expression
+        )));
     }
-    if let Some(input) = &args.input {
-        parts.push("--input".to_string());
-        parts.push(input.display().to_string());
+    match &overrides.json_source {
+        Some(ParameterJsonSource::Inline(json)) => {
+            parts.push("--params-json".to_string());
+            parts.push(shell_quote(json));
+        }
+        Some(ParameterJsonSource::File(path)) => {
+            parts.push("--params-json-file".to_string());
+            parts.push(shell_quote(&path.display().to_string()));
+        }
+        Some(ParameterJsonSource::Stdin) => {
+            parts.push("--params-json-file".to_string());
+            parts.push("-".to_string());
+        }
+        None => {}
+    }
+    if let Some(limit) = overrides.json_max_bytes {
+        parts.push("--params-json-max-bytes".to_string());
+        parts.push(limit.to_string());
     }
     parts.join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_quote;
+
+    #[test]
+    fn shell_quote_handles_plain_text_and_single_quotes() {
+        assert_eq!(shell_quote("model.gcl"), "'model.gcl'");
+        assert_eq!(shell_quote("scenario's.json"), "'scenario'\"'\"'s.json'");
+    }
 }

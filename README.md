@@ -55,7 +55,9 @@ Save the example above as `rocket.gcl`, then run:
 ```sh
 graphcal eval rocket.gcl
 # Try a different input:
-graphcal eval rocket.gcl --set 'isp=450.0 s'
+graphcal eval rocket.gcl --param 'isp=450.0 s'
+# Or bind several params from inline JSON:
+graphcal eval rocket.gcl --params-json '{"dry_mass":"1500.0 kg","isp":"450.0 s"}'
 # Build a shareable, self-contained HTML report (experimental; drop --static
 # for an interactive page once you build the wasm engine, see the CLI reference):
 graphcal report build rocket.gcl --static

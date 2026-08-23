@@ -634,8 +634,8 @@ Key files:
 - `graphcal-eval/src/package_cache.rs` centralizes the absolute cache root and
   typed source/generation path derivation shared by the lock producer and
   read-only loader.
-- `json_input.rs` reads bounded JSON input for params.
-- `overrides.rs` parses `--set` and `--input` parameter overrides.
+- `json_input.rs` converts JSON parameter documents into typed binding expressions.
+- `overrides.rs` parses direct and JSON CLI parameter bindings.
 - `display.rs` renders normal eval text output.
 - `dump.rs` selects one pipeline boundary and pretty-prints its unstable Rust
   `Debug` representation.

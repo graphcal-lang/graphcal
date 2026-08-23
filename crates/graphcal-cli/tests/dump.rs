@@ -142,6 +142,34 @@ fn plan_accepts_required_runtime_params_but_runtime_requires_a_binding() {
     assert_eq!(runtime.status.code(), Some(2));
     assert!(runtime.stdout.is_empty());
     assert!(String::from_utf8_lossy(&runtime.stderr).contains("required"));
+
+    let bound_runtime = run(&[
+        "dump",
+        "runtime",
+        path.to_str().unwrap(),
+        "--param",
+        "required=2.0",
+    ]);
+    assert!(
+        bound_runtime.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bound_runtime.stderr)
+    );
+    assert!(String::from_utf8_lossy(&bound_runtime.stdout).contains("RuntimeEvaluation"));
+
+    let json_result = run(&[
+        "dump",
+        "result",
+        path.to_str().unwrap(),
+        "--params-json",
+        r#"{"required":2.0}"#,
+    ]);
+    assert!(
+        json_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json_result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&json_result.stdout).contains("EvalResult"));
 }
 
 #[test]

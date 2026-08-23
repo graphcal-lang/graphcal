@@ -1,11 +1,12 @@
 //! Allow use of unwrap in tests
 #![cfg(test)]
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[cfg(unix)]
-use std::{os::unix::fs::PermissionsExt, process::Stdio, sync::OnceLock};
+use std::{os::unix::fs::PermissionsExt, sync::OnceLock};
 
 /// Unix builds route Git's SSH transport through a stub so package tests never
 /// touch a real remote. Other platforms have no such hook, so they invoke the
@@ -86,6 +87,30 @@ fn version_prints_package_version_and_commit_when_available() {
         format!("graphcal {version} (commit: {git_hash})\n")
     };
     assert_eq!(stdout, expected);
+}
+
+#[test]
+fn eval_help_exposes_explicit_parameter_sources_only() {
+    let output = graphcal_bin()
+        .args(["eval", "--help"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    for option in [
+        "--param <NAME=VALUE>",
+        "--params-json <JSON>",
+        "--params-json-file <FILE>",
+        "--params-json-max-bytes <BYTES>",
+    ] {
+        assert!(stdout.contains(option), "missing {option}: {stdout}");
+    }
+    assert!(!stdout.contains("--set"), "legacy option leaked: {stdout}");
+    assert!(
+        !stdout.contains("--input"),
+        "legacy option leaked: {stdout}"
+    );
 }
 
 fn fixtures_root() -> PathBuf {
@@ -1915,12 +1940,17 @@ fn eval_invalid_syntax_fails() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// --- --set flag tests ---
+// --- --param flag tests ---
 
 #[test]
-fn eval_with_set_flag() {
+fn eval_with_param_flag() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "isp=450.0 s"])
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--param",
+            "isp=450.0 s",
+        ])
         .output()
         .expect("failed to run graphcal");
 
@@ -1946,14 +1976,14 @@ fn eval_with_set_flag() {
 }
 
 #[test]
-fn eval_with_multiple_set() {
+fn eval_with_multiple_params() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/rocket.gcl"),
-            "--set",
+            "--param",
             "isp=450.0 s",
-            "--set",
+            "--param",
             "dry_mass=1500.0 kg",
         ])
         .output()
@@ -1980,12 +2010,12 @@ fn eval_with_multiple_set() {
 }
 
 #[test]
-fn eval_set_invalid_param() {
+fn eval_param_rejects_unknown_param() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/rocket.gcl"),
-            "--set",
+            "--param",
             "nonexistent=100",
         ])
         .output()
@@ -2025,12 +2055,12 @@ fn eval_user_defined_dimensions() {
 }
 
 #[test]
-fn eval_set_node_error() {
+fn eval_param_rejects_node() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/rocket.gcl"),
-            "--set",
+            "--param",
             "delta_v=100.0 m/s",
         ])
         .output()
@@ -2045,9 +2075,9 @@ fn eval_set_node_error() {
 }
 
 #[test]
-fn eval_set_bad_value() {
+fn eval_param_rejects_bad_value() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "isp=???"])
+        .args(["eval", &fixture("valid/rocket.gcl"), "--param", "isp=???"])
         .output()
         .expect("failed to run graphcal");
 
@@ -2190,15 +2220,15 @@ fn check_rejects_type_only_import_for_constructor() {
     );
 }
 
-// --- --input JSON file tests ---
+// --- JSON parameter source tests ---
 
 #[test]
-fn eval_with_input_json() {
+fn eval_with_params_json_file() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/rocket.gcl"),
-            "--input",
+            "--params-json-file",
             &fixture("valid/input_rocket.json"),
         ])
         .output()
@@ -2210,32 +2240,150 @@ fn eval_with_input_json() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // dry_mass should show 1500 (from JSON), not default 1200
     assert!(
         stdout
             .lines()
-            .any(|l| l.contains("dry_mass") && l.contains("1500")),
+            .any(|line| line.contains("dry_mass") && line.contains("1500")),
         "expected dry_mass=1500 in output: {stdout}"
     );
-    // isp should show 450 (from JSON), not default 320
     assert!(
         stdout
             .lines()
-            .any(|l| l.contains("isp") && l.contains("450")),
+            .any(|line| line.contains("isp") && line.contains("450")),
         "expected isp=450 in output: {stdout}"
     );
 }
 
 #[test]
-fn eval_input_json_set_precedence() {
-    // --set should override the same param from --input
+fn eval_with_inline_params_json() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/rocket.gcl"),
-            "--input",
-            &fixture("valid/input_rocket.json"),
-            "--set",
+            "--params-json",
+            r#"{"dry_mass":"1500.0 kg","isp":"450.0 s"}"#,
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("dry_mass") && line.contains("1500")),
+        "expected dry_mass=1500 in output: {stdout}"
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("isp") && line.contains("450")),
+        "expected isp=450 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_reads_params_json_file_from_stdin() {
+    let mut child = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--params-json-file",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run graphcal");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(br#"{"isp":"450.0 s"}"#)
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.contains("isp") && line.contains("450")),
+        "expected isp=450 in output: {stdout}"
+    );
+}
+
+#[test]
+fn eval_stdin_params_json_semantic_error_points_to_stdin() {
+    let mut child = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--params-json-file",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run graphcal");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\n  \"isp\": \"450.0 kg\"\n}")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("<stdin>:2:3"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("invalid binding for `isp`"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn eval_param_and_json_reject_duplicate_binding() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--params-json",
+            r#"{"isp":"450.0 s"}"#,
+            "--param",
+            "isp=500.0 s",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("duplicate parameter binding for `isp`"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn eval_param_can_supplement_json_with_a_disjoint_binding() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--params-json",
+            r#"{"dry_mass":"1500.0 kg"}"#,
+            "--param",
             "isp=500.0 s",
         ])
         .output()
@@ -2247,29 +2395,25 @@ fn eval_input_json_set_precedence() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // isp should show 500 (from --set), not 450 (from JSON)
     assert!(
         stdout
             .lines()
-            .any(|l| l.contains("isp") && l.contains("500")),
-        "expected isp=500 in output: {stdout}"
+            .any(|line| line.contains("isp") && line.contains("500"))
     );
-    // dry_mass should still come from JSON
     assert!(
         stdout
             .lines()
-            .any(|l| l.contains("dry_mass") && l.contains("1500")),
-        "expected dry_mass=1500 in output: {stdout}"
+            .any(|line| line.contains("dry_mass") && line.contains("1500"))
     );
 }
 
 #[test]
-fn eval_input_json_indexed() {
+fn eval_params_json_file_indexed() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/indexed.gcl"),
-            "--input",
+            "--params-json-file",
             &fixture("valid/input_indexed.json"),
         ])
         .output()
@@ -2291,12 +2435,12 @@ fn eval_input_json_indexed() {
 }
 
 #[test]
-fn eval_input_json_tagged_union() {
+fn eval_params_json_file_tagged_union() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/tagged_union_param.gcl"),
-            "--input",
+            "--params-json-file",
             &fixture("valid/input_tagged_union.json"),
         ])
         .output()
@@ -2323,7 +2467,7 @@ fn eval_input_json_tagged_union() {
 }
 
 #[test]
-fn eval_input_json_multiple_structured_overrides() {
+fn eval_params_json_file_multiple_structured_bindings() {
     // Regression for #764: several indexed/tagged-union overrides in one JSON
     // file. Span-keyed TIR semantic metadata gave every synthetic override the
     // same (or per-entry colliding) spans, so one override's map keys and
@@ -2332,7 +2476,7 @@ fn eval_input_json_multiple_structured_overrides() {
         .args([
             "eval",
             &fixture("valid/multi_override_params.gcl"),
-            "--input",
+            "--params-json-file",
             &fixture("valid/input_multi_override.json"),
         ])
         .output()
@@ -2368,12 +2512,12 @@ fn eval_input_json_multiple_structured_overrides() {
 }
 
 #[test]
-fn eval_input_json_imported_record_uses_definition_site_constructor_and_unit() {
+fn eval_params_json_imported_record_uses_definition_site_constructor_and_unit() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("regressions/prepared_json_type_import/src/demo/main.gcl"),
-            "--input",
+            "--params-json-file",
             &fixture("regressions/prepared_json_type_import/input.json"),
         ])
         .output()
@@ -2394,12 +2538,12 @@ fn eval_input_json_imported_record_uses_definition_site_constructor_and_unit() {
 }
 
 #[test]
-fn eval_input_json_nested_imported_record_uses_transitive_definition_site_schema() {
+fn eval_params_json_nested_imported_record_uses_transitive_definition_site_schema() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("regressions/prepared_json_type_import/src/demo/nested.gcl"),
-            "--input",
+            "--params-json-file",
             &fixture("regressions/prepared_json_type_import/input_nested.json"),
         ])
         .output()
@@ -2420,12 +2564,12 @@ fn eval_input_json_nested_imported_record_uses_transitive_definition_site_schema
 }
 
 #[test]
-fn eval_input_json_imported_record_keeps_definition_site_field_constraint() {
+fn eval_params_json_imported_record_keeps_definition_site_field_constraint() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("regressions/prepared_json_type_import/src/demo/main.gcl"),
-            "--input",
+            "--params-json-file",
             &fixture("regressions/prepared_json_type_import/input_invalid.json"),
         ])
         .output()
@@ -2440,7 +2584,7 @@ fn eval_input_json_imported_record_keeps_definition_site_field_constraint() {
 }
 
 #[test]
-fn eval_input_json_semantic_error_points_to_input_file() {
+fn eval_params_json_semantic_error_points_to_parameter_file() {
     let dir = tempfile::tempdir().unwrap();
     let model_path = dir.path().join("model.gcl");
     let input_path = dir.path().join("input.json");
@@ -2470,7 +2614,7 @@ fn eval_input_json_semantic_error_points_to_input_file() {
         .args([
             "eval",
             model_path.to_str().unwrap(),
-            "--input",
+            "--params-json-file",
             input_path.to_str().unwrap(),
         ])
         .output()
@@ -2490,7 +2634,50 @@ fn eval_input_json_semantic_error_points_to_input_file() {
 }
 
 #[test]
-fn eval_input_json_unknown_param() {
+fn eval_inline_params_json_semantic_error_points_to_virtual_source() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--params-json",
+            "{\n  \"isp\": \"450.0 kg\"\n}",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("<--params-json>:2:3"),
+        "expected diagnostic to point to the inline parameter key: {stderr}"
+    );
+    assert!(
+        stderr.contains("invalid binding for `isp`"),
+        "stderr: {stderr}"
+    );
+}
+
+#[test]
+fn eval_rejects_multiple_bulk_json_sources() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--params-json",
+            "{}",
+            "--params-json-file",
+            &fixture("valid/input_rocket.json"),
+        ])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("cannot be used with"), "stderr: {stderr}");
+}
+
+#[test]
+fn eval_params_json_rejects_unknown_param() {
     let dir = std::env::temp_dir().join("graphcal_test_input");
     std::fs::create_dir_all(&dir).unwrap();
     let json_path = dir.join("bad_param.json");
@@ -2500,7 +2687,7 @@ fn eval_input_json_unknown_param() {
         .args([
             "eval",
             &fixture("valid/rocket.gcl"),
-            "--input",
+            "--params-json-file",
             json_path.to_str().unwrap(),
         ])
         .output()
@@ -2517,7 +2704,7 @@ fn eval_input_json_unknown_param() {
 }
 
 #[test]
-fn eval_input_json_invalid_json() {
+fn eval_params_json_file_rejects_invalid_json() {
     let dir = std::env::temp_dir().join("graphcal_test_input_bad");
     std::fs::create_dir_all(&dir).unwrap();
     let json_path = dir.join("bad.json");
@@ -2527,7 +2714,7 @@ fn eval_input_json_invalid_json() {
         .args([
             "eval",
             &fixture("valid/rocket.gcl"),
-            "--input",
+            "--params-json-file",
             json_path.to_str().unwrap(),
         ])
         .output()
@@ -2543,7 +2730,7 @@ fn eval_input_json_invalid_json() {
 }
 
 #[test]
-fn eval_input_json_rejects_duplicate_keys_and_out_of_range_integer_tokens() {
+fn eval_params_json_rejects_duplicate_keys_and_out_of_range_integer_tokens() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "model.gcl", "param x: Dimensionless = 0.0;\n");
     let input = dir.path().join("input.json");
@@ -2560,7 +2747,7 @@ fn eval_input_json_rejects_duplicate_keys_and_out_of_range_integer_tokens() {
             .args([
                 "eval",
                 model.to_str().unwrap(),
-                "--input",
+                "--params-json-file",
                 input.to_str().unwrap(),
             ])
             .output()
@@ -4050,26 +4237,31 @@ fn eval_instantiated_include_resolves_libraries_own_unbound_index() {
     has("s.total     = 30");
 }
 
-// --- Partial overrides CLI tests ---
+// --- Partial parameter-binding CLI tests ---
 
 #[test]
-fn eval_partial_set_uses_defaults() {
-    // Partial --set falls back to defaults for the unset params.
+fn eval_partial_param_uses_defaults() {
+    // A partial --param list falls back to defaults for the remaining params.
     let output = graphcal_bin()
-        .args(["eval", &fixture("valid/rocket.gcl"), "--set", "isp=450.0 s"])
+        .args([
+            "eval",
+            &fixture("valid/rocket.gcl"),
+            "--param",
+            "isp=450.0 s",
+        ])
         .output()
         .expect("failed to run graphcal");
 
     assert!(
         output.status.success(),
-        "partial --set should fall back to defaults: stderr={}",
+        "partial --param should fall back to defaults: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
 
 #[test]
-fn eval_no_overrides_defaults_freely() {
-    // No --set or --input at all → defaults used freely, no error
+fn eval_no_parameter_bindings_uses_defaults_freely() {
+    // No CLI parameter bindings at all: defaults are used freely.
     let output = graphcal_bin()
         .args(["eval", &fixture("valid/rocket.gcl")])
         .output()
@@ -4077,7 +4269,7 @@ fn eval_no_overrides_defaults_freely() {
 
     assert!(
         output.status.success(),
-        "no overrides should use defaults freely: stderr={}",
+        "no parameter bindings should use defaults freely: stderr={}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
@@ -5040,12 +5232,12 @@ fn eval_dynamic_units() {
 }
 
 #[test]
-fn eval_dynamic_units_with_override() {
+fn eval_dynamic_units_with_parameter_binding() {
     let output = graphcal_bin()
         .args([
             "eval",
             &fixture("valid/dynamic_units.gcl"),
-            "--set",
+            "--param",
             "usd_per_eur=1.20",
         ])
         .output()
@@ -6168,7 +6360,7 @@ fn eval_requires_a_lock_pin_in_package_projects() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn eval_set_rejects_arbitrary_computation() {
+fn eval_param_rejects_arbitrary_computation() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(
         dir.path(),
@@ -6178,7 +6370,7 @@ fn eval_set_rejects_arbitrary_computation() {
     let output = graphcal_bin()
         .arg("eval")
         .arg(&model)
-        .args(["--set", "x=1 + 2"])
+        .args(["--param", "x=1 + 2"])
         .output()
         .expect("failed to run graphcal");
 
@@ -6450,7 +6642,7 @@ fn report_build_writes_self_contained_html_and_markdown() {
 }
 
 #[test]
-fn report_build_provenance_pins_source_digest_and_baseline() {
+fn report_build_provenance_pins_source_digest_and_parameter_baseline() {
     use sha2::{Digest, Sha256};
     use std::fmt::Write;
 
@@ -6461,7 +6653,7 @@ fn report_build_provenance_pins_source_digest_and_baseline() {
     let output = graphcal_bin()
         .args(["report", "build", "--static"])
         .arg(&model)
-        .args(["--set", "isp=450.0 s", "--output"])
+        .args(["--param", "isp=450.0 s", "--output"])
         .arg(&html_path)
         .output()
         .expect("failed to run graphcal");
@@ -6538,7 +6730,7 @@ fn report_build_is_byte_deterministic() {
 }
 
 #[test]
-fn report_build_set_override_changes_baseline_and_repro_line() {
+fn report_build_param_changes_baseline_and_repro_line() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
     let html_path = dir.path().join("out.html");
@@ -6546,7 +6738,7 @@ fn report_build_set_override_changes_baseline_and_repro_line() {
     let output = graphcal_bin()
         .args(["report", "build", "--static"])
         .arg(&model)
-        .args(["--set", "isp=450.0 s", "--output"])
+        .args(["--param", "isp=450.0 s", "--output"])
         .arg(&html_path)
         .output()
         .expect("failed to run graphcal");
@@ -6558,8 +6750,44 @@ fn report_build_set_override_changes_baseline_and_repro_line() {
     let html = std::fs::read_to_string(&html_path).unwrap();
     assert!(html.contains("450 s"), "overridden baseline must display");
     assert!(
-        html.contains("--set"),
-        "repro command must carry the override"
+        html.contains("--param"),
+        "repro command must carry the parameter binding"
+    );
+}
+
+#[test]
+fn report_build_static_accepts_inline_json_and_records_repro_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build", "--static"])
+        .arg(&model)
+        .args([
+            "--params-json",
+            r#"{"isp":"450.0 s"}"#,
+            "--params-json-max-bytes",
+            "1024",
+            "--output",
+        ])
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains("450 s"), "JSON baseline must display");
+    assert!(
+        html.contains("--params-json"),
+        "repro command must retain the inline JSON source"
+    );
+    assert!(
+        html.contains("--params-json-max-bytes 1024"),
+        "repro command must retain the explicit size limit"
     );
 }
 
@@ -6637,7 +6865,7 @@ fn report_build_hydrated_embeds_engine_project_and_runtime() {
         .arg(&model)
         .args(["--engine-dir"])
         .arg(&engine_dir)
-        .args(["--set", "isp=450.0 s", "--output"])
+        .args(["--param", "isp=450.0 s", "--output"])
         .arg(&html_path)
         .output()
         .expect("failed to run graphcal");
@@ -6653,7 +6881,7 @@ fn report_build_hydrated_embeds_engine_project_and_runtime() {
     // would ship an artifact the browser engine rejects.
     assert!(html.contains("\"entry\":\"deltav.gcl\""));
     assert!(html.contains("id=\"graphcal-baseline\""));
-    // The baseline binding payload itself carries the override (the repro
+    // The baseline binding payload itself carries the CLI value (the repro
     // line elsewhere also mentions it, so check the JSON fields).
     assert!(html.contains("\"name\":\"isp\""));
     assert!(html.contains("\"expr\":\"450.0 s\""));
@@ -6811,7 +7039,7 @@ fn report_build_without_engine_fails_loudly_with_recovery_paths() {
 }
 
 #[test]
-fn report_build_hydrated_rejects_input_file_baselines() {
+fn report_build_hydrated_rejects_json_parameter_file_baselines() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
     let engine_dir = write_fake_engine(dir.path());
@@ -6823,12 +7051,12 @@ fn report_build_hydrated_rejects_input_file_baselines() {
         .arg(&model)
         .args(["--engine-dir"])
         .arg(&engine_dir)
-        .args(["--input"])
+        .args(["--params-json-file"])
         .arg(&input)
         .output()
         .expect("failed to run graphcal");
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--set"), "stderr: {stderr}");
+    assert!(stderr.contains("--param"), "stderr: {stderr}");
     assert!(stderr.contains("--static"), "stderr: {stderr}");
 }

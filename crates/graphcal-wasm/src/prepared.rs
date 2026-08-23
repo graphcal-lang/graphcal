@@ -3,7 +3,7 @@
 //! The one-shot [`crate::evaluate`] entry recompiles the project on every
 //! call. Interactive consumers (the playground, hydrated reports) instead
 //! prepare a project once, read its typed parameter ports, and re-evaluate
-//! repeatedly with reader-supplied closed values — the same `--set`
+//! repeatedly with reader-supplied closed values — the same `--param`
 //! discipline the CLI enforces: full literal syntax, unit-checked, no
 //! expression injection into the prepared DAG.
 //!
@@ -94,7 +94,7 @@ pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
 }
 
 /// One reader-supplied parameter binding: a closed Graphcal value expression
-/// in source syntax (e.g. `450.0 s`), exactly like the CLI's `--set`.
+/// in source syntax (e.g. `450.0 s`), exactly like the CLI's `--param`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BindingRequest {
     pub name: String,
