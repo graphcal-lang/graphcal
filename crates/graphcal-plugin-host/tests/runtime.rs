@@ -8,13 +8,13 @@ use std::sync::Arc;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_eval::host_fns::{HostArray, HostFnValue};
 use graphcal_plugin_abi::{
-    ManifestDecodeError, ManifestFromWasmError, ManifestFunction, ManifestMonomial, ManifestParam,
-    ManifestParamKind, ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
-    SectionError, embed_manifest,
+    ManifestArrayElementKind, ManifestDecodeError, ManifestFromWasmError, ManifestFunction,
+    ManifestMonomial, ManifestParam, ManifestParamKind, ManifestRational, ManifestResultKind,
+    ManifestVarPower, PluginManifest, SectionError, embed_manifest,
 };
 use graphcal_plugin_host::{
-    ConvertErrorKind, PluginCacheLimits, PluginCallError, PluginHost, PluginLimits,
-    PluginLoadError, PluginModuleLimitError,
+    ConvertErrorKind, PluginArgumentLocation, PluginCacheLimits, PluginCallError, PluginHost,
+    PluginLimits, PluginLoadError, PluginModuleLimitError,
 };
 
 fn quantity_var(var: &str) -> ManifestParamKind {
@@ -512,12 +512,12 @@ fn missing_manifest_section_is_rejected_at_load() {
 #[test]
 fn future_abi_versions_are_rejected_with_a_version_error() {
     let wasm = wat::parse_str(LERP_WAT).unwrap();
-    let wasm = embed_manifest(&wasm, br#"{"abi_version":5,"shape":"unknown"}"#).unwrap();
+    let wasm = embed_manifest(&wasm, br#"{"abi_version":6,"shape":"unknown"}"#).unwrap();
     assert_eq!(
         PluginHost::new().load(&wasm).unwrap_err(),
         PluginLoadError::Manifest(ManifestFromWasmError::Decode(
             ManifestDecodeError::UnsupportedAbiVersion {
-                found: 5,
+                found: 6,
                 supported: graphcal_plugin_abi::ABI_VERSION,
             }
         ))
@@ -544,7 +544,7 @@ fn v2_manifests_are_rejected_with_a_version_error() {
 #[test]
 fn struct_parameter_manifest_is_rejected_during_host_load() {
     let wasm = wat::parse_str(LERP_WAT).unwrap();
-    let json = br#"{"abi_version":4,"functions":[{"name":"bad","params":[{"name":"value","kind":{"struct":{"fields":[{"name":"ok","kind":"bool"}]}}}],"result":"bool"}]}"#;
+    let json = br#"{"abi_version":5,"functions":[{"name":"bad","params":[{"name":"value","kind":{"struct":{"fields":[{"name":"ok","kind":"bool"}]}}}],"result":"bool"}]}"#;
     let wasm = embed_manifest(&wasm, json).unwrap();
 
     assert!(matches!(
@@ -833,13 +833,13 @@ const ARRAY_WAT: &str = r#"
 
 fn array_kind(var: &str, index: &str) -> ManifestParamKind {
     ManifestParamKind::Array {
-        element: ManifestMonomial {
+        element: ManifestArrayElementKind::Quantity(ManifestMonomial {
             vars: vec![ManifestVarPower {
                 var: var.to_string(),
                 pow: ManifestRational { num: 1, den: 1 },
             }],
             fixed: Vec::new(),
-        },
+        }),
         indexes: vec![index.to_string()],
     }
 }
@@ -873,6 +873,56 @@ fn array_manifest() -> PluginManifest {
         ),
         array_function("total", &[("xs", array_kind("D", "I"))], quantity_var("D")),
     ])
+}
+
+fn semantic_array_manifest(element: ManifestArrayElementKind) -> PluginManifest {
+    manifest(vec![ManifestFunction {
+        name: "scale".to_string(),
+        dim_vars: Vec::new(),
+        index_vars: vec!["I".to_string()],
+        params: vec![
+            ManifestParam {
+                name: "values".to_string(),
+                kind: ManifestParamKind::Array {
+                    element: element.clone(),
+                    indexes: vec!["I".to_string()],
+                },
+            },
+            ManifestParam {
+                name: "factor".to_string(),
+                kind: dimensionless(),
+            },
+        ],
+        result: ManifestResultKind::Array {
+            element,
+            indexes: vec!["I".to_string()],
+        },
+    }])
+}
+
+#[test]
+fn strict_host_rejects_malformed_typed_array_elements_before_the_call() {
+    for (element, invalid) in [
+        (ManifestArrayElementKind::Bool, 0.5),
+        (ManifestArrayElementKind::Int, 1.5),
+    ] {
+        let module = PluginHost::new()
+            .load(&plugin(ARRAY_WAT, &semantic_array_manifest(element)))
+            .unwrap();
+        let error = module
+            .call(
+                &fn_name("scale"),
+                &[vector(vec![1.0, invalid]), HostFnValue::F64(1.0)],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PluginCallError::InvalidArgument {
+                location: PluginArgumentLocation::ArrayElement(1),
+                ..
+            }
+        ));
+    }
 }
 
 #[test]
@@ -959,12 +1009,12 @@ fn matrix_manifest() -> PluginManifest {
         params: vec![ManifestParam {
             name: "matrix".to_string(),
             kind: ManifestParamKind::Array {
-                element: element.clone(),
+                element: ManifestArrayElementKind::Quantity(element.clone()),
                 indexes: vec!["I".to_string(), "J".to_string()],
             },
         }],
         result: ManifestResultKind::Array {
-            element,
+            element: ManifestArrayElementKind::Quantity(element),
             indexes: vec!["J".to_string(), "I".to_string()],
         },
     }])

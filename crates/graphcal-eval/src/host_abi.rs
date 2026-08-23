@@ -8,7 +8,9 @@
 
 use std::fmt;
 
-use graphcal_compiler::function_signature::{DimMonomial, StructFieldKind, ValueKind};
+use graphcal_compiler::function_signature::{
+    DimMonomial, ScalarValueKind, StructFieldKind, ValueKind,
+};
 use graphcal_compiler::syntax::index_name::IndexVarName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::type_name::FieldName;
@@ -243,23 +245,35 @@ pub enum HostResultDecodeError {
     },
 }
 
-/// A validated dense quantity array plus the typed result metadata needed by
+/// Typed, validated row-major values of a host array.
+///
+/// The quantity variant carries its dimension monomial, so the semantic kind
+/// and payload cannot disagree.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValidatedHostArrayValues {
+    /// Finite quantity elements.
+    Quantity {
+        /// Declared element dimension.
+        element: DimMonomial,
+        /// Finite SI values.
+        values: Vec<FiniteHostQuantity>,
+    },
+    /// Boolean elements.
+    Bool(Vec<bool>),
+    /// Integer elements.
+    Int(Vec<i64>),
+}
+
+/// A validated dense scalar array plus the typed result metadata needed by
 /// consumers to rebuild or render it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidatedHostArray {
-    element: DimMonomial,
     indexes: NonEmpty<IndexVarName>,
     shape: Vec<usize>,
-    values: Vec<FiniteHostQuantity>,
+    values: ValidatedHostArrayValues,
 }
 
 impl ValidatedHostArray {
-    /// Declared element dimension.
-    #[must_use]
-    pub const fn element(&self) -> &DimMonomial {
-        &self.element
-    }
-
     /// Declared index variables in row-major axis order.
     #[must_use]
     pub const fn indexes(&self) -> &NonEmpty<IndexVarName> {
@@ -272,9 +286,9 @@ impl ValidatedHostArray {
         &self.shape
     }
 
-    /// Finite row-major element values.
+    /// Typed row-major element values.
     #[must_use]
-    pub fn values(&self) -> &[FiniteHostQuantity] {
+    pub const fn values(&self) -> &ValidatedHostArrayValues {
         &self.values
     }
 }
@@ -325,7 +339,7 @@ pub enum ValidatedHostResult {
         /// Finite SI value.
         value: FiniteHostQuantity,
     },
-    /// Dense, finite quantity array.
+    /// Dense typed scalar array.
     Array(ValidatedHostArray),
     /// Fixed-layout record whose fields are decoded by declared kind.
     Struct(Vec<ValidatedHostField>),
@@ -343,24 +357,26 @@ pub fn decode_result(
     raw: &HostFnValue,
 ) -> Result<ValidatedHostResult, HostResultDecodeError> {
     match declared {
-        ValueKind::Bool => scalar_slot(raw).and_then(|value| {
+        ValueKind::Scalar(ScalarValueKind::Bool) => scalar_slot(raw).and_then(|value| {
             decode_bool(value)
                 .map(ValidatedHostResult::Bool)
                 .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
         }),
-        ValueKind::Int => scalar_slot(raw).and_then(|value| {
+        ValueKind::Scalar(ScalarValueKind::Int) => scalar_slot(raw).and_then(|value| {
             decode_int(value)
                 .map(ValidatedHostResult::Int)
                 .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
         }),
-        ValueKind::Quantity(dimension) => scalar_slot(raw).and_then(|value| {
-            validate_quantity(value)
-                .map(|value| ValidatedHostResult::Quantity {
-                    dimension: dimension.clone(),
-                    value,
-                })
-                .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
-        }),
+        ValueKind::Scalar(ScalarValueKind::Quantity(dimension)) => {
+            scalar_slot(raw).and_then(|value| {
+                validate_quantity(value)
+                    .map(|value| ValidatedHostResult::Quantity {
+                        dimension: dimension.clone(),
+                        value,
+                    })
+                    .map_err(|source| invalid_slot(HostSlotLocation::Scalar, source))
+            })
+        }
         ValueKind::Indexed { element, indexes } => {
             let HostFnValue::Array(array) = raw else {
                 return Err(HostResultDecodeError::ExpectedArray);
@@ -371,18 +387,20 @@ pub fn decode_result(
                     actual: array.shape().len(),
                 });
             }
-            let values = array
-                .values()
-                .iter()
-                .enumerate()
-                .map(|(index, value)| {
-                    validate_quantity(*value).map_err(|source| {
-                        invalid_slot(HostSlotLocation::ArrayElement { index }, source)
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+            let values = match element {
+                ScalarValueKind::Quantity(monomial) => ValidatedHostArrayValues::Quantity {
+                    element: monomial.clone(),
+                    values: decode_array_values(array.values(), validate_quantity)?,
+                },
+                ScalarValueKind::Bool => ValidatedHostArrayValues::Bool(decode_array_values(
+                    array.values(),
+                    decode_bool,
+                )?),
+                ScalarValueKind::Int => {
+                    ValidatedHostArrayValues::Int(decode_array_values(array.values(), decode_int)?)
+                }
+            };
             Ok(ValidatedHostResult::Array(ValidatedHostArray {
-                element: element.clone(),
                 indexes: indexes.clone(),
                 shape: array.shape().to_vec(),
                 values,
@@ -426,6 +444,20 @@ pub fn decode_result(
             Ok(ValidatedHostResult::Struct(fields))
         }
     }
+}
+
+fn decode_array_values<T>(
+    raw: &[f64],
+    decode: impl Fn(f64) -> Result<T, HostScalarError>,
+) -> Result<Vec<T>, HostResultDecodeError> {
+    raw.iter()
+        .copied()
+        .enumerate()
+        .map(|(index, value)| {
+            decode(value)
+                .map_err(|source| invalid_slot(HostSlotLocation::ArrayElement { index }, source))
+        })
+        .collect()
 }
 
 const fn scalar_slot(raw: &HostFnValue) -> Result<f64, HostResultDecodeError> {
@@ -494,11 +526,62 @@ mod tests {
         ));
     }
 
+    fn indexed_kind(element: ScalarValueKind) -> ValueKind {
+        ValueKind::Indexed {
+            element,
+            indexes: NonEmpty::new(IndexVarName::expect_valid("I"), Vec::new()),
+        }
+    }
+
+    #[test]
+    fn bool_and_int_arrays_decode_with_scalar_policy_and_element_locations() {
+        let bool_kind = indexed_kind(ScalarValueKind::Bool);
+        let bools = HostFnValue::Array(HostArray::try_new(vec![3], vec![0.0, -0.0, 1.0]).unwrap());
+        assert!(matches!(
+            decode_result(&bool_kind, &bools),
+            Ok(ValidatedHostResult::Array(ValidatedHostArray {
+                values: ValidatedHostArrayValues::Bool(values),
+                ..
+            })) if values == [false, false, true]
+        ));
+        for invalid in [0.5, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let raw = HostFnValue::Array(HostArray::vector(vec![0.0, invalid]).unwrap());
+            assert!(matches!(
+                decode_result(&bool_kind, &raw),
+                Err(HostResultDecodeError::InvalidSlot {
+                    location: HostSlotLocation::ArrayElement { index: 1 },
+                    source: HostScalarError::InvalidBool { .. },
+                })
+            ));
+        }
+
+        let int_kind = indexed_kind(ScalarValueKind::Int);
+        let ints =
+            HostFnValue::Array(HostArray::vector(vec![-0.0, 2.0_f64.powi(54), -3.0]).unwrap());
+        assert!(matches!(
+            decode_result(&int_kind, &ints),
+            Ok(ValidatedHostResult::Array(ValidatedHostArray {
+                values: ValidatedHostArrayValues::Int(values),
+                ..
+            })) if values == [0, 1_i64 << 54, -3]
+        ));
+        for invalid in [0.5, f64::NAN, f64::INFINITY, 2.0_f64.powi(63)] {
+            let raw = HostFnValue::Array(HostArray::vector(vec![1.0, invalid]).unwrap());
+            assert!(matches!(
+                decode_result(&int_kind, &raw),
+                Err(HostResultDecodeError::InvalidSlot {
+                    location: HostSlotLocation::ArrayElement { index: 1 },
+                    source: HostScalarError::InvalidInt { .. },
+                })
+            ));
+        }
+    }
+
     #[test]
     fn composite_results_validate_every_quantity_slot() {
         let indexes = NonEmpty::new(IndexVarName::expect_valid("I"), Vec::new());
         let array_kind = ValueKind::Indexed {
-            element: DimMonomial::fixed(Dimension::dimensionless()),
+            element: ScalarValueKind::Quantity(DimMonomial::fixed(Dimension::dimensionless())),
             indexes,
         };
         let array =

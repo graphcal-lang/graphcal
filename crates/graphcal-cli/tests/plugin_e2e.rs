@@ -361,6 +361,92 @@ panic = "abort"
 }
 
 #[test]
+fn maximum_width_buffer_plugin_loads_under_strict_wasmi_limits() {
+    if !wasm_target_installed() {
+        eprintln!(
+            "SKIPPED: maximum_width_buffer_plugin_loads_under_strict_wasmi_limits needs the \
+             wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown)"
+        );
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let crate_dir = dir.path().join("maximum-width-probe");
+    std::fs::create_dir_all(crate_dir.join("src")).unwrap();
+    let sdk_path = repo_root().join("crates").join("graphcal-plugin");
+    std::fs::write(
+        crate_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "maximum-width-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+graphcal-plugin = {{ path = {sdk_path:?} }}
+
+[profile.release]
+panic = "abort"
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        crate_dir.join("src/lib.rs"),
+        r"graphcal_plugin::plugin! {
+    fn all_true<I: Index>(values: Bool[I]) -> Bool {
+        values.iter().all(|value| *value)
+    }
+
+    // Sixteen rank-one arrays consume exactly 32 raw ABI parameter slots.
+    // ArrayView references keep the generated natural Rust function narrower
+    // than that raw signature, independent of optimizer inlining.
+    fn maximum_width<I: Index>(
+        a0: Bool[I],
+        a1: Int[I],
+        a2: Dimensionless[I],
+        a3: Dimensionless[I],
+        a4: Dimensionless[I],
+        a5: Dimensionless[I],
+        a6: Dimensionless[I],
+        a7: Dimensionless[I],
+        a8: Dimensionless[I],
+        a9: Dimensionless[I],
+        a10: Dimensionless[I],
+        a11: Dimensionless[I],
+        a12: Dimensionless[I],
+        a13: Dimensionless[I],
+        a14: Dimensionless[I],
+        a15: Dimensionless[I],
+    ) -> Bool {
+        all_true(a0)
+            && a1.iter().all(|value| *value == 1)
+            && [a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15]
+                .iter()
+                .all(|values| values.iter().all(|value| *value == 1.0))
+    }
+}
+",
+    )
+    .unwrap();
+
+    let artifact = build_wasm(&crate_dir, "maximum_width_probe.wasm");
+    let bytes = std::fs::read(&artifact).unwrap();
+    let module = graphcal_plugin_host::PluginHost::new()
+        .load(&bytes)
+        .expect("the accepted maximum-width SDK artifact must load under strict limits");
+    let name = graphcal_compiler::syntax::function_name::FnName::expect_valid("maximum_width");
+    let args = (0..16)
+        .map(|_| HostFnValue::Array(graphcal_eval::host_fns::HostArray::vector(vec![1.0]).unwrap()))
+        .collect::<Vec<_>>();
+    assert_eq!(module.call(&name, &args).unwrap(), HostFnValue::F64(1.0));
+}
+
+#[test]
 fn plugin_panics_surface_as_failure_messages() {
     if !wasm_target_installed() {
         eprintln!(

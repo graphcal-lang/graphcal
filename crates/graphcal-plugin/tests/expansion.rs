@@ -51,6 +51,24 @@ graphcal_plugin::plugin! {
             .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
     }
 
+    /// Bool arrays arrive and return as typed values.
+    fn invert<I: Index>(values: Bool[I]) -> Bool[I] {
+        let shape = values.shape().to_vec();
+        let values = values.iter().map(|value| !value).collect();
+        graphcal_plugin::Array::new(shape, values)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
+    }
+
+    /// Int arrays arrive and return as typed values.
+    fn increment<I: Index>(values: Int[I]) -> Int[I] {
+        let incremented = values
+            .iter()
+            .map(|value| value.checked_add(1).unwrap_or_else(|| graphcal_plugin::fail!("overflow")))
+            .collect();
+        graphcal_plugin::Array::new(values.shape().to_vec(), incremented)
+            .unwrap_or_else(|error| graphcal_plugin::fail!("{error}"))
+    }
+
     /// Multi-axis arrays can reorder axes and values.
     fn matrix_transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I] {
         let [rows, columns] = xs.shape() else {
@@ -134,15 +152,29 @@ fn array_kernels_run_natively_with_explicit_shapes() {
     let values = [1.0, 2.5, -4.0];
     let xs = graphcal_plugin::ArrayView::new(&[3], &values).unwrap();
     assert_eq!(
-        rescale(xs, 2.0),
+        rescale(&xs, 2.0),
         graphcal_plugin::Array::vector(vec![2.0, 5.0, -8.0]).unwrap()
     );
-    assert!((total(xs) + 0.5).abs() < 1e-12);
+    assert!((total(&xs) + 0.5).abs() < 1e-12);
+
+    let bools = [true, false, true];
+    let bools = graphcal_plugin::ArrayView::new(&[3], &bools).unwrap();
+    assert_eq!(
+        invert(&bools),
+        graphcal_plugin::Array::vector(vec![false, true, false]).unwrap()
+    );
+
+    let ints = [1_i64, -2, 3];
+    let ints = graphcal_plugin::ArrayView::new(&[3], &ints).unwrap();
+    assert_eq!(
+        increment(&ints),
+        graphcal_plugin::Array::vector(vec![2_i64, -1, 4]).unwrap()
+    );
 
     let matrix = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let matrix = graphcal_plugin::ArrayView::new(&[2, 3], &matrix).unwrap();
     assert_eq!(
-        matrix_transpose(matrix),
+        matrix_transpose(&matrix),
         graphcal_plugin::Array::new(vec![3, 2], vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap()
     );
 }
@@ -150,7 +182,8 @@ fn array_kernels_run_natively_with_explicit_shapes() {
 #[test]
 fn struct_kernels_return_the_generated_output_type() {
     let values = [3.0, -1.5, 2.0];
-    let span = span(graphcal_plugin::ArrayView::new(&[3], &values).unwrap());
+    let view = graphcal_plugin::ArrayView::new(&[3], &values).unwrap();
+    let span = span(&view);
     assert_eq!(span, SpanOutput { lo: -1.5, hi: 3.0 });
 }
 
@@ -171,6 +204,8 @@ fn manifest_matches_the_declarations() {
             "is_probability",
             "unrepresentable",
             "rescale",
+            "invert",
+            "increment",
             "matrix_transpose",
             "total",
             "span"
@@ -179,7 +214,30 @@ fn manifest_matches_the_declarations() {
 
     let rescale = &manifest.functions[5];
     assert_eq!(rescale.index_vars, ["I"]);
-    let span = &manifest.functions[8];
+    let invert = &manifest.functions[6];
+    assert!(matches!(
+        &invert.params[0].kind,
+        graphcal_plugin_abi::ManifestParamKind::Array {
+            element: graphcal_plugin_abi::ManifestArrayElementKind::Bool,
+            ..
+        }
+    ));
+    assert!(matches!(
+        &invert.result,
+        graphcal_plugin_abi::ManifestResultKind::Array {
+            element: graphcal_plugin_abi::ManifestArrayElementKind::Bool,
+            ..
+        }
+    ));
+    let increment = &manifest.functions[7];
+    assert!(matches!(
+        &increment.params[0].kind,
+        graphcal_plugin_abi::ManifestParamKind::Array {
+            element: graphcal_plugin_abi::ManifestArrayElementKind::Int,
+            ..
+        }
+    ));
+    let span = &manifest.functions[10];
     assert!(matches!(
         &span.result,
         graphcal_plugin_abi::ManifestResultKind::Struct { fields }
@@ -210,18 +268,18 @@ fn manifest_converts_to_the_compiler_signature_ir() {
         vec![
             FunctionParam {
                 name: FnParamName::expect_valid("a"),
-                kind: ValueKind::Quantity(DimMonomial::var(var())),
+                kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("b"),
-                kind: ValueKind::Quantity(DimMonomial::var(var())),
+                kind: ValueKind::quantity_monomial(DimMonomial::var(var())),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("t"),
                 kind: ValueKind::dimensionless(),
             },
         ],
-        ValueKind::Quantity(DimMonomial::var(var())),
+        ValueKind::quantity_monomial(DimMonomial::var(var())),
     )
     .expect("expected signature is valid");
 
@@ -243,14 +301,14 @@ fn manifest_converts_to_the_compiler_signature_ir() {
         vec![
             FunctionParam {
                 name: FnParamName::expect_valid("n"),
-                kind: ValueKind::Int,
+                kind: ValueKind::int(),
             },
             FunctionParam {
                 name: FnParamName::expect_valid("up"),
-                kind: ValueKind::Bool,
+                kind: ValueKind::bool(),
             },
         ],
-        ValueKind::Int,
+        ValueKind::int(),
     )
     .expect("expected signature is valid");
     assert!(step_signature.structurally_equivalent(&expected_step));

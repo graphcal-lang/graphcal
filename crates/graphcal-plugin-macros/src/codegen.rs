@@ -11,8 +11,8 @@
 //! Single-value ABI functions (quantities, `Bool`, and `Int`) are emitted as a
 //! single `extern "C-unwind"` item whose raw `f64` parameters double as the
 //! natural test surface. Functions that move arrays split in two: a natural
-//! `pub fn` taking [`graphcal_plugin::ArrayView`] values (what `cargo test`
-//! calls) and a `wasm32`-only export wrapper that decodes the pointer plus one
+//! `pub fn` taking borrowed typed [`graphcal_plugin::ArrayView`] values (what
+//! `cargo test` calls) and a `wasm32`-only export wrapper that decodes the pointer plus one
 //! extent per axis, calls the natural function, and writes an owned
 //! [`graphcal_plugin::Array`] through the host-allocated out-pointer.
 
@@ -22,7 +22,9 @@ use std::collections::hash_map::Entry;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
-use crate::lower::{FieldIr, FieldKindIr, FunctionIr, ParamKindIr, PluginIr, ResultKindIr};
+use crate::lower::{
+    FieldIr, FieldKindIr, FunctionIr, ParamKindIr, PluginIr, ResultKindIr, ScalarKindIr,
+};
 
 const MANIFEST_STATIC: &str = "GRAPHCAL_PLUGIN_MANIFEST";
 const MANIFEST_UNIQUENESS_GUARD: &str = "GRAPHCAL_PLUGIN_MANIFEST_SECTION_IS_UNIQUE";
@@ -325,10 +327,7 @@ fn register_output_structs(
                 }
                 Ok(Some(ident))
             }
-            ResultKindIr::Bool
-            | ResultKindIr::Int
-            | ResultKindIr::Quantity(_)
-            | ResultKindIr::Array { .. } => Ok(None),
+            ResultKindIr::Scalar(_) | ResultKindIr::Array { .. } => Ok(None),
         })
         .collect()
 }
@@ -422,9 +421,7 @@ impl FunctionSymbols {
                         })
                         .collect(),
                 },
-                ParamKindIr::Bool | ParamKindIr::Int | ParamKindIr::Quantity(_) => {
-                    ParamSymbols::Scalar
-                }
+                ParamKindIr::Scalar(_) => ParamSymbols::Scalar,
             })
             .collect();
         Self {
@@ -443,6 +440,14 @@ impl FunctionSymbols {
 
 fn internal_ident(spelling: &str) -> Ident {
     Ident::new(spelling, Span::mixed_site())
+}
+
+fn scalar_rust_type(kind: &ScalarKindIr) -> TokenStream {
+    match kind {
+        ScalarKindIr::Quantity(_) => quote! { f64 },
+        ScalarKindIr::Bool => quote! { bool },
+        ScalarKindIr::Int => quote! { i64 },
+    }
 }
 
 /// Generate the full expansion from the validated IR and its manifest
@@ -533,26 +538,26 @@ fn generate_f64_abi_function(function: &FunctionIr, symbols: &FunctionSymbols) -
     let conversions = function.params.iter().filter_map(|param| {
         let name = &param.name;
         let name_str = param.name.to_string();
-        match param.kind {
-            ParamKindIr::Quantity(_) | ParamKindIr::Array { .. } => None,
-            ParamKindIr::Bool => Some(quote! {
+        match &param.kind {
+            ParamKindIr::Scalar(ScalarKindIr::Quantity(_)) | ParamKindIr::Array { .. } => None,
+            ParamKindIr::Scalar(ScalarKindIr::Bool) => Some(quote! {
                 let #name: bool = ::graphcal_plugin::__rt::bool_from_abi(#name, #name_str);
             }),
-            ParamKindIr::Int => Some(quote! {
+            ParamKindIr::Scalar(ScalarKindIr::Int) => Some(quote! {
                 let #name: i64 = ::graphcal_plugin::__rt::int_from_abi(#name, #name_str);
             }),
         }
     });
     let result = &symbols.result;
-    let (result_ty, to_abi) = match function.result {
-        ResultKindIr::Quantity(_) | ResultKindIr::Array { .. } | ResultKindIr::Struct(_) => {
-            (quote! { f64 }, quote! { #result })
-        }
-        ResultKindIr::Bool => (
+    let (result_ty, to_abi) = match &function.result {
+        ResultKindIr::Scalar(ScalarKindIr::Quantity(_))
+        | ResultKindIr::Array { .. }
+        | ResultKindIr::Struct(_) => (quote! { f64 }, quote! { #result }),
+        ResultKindIr::Scalar(ScalarKindIr::Bool) => (
             quote! { bool },
             quote! { ::graphcal_plugin::__rt::bool_to_abi(#result) },
         ),
-        ResultKindIr::Int => (
+        ResultKindIr::Scalar(ScalarKindIr::Int) => (
             quote! { i64 },
             quote! { ::graphcal_plugin::__rt::int_to_abi(#result) },
         ),
@@ -598,18 +603,18 @@ fn wrapper_pieces(function: &FunctionIr, symbols: &FunctionSymbols) -> syn::Resu
         let pname = &param.name;
         let pname_str = pname.to_string();
         match (&param.kind, param_symbols) {
-            (ParamKindIr::Quantity(_), ParamSymbols::Scalar) => {
+            (ParamKindIr::Scalar(ScalarKindIr::Quantity(_)), ParamSymbols::Scalar) => {
                 raw_params.push(quote! { #pname: f64 });
                 natural_args.push(quote! { #pname });
             }
-            (ParamKindIr::Bool, ParamSymbols::Scalar) => {
+            (ParamKindIr::Scalar(ScalarKindIr::Bool), ParamSymbols::Scalar) => {
                 raw_params.push(quote! { #pname: f64 });
                 decodes.push(quote! {
                     let #pname: bool = ::graphcal_plugin::__rt::bool_from_abi(#pname, #pname_str);
                 });
                 natural_args.push(quote! { #pname });
             }
-            (ParamKindIr::Int, ParamSymbols::Scalar) => {
+            (ParamKindIr::Scalar(ScalarKindIr::Int), ParamSymbols::Scalar) => {
                 raw_params.push(quote! { #pname: f64 });
                 decodes.push(quote! {
                     let #pname: i64 = ::graphcal_plugin::__rt::int_from_abi(#pname, #pname_str);
@@ -617,7 +622,7 @@ fn wrapper_pieces(function: &FunctionIr, symbols: &FunctionSymbols) -> syn::Resu
                 natural_args.push(quote! { #pname });
             }
             (
-                ParamKindIr::Array { indexes, .. },
+                ParamKindIr::Array { element, indexes },
                 ParamSymbols::Array {
                     ptr,
                     len,
@@ -633,26 +638,33 @@ fn wrapper_pieces(function: &FunctionIr, symbols: &FunctionSymbols) -> syn::Resu
                     ));
                 }
                 raw_params.push(quote! { #ptr: *const f64, #(#extents: u32),* });
+                let decode = match element {
+                    ScalarKindIr::Quantity(_) => quote! {
+                        ::graphcal_plugin::__rt::quantity_array_view_from_abi(
+                            #ptr, #len, &#shape, #pname_str,
+                        )
+                    },
+                    ScalarKindIr::Bool => quote! {
+                        ::graphcal_plugin::__rt::bool_array_view_from_abi(
+                            #ptr, #len, &#shape, #pname_str,
+                        )
+                    },
+                    ScalarKindIr::Int => quote! {
+                        ::graphcal_plugin::__rt::int_array_view_from_abi(
+                            #ptr, #len, &#shape, #pname_str,
+                        )
+                    },
+                };
                 decodes.push(quote! {
                     let #shape = [#(#extents as usize),*];
                     let #len = ::graphcal_plugin::__rt::shape_len_u32(&#shape, #pname_str);
                     // SAFETY: the host wrote the shape product at `ptr` inside
                     // this instance's memory and keeps it alive for the call.
-                    let #pname = unsafe {
-                        ::graphcal_plugin::__rt::array_view_from_abi(
-                            #ptr,
-                            #len,
-                            &#shape,
-                            #pname_str,
-                        )
-                    };
+                    let #pname = unsafe { #decode };
                 });
-                natural_args.push(quote! { #pname });
+                natural_args.push(quote! { &#pname });
             }
-            (
-                ParamKindIr::Bool | ParamKindIr::Int | ParamKindIr::Quantity(_),
-                ParamSymbols::Array { .. },
-            )
+            (ParamKindIr::Scalar(_), ParamSymbols::Array { .. })
             | (ParamKindIr::Array { .. }, ParamSymbols::Scalar) => {
                 return Err(internal_invariant_error(
                     pname.span(),
@@ -669,8 +681,9 @@ fn wrapper_pieces(function: &FunctionIr, symbols: &FunctionSymbols) -> syn::Resu
     })
 }
 
-/// Emit an array-moving function: the natural `pub fn` (slices in, `Vec`
-/// out) plus the `wasm32`-only export wrapper speaking the buffer protocol.
+/// Emit an array-moving function: the natural `pub fn` (borrowed typed views
+/// in, owned typed arrays out) plus the `wasm32`-only export wrapper speaking
+/// the buffer protocol.
 fn generate_buffer_function(
     function: &FunctionIr,
     symbols: &FunctionSymbols,
@@ -682,29 +695,21 @@ fn generate_buffer_function(
     let natural_params = function.params.iter().map(|param| {
         let pname = &param.name;
         match &param.kind {
-            ParamKindIr::Quantity(_) => quote! { #pname: f64 },
-            ParamKindIr::Bool => quote! { #pname: bool },
-            ParamKindIr::Int => quote! { #pname: i64 },
-            ParamKindIr::Array { .. } => quote! { #pname: ::graphcal_plugin::ArrayView<'_> },
+            ParamKindIr::Scalar(scalar) => {
+                let ty = scalar_rust_type(scalar);
+                quote! { #pname: #ty }
+            }
+            ParamKindIr::Array { element, .. } => {
+                let element_ty = scalar_rust_type(element);
+                quote! { #pname: &::graphcal_plugin::ArrayView<'_, #element_ty> }
+            }
         }
     });
     let output_ident = match (&function.result, &symbols.output_struct) {
         (ResultKindIr::Struct(_), Some(ident)) => Some(ident),
-        (
-            ResultKindIr::Bool
-            | ResultKindIr::Int
-            | ResultKindIr::Quantity(_)
-            | ResultKindIr::Array { .. },
-            None,
-        ) => None,
+        (ResultKindIr::Scalar(_) | ResultKindIr::Array { .. }, None) => None,
         (ResultKindIr::Struct(_), None)
-        | (
-            ResultKindIr::Bool
-            | ResultKindIr::Int
-            | ResultKindIr::Quantity(_)
-            | ResultKindIr::Array { .. },
-            Some(_),
-        ) => {
+        | (ResultKindIr::Scalar(_) | ResultKindIr::Array { .. }, Some(_)) => {
             return Err(internal_invariant_error(
                 name.span(),
                 name,
@@ -713,10 +718,11 @@ fn generate_buffer_function(
         }
     };
     let natural_result_ty = match &function.result {
-        ResultKindIr::Quantity(_) => quote! { f64 },
-        ResultKindIr::Bool => quote! { bool },
-        ResultKindIr::Int => quote! { i64 },
-        ResultKindIr::Array { .. } => quote! { ::graphcal_plugin::Array },
+        ResultKindIr::Scalar(scalar) => scalar_rust_type(scalar),
+        ResultKindIr::Array { element, .. } => {
+            let element_ty = scalar_rust_type(element);
+            quote! { ::graphcal_plugin::Array<#element_ty> }
+        }
         ResultKindIr::Struct(_) => {
             let Some(output_ident) = output_ident else {
                 return Err(internal_invariant_error(
@@ -827,8 +833,8 @@ impl BufferWrapperCodegen<'_> {
         let decodes = self.decodes;
         let natural_args = self.natural_args;
         Ok(match &self.function.result {
-            ResultKindIr::Array { indexes, .. } => self.array_result(indexes)?,
-            ResultKindIr::Quantity(_) => quote! {
+            ResultKindIr::Array { element, indexes } => self.array_result(element, indexes)?,
+            ResultKindIr::Scalar(ScalarKindIr::Quantity(_)) => quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(export_name = #name_str)]
                 extern "C-unwind" fn #wrapper_ident(#(#raw_params),*) -> f64 {
@@ -837,7 +843,7 @@ impl BufferWrapperCodegen<'_> {
                     #name(#(#natural_args),*)
                 }
             },
-            ResultKindIr::Bool => quote! {
+            ResultKindIr::Scalar(ScalarKindIr::Bool) => quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(export_name = #name_str)]
                 extern "C-unwind" fn #wrapper_ident(#(#raw_params),*) -> f64 {
@@ -846,7 +852,7 @@ impl BufferWrapperCodegen<'_> {
                     ::graphcal_plugin::__rt::bool_to_abi(#name(#(#natural_args),*))
                 }
             },
-            ResultKindIr::Int => quote! {
+            ResultKindIr::Scalar(ScalarKindIr::Int) => quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(export_name = #name_str)]
                 extern "C-unwind" fn #wrapper_ident(#(#raw_params),*) -> f64 {
@@ -859,7 +865,11 @@ impl BufferWrapperCodegen<'_> {
         })
     }
 
-    fn array_result(&self, indexes: &[syn::Ident]) -> syn::Result<TokenStream> {
+    fn array_result(
+        &self,
+        element: &ScalarKindIr,
+        indexes: &[syn::Ident],
+    ) -> syn::Result<TokenStream> {
         // Every result extent comes from an input occurrence of the same
         // index variable; lowering guarantees each binding exists.
         let expected_extents = indexes
@@ -875,6 +885,23 @@ impl BufferWrapperCodegen<'_> {
         let result = &self.symbols.result;
         let out_ptr = &self.symbols.out_ptr;
         let expected_shape = &self.symbols.expected_shape;
+        let write_result = match element {
+            ScalarKindIr::Quantity(_) => quote! {
+                ::graphcal_plugin::__rt::write_quantity_array_result(
+                    &#result, #out_ptr, &#expected_shape, #name_str,
+                );
+            },
+            ScalarKindIr::Bool => quote! {
+                ::graphcal_plugin::__rt::write_bool_array_result(
+                    &#result, #out_ptr, &#expected_shape, #name_str,
+                );
+            },
+            ScalarKindIr::Int => quote! {
+                ::graphcal_plugin::__rt::write_int_array_result(
+                    &#result, #out_ptr, &#expected_shape, #name_str,
+                );
+            },
+        };
         Ok(quote! {
             #[cfg(target_arch = "wasm32")]
             #[unsafe(export_name = #name_str)]
@@ -888,14 +915,7 @@ impl BufferWrapperCodegen<'_> {
                 let #expected_shape = [#(#expected_extents as usize),*];
                 // SAFETY: the host allocated the product of the
                 // signature-bound result extents at this pointer.
-                unsafe {
-                    ::graphcal_plugin::__rt::write_array_result(
-                        &#result,
-                        #out_ptr,
-                        &#expected_shape,
-                        #name_str,
-                    );
-                }
+                unsafe { #write_result }
             }
         })
     }
@@ -979,14 +999,8 @@ fn binding_extent_ident(
                     });
                 }
             }
-            (
-                ParamKindIr::Bool | ParamKindIr::Int | ParamKindIr::Quantity(_),
-                ParamSymbols::Scalar,
-            ) => {}
-            (
-                ParamKindIr::Bool | ParamKindIr::Int | ParamKindIr::Quantity(_),
-                ParamSymbols::Array { .. },
-            )
+            (ParamKindIr::Scalar(_), ParamSymbols::Scalar) => {}
+            (ParamKindIr::Scalar(_), ParamSymbols::Array { .. })
             | (ParamKindIr::Array { .. }, ParamSymbols::Scalar) => {
                 return Err(internal_invariant_error(
                     param.name.span(),

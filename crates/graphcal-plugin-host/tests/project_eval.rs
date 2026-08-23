@@ -16,8 +16,8 @@ use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, load_project};
 use graphcal_io::RealFileSystem;
 use graphcal_plugin_abi::{
-    ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind, ManifestRational,
-    ManifestResultKind, ManifestVarPower, PluginManifest,
+    ManifestArrayElementKind, ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind,
+    ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
 };
 use graphcal_plugin_host::{PluginHost, register_project_plugins};
 
@@ -533,26 +533,26 @@ fn scale_plugin() -> Vec<u8> {
             (
                 "xs",
                 ManifestParamKind::Array {
-                    element: ManifestMonomial {
+                    element: ManifestArrayElementKind::Quantity(ManifestMonomial {
                         vars: vec![ManifestVarPower {
                             var: "D".to_string(),
                             pow: ManifestRational { num: 1, den: 1 },
                         }],
                         fixed: Vec::new(),
-                    },
+                    }),
                     indexes: vec!["I".to_string()],
                 },
             ),
             ("k", dimensionless()),
         ],
         ManifestResultKind::Array {
-            element: ManifestMonomial {
+            element: ManifestArrayElementKind::Quantity(ManifestMonomial {
                 vars: vec![ManifestVarPower {
                     var: "D".to_string(),
                     pow: ManifestRational { num: 1, den: 1 },
                 }],
                 fixed: Vec::new(),
-            },
+            }),
             indexes: vec!["I".to_string()],
         },
     );
@@ -620,6 +620,124 @@ node margin_total: Velocity = sum(@margined);
     );
 }
 
+fn bool_int_array_plugin() -> Vec<u8> {
+    let array_function = |name: &str, element: ManifestArrayElementKind| ManifestFunction {
+        name: name.to_string(),
+        dim_vars: Vec::new(),
+        index_vars: vec!["I".to_string()],
+        params: vec![ManifestParam {
+            name: "values".to_string(),
+            kind: ManifestParamKind::Array {
+                element: element.clone(),
+                indexes: vec!["I".to_string()],
+            },
+        }],
+        result: ManifestResultKind::Array {
+            element,
+            indexes: vec!["I".to_string()],
+        },
+    };
+    plugin_bytes(
+        r#"
+        (module
+          (memory (export "memory") 1)
+          (global $bump (mut i32) (i32.const 1024))
+          (func (export "graphcal_alloc") (param $size i32) (result i32)
+            (local $ptr i32)
+            (local.set $ptr (global.get $bump))
+            (global.set $bump (i32.add (global.get $bump) (local.get $size)))
+            (local.get $ptr))
+          (func (export "graphcal_free") (param i32 i32))
+          (func (export "invert") (param $ptr i32) (param $len i32) (param $out i32)
+            (local $i i32)
+            (block $done
+              (loop $loop
+                (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+                (f64.store
+                  (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 8)))
+                  (f64.sub
+                    (f64.const 1)
+                    (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8))))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop))))
+          (func (export "increment") (param $ptr i32) (param $len i32) (param $out i32)
+            (local $i i32)
+            (block $done
+              (loop $loop
+                (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+                (f64.store
+                  (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 8)))
+                  (f64.add
+                    (f64.load (i32.add (local.get $ptr) (i32.mul (local.get $i) (i32.const 8))))
+                    (f64.const 1)))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $loop)))))
+        "#,
+        vec![
+            array_function("invert", ManifestArrayElementKind::Bool),
+            array_function("increment", ManifestArrayElementKind::Int),
+        ],
+    )
+}
+
+#[test]
+fn bool_and_int_array_plugins_evaluate_end_to_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+import plugin "plugins/scalars.wasm" as scalars {
+    fn invert<I: Index>(values: Bool[I]) -> Bool[I];
+    fn increment<I: Index>(values: Int[I]) -> Int[I];
+}
+
+index Item = { A, B, C };
+node flags: Bool[Item] = { Item.A: true, Item.B: false, Item.C: true };
+node inverted: Bool[Item] = scalars.invert(@flags);
+node first_flag: Bool = @inverted[Item.A];
+node numbers: Int[Item] = { Item.A: 1, Item.B: -2, Item.C: 3 };
+node incremented: Int[Item] = scalars.increment(@numbers);
+node second_number: Int = @incremented[Item.B];
+"#;
+    let result = eval_project_with_plugin(
+        dir.path(),
+        source,
+        Some(("plugins/scalars.wasm", bool_int_array_plugin())),
+    )
+    .unwrap();
+    assert!(matches!(
+        value_for(&result, "first_flag"),
+        Value::Bool(false)
+    ));
+    assert!(matches!(
+        value_for(&result, "second_number"),
+        Value::Int(-1)
+    ));
+}
+
+#[test]
+fn bool_and_int_array_arguments_remain_semantically_distinct() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = r#"
+import plugin "plugins/scalars.wasm" as scalars {
+    fn invert<I: Index>(values: Bool[I]) -> Bool[I];
+    fn increment<I: Index>(values: Int[I]) -> Int[I];
+}
+index Item = { A, B };
+node numbers: Int[Item] = { Item.A: 1, Item.B: 2 };
+node bad: Bool[Item] = scalars.invert(@numbers);
+"#;
+    let err = eval_project_with_plugin(
+        dir.path(),
+        source,
+        Some(("plugins/scalars.wasm", bool_int_array_plugin())),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("expected Bool with exactly 1 indexed axes"),
+        "{err}"
+    );
+}
+
 #[test]
 fn declared_array_signature_must_match_the_manifest() {
     // The declaration says the result reuses the input's index variable but
@@ -680,13 +798,13 @@ fn span_plugin() -> Vec<u8> {
         &[(
             "xs",
             ManifestParamKind::Array {
-                element: ManifestMonomial {
+                element: ManifestArrayElementKind::Quantity(ManifestMonomial {
                     vars: vec![ManifestVarPower {
                         var: "D".to_string(),
                         pow: ManifestRational { num: 1, den: 1 },
                     }],
                     fixed: Vec::new(),
-                },
+                }),
                 indexes: vec!["I".to_string()],
             },
         )],

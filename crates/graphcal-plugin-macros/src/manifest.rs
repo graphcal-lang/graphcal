@@ -6,13 +6,15 @@
 //! format by construction.
 
 use graphcal_plugin_abi::{
-    ManifestDimPower, ManifestFunction, ManifestMonomial, ManifestParam, ManifestParamKind,
-    ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
+    ManifestArrayElementKind, ManifestDimPower, ManifestFunction, ManifestMonomial, ManifestParam,
+    ManifestParamKind, ManifestRational, ManifestResultKind, ManifestVarPower, PluginManifest,
 };
 use proc_macro2::Span;
 
 use crate::dims;
-use crate::lower::{FieldKindIr, FunctionIr, MonomialIr, ParamKindIr, PluginIr, ResultKindIr};
+use crate::lower::{
+    FieldKindIr, FunctionIr, MonomialIr, ParamKindIr, PluginIr, ResultKindIr, ScalarKindIr,
+};
 use crate::rational::Rational;
 
 /// Serialize the signature IR as the manifest JSON payload.
@@ -75,13 +77,13 @@ fn param_kind_to_manifest(
     fallback_span: Span,
 ) -> syn::Result<ManifestParamKind> {
     Ok(match kind {
-        ParamKindIr::Bool => ManifestParamKind::Bool,
-        ParamKindIr::Int => ManifestParamKind::Int,
-        ParamKindIr::Quantity(monomial) => {
+        ParamKindIr::Scalar(ScalarKindIr::Bool) => ManifestParamKind::Bool,
+        ParamKindIr::Scalar(ScalarKindIr::Int) => ManifestParamKind::Int,
+        ParamKindIr::Scalar(ScalarKindIr::Quantity(monomial)) => {
             ManifestParamKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
         }
         ParamKindIr::Array { element, indexes } => ManifestParamKind::Array {
-            element: monomial_to_manifest(element, fallback_span)?,
+            element: scalar_kind_to_array_element(element, fallback_span)?,
             indexes: indexes.iter().map(ToString::to_string).collect(),
         },
     })
@@ -92,13 +94,13 @@ fn result_kind_to_manifest(
     fallback_span: Span,
 ) -> syn::Result<ManifestResultKind> {
     Ok(match kind {
-        ResultKindIr::Bool => ManifestResultKind::Bool,
-        ResultKindIr::Int => ManifestResultKind::Int,
-        ResultKindIr::Quantity(monomial) => {
+        ResultKindIr::Scalar(ScalarKindIr::Bool) => ManifestResultKind::Bool,
+        ResultKindIr::Scalar(ScalarKindIr::Int) => ManifestResultKind::Int,
+        ResultKindIr::Scalar(ScalarKindIr::Quantity(monomial)) => {
             ManifestResultKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
         }
         ResultKindIr::Array { element, indexes } => ManifestResultKind::Array {
-            element: monomial_to_manifest(element, fallback_span)?,
+            element: scalar_kind_to_array_element(element, fallback_span)?,
             indexes: indexes.iter().map(ToString::to_string).collect(),
         },
         ResultKindIr::Struct(fields) => ManifestResultKind::Struct {
@@ -120,6 +122,19 @@ fn result_kind_to_manifest(
                 })
                 .collect::<syn::Result<Vec<_>>>()?,
         },
+    })
+}
+
+fn scalar_kind_to_array_element(
+    kind: &ScalarKindIr,
+    fallback_span: Span,
+) -> syn::Result<ManifestArrayElementKind> {
+    Ok(match kind {
+        ScalarKindIr::Quantity(monomial) => {
+            ManifestArrayElementKind::Quantity(monomial_to_manifest(monomial, fallback_span)?)
+        }
+        ScalarKindIr::Bool => ManifestArrayElementKind::Bool,
+        ScalarKindIr::Int => ManifestArrayElementKind::Int,
     })
 }
 
