@@ -38,8 +38,8 @@ pub struct HydrationProject {
 pub struct Hydration<'a> {
     pub engine: EngineBundle<'a>,
     pub project: HydrationProject,
-    /// Baseline binding expressions from build-time `--set`/`--input`
-    /// overrides, replayed as the initial reader-visible values.
+    /// Baseline binding expressions from build-time `--param` arguments,
+    /// replayed as the initial reader-visible values.
     pub baseline_bindings: Vec<(String, String)>,
 }
 

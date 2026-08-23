@@ -50,7 +50,8 @@ use graphcal::format::{
 
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{
-    InputOverrideSource, OverrideParseError, ParsedOverrides, parse_overrides_with_sources,
+    JsonOverrideSource, OverrideParseError, ParameterArgs, ParsedOverrides,
+    parse_overrides_with_sources,
 };
 
 const VERSION: &str = if env!("GIT_HASH").is_empty() {
@@ -101,15 +102,8 @@ enum Commands {
         /// Values to display: the entry surface or every included-DAG value
         #[arg(long, value_enum, default_value = "surface")]
         output_view: OutputView,
-        /// Bind a param to a closed value: --set 'name=value'
-        #[arg(long)]
-        set: Vec<String>,
-        /// JSON input file for param values
-        #[arg(long)]
-        input: Option<PathBuf>,
-        /// Maximum size (in bytes) of the --input JSON file. Defaults to 1 MiB.
-        #[arg(long)]
-        input_max_bytes: Option<u64>,
+        #[command(flatten)]
+        parameters: ParameterArgs,
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
@@ -409,17 +403,14 @@ fn run_command(cli: Cli) {
             file,
             format,
             output_view,
-            set,
-            input,
-            input_max_bytes,
+            parameters,
             root,
             plot: plot_output,
         } => {
-            let overrides =
-                match parse_overrides_with_sources(&set, input.as_deref(), input_max_bytes) {
-                    Ok(o) => o,
-                    Err(e) => report_override_error(&e),
-                };
+            let overrides = match parse_overrides_with_sources(&parameters) {
+                Ok(overrides) => overrides,
+                Err(error) => report_parameter_error(&error),
+            };
             handle_eval(
                 &file,
                 &format,
@@ -439,13 +430,9 @@ fn run_command(cli: Cli) {
 fn run_report(command: report::ReportCommands) {
     match command {
         report::ReportCommands::Build(args) => {
-            let overrides = match parse_overrides_with_sources(
-                &args.set,
-                args.input.as_deref(),
-                args.input_max_bytes,
-            ) {
-                Ok(o) => o,
-                Err(e) => report_override_error(&e),
+            let overrides = match parse_overrides_with_sources(&args.parameters) {
+                Ok(overrides) => overrides,
+                Err(error) => report_parameter_error(&error),
             };
             match report::run_build(&args, &overrides, VERSION) {
                 Ok(report::ReportStatus::Success) => {}
@@ -642,12 +629,12 @@ fn run_deps_lock(root: Option<&Path>) {
     }
 }
 
-/// Print an override-parse error and exit with code 2.
+/// Print a parameter-binding parse error and exit with code 2.
 ///
 /// Kept separate so that the return type (`!`) stays out of the happy path
 /// in `main`.
-fn report_override_error(e: &OverrideParseError) -> ! {
-    eprintln!("error: {e}");
+fn report_parameter_error(error: &OverrideParseError) -> ! {
+    eprintln!("error: {error}");
     process::exit(2);
 }
 
@@ -675,8 +662,8 @@ fn handle_eval(
             let prepared = prepare_from_project_with_host_fns(&project, &host_fns)?;
             let mut bindings = prepared.binding_builder();
             for (name, expression) in &overrides.values {
-                match overrides.input_sources.get(name) {
-                    Some(InputOverrideSource { source, span }) => {
+                match overrides.json_sources.get(name) {
+                    Some(JsonOverrideSource { source, span }) => {
                         bindings.bind_external_expression(name, expression, source, *span)?;
                     }
                     None => bindings.bind_expression(name, expression)?,

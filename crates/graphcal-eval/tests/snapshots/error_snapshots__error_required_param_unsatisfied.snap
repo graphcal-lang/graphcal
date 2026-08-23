@@ -10,5 +10,5 @@ Begin snippet for required_param_unsatisfied.gcl starting at line 1, column 1
 snippet line 1: // Error: required param needs a value supplied at eval time.
 snippet line 2: param x: Dimensionless;
     label at line 2, columns 1 to 23: declared here without a default value
-diagnostic help: supply the entry-DAG input via `--set 'x=<value>'` / `--input`, or bind this named input port at an include/call site
+diagnostic help: supply the entry-DAG input via `--param 'x=<value>'`, `--params-json`, or `--params-json-file`; otherwise bind this named input port at an include/call site
 diagnostic code: graphcal::O003

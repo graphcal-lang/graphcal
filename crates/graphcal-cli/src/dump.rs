@@ -17,7 +17,9 @@ use graphcal_eval::eval::{
 use graphcal_eval::loader::{build_rooted_filesystem, load_project};
 use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, NeverCancel};
 
-use crate::overrides::{OverrideParseError, ParsedOverrides, parse_overrides_with_sources};
+use crate::overrides::{
+    OverrideParseError, ParameterArgs, ParsedOverrides, parse_overrides_with_sources,
+};
 
 const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -61,15 +63,8 @@ pub struct FileArgs {
 pub struct EvaluationArgs {
     #[command(flatten)]
     project: FileArgs,
-    /// Bind a param to a closed value: --set 'name=value'
-    #[arg(long)]
-    set: Vec<String>,
-    /// JSON input file for param values
-    #[arg(long)]
-    input: Option<PathBuf>,
-    /// Maximum size of the --input JSON file
-    #[arg(long)]
-    input_max_bytes: Option<u64>,
+    #[command(flatten)]
+    parameters: ParameterArgs,
 }
 
 /// Process status after a successful dump infrastructure run.
@@ -242,8 +237,7 @@ fn parse_bindings(
     prepared: &PreparedProject,
     args: &EvaluationArgs,
 ) -> Result<ParameterBindingRow, DumpError> {
-    let overrides =
-        parse_overrides_with_sources(&args.set, args.input.as_deref(), args.input_max_bytes)?;
+    let overrides = parse_overrides_with_sources(&args.parameters)?;
     build_bindings(prepared, &overrides)
 }
 
@@ -253,7 +247,7 @@ fn build_bindings(
 ) -> Result<ParameterBindingRow, DumpError> {
     let mut bindings = prepared.binding_builder();
     for (name, expression) in &overrides.values {
-        match overrides.input_sources.get(name) {
+        match overrides.json_sources.get(name) {
             Some(source) => {
                 bindings.bind_external_expression(name, expression, &source.source, source.span)?;
             }

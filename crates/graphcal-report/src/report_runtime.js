@@ -3,7 +3,7 @@
 // Runs the same compiler/evaluator the CLI uses, compiled to WebAssembly and
 // embedded in this page, inside a Web Worker built from a blob URL so the
 // single-file artifact works from file:// paths. Readers bind closed typed
-// values to entry params (the CLI --set discipline); results patch the static
+// values to entry params (the CLI --param discipline); results patch the static
 // baseline in place. If anything here fails, the page loudly says so and the
 // static baseline remains valid.
 (function () {

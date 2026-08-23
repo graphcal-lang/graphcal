@@ -200,8 +200,9 @@ regular_declaration_kind
 (* A param is a named DAG input port, tracked separately from declarations
    carrying an explicit `pub` marker. Its effective bound/default value remains
    externally selectable as an output. Params may have a default or be required
-   (no `= expr`). Required entry-DAG ports use `--set` / `--input`; required
-   callable-DAG ports use include/call bindings. Params never take visibility. *)
+   (no `= expr`). Required entry-DAG ports use `--param`, `--params-json`, or
+   `--params-json-file`; required callable-DAG ports use include/call bindings.
+   Params never take visibility. *)
 param_decl
    = "param", IDENT, [ ":", type_expr ], [ "=", expr ], ";";
 

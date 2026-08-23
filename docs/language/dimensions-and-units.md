@@ -142,7 +142,9 @@ param usd_per_eur: Dimensionless = 1.08;
 unit EUR: Money = (@usd_per_eur) USD;
 ```
 
-Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so overriding `usd_per_eur` (e.g., via `--set usd_per_eur=1.20`) changes all EUR-denominated values accordingly.
+Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so
+binding `usd_per_eur` at evaluation time (e.g., via
+`--param 'usd_per_eur=1.20'`) changes all EUR-denominated values accordingly.
 
 Dynamic unit definitions are fully checked even when the unit is never used. The scale expression must lower successfully and have the concrete scalar type `Dimensionless`: dimensioned quantities, `Bool`, `Int`, structs/unions, and indexed values are rejected (`D032`). Runtime params and nodes may be referenced; assertions and external plugin functions may not. The right-hand unit expression must still have exactly the declared dimension (`D031`).
 

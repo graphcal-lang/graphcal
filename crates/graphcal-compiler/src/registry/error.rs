@@ -1439,17 +1439,17 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("cannot override `{name}`: it is a {actual_kind}, not a param")]
+    #[error("cannot bind `{name}`: it is a {actual_kind}, not a param")]
     #[diagnostic(
         code(graphcal::O001),
-        help("only `param` declarations can be overridden with --set")
+        help("only `param` declarations can receive external parameter bindings")
     )]
     OverrideNotAParam {
         name: DeclName,
         actual_kind: crate::registry::resolve_types::DeclCategory,
     },
 
-    #[error("unknown parameter `{name}` in --set override")]
+    #[error("unknown entry parameter `{name}` in external binding")]
     #[diagnostic(
         code(graphcal::O002),
         help("the name must match a `param` declared in the file")
@@ -1460,7 +1460,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::O003),
         help(
-            "supply the entry-DAG input via `--set '{name}=<value>'` / `--input`, or bind this named input port at an include/call site"
+            "supply the entry-DAG input via `--param '{name}=<value>'`, `--params-json`, or `--params-json-file`; otherwise bind this named input port at an include/call site"
         )
     )]
     RequiredParamNotProvided {
