@@ -10,9 +10,14 @@ minimum_test_timeout = 120.0
 # be almost a no-op, so a baseline-relative build timeout is not representative.
 # Keep cargo-mutants' default of no build timeout to avoid spurious CI findings.
 
-# Test/debug renderers are not semantic runtime behavior. Keep exclusions exact
-# and review them whenever the named implementation moves.
+# Test/debug renderers are not semantic runtime behavior. Two known
+# nonterminating section mutations repeatedly terminate the GitHub runner before
+# cargo-mutants can report its timeout; they remain recorded availability
+# findings in the baseline. Keep exclusions exact and review them whenever the
+# named implementation moves.
 exclude_re = [
   "<impl fmt::Debug for Dimension>::fmt",
-  "<impl fmt::Debug for Rational>::fmt"
+  "<impl fmt::Debug for Rational>::fmt",
+  "replace \\+= with -= in SectionWalker<'a>::next_section$",
+  "replace == with != in encode_leb128_u32$"
 ]

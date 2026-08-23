@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run --script
-"""Run cargo-mutants and apply Graphcal's reviewed survivor ratchet."""
+"""Run cargo-mutants and apply Graphcal's tracked survivor ratchet."""
 
 from __future__ import annotations
 
@@ -8,14 +8,23 @@ from pathlib import Path
 import sys
 
 
-def main() -> int:
-    command = ["cargo", "mutants", *sys.argv[1:]]
+REPORT = Path("mutants.out/outcomes.json")
+COMPLETION_MARKER = Path("mutants.out/graphcal-campaign-complete")
+
+
+def main(
+    arguments: list[str] | None = None,
+    report: Path = REPORT,
+    completion_marker: Path = COMPLETION_MARKER,
+) -> int:
+    cargo_arguments = sys.argv[1:] if arguments is None else arguments
+    command = ["cargo", "mutants", *cargo_arguments]
     completed = subprocess.run(command, check=False)
     if completed.returncode in {0, 2, 3}:
-        report = Path("mutants.out/outcomes.json")
         if not report.is_file():
             print("cargo-mutants produced no outcomes report", file=sys.stderr)
             return 1
+        completion_marker.write_text("completed\n", encoding="utf-8")
         return subprocess.run(
             ["./internals/check-mutants-ratchet.py", str(report)],
             check=False,
