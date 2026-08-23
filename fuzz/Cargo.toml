@@ -1,71 +1,71 @@
 [package]
 name = "graphcal-fuzz"
 version = "0.0.0"
-publish = false
 edition = "2024"
+publish = false
 
 [package.metadata]
 cargo-fuzz = true
-
-[dependencies]
-graphcal-compiler = { path = "../crates/graphcal-compiler", version = "0.0.1-alpha.23" }
-graphcal-eval = { path = "../crates/graphcal-eval", version = "0.0.1-alpha.23" }
-graphcal-fmt = { path = "../crates/graphcal-fmt", version = "0.0.1-alpha.23" }
-graphcal-io = { path = "../crates/graphcal-io", version = "0.0.1-alpha.23" }
-graphcal-package = { path = "../crates/graphcal-package", version = "0.0.1-alpha.23" }
-graphcal-plugin-abi = { path = "../crates/graphcal-plugin-abi", version = "0.0.1-alpha.23" }
-graphcal-test-support = { version = "0.0.1-alpha.23", path = "../crates/graphcal-test-support" }
-libfuzzer-sys = "0.4"
 
 # Keep nightly-only fuzz dependencies out of the stable production workspace.
 [workspace]
 members = ["."]
 
 [[bin]]
+bench = false
+doc = false
 name = "parser"
 path = "fuzz_targets/parser.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "formatter"
 path = "fuzz_targets/formatter.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "package_manifest"
 path = "fuzz_targets/package_manifest.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "package_lockfile"
 path = "fuzz_targets/package_lockfile.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "plugin_manifest"
 path = "fuzz_targets/plugin_manifest.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "plugin_section"
 path = "fuzz_targets/plugin_section.rs"
 test = false
-doc = false
-bench = false
 
 [[bin]]
+bench = false
+doc = false
 name = "generated_project"
 path = "fuzz_targets/generated_project.rs"
 test = false
-doc = false
-bench = false
+
+[dependencies]
+graphcal-compiler = { path = "../crates/graphcal-compiler", version = "0.0.1-alpha.26" }
+graphcal-eval = { path = "../crates/graphcal-eval", version = "0.0.1-alpha.26" }
+graphcal-fmt = { path = "../crates/graphcal-fmt", version = "0.0.1-alpha.26" }
+graphcal-io = { path = "../crates/graphcal-io", version = "0.0.1-alpha.26" }
+graphcal-package = { path = "../crates/graphcal-package", version = "0.0.1-alpha.26" }
+graphcal-plugin-abi = { path = "../crates/graphcal-plugin-abi", version = "0.0.1-alpha.26" }
+graphcal-test-support = { path = "../crates/graphcal-test-support", version = "0.0.1-alpha.26" }
+libfuzzer-sys = "0.4"
