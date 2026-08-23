@@ -6,6 +6,10 @@ on:
       - ".cargo/mutants*.txt"
       - ".cargo/mutants.toml"
       - ".github/workflows/mutants.yaml"
+      - "internals/check-mutants-ratchet.py"
+      - "internals/run-mutants-ratcheted.py"
+      - "internals/test_check_mutants_ratchet.py"
+      - "internals/test_run_mutants_ratcheted.py"
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/**/*.rs"
@@ -26,6 +30,27 @@ env:
   UV_VERSION: "0.12.x"
 
 jobs:
+  ratchet-tool:
+    name: mutation ratchet tool
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Test mutation ratchet tool
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          uv run -m unittest
+          internals/test_check_mutants_ratchet.py
+          internals/test_run_mutants_ratcheted.py
+
   changed-region:
     name: changed-region (informational)
     if: github.event_name == 'pull_request'
@@ -81,9 +106,12 @@ jobs:
           - name: package
             package: graphcal-package
             files: -f crates/graphcal-package/src/lib.rs
-          - name: plugin
+          - name: plugin-manifest
             package: graphcal-plugin-abi
-            files: -f crates/graphcal-plugin-abi/src/manifest.rs -f crates/graphcal-plugin-abi/src/section.rs
+            files: -f crates/graphcal-plugin-abi/src/manifest.rs
+          - name: plugin-section
+            package: graphcal-plugin-abi
+            files: -f crates/graphcal-plugin-abi/src/section.rs
           - name: presentation
             package: graphcal-eval
             files: -f crates/graphcal-eval/src/runtime_presentation.rs -f crates/graphcal-eval/src/eval/display.rs
@@ -125,3 +153,87 @@ jobs:
           name: mutants-${{ matrix.shard.name }}-${{ github.run_id }}
           path: mutants.out
           if-no-files-found: ignore
+
+      - name: Upload shard outcome for aggregation
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutant-outcome-${{ matrix.shard.name }}-${{ github.run_id }}
+          path: |
+            mutants.out/outcomes.json
+            mutants.out/graphcal-campaign-complete
+          if-no-files-found: error
+
+  update-baseline:
+    name: open mutation finding PR
+    if: >-
+      ${{ always()
+      && needs.ratchet-tool.result == 'success'
+      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    needs:
+      - ratchet-tool
+      - weekly
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+
+      - name: Download mutation outcomes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutant-outcome-*-${{ github.run_id }}
+          path: mutation-reports
+
+      - name: Add new findings to the baseline
+        run: |
+          shopt -s nullglob
+          reports=(mutation-reports/*/outcomes.json)
+          markers=(mutation-reports/*/graphcal-campaign-complete)
+          if (( ${#reports[@]} != 5 || ${#markers[@]} != 5 )); then
+            printf 'Expected 5 complete mutation reports; found %s reports and %s completion markers.\n' \
+              "${#reports[@]}" "${#markers[@]}" >&2
+            exit 1
+          fi
+          ./internals/check-mutants-ratchet.py --update "${reports[@]}"
+          rm -rf mutation-reports
+
+      - name: Create or update mutation finding PR
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: .cargo/mutants-baseline.txt
+          branch: automation/mutants-baseline
+          commit-message: "chore: track mutation test findings"
+          delete-branch: true
+          title: "chore: track mutation test findings"
+          body: |
+            > [!WARNING]
+            > This content was written by an AI agent and must be verified by a human developer. After human verification, this alert may be removed.
+
+            ## Summary
+
+            - Record newly missed or timed-out mutants found by the scheduled safety-core campaign.
+            - Keep each finding visible in the mutation work queue without blocking unrelated development.
+            - Update this PR when later scheduled campaigns discover more findings.
+
+            Mutation findings should be resolved or explained in follow-up changes; the baseline is not a permanent exemption list.
+
+            Latest campaign: [workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) (see its mutation-report artifacts for diffs and logs).
+
+            ## AI assistance
+
+            - AI used: yes — the mutation workflow generated this baseline update and PR.
+            - Human review of AI-assisted code: pending
+
+            ## Breaking changes
+
+            - [x] No breaking changes
+            - [ ] Breaking changes; the `breaking change` label is applied
