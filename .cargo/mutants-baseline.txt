@@ -74,3 +74,7 @@ crates/graphcal-eval/src/eval/display.rs	format_coordinate_exact	FnValue	String:
 crates/graphcal-eval/src/eval/display.rs	format_coordinate_exact	FnValue	"xyzzy".into()
 crates/graphcal-eval/src/runtime_presentation.rs	PresentationInstance::is_none	FnValue	false
 crates/graphcal-eval/src/runtime_presentation.rs	PresentationInstance::project_field	FnValue	Ok(Default::default())
+
+# Automatically discovered by scheduled mutation testing.
+# These entries are an unreviewed work queue; resolve or explain them in follow-up PRs.
+crates/graphcal-plugin-abi/src/section.rs	encode_leb128_u32	BinaryOperator	^
