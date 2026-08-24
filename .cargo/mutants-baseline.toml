@@ -1,0 +1,570 @@
+schema_version = 1
+
+# Mutation findings are retained as history. Automation changes status
+# instead of deleting records; only open and excluded findings are skipped
+# by ordinary discovery campaigns.
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "<impl fmt::Debug for Dimension>::fmt"
+genre = "BinaryOperator"
+replacement = "=="
+span = { start = { line = 12, column = 25 }, end = { line = 12, column = 27 } }
+status = "excluded"
+review = "reviewed"
+rationale = "Debug renderers are excluded because they are not semantic runtime behavior."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "<impl fmt::Debug for Dimension>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 17, column = 10 } }
+status = "excluded"
+review = "reviewed"
+rationale = "Debug renderers are excluded because they are not semantic runtime behavior."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "<impl fmt::Debug for Dimension>::fmt"
+genre = "UnaryOperator"
+replacement = ""
+span = { start = { line = 7, column = 20 }, end = { line = 7, column = 21 } }
+status = "excluded"
+review = "reviewed"
+rationale = "Debug renderers are excluded because they are not semantic runtime behavior."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "<impl fmt::Debug for Rational>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 1, column = 35 } }
+status = "excluded"
+review = "reviewed"
+rationale = "Debug renderers are excluded because they are not semantic runtime behavior."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "BaseDimId::name"
+genre = "FnValue"
+replacement = "\"\""
+span = { start = { line = 3, column = 9 }, end = { line = 6, column = 10 } }
+status = "resolved"
+review = "reviewed"
+rationale = "A previously surviving mutation is now caught by the test suite."
+resolution = "caught"
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "BaseDimId::name"
+genre = "FnValue"
+replacement = "\"xyzzy\""
+span = { start = { line = 3, column = 9 }, end = { line = 6, column = 10 } }
+status = "resolved"
+review = "reviewed"
+rationale = "A previously surviving mutation is now caught by the test suite."
+resolution = "caught"
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "Dimension::is_compound"
+genre = "BinaryOperator"
+replacement = "=="
+span = { start = { line = 6, column = 60 }, end = { line = 6, column = 62 } }
+status = "obsolete"
+review = "reviewed"
+rationale = "The mutation is no longer generated from the current implementation."
+resolution = "not-generated"
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "Dimension::is_compound"
+genre = "BinaryOperator"
+replacement = "||"
+span = { start = { line = 4, column = 36 }, end = { line = 4, column = 38 } }
+status = "open"
+review = "reviewed"
+rationale = "Exact algebra behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "Dimension::is_compound"
+genre = "FnValue"
+replacement = "true"
+span = { start = { line = 4, column = 9 }, end = { line = 4, column = 73 } }
+status = "open"
+review = "reviewed"
+rationale = "Exact algebra behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/dimension.rs"
+function = "Rational::try_new_i64"
+genre = "BinaryOperator"
+replacement = "<="
+span = { start = { line = 13, column = 14 }, end = { line = 13, column = 15 } }
+status = "open"
+review = "reviewed"
+rationale = "Exact algebra behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/exact_rational.rs"
+function = "ExactRational::try_new_i128"
+genre = "BinaryOperator"
+replacement = "<="
+span = { start = { line = 16, column = 32 }, end = { line = 16, column = 33 } }
+status = "open"
+review = "reviewed"
+rationale = "The denominator is proven nonzero before normalization, so the boundary comparisons are equivalent."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/nat.rs"
+function = "<impl PartialOrd for Monomial>::partial_cmp"
+genre = "FnValue"
+replacement = "None"
+span = { start = { line = 1, column = 9 }, end = { line = 1, column = 30 } }
+status = "open"
+review = "reviewed"
+rationale = "Exact algebra behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/nat.rs"
+function = "<impl std::fmt::Display for NatPolyForm>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 1, column = 39 } }
+status = "open"
+review = "reviewed"
+rationale = "Exact algebra behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/nat.rs"
+function = "NatPolyForm::format"
+genre = "BinaryOperator"
+replacement = ">="
+span = { start = { line = 22, column = 19 }, end = { line = 22, column = 20 } }
+status = "open"
+review = "reviewed"
+rationale = "Exact algebra behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-compiler/src/nat.rs"
+function = "NatPolyForm::variables"
+genre = "FnValue"
+replacement = "BTreeSet::new()"
+span = { start = { line = 3, column = 9 }, end = { line = 6, column = 23 } }
+status = "open"
+review = "reviewed"
+rationale = "Exact algebra behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "attach_indexed"
+genre = "MatchArm"
+replacement = ""
+span = { start = { line = 79, column = 9 }, end = { line = 85, column = 12 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "attach_indexed"
+genre = "MatchArmGuard"
+replacement = "true"
+span = { start = { line = 25, column = 14 }, end = { line = 25, column = 43 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "attach_leaf"
+genre = "MatchArmGuard"
+replacement = "true"
+span = { start = { line = 19, column = 14 }, end = { line = 19, column = 43 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "attach_struct"
+genre = "MatchArm"
+replacement = ""
+span = { start = { line = 48, column = 9 }, end = { line = 54, column = 12 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "attach_struct"
+genre = "MatchArmGuard"
+replacement = "true"
+span = { start = { line = 22, column = 16 }, end = { line = 22, column = 62 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "format_coordinate"
+genre = "FnValue"
+replacement = "\"xyzzy\".into()"
+span = { start = { line = 5, column = 5 }, end = { line = 5, column = 53 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "format_coordinate"
+genre = "FnValue"
+replacement = "String::new()"
+span = { start = { line = 5, column = 5 }, end = { line = 5, column = 53 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "format_coordinate_exact"
+genre = "FnValue"
+replacement = "\"xyzzy\".into()"
+span = { start = { line = 5, column = 5 }, end = { line = 5, column = 52 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "format_coordinate_exact"
+genre = "FnValue"
+replacement = "String::new()"
+span = { start = { line = 5, column = 5 }, end = { line = 5, column = 52 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/eval/display.rs"
+function = "presentation_pattern_matches"
+genre = "BinaryOperator"
+replacement = "||"
+span = { start = { line = 20, column = 17 }, end = { line = 20, column = 19 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/runtime_presentation.rs"
+function = "PresentationInstance::is_none"
+genre = "FnValue"
+replacement = "false"
+span = { start = { line = 2, column = 9 }, end = { line = 2, column = 35 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-eval/src/runtime_presentation.rs"
+function = "PresentationInstance::project_field"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 5, column = 9 }, end = { line = 12, column = 10 } }
+status = "open"
+review = "reviewed"
+rationale = "Presentation matching, projection, and formatting behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "<impl fmt::Display for LockedDependencyCycle>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 5, column = 48 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "<impl fmt::Display for PackageSourceDirectoryErrorReason>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 10, column = 11 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "<impl fmt::Display for PluginFunctionName>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 1, column = 37 } }
+status = "open"
+review = "unreviewed"
+rationale = ""
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "Lockfile::reject_dependency_cycles"
+genre = "MatchArmGuard"
+replacement = "false"
+span = { start = { line = 25, column = 62 }, end = { line = 25, column = 86 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "ValidatedLockfile<'_>::bind_manifests"
+genre = "BinaryOperator"
+replacement = "||"
+span = { start = { line = 86, column = 25 }, end = { line = 86, column = 27 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "ValidatedLockfile<'_>::bind_manifests"
+genre = "BinaryOperator"
+replacement = "||"
+span = { start = { line = 87, column = 25 }, end = { line = 87, column = 27 } }
+status = "open"
+review = "unreviewed"
+rationale = ""
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "ValidatedLockfile<'_>::bind_manifests"
+genre = "MatchArmGuard"
+replacement = "true"
+span = { start = { line = 85, column = 26 }, end = { line = 87, column = 51 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "is_ambiguous_raw_path_component"
+genre = "BinaryOperator"
+replacement = "&&"
+span = { start = { line = 7, column = 9 }, end = { line = 7, column = 11 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "is_valid_name"
+genre = "BinaryOperator"
+replacement = "||"
+span = { start = { line = 2, column = 9 }, end = { line = 2, column = 11 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "is_valid_name"
+genre = "BinaryOperator"
+replacement = "||"
+span = { start = { line = 3, column = 9 }, end = { line = 3, column = 11 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "is_valid_name"
+genre = "FnValue"
+replacement = "true"
+span = { start = { line = 1, column = 5 }, end = { line = 5, column = 79 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "parse_required_ssh_user"
+genre = "BinaryOperator"
+replacement = "&&"
+span = { start = { line = 1, column = 25 }, end = { line = 1, column = 27 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "parse_scp_git_url"
+genre = "BinaryOperator"
+replacement = "&&"
+span = { start = { line = 2, column = 29 }, end = { line = 2, column = 31 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "parse_scp_git_url"
+genre = "MatchArmGuard"
+replacement = "true"
+span = { start = { line = 7, column = 17 }, end = { line = 7, column = 35 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "push_escaped_string"
+genre = "MatchArmGuard"
+replacement = "false"
+span = { start = { line = 10, column = 22 }, end = { line = 10, column = 40 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "push_kv_inline_table"
+genre = "BinaryOperator"
+replacement = "<"
+span = { start = { line = 4, column = 16 }, end = { line = 4, column = 17 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-package/src/lib.rs"
+function = "required_u64"
+genre = "FnValue"
+replacement = "Ok(1)"
+span = { start = { line = 1, column = 5 }, end = { line = 7, column = 11 } }
+status = "open"
+review = "reviewed"
+rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/manifest.rs"
+function = "<impl Write for ManifestJsonWriter>::write"
+genre = "BinaryOperator"
+replacement = ">="
+span = { start = { line = 1, column = 24 }, end = { line = 1, column = 25 } }
+status = "open"
+review = "reviewed"
+rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/manifest.rs"
+function = "<impl std::fmt::Display for ManifestListRole>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 9, column = 11 } }
+status = "open"
+review = "reviewed"
+rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/manifest.rs"
+function = "<impl std::fmt::Display for NameRole>::fmt"
+genre = "FnValue"
+replacement = "Ok(Default::default())"
+span = { start = { line = 1, column = 9 }, end = { line = 9, column = 11 } }
+status = "open"
+review = "reviewed"
+rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/manifest.rs"
+function = "PluginManifest::to_json"
+genre = "MatchArmGuard"
+replacement = "true"
+span = { start = { line = 13, column = 23 }, end = { line = 13, column = 44 } }
+status = "open"
+review = "reviewed"
+rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/manifest.rs"
+function = "function_context"
+genre = "FnValue"
+replacement = "\"xyzzy\".into()"
+span = { start = { line = 1, column = 5 }, end = { line = 1, column = 79 } }
+status = "open"
+review = "reviewed"
+rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/manifest.rs"
+function = "function_context"
+genre = "FnValue"
+replacement = "String::new()"
+span = { start = { line = 1, column = 5 }, end = { line = 1, column = 79 } }
+status = "open"
+review = "reviewed"
+rationale = "Plugin diagnostics and size-limit behavior needs stronger direct assertions."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/section.rs"
+function = "SectionWalker<'a>::next_section"
+genre = "BinaryOperator"
+replacement = "+"
+span = { start = { line = 20, column = 71 }, end = { line = 20, column = 72 } }
+status = "open"
+review = "unreviewed"
+rationale = ""
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/section.rs"
+function = "SectionWalker<'a>::next_section"
+genre = "BinaryOperator"
+replacement = "+"
+span = { start = { line = 24, column = 71 }, end = { line = 24, column = 72 } }
+status = "resolved"
+review = "reviewed"
+rationale = "A previously surviving mutation is now caught by the test suite."
+resolution = "caught"
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/section.rs"
+function = "SectionWalker<'a>::next_section"
+genre = "BinaryOperator"
+replacement = "-="
+span = { start = { line = 6, column = 22 }, end = { line = 6, column = 24 } }
+status = "excluded"
+review = "reviewed"
+rationale = "Excluded because this mutation makes progress impossible and can terminate the CI runner."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/section.rs"
+function = "SectionWalker<'a>::next_section"
+genre = "BinaryOperator"
+replacement = "/"
+span = { start = { line = 24, column = 71 }, end = { line = 24, column = 72 } }
+status = "resolved"
+review = "reviewed"
+rationale = "A previously surviving mutation is now caught by the test suite."
+resolution = "caught"
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/section.rs"
+function = "encode_leb128_u32"
+genre = "BinaryOperator"
+replacement = "!="
+span = { start = { line = 6, column = 18 }, end = { line = 6, column = 20 } }
+status = "excluded"
+review = "reviewed"
+rationale = "Excluded because this mutation makes progress impossible and can terminate the CI runner."
+
+[[finding]]
+file = "crates/graphcal-plugin-abi/src/section.rs"
+function = "encode_leb128_u32"
+genre = "BinaryOperator"
+replacement = "^"
+span = { start = { line = 10, column = 23 }, end = { line = 10, column = 24 } }
+status = "open"
+review = "unreviewed"
+rationale = ""

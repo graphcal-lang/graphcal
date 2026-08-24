@@ -27,19 +27,25 @@ The pilot found and closed missing assertions for exact-rational rendering and
 plugin custom-section error offsets. `runtime_presentation.rs` has no unexplained
 survivors: its 12 generated mutants yielded 9 caught and 3 unviable mutants.
 
-Other pilot files currently retain known survivors. They are recorded in
-`.cargo/mutants-baseline.txt`, which is checked against campaign output. The
-local ratchet and each scheduled shard reject findings outside that baseline.
-After all scheduled shards finish, a final workflow job aggregates their reports,
-appends new findings to the work queue, and creates or updates the fixed
-`automation/mutants-baseline` pull request. This keeps a failed shard from losing
-its findings while leaving explanation and resolution to reviewable follow-up
-work.
+Other pilot files currently retain known survivors. They are recorded as
+structured lifecycle records in `.cargo/mutants-baseline.toml`. Each identity
+includes a function-relative source span, so separate mutations in the same
+function cannot collapse into one work item.
 
-Automatically appended entries are explicitly unreviewed. A baseline entry is a
-review queue, not a permanent exemption. Equivalent boundary mutants should be
-documented inline when reviewed. The automation only adds entries; it never
-removes resolved entries automatically.
+A discovery campaign runs daily. Before cargo-mutants executes tests, the wrapper
+lists the generated candidates and passes exact `--exclude-re` filters for
+`open` and `excluded` baseline records. Candidate enumeration is cheap; skipping
+known survivors avoids their comparatively expensive full-suite test runs.
+Monday's campaign first audits every runnable `open` record with an exact `--re`
+filter, then excludes those already-tested candidates from discovery. Manual
+dispatches can request the same audit.
+
+The final workflow job aggregates every available shard artifact and creates or
+updates the mutation baseline pull request. New findings become `open` and
+`unreviewed`; caught or unviable audit outcomes become `resolved`; identities no
+longer generated become `obsolete`; and deliberately nonterminating mutations
+remain `excluded`. Records are retained as history rather than deleted. A later
+missed outcome reopens a resolved or obsolete record.
 
 The PR job uses the workflow `GITHUB_TOKEN` with narrowly scoped `contents: write`
 and `pull-requests: write` permissions. A repository or organization
@@ -63,16 +69,17 @@ For every campaign:
 6. Re-run the smallest affected file campaign, then the scheduled safety-core
    shard.
 
-Mutation reports under `mutants.out/` are CI artifacts, not source inputs. The
-ratcheted wrapper preserves infrastructure/baseline failures but handles the
-expected cargo-mutants exit codes for recorded missed and timed-out mutants.
-The scheduled aggregator requires one `outcomes.json` report and one completion
-marker from every shard. The wrapper writes the marker only after cargo-mutants
-returns a documented result code, so an interrupted campaign cannot silently
-produce a partial baseline update from cargo-mutants' incrementally written
-report. To exercise the aggregation behavior locally, pass all reports at once:
+Mutation reports under `mutants.out/` and `mutants-audit/mutants.out/` are CI
+artifacts, not source inputs. The ratcheted wrapper preserves infrastructure
+failures but handles cargo-mutants' documented result codes. It writes a campaign
+plan before testing and marks an audit complete only after cargo-mutants returns
+a documented result and produces its report. Consequently, an interrupted audit
+can never resolve a finding. Incrementally written discovery reports remain
+useful: the aggregator records every finding available before interruption and
+skips missing or malformed shard artifacts with a workflow warning.
+
+To apply downloaded campaign artifacts locally, run:
 
 ```sh
-./internals/check-mutants-ratchet.py --update \
-  path/to/shard-a/outcomes.json path/to/shard-b/outcomes.json
+./internals/update-mutants-baseline.py path/to/artifact-directory
 ```

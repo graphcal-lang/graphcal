@@ -32,11 +32,12 @@ no survivors. This provides the acceptance proof that deliberately weakened
 operators/bodies are killed.
 
 Every remaining pilot finding, including two nonterminating plugin-section
-mutants, is normalized and explained in `.cargo/mutants-baseline.txt`. Scheduled
-shards reject findings not in that baseline, then an aggregation job records the
-new findings in a pull request so failed campaigns do not lose their results.
-Automatically added findings remain an unreviewed work queue until a follow-up
-change resolves or explains them. Non-semantic debug-renderer exclusions and
-known runner-terminating section mutations are narrowly named in
-`.cargo/mutants.toml`; the latter remain recorded in the baseline as availability
-findings.
+mutants, is represented by a location-aware lifecycle record in
+`.cargo/mutants-baseline.toml`. Daily discovery skips open findings before test
+execution; the weekly audit checks whether they remain missed or timed out. The
+aggregation job preserves every record as history while transitioning it among
+open, resolved, obsolete, and excluded states. Automatically discovered findings
+remain unreviewed until a follow-up change resolves or explains them.
+Non-semantic debug-renderer exclusions and known runner-terminating section
+mutations are narrowly named in `.cargo/mutants.toml` and carry explicit
+`excluded` baseline records.
