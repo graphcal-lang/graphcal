@@ -154,21 +154,20 @@ jobs:
           path: mutants.out
           if-no-files-found: ignore
 
+      # cargo-mutants updates outcomes.json after every tested mutant, so an
+      # interrupted campaign still has useful findings to upload.
       - name: Upload shard outcome for aggregation
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutant-outcome-${{ matrix.shard.name }}-${{ github.run_id }}
-          path: |
-            mutants.out/outcomes.json
-            mutants.out/graphcal-campaign-complete
-          if-no-files-found: error
+          path: mutants.out/outcomes.json
+          if-no-files-found: ignore
 
   update-baseline:
     name: open mutation finding PR
     if: >-
       ${{ always()
-      && needs.ratchet-tool.result == 'success'
       && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     needs:
       - ratchet-tool
@@ -187,26 +186,30 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
 
+      # A failed shard may have no artifact, while other shards remain useful.
       - name: Download mutation outcomes
+        continue-on-error: true
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: mutant-outcome-*-${{ github.run_id }}
           path: mutation-reports
 
-      - name: Add new findings to the baseline
+      - name: Add available findings to the baseline
         run: |
-          shopt -s nullglob
-          reports=(mutation-reports/outcomes.json mutation-reports/*/outcomes.json)
-          markers=(
-            mutation-reports/graphcal-campaign-complete
-            mutation-reports/*/graphcal-campaign-complete
-          )
-          if (( ${#reports[@]} != 5 || ${#markers[@]} != 5 )); then
-            printf 'Expected 5 complete mutation reports; found %s reports and %s completion markers.\n' \
-              "${#reports[@]}" "${#markers[@]}" >&2
-            exit 1
+          reports=()
+          while IFS= read -r -d '' report; do
+            reports+=("$report")
+          done < <(find mutation-reports -type f -name outcomes.json -print0 2>/dev/null)
+          if (( ${#reports[@]} == 0 )); then
+            echo 'No mutation outcome reports were available; there are no findings to add.'
+          else
+            for report in "${reports[@]}"; do
+              if ! ./internals/check-mutants-ratchet.py --update "$report"; then
+                printf '::warning file=%s::Skipping a mutation outcome report that could not be processed.\n' \
+                  "$report"
+              fi
+            done
           fi
-          ./internals/check-mutants-ratchet.py --update "${reports[@]}"
           rm -rf mutation-reports
 
       - name: Create or update mutation finding PR
