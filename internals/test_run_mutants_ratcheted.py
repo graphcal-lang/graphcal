@@ -17,10 +17,9 @@ SPEC.loader.exec_module(runner)
 
 
 class MutationRunnerTest(unittest.TestCase):
-    def test_completed_campaign_writes_marker_before_checking_ratchet(self) -> None:
+    def test_completed_campaign_checks_ratchet(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / "outcomes.json"
-            marker = Path(directory) / "complete"
             report.write_text('{"outcomes": []}\n', encoding="utf-8")
             completed = [
                 subprocess.CompletedProcess([], 2),
@@ -28,26 +27,22 @@ class MutationRunnerTest(unittest.TestCase):
             ]
 
             with mock.patch.object(runner.subprocess, "run", side_effect=completed) as run:
-                result = runner.main([], report, marker)
+                result = runner.main([], report)
 
             self.assertEqual(result, 1)
-            self.assertEqual(marker.read_text(encoding="utf-8"), "completed\n")
             self.assertEqual(run.call_count, 2)
 
-    def test_interrupted_campaign_does_not_write_marker(self) -> None:
+    def test_interrupted_campaign_does_not_check_ratchet(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            marker = Path(directory) / "complete"
             completed = subprocess.CompletedProcess([], 130)
 
             with mock.patch.object(runner.subprocess, "run", return_value=completed) as run:
                 result = runner.main(
                     [],
                     Path(directory) / "outcomes.json",
-                    marker,
                 )
 
             self.assertEqual(result, 130)
-            self.assertFalse(marker.exists())
             run.assert_called_once_with(["cargo", "mutants"], check=False)
 
 
