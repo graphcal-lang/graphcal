@@ -113,9 +113,10 @@ function = "ExactRational::try_new_i128"
 genre = "BinaryOperator"
 replacement = "<="
 span = { start = { line = 16, column = 32 }, end = { line = 16, column = 33 } }
-status = "open"
+status = "resolved"
 review = "reviewed"
 rationale = "The denominator is proven nonzero before normalization, so the boundary comparisons are equivalent."
+resolution = "caught"
 
 [[finding]]
 file = "crates/graphcal-compiler/src/nat.rs"

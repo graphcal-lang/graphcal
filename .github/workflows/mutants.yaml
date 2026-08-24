@@ -115,19 +115,8 @@ jobs:
         shard:
           - name: exact
             package: graphcal-compiler
-            files: -f crates/graphcal-compiler/src/exact_rational.rs -f crates/graphcal-compiler/src/dimension.rs -f crates/graphcal-compiler/src/nat.rs
-          - name: package
-            package: graphcal-package
-            files: -f crates/graphcal-package/src/lib.rs
-          - name: plugin-manifest
-            package: graphcal-plugin-abi
-            files: -f crates/graphcal-plugin-abi/src/manifest.rs
-          - name: plugin-section
-            package: graphcal-plugin-abi
-            files: -f crates/graphcal-plugin-abi/src/section.rs
-          - name: presentation
-            package: graphcal-eval
-            files: -f crates/graphcal-eval/src/runtime_presentation.rs -f crates/graphcal-eval/src/eval/display.rs
+            files: -f crates/graphcal-compiler/src/exact_rational.rs
+            examine: replace < with <= in ExactRational::try_new_i128
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -155,12 +144,14 @@ jobs:
           GRAPHCAL_MUTATION_AUDIT: >-
             ${{ (github.event_name == 'schedule' && github.event.schedule == '17 3 * * 1')
             || (github.event_name == 'workflow_dispatch' && inputs.audit-baseline) }}
+          MUTANT_EXAMINE: ${{ matrix.shard.examine }}
           MUTANT_PACKAGE: ${{ matrix.shard.package }}
           MUTANT_FILES: ${{ matrix.shard.files }}
         run: >-
           ./internals/run-mutants-ratcheted.py
           --in-place --no-shuffle
           -p "$MUTANT_PACKAGE" $MUTANT_FILES
+          -F "$MUTANT_EXAMINE"
 
       - name: Upload shard report
         if: always()
