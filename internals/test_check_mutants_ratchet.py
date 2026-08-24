@@ -3,11 +3,25 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 
-SCRIPT = Path(__file__).with_name("check-mutants-ratchet.py")
+INTERNALS = Path(__file__).parent
+sys.path.insert(0, str(INTERNALS))
+from mutation_baseline import (  # noqa: E402
+    BaselineFinding,
+    FindingStatus,
+    MutationId,
+    Resolution,
+    ReviewStatus,
+    SourcePosition,
+    SourceSpan,
+    write_baseline,
+)
+
+SCRIPT = INTERNALS / "check-mutants-ratchet.py"
 SPEC = importlib.util.spec_from_file_location("check_mutants_ratchet", SCRIPT)
 assert SPEC is not None
 assert SPEC.loader is not None
@@ -15,65 +29,99 @@ ratchet = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ratchet)
 
 
-def outcome(summary: str, replacement: str) -> dict[str, object]:
+def mutation_id(line: int) -> MutationId:
+    return MutationId(
+        file="crates/example/src/lib.rs",
+        function="example",
+        genre="BinaryOperator",
+        replacement="||",
+        span=SourceSpan(
+            start=SourcePosition(line, 9),
+            end=SourcePosition(line, 11),
+        ),
+    )
+
+
+def outcome(summary: str, line: int) -> dict[str, object]:
     return {
         "summary": summary,
         "scenario": {
             "Mutant": {
+                "name": f"crate.rs:{line + 10}:9: replace && with || in example",
                 "file": "crates/example/src/lib.rs",
-                "function": {"function_name": "example"},
-                "genre": "FnValue",
-                "replacement": replacement,
+                "function": {
+                    "function_name": "example",
+                    "span": {
+                        "start": {"line": 10, "column": 1},
+                        "end": {"line": 20, "column": 2},
+                    },
+                },
+                "genre": "BinaryOperator",
+                "replacement": "||",
+                "span": {
+                    "start": {"line": line + 10, "column": 9},
+                    "end": {"line": line + 10, "column": 11},
+                },
             }
         },
     }
 
 
 class MutationRatchetTest(unittest.TestCase):
-    def test_load_findings_includes_missed_and_timeout_only(self) -> None:
+    def test_distinct_locations_do_not_collapse(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / "outcomes.json"
             report.write_text(
                 json.dumps(
                     {
                         "outcomes": [
-                            outcome("CaughtMutant", "false"),
-                            outcome("MissedMutant", "true"),
-                            outcome("Timeout", "loop {}"),
+                            outcome("MissedMutant", 2),
+                            outcome("MissedMutant", 3),
                         ]
                     }
                 ),
                 encoding="utf-8",
             )
-
-            self.assertEqual(
-                ratchet.load_findings([report]),
-                {
-                    "crates/example/src/lib.rs\texample\tFnValue\ttrue",
-                    "crates/example/src/lib.rs\texample\tFnValue\tloop {}",
-                },
+            baseline = Path(directory) / "baseline.toml"
+            write_baseline(
+                baseline,
+                [
+                    BaselineFinding(
+                        mutation_id=mutation_id(2),
+                        status=FindingStatus.OPEN,
+                        review=ReviewStatus.REVIEWED,
+                    )
+                ],
             )
 
-    def test_append_findings_adds_sorted_automated_section_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            baseline = Path(directory) / "baseline.txt"
-            existing = "crate.rs\texisting\tFnValue\tfalse"
-            first = "crate.rs\ta_first\tFnValue\ttrue"
-            second = "crate.rs\tz_second\tFnValue\ttrue"
-            baseline.write_text(f"# Reviewed findings.\n{existing}\n", encoding="utf-8")
-
-            added = ratchet.append_findings(baseline, {second, existing, first})
-            added_again = ratchet.append_findings(baseline, {second, existing, first})
-
-            self.assertEqual(added, {first, second})
-            self.assertEqual(added_again, set())
             self.assertEqual(
-                baseline.read_text(encoding="utf-8"),
-                "# Reviewed findings.\n"
-                f"{existing}\n\n"
-                f"{ratchet.AUTOMATED_SECTION_HEADER}\n"
-                f"{first}\n"
-                f"{second}\n",
+                ratchet.unexpected_findings([report], baseline),
+                {mutation_id(3)},
+            )
+
+    def test_resolved_finding_is_unexpected_when_it_regresses(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "outcomes.json"
+            report.write_text(
+                json.dumps({"outcomes": [outcome("MissedMutant", 2)]}),
+                encoding="utf-8",
+            )
+            baseline = Path(directory) / "baseline.toml"
+            write_baseline(
+                baseline,
+                [
+                    BaselineFinding(
+                        mutation_id=mutation_id(2),
+                        status=FindingStatus.RESOLVED,
+                        review=ReviewStatus.REVIEWED,
+                        resolution=Resolution.CAUGHT,
+                    )
+                ],
+            )
+
+            self.assertEqual(
+                ratchet.unexpected_findings([report], baseline),
+                {mutation_id(2)},
             )
 
 

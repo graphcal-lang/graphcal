@@ -12,8 +12,8 @@ minimum_test_timeout = 120.0
 
 # Test/debug renderers are not semantic runtime behavior. Two known
 # nonterminating section mutations repeatedly terminate the GitHub runner before
-# cargo-mutants can report its timeout; they remain recorded availability
-# findings in the baseline. Keep exclusions exact and review them whenever the
+# cargo-mutants can report its timeout; they remain explicit `excluded` lifecycle
+# records in the baseline. Keep exclusions exact and review them whenever the
 # named implementation moves.
 exclude_re = [
   "<impl fmt::Debug for Dimension>::fmt",
