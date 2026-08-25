@@ -8,14 +8,19 @@ The first specification is
 It formalizes validation rule V002: required indexes, types, and dimensions must
 be bindable, while parameters are inherently bindable input ports.
 
-## Build
+## Build and conformance check
 
-Install [Elan](https://lean-lang.org/install/) and run:
+Install [Elan](https://lean-lang.org/install/) and run from the repository root:
 
 ```sh
-cd formal
-lake build --wfail
+just formal
+just formal-conformance
 ```
+
+`just formal` checks the Lean library and rejects proof placeholders or custom
+axioms. `just formal-conformance` then asks the Lean executable oracle for its
+complete 20-case state matrix and compares every decision with Graphcal's real
+parser, desugaring, and V002 production pass.
 
 The checked-in `lean-toolchain` pins the Lean version. The package intentionally
 has no third-party Lean dependencies for this initial specification.

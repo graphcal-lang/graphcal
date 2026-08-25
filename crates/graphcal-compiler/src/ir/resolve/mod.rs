@@ -1,4 +1,6 @@
 mod deps;
+#[cfg(test)]
+mod formal_conformance;
 pub(crate) mod names;
 #[cfg(test)]
 mod tests;

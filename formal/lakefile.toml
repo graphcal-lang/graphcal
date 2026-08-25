@@ -1,6 +1,10 @@
 name = "graphcal-formal"
 version = "0.1.0"
-defaultTargets = ["Graphcal"]
+defaultTargets = ["Graphcal", "required-bindability-oracle"]
 
 [[lean_lib]]
 name = "Graphcal"
+
+[[lean_exe]]
+name = "required-bindability-oracle"
+root = "Graphcal.Static.RequiredBindabilityOracle"

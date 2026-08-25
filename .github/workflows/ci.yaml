@@ -109,6 +109,37 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  formal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build and independently check Lean specifications
+        uses: leanprover/lean-action@50fcf42d2e460296f1a34b402e990d1b24f8b596 # v1.6.0
+        with:
+          lake-package-directory: formal
+          auto-config: false
+          build: true
+          build-args: --wfail
+          leanchecker: true
+          axiom-audit: true
+          axiom-audit-root: Graphcal
+          use-mathlib-cache: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Compare Rust V002 with the exhaustive Lean oracle
+        env:
+          GRAPHCAL_REQUIRED_BINDABILITY_ORACLE: ${{ github.workspace }}/formal/.lake/build/bin/required-bindability-oracle
+        run: >-
+          cargo test --package graphcal-compiler --lib
+          required_bindability_matches_lean_oracle -- --ignored
+
   qa-corpus:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -298,13 +329,13 @@ jobs:
       - uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
 
   collect:
-    needs: [checks, public-surface, dependency-policy, test, qa-corpus, windows, wasm, coverage, msrv, typos]
+    needs: [checks, public-surface, dependency-policy, test, formal, qa-corpus, windows, wasm, coverage, msrv, typos]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.formal.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.typos.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"

@@ -1333,6 +1333,7 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 28. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
 29. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
 30. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
+31. `crates/graphcal-compiler/src/ir/resolve/formal_conformance.rs`
 
 ### Stage 9 - Filesystem abstraction (`graphcal-io`)
 
