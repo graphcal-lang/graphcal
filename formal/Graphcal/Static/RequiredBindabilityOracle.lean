@@ -1,5 +1,5 @@
 import Lean.Data.Json
-import Graphcal.Static.RequiredBindability
+import Graphcal.Static.RequiredBindability.Reference
 
 namespace Graphcal.Static.RequiredBindability.Oracle
 
