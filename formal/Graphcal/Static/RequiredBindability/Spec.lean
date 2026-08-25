@@ -54,11 +54,24 @@ theorem defaulted_nominal_wellFormed
     (kind : NominalKind)
     (visibility : Visibility) :
     WellFormed (.nominal kind visibility .defaulted) := by
-  simp [WellFormed, Required]
+    simp [WellFormed, Required]
 
 /-- Both required and defaulted parameters are valid because they are ports. -/
 theorem param_wellFormed (requirement : Requirement) :
     WellFormed (.param requirement) := by
   cases requirement <;> simp [WellFormed, Required, Bindable]
+
+/--
+Well-formedness is equivalent to having no applicable violation. This lemma
+ensures that `WellFormed` and `Violation.AppliesTo` are consistent.
+-/
+theorem wellFormed_iff_no_applicable_violation (decl : InterfaceDecl) :
+    WellFormed decl ↔ ¬ ∃ violation : Violation, violation.AppliesTo decl := by
+  cases decl with
+  | param requirement =>
+      cases requirement <;> simp [WellFormed, Required, Violation.AppliesTo, Bindable]
+  | nominal kind visibility requirement =>
+      cases requirement <;> cases visibility <;> simp [WellFormed, Required, Bindable, Violation.AppliesTo] <;>
+      refine ⟨Violation.requiredMustBeBindable kind, ?_⟩ <;> simp
 
 end Graphcal.Static.RequiredBindability
