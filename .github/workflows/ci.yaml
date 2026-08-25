@@ -124,6 +124,9 @@ jobs:
           build: true
           build-args: --wfail
           leanchecker: true
+          # The package is named `graphcal-formal`, which is not a Lean module
+          # prefix. Tell leanchecker to check the compiled `Graphcal` library.
+          leanchecker-args: Graphcal
           axiom-audit: true
           axiom-audit-root: Graphcal
           use-mathlib-cache: false
