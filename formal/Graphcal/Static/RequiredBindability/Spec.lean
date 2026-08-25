@@ -35,4 +35,30 @@ def Violation.AppliesTo : Violation → InterfaceDecl → Prop
         actualKind = expectedKind ∧ visibility ≠ .exportedBindable
   | _, _ => False
 
+/--
+The following lemmas characterize the normative `WellFormed` predicate itself.
+They intentionally do not refer to `validate`; they are specification-only
+lemmas, not proofs about the executable reference validator.
+-/
+
+/-- A required nominal declaration is well-formed exactly when it is bindable. -/
+theorem required_nominal_wellFormed_iff
+    (kind : NominalKind)
+    (visibility : Visibility) :
+    WellFormed (.nominal kind visibility .required) ↔
+      visibility = .exportedBindable := by
+  cases visibility <;> simp [WellFormed, Required, Bindable]
+
+/-- Every nominal declaration with a definition is valid under V002. -/
+theorem defaulted_nominal_wellFormed
+    (kind : NominalKind)
+    (visibility : Visibility) :
+    WellFormed (.nominal kind visibility .defaulted) := by
+  simp [WellFormed, Required]
+
+/-- Both required and defaulted parameters are valid because they are ports. -/
+theorem param_wellFormed (requirement : Requirement) :
+    WellFormed (.param requirement) := by
+  cases requirement <;> simp [WellFormed, Required, Bindable]
+
 end Graphcal.Static.RequiredBindability

@@ -31,27 +31,4 @@ theorem validate_error_sound
       cases visibility <;> cases requirement <;> cases violation <;>
         simp_all [validate, Violation.AppliesTo]
 
-/--
-A required nominal declaration satisfies V002 precisely when it is explicitly
-bindable. This theorem is the required row of the state matrix in one line.
--/
-theorem required_nominal_wellFormed_iff
-    (kind : NominalKind)
-    (visibility : Visibility) :
-    WellFormed (.nominal kind visibility .required) ↔
-      visibility = .exportedBindable := by
-  cases visibility <;> simp [WellFormed, Required, Bindable]
-
-/-- Every nominal declaration with a definition is valid under V002. -/
-theorem defaulted_nominal_wellFormed
-    (kind : NominalKind)
-    (visibility : Visibility) :
-    WellFormed (.nominal kind visibility .defaulted) := by
-  simp [WellFormed, Required]
-
-/-- Both required and defaulted parameters are valid because they are ports. -/
-theorem param_wellFormed (requirement : Requirement) :
-    WellFormed (.param requirement) := by
-  cases requirement <;> simp [WellFormed, Required, Bindable]
-
 end Graphcal.Static.RequiredBindability
