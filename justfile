@@ -1,11 +1,20 @@
-lint:
+# Build all reviewed Lean specifications and reject placeholders or local axioms.
+formal:
+    cd formal && lake build --wfail
+    @if rg --line-number '\b(sorry|admit|axiom)\b' formal --glob '*.lean'; then echo 'formal specifications must not contain sorry, admit, or custom axioms' >&2; exit 1; fi
+
+# Exhaustively compare the Rust V002 pass with the Lean oracle's 20 cases.
+formal-conformance: formal
+    GRAPHCAL_REQUIRED_BINDABILITY_ORACLE="$(pwd)/formal/.lake/build/bin/required-bindability-oracle" cargo test --package graphcal-compiler --lib required_bindability_matches_lean_oracle -- --ignored
+
+lint: formal
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
     cargo fmt --check
     CARGO_BUILD_WARNINGS=deny cargo doc --workspace --no-deps
     CARGO_BUILD_WARNINGS=deny cargo check --workspace
 
-test:
+test: formal-conformance
     cargo test --workspace
 
 # Audit the closed-world CLI surface while preserving documented external crate

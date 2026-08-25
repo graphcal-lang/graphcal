@@ -1,4 +1,6 @@
 mod deps;
+#[cfg(test)]
+mod formal_conformance;
 pub(crate) mod names;
 #[cfg(test)]
 mod tests;
@@ -7,6 +9,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use miette::NamedSource;
+
+use super::required_bindability::{
+    self, InterfaceDecl, NominalKind, Requirement, Violation as RequiredBindabilityViolation,
+};
 
 use crate::builtin::BuiltinConst;
 use crate::desugar::desugared_ast::{
@@ -266,6 +272,83 @@ struct CollectedDeclarations {
     external_surface: ExternalDeclSurface,
 }
 
+/// Project one desugared declaration onto the small semantic state used by
+/// V002. Declarations that cannot be required or externally supplied are
+/// outside this rule's domain.
+fn required_bindability_interface(decl: &DeclKind) -> Option<(InterfaceDecl, &str, Span)> {
+    let requirement_from_missing_definition = |missing| {
+        if missing {
+            Requirement::Required
+        } else {
+            Requirement::Defaulted
+        }
+    };
+
+    match decl {
+        DeclKind::Param(param) => Some((
+            InterfaceDecl::InputPort {
+                requirement: requirement_from_missing_definition(param.value.is_none()),
+            },
+            param.name.value.as_str(),
+            param.name.span,
+        )),
+        DeclKind::Index(index) => Some((
+            InterfaceDecl::Nominal {
+                kind: NominalKind::Index,
+                visibility: index.visibility,
+                requirement: requirement_from_missing_definition(index.kind.is_required()),
+            },
+            index.name.value.as_str(),
+            index.name.span,
+        )),
+        DeclKind::Type(type_decl) => Some((
+            InterfaceDecl::Nominal {
+                kind: NominalKind::Type,
+                visibility: type_decl.visibility,
+                requirement: requirement_from_missing_definition(matches!(
+                    type_decl.body,
+                    TypeDeclBody::Required
+                )),
+            },
+            type_decl.name.value.as_str(),
+            type_decl.name.span,
+        )),
+        DeclKind::Dimension(dimension) => Some((
+            InterfaceDecl::Nominal {
+                kind: NominalKind::Dimension,
+                visibility: dimension.visibility,
+                requirement: requirement_from_missing_definition(dimension.definition.is_none()),
+            },
+            dimension.name.value.as_str(),
+            dimension.name.span,
+        )),
+        _ => None,
+    }
+}
+
+/// Validate that every required interface declaration can be supplied from
+/// outside its module. This is the production implementation of V002.
+fn validate_required_bindability(
+    file: &File,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    file.declarations
+        .iter()
+        .filter_map(|decl| required_bindability_interface(&decl.kind))
+        .try_for_each(|(interface, name, span)| {
+            required_bindability::validate(interface).map_err(|violation| match violation {
+                RequiredBindabilityViolation::RequiredMustBeBindable { kind } => {
+                    GraphcalError::RequiredItemMustBeBindable {
+                        kind: kind.to_string(),
+                        name: name.to_string(),
+                        src: src.clone(),
+                        span: span.into(),
+                    }
+                }
+            })
+        })
+}
+
 /// Collect all local declarations and check for duplicates.
 ///
 /// Returns the collected declarations and the names map for further processing.
@@ -357,43 +440,7 @@ fn collect_local_declarations(
         }
     }
 
-    // Validate: required `index`, `type`, `dim` must be `pub(bind)` (V002).
-    //
-    // Required `param` is excluded from this check: `param` directly declares
-    // an input port, whose missing default makes it required. Input ports never
-    // carry visibility annotations; the parser rejects `pub`/`pub(bind)` on
-    // `param`.
-    for decl in &file.declarations {
-        match &decl.kind {
-            DeclKind::Index(idx) if idx.kind.is_required() && !idx.visibility.is_bindable() => {
-                return Err(GraphcalError::RequiredItemMustBeBindable {
-                    kind: "index".to_string(),
-                    name: idx.name.value.to_string(),
-                    src: src.clone(),
-                    span: idx.name.span.into(),
-                });
-            }
-            DeclKind::Type(t)
-                if matches!(t.body, TypeDeclBody::Required) && !t.visibility.is_bindable() =>
-            {
-                return Err(GraphcalError::RequiredItemMustBeBindable {
-                    kind: "type".to_string(),
-                    name: t.name.value.to_string(),
-                    src: src.clone(),
-                    span: t.name.span.into(),
-                });
-            }
-            DeclKind::Dimension(d) if d.definition.is_none() && !d.visibility.is_bindable() => {
-                return Err(GraphcalError::RequiredItemMustBeBindable {
-                    kind: "dim".to_string(),
-                    name: d.name.value.to_string(),
-                    src: src.clone(),
-                    span: d.name.span.into(),
-                });
-            }
-            _ => {}
-        }
-    }
+    validate_required_bindability(file, src)?;
 
     // First pass: collect all declarations and check for duplicates
     for decl in &file.declarations {
