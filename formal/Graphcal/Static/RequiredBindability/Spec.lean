@@ -35,7 +35,7 @@ def Violation.AppliesTo : Violation → InterfaceDecl → Prop
         actualKind = expectedKind ∧ visibility ≠ .exportedBindable
   | _, _ => False
 
-/--
+/-
 The following lemmas characterize the normative `WellFormed` predicate itself.
 They intentionally do not refer to `validate`; they are specification-only
 lemmas, not proofs about the executable reference validator.
