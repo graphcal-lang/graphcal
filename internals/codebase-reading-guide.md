@@ -496,6 +496,7 @@ The compiler crate owns the functional core through TIR.
 | `hir/source_interface.rs`     | Direct parameter/node/index provenance retained through HIR     |
 | `ir/instance.rs`              | Typed template-instance edges and binding environments         |
 | `ir/lower.rs`                 | IR assembly, body-source provenance, strict HIR freeze boundary |
+| `ir/required_bindability.rs`  | Pure V002 required-interface validation                       |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
 | `tir/materialized_shape.rs`   | Checked total cardinality for eagerly materialized indexed values |
@@ -1279,9 +1280,10 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `reg
 
 ### Stage 6 - Name resolution (IR)
 
-1. `crates/graphcal-compiler/src/ir/resolve/names.rs`
-2. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
-3. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
+1. `crates/graphcal-compiler/src/ir/required_bindability.rs`
+2. `crates/graphcal-compiler/src/ir/resolve/names.rs`
+3. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
+4. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
 
 ### Stage 7 - HIR and builtin signatures
 
