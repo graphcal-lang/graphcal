@@ -1,0 +1,4 @@
+assert guard = true;
+
+#[assumes(guard, guard)]
+node output: Dimensionless = 1.0;

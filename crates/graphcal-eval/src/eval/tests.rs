@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use super::*;
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_io::RealFileSystem;
@@ -107,6 +108,73 @@ fn bare_graph_declaration_refs_fail_before_dependency_planning() {
             "case: {case}"
         );
     }
+}
+
+#[test]
+fn safety_attributes_reject_repetition_and_invalid_assumptions() {
+    let repeated_expected_fail = "#[expected_fail]\n\
+                                  #[expected_fail]\n\
+                                  assert check = false;";
+    let error = compile_and_eval_named(repeated_expected_fail, "test.gcl").unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
+            name: AttributeName::ExpectedFail,
+            ..
+        })
+    ));
+
+    let invalid_assumes = [
+        "assert guard = true;\n#[assumes]\nnode output: Dimensionless = 1.0;",
+        "assert guard = true;\n#[assumes(guard, guard)]\nnode output: Dimensionless = 1.0;",
+        "assert first = true;\nassert second = true;\n#[assumes(first)]\n#[assumes(second)]\nnode output: Dimensionless = 1.0;",
+    ];
+    for source in invalid_assumes {
+        assert!(compile_and_eval_named(source, "test.gcl").is_err());
+    }
+
+    let valid = "assert first = true;\n\
+                 assert second = true;\n\
+                 #[assumes(second, first)]\n\
+                 node output: Dimensionless = 1.0;";
+    assert!(compile_and_eval_named(valid, "test.gcl").is_ok());
+}
+
+#[test]
+fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub assert check = false;\n"),
+            (
+                "main.gcl",
+                "include pipeline.lib().{\n    #[expected_fail]\n    #[expected_fail]\n    check,\n};\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let file_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        file_error,
+        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
+            name: AttributeName::ExpectedFail,
+            ..
+        })
+    ));
+
+    let inline = "dag checks { pub assert check = false; }\n\
+                  include checks().{\n\
+                      #[expected_fail]\n\
+                      #[expected_fail]\n\
+                      check,\n\
+                  };";
+    let inline_error = compile_and_eval_named(inline, "test.gcl").unwrap_err();
+    assert!(matches!(
+        inline_error,
+        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
+            name: AttributeName::ExpectedFail,
+            ..
+        })
+    ));
 }
 
 fn assert_missing_dag_bindings(

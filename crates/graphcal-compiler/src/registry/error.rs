@@ -7,6 +7,7 @@ use crate::builtin::BuiltinFnName;
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::time_zone::IanaTimeZoneId;
+use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::{FnName, FnParamName};
@@ -1286,6 +1287,60 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("attribute `#[{name}]` appears more than once")]
+    #[diagnostic(
+        code(graphcal::A019),
+        help("`#[{name}]` is singleton metadata; combine its contents into one attribute")
+    )]
+    RepeatedSingletonAttribute {
+        name: AttributeName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate `#[{name}]` attribute")]
+        duplicate: SourceSpan,
+        #[label("first `#[{name}]` attribute")]
+        first: SourceSpan,
+    },
+
+    #[error("`#[assumes(...)]` requires at least one assertion name")]
+    #[diagnostic(
+        code(graphcal::A020),
+        help("name one or more distinct assertions, or remove the inert attribute")
+    )]
+    EmptyAssumes {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("no assertions named")]
+        span: SourceSpan,
+    },
+
+    #[error("assertion `{name}` appears more than once in `#[assumes(...)]`")]
+    #[diagnostic(
+        code(graphcal::A021),
+        help("each assertion may be named at most once by one declaration")
+    )]
+    DuplicateAssumesArgument {
+        name: DeclName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate assertion name")]
+        duplicate: SourceSpan,
+        #[label("first named here")]
+        first: SourceSpan,
+    },
+
+    #[error("`#[assumes(...)]` arguments must be plain identifiers")]
+    #[diagnostic(
+        code(graphcal::A022),
+        help("name assertions directly, for example `#[assumes(first_check, second_check)]`")
+    )]
+    InvalidAssumesArgument {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("not a plain assertion name")]
+        span: SourceSpan,
+    },
+
     #[error("attribute `hidden` does not apply to `{kind}` declarations")]
     #[diagnostic(
         code(graphcal::A017),
@@ -2232,6 +2287,10 @@ impl GraphcalError {
             | Self::AssertBodyNotBool { src, .. }
             | Self::UnknownAssertInAssumes { src, .. }
             | Self::InvalidAssumesTarget { src, .. }
+            | Self::RepeatedSingletonAttribute { src, .. }
+            | Self::EmptyAssumes { src, .. }
+            | Self::DuplicateAssumesArgument { src, .. }
+            | Self::InvalidAssumesArgument { src, .. }
             | Self::InvalidHiddenTarget { src, .. }
             | Self::UnknownAttribute { src, .. }
             | Self::InvalidExpectedFailTarget { src, .. }

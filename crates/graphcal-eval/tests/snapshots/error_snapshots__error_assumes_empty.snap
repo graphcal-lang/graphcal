@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`#[assumes(...)]` requires at least one assertion name
+    Diagnostic severity: error
+Begin snippet for assumes_empty.gcl starting at line 2, column 1
+
+snippet line 2: 
+snippet line 3: #[assumes]
+    label at line 3, columns 1 to 10: no assertions named
+snippet line 4: node output: Dimensionless = 1.0;
+diagnostic help: name one or more distinct assertions, or remove the inert attribute
+diagnostic code: graphcal::A020

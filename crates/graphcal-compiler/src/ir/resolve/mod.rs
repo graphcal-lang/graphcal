@@ -1,3 +1,4 @@
+pub mod attribute_validation;
 mod deps;
 #[cfg(test)]
 mod formal_conformance;
@@ -16,8 +17,8 @@ use super::required_bindability::{
 
 use crate::builtin::BuiltinConst;
 use crate::desugar::desugared_ast::{
-    AssertBody, AttributeArg, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody,
-    TypeExpr, TypeExprKind,
+    AssertBody, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr,
+    TypeExprKind,
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::prelude::{
@@ -607,17 +608,13 @@ fn validate_attributes(
             DeclKind::Figure(f) => Some(f.name.value.clone()),
             _ => None,
         };
-        for attr in &decl.attributes {
-            let attr_name_str = attr.name.name.as_str();
-            let attr_name = attr_name_str.parse::<AttributeName>().map_err(|err| {
-                GraphcalError::UnknownAttribute {
-                    name: err.into_raw(),
-                    src: src.clone(),
-                    span: attr.span.into(),
-                }
+        let attributes =
+            attribute_validation::validate_attributes(&decl.attributes).map_err(|error| {
+                attribute_validation::attribute_validation_error_to_graphcal(error, src)
             })?;
-
-            match attr_name {
+        for validated in attributes {
+            let attr = validated.attribute();
+            match validated.name() {
                 AttributeName::Assumes => {
                     // #[assumes] is only valid on non-const node and param
                     let kind = match &decl.kind {
@@ -644,35 +641,19 @@ fn validate_attributes(
                             span: attr.span.into(),
                         });
                     }
-                    // Each argument must reference an existing assert declaration
-                    for arg in &attr.args {
-                        let ident = match arg {
-                            AttributeArg::Path { segments, .. } if segments.len() == 1 => {
-                                segments.first()
-                            }
-                            AttributeArg::Path { .. }
-                            | AttributeArg::FinitePosition { .. }
-                            | AttributeArg::Group { .. } => {
-                                return Err(GraphcalError::EvalError {
-                                    message:
-                                        "`#[assumes(...)]` arguments must be plain identifiers"
-                                            .to_string(),
-                                    src: src.clone(),
-                                    span: arg.span().into(),
-                                });
-                            }
-                        };
-                        let arg_name = ident.name.as_str();
-                        if !assert_names.contains(arg_name) {
+                    // Structural validation above guarantees a non-empty set
+                    // of unique, plain assertion names.
+                    for argument in validated.assumes_arguments() {
+                        if !assert_names.contains(&argument.value) {
                             return Err(GraphcalError::UnknownAssertInAssumes {
-                                name: arg_name.to_string(),
+                                name: argument.value.to_string(),
                                 src: src.clone(),
-                                span: ident.span.into(),
+                                span: argument.span.into(),
                             });
                         }
                         if let Some(ref dname) = decl_name {
                             assumes_map
-                                .entry(DeclName::expect_valid(arg_name))
+                                .entry(argument.value.clone())
                                 .or_default()
                                 .push(dname.clone());
                         }
