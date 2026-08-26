@@ -26,7 +26,6 @@ use crate::ir::resolve::{
     CollectedFile, DeclCategory, ExpectedFail, ImportedValueNames, ParsedExpectedFail,
     resolve_with_imported_values,
 };
-use crate::ir::resolve::{ImportedNames, resolve_with_imports};
 use crate::registry::dimension_registry::DimensionResolveError;
 use crate::registry::error::GraphcalError;
 use crate::registry::format::format_unit_expr_with_config;
@@ -508,7 +507,19 @@ pub fn lower(ast: &File, src: &NamedSource<Arc<String>>) -> Result<HirDag, Graph
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-    lower_with_imports(ast, src, &ImportedNames::default(), &dag_id)
+    let (builder, unresolved) = lower_to_builder_with_imported_bindings(
+        ast,
+        src,
+        &ImportedValueNames::default(),
+        HashMap::new(),
+        &dag_id,
+        None,
+    )?;
+    let resolver = single_module_resolver(ast, &dag_id, src)?;
+    let registry = builder
+        .try_build()
+        .map_err(|error| registry_build_error(&error, src))?;
+    unresolved.freeze(registry, &dag_id, &resolver, src)
 }
 
 #[cfg(test)]
@@ -524,35 +535,20 @@ pub(crate) fn lower_with_frontend_registry_for_test(
                 DiagnosticAnchor::WholeFile,
             )
         })?;
-    let (builder, unresolved) = lower_to_builder(ast, src, &ImportedNames::default(), &dag_id)?;
+    let (builder, unresolved) = lower_to_builder_with_imported_bindings(
+        ast,
+        src,
+        &ImportedValueNames::default(),
+        HashMap::new(),
+        &dag_id,
+        None,
+    )?;
     let resolver = single_module_resolver(ast, &dag_id, src)?;
     let registry = builder
         .try_build()
         .map_err(|error| registry_build_error(&error, src))?;
     let hir = unresolved.freeze(registry.clone(), &dag_id, &resolver, src)?;
     Ok((hir, registry))
-}
-
-/// Lower an AST with imported declarations into a [`HirDag`].
-///
-/// Same as [`lower`] but accepts imported names from other files.
-/// The registry is frozen (via `try_build()`) before returning.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
-fn lower_with_imports(
-    ast: &File,
-    src: &NamedSource<Arc<String>>,
-    imported: &ImportedNames,
-    dag_id: &crate::dag_id::DagId,
-) -> Result<HirDag, GraphcalError> {
-    let (builder, resolved_ir) = lower_to_builder(ast, src, imported, dag_id)?;
-    let resolver = single_module_resolver(ast, dag_id, src)?;
-    let registry = builder
-        .try_build()
-        .map_err(|err| registry_build_error(&err, src))?;
-    resolved_ir.freeze(registry, dag_id, &resolver, src)
 }
 
 /// Build a resolver covering only this file's own module.
@@ -594,15 +590,6 @@ fn single_module_resolver(
     Ok(resolver)
 }
 
-/// Lower an AST with imported declarations, returning a `RegistryBuilder`
-/// that can be further mutated (e.g., to register imported type-system
-/// declarations) before freezing.
-///
-/// Call [`UnfrozenIR::freeze`] with the final [`Registry`] to produce a [`HirDag`].
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if declaration collection or registry construction fails.
 fn collect_source_declarations(ast: &File) -> Vec<crate::hir::SourceDeclaration> {
     ast.declarations
         .iter()
@@ -624,41 +611,6 @@ fn collect_source_declarations(ast: &File) -> Vec<crate::hir::SourceDeclaration>
         .collect()
 }
 
-fn lower_to_builder(
-    ast: &File,
-    src: &NamedSource<Arc<String>>,
-    imported: &ImportedNames,
-    dag_id: &crate::dag_id::DagId,
-) -> Result<(RegistryBuilder, UnfrozenIR), GraphcalError> {
-    // Step 1: Declaration collection
-    let resolved = resolve_with_imports(ast, src, imported)?;
-
-    // Step 2: Extract type annotations from AST + imported declarations.
-    let mut type_anns = extract_type_annotations(ast);
-    for (name, type_ann, _, _) in &imported.consts {
-        type_anns.insert(name.clone(), type_ann.clone());
-    }
-    for (name, type_ann, _, _) in &imported.params {
-        type_anns.insert(name.clone(), type_ann.clone());
-    }
-    for (name, type_ann, _, _) in &imported.nodes {
-        type_anns.insert(name.clone(), type_ann.clone());
-    }
-
-    // Step 3: Build registry, augment deps, and construct IR
-    build_ir_from_resolved(
-        ast,
-        src,
-        resolved,
-        type_anns,
-        HashMap::new(),
-        dag_id,
-        None,
-        None,
-        &crate::cancellation::CancellationToken::unbounded(),
-    )
-}
-
 /// Hook that merges imported type-system declarations into the registry builder.
 ///
 /// Invoked after the prelude is loaded but before the file's own
@@ -670,9 +622,9 @@ pub type RegistrySeed<'a> = &'a mut dyn FnMut(&mut RegistryBuilder) -> Result<()
 /// Lower an AST with imported value bindings, returning a `RegistryBuilder`
 /// that can be further mutated before freezing.
 ///
-/// Unlike `lower_to_builder`, this uses `resolve_with_imported_values`, which
-/// adds only imported lexical names to the scope. Canonical targets remain
-/// attached to those lexical names in `imported_bindings`.
+/// Imported lexical names are added to the resolution scope without injecting
+/// parallel AST expressions. Canonical targets remain attached to those names
+/// in `imported_bindings`.
 ///
 /// # Errors
 ///
@@ -6056,18 +6008,6 @@ mod tests {
         let dep_src = make_src(dep_source);
         let raw_file = Parser::new(dep_source).parse_file().unwrap();
         let dep_file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
-        let (_dep_builder, mut dep_unfrozen) = lower_to_builder(
-            &dep_file,
-            &dep_src,
-            &ImportedNames {
-                consts: vec![],
-                params: vec![],
-                nodes: vec![],
-                asserts: vec![],
-            },
-            &crate::dag_id::DagId::root_in_package("test", "dep"),
-        )
-        .unwrap();
         let qualified = ScopedName::qualified(
             ModuleAliasName::expect_valid("mission"),
             DeclName::expect_valid("C"),
@@ -6076,25 +6016,34 @@ mod tests {
             crate::dag_id::DagId::root_in_package("producer", "config"),
             DeclName::expect_valid("C"),
         );
-        dep_unfrozen.imported_bindings.insert(
-            qualified.clone(),
-            HirImportedBinding::new(canonical.clone()),
-        );
+        let imported_names = ImportedValueNames {
+            const_names: vec![(qualified.clone(), Span::new(0, 0))],
+            ..ImportedValueNames::default()
+        };
+        let (_dep_builder, dep_unfrozen) = lower_to_builder_with_imported_bindings(
+            &dep_file,
+            &dep_src,
+            &imported_names,
+            HashMap::from([(
+                qualified.clone(),
+                HirImportedBinding::new(canonical.clone()),
+            )]),
+            &crate::dag_id::DagId::root_in_package("test", "dep"),
+            None,
+        )
+        .unwrap();
 
         let importer_source = "node anchor: Dimensionless = 1.0;";
         let importer_src = make_src(importer_source);
         let raw_importer = Parser::new(importer_source).parse_file().unwrap();
         let importer_file = crate::syntax::desugar::desugar_multi_decls_in_file(raw_importer);
-        let (_importer_builder, mut unfrozen) = lower_to_builder(
+        let (_importer_builder, mut unfrozen) = lower_to_builder_with_imported_bindings(
             &importer_file,
             &importer_src,
-            &ImportedNames {
-                consts: vec![],
-                params: vec![],
-                nodes: vec![],
-                asserts: vec![],
-            },
+            &ImportedValueNames::default(),
+            HashMap::new(),
             &crate::dag_id::DagId::root_in_package("test", "main"),
+            None,
         )
         .unwrap();
 

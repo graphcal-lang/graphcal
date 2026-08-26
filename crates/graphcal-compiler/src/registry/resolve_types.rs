@@ -20,9 +20,8 @@ use crate::syntax::span::Span;
 
 /// Pre-evaluated value bindings imported from already-evaluated dependency files.
 ///
-/// Unlike `ImportedNames` which carries AST expressions, this carries
-/// evaluated values. Used in per-file evaluation where each file is
-/// compiled and evaluated independently.
+/// These names carry no parallel AST-expression import route. Canonical
+/// targets cross the HIR boundary separately as typed imported bindings.
 #[derive(Debug, Default, Clone)]
 pub struct ImportedValueNames {
     /// Imported const names (for scope checking only — actual values are in the exec plan).

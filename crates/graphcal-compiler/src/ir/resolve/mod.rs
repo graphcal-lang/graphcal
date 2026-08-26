@@ -17,8 +17,7 @@ use super::required_bindability::{
 };
 
 use crate::desugar::desugared_ast::{
-    AssertBody, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr,
-    TypeExprKind,
+    AssertBody, DeclKind, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr, TypeExprKind,
 };
 use crate::registry::error::GraphcalError;
 use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
@@ -1078,159 +1077,17 @@ fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
     }
 }
 
-/// Declarations imported from other files, to be injected into the resolve scope.
-///
-/// These are treated as if they were declared locally, appearing before local declarations.
-#[derive(Debug, Default)]
-pub(crate) struct ImportedNames {
-    pub consts: Vec<(DeclName, TypeExpr, Expr, Span)>,
-    pub params: Vec<(DeclName, TypeExpr, Expr, Span)>,
-    pub nodes: Vec<(DeclName, TypeExpr, Expr, Span)>,
-    pub asserts: Vec<(DeclName, AssertBody, Span)>,
-}
-
-/// Collect declaration entries and validate declaration shells.
-///
-/// Reference resolution and dependency extraction happen in HIR lowering;
-/// this pass checks duplicates, visibility rules, and attributes.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if duplicate names or invalid declaration
-/// shells are found.
+/// Collect declaration entries and validate declaration shells through the
+/// production imported-binding path.
 #[cfg(test)]
 fn resolve(file: &File, src: &NamedSource<Arc<String>>) -> Result<CollectedFile, GraphcalError> {
-    resolve_with_imports(file, src, &ImportedNames::default())
-}
-
-/// Resolve names with imported declarations injected into scope.
-///
-/// Imported declarations are prepended to the local declarations, so they appear
-/// first in eval order. The downstream pipeline (`dim_check`, `const_eval`, DAG, evaluate)
-/// works without changes because imported params/nodes become part of the DAG.
-///
-/// # Errors
-///
-/// Returns a [`GraphcalError`] if duplicate names or invalid declaration
-/// shells are found.
-pub(crate) fn resolve_with_imports(
-    file: &File,
-    src: &NamedSource<Arc<String>>,
-    imported: &ImportedNames,
-) -> Result<CollectedFile, GraphcalError> {
-    let mut names: HashMap<ScopedName, Span> = HashMap::new();
-
-    // Pre-populate with imported names (they don't get duplicate-checked against
-    // each other here because they were validated in their source files).
-    for (name, _, _, span) in &imported.consts {
-        names.insert(ScopedName::from(name), *span);
-    }
-    for (name, _, _, span) in &imported.params {
-        names.insert(ScopedName::from(name), *span);
-    }
-    for (name, _, _, span) in &imported.nodes {
-        names.insert(ScopedName::from(name), *span);
-    }
-    for (name, _, span) in &imported.asserts {
-        names.insert(ScopedName::from(name), *span);
-    }
-
-    // Collect local declarations
-    let local = collect_local_declarations(file, src, &mut names)?;
-
-    // Build assert names (imported + local) for attribute validation
-    let mut all_assert_names: HashSet<DeclName> = HashSet::new();
-    for (name, _, _) in &imported.asserts {
-        all_assert_names.insert(name.clone());
-    }
-    all_assert_names.extend(local.assert_names.iter().cloned());
-
-    // Prepend imported declarations so they appear before local ones in eval order.
-    // Strip TypeExpr from imported tuples and convert to entry types.
-    let mut all_consts: Vec<CollectedConstEntry> = imported
-        .consts
-        .iter()
-        .map(|(name, _, expr, span)| CollectedConstEntry {
-            name: name.clone(),
-            expr: expr.clone(),
-            span: *span,
-        })
-        .collect();
-    all_consts.extend(local.consts);
-    let mut all_params: Vec<CollectedParamEntry> = imported
-        .params
-        .iter()
-        .map(|(name, _, expr, span)| CollectedParamEntry {
-            name: name.clone(),
-            default_expr: Some(expr.clone()),
-            span: *span,
-        })
-        .collect();
-    all_params.extend(local.params);
-    let mut all_nodes: Vec<CollectedNodeEntry> = imported
-        .nodes
-        .iter()
-        .map(|(name, _, expr, span)| CollectedNodeEntry {
-            name: name.clone(),
-            expr: expr.clone(),
-            span: *span,
-        })
-        .collect();
-    all_nodes.extend(local.nodes);
-    let mut all_asserts: Vec<CollectedAssertEntry> = imported
-        .asserts
-        .iter()
-        .map(|(name, body, span)| CollectedAssertEntry {
-            name: name.clone(),
-            body: body.clone(),
-            span: *span,
-        })
-        .collect();
-    all_asserts.extend(local.asserts);
-
-    // Prepend imported source_order entries
-    let mut all_source_order: Vec<(DeclName, DeclCategory)> = Vec::new();
-    for (name, _, _, _) in &imported.consts {
-        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Const));
-    }
-    for (name, _, _, _) in &imported.params {
-        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Param));
-    }
-    for (name, _, _, _) in &imported.nodes {
-        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Node));
-    }
-    for (name, _, _) in &imported.asserts {
-        all_source_order.push((DeclName::expect_valid(name.as_str()), DeclCategory::Assert));
-    }
-    all_source_order.extend(local.source_order);
-
-    // Validate attributes and build assumes_map / expected_fail_map
-    let validated = validate_attributes(file, src, &all_assert_names)?;
-
-    // Validate external signatures: exports and input ports must not reference private type-system items.
-    validate_private_in_public(file, src, &local.external_surface)?;
-
-    Ok(CollectedFile {
-        consts: all_consts,
-        params: all_params,
-        nodes: all_nodes,
-        asserts: all_asserts,
-        plots: local.plots,
-        figures: local.figures,
-        layers: local.layers,
-        source_order: all_source_order,
-        assert_names: all_assert_names,
-        assumes_map: validated.assumes_map,
-        expected_fail: validated.expected_fail_map,
-        hidden_plots: validated.hidden_plots,
-        external_surface: local.external_surface,
-    })
+    resolve_with_imported_values(file, src, &ImportedValueNames::default())
 }
 
 /// Resolve names with imported value declarations in lexical scope.
 ///
-/// Unlike [`resolve_with_imports`], this does **not** inject imported expressions
-/// into the DAG. Imported names are used only for scope checking. HIR lowering
+/// Imported names are used only for scope checking; no imported AST
+/// expressions are injected into the DAG. HIR lowering
 /// attaches canonical targets, and static checking later attaches declared
 /// types and any available compile-time values.
 ///
