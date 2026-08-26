@@ -1,0 +1,2 @@
+#[lazy]
+node output: Dimensionless = 1.0;

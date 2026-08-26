@@ -375,7 +375,10 @@ fn validate_include_item_attributes(
                 }));
             }
             AttributeName::Lazy => {
-                // Recognized but semantics deferred, matching declaration-level validation.
+                return Err(CompileError::Eval(GraphcalError::LazyNotSupported {
+                    src: file_src.clone(),
+                    span: attr.span.into(),
+                }));
             }
         }
     }

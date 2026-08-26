@@ -72,6 +72,9 @@ pub enum AttributeValidationError {
         first: Span,
         duplicate: Span,
     },
+    /// Lazy evaluation syntax is reserved but has no semantics yet.
+    #[error("`#[lazy]` is reserved but not supported")]
+    UnsupportedLazy { span: Span },
 }
 
 /// Parse known attributes and enforce shared singleton/argument invariants.
@@ -107,7 +110,12 @@ pub fn validate_attributes(
                     reject_repeated_singleton(name, &mut first_expected_fail, attribute.span)?;
                     Vec::new()
                 }
-                AttributeName::Hidden | AttributeName::Lazy => Vec::new(),
+                AttributeName::Hidden => Vec::new(),
+                AttributeName::Lazy => {
+                    return Err(AttributeValidationError::UnsupportedLazy {
+                        span: attribute.span,
+                    });
+                }
             };
 
             Ok(ValidatedAttribute {
@@ -223,6 +231,10 @@ pub fn attribute_validation_error_to_graphcal(
             first: first.into(),
             duplicate: duplicate.into(),
         },
+        AttributeValidationError::UnsupportedLazy { span } => GraphcalError::LazyNotSupported {
+            src: src.clone(),
+            span: span.into(),
+        },
     }
 }
 
@@ -293,6 +305,19 @@ mod tests {
                 ),
                 "case: {expected}"
             );
+        }
+    }
+
+    #[test]
+    fn lazy_is_rejected_regardless_of_target_or_arguments() {
+        for source in [
+            "#[lazy]\nnode output: Dimensionless = 1.0;",
+            "#[lazy(guard)]\nassert output = true;",
+        ] {
+            assert!(matches!(
+                validate_attributes(&attributes(source)),
+                Err(AttributeValidationError::UnsupportedLazy { .. })
+            ));
         }
     }
 

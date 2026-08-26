@@ -157,7 +157,9 @@ regular_declaration
    = { attribute }, [ "pub", [ "(", "bind", ")" ] ], regular_declaration_kind;
 
 (* Recognized attribute names: "assumes" (node/param), "expected_fail"
-   (assert), "hidden" (plot; suppresses standalone display), "lazy". *)
+   (assert), "hidden" (plot; suppresses standalone display), "lazy".
+   "lazy" syntax is reserved but semantic checking rejects it until lazy
+   evaluation is implemented. *)
 attribute
    = "#", "[", IDENT, [ "(", [ attribute_arg_list ], ")" ], "]";
 

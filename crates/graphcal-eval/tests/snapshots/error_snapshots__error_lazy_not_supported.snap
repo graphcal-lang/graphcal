@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+`#[lazy]` is reserved but not supported
+    Diagnostic severity: error
+Begin snippet for lazy_not_supported.gcl starting at line 1, column 1
+
+snippet line 1: #[lazy]
+    label at line 1, columns 1 to 7: lazy evaluation is not implemented
+snippet line 2: node output: Dimensionless = 1.0;
+diagnostic help: remove `#[lazy]`; Graphcal currently evaluates nodes eagerly
+diagnostic code: graphcal::A023

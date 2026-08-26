@@ -1140,6 +1140,21 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn lazy_attribute_reports_reserved_but_unsupported() {
+        let diagnostics =
+            produce_diagnostics("#[lazy]\nnode output: Dimensionless = 1.0;", "test.gcl");
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::A023".to_string()))
+        );
+        assert_eq!(diagnostic.range.start, Position::new(0, 0));
+        assert_eq!(diagnostic.range.end, Position::new(0, 7));
+    }
+
+    #[test]
     fn repeated_include_producer_has_both_selection_spans() {
         let source = "dag producer { pub node value: Dimensionless = 1.0; }\n\
                       include producer().{ value as first, value as second };";

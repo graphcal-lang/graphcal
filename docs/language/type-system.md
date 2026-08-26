@@ -413,7 +413,7 @@ or exist only at construction and rendering boundaries:
 | Loop variable | `for v: I` | `Key(I)` for the iterated axis | the comprehension body |
 | `match` binding | `field: name` in a pattern | the bound field's type | the arm expression |
 | Closure variables | `scan` binders `acc`, `item`; `unfold` binders `prev_state`, `prev_i`, `i` | accumulator / element values; `unfold`'s `prev_i`, `i` are `Key(I)` | the `scan` / `unfold` body |
-| Attributes | `#[...]` before a declaration | closed set: `assumes`, `expected_fail`, `hidden`, `lazy` | declaration metadata |
+| Attributes | `#[...]` before a declaration | closed set: `assumes`, `expected_fail`, `hidden`; `lazy` is reserved but rejected (A023) | declaration metadata |
 | String literals | single-line quoted text | — (there is no `String` ValueType) | `datetime`/`epoch` arguments, timezone display targets, plot properties, plugin paths |
 | Timezone | quoted IANA name | validated against the bundled tzdb | `datetime(..., tz)` construction, `-> "Area/Location"` display |
 | Module / package | directory tree and `import` | — | dot-separated path prefixes |

@@ -314,8 +314,11 @@ positional keys always include the `#` prefix.
 
 ### `#[lazy]`
 
-Recognized by the parser but not yet implemented. Will mark a node for lazy
-evaluation (computed only when requested, not eagerly during graph evaluation).
+Reserved syntax, but lazy evaluation is not implemented. Semantic checking
+rejects `#[lazy]` on every declaration and selective include item (A023), with
+or without arguments. The parser and formatter continue to recognize it so a
+future implementation can define an exact target and argument shape before
+carrying typed lazy metadata into the execution plan.
 
 ## Assertions in Multi-File Projects
 
@@ -376,3 +379,4 @@ bindings happen to be equal.
 | A020 | Empty `#[assumes]` argument list |
 | A021 | Duplicate assertion name in `#[assumes(...)]` |
 | A022 | Non-identifier argument in `#[assumes(...)]` |
+| A023 | Reserved `#[lazy]` syntax is not supported |

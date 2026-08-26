@@ -1357,6 +1357,18 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("`#[lazy]` is reserved but not supported")]
+    #[diagnostic(
+        code(graphcal::A023),
+        help("remove `#[lazy]`; Graphcal currently evaluates nodes eagerly")
+    )]
+    LazyNotSupported {
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("lazy evaluation is not implemented")]
+        span: SourceSpan,
+    },
+
     #[error("attribute `hidden` does not apply to `{kind}` declarations")]
     #[diagnostic(
         code(graphcal::A017),
@@ -2308,6 +2320,7 @@ impl GraphcalError {
             | Self::EmptyAssumes { src, .. }
             | Self::DuplicateAssumesArgument { src, .. }
             | Self::InvalidAssumesArgument { src, .. }
+            | Self::LazyNotSupported { src, .. }
             | Self::InvalidHiddenTarget { src, .. }
             | Self::UnknownAttribute { src, .. }
             | Self::InvalidExpectedFailTarget { src, .. }

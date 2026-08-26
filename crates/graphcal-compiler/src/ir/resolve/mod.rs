@@ -798,7 +798,10 @@ fn validate_attributes(
                     }
                 }
                 AttributeName::Lazy => {
-                    // Recognized but semantics deferred — no validation needed
+                    return Err(GraphcalError::LazyNotSupported {
+                        src: src.clone(),
+                        span: attr.span.into(),
+                    });
                 }
             }
         }
