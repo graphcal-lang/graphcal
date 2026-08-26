@@ -386,6 +386,47 @@ mod tests {
     }
 
     #[test]
+    fn applicability_is_shared_by_declarations_and_include_items() {
+        let invalid = [
+            (
+                "#[expected_fail]\nnode output: Dimensionless = 1.0;",
+                AttributeTarget::declaration(DeclarationKind::Node),
+                AttributeName::ExpectedFail,
+            ),
+            (
+                "#[assumes(guard)]\nnode output: Dimensionless = 1.0;",
+                AttributeTarget::include_item(
+                    Some(DeclarationKind::Node),
+                    crate::syntax::names::NameAtom::parse("output").unwrap(),
+                ),
+                AttributeName::Assumes,
+            ),
+            (
+                "#[hidden]\nassert output = true;",
+                AttributeTarget::include_item(
+                    Some(DeclarationKind::Assert),
+                    crate::syntax::names::NameAtom::parse("output").unwrap(),
+                ),
+                AttributeName::Hidden,
+            ),
+        ];
+        for (source, target, expected_name) in invalid {
+            assert!(matches!(
+                validate_attributes(&attributes(source), &target),
+                Err(AttributeValidationError::InvalidTarget { name, .. })
+                    if name == expected_name
+            ));
+        }
+
+        let expected_fail = attributes("#[expected_fail]\nassert output = false;");
+        let assertion_item = AttributeTarget::include_item(
+            Some(DeclarationKind::Assert),
+            crate::syntax::names::NameAtom::parse("output").unwrap(),
+        );
+        assert!(validate_attributes(&expected_fail, &assertion_item).is_ok());
+    }
+
+    #[test]
     fn distinct_assumptions_are_valid_and_order_independent() {
         for source in [
             "#[assumes(first, second)]\nnode output: Dimensionless = 1.0;",

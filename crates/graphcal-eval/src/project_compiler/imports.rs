@@ -1417,6 +1417,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dependency_index_preserves_typed_non_param_categories() {
+        let raw = graphcal_compiler::syntax::parser::Parser::new(
+            "const node fixed: Dimensionless = 1.0;\n\
+             node computed: Dimensionless = 2.0;\n\
+             assert check = true;",
+        )
+        .parse_file()
+        .unwrap();
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw);
+        let index = build_dep_decl_index(&file.declarations);
+
+        assert_eq!(index.other["fixed"], DeclarationKind::ConstNode);
+        assert_eq!(index.other["computed"], DeclarationKind::Node);
+        assert_eq!(index.other["check"], DeclarationKind::Assert);
+    }
+
+    #[test]
     fn selective_import_records_only_the_canonical_hir_target() {
         let src = NamedSource::new("test.gcl", Arc::new(String::new()));
         let mut imported_names = ImportedValueNames::default();
