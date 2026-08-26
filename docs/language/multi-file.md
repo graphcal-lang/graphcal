@@ -174,6 +174,20 @@ Each item in a brace list may be aliased independently:
 import nasa.rocket.{type Orbit as O, compute_thrust as ct};
 ```
 
+Aliases obey the same namespace-specific reservation rules as direct
+local declarations (N009):
+
+- `type`, `dim`, and `index` aliases cannot reuse a prelude dimension or
+  built-in type spelling.
+- `unit` aliases cannot reuse a prelude unit spelling.
+- aliases of graph values cannot reuse a built-in numeric constant spelling
+  such as `E` or `PI`.
+
+These are separate namespace policies, not one global reserved-word list.
+Graph-value aliases may use time-scale and built-in-function spellings because
+`@UTC`, `Datetime<UTC>`, and `sin(...)` are structurally disambiguated.
+Selective `include` items and `pub` re-exports apply the same rules.
+
 ### What `import` may bring
 
 Only compile-time names cross the `import` boundary:
