@@ -61,11 +61,11 @@ path = "fuzz_targets/generated_project.rs"
 test = false
 
 [dependencies]
-graphcal-compiler = { path = "../crates/graphcal-compiler", version = "0.0.1-alpha.26" }
-graphcal-eval = { path = "../crates/graphcal-eval", version = "0.0.1-alpha.26" }
-graphcal-fmt = { path = "../crates/graphcal-fmt", version = "0.0.1-alpha.26" }
-graphcal-io = { path = "../crates/graphcal-io", version = "0.0.1-alpha.26" }
-graphcal-package = { path = "../crates/graphcal-package", version = "0.0.1-alpha.26" }
-graphcal-plugin-abi = { path = "../crates/graphcal-plugin-abi", version = "0.0.1-alpha.26" }
-graphcal-test-support = { path = "../crates/graphcal-test-support", version = "0.0.1-alpha.26" }
+graphcal-compiler = { path = "../crates/graphcal-compiler", version = "0.0.1-alpha.27" }
+graphcal-eval = { path = "../crates/graphcal-eval", version = "0.0.1-alpha.27" }
+graphcal-fmt = { path = "../crates/graphcal-fmt", version = "0.0.1-alpha.27" }
+graphcal-io = { path = "../crates/graphcal-io", version = "0.0.1-alpha.27" }
+graphcal-package = { path = "../crates/graphcal-package", version = "0.0.1-alpha.27" }
+graphcal-plugin-abi = { path = "../crates/graphcal-plugin-abi", version = "0.0.1-alpha.27" }
+graphcal-test-support = { path = "../crates/graphcal-test-support", version = "0.0.1-alpha.27" }
 libfuzzer-sys = "0.4"
