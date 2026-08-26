@@ -1,4 +1,5 @@
 use super::*;
+use crate::builtin::BuiltinConst;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::parser::Parser;

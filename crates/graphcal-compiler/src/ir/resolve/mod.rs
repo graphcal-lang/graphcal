@@ -15,15 +15,12 @@ use super::required_bindability::{
     self, InterfaceDecl, NominalKind, Requirement, Violation as RequiredBindabilityViolation,
 };
 
-use crate::builtin::BuiltinConst;
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, Expr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr,
     TypeExprKind,
 };
 use crate::registry::error::GraphcalError;
-use crate::registry::prelude::{
-    PRELUDE_BUILTIN_TYPE_NAMES, PRELUDE_DIMENSION_NAMES, PRELUDE_UNIT_NAMES,
-};
+use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
 use crate::registry::resolve_types::{
     CollectedAssertEntry, CollectedConstEntry, CollectedExpectedFail, CollectedFigureEntry,
     CollectedLayerEntry, CollectedNodeEntry, CollectedParamEntry, CollectedPlotEntry,
@@ -88,38 +85,72 @@ fn check_builtin_name_shadowing(
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for decl in &file.declarations {
-        let shadowed = match &decl.kind {
-            DeclKind::BaseDimension(d) if is_builtin_type_name(d.name.value.as_str()) => {
-                Some(("dimension", d.name.value.to_string(), d.name.span))
-            }
-            DeclKind::Dimension(d) if is_builtin_type_name(d.name.value.as_str()) => {
-                Some(("dimension", d.name.value.to_string(), d.name.span))
-            }
-            DeclKind::Type(t) if is_builtin_type_name(t.name.value.as_str()) => {
-                Some(("type", t.name.value.to_string(), t.name.span))
-            }
-            DeclKind::Index(i) if is_builtin_type_name(i.name.value.as_str()) => {
-                Some(("index", i.name.value.to_string(), i.name.span))
-            }
-            DeclKind::Unit(u) if PRELUDE_UNIT_NAMES.contains(&u.name.value.as_str()) => {
-                Some(("unit", u.name.value.to_string(), u.name.span))
-            }
-            DeclKind::Param(p) if BuiltinConst::parse(p.name.value.as_str()).is_some() => {
-                Some(("param", p.name.value.to_string(), p.name.span))
-            }
-            DeclKind::Node(n) if BuiltinConst::parse(n.name.value.as_str()).is_some() => {
-                Some(("node", n.name.value.to_string(), n.name.span))
-            }
-            DeclKind::ConstNode(c) if BuiltinConst::parse(c.name.value.as_str()).is_some() => {
-                Some(("const node", c.name.value.to_string(), c.name.span))
-            }
-            _ => None,
+        let introduced = match &decl.kind {
+            DeclKind::BaseDimension(d) => Some((
+                ReservedNameNamespace::TypeSystem,
+                "dimension",
+                d.name.value.atom(),
+                d.name.span,
+            )),
+            DeclKind::Dimension(d) => Some((
+                ReservedNameNamespace::TypeSystem,
+                "dimension",
+                d.name.value.atom(),
+                d.name.span,
+            )),
+            DeclKind::Type(t) => Some((
+                ReservedNameNamespace::TypeSystem,
+                "type",
+                t.name.value.atom(),
+                t.name.span,
+            )),
+            DeclKind::Index(i) => Some((
+                ReservedNameNamespace::TypeSystem,
+                "index",
+                i.name.value.atom(),
+                i.name.span,
+            )),
+            DeclKind::Unit(u) => Some((
+                ReservedNameNamespace::Unit,
+                "unit",
+                u.name.value.atom(),
+                u.name.span,
+            )),
+            DeclKind::Param(p) => Some((
+                ReservedNameNamespace::GraphValue,
+                "param",
+                p.name.value.atom(),
+                p.name.span,
+            )),
+            DeclKind::Node(n) => Some((
+                ReservedNameNamespace::GraphValue,
+                "node",
+                n.name.value.atom(),
+                n.name.span,
+            )),
+            DeclKind::ConstNode(c) => Some((
+                ReservedNameNamespace::GraphValue,
+                "const node",
+                c.name.value.atom(),
+                c.name.span,
+            )),
+            DeclKind::Assert(_)
+            | DeclKind::Plot(_)
+            | DeclKind::Figure(_)
+            | DeclKind::Layer(_)
+            | DeclKind::Import(_)
+            | DeclKind::PluginImport(_)
+            | DeclKind::Include(_)
+            | DeclKind::Dag(_)
+            | DeclKind::Sugar(_) => None,
         };
 
-        if let Some((kind, name, span)) = shadowed {
+        if let Some((namespace, kind, name, span)) = introduced
+            && validate_reserved_name(namespace, name).is_err()
+        {
             return Err(GraphcalError::BuiltinNameShadowed {
                 kind,
-                name,
+                name: name.to_string(),
                 src: src.clone(),
                 span: span.into(),
             });
@@ -129,8 +160,27 @@ fn check_builtin_name_shadowing(
     Ok(())
 }
 
-fn is_builtin_type_name(name: &str) -> bool {
-    PRELUDE_DIMENSION_NAMES.contains(&name) || PRELUDE_BUILTIN_TYPE_NAMES.contains(&name)
+fn check_imported_graph_value_names(
+    imported: &ImportedValueNames,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    imported
+        .const_names
+        .iter()
+        .chain(&imported.param_names)
+        .chain(&imported.node_names)
+        .filter(|(name, _)| !name.is_qualified())
+        .try_for_each(|(name, span)| {
+            let atom = name.member().atom();
+            validate_reserved_name(ReservedNameNamespace::GraphValue, atom).map_err(|_| {
+                GraphcalError::BuiltinNameShadowed {
+                    kind: "graph-value alias",
+                    name: atom.to_string(),
+                    src: src.clone(),
+                    span: (*span).into(),
+                }
+            })
+        })
 }
 
 fn check_exclusive_universe_collisions(
@@ -1189,6 +1239,7 @@ pub(crate) fn resolve_with_imported_values(
     src: &NamedSource<Arc<String>>,
     imported: &ImportedValueNames,
 ) -> Result<CollectedFile, GraphcalError> {
+    check_imported_graph_value_names(imported, src)?;
     let mut names: HashMap<ScopedName, Span> = HashMap::new();
 
     // Pre-populate with imported names. The scope here mixes typed imported

@@ -1271,19 +1271,21 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `reg
 7. `crates/graphcal-compiler/src/registry/unit.rs`
 8. `crates/graphcal-compiler/src/registry/types.rs`
 9. `crates/graphcal-compiler/src/registry/prelude.rs`
-10. `crates/graphcal-compiler/src/registry/declared_type.rs`
-11. `crates/graphcal-compiler/src/registry/resolve_types.rs`
-12. `crates/graphcal-compiler/src/diagnostic_anchor.rs`
-13. `crates/graphcal-compiler/src/registry/error.rs`
-14. `crates/graphcal-compiler/src/registry/runtime_value.rs`
-15. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
+10. `crates/graphcal-compiler/src/registry/reserved_name.rs`
+11. `crates/graphcal-compiler/src/registry/declared_type.rs`
+12. `crates/graphcal-compiler/src/registry/resolve_types.rs`
+13. `crates/graphcal-compiler/src/diagnostic_anchor.rs`
+14. `crates/graphcal-compiler/src/registry/error.rs`
+15. `crates/graphcal-compiler/src/registry/runtime_value.rs`
+16. `crates/graphcal-compiler/src/syntax/module_resolve.rs`
 
 ### Stage 6 - Name resolution (IR)
 
 1. `crates/graphcal-compiler/src/ir/required_bindability.rs`
 2. `crates/graphcal-compiler/src/ir/resolve/names.rs`
 3. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
-4. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
+4. `crates/graphcal-compiler/src/ir/resolve/attribute_validation.rs`
+5. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
 
 ### Stage 7 - HIR and builtin signatures
 

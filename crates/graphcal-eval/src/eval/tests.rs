@@ -213,6 +213,67 @@ fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
     ));
 }
 
+#[test]
+fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
+    let library = "pub dim CustomDim = Length;\n\
+                   pub const unit custom_unit: Length = 2.0 m;\n\
+                   pub type CustomType { CustomType }\n\
+                   pub index CustomIndex = { One };\n\
+                   pub const node constant: Dimensionless = 1.0;\n\
+                   pub node runtime: Dimensionless = 2.0;\n";
+    let invalid_imports = [
+        ("dim CustomDim as Velocity", "Velocity"),
+        ("unit custom_unit as m", "m"),
+        ("type CustomType as Bool", "Bool"),
+        ("index CustomIndex as Length", "Length"),
+        ("constant as E", "E"),
+    ];
+
+    for (item, expected_name) in invalid_imports {
+        let main = format!("import pipeline.lib.{{ {item} }};\n");
+        let (_directory, root) =
+            write_pipeline_project(&[("lib.gcl", library), ("main.gcl", &main)], "main.gcl");
+        let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. })
+                if name == expected_name
+        ));
+    }
+
+    let invalid_includes = [
+        "include pipeline.lib().{ runtime as E };\n",
+        "dag producer { pub node value: Dimensionless = 1.0; }\ninclude producer().{ value as E };\n",
+    ];
+    for main in invalid_includes {
+        let error = if main.starts_with("dag") {
+            compile_and_eval_named(main, "test.gcl").unwrap_err()
+        } else {
+            let (_directory, root) =
+                write_pipeline_project(&[("lib.gcl", library), ("main.gcl", main)], "main.gcl");
+            compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err()
+        };
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "E"
+        ));
+    }
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub const node value: Dimensionless = 1.0;\n"),
+            ("middle.gcl", "import pipeline.lib.{ pub value as E };\n"),
+            ("main.gcl", "import pipeline.middle as middle;\n"),
+        ],
+        "main.gcl",
+    );
+    let reexport_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        reexport_error,
+        CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "E"
+    ));
+}
+
 fn assert_missing_dag_bindings(
     error: CompileError,
     expected_dag_name: &str,

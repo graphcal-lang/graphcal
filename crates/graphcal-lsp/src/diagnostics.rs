@@ -430,6 +430,38 @@ mod tests {
     }
 
     #[test]
+    fn reserved_alias_diagnostic_points_at_the_local_alias() {
+        let directory = tempfile::tempdir().unwrap();
+        let source_dir = directory.path().join("src/app");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            directory.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            source_dir.join("lib.gcl"),
+            "pub const node value: Dimensionless = 1.0;\n",
+        )
+        .unwrap();
+        let source = "import app.lib.{ value as E };\n";
+        let root = source_dir.join("main.gcl");
+        std::fs::write(&root, source).unwrap();
+
+        let diagnostics = produce_diagnostics_for_file(&root, source);
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::N009".to_string()))
+        );
+        assert!(diagnostic.message.contains("graph-value alias `E`"));
+        assert_eq!(diagnostic.range.start, Position::new(0, 26));
+        assert_eq!(diagnostic.range.end, Position::new(0, 27));
+    }
+
+    #[test]
     fn eval_error_range_points_at_declaration_name() {
         // `@bad` references a non-existent node; the E001 runtime error for
         // `broken` should point at `broken`'s name-span, not at line 0 col 0.
