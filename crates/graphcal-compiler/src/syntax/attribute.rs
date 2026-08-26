@@ -11,6 +11,17 @@ pub enum AttributeName {
     Lazy,
 }
 
+impl std::fmt::Display for AttributeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Assumes => "assumes",
+            Self::ExpectedFail => "expected_fail",
+            Self::Hidden => "hidden",
+            Self::Lazy => "lazy",
+        })
+    }
+}
+
 /// Error returned when parsing an unknown attribute name.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("unknown attribute `{raw}`")]

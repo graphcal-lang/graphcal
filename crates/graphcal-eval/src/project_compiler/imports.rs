@@ -321,15 +321,21 @@ fn validate_include_item_attributes(
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<bool, CompileError> {
     let mut hidden = false;
-    for attr in &import_item.attributes {
-        let attr_name = attr.name.name.parse::<AttributeName>().map_err(|err| {
-            CompileError::Eval(GraphcalError::UnknownAttribute {
-                name: err.into_raw(),
-                src: file_src.clone(),
-                span: attr.span.into(),
-            })
+    let attributes =
+        graphcal_compiler::ir::resolve::attribute_validation::validate_attributes(
+            &import_item.attributes,
+        )
+        .map_err(|error| {
+            CompileError::Eval(
+                graphcal_compiler::ir::resolve::attribute_validation::attribute_validation_error_to_graphcal(
+                    error,
+                    file_src,
+                ),
+            )
         })?;
-        match attr_name {
+    for validated in attributes {
+        let attr = validated.attribute();
+        match validated.name() {
             AttributeName::Hidden => {
                 if !is_plot {
                     return Err(CompileError::Eval(
