@@ -1,0 +1,3 @@
+node UTC: Dimensionless = 1.0;
+node copied: Dimensionless = @UTC;
+node event: Datetime<UTC> = epoch<UTC>("2024-01-01T00:00:00");

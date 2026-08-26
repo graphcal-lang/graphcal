@@ -1,4 +1,5 @@
 use super::*;
+use crate::registry::time_scale::TimeScale;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::parser::Parser;
 
@@ -161,15 +162,33 @@ fn resolve_rejects_builtin_unit_shadowing() {
 }
 
 #[test]
-fn resolve_rejects_builtin_value_shadowing() {
-    let err = parse_and_resolve("const node E: Dimensionless = 2.0;").unwrap_err();
-    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "E"));
+fn resolve_rejects_every_builtin_constant_spelling_for_graph_values() {
+    for builtin in BuiltinConst::ALL {
+        for declaration in [
+            format!("param {builtin}: Dimensionless = 2.0;"),
+            format!("node {builtin}: Dimensionless = 2.0;"),
+            format!("const node {builtin}: Dimensionless = 2.0;"),
+        ] {
+            let err = parse_and_resolve(&declaration).unwrap_err();
+            assert!(matches!(
+                err,
+                GraphcalError::BuiltinNameShadowed { name, .. } if name == builtin.as_str()
+            ));
+        }
+    }
 }
 
 #[test]
-fn resolve_rejects_time_scale_value_shadowing() {
-    let err = parse_and_resolve("node UTC: Dimensionless = 0.0;").unwrap_err();
-    assert!(matches!(err, GraphcalError::BuiltinNameShadowed { name, .. } if name == "UTC"));
+fn resolve_allows_every_time_scale_spelling_for_graph_values() {
+    for scale in TimeScale::ALL {
+        for declaration in [
+            format!("param {scale}: Dimensionless = 2.0;"),
+            format!("node {scale}: Dimensionless = 2.0;"),
+            format!("const node {scale}: Dimensionless = 2.0;"),
+        ] {
+            parse_and_resolve(&declaration).unwrap();
+        }
+    }
 }
 
 #[test]

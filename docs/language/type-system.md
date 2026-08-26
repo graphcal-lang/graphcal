@@ -544,6 +544,12 @@ param t_tt: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00");
 
 Supported time scales: `UTC`, `TAI`, `TT`, `TDB`, `ET`, `GPST`, `GST`, `BDT`, `QZSST`.
 
+Time-scale names occupy a static namespace selected by `Datetime<S>` and
+`epoch<S>(...)`. The same spelling may name a graph value without ambiguity:
+`@UTC` is a graph reference, while `Datetime<UTC>` selects the time scale.
+Writing bare `UTC` in an ordinary value expression does not refer to the graph
+value and is rejected as a time scale used where a value is required.
+
 Local civil coordinates must include both a date and an explicit time. Date-only
 strings are rejected; write `T00:00:00` when midnight is intended.
 

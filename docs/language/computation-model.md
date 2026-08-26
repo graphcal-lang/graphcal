@@ -95,6 +95,14 @@ sigil is a compile error. This keeps every runtime and compile-time dependency
 edge explicit, so scheduling and cycle detection see the same graph expressed
 by the source.
 
+Time-scale spellings such as `UTC` and `TT` live in a separate static
+namespace. A graph declaration may reuse one: `@UTC` selects the graph value,
+while `Datetime<UTC>` and `epoch<UTC>(...)` select the time scale. Bare `UTC`
+in an ordinary value expression remains a type error. Built-in numeric
+constants such as `E` and `PI` are different: their spellings stay reserved in
+the graph namespace because a missing `@` could otherwise select a valid
+numeric value silently.
+
 ### Where `@` Is Allowed
 
 | Context | `@` Allowed? |
