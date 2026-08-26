@@ -832,6 +832,35 @@ fn error_assumes_on_const() {
 }
 
 #[test]
+fn error_assumes_empty() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_empty.gcl");
+    let rendered = render_error(source, "assumes_empty.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_duplicate() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_duplicate.gcl");
+    let rendered = render_error(source, "assumes_duplicate.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_assumes_repeated() {
+    let source = include_str!("../../../tests/fixtures/invalid/assumes_repeated.gcl");
+    let rendered = render_error(source, "assumes_repeated.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_repeated_expected_fail_attribute() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/repeated_expected_fail_attribute.gcl");
+    let rendered = render_error(source, "repeated_expected_fail_attribute.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_attribute() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_attribute.gcl");
     let rendered = render_error(source, "unknown_attribute.gcl");

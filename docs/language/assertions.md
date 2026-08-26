@@ -211,7 +211,10 @@ Assertions:
   `const node`, or nonexistent name is a compile error (A005).
 - Valid on `node` and `param` declarations. Using `#[assumes]` on `const node` is an
   error (A006) because constants do not depend on runtime values.
-- Multiple assertions can be listed: `#[assumes(a, b, c)]`.
+- Each `#[assumes(...)]` must contain at least one assertion name (A020).
+- Multiple distinct assertions can be listed once: `#[assumes(a, b, c)]`.
+  Repeating a name in the list is an error (A021), and stacking a second
+  `#[assumes(...)]` on the same declaration is an error (A019).
 - Cross-file assertions must be selected from an explicit `include` instance;
   the resulting instance-local alias may then be referenced in `#[assumes]`.
   A pure `import` cannot expose an assertion (`M024`).
@@ -242,7 +245,10 @@ assert x_greater = @x > @y;
 - `#[expected_fail]` without arguments is valid only on unindexed assertions.
   Indexed assertions must list the exact expected-fail keys (A011).
 - Per-variant keys are valid only on indexed assertions (A010).
-- Each expected-fail key must be unique (A012).
+- Each assertion or selective include item accepts at most one
+  `#[expected_fail]` attribute (A019). Put every per-key expectation in that
+  single attribute; later attributes never override earlier metadata.
+- Each expected-fail key within the attribute must be unique (A012).
 - Single-index keys must belong to the assertion's index. Multi-index tuple
   keys must include every axis in the assertion's axis order (A013, A014).
 
@@ -364,3 +370,9 @@ bindings happen to be equal.
 | A014 | `#[expected_fail(...)]` key uses the wrong assertion index |
 | A015 | Literal tolerance in `~=` assertion is negative |
 | A016 | `#[expected_fail(...)]` Fin position is outside the indexed assertion axis |
+| A017 | `#[hidden]` on an invalid declaration kind |
+| A018 | `#[hidden]` on a non-plot include item |
+| A019 | Repeated singleton `#[assumes]` or `#[expected_fail]` attribute |
+| A020 | Empty `#[assumes]` argument list |
+| A021 | Duplicate assertion name in `#[assumes(...)]` |
+| A022 | Non-identifier argument in `#[assumes(...)]` |

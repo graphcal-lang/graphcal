@@ -1056,6 +1056,50 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn safety_attribute_shape_diagnostics_reach_lsp_clients() {
+        let cases = [
+            (
+                "assert guard = true;\n#[assumes]\nnode output: Dimensionless = 1.0;",
+                "graphcal::A020",
+                false,
+            ),
+            (
+                "assert guard = true;\n#[assumes(guard, guard)]\nnode output: Dimensionless = 1.0;",
+                "graphcal::A021",
+                true,
+            ),
+            (
+                "assert first = true;\nassert second = true;\n#[assumes(first)]\n#[assumes(second)]\nnode output: Dimensionless = 1.0;",
+                "graphcal::A019",
+                true,
+            ),
+            (
+                "#[expected_fail]\n#[expected_fail]\nassert check = false;",
+                "graphcal::A019",
+                true,
+            ),
+        ];
+
+        for (source, expected_code, has_related_span) in cases {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            let [diagnostic] = diagnostics.as_slice() else {
+                panic!("expected one diagnostic, got {diagnostics:?}");
+            };
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String(expected_code.to_string()))
+            );
+            assert_eq!(
+                diagnostic
+                    .related_information
+                    .as_ref()
+                    .is_some_and(|related| !related.is_empty()),
+                has_related_span
+            );
+        }
+    }
+
+    #[test]
     fn passing_assertion_produces_no_diagnostic() {
         let source = "param x: Dimensionless = 1.0;\nassert x_pos = @x > 0.0;";
         let diags = produce_diagnostics(source, "test.gcl");

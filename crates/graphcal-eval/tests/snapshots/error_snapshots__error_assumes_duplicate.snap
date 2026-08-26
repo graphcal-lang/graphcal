@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+assertion `guard` appears more than once in `#[assumes(...)]`
+    Diagnostic severity: error
+Begin snippet for assumes_duplicate.gcl starting at line 2, column 1
+
+snippet line 2: 
+snippet line 3: #[assumes(guard, guard)]
+    label at line 3, columns 11 to 15: first named here
+    label at line 3, columns 18 to 22: duplicate assertion name
+snippet line 4: node output: Dimensionless = 1.0;
+diagnostic help: each assertion may be named at most once by one declaration
+diagnostic code: graphcal::A021
