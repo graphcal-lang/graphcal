@@ -6,6 +6,7 @@ use thiserror::Error;
 use crate::builtin::BuiltinFnName;
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic_anchor::DiagnosticAnchor;
+use crate::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -1296,7 +1297,7 @@ pub enum GraphcalError {
         help("`#[assumes(...)]` is only valid on `node` and `param` declarations")
     )]
     InvalidAssumesTarget {
-        kind: String,
+        kind: AttributeTarget,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not a node or param")]
@@ -1377,7 +1378,7 @@ pub enum GraphcalError {
         )
     )]
     InvalidHiddenTarget {
-        kind: String,
+        kind: AttributeTarget,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not a plot")]
@@ -1405,7 +1406,7 @@ pub enum GraphcalError {
         help("`#[expected_fail]` is only valid on `assert` declarations")
     )]
     InvalidExpectedFailTarget {
-        kind: String,
+        kind: AttributeTarget,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not an assert")]
@@ -1587,7 +1588,7 @@ pub enum GraphcalError {
     )]
     BindingNotAParam {
         name: String,
-        actual_kind: String,
+        actual_kind: DeclarationKind,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("targets a {actual_kind}, not a param")]
@@ -1994,9 +1995,9 @@ pub enum GraphcalError {
     /// A visible declaration references a private type-system item in
     /// its written signature (A9 case 1).
     ///
-    /// The `pub_kind` string is the declaration kind (e.g. `"param"`,
-    /// `"pub node"`, `"pub type"`). A `param` contributes an external
-    /// input-port signature rather than an explicitly exported signature.
+    /// `pub_kind` is the externally visible declaration category. A `param`
+    /// contributes an input-port signature rather than an explicitly exported
+    /// signature.
     #[error(
         "`{pub_kind}` `{pub_name}` references private {ref_kind} `{ref_name}` in its signature"
     )]
@@ -2007,10 +2008,10 @@ pub enum GraphcalError {
         )
     )]
     PrivateInPublic {
-        pub_kind: String,
-        pub_name: String,
-        ref_kind: String,
-        ref_name: String,
+        pub_kind: DeclarationKind,
+        pub_name: NameAtom,
+        ref_kind: DeclarationKind,
+        ref_name: NameAtom,
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("references private `{ref_name}`")]

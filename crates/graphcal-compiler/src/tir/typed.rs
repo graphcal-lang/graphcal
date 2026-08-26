@@ -785,19 +785,19 @@ impl PublicSignatureDependency {
         }
     }
 
-    fn name(&self) -> String {
+    fn name(&self) -> crate::syntax::names::NameAtom {
         match self {
-            Self::Dimension(name) => name.value.as_str().to_string(),
-            Self::Index(name) => name.value.as_str().to_string(),
-            Self::Type(name) => name.value.as_str().to_string(),
+            Self::Dimension(name) => name.value.atom().clone(),
+            Self::Index(name) => name.value.atom().clone(),
+            Self::Type(name) => name.value.atom().clone(),
         }
     }
 
-    const fn kind(&self) -> &'static str {
+    const fn kind(&self) -> crate::registry::resolve_types::DeclarationKind {
         match self {
-            Self::Dimension(_) => "dim",
-            Self::Index(_) => "index",
-            Self::Type(_) => "type",
+            Self::Dimension(_) => crate::registry::resolve_types::DeclarationKind::Dimension,
+            Self::Index(_) => crate::registry::resolve_types::DeclarationKind::Index,
+            Self::Type(_) => crate::registry::resolve_types::DeclarationKind::Type,
         }
     }
 
@@ -982,9 +982,9 @@ fn validate_public_generic_defaults(
                     Some(true) => {}
                     Some(false) => {
                         return Err(GraphcalError::PrivateInPublic {
-                            pub_kind: "type".to_string(),
-                            pub_name: type_name.as_str().to_string(),
-                            ref_kind: dependency.kind().to_string(),
+                            pub_kind: crate::registry::resolve_types::DeclarationKind::Type,
+                            pub_name: type_name.atom().clone(),
+                            ref_kind: dependency.kind(),
                             ref_name: dependency.name(),
                             src: src.clone(),
                             ref_span: dependency.span().into(),

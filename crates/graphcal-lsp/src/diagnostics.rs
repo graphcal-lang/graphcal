@@ -194,7 +194,7 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
     match e {
         // V003: the private item that needs `pub`.
         GraphcalError::PrivateInPublic { ref_name, .. } => {
-            Some(serde_json::json!({ "referencedName": ref_name }))
+            Some(serde_json::json!({ "referencedName": ref_name.as_str() }))
         }
         // V006: the leaked private item that needs `pub`.
         GraphcalError::GenericsLeakage { leaked_name, .. } => {

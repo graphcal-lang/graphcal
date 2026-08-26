@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::desugar::desugared_ast::{Attribute, AttributeArg};
 use crate::registry::error::GraphcalError;
+use crate::registry::resolve_types::AttributeTarget;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
@@ -52,6 +53,13 @@ pub enum AttributeValidationError {
     /// The attribute name is not part of the language vocabulary.
     #[error("unknown attribute `{name}`")]
     UnknownAttribute { name: String, span: Span },
+    /// A known attribute does not apply at this source target.
+    #[error("`#[{name}]` is not valid on `{target}`")]
+    InvalidTarget {
+        name: AttributeName,
+        target: AttributeTarget,
+        span: Span,
+    },
     /// Singleton metadata was supplied more than once to one target.
     #[error("attribute `#[{name}]` appears more than once")]
     RepeatedSingleton {
@@ -83,9 +91,10 @@ pub enum AttributeValidationError {
 /// contain a non-empty set of unique plain assertion names. The function has
 /// no registry or I/O dependencies, so declarations and include items cannot
 /// drift onto separate validation rules.
-pub fn validate_attributes(
-    attributes: &[Attribute],
-) -> Result<Vec<ValidatedAttribute<'_>>, AttributeValidationError> {
+pub fn validate_attributes<'a>(
+    attributes: &'a [Attribute],
+    target: &AttributeTarget,
+) -> Result<Vec<ValidatedAttribute<'a>>, AttributeValidationError> {
     let mut first_assumes = None;
     let mut first_expected_fail = None;
 
@@ -101,6 +110,19 @@ pub fn validate_attributes(
                     span: attribute.span,
                 })?;
 
+            if matches!(name, AttributeName::Lazy) {
+                return Err(AttributeValidationError::UnsupportedLazy {
+                    span: attribute.span,
+                });
+            }
+            if !target.accepts(name) {
+                return Err(AttributeValidationError::InvalidTarget {
+                    name,
+                    target: target.clone(),
+                    span: attribute.span,
+                });
+            }
+
             let assumes_arguments = match name {
                 AttributeName::Assumes => {
                     reject_repeated_singleton(name, &mut first_assumes, attribute.span)?;
@@ -110,12 +132,7 @@ pub fn validate_attributes(
                     reject_repeated_singleton(name, &mut first_expected_fail, attribute.span)?;
                     Vec::new()
                 }
-                AttributeName::Hidden => Vec::new(),
-                AttributeName::Lazy => {
-                    return Err(AttributeValidationError::UnsupportedLazy {
-                        span: attribute.span,
-                    });
-                }
+                AttributeName::Hidden | AttributeName::Lazy => Vec::new(),
             };
 
             Ok(ValidatedAttribute {
@@ -201,6 +218,36 @@ pub fn attribute_validation_error_to_graphcal(
                 span: span.into(),
             }
         }
+        AttributeValidationError::InvalidTarget { name, target, span } => match name {
+            AttributeName::Assumes => GraphcalError::InvalidAssumesTarget {
+                kind: target,
+                src: src.clone(),
+                span: span.into(),
+            },
+            AttributeName::ExpectedFail => GraphcalError::InvalidExpectedFailTarget {
+                kind: target,
+                src: src.clone(),
+                span: span.into(),
+            },
+            AttributeName::Hidden => match target {
+                AttributeTarget::IncludeItem { name, .. } => {
+                    GraphcalError::HiddenIncludeItemNotAPlot {
+                        name: name.to_string(),
+                        src: src.clone(),
+                        span: span.into(),
+                    }
+                }
+                target @ AttributeTarget::Declaration(_) => GraphcalError::InvalidHiddenTarget {
+                    kind: target,
+                    src: src.clone(),
+                    span: span.into(),
+                },
+            },
+            AttributeName::Lazy => GraphcalError::LazyNotSupported {
+                src: src.clone(),
+                span: span.into(),
+            },
+        },
         AttributeValidationError::RepeatedSingleton {
             name,
             first,
@@ -240,6 +287,7 @@ pub fn attribute_validation_error_to_graphcal(
 
 #[cfg(test)]
 mod tests {
+    use crate::registry::resolve_types::DeclarationKind;
     use crate::syntax::parser::Parser;
 
     use super::*;
@@ -257,12 +305,18 @@ mod tests {
 
     #[test]
     fn singleton_attributes_report_first_and_duplicate_spans() {
-        for source in [
-            "#[expected_fail]\n#[expected_fail]\nassert check = false;",
-            "#[assumes(first)]\n#[assumes(second)]\nnode output: Dimensionless = 1.0;",
+        for (source, target) in [
+            (
+                "#[expected_fail]\n#[expected_fail]\nassert check = false;",
+                AttributeTarget::declaration(DeclarationKind::Assert),
+            ),
+            (
+                "#[assumes(first)]\n#[assumes(second)]\nnode output: Dimensionless = 1.0;",
+                AttributeTarget::declaration(DeclarationKind::Node),
+            ),
         ] {
             let attributes = attributes(source);
-            let error = validate_attributes(&attributes).unwrap_err();
+            let error = validate_attributes(&attributes, &target).unwrap_err();
             assert!(matches!(
                 error,
                 AttributeValidationError::RepeatedSingleton {
@@ -289,7 +343,11 @@ mod tests {
         ];
 
         for (source, expected) in cases {
-            let error = validate_attributes(&attributes(source)).unwrap_err();
+            let error = validate_attributes(
+                &attributes(source),
+                &AttributeTarget::declaration(DeclarationKind::Node),
+            )
+            .unwrap_err();
             assert!(
                 matches!(
                     (expected, error),
@@ -310,12 +368,18 @@ mod tests {
 
     #[test]
     fn lazy_is_rejected_regardless_of_target_or_arguments() {
-        for source in [
-            "#[lazy]\nnode output: Dimensionless = 1.0;",
-            "#[lazy(guard)]\nassert output = true;",
+        for (source, target) in [
+            (
+                "#[lazy]\nnode output: Dimensionless = 1.0;",
+                AttributeTarget::declaration(DeclarationKind::Node),
+            ),
+            (
+                "#[lazy(guard)]\nassert output = true;",
+                AttributeTarget::declaration(DeclarationKind::Assert),
+            ),
         ] {
             assert!(matches!(
-                validate_attributes(&attributes(source)),
+                validate_attributes(&attributes(source), &target),
                 Err(AttributeValidationError::UnsupportedLazy { .. })
             ));
         }
@@ -327,7 +391,13 @@ mod tests {
             "#[assumes(first, second)]\nnode output: Dimensionless = 1.0;",
             "#[assumes(second, first)]\nnode output: Dimensionless = 1.0;",
         ] {
-            assert!(validate_attributes(&attributes(source)).is_ok());
+            assert!(
+                validate_attributes(
+                    &attributes(source),
+                    &AttributeTarget::declaration(DeclarationKind::Node),
+                )
+                .is_ok()
+            );
         }
     }
 }

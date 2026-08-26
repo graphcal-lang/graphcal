@@ -3379,7 +3379,10 @@ fn check_hidden_on_node_is_rejected() {
 node x: Dimensionless = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. } if kind == "node"),
+        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. }
+        if kind == &crate::ir::resolve::AttributeTarget::declaration(
+            crate::ir::resolve::DeclarationKind::Node,
+        )),
         "got: {err:?}"
     );
 }
@@ -3394,7 +3397,10 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [p] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. } if kind == "figure"),
+        matches!(err, GraphcalError::InvalidHiddenTarget { ref kind, .. }
+        if kind == &crate::ir::resolve::AttributeTarget::declaration(
+            crate::ir::resolve::DeclarationKind::Figure,
+        )),
         "got: {err:?}"
     );
 }
