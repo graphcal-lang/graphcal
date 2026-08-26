@@ -375,6 +375,12 @@ dag mission {
 
 ### Selective include-output re-exports
 
+Within one selective include list, each producer may appear at most once in
+its namespace (M027). Giving repeated selections different local aliases does
+not make them distinct: assertion, plot, `#[hidden]`, `#[expected_fail]`, and
+`#[assumes]` metadata is attached to one producer occurrence. Select once and
+use that local name consistently.
+
 An include is also a private use-site. Re-export only explicitly selected
 outputs by marking each output `pub` inside the brace list:
 

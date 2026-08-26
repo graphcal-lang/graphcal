@@ -1,0 +1,9 @@
+dag producer {
+    pub node x: Dimensionless = 1.0;
+    pub assert okay = @x == 2.0;
+}
+
+include producer().{
+    okay as first_check,
+    okay as second_check,
+};

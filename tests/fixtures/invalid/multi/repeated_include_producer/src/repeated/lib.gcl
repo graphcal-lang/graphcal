@@ -1,0 +1,2 @@
+pub node x: Dimensionless = 1.0;
+pub assert okay = @x == 2.0;

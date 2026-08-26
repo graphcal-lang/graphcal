@@ -1140,6 +1140,27 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn repeated_include_producer_has_both_selection_spans() {
+        let source = "dag producer { pub node value: Dimensionless = 1.0; }\n\
+                      include producer().{ value as first, value as second };";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::M027".to_string()))
+        );
+        assert_eq!(diagnostic.range.start.line, 1);
+        assert!(
+            diagnostic
+                .related_information
+                .as_ref()
+                .is_some_and(|related| related.len() == 1)
+        );
+    }
+
+    #[test]
     fn passing_assertion_produces_no_diagnostic() {
         let source = "param x: Dimensionless = 1.0;\nassert x_pos = @x > 0.0;";
         let diags = produce_diagnostics(source, "test.gcl");
