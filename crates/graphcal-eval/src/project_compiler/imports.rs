@@ -12,6 +12,7 @@ use crate::import_surface::{
     decl_identity, pure_import_term_disposition,
 };
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
+use graphcal_compiler::registry::reserved_name::ReservedNameNamespace;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::names::NameAtom;
@@ -381,6 +382,33 @@ fn validate_include_item_attributes(
     Ok(hidden)
 }
 
+fn validate_reserved_alias(
+    namespace: ReservedNameNamespace,
+    import_item: &graphcal_compiler::desugar::desugared_ast::ImportItem,
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<(), CompileError> {
+    let local_name = import_item.local_name_atom();
+    graphcal_compiler::registry::reserved_name::validate_reserved_name(namespace, local_name)
+        .map_err(|_| {
+            let kind = match namespace {
+                ReservedNameNamespace::TypeSystem => match import_item.namespace {
+                    ImportItemNamespace::Type => "type alias",
+                    ImportItemNamespace::Dimension => "dimension alias",
+                    ImportItemNamespace::Index => "index alias",
+                    ImportItemNamespace::Term | ImportItemNamespace::Unit => "type-system alias",
+                },
+                ReservedNameNamespace::Unit => "unit alias",
+                ReservedNameNamespace::GraphValue => "graph-value alias",
+            };
+            CompileError::Eval(GraphcalError::BuiltinNameShadowed {
+                kind,
+                name: local_name.to_string(),
+                src: file_src.clone(),
+                span: import_item.local_span().into(),
+            })
+        })
+}
+
 fn file_exports_plot(
     project: &crate::loader::LoadedProject,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
@@ -693,6 +721,15 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     && (dep_index.is_plot(orig_name)
                         || file_exports_plot(project, import_dag_id, orig_name));
                 let is_assert = is_term_namespace && dep_index.is_assert(orig_name);
+                let is_graph_value = is_term_namespace
+                    && (dep_index.is_const(orig_name) || dep_index.is_runtime(orig_name));
+                if is_graph_value {
+                    validate_reserved_alias(
+                        ReservedNameNamespace::GraphValue,
+                        import_item,
+                        file_src,
+                    )?;
+                }
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
@@ -725,7 +762,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                 // Register the local name in scope for the resolver.
                 // Determine the category from the dep's AST.
                 let scoped = ScopedName::local(local.clone());
-                let span = import_item.name.span;
+                let span = import_item.local_span();
                 match (
                     dep_index.is_const(orig_name),
                     dep_index.is_runtime(orig_name),
@@ -930,6 +967,23 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                     && dag_body.declarations.iter().any(|d| {
                         matches!(&d.kind, DeclKind::Assert(assert) if assert.name.value.as_str() == orig_name.as_str())
                     });
+                let is_graph_value = is_term_namespace
+                    && dag_body.declarations.iter().any(|declaration| {
+                        matches!(
+                            &declaration.kind,
+                            DeclKind::ConstNode(_) | DeclKind::Param(_) | DeclKind::Node(_)
+                        ) && declaration
+                            .kind
+                            .name_and_span()
+                            .is_some_and(|(name, _)| name == orig_name.as_str())
+                    });
+                if is_graph_value {
+                    validate_reserved_alias(
+                        ReservedNameNamespace::GraphValue,
+                        import_item,
+                        file_src,
+                    )?;
+                }
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
@@ -965,7 +1019,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                         || matches!(&d.kind, DeclKind::Node(n) if n.name.value.as_str() == orig_name.as_str())
                 });
                 let scoped = ScopedName::local(local.clone());
-                let span = import_item.name.span;
+                let span = import_item.local_span();
                 if is_const {
                     ctx.imported_names.const_names.push((scoped, span));
                 } else if is_runtime {
@@ -1122,12 +1176,16 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     ));
                 }
 
-                if import_item.namespace
-                    != graphcal_compiler::syntax::ast::ImportItemNamespace::Term
-                {
-                    if import_item.namespace
-                        == graphcal_compiler::syntax::ast::ImportItemNamespace::Unit
-                    {
+                if import_item.namespace != ImportItemNamespace::Term {
+                    let namespace = match import_item.namespace {
+                        ImportItemNamespace::Unit => ReservedNameNamespace::Unit,
+                        ImportItemNamespace::Type
+                        | ImportItemNamespace::Dimension
+                        | ImportItemNamespace::Index => ReservedNameNamespace::TypeSystem,
+                        ImportItemNamespace::Term => ReservedNameNamespace::GraphValue,
+                    };
+                    validate_reserved_alias(namespace, import_item, file_src)?;
+                    if import_item.namespace == ImportItemNamespace::Unit {
                         reject_runtime_unit_import(
                             dep,
                             orig_name,
@@ -1167,16 +1225,23 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 )?;
 
                 match disposition {
-                    PureImportTermDisposition::BindConstant => import_selective_item(
-                        module_target,
-                        orig_name,
-                        &local_name,
-                        import_item.name.span,
-                        file_src,
-                        &mut ctx.imported_names,
-                        &mut ctx.imported_bindings,
-                        Some(&mut ctx.imported_source_order),
-                    )?,
+                    PureImportTermDisposition::BindConstant => {
+                        validate_reserved_alias(
+                            ReservedNameNamespace::GraphValue,
+                            import_item,
+                            file_src,
+                        )?;
+                        import_selective_item(
+                            module_target,
+                            orig_name,
+                            &local_name,
+                            import_item.local_span(),
+                            file_src,
+                            &mut ctx.imported_names,
+                            &mut ctx.imported_bindings,
+                            Some(&mut ctx.imported_source_order),
+                        )?;
+                    }
                     PureImportTermDisposition::ResolverOnly => {
                         ctx.imported_type_system_names
                             .entry(module_target.clone())
