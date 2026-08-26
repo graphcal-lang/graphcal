@@ -89,6 +89,12 @@ The `@` prefix is the central scoping mechanism:
 | `NAME` | Built-in constant (`PI`, `E`, `TAU`, etc.) | Everywhere |
 | `name` | Local variable (loop variable, match binding) | Expression bodies |
 
+All user graph declarations require `@`, including `const node` values. A bare
+identifier never refers to a `param`, `node`, or `const node`; omitting the
+sigil is a compile error. This keeps every runtime and compile-time dependency
+edge explicit, so scheduling and cycle detection see the same graph expressed
+by the source.
+
 ### Where `@` Is Allowed
 
 | Context | `@` Allowed? |

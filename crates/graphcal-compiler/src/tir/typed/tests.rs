@@ -684,9 +684,9 @@ fn finalized_tir_keeps_inline_dags_in_the_checked_registry() {
 #[test]
 fn module_aware_type_resolve_records_semantic_deps() {
     let source = "const node C: Dimensionless = 1.0;\n\
-                  const node D: Dimensionless = C;\n\
+                  const node D: Dimensionless = @C;\n\
                   param p: Dimensionless;\n\
-                  node x: Dimensionless = @p + D;";
+                  node x: Dimensionless = @p + @D;";
     let raw_file = Parser::new(source).parse_file().unwrap();
     let desugared = crate::syntax::desugar::desugar_multi_decls_in_file(raw_file);
     let file = desugared;

@@ -72,6 +72,13 @@ pub enum ExprLowerError {
     /// A graph reference (`@name`) did not resolve to any declaration.
     #[error("unknown graph reference `@{name}`")]
     UnknownGraphRef { name: ScopedName, span: Span },
+    /// A user graph declaration was referenced without the required `@` sigil.
+    #[error("bare reference `{name}` names a {kind}; user graph declarations require `@`")]
+    BareGraphDeclarationRef {
+        name: ScopedName,
+        kind: DeclSymbolKind,
+        span: Span,
+    },
     /// A single expression tree introduced more local bindings than HIR can index.
     #[error("too many local bindings in one expression")]
     TooManyLocals { span: Span },
@@ -1742,8 +1749,36 @@ impl<'a> ExprLowerer<'a> {
         {
             return Ok(ExprKind::TypeSystemRef(Spanned::new(type_system_ref, span)));
         }
-        self.lower_const_ref(&ScopedName::from(ident.name.clone()), span)
-            .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
+        let scoped_name = ScopedName::from(ident.name.clone());
+        match self.resolve_decl_scoped_name(&scoped_name, span) {
+            Ok(resolved) => {
+                let kind = self
+                    .ctx
+                    .resolver
+                    .decl_symbol_kind(&resolved)
+                    .map_err(|source| ExprLowerError::ModuleResolve { source, span })?;
+                match kind {
+                    DeclSymbolKind::Const | DeclSymbolKind::Param | DeclSymbolKind::Node => {
+                        Err(ExprLowerError::BareGraphDeclarationRef {
+                            name: scoped_name,
+                            kind,
+                            span,
+                        })
+                    }
+                    DeclSymbolKind::Assert
+                    | DeclSymbolKind::Plot
+                    | DeclSymbolKind::Figure
+                    | DeclSymbolKind::Layer
+                    | DeclSymbolKind::Dag => self
+                        .lower_const_ref(&scoped_name, span)
+                        .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span))),
+                }
+            }
+            Err(ExprLowerError::UnknownGraphRef { .. }) => self
+                .lower_const_ref(&scoped_name, span)
+                .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span))),
+            Err(error) => Err(error),
+        }
     }
 
     /// Resolve a bare identifier against the type-system namespaces.
@@ -1943,7 +1978,23 @@ impl<'a> ExprLowerer<'a> {
             .and_then(|bindings| bindings.get(name))
             .cloned()
         {
-            return Ok(ConstRef::Decl(resolved));
+            let actual = self
+                .ctx
+                .resolver
+                .decl_symbol_kind(&resolved)
+                .map_err(|source| ExprLowerError::ModuleResolve { source, span })?;
+            return if actual.is_const() {
+                Ok(ConstRef::Decl(resolved))
+            } else {
+                Err(ExprLowerError::ModuleResolve {
+                    source: ModuleResolveError::UnexpectedDeclKind {
+                        name: resolved,
+                        expected: "const",
+                        actual,
+                    },
+                    span,
+                })
+            };
         }
 
         match self
@@ -3119,7 +3170,7 @@ mod tests {
     }
 
     #[test]
-    fn const_ref_to_runtime_decl_is_rejected_by_decl_kind() {
+    fn const_ref_binding_to_runtime_decl_is_rejected_by_decl_kind() {
         let owner = DagId::root_in_package("test", "main");
         let file = desugared_source("param p: Dimensionless; node x: Dimensionless = p;");
         let mut resolver = ModuleResolver::default();
@@ -3127,17 +3178,60 @@ mod tests {
             .add_module(owner.clone(), &file.declarations)
             .unwrap();
         let scope = GenericScope::new();
+        let scoped_name = ScopedName::from(DeclName::expect_valid("p"));
+        let bindings = HashMap::from([(
+            scoped_name,
+            ResolvedDeclName::from_def(owner.clone(), DeclName::expect_valid("p")),
+        )]);
 
         let err = lower_expr(
             node_value(&file, "x"),
-            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+            ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled())
+                .with_decl_bindings(&bindings),
         )
         .unwrap_err();
 
-        assert!(
-            err.to_string()
-                .contains("expected const declaration `main.p`, found param"),
-            "unexpected error: {err}"
-        );
+        assert!(matches!(
+            err,
+            ExprLowerError::BareGraphDeclarationRef {
+                kind: DeclSymbolKind::Param,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn bare_graph_declaration_refs_require_at_sigil() {
+        let cases = [
+            ("param target: Dimensionless;", DeclSymbolKind::Param),
+            ("node target: Dimensionless = 1.0;", DeclSymbolKind::Node),
+            (
+                "const node target: Dimensionless = 1.0;",
+                DeclSymbolKind::Const,
+            ),
+        ];
+
+        for (declaration, expected_kind) in cases {
+            let owner = DagId::root_in_package("test", "main");
+            let file = desugared_source(&format!(
+                "{declaration} node output: Dimensionless = target;"
+            ));
+            let mut resolver = ModuleResolver::default();
+            resolver
+                .add_module(owner.clone(), &file.declarations)
+                .unwrap();
+            let scope = GenericScope::new();
+
+            let err = lower_expr(
+                node_value(&file, "output"),
+                ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                ExprLowerError::BareGraphDeclarationRef { kind, .. } if kind == expected_kind
+            ));
+        }
     }
 }

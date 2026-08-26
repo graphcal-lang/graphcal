@@ -61,6 +61,13 @@ fn error_unknown_const_ref() {
 }
 
 #[test]
+fn error_bare_graph_declaration_ref() {
+    let source = include_str!("../../../tests/fixtures/invalid/bare_graph_declaration_ref.gcl");
+    let rendered = render_error(source, "bare_graph_declaration_ref.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_at_in_const() {
     let source = include_str!("../../../tests/fixtures/invalid/at_in_const.gcl");
     let rendered = render_error(source, "at_in_const.gcl");

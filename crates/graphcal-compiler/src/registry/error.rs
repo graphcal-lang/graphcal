@@ -13,6 +13,7 @@ use crate::syntax::function_name::{FnName, FnParamName};
 use crate::syntax::import_category::ImportItemCategoryMismatch;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
+use crate::syntax::module_resolve::DeclSymbolKind;
 use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
@@ -297,6 +298,17 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("not found")]
+        span: SourceSpan,
+    },
+
+    #[error("bare reference `{name}` names a {kind}; user graph declarations require `@`")]
+    #[diagnostic(code(graphcal::N017), help("write `@{name}` to reference this {kind}"))]
+    BareGraphDeclarationRef {
+        name: ScopedName,
+        kind: DeclSymbolKind,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("missing `@` sigil")]
         span: SourceSpan,
     },
 
@@ -2151,6 +2163,7 @@ impl GraphcalError {
             | Self::IncludeRuntimeUnit { src, .. }
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
+            | Self::BareGraphDeclarationRef { src, .. }
             | Self::UnknownFunction { src, .. }
             | Self::UnknownExternFunction { src, .. }
             | Self::NamedArgumentsOnFunction { src, .. }

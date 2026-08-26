@@ -61,6 +61,54 @@ fn write_pipeline_project(
     (directory, source_root.join(root))
 }
 
+#[test]
+fn bare_graph_declaration_refs_fail_before_dependency_planning() {
+    let cases = [
+        (
+            "later runtime node",
+            "node b_ref: Dimensionless = z_target * 3.0;\n\
+             node z_target: Dimensionless = 2.0;",
+            "z_target",
+        ),
+        (
+            "earlier runtime node",
+            "node a: Dimensionless = 2.0;\n\
+             node b: Dimensionless = a * 3.0;",
+            "a",
+        ),
+        (
+            "parameter",
+            "param input: Dimensionless = 2.0;\n\
+             node output: Dimensionless = input;",
+            "input",
+        ),
+        (
+            "const node",
+            "const node factor: Dimensionless = 2.0;\n\
+             node output: Dimensionless = factor;",
+            "factor",
+        ),
+        (
+            "mixed bare and graph-reference cycle",
+            "node a: Dimensionless = @b + 1.0;\n\
+             node b: Dimensionless = a + 1.0;",
+            "a",
+        ),
+    ];
+
+    for (case, source, expected_name) in cases {
+        let error = compile_and_eval_named(source, "test.gcl").unwrap_err();
+        assert!(
+            matches!(
+                error,
+                CompileError::Eval(GraphcalError::BareGraphDeclarationRef { name, .. })
+                    if name.to_string() == expected_name
+            ),
+            "case: {case}"
+        );
+    }
+}
+
 fn assert_missing_dag_bindings(
     error: CompileError,
     expected_dag_name: &str,
@@ -3308,7 +3356,7 @@ fn project_import_preserves_structural_finite_index_identity() {
     let root = source_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "import app.lib.{ values };\nconst node copied: Dimensionless[Fin(2)] = values;\n",
+        "import app.lib.{ values };\nconst node copied: Dimensionless[Fin(2)] = @values;\n",
     )
     .unwrap();
 

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+bare reference `z_target` names a node; user graph declarations require `@`
+    Diagnostic severity: error
+Begin snippet for bare_graph_declaration_ref.gcl starting at line 1, column 1
+
+snippet line 1: node b_ref: Dimensionless = z_target * 3.0;
+    label at line 1, columns 29 to 36: missing `@` sigil
+snippet line 2: node z_target: Dimensionless = 2.0;
+diagnostic help: write `@z_target` to reference this node
+diagnostic code: graphcal::N017

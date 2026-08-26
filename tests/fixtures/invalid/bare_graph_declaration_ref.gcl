@@ -1,0 +1,2 @@
+node b_ref: Dimensionless = z_target * 3.0;
+node z_target: Dimensionless = 2.0;
