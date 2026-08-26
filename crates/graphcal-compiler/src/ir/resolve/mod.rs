@@ -35,7 +35,7 @@ use crate::syntax::names::NameAtom;
 use crate::syntax::span::Span;
 
 // Re-export types and constants from graphcal-registry's resolve_types module.
-pub(crate) use crate::registry::resolve_types::{CollectedFile, is_time_scale_name};
+pub(crate) use crate::registry::resolve_types::CollectedFile;
 pub use crate::registry::resolve_types::{
     DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
     ParsedExpectedFail,
@@ -104,13 +104,13 @@ fn check_builtin_name_shadowing(
             DeclKind::Unit(u) if PRELUDE_UNIT_NAMES.contains(&u.name.value.as_str()) => {
                 Some(("unit", u.name.value.to_string(), u.name.span))
             }
-            DeclKind::Param(p) if is_builtin_value_name(p.name.value.as_str()) => {
+            DeclKind::Param(p) if BuiltinConst::parse(p.name.value.as_str()).is_some() => {
                 Some(("param", p.name.value.to_string(), p.name.span))
             }
-            DeclKind::Node(n) if is_builtin_value_name(n.name.value.as_str()) => {
+            DeclKind::Node(n) if BuiltinConst::parse(n.name.value.as_str()).is_some() => {
                 Some(("node", n.name.value.to_string(), n.name.span))
             }
-            DeclKind::ConstNode(c) if is_builtin_value_name(c.name.value.as_str()) => {
+            DeclKind::ConstNode(c) if BuiltinConst::parse(c.name.value.as_str()).is_some() => {
                 Some(("const node", c.name.value.to_string(), c.name.span))
             }
             _ => None,
@@ -131,10 +131,6 @@ fn check_builtin_name_shadowing(
 
 fn is_builtin_type_name(name: &str) -> bool {
     PRELUDE_DIMENSION_NAMES.contains(&name) || PRELUDE_BUILTIN_TYPE_NAMES.contains(&name)
-}
-
-fn is_builtin_value_name(name: &str) -> bool {
-    BuiltinConst::parse(name).is_some() || is_time_scale_name(name)
 }
 
 fn check_exclusive_universe_collisions(

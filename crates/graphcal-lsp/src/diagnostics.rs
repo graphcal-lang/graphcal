@@ -1100,6 +1100,14 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn graph_value_may_share_a_time_scale_spelling() {
+        let source = "node UTC: Dimensionless = 1.0;\n\
+                      node copied: Dimensionless = @UTC;\n\
+                      node event: Datetime<UTC> = epoch<UTC>(\"2024-01-01T00:00:00\");";
+        assert!(produce_diagnostics(source, "test.gcl").is_empty());
+    }
+
+    #[test]
     fn passing_assertion_produces_no_diagnostic() {
         let source = "param x: Dimensionless = 1.0;\nassert x_pos = @x > 0.0;";
         let diags = produce_diagnostics(source, "test.gcl");

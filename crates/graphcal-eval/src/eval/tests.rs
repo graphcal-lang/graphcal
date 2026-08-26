@@ -177,6 +177,42 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     ));
 }
 
+#[test]
+fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
+    for scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
+        for declaration in [
+            format!("param {scale}: Dimensionless = 1.0;"),
+            format!("node {scale}: Dimensionless = 1.0;"),
+            format!("const node {scale}: Dimensionless = 1.0;"),
+        ] {
+            let source = format!(
+                "{declaration}\n\
+                 node copied: Dimensionless = @{scale};\n\
+                 node event: Datetime<{scale}> = epoch<{scale}>(\"2024-01-01T00:00:00\");"
+            );
+            compile_and_eval_named(&source, "test.gcl").unwrap();
+        }
+
+        let aliased = format!(
+            "dag producer {{ pub node value: Dimensionless = 1.0; }}\n\
+             include producer().{{ value as {scale} }};\n\
+             node copied: Dimensionless = @{scale};\n\
+             node event: Datetime<{scale}> = epoch<{scale}>(\"2024-01-01T00:00:00\");"
+        );
+        compile_and_eval_named(&aliased, "test.gcl").unwrap();
+    }
+
+    let bare_error = compile_and_eval_named(
+        "node UTC: Dimensionless = 1.0;\nnode invalid: Dimensionless = UTC;",
+        "test.gcl",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        bare_error,
+        CompileError::Eval(GraphcalError::DimensionMismatch { found, .. }) if found == "time scale"
+    ));
+}
+
 fn assert_missing_dag_bindings(
     error: CompileError,
     expected_dag_name: &str,

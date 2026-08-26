@@ -71,7 +71,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::N009),
         help(
-            "choose a different name; built-in dimensions, types, units, constants, and time scales cannot be redefined"
+            "choose a different name; prelude dimensions, built-in types, prelude units, and built-in numeric constants cannot be redefined in their namespaces"
         )
     )]
     BuiltinNameShadowed {

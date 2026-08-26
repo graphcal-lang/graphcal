@@ -14,12 +14,6 @@ use crate::syntax::module_name::ScopedName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 
-/// Returns `true` if `name` is a time scale identifier (`UTC`, `TT`, `TAI`, etc.).
-#[must_use]
-pub(crate) fn is_time_scale_name(name: &str) -> bool {
-    crate::registry::time_scale::TimeScale::ALL_NAMES.contains(&name)
-}
-
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
