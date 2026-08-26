@@ -218,7 +218,7 @@ pub fn check_domain_constraint(
             })
         }),
         RuntimeValue::Quantity(value) => match &constraint.kind {
-            ResolvedDomainConstraintKind::Quantity(bounds) => check_bounds(value, bounds),
+            ResolvedDomainConstraintKind::Quantity(bounds) => check_quantity_bounds(*value, bounds),
             other => Err(constraint_kind_mismatch("Quantity", other)),
         },
         RuntimeValue::Int(value) => match &constraint.kind {
@@ -253,6 +253,24 @@ fn constraint_kind_mismatch(
     DomainViolation::new(format!(
         "internal domain kind mismatch: {value_kind} value with {constraint_kind} bounds"
     ))
+}
+
+fn check_quantity_bounds(
+    value: f64,
+    bounds: &ResolvedDomainBounds<f64>,
+) -> Result<(), DomainViolation> {
+    // Runtime-value construction owns the public finite-number policy. Check
+    // that invariant again only at this PartialOrd boundary: NaN would make
+    // both `< min` and `> max` false and otherwise look spuriously in-bounds.
+    let all_finite = value.is_finite()
+        && bounds.min().is_none_or(|bound| bound.value().is_finite())
+        && bounds.max().is_none_or(|bound| bound.value().is_finite());
+    if !all_finite {
+        return Err(DomainViolation::new(
+            "internal domain invariant: quantity values and bounds must be finite",
+        ));
+    }
+    check_bounds(&value, bounds)
 }
 
 fn check_bounds<T: PartialOrd>(
@@ -294,6 +312,29 @@ mod tests {
         let constraint = int_constraint(i64::MIN, i64::MAX);
         check_domain_constraint(&RuntimeValue::Int(i64::MIN), &constraint).unwrap();
         check_domain_constraint(&RuntimeValue::Int(i64::MAX), &constraint).unwrap();
+    }
+
+    #[test]
+    fn non_finite_internal_quantity_never_passes_bounds() {
+        let constraint = ResolvedDomainConstraint::quantity(ResolvedDomainBounds::new(
+            Some(ResolvedDomainBound::new(0.0, "0".to_string())),
+            Some(ResolvedDomainBound::new(1.0, "1".to_string())),
+        ));
+
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let error = check_domain_constraint(&RuntimeValue::Quantity(value), &constraint)
+                .expect_err("non-finite internal quantities must fail closed");
+            assert!(error.message.contains("must be finite"));
+        }
+    }
+
+    #[test]
+    fn non_finite_internal_quantity_bound_never_passes() {
+        let constraint = ResolvedDomainConstraint::quantity(ResolvedDomainBounds::new(
+            Some(ResolvedDomainBound::new(f64::NAN, "NaN".to_string())),
+            None,
+        ));
+        assert!(check_domain_constraint(&RuntimeValue::Quantity(0.5), &constraint).is_err());
     }
 
     #[test]
