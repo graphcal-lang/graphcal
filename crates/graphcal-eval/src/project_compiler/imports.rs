@@ -13,28 +13,10 @@ use crate::import_surface::{
 };
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::registry::reserved_name::ReservedNameNamespace;
+use graphcal_compiler::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::names::NameAtom;
-
-/// What kind of "other declaration" a binding name resolves to in the dep file
-/// when it is not a param / type / dim / index.
-#[derive(Clone, Copy)]
-enum OtherDeclKind {
-    ConstNode,
-    Node,
-    Assert,
-}
-
-impl OtherDeclKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::ConstNode => "const node",
-            Self::Node => "node",
-            Self::Assert => "assert",
-        }
-    }
-}
 
 /// Classification of a name against a dependency's declarations.
 ///
@@ -52,7 +34,7 @@ struct DepDeclIndex<'a> {
     indexes: HashMap<IndexName, &'a graphcal_compiler::desugar::desugared_ast::IndexDecl>,
     /// "Other" declarations (const node / node / assert) that are invalid as
     /// binding targets; used to produce precise "is actually a …" diagnostics.
-    other: HashMap<DeclName, OtherDeclKind>,
+    other: HashMap<DeclName, DeclarationKind>,
 }
 
 pub(in crate::project_compiler) struct InlineDagIncludeTarget<'a> {
@@ -191,13 +173,13 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
 
 impl DepDeclIndex<'_> {
     fn is_const(&self, name: &str) -> bool {
-        matches!(self.other.get(name), Some(OtherDeclKind::ConstNode))
+        matches!(self.other.get(name), Some(DeclarationKind::ConstNode))
     }
     fn is_runtime(&self, name: &str) -> bool {
-        self.params.contains(name) || matches!(self.other.get(name), Some(OtherDeclKind::Node))
+        self.params.contains(name) || matches!(self.other.get(name), Some(DeclarationKind::Node))
     }
     fn is_assert(&self, name: &str) -> bool {
-        matches!(self.other.get(name), Some(OtherDeclKind::Assert))
+        matches!(self.other.get(name), Some(DeclarationKind::Assert))
     }
     fn is_plot(&self, name: &str) -> bool {
         self.plots.contains(name)
@@ -322,9 +304,16 @@ fn validate_include_item_attributes(
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<bool, CompileError> {
     let mut hidden = false;
+    let producer = match (is_plot, is_assert) {
+        (true, _) => Some(DeclarationKind::Plot),
+        (false, true) => Some(DeclarationKind::Assert),
+        (false, false) => None,
+    };
+    let target = AttributeTarget::include_item(producer, import_item.name.name.clone());
     let attributes =
         graphcal_compiler::ir::resolve::attribute_validation::validate_attributes(
             &import_item.attributes,
+            &target,
         )
         .map_err(|error| {
             CompileError::Eval(
@@ -338,15 +327,6 @@ fn validate_include_item_attributes(
         let attr = validated.attribute();
         match validated.name() {
             AttributeName::Hidden => {
-                if !is_plot {
-                    return Err(CompileError::Eval(
-                        GraphcalError::HiddenIncludeItemNotAPlot {
-                            name: import_item.name.name.to_string(),
-                            src: file_src.clone(),
-                            span: attr.span.into(),
-                        },
-                    ));
-                }
                 if !attr.args.is_empty() {
                     return Err(CompileError::Eval(GraphcalError::EvalError {
                         message: "`#[hidden]` takes no arguments".to_string(),
@@ -356,23 +336,13 @@ fn validate_include_item_attributes(
                 }
                 hidden = true;
             }
-            AttributeName::ExpectedFail => {
-                if !is_assert {
-                    return Err(CompileError::Eval(
-                        GraphcalError::InvalidExpectedFailTarget {
-                            kind: "include/import item".to_string(),
-                            src: file_src.clone(),
-                            span: attr.span.into(),
-                        },
-                    ));
-                }
-            }
+            AttributeName::ExpectedFail => {}
             AttributeName::Assumes => {
-                return Err(CompileError::Eval(GraphcalError::InvalidAssumesTarget {
-                    kind: "include/import item".to_string(),
-                    src: file_src.clone(),
-                    span: attr.span.into(),
-                }));
+                return Err(CompileError::Eval(GraphcalError::internal_error(
+                    "attribute applicability accepted assumes on an include item",
+                    file_src,
+                    graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
+                )));
             }
             AttributeName::Lazy => {
                 return Err(CompileError::Eval(GraphcalError::LazyNotSupported {
@@ -481,7 +451,7 @@ fn build_dep_decl_index(
     let mut dims = HashSet::new();
     let mut indexes: HashMap<IndexName, &graphcal_compiler::desugar::desugared_ast::IndexDecl> =
         HashMap::new();
-    let mut other: HashMap<DeclName, OtherDeclKind> = HashMap::new();
+    let mut other: HashMap<DeclName, DeclarationKind> = HashMap::new();
     for d in decls {
         match &d.kind {
             DeclKind::Param(p) => {
@@ -503,13 +473,13 @@ fn build_dep_decl_index(
                 indexes.insert(idx.name.value.clone(), idx);
             }
             DeclKind::ConstNode(c) => {
-                other.insert(c.name.value.clone(), OtherDeclKind::ConstNode);
+                other.insert(c.name.value.clone(), DeclarationKind::ConstNode);
             }
             DeclKind::Node(n) => {
-                other.insert(n.name.value.clone(), OtherDeclKind::Node);
+                other.insert(n.name.value.clone(), DeclarationKind::Node);
             }
             DeclKind::Assert(a) => {
-                other.insert(a.name.value.clone(), OtherDeclKind::Assert);
+                other.insert(a.name.value.clone(), DeclarationKind::Assert);
             }
             DeclKind::Plot(pl) => {
                 plots.insert(pl.name.value.clone());
@@ -602,7 +572,7 @@ fn classify_param_bindings(
         if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
             return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
                 name: binding_name.to_string(),
-                actual_kind: kind.as_str().to_string(),
+                actual_kind: *kind,
                 src: file_src.clone(),
                 span: binding.name.span.into(),
             }));
@@ -1445,6 +1415,23 @@ pub(in crate::project_compiler) fn import_module_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dependency_index_preserves_typed_non_param_categories() {
+        let raw = graphcal_compiler::syntax::parser::Parser::new(
+            "const node fixed: Dimensionless = 1.0;\n\
+             node computed: Dimensionless = 2.0;\n\
+             assert check = true;",
+        )
+        .parse_file()
+        .unwrap();
+        let file = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw);
+        let index = build_dep_decl_index(&file.declarations);
+
+        assert_eq!(index.other["fixed"], DeclarationKind::ConstNode);
+        assert_eq!(index.other["computed"], DeclarationKind::Node);
+        assert_eq!(index.other["check"], DeclarationKind::Assert);
+    }
 
     #[test]
     fn selective_import_records_only_the_canonical_hir_target() {

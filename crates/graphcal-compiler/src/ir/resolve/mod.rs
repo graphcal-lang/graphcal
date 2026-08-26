@@ -34,8 +34,8 @@ use crate::syntax::span::Span;
 // Re-export types and constants from graphcal-registry's resolve_types module.
 pub(crate) use crate::registry::resolve_types::CollectedFile;
 pub use crate::registry::resolve_types::{
-    DeclCategory, ExpectedFail, ExpectedFailKey, ExpectedFailKeyPart, ImportedValueNames,
-    ParsedExpectedFail,
+    AttributeTarget, DeclCategory, DeclarationKind, ExpectedFail, ExpectedFailKey,
+    ExpectedFailKeyPart, ImportedValueNames, ParsedExpectedFail,
 };
 pub use crate::syntax::module_name::ScopedName;
 
@@ -634,7 +634,6 @@ struct ValidatedAttributes {
 }
 
 /// Validate attributes and build `assumes_map` / `expected_fail_map`.
-#[expect(clippy::too_many_lines, reason = "comprehensive attribute validation")]
 fn validate_attributes(
     file: &File,
     src: &NamedSource<Arc<String>>,
@@ -654,40 +653,18 @@ fn validate_attributes(
             DeclKind::Figure(f) => Some(f.name.value.clone()),
             _ => None,
         };
-        let attributes =
-            attribute_validation::validate_attributes(&decl.attributes).map_err(|error| {
+        let declaration_kind = DeclarationKind::from_decl_kind(&decl.kind);
+        let target = AttributeTarget::declaration(declaration_kind);
+        let attributes = attribute_validation::validate_attributes(&decl.attributes, &target)
+            .map_err(|error| {
                 attribute_validation::attribute_validation_error_to_graphcal(error, src)
             })?;
         for validated in attributes {
             let attr = validated.attribute();
             match validated.name() {
                 AttributeName::Assumes => {
-                    // #[assumes] is only valid on non-const node and param
-                    let kind = match &decl.kind {
-                        DeclKind::ConstNode(_) => Some("const node"),
-                        DeclKind::Param(_) | DeclKind::Node(_) => None,
-                        DeclKind::Assert(_) => Some("assert"),
-                        DeclKind::Plot(_) => Some("plot"),
-                        DeclKind::Figure(_) => Some("figure"),
-                        DeclKind::Layer(_) => Some("layer"),
-
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dim"),
-                        DeclKind::Unit(_) => Some("unit"),
-                        DeclKind::Type(_) => Some("type"),
-                        DeclKind::Index(_) => Some("cat/range"),
-                        DeclKind::Import(_) | DeclKind::PluginImport(_) => Some("import"),
-                        DeclKind::Include(_) => Some("include"),
-                        DeclKind::Dag(_) => Some("dag"),
-                        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
-                    };
-                    if let Some(kind) = kind {
-                        return Err(GraphcalError::InvalidAssumesTarget {
-                            kind: kind.to_string(),
-                            src: src.clone(),
-                            span: attr.span.into(),
-                        });
-                    }
-                    // Structural validation above guarantees a non-empty set
+                    // Shared applicability and structural validation guarantee
+                    // a node/param target with a non-empty set
                     // of unique, plain assertion names.
                     for argument in validated.assumes_arguments() {
                         if !assert_names.contains(&argument.value) {
@@ -706,85 +683,39 @@ fn validate_attributes(
                     }
                 }
                 AttributeName::ExpectedFail => {
-                    let kind = match &decl.kind {
-                        DeclKind::Assert(a) => {
-                            // Valid target — parse args and record
-                            let ef = parse_expected_fail_args(&attr.args, src)?;
-                            // #[expected_fail] (no args) on an indexed assertion is
-                            // an error — the user must specify which variants fail.
-                            if matches!(ef, ExpectedFail::All) {
-                                let is_indexed = matches!(
-                                    &a.body,
-                                    AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
-                                );
-                                if is_indexed {
-                                    return Err(GraphcalError::ExpectedFailAllOnIndexed {
-                                        src: src.clone(),
-                                        span: attr.span.into(),
-                                    });
-                                }
-                            }
-                            if let Some(ref dname) = decl_name {
-                                expected_fail_map.insert(
-                                    dname.clone(),
-                                    CollectedExpectedFail {
-                                        expected: ef,
-                                        attribute_span: attr.span,
-                                    },
-                                );
-                            }
-                            continue;
-                        }
-                        DeclKind::Param(_) => "param",
-                        DeclKind::ConstNode(_) => "const node",
-                        DeclKind::Node(_) => "node",
-                        DeclKind::Plot(_) => "plot",
-                        DeclKind::Figure(_) => "figure",
-                        DeclKind::Layer(_) => "layer",
-
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => "dim",
-                        DeclKind::Unit(_) => "unit",
-                        DeclKind::Type(_) => "type",
-                        DeclKind::Index(_) => "cat/range",
-                        DeclKind::Import(_) | DeclKind::PluginImport(_) => "import",
-                        DeclKind::Include(_) => "include",
-                        DeclKind::Dag(_) => "dag",
-                        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
+                    let DeclKind::Assert(assertion) = &decl.kind else {
+                        return Err(GraphcalError::internal_error(
+                            "attribute applicability accepted expected_fail on a non-assert",
+                            src,
+                            crate::diagnostic_anchor::DiagnosticAnchor::Source(attr.span),
+                        ));
                     };
-                    return Err(GraphcalError::InvalidExpectedFailTarget {
-                        kind: kind.to_string(),
-                        src: src.clone(),
-                        span: attr.span.into(),
-                    });
+                    let expected = parse_expected_fail_args(&attr.args, src)?;
+                    // A blanket expected failure on an indexed assertion is
+                    // ambiguous; users must name the expected failing keys.
+                    if matches!(expected, ExpectedFail::All) {
+                        let is_indexed = matches!(
+                            &assertion.body,
+                            AssertBody::Expr(expr) if matches!(expr.kind, ExprKind::ForComp { .. })
+                        );
+                        if is_indexed {
+                            return Err(GraphcalError::ExpectedFailAllOnIndexed {
+                                src: src.clone(),
+                                span: attr.span.into(),
+                            });
+                        }
+                    }
+                    if let Some(ref dname) = decl_name {
+                        expected_fail_map.insert(
+                            dname.clone(),
+                            CollectedExpectedFail {
+                                expected,
+                                attribute_span: attr.span,
+                            },
+                        );
+                    }
                 }
                 AttributeName::Hidden => {
-                    // #[hidden] is plot-only: figures/layers cannot be
-                    // referenced by anything, so hiding one is equivalent to
-                    // deleting it; other declarations have no display axis.
-                    let kind = match &decl.kind {
-                        DeclKind::Plot(_) => None,
-                        DeclKind::Param(_) => Some("param"),
-                        DeclKind::ConstNode(_) => Some("const node"),
-                        DeclKind::Node(_) => Some("node"),
-                        DeclKind::Assert(_) => Some("assert"),
-                        DeclKind::Figure(_) => Some("figure"),
-                        DeclKind::Layer(_) => Some("layer"),
-                        DeclKind::BaseDimension(_) | DeclKind::Dimension(_) => Some("dim"),
-                        DeclKind::Unit(_) => Some("unit"),
-                        DeclKind::Type(_) => Some("type"),
-                        DeclKind::Index(_) => Some("cat/range"),
-                        DeclKind::Import(_) | DeclKind::PluginImport(_) => Some("import"),
-                        DeclKind::Include(_) => Some("include"),
-                        DeclKind::Dag(_) => Some("dag"),
-                        DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
-                    };
-                    if let Some(kind) = kind {
-                        return Err(GraphcalError::InvalidHiddenTarget {
-                            kind: kind.to_string(),
-                            src: src.clone(),
-                            span: attr.span.into(),
-                        });
-                    }
                     if !attr.args.is_empty() {
                         return Err(GraphcalError::EvalError {
                             message: "`#[hidden]` takes no arguments".to_string(),
@@ -813,6 +744,31 @@ fn validate_attributes(
     })
 }
 
+#[derive(Debug, Clone)]
+enum LocalTypeSystemDeclaration {
+    Dimension(crate::syntax::dimension::DimName),
+    Index(crate::syntax::index_name::IndexName),
+    Type(crate::syntax::type_name::StructTypeName),
+}
+
+impl LocalTypeSystemDeclaration {
+    const fn kind(&self) -> DeclarationKind {
+        match self {
+            Self::Dimension(_) => DeclarationKind::Dimension,
+            Self::Index(_) => DeclarationKind::Index,
+            Self::Type(_) => DeclarationKind::Type,
+        }
+    }
+
+    const fn atom(&self) -> &NameAtom {
+        match self {
+            Self::Dimension(name) => name.atom(),
+            Self::Index(name) => name.atom(),
+            Self::Type(name) => name.atom(),
+        }
+    }
+}
+
 /// Validate that every external signature names only exported type-system
 /// symbols (V003 / A9 case 1).
 ///
@@ -834,17 +790,31 @@ fn validate_private_in_public(
 ) -> Result<(), GraphcalError> {
     use crate::desugar::desugared_ast::IndexDeclKind;
 
-    // Collect all locally-declared type-system names (dims, indexes, types) with their spans.
-    let mut local_type_names: HashMap<String, Span> = HashMap::new();
+    // Preserve the semantic category beside each typed local name so the
+    // visibility diagnostic never has to rescan declarations by string.
+    let mut local_type_names: HashMap<NameAtom, (LocalTypeSystemDeclaration, Span)> =
+        HashMap::new();
     for decl in &file.declarations {
         let (name, span) = match &decl.kind {
-            DeclKind::BaseDimension(d) => (d.name.value.to_string(), d.name.span),
-            DeclKind::Dimension(d) => (d.name.value.to_string(), d.name.span),
-            DeclKind::Index(idx) => (idx.name.value.to_string(), idx.name.span),
-            DeclKind::Type(t) => (t.name.value.to_string(), t.name.span),
+            DeclKind::BaseDimension(d) => (
+                LocalTypeSystemDeclaration::Dimension(d.name.value.clone()),
+                d.name.span,
+            ),
+            DeclKind::Dimension(d) => (
+                LocalTypeSystemDeclaration::Dimension(d.name.value.clone()),
+                d.name.span,
+            ),
+            DeclKind::Index(index) => (
+                LocalTypeSystemDeclaration::Index(index.name.value.clone()),
+                index.name.span,
+            ),
+            DeclKind::Type(r#type) => (
+                LocalTypeSystemDeclaration::Type(r#type.name.value.clone()),
+                r#type.name.span,
+            ),
             _ => continue,
         };
-        local_type_names.insert(name, span);
+        local_type_names.insert(name.atom().clone(), (name, span));
     }
 
     // If there are no local type-system names, nothing to check.
@@ -852,8 +822,8 @@ fn validate_private_in_public(
         return Ok(());
     }
 
-    let emit = |pub_kind: &str,
-                pub_name: String,
+    let emit = |pub_kind: DeclarationKind,
+                pub_name: NameAtom,
                 pub_span: Span,
                 refs: &[(crate::syntax::names::NamePath, Span)]|
      -> Result<(), GraphcalError> {
@@ -864,14 +834,14 @@ fn validate_private_in_public(
                 continue;
             };
             let ref_decl_name = DeclName::from_atom(ref_name.clone());
-            if local_type_names.contains_key(ref_name.as_str())
+            if let Some((referenced, _)) = local_type_names.get(ref_name)
                 && !external_surface.is_explicit_export(&ref_decl_name)
             {
                 return Err(GraphcalError::PrivateInPublic {
-                    pub_kind: pub_kind.to_string(),
+                    pub_kind,
                     pub_name,
-                    ref_kind: ref_kind_for(file, ref_name.as_str()).to_string(),
-                    ref_name: ref_name.to_string(),
+                    ref_kind: referenced.kind(),
+                    ref_name: referenced.atom().clone(),
                     src: src.clone(),
                     ref_span: (*ref_span).into(),
                     pub_span: pub_span.into(),
@@ -909,28 +879,28 @@ fn validate_private_in_public(
         }
 
         let mut refs: Vec<(crate::syntax::names::NamePath, Span)> = Vec::new();
-        let (kind, name): (&str, String) = match &decl.kind {
+        let (kind, name): (DeclarationKind, NameAtom) = match &decl.kind {
             DeclKind::Param(p) => {
                 collect_type_refs(&p.type_ann, &mut refs);
-                ("param", p.name.value.to_string())
+                (DeclarationKind::Param, p.name.value.atom().clone())
             }
             DeclKind::Node(n) => {
                 collect_type_refs(&n.type_ann, &mut refs);
-                ("node", n.name.value.to_string())
+                (DeclarationKind::Node, n.name.value.atom().clone())
             }
             DeclKind::ConstNode(c) => {
                 collect_type_refs(&c.type_ann, &mut refs);
-                ("const node", c.name.value.to_string())
+                (DeclarationKind::ConstNode, c.name.value.atom().clone())
             }
             DeclKind::Dimension(d) => {
                 if let Some(def) = &d.definition {
                     collect_dim_refs(def, &mut refs);
                 }
-                ("dim", d.name.value.to_string())
+                (DeclarationKind::Dimension, d.name.value.atom().clone())
             }
             DeclKind::Unit(u) => {
                 collect_dim_refs(&u.dim_type, &mut refs);
-                ("unit", u.name.value.to_string())
+                (DeclarationKind::Unit, u.name.value.atom().clone())
             }
             DeclKind::Type(t) => {
                 // Each constructor payload field type is part of the
@@ -944,13 +914,13 @@ fn validate_private_in_public(
                         }
                     }
                 }
-                ("type", t.name.value.to_string())
+                (DeclarationKind::Type, t.name.value.atom().clone())
             }
-            DeclKind::Index(idx) => {
-                if let IndexDeclKind::RequiredCoordinate { dimension } = &idx.kind {
+            DeclKind::Index(index) => {
+                if let IndexDeclKind::RequiredCoordinate { dimension } = &index.kind {
                     collect_dim_refs(dimension, &mut refs);
                 }
-                ("index", idx.name.value.to_string())
+                (DeclarationKind::Index, index.name.value.atom().clone())
             }
             // Sink kinds have no written signature; bodies are not A9 case 1.
             // BaseDimension has no body. Import/Include are use-sites. Dag is
@@ -1053,27 +1023,6 @@ fn collect_ambiguous_generic_refs(
 fn collect_dim_refs(dim_expr: &DimExpr, refs: &mut Vec<(crate::syntax::names::NamePath, Span)>) {
     for item in &dim_expr.terms {
         refs.push((item.term.name.value.clone(), item.term.span));
-    }
-}
-
-/// Classify the owning declaration of a referenced name for diagnostic messages.
-fn ref_kind_for(file: &File, ref_name: &str) -> &'static str {
-    match file
-        .declarations
-        .iter()
-        .find(|d| match &d.kind {
-            DeclKind::BaseDimension(bd) => bd.name.value.as_str() == ref_name,
-            DeclKind::Dimension(d) => d.name.value.as_str() == ref_name,
-            DeclKind::Index(idx) => idx.name.value.as_str() == ref_name,
-            DeclKind::Type(t) => t.name.value.as_str() == ref_name,
-            _ => false,
-        })
-        .map(|d| &d.kind)
-    {
-        Some(DeclKind::BaseDimension(_) | DeclKind::Dimension(_)) => "dim",
-        Some(DeclKind::Index(_)) => "index",
-        Some(DeclKind::Type(_)) => "type",
-        _ => "item",
     }
 }
 
