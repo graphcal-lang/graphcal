@@ -1285,7 +1285,8 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `reg
 2. `crates/graphcal-compiler/src/ir/resolve/names.rs`
 3. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
 4. `crates/graphcal-compiler/src/ir/resolve/attribute_validation.rs`
-5. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
+5. `crates/graphcal-compiler/src/ir/resolve/include_selection.rs`
+6. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
 
 ### Stage 7 - HIR and builtin signatures
 

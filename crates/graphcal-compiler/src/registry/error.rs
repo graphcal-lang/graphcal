@@ -11,7 +11,7 @@ use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName, UnitRef};
 use crate::syntax::function_name::{FnName, FnParamName};
-use crate::syntax::import_category::ImportItemCategoryMismatch;
+use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName};
 use crate::syntax::module_name::ScopedName;
 use crate::syntax::module_resolve::DeclSymbolKind;
@@ -229,6 +229,22 @@ pub enum GraphcalError {
         src: NamedSource<Arc<String>>,
         #[label("this include would give a unit a hidden runtime instance")]
         span: SourceSpan,
+    },
+
+    #[error("selective include chooses {namespace} producer `{name}` more than once")]
+    #[diagnostic(
+        code(graphcal::M027),
+        help("select each producer at most once in an include list")
+    )]
+    DuplicateIncludeSelection {
+        namespace: ImportItemNamespace,
+        name: NameAtom,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("duplicate producer selection")]
+        duplicate: SourceSpan,
+        #[label("first selected here")]
+        first: SourceSpan,
     },
 
     #[error("attribute `hidden` does not apply to include item `{name}`")]
@@ -2216,6 +2232,7 @@ impl GraphcalError {
             | Self::ImportAssertionItem { src, .. }
             | Self::ImportRuntimeUnit { src, .. }
             | Self::IncludeRuntimeUnit { src, .. }
+            | Self::DuplicateIncludeSelection { src, .. }
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::BareGraphDeclarationRef { src, .. }

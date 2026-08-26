@@ -382,6 +382,21 @@ fn validate_include_item_attributes(
     Ok(hidden)
 }
 
+fn validate_include_producers(
+    items: &[graphcal_compiler::desugar::desugared_ast::ImportItem],
+    file_src: &NamedSource<Arc<String>>,
+) -> Result<(), CompileError> {
+    graphcal_compiler::ir::resolve::include_selection::validate_unique_include_producers(items)
+        .map_err(|error| {
+            CompileError::Eval(
+                graphcal_compiler::ir::resolve::include_selection::duplicate_include_producer_to_graphcal(
+                    error,
+                    file_src,
+                ),
+            )
+        })
+}
+
 fn validate_reserved_alias(
     namespace: ReservedNameNamespace,
     import_item: &graphcal_compiler::desugar::desugared_ast::ImportItem,
@@ -700,6 +715,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     let mut assertion_aliases = HashMap::new();
     let selective_names = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
+            validate_include_producers(names, file_src)?;
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
@@ -942,6 +958,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     let mut assertion_aliases = HashMap::new();
     let selective_names = match &include_decl.kind {
         ImportKind::Selective(names) => {
+            validate_include_producers(names, file_src)?;
             let mut selective = Vec::new();
             for import_item in names {
                 let orig_name = &import_item.name.name;
