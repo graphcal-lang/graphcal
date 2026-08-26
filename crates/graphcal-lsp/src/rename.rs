@@ -531,11 +531,11 @@ figure f = { plots: [p] };
     fn rename_respects_compiler_namespaces_for_same_spelling() {
         let source = "pub const node scale: Dimensionless = 2.0;\n\
                       pub const unit scale: Length = 1.0 m;\n\
-                      node value: Length = scale * 1.0 scale;";
+                      node value: Length = @scale * 1.0 scale;";
         let analysis = analysis_from_source(source);
         let uri = Url::parse("file:///test.gcl").unwrap();
 
-        let const_use = source.find("= scale *").unwrap() + 2;
+        let const_use = source.find("= @scale *").unwrap() + 3;
         let const_edit = rename(&analysis, &uri, const_use, "factor")
             .unwrap()
             .unwrap();
@@ -778,16 +778,16 @@ figure f = { plots: [p] };
             ("lib.gcl", "pub const node y: Dimensionless = 2.0;\n"),
             (
                 "a.gcl",
-                "import helper.lib.{ pub y };\nconst node occupied: Dimensionless = 0.0;\npub const node a_value: Dimensionless = y;\n",
+                "import helper.lib.{ pub y };\nconst node occupied: Dimensionless = 0.0;\npub const node a_value: Dimensionless = @y;\n",
             ),
             (
                 "b.gcl",
-                "import helper.lib.{ y as alias };\npub const node b_value: Dimensionless = alias;\n",
+                "import helper.lib.{ y as alias };\npub const node b_value: Dimensionless = @alias;\n",
             ),
             ("other.gcl", "pub const node y: Dimensionless = 40.0;\n"),
             (
                 "main.gcl",
-                "import helper.lib.{ y };\nimport helper.a.{ y as through_a, a_value };\nimport helper.b.{ b_value };\nimport helper.other as other;\nnode total: Dimensionless = y + through_a + a_value + b_value + other.y;\n",
+                "import helper.lib.{ y };\nimport helper.a.{ y as through_a, a_value };\nimport helper.b.{ b_value };\nimport helper.other as other;\nnode total: Dimensionless = @y + @through_a + @a_value + @b_value + @other.y;\n",
             ),
         ];
         for (name, source) in files {
@@ -803,7 +803,7 @@ figure f = { plots: [p] };
             "expected clean project: {:?}",
             analysis.diagnostics,
         );
-        let cursor = main_text.rfind(" y +").unwrap() + 1;
+        let cursor = main_text.rfind("@y +").unwrap() + 1;
 
         let references = crate::references::references(&analysis, &main_uri, cursor, true)
             .expect("project references");
@@ -845,8 +845,8 @@ figure f = { plots: [p] };
         }
         let updated_main = std::fs::read_to_string(&main_path).unwrap();
         assert!(updated_main.contains("renamed as through_a"));
-        assert!(updated_main.contains("+ through_a"));
-        assert!(updated_main.contains("other.y"));
+        assert!(updated_main.contains("+ @through_a"));
+        assert!(updated_main.contains("@other.y"));
         let updated = crate::server::run_analysis_for_test(&main_uri, &updated_main);
         assert!(
             updated.has_no_diagnostics(),

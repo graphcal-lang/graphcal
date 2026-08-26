@@ -2991,7 +2991,7 @@ param q: Int[I]
     fn same_spelling_in_distinct_namespaces_has_distinct_identity() {
         let source = "pub const node scale: Dimensionless = 2.0;\n\
                       pub const unit scale: Length = 1.0 m;\n\
-                      node value: Length = scale * 1.0 scale;";
+                      node value: Length = @scale * 1.0 scale;";
         let table = table_for(source);
         let constant = definition_key(&table, SymbolCategory::Const, "scale");
         let unit = definition_key(&table, SymbolCategory::Unit, "scale");

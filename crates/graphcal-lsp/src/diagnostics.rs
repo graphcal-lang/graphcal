@@ -1037,6 +1037,25 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn bare_graph_declaration_ref_points_at_missing_sigil() {
+        let source = "node target: Dimensionless = 1.0;\n\
+                      node output: Dimensionless = target;";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::N017".to_string()))
+        );
+        assert!(diagnostic.message.contains("write `@target`"));
+        assert_eq!(diagnostic.range.start.line, 1);
+        assert_eq!(diagnostic.range.start.character, 29);
+        assert_eq!(diagnostic.range.end.character, 35);
+    }
+
+    #[test]
     fn passing_assertion_produces_no_diagnostic() {
         let source = "param x: Dimensionless = 1.0;\nassert x_pos = @x > 0.0;";
         let diags = produce_diagnostics(source, "test.gcl");
