@@ -861,6 +861,13 @@ fn error_repeated_expected_fail_attribute() {
 }
 
 #[test]
+fn error_repeated_include_producer() {
+    let source = include_str!("../../../tests/fixtures/invalid/repeated_include_producer.gcl");
+    let rendered = render_error(source, "repeated_include_producer.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_unknown_attribute() {
     let source = include_str!("../../../tests/fixtures/invalid/unknown_attribute.gcl");
     let rendered = render_error(source, "unknown_attribute.gcl");

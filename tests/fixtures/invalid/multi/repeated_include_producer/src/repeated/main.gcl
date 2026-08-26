@@ -1,0 +1,7 @@
+include repeated.lib().{
+    okay as first_check,
+    okay as second_check,
+};
+
+#[assumes(first_check)]
+node dependent: Dimensionless = 1.0;

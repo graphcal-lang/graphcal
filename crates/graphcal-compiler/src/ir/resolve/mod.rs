@@ -2,6 +2,7 @@ pub mod attribute_validation;
 mod deps;
 #[cfg(test)]
 mod formal_conformance;
+pub mod include_selection;
 pub(crate) mod names;
 #[cfg(test)]
 mod tests;

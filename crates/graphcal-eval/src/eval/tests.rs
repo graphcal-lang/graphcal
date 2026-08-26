@@ -274,6 +274,62 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     ));
 }
 
+#[test]
+fn repeated_include_producers_are_rejected_before_metadata_maps() {
+    let producer = "pub node x: Dimensionless = 1.0;\n\
+                    pub assert okay = @x == 2.0;\n\
+                    pub plot chart = { mark: point, encode: { x: @x } };\n";
+    let file_selectors = [
+        "okay as first_check, okay as second_check",
+        "#[expected_fail] okay as first_check, #[expected_fail] okay as second_check",
+        "#[hidden] chart as first_chart, chart as second_chart",
+        "x as first_value, x as second_value",
+    ];
+    for selectors in file_selectors {
+        let main = format!(
+            "include pipeline.lib().{{ {selectors} }};\n\
+             #[assumes(first_check)]\n\
+             node dependent: Dimensionless = 1.0;\n"
+        );
+        let (_directory, root) =
+            write_pipeline_project(&[("lib.gcl", producer), ("main.gcl", &main)], "main.gcl");
+        let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::DuplicateIncludeSelection { .. })
+        ));
+    }
+
+    for selectors in [
+        "okay as first_check, okay as second_check",
+        "#[hidden] chart as first_chart, chart as second_chart",
+    ] {
+        let source =
+            format!("dag producer {{ {producer} }}\ninclude producer().{{ {selectors} }};");
+        let error = compile_and_eval_named(&source, "test.gcl").unwrap_err();
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::DuplicateIncludeSelection { .. })
+        ));
+    }
+}
+
+#[test]
+fn unique_include_producers_remain_order_independent() {
+    let producer = "dag producer {\n\
+                        pub node first: Dimensionless = 1.0;\n\
+                        pub node second: Dimensionless = 2.0;\n\
+                    }\n";
+    for selectors in ["first as x, second as y", "second as y, first as x"] {
+        let source = format!(
+            "{producer}\n\
+             include producer().{{ {selectors} }};\n\
+             node total: Dimensionless = @x + @y;"
+        );
+        compile_and_eval_named(&source, "test.gcl").unwrap();
+    }
+}
+
 fn assert_missing_dag_bindings(
     error: CompileError,
     expected_dag_name: &str,
