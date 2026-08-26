@@ -330,6 +330,46 @@ fn unique_include_producers_remain_order_independent() {
     }
 }
 
+#[test]
+fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
+    for source in [
+        "#[lazy]\nnode output: Dimensionless = 1.0;",
+        "#[lazy(guard)]\nnode output: Dimensionless = 1.0;",
+        "#[lazy]\nassert output = true;",
+        "#[lazy(guard)]\nassert output = true;",
+    ] {
+        let error = compile_and_eval_named(source, "test.gcl").unwrap_err();
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::LazyNotSupported { .. })
+        ));
+    }
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub node value: Dimensionless = 1.0;\n"),
+            ("main.gcl", "include pipeline.lib().{ #[lazy] value };\n"),
+        ],
+        "main.gcl",
+    );
+    let file_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        file_error,
+        CompileError::Eval(GraphcalError::LazyNotSupported { .. })
+    ));
+
+    let inline_error = compile_and_eval_named(
+        "dag producer { pub node value: Dimensionless = 1.0; }\n\
+         include producer().{ #[lazy(guard)] value };",
+        "test.gcl",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        inline_error,
+        CompileError::Eval(GraphcalError::LazyNotSupported { .. })
+    ));
+}
+
 fn assert_missing_dag_bindings(
     error: CompileError,
     expected_dag_name: &str,

@@ -874,6 +874,13 @@ fn error_unknown_attribute() {
     insta::assert_snapshot!(rendered);
 }
 
+#[test]
+fn error_lazy_not_supported() {
+    let source = include_str!("../../../tests/fixtures/invalid/lazy_not_supported.gcl");
+    let rendered = render_error(source, "lazy_not_supported.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 // --- Expected-fail error tests ---
 
 #[test]
