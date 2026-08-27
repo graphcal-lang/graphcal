@@ -1,2 +1,1 @@
-import Graphcal.Static.NamespaceResolution.Reference
-import Graphcal.Static.NamespaceResolution.Spec
+import Graphcal.Static.NamespaceResolution.Examples

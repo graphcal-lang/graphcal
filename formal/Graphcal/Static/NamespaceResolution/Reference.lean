@@ -22,8 +22,9 @@ def LookupSummary.add
     summary
 
 /-- Count matching bindings while retaining the sole binding when unique. -/
-def summarizeLookup (environment : Environment) (query : Query) : LookupSummary :=
-  environment.foldr (fun binding summary => summary.add query binding) .none
+def summarizeLookup : Environment → Query → LookupSummary
+  | [], _ => .none
+  | binding :: rest, query => (summarizeLookup rest query).add query binding
 
 /-- Typed failures produced by the executable namespace resolver. -/
 inductive ResolutionError where
@@ -147,25 +148,39 @@ def validateUnit (entity : Entity) : Except ResolutionError UnitEntity :=
   | .unit unitEntity => .ok unitEntity
   | other => .error (.wrongNamespace .unit other)
 
+/-- Index-label owners must be concrete indexes, not generic index parameters. -/
+def requireConcreteIndex
+    (entity : StaticEntity) : Except ResolutionError StaticEntity :=
+  match entity.kind with
+  | .index => .ok entity
+  | _ => .error (.labelOwnerNotIndex entity)
+
+/-- Validate that a Term label retains the canonical owner selected by `#`. -/
+def validateIndexLabel
+    (expectedOwner : StaticId)
+    (entity : Entity) : Except ResolutionError TermEntity :=
+  match entity with
+  | .term labelEntity =>
+      match labelEntity.kind with
+      | .indexLabel actualOwner =>
+          if actualOwner = expectedOwner then
+            .ok labelEntity
+          else
+            .error (.labelOwnerMismatch expectedOwner labelEntity)
+      | _ => .error (.labelOwnerMismatch expectedOwner labelEntity)
+  | other => .error (.wrongNamespace .term other)
+
 /-- Resolve `Owner#Label` through the canonical Static index owner. -/
 def resolveLabel
     (environment : Environment)
     (owner : NameHead)
     (label : NameAtom) : Except ResolutionError TermEntity := do
   let ownerCandidate ← resolveHead environment .static owner
-  let indexEntity ← validateStatic .index ownerCandidate
+  let indexCandidate ← validateStatic .index ownerCandidate
+  let indexEntity ← requireConcreteIndex indexCandidate
   let labelCandidate ←
     lookup environment (Query.exact (.indexLabels indexEntity.id) .term label)
-  match labelCandidate with
-  | .term labelEntity =>
-      match labelEntity.kind with
-      | .indexLabel actualOwner =>
-          if actualOwner = indexEntity.id then
-            .ok labelEntity
-          else
-            .error (.labelOwnerMismatch indexEntity.id labelEntity)
-      | _ => .error (.labelOwnerMismatch indexEntity.id labelEntity)
-  | other => .error (.wrongNamespace .term other)
+  validateIndexLabel indexEntity.id labelCandidate
 
 /-- The executable reference resolver certified in `Proofs`. -/
 def resolve

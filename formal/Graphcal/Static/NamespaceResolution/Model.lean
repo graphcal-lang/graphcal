@@ -265,6 +265,14 @@ inductive Reference where
   | call (callee : NameHead) (arguments : ArgumentShape)
   deriving DecidableEq, Repr
 
+/-- The one result namespace selected by each punctuation-preserving form. -/
+def Reference.resultSpace : Reference → Namespace
+  | .static _ _ => .static
+  | .term _ _ => .term
+  | .unit _ => .unit
+  | .label _ _ => .term
+  | .call _ _ => .term
+
 /-- Only Static and Term introduce lexical/generic binders. -/
 inductive BinderKind where
   | static
