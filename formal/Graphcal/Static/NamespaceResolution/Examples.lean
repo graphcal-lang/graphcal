@@ -212,6 +212,68 @@ theorem configured_instance_result_is_readable :
       .ok (.term configuredResult) := by
   decide
 
+private def inputParamEntity : TermEntity := {
+  id := termId libraryDag 3
+  kind := .param
+}
+
+private def inputTypeEntity : StaticEntity := {
+  id := staticId libraryDag 1
+  kind := .nominalType
+}
+
+private def inputParamBinding : Binding := {
+  scope := .dag libraryDag
+  name := "State"
+  entity := .term inputParamEntity
+}
+
+private def inputTypeBinding : Binding := {
+  scope := .dag libraryDag
+  name := "State"
+  entity := .static inputTypeEntity
+}
+
+private def sameSpelledInputs : Environment := [inputParamBinding, inputTypeBinding]
+
+private def inputHead : NameHead := .visible [.dag libraryDag] "State"
+
+/-- An unmarked DAG input selector means exactly the Term parameter. -/
+theorem unmarked_input_selects_param :
+    resolveInputBinding sameSpelledInputs {
+      category := .unmarked
+      target := inputHead
+    } = .ok (.param inputParamEntity) := by
+  decide
+
+/-- A `type` marker selects the same-spelled Static nominal type. -/
+theorem type_marked_input_selects_nominal_type :
+    resolveInputBinding sameSpelledInputs {
+      category := .nominalType
+      target := inputHead
+    } = .ok (.nominalType inputTypeEntity) := by
+  decide
+
+/-- An unmarked selector never retries Static when no parameter exists. -/
+theorem unmarked_input_does_not_fall_back_to_type :
+    resolveInputBinding [inputTypeBinding] {
+      category := .unmarked
+      target := inputHead
+    } = .error (.unknown {
+      scopes := [.dag libraryDag]
+      space := .term
+      name := "State"
+    }) := by
+  decide
+
+/-- The source marker inventory has no `param` marker variant. -/
+theorem input_binding_categories_are_exhaustive (category : InputBindingCategory) :
+    category = .unmarked ∨
+      category = .nominalType ∨
+      category = .dimension ∨
+      category = .index := by
+  cases category <;> simp
+
 private def massNode : Binding := {
   scope := .dag rootDag
   name := "mass"
@@ -248,6 +310,60 @@ theorem local_term_shadowing_is_rejected :
 /-- The same spelling remains valid for a Static binder. -/
 theorem cross_namespace_binder_reuse_is_accepted :
     validateBinder [massNode] staticMassBinder = .ok () := by
+  decide
+
+private def lengthDimension : Binding := {
+  scope := .dag rootDag
+  name := "Length"
+  entity := .static {
+    id := staticId rootDag 4
+    kind := .dimension
+  }
+}
+
+private def staticLengthBinder : BinderRequest := {
+  kind := .static
+  scope := .lexical localScope
+  visibleScopes := [.dag rootDag]
+  name := "Length"
+}
+
+/-- A Static generic binder cannot shadow a visible Static entity. -/
+theorem static_generic_shadowing_is_rejected :
+    validateBinder [lengthDimension] staticLengthBinder =
+      .error (.visibleNameOccupied {
+        scopes := [.lexical localScope, .dag rootDag]
+        space := .static
+        name := "Length"
+      }) := by
+  decide
+
+private def outerLocal : Binding := {
+  scope := .lexical localScope
+  name := "sample"
+  entity := .term {
+    id := termId rootDag 12
+    kind := .localBinding
+  }
+}
+
+private def nestedScope : LexicalScopeId := ⟨rootDag, 1⟩
+
+private def nestedLocalRequest : BinderRequest := {
+  kind := .term
+  scope := .lexical nestedScope
+  visibleScopes := [.lexical localScope, .dag rootDag]
+  name := "sample"
+}
+
+/-- A nested local cannot hide another visible local. -/
+theorem nested_local_shadowing_is_rejected :
+    validateBinder [outerLocal] nestedLocalRequest =
+      .error (.visibleNameOccupied {
+        scopes := [.lexical nestedScope, .lexical localScope, .dag rootDag]
+        space := .term
+        name := "sample"
+      }) := by
   decide
 
 /-- Argument shape is observationally irrelevant to callee resolution. -/

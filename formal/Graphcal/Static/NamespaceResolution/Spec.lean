@@ -90,7 +90,9 @@ def HeadResolves
 /-- Static lookup is followed by explicit kind validation. -/
 def StaticPermits : StaticUse → StaticEntity → Prop
   | .type, ⟨_, .nominalType⟩ => True
+  | .type, ⟨_, .dimension⟩ => True
   | .type, ⟨_, .genericTypeParam⟩ => True
+  | .type, ⟨_, .genericDimParam⟩ => True
   | .dimension, ⟨_, .dimension⟩ => True
   | .dimension, ⟨_, .genericDimParam⟩ => True
   | .index, ⟨_, .index⟩ => True
@@ -120,6 +122,34 @@ def TermPermits : TermUse → TermEntity → Prop
   | .includeOutcome, ⟨_, .assertion⟩ => True
   | .includeOutcome, ⟨_, .visualization⟩ => True
   | _, _ => False
+
+/-- Exact category relation for DAG input bindings. -/
+inductive InputTargetMatches :
+    InputBindingCategory → Entity → InputBindingTarget → Prop where
+  | param (id : TermId) :
+      InputTargetMatches .unmarked (.term ⟨id, .param⟩)
+        (.param ⟨id, .param⟩)
+  | nominalType (id : StaticId) :
+      InputTargetMatches .nominalType (.static ⟨id, .nominalType⟩)
+        (.nominalType ⟨id, .nominalType⟩)
+  | dimension (id : StaticId) :
+      InputTargetMatches .dimension (.static ⟨id, .dimension⟩)
+        (.dimension ⟨id, .dimension⟩)
+  | index (id : StaticId) :
+      InputTargetMatches .index (.static ⟨id, .index⟩)
+        (.index ⟨id, .index⟩)
+
+/--
+An unmarked input performs one Term lookup and requires `param`; marked inputs
+perform one Static lookup and require the exact marker category.
+-/
+def InputBindingResolves
+    (environment : Environment)
+    (selector : InputBindingSelector)
+    (target : InputBindingTarget) : Prop :=
+  ∃ entity,
+    HeadResolves environment selector.category.space selector.target entity ∧
+      InputTargetMatches selector.category entity target
 
 /--
 Normative reference resolution. Every constructor performs one namespace lookup

@@ -23,6 +23,12 @@ Graphcal/Static/NamespaceResolution/
 ├── Spec.lean
 ├── Reference.lean
 ├── Proofs.lean
+├── Proofs/
+│   ├── Lookup.lean
+│   ├── Scope.lean
+│   ├── Path.lean
+│   ├── InputBinding.lean
+│   └── Resolution.lean
 └── Examples.lean
 ```
 
@@ -53,4 +59,4 @@ reference is already suitable for a future structured-project oracle; it should
 not be compared against the fallback-based resolver being replaced.
 
 The checked-in `lean-toolchain` pins the Lean version. The package intentionally
-has no third-party Lean dependencies for this initial specification.
+has no third-party Lean dependencies for these specification slices.

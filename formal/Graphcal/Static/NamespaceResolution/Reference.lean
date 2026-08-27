@@ -36,6 +36,7 @@ inductive ResolutionError where
   | wrongNamespace (expected : Namespace) (actual : Entity)
   | invalidStaticUse (use : StaticUse) (entity : StaticEntity)
   | invalidTermUse (use : TermUse) (entity : TermEntity)
+  | invalidInputTarget (category : InputBindingCategory) (entity : Entity)
   | labelOwnerNotIndex (entity : StaticEntity)
   | labelOwnerMismatch (expected : StaticId) (actual : TermEntity)
   deriving DecidableEq, Repr
@@ -104,7 +105,9 @@ def validateStatic
   | .static staticEntity =>
       match use, staticEntity.kind with
       | .type, .nominalType
+      | .type, .dimension
       | .type, .genericTypeParam
+      | .type, .genericDimParam
       | .dimension, .dimension
       | .dimension, .genericDimParam
       | .index, .index
@@ -181,6 +184,28 @@ def resolveLabel
   let labelCandidate ←
     lookup environment (Query.exact (.indexLabels indexEntity.id) .term label)
   validateIndexLabel indexEntity.id labelCandidate
+
+/-- Validate the exact category selected by one DAG input-binding form. -/
+def validateInputTarget
+    (category : InputBindingCategory)
+    (entity : Entity) : Except ResolutionError InputBindingTarget :=
+  match category, entity with
+  | .unmarked, .term ⟨id, .param⟩ => .ok (.param ⟨id, .param⟩)
+  | .nominalType, .static ⟨id, .nominalType⟩ =>
+      .ok (.nominalType ⟨id, .nominalType⟩)
+  | .dimension, .static ⟨id, .dimension⟩ =>
+      .ok (.dimension ⟨id, .dimension⟩)
+  | .index, .static ⟨id, .index⟩ => .ok (.index ⟨id, .index⟩)
+  | category, entity => .error (.invalidInputTarget category entity)
+
+/-- Resolve one categorized DAG input target without cross-namespace fallback. -/
+def resolveInputBinding
+    (environment : Environment)
+    (selector : InputBindingSelector) :
+    Except ResolutionError InputBindingTarget := do
+  let candidate ←
+    resolveHead environment selector.category.space selector.target
+  validateInputTarget selector.category candidate
 
 /-- The executable reference resolver certified in `Proofs`. -/
 def resolve

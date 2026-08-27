@@ -273,6 +273,36 @@ def Reference.resultSpace : Reference → Namespace
   | .label _ _ => .term
   | .call _ _ => .term
 
+/--
+The four source forms for a DAG input binding. `unmarked` means exactly a
+parameter; there is deliberately no source `param` marker constructor.
+-/
+inductive InputBindingCategory where
+  | unmarked
+  | nominalType
+  | dimension
+  | index
+  deriving DecidableEq, Repr
+
+/-- Namespace selected before an input target is looked up. -/
+def InputBindingCategory.space : InputBindingCategory → Namespace
+  | .unmarked => .term
+  | .nominalType | .dimension | .index => .static
+
+/-- One parsed DAG input selector, shared by `include` and direct DAG calls. -/
+structure InputBindingSelector where
+  category : InputBindingCategory
+  target : NameHead
+  deriving DecidableEq, Repr
+
+/-- Exact semantic target produced by a categorized DAG input selector. -/
+inductive InputBindingTarget where
+  | param (entity : TermEntity)
+  | nominalType (entity : StaticEntity)
+  | dimension (entity : StaticEntity)
+  | index (entity : StaticEntity)
+  deriving DecidableEq, Repr
+
 /-- Only Static and Term introduce lexical/generic binders. -/
 inductive BinderKind where
   | static
