@@ -143,10 +143,6 @@ impl ScopedName {
     /// Returns [`ScopedNameParseError`] when any path component is empty. A
     /// literal dot cannot occur inside a component because dots delimit the
     /// serialized path.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "str::split always yields one segment; the empty fallback follows the normal invalid-segment error path"
-    )]
     pub fn parse(display: impl AsRef<str>) -> Result<Self, ScopedNameParseError> {
         fn parse_segment(segment: &str, position: usize) -> Result<NameAtom, ScopedNameParseError> {
             NameAtom::parse(segment).map_err(|source| ScopedNameParseError::InvalidSegment {

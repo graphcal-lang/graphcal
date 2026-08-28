@@ -138,10 +138,10 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
                             && let (seg_token, seg_span) = &tokens[j - 2]
                             && seg_token.is_identifier()
                         {
-                            let separator = match tokens[j - 1].0 {
-                                Token::Dot => ".",
-                                Token::DoubleColon => "::",
-                                _ => unreachable!("separator was matched above"),
+                            let separator = if tokens[j - 1].0 == Token::Dot {
+                                "."
+                            } else {
+                                "::"
                             };
                             let segment =
                                 &source[seg_span.offset()..seg_span.offset() + seg_span.len()];

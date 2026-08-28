@@ -70,14 +70,10 @@ impl IdentPath {
     /// segment is local; two or more treat the final segment as the member.
     #[must_use]
     pub fn new(segments: NonEmpty<Ident>) -> Self {
-        let mut segments = segments.into_vec();
-        let member = match segments.pop() {
-            Some(member) => member,
-            None => unreachable!("NonEmpty always contains a member identifier"),
-        };
-        match NonEmpty::try_from_vec(segments) {
-            Ok(owner) => Self::member(owner, member),
-            Err(_) => Self::bare(member),
+        let (member, owner) = segments.into_last_and_init();
+        Self {
+            owner: NonEmpty::try_from_vec(owner).ok(),
+            member,
         }
     }
 
@@ -110,13 +106,9 @@ impl IdentPath {
     #[must_use]
     pub fn into_segments(self) -> NonEmpty<Ident> {
         match self.owner {
-            Some(owner) => {
-                let mut segments = owner.into_vec();
-                segments.push(self.member);
-                match NonEmpty::try_from_vec(segments) {
-                    Ok(segments) => segments,
-                    Err(_) => unreachable!("an IdentPath always contains its member"),
-                }
+            Some(mut owner) => {
+                owner.push(self.member);
+                owner
             }
             None => NonEmpty::singleton(self.member),
         }
@@ -212,7 +204,7 @@ impl IdentPath {
     }
 
     /// Mutably return the selected identifier only for a local path.
-    pub(crate) fn as_bare_mut(&mut self) -> Option<&mut Ident> {
+    pub(crate) const fn as_bare_mut(&mut self) -> Option<&mut Ident> {
         match &self.owner {
             None => Some(&mut self.member),
             Some(_) => None,

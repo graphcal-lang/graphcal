@@ -307,7 +307,7 @@ impl Parser<'_> {
                     .enumerate()
                     .map(|(index, cell)| match cell {
                         HeaderCell::Underscore(sp) => {
-                            ast::MultiHeaderCell::Underscore { span: *sp }
+                            Ok(ast::MultiHeaderCell::Underscore { span: *sp })
                         }
                         HeaderCell::Variant { variant, span } => {
                             let axis = slice.column_layout.iter().find_map(|layout| match layout {
@@ -318,20 +318,22 @@ impl Parser<'_> {
                                 } if (*start..*end).contains(&index) => Some(extra_axis.clone()),
                                 SlotColumnSpan::Single(_) | SlotColumnSpan::Range { .. } => None,
                             });
-                            let axis = match axis {
-                                Some(axis) => axis,
-                                None => unreachable!(
-                                    "validated variant header belongs to an extra-axis slot"
-                                ),
+                            let Some(axis) = axis else {
+                                return Err(ParseError::MultiDeclUnsupportedShape {
+                                    reason: "a validated variant header has no extra-axis slot"
+                                        .to_string(),
+                                    src: self.named_source(),
+                                    span: (*span).into(),
+                                });
                             };
-                            ast::MultiHeaderCell::Variant {
+                            Ok(ast::MultiHeaderCell::Variant {
                                 axis,
                                 variant: variant.clone(),
                                 span: *span,
-                            }
+                            })
                         }
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>, ParseError>>()?;
                 let column_layout = slice
                     .column_layout
                     .iter()

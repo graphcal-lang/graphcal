@@ -416,8 +416,8 @@ impl<Ns: NameNamespace> std::fmt::Display for ResolvedName<Ns> {
 /// A syntactic dotted path whose segments all denote DAG/module namespaces.
 ///
 /// Dots have exactly this role before a `::` member boundary. Keeping the path
-/// separate from [`NamePath::name`] prevents a module member from being
-/// mistaken for another dotted namespace segment.
+/// separate from the selected name in [`NamePath`] prevents a module member
+/// from being mistaken for another dotted namespace segment.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NamespacePath {
     segments: crate::syntax::non_empty::NonEmpty<NameAtom>,
@@ -482,14 +482,12 @@ impl NamePath {
     /// the member after `::`.
     #[must_use]
     pub fn new(segments: crate::syntax::non_empty::NonEmpty<NameAtom>) -> Self {
-        let mut segments = segments.into_vec();
-        let name = match segments.pop() {
-            Some(name) => name,
-            None => unreachable!("NonEmpty always contains a member name"),
-        };
-        match crate::syntax::non_empty::NonEmpty::try_from_vec(segments) {
-            Ok(owner) => Self::member(NamespacePath::new(owner), name),
-            Err(_) => Self::local(name),
+        let (name, owner) = segments.into_last_and_init();
+        Self {
+            owner: crate::syntax::non_empty::NonEmpty::try_from_vec(owner)
+                .ok()
+                .map(NamespacePath::new),
+            name,
         }
     }
 
@@ -541,12 +539,9 @@ impl NamePath {
     pub fn into_segments(self) -> crate::syntax::non_empty::NonEmpty<NameAtom> {
         match self.owner {
             Some(owner) => {
-                let mut segments = owner.into_segments().into_vec();
+                let mut segments = owner.into_segments();
                 segments.push(self.name);
-                match crate::syntax::non_empty::NonEmpty::try_from_vec(segments) {
-                    Ok(segments) => segments,
-                    Err(_) => unreachable!("a NamePath always contains its member name"),
-                }
+                segments
             }
             None => crate::syntax::non_empty::NonEmpty::singleton(self.name),
         }

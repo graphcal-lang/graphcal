@@ -1591,13 +1591,12 @@ fn collect_attribute_refs(
                     target: refs.declaration_target(&path.value),
                 });
             }
-            AttributeArg::IndexLabel { .. } => {}
             AttributeArg::Group { elements, .. } => {
                 for element in elements {
                     collect_argument(element, table, refs);
                 }
             }
-            AttributeArg::FinitePosition { .. } => {}
+            AttributeArg::IndexLabel { .. } | AttributeArg::FinitePosition { .. } => {}
         }
     }
 

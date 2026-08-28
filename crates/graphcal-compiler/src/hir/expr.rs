@@ -2349,12 +2349,10 @@ impl<'a> ExprLowerer<'a> {
             .ctx
             .resolver
             .resolve_constructor_ident_path(self.ctx.owner, callee);
-        match constructor {
-            Ok(constructor) => Ok(ResolvedCallable::Constructor(constructor)),
-            Err(_) => self
-                .lower_function_ref(callee)
-                .map(ResolvedCallable::Function),
-        }
+        constructor.map(ResolvedCallable::Constructor).or_else(|_| {
+            self.lower_function_ref(callee)
+                .map(ResolvedCallable::Function)
+        })
     }
 
     fn lower_function_ref(
@@ -3072,7 +3070,7 @@ mod tests {
         assert_eq!(
             graph_refs
                 .iter()
-                .map(|reference| reference.as_str())
+                .map(crate::syntax::names::ResolvedName::as_str)
                 .collect::<Vec<_>>(),
             ["C", "p"]
         );

@@ -2815,8 +2815,8 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
                             index.value = new.clone().into();
                         }
                     }
-                    crate::desugar::desugared_ast::MatchPattern::Path { .. } => {}
-                    crate::desugar::desugared_ast::MatchPattern::Constructor { .. } => {}
+                    crate::desugar::desugared_ast::MatchPattern::Path { .. }
+                    | crate::desugar::desugared_ast::MatchPattern::Constructor { .. } => {}
                 }
                 self.visit_expr_mut(&mut arm.body)?;
             }
@@ -3123,7 +3123,8 @@ fn substitute_type_names_in_expr(
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
         | ExprKind::QuantityLiteral { .. }
-        | ExprKind::GraphRef(_) => {}
+        | ExprKind::GraphRef(_)
+        | ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel { .. }) => {}
 
         // A bare reference path naming a rebound type is a nullary
         // constructor use; rewrite it to the importer's constructor name.
@@ -3135,8 +3136,6 @@ fn substitute_type_names_in_expr(
                 ident.name = parsed_name;
             }
         }
-        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel { .. }) => {}
-
         ExprKind::InlineDagRef { args, .. } => {
             for binding in args {
                 substitute_type_names_in_expr(&mut binding.value, bindings);

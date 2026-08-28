@@ -80,6 +80,10 @@ fn register_exclusive_universe_name(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the namespace policy exhaustively classifies every declaration role"
+)]
 fn check_builtin_name_shadowing(
     file: &File,
     src: &NamedSource<Arc<String>>,

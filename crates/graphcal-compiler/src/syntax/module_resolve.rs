@@ -20,6 +20,7 @@ use crate::syntax::type_name::{
     ConstructorNameNamespace, ResolvedConstructorName, ResolvedStructTypeName,
     StructTypeNameNamespace,
 };
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
@@ -706,19 +707,19 @@ impl ModuleSymbols {
     ) -> Result<(), ModuleResolveError> {
         let namespace = kind.namespace();
         let slot = (namespace, atom.clone());
-        match occupied.get(&slot) {
-            Some(first) => Err(ModuleResolveError::DuplicateSymbol {
+        match occupied.entry(slot) {
+            Entry::Occupied(entry) => Err(ModuleResolveError::DuplicateSymbol {
                 owner: self.owner.clone(),
                 namespace: match namespace {
                     FlatNamespace::Static => "Static",
                     FlatNamespace::Term => "Term",
                 },
                 name: atom.to_string(),
-                first: first.span,
+                first: entry.get().span,
                 duplicate: span,
             }),
-            None => {
-                occupied.insert(slot, ExclusiveNameBinding { span });
+            Entry::Vacant(entry) => {
+                entry.insert(ExclusiveNameBinding { span });
                 Ok(())
             }
         }
@@ -923,7 +924,7 @@ pub struct ModuleAliasTarget {
 }
 
 impl ModuleAliasTarget {
-    /// Canonical DAG/module targeted by the alias::
+    /// Canonical DAG/module targeted by the alias.
     #[must_use]
     pub const fn target(&self) -> &DagId {
         &self.target
@@ -935,7 +936,7 @@ impl ModuleAliasTarget {
         self.span
     }
 
-    /// Visibility rule for names reached through this alias::
+    /// Visibility rule for names reached through this alias.
     #[must_use]
     pub const fn access(&self) -> ModuleAccess {
         self.access
@@ -1678,6 +1679,10 @@ impl ModuleResolver {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one typed import edge carries path, access, role, and visibility independently"
+    )]
     fn register_import_with_access(
         &mut self,
         owner: &DagId,
@@ -1919,7 +1924,7 @@ impl ModuleResolver {
     ///
     /// The first segment names a reusable DAG module in the caller's scope. It
     /// may be a local inline DAG, a sibling DAG visible from an inline body, or
-    /// an imported module alias:: That binding is itself callable regardless of
+    /// an imported module alias. That binding is itself callable regardless of
     /// whether its canonical target is a file root or an inline DAG; remaining
     /// path segments descend through child DAG modules uniformly.
     pub fn resolve_module_path(
@@ -2785,6 +2790,10 @@ impl ModuleResolver {
 }
 
 impl ModuleScope {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive typed dispatch installs every import-surface category"
+    )]
     fn apply_addition(
         &mut self,
         owner: &DagId,
@@ -2896,6 +2905,10 @@ impl ModuleScope {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "module aliases preserve target, access, role, visibility, and diagnostic context"
+)]
 fn insert_module_alias(
     owner: &DagId,
     map: &mut HashMap<ModuleAliasName, ModuleAliasTarget>,
@@ -3285,7 +3298,7 @@ pub enum ModuleResolveError {
         owner: DagId,
         alias: ModuleAliasName,
     },
-    /// A call path is ambiguous between a local DAG and an imported module alias::
+    /// A call path is ambiguous between a local DAG and an imported module alias.
     #[error("DAG name `{name}` is ambiguous in `{owner}`")]
     AmbiguousCallableModule {
         owner: DagId,

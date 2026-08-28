@@ -356,7 +356,7 @@ impl SourceSymbolPath {
     }
 
     #[must_use]
-    pub fn namespace_depth(&self) -> usize {
+    pub const fn namespace_depth(&self) -> usize {
         match self {
             Self::Local(_) => 0,
             Self::ModuleMember { namespace, .. } => namespace.len(),
