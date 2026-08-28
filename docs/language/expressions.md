@@ -129,8 +129,8 @@ each collection in the body:
 ```gcl
 index Case = { A, B };
 node values: Length[Case] = {
-    Case.A: 1.0 m,
-    Case.B: 2.0 m,
+    Case#A: 1.0 m,
+    Case#B: 2.0 m,
 };
 node below_limit: Bool[Case] = for case: Case {
     @values[case] < 3.0 m
@@ -168,7 +168,7 @@ node displacement_cm: Complex<Length> = @displacement -> cm;
 For `Complex<D>`, the target scales both components and is display metadata;
 the stored SI components and type do not change. The target otherwise follows
 unit scoping rules: bare names for local, selectively imported, or prelude
-units, and `alias.unit` for units of a module imported
+units, and `alias::unit` for units of a module imported
 with an alias (see
 [Unit Scoping](dimensions-and-units.md#unit-scoping)).
 
@@ -212,7 +212,7 @@ node dv: Velocity = @transfer.total_dv;
 Access an element of an indexed value:
 
 ```
-node first: Velocity = @delta_v[Maneuver.Departure];
+node first: Velocity = @delta_v[Maneuver#Departure];
 ```
 
 The brackets must contain at least one argument; `expr[]` is invalid rather
@@ -231,13 +231,13 @@ node clamped: Int = if @a > @seven { @seven } else { @a };
 
 Both branches must have the same type and dimension. The `else` branch is required.
 
-## DAG Call Expression (`@dag(args).out`)
+## DAG Call Expression (`@dag(args)::out`)
 
 Any DAG module—a file root or a `dag` block—can be invoked as an expression,
 producing a fresh runtime sub-graph at every syntactic call site:
 
 ```
-node doubled: Length = @scale(factor: 2.0, v: @src).result;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
 ```
 
 The projected output after `.` is mandatory. Arguments are evaluated in the
@@ -246,7 +246,7 @@ surrounding scope, so they may reference loop variables from an enclosing
 
 The thing immediately after `@` may be a local DAG or an imported module alias.
 A file-root or inline-DAG target imported as `module` is invoked directly as
-`@module(args).out`; `@module.dag(args).out` descends to a child DAG. The
+`@module(args)::out`; `@module.dag(args)::out` descends to a child DAG. The
 mandatory projection makes the expression a graph reference. It may name either
 an explicitly exported node or a param input port; projecting a param yields its
 effective bound/default value.

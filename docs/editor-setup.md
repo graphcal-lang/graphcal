@@ -31,7 +31,7 @@ The inlay hints feature is what makes Graphcal feel like a live spreadsheet. As 
 
 For multi-file projects, editor navigation follows module-qualified identity for
 same-leaf declarations. If `a.gcl` and `b.gcl` both export `Phase`, `Item`, and
-`Pick`, go-to-definition on `a.Phase`, `a.Phase.Burn`, `a.Item`, or `a.Pick(...)`
+`Pick`, go-to-definition on `a::Phase`, `a::Phase#Burn`, `a::Item`, or `a::Pick(...)`
 jumps to `a.gcl`, not whichever same-leaf symbol was seen first. Navigation and
 rename also preserve Graphcal namespaces: a term and a unit may share a spelling
 without being merged. Selective imports retain every authored alias while all

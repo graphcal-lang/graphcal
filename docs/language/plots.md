@@ -280,7 +280,7 @@ author) controls what is displayed. Naming a `pub plot` in an include's brace
 list is the display request:
 
 ```gcl
-include pkg.engine(fuel: 500.0 kg).{ delta_v, thrust_curve, mass_breakdown as mb };
+include pkg.engine(fuel: 500.0 kg)::{ delta_v, thrust_curve, mass_breakdown as mb };
 ```
 
 - A library plot must be `pub` to be includable — `pub` keeps its single
@@ -297,7 +297,7 @@ include pkg.engine(fuel: 500.0 kg).{ delta_v, thrust_curve, mass_breakdown as mb
   item:
 
 ```gcl
-include pkg.engine(fuel: 500.0 kg).{
+include pkg.engine(fuel: 500.0 kg)::{
     thrust_curve,                    // displayed
     #[hidden] mass_breakdown as mb,  // included for composition only
 };

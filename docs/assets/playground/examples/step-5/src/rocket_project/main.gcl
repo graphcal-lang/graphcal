@@ -1,5 +1,5 @@
-import rocket_project.constants.{g0};
-include rocket_project.params().{dry_mass, fuel_mass, isp};
+import rocket_project.constants::{ g0 };
+include rocket_project.params()::{ dry_mass, fuel_mass, isp };
 
 node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;

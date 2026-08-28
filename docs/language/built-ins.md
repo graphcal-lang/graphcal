@@ -155,7 +155,7 @@ Nat constant; `e` is a runtime `Int`; `q` is a quantity of dimension `D`.
 | `coord(k)` | `Key<C> -> D` | Extract the quantity coordinate of a coordinate-axis key |
 | `to_int(k)` | `Key<Fin(N)> -> Int` | Extract the integer position of a `Fin` key |
 
-Named axes need no former — a qualified label such as `Maneuver.Departure`
+Named axes need no former — a qualified label such as `Maneuver#Departure`
 is itself a constant of type `Key<Maneuver>` — and have no extraction: a
 named key is opaque apart from equality and `match`. There is no exact
 quantity-to-key cast for coordinate axes; select a grid point with an
@@ -311,14 +311,14 @@ never empty and ties are deterministic, the identity
 ```graphcal
 index Maneuver = { Departure, Correction, Insertion };
 param delta_v: Velocity[Maneuver] = {
-    Maneuver.Departure: 2.46 km/s,
-    Maneuver.Correction: 0.12 km/s,
-    Maneuver.Insertion: 1.83 km/s,
+    Maneuver#Departure: 2.46 km/s,
+    Maneuver#Correction: 0.12 km/s,
+    Maneuver#Insertion: 1.83 km/s,
 };
 param fuel_margin: Dimensionless[Maneuver] = {
-    Maneuver.Departure: 1.1,
-    Maneuver.Correction: 1.2,
-    Maneuver.Insertion: 1.3,
+    Maneuver#Departure: 1.1,
+    Maneuver#Correction: 1.2,
+    Maneuver#Insertion: 1.3,
 };
 
 node critical: Key<Maneuver> = argmax(@delta_v);
@@ -337,12 +337,12 @@ combine each according to its semantics:
 ```graphcal
 index BudgetLine = { Structure, Payload };
 param means: Mass[BudgetLine] = {
-    BudgetLine.Structure: 100.0 kg,
-    BudgetLine.Payload: 50.0 kg,
+    BudgetLine#Structure: 100.0 kg,
+    BudgetLine#Payload: 50.0 kg,
 };
 param sigmas: Mass[BudgetLine] = {
-    BudgetLine.Structure: 3.0 kg,
-    BudgetLine.Payload: 4.0 kg,
+    BudgetLine#Structure: 3.0 kg,
+    BudgetLine#Payload: 4.0 kg,
 };
 node budget_mean: Mass = sum(@means);   // 150 kg
 node budget_sigma: Mass = rss(@sigmas); // 5 kg

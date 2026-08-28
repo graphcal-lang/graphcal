@@ -21,7 +21,7 @@ Every `.gcl` file in Graphcal is a **package**. Without a
 `graphcal.toml` manifest, the file is a *virtual* package — a
 standalone Graphcal script. The package contains exactly one module:
 the file itself. You can self-reference its top-level decls from
-inline DAGs (e.g. `import dynamics.{type T};` from inside `dynamics.gcl`),
+inline DAGs (e.g. `import dynamics::{type T};` from inside `dynamics.gcl`),
 but you **cannot** import a sibling file. The first multi-file step
 in any Graphcal project is to add a manifest.
 
@@ -70,8 +70,8 @@ param isp: Time = 320.0 s;
 ### `main.gcl`
 
 ```graphcal
-import rocket_project.constants.{g0};
-include rocket_project.params().{dry_mass, fuel_mass, isp};
+import rocket_project.constants::{g0};
+include rocket_project.params()::{dry_mass, fuel_mass, isp};
 
 node v_exhaust: Velocity = @isp * @g0;
 node mass_ratio: Dimensionless = (@dry_mass + @fuel_mass) / @dry_mass;
@@ -90,7 +90,7 @@ Use the file tabs to edit `graphcal.toml`, both library modules, and the entry f
 
 Expected initial output includes all seven projected values from `g0` through `delta_v`.
 
-The path before `.{...}` is absolute from the package root. The
+The path before `::{...}` is absolute from the package root. The
 first segment is the package name (from `graphcal.toml`); subsequent
 segments walk the directory tree under `source_dir`.
 
@@ -124,7 +124,7 @@ bring into scope:
 ```graphcal
 import rocket_project.constants;                  // brings module `constants`
 import rocket_project.constants as c;             // brings module under alias `c`
-import rocket_project.constants.{g0, g_mars};     // brings only `g0` and `g_mars`
+import rocket_project.constants::{g0, g_mars};     // brings only `g0` and `g_mars`
 ```
 
 The brace form is the most common in practice — it makes every
@@ -135,15 +135,15 @@ imported name explicit.
 If two files export the same name, rename one or both with `as`:
 
 ```graphcal
-import rocket_project.file_a.{velocity as velocity_a};
-import rocket_project.file_b.{velocity as velocity_b};
+import rocket_project.file_a::{velocity as velocity_a};
+import rocket_project.file_b::{velocity as velocity_b};
 ```
 
 You can also alias a whole module:
 
 ```graphcal
 import very.long.package.path as p;
-node y: Length = @p.helper(...).result;
+node y: Length = @p.helper(...)::result;
 ```
 
 ## What Gets Imported
@@ -157,13 +157,13 @@ from another file, *include* the producing DAG instead of importing the value (s
 
 | Declaration kind | How to import                       | How to reference |
 |------------------|-------------------------------------|------------------|
-| `const node`     | `import package.file.{name}`                | `@name`          |
-| `dim`            | `import package.file.{dim DimName}`         | `DimName`        |
-| `unit`           | `import package.file.{unit unit_name}`      | `unit_name`      |
-| `type`           | `import package.file.{type TypeName}`       | `TypeName`       |
-| `index`          | `import package.file.{index IndexName}`     | `IndexName`      |
-| `dag`            | `import package.file.{dag_name}`            | `include`-d, or called as `@dag_name(...).out` |
-| `assert`         | `import package.file.{assert_name}`         | `#[assumes(assert_name)]` |
+| `const node`     | `import package.file::{name}`                | `@name`          |
+| `dim`            | `import package.file::{dim DimName}`         | `DimName`        |
+| `unit`           | `import package.file::{unit unit_name}`      | `unit_name`      |
+| `type`           | `import package.file::{type TypeName}`       | `TypeName`       |
+| `index`          | `import package.file::{index IndexName}`     | `IndexName`      |
+| `dag`            | `import package.file::{dag_name}`            | `include`-d, or called as `@dag_name(...)::out` |
+| `assert`         | `import package.file::{assert_name}`         | `#[assumes(assert_name)]` |
 
 ## When a Single File Suffices
 
@@ -178,7 +178,7 @@ self-reference path:
 type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) }
 
 dag analyze {
-    import rocket.{type OrbitType};   // file's own name
+    import rocket::{type OrbitType};   // file's own name
     param o: OrbitType;
     // ...
 }
@@ -198,10 +198,10 @@ with two modules `<pkg>.a` and `<pkg>.b`:
 
 ```graphcal
 // src/<pkg>/a.gcl
-import <pkg>.b.{x};
+import <pkg>.b::{x};
 
 // src/<pkg>/b.gcl
-import <pkg>.a.{y};   // ERROR: circular import
+import <pkg>.a::{y};   // ERROR: circular import
 ```
 
 ## Assertions Belong to Explicit Instances

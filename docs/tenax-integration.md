@@ -28,7 +28,7 @@ param mode: Key<Mode>;
 pub node failure: Bool =
     @load > 8_000.0 N
     && @cycles > 50_000
-    && @mode == Mode.Degraded;
+    && @mode == Mode#Degraded;
 ```
 
 The interface above discovers as:
