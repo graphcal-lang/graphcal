@@ -49,14 +49,20 @@ just formal-conformance
 ```
 
 `just formal` checks the Lean library and rejects proof placeholders or custom
-axioms. `just formal-conformance` then asks the required-bindability Lean
-executable oracle for its complete 20-case state matrix and compares every
-decision with Graphcal's real parser, desugaring, and V002 production pass.
+axioms. `just formal-conformance` runs two differential checks:
 
-Namespace-resolution conformance is intentionally deferred until the approved
-namespace syntax and production resolver are implemented. Its executable Lean
-reference is already suitable for a future structured-project oracle; it should
-not be compared against the fallback-based resolver being replaced.
+- the required-bindability oracle's complete 20-case matrix against Graphcal's
+  parser, desugaring, and V002 production pass;
+- the namespace-resolution oracle's 72 reviewed scenarios against the
+  production single-file and project pipeline. The matrix covers visible and
+  `::` member lookups for every Static/Term/Unit occupancy, duplicate slots,
+  every DAG-input selector/target category pair, and owner-qualified labels.
+
+The namespace oracle is emitted by
+[`Graphcal/Static/NamespaceResolutionOracle.lean`](Graphcal/Static/NamespaceResolutionOracle.lean).
+It evaluates the proved executable reference resolver; Rust independently
+renders and compiles each typed scenario, so production acceptance cannot
+silently diverge from the Lean model.
 
 The checked-in `lean-toolchain` pins the Lean version. The package intentionally
 has no third-party Lean dependencies for these specification slices.

@@ -3,9 +3,10 @@ formal:
     cd formal && lake build --wfail
     @if rg --line-number '\b(sorry|admit|axiom)\b' formal --glob '*.lean'; then echo 'formal specifications must not contain sorry, admit, or custom axioms' >&2; exit 1; fi
 
-# Exhaustively compare the Rust V002 pass with the Lean oracle's 20 cases.
+# Compare production Rust with the reviewed finite Lean oracle matrices.
 formal-conformance: formal
     GRAPHCAL_REQUIRED_BINDABILITY_ORACLE="$(pwd)/formal/.lake/build/bin/required-bindability-oracle" cargo test --package graphcal-compiler --lib required_bindability_matches_lean_oracle -- --ignored
+    GRAPHCAL_NAMESPACE_RESOLUTION_ORACLE="$(pwd)/formal/.lake/build/bin/namespace-resolution-oracle" cargo test --package graphcal-eval --test namespace_formal_conformance -- --ignored
 
 lint: formal
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
