@@ -215,6 +215,7 @@ pub struct ExprLoweringContext<'a> {
     prelude: Option<&'a PreludeTypeScope>,
     unit_registry: Option<&'a UnitRegistry>,
     decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
+    instance_templates: Option<&'a HashMap<DagId, DagId>>,
 }
 
 impl<'a> ExprLoweringContext<'a> {
@@ -234,6 +235,7 @@ impl<'a> ExprLoweringContext<'a> {
             prelude: None,
             unit_registry: None,
             decl_bindings: None,
+            instance_templates: None,
         }
     }
 
@@ -248,6 +250,7 @@ impl<'a> ExprLoweringContext<'a> {
             prelude: Some(prelude),
             unit_registry: self.unit_registry,
             decl_bindings: self.decl_bindings,
+            instance_templates: self.instance_templates,
         }
     }
 
@@ -263,6 +266,7 @@ impl<'a> ExprLoweringContext<'a> {
             prelude: self.prelude,
             unit_registry: Some(unit_registry),
             decl_bindings: self.decl_bindings,
+            instance_templates: self.instance_templates,
         }
     }
 
@@ -281,6 +285,26 @@ impl<'a> ExprLoweringContext<'a> {
             prelude: self.prelude,
             unit_registry: self.unit_registry,
             decl_bindings: Some(decl_bindings),
+            instance_templates: self.instance_templates,
+        }
+    }
+
+    /// Add the concrete-instance to source-template identity map used to
+    /// validate instance member access without flattening either identity.
+    #[must_use]
+    pub(crate) const fn with_instance_templates(
+        self,
+        instance_templates: &'a HashMap<DagId, DagId>,
+    ) -> Self {
+        Self {
+            owner: self.owner,
+            resolver: self.resolver,
+            generic_scope: self.generic_scope,
+            time_zones: self.time_zones,
+            prelude: self.prelude,
+            unit_registry: self.unit_registry,
+            decl_bindings: self.decl_bindings,
+            instance_templates: Some(instance_templates),
         }
     }
 
@@ -1844,6 +1868,7 @@ impl<'a> ExprLowerer<'a> {
             .and_then(|bindings| bindings.get(name))
             .cloned()
         {
+            self.ensure_bound_decl_access(name, &resolved, span)?;
             let actual = self
                 .ctx
                 .resolver
@@ -1979,6 +2004,7 @@ impl<'a> ExprLowerer<'a> {
             .and_then(|bindings| bindings.get(name))
             .cloned()
         {
+            self.ensure_bound_decl_access(name, &resolved, span)?;
             return Ok(resolved);
         }
         let resolved = match self.ctx.resolver.resolve_decl_path(self.ctx.owner, &path) {
@@ -1998,6 +2024,60 @@ impl<'a> ExprLowerer<'a> {
             },
             source => ExprLowerError::ModuleResolve { source, span },
         })
+    }
+
+    fn ensure_bound_decl_access(
+        &self,
+        name: &ScopedName,
+        resolved: &ResolvedDeclName,
+        span: Span,
+    ) -> Result<(), ExprLowerError> {
+        if !name.is_qualified() {
+            return Ok(());
+        }
+
+        match self
+            .ctx
+            .resolver
+            .resolve_decl_path(self.ctx.owner, &name.to_name_path())
+        {
+            Ok(_) => Ok(()),
+            Err(ModuleResolveError::UnknownModuleAlias { .. }) => {
+                let Some(template) = self
+                    .ctx
+                    .instance_templates
+                    .and_then(|templates| templates.get(resolved.owner()))
+                else {
+                    return Ok(());
+                };
+                if template == self.ctx.owner {
+                    return Ok(());
+                }
+
+                let template_name = ResolvedDeclName::from_def(
+                    template.clone(),
+                    resolved.to_unowned_def_name(),
+                );
+                if self
+                    .ctx
+                    .resolver
+                    .decl_symbol_is_instance_accessible(&template_name)
+                    .map_err(|source| ExprLowerError::ModuleResolve { source, span })?
+                {
+                    Ok(())
+                } else {
+                    Err(ExprLowerError::ModuleResolve {
+                        source: ModuleResolveError::PrivateName {
+                            owner: resolved.owner().clone(),
+                            namespace: DeclNameNamespace::DISPLAY_NAME,
+                            name: resolved.as_str().to_string(),
+                        },
+                        span,
+                    })
+                }
+            }
+            Err(source) => Err(ExprLowerError::ModuleResolve { source, span }),
+        }
     }
 
     fn resolve_synthetic_child_decl_path(&self, path: &NamePath) -> Option<ResolvedDeclName> {

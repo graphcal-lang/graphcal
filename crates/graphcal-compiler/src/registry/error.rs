@@ -1661,7 +1661,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M016),
         help(
-            "index bindings accept a compatible index name or structural axis such as `{name}: Fin(3)`; type and dimension bindings accept a compatible name"
+            "index bindings accept a compatible index name or structural axis such as `index {name}: Fin(3)`; type and dimension bindings use the explicit `type` and `dim` markers"
         )
     )]
     InvalidTypeLevelBindingValue {

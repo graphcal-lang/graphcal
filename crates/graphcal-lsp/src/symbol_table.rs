@@ -2224,7 +2224,8 @@ fn collect_type_expr_refs_in_scope(
     refs: &mut HirRefCollector<'_>,
 ) {
     match &type_expr.kind {
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}

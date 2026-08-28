@@ -180,7 +180,8 @@ fn collect_type_expr_names(
                 collect_type_expr_names(arg, refs);
             }
         }
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}

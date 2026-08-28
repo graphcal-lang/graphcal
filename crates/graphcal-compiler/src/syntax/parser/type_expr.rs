@@ -5,6 +5,7 @@ use crate::syntax::ast::{
     TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
 use crate::syntax::dimension::UnitRef;
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
@@ -34,9 +35,17 @@ impl Parser<'_> {
         let mut base = if self.lexer.peek().is_some_and(|token| token.is_identifier()) {
             let path = self.parse_ident_path()?;
             let path_span = path.span();
-            let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
-
-            match bare_name.as_deref() {
+            if self.lexer.peek() == Some(&Token::Hash) {
+                self.lexer.next_token();
+                let label = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+                TypeExpr {
+                    span: path_span.merge(label.span),
+                    kind: TypeExprKind::IndexLabel { index: path, label },
+                    constraints: vec![],
+                }
+            } else {
+                let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
+                match bare_name.as_deref() {
                 Some("Dimensionless") => TypeExpr {
                     kind: TypeExprKind::Dimensionless,
                     constraints: vec![],
@@ -89,13 +98,14 @@ impl Parser<'_> {
                         span,
                     }
                 }
-                _ => {
-                    let dim_expr = self.parse_dim_expr_after_first_path(path)?;
-                    let span = dim_expr.span;
-                    TypeExpr {
-                        kind: TypeExprKind::DimExpr(dim_expr),
-                        constraints: vec![],
-                        span,
+                    _ => {
+                        let dim_expr = self.parse_dim_expr_after_first_path(path)?;
+                        let span = dim_expr.span;
+                        TypeExpr {
+                            kind: TypeExprKind::DimExpr(dim_expr),
+                            constraints: vec![],
+                            span,
+                        }
                     }
                 }
             }

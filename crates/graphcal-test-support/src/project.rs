@@ -630,7 +630,7 @@ impl Declaration {
                         0 => "First",
                         _ => "Second",
                     };
-                    writeln!(source, "    {index}.{variant}: {value}.0,")
+                    writeln!(source, "    {index}#{variant}: {value}.0,")
                         .expect("writing to String cannot fail");
                 }
                 source.push_str("};");

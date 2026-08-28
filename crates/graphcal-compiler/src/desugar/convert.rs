@@ -466,6 +466,7 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
             TypeExprKind::KeyApplication { generic_args } => Self::KeyApplication {
                 generic_args: generic_args.into_iter().map(Into::into).collect(),
             },
+            TypeExprKind::IndexLabel { index, label } => Self::IndexLabel { index, label },
         }
     }
 }

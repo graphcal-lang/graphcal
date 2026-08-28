@@ -38,7 +38,8 @@ pub fn validate_type_annotation(
             }
             validate_type_annotation(arg, src)
         }),
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
@@ -146,7 +147,8 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
         TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_index_name_at_span(arg, span)),
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
@@ -171,7 +173,8 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
         TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_dim_term_at_span(arg, span)),
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => false,
@@ -383,6 +386,21 @@ pub fn expr_lower_error_to_graphcal(
             };
         }
         hir::ExprLowerError::ModuleResolve {
+            source:
+                ModuleResolveError::UnexpectedDeclKind {
+                    name,
+                    actual: crate::syntax::module_resolve::DeclSymbolKind::Assert,
+                    ..
+                },
+            span,
+        } => {
+            return GraphcalError::GraphRefToAssert {
+                name: name.to_unowned_def_name(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ModuleResolve {
             source: ModuleResolveError::PrivateName { owner, name, .. },
             span,
         } => {
@@ -485,6 +503,7 @@ pub fn hir_lower_error_to_graphcal(
     let span = match &err {
         hir::HirLowerError::ModuleResolve { span, .. }
         | hir::HirLowerError::UnknownTypePath { span, .. }
+        | hir::HirLowerError::IndexLabelAsType { span, .. }
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
         | hir::HirLowerError::ExpectedIndexFoundNat { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }

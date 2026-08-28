@@ -60,7 +60,8 @@ pub(crate) fn resolve_type_expr_impl(
 ) -> Result<Option<Dimension>, RationalError> {
     match &type_expr.kind {
         TypeExprKind::Dimensionless => Ok(Some(Dimension::dimensionless())),
-        TypeExprKind::Bool
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
         | TypeExprKind::TypeApplication { .. }

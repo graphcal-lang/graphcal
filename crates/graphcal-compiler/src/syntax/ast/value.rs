@@ -462,6 +462,15 @@ pub enum TypeExprKind<P: Phase = Raw> {
     /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
     /// the built-in semantic identity instead of matching the source name.
     KeyApplication { generic_args: Vec<GenericArg<P>> },
+    /// An index label written in a type slot, such as `Phase#Launch`.
+    ///
+    /// The parser preserves this structured reference so HIR can issue a
+    /// namespace/category diagnostic rather than treating `#` as punctuation
+    /// that terminates an otherwise valid type expression.
+    IndexLabel {
+        index: IdentPath,
+        label: Spanned<IndexVariantName>,
+    },
     /// A dimension expression like `Length`, `Length^2`, `Mass * Length / Time^2`
     DimExpr(DimExpr),
     /// An indexed type such as `Velocity[Maneuver]`, `Dimensionless[Fin(3)]`, or `D[I]`

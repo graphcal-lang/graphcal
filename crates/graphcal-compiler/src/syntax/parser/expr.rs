@@ -551,8 +551,9 @@ impl Parser<'_> {
         let terminator = probe.peek().copied();
         if !matches!(terminator, Some(Token::LParen | Token::DoubleColon)) {
             let span = at_span.merge(first.span);
+            let name = ScopedName::from(DeclName::from_atom(first.name));
             return Ok(Expr::new(
-                ExprKind::GraphRef(first.into_spanned::<ScopedName>()),
+                ExprKind::GraphRef(Spanned::new(name, span)),
                 span,
             ));
         }

@@ -1139,6 +1139,11 @@ impl UnfrozenIR {
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
         // canonical identities for the lowering below.
+        let instance_templates = self
+            .instances
+            .iter()
+            .map(|record| (record.id.owner().clone(), record.id.template().clone()))
+            .collect::<HashMap<_, _>>();
         let mut decl_bindings = HashMap::new();
         for (name, declaration_owner) in self
             .consts
@@ -1190,7 +1195,8 @@ impl UnfrozenIR {
             )
             .with_prelude(&prelude)
             .with_unit_registry(&registry.units)
-            .with_decl_bindings(&decl_bindings);
+            .with_decl_bindings(&decl_bindings)
+            .with_instance_templates(&instance_templates);
             crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
                 crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
             })
@@ -1377,7 +1383,8 @@ impl UnfrozenIR {
                         )
                         .with_prelude(&prelude)
                         .with_unit_registry(&registry.units)
-                        .with_decl_bindings(&decl_bindings);
+                        .with_decl_bindings(&decl_bindings)
+                        .with_instance_templates(&instance_templates);
                         crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
                             crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
                         })?
@@ -3005,7 +3012,8 @@ pub fn substitute_type_expr_indexes(
                 substitute_type_expr_indexes(arg, bindings);
             }
         }
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
@@ -3084,7 +3092,8 @@ where
                 substitute_type_expr_nominal_names(arg, bindings);
             }
         }
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
@@ -4505,7 +4514,8 @@ fn find_non_earlier_type_reference(
     use crate::desugar::desugared_ast::TypeExprKind;
 
     match &type_expr.kind {
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => None,
@@ -5248,7 +5258,8 @@ fn resolve_extern_value_kind(
                 src,
             )
         }
-        TypeExprKind::Datetime
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::KeyApplication { .. }
@@ -5524,7 +5535,8 @@ fn resolve_extern_struct_field(
             let monomial = resolve_extern_dim_monomial(dim_expr, &[], registry, src)?;
             Ok(StructFieldKind::Quantity(monomial.fixed))
         }
-        TypeExprKind::Datetime
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::KeyApplication { .. }

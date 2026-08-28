@@ -67,6 +67,11 @@ pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<
                 .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
                 .append(RcDoc::text(">"))
         }
+        TypeExprKind::IndexLabel { index, label } => RcDoc::text(format!(
+            "{}#{}",
+            index.display_path(),
+            label.value
+        )),
         TypeExprKind::KeyApplication { generic_args } => {
             // Bare `Key` (a parse-level arity error) keeps its spelling so the
             // formatter never fabricates an empty `<>` argument list.

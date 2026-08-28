@@ -181,7 +181,8 @@ pub(crate) trait ExprVisitor<P: Phase> {
                 self.visit_generic_args(generic_args)?;
             }
             TypeExprKind::Indexed { base, .. } => self.visit_type_expr(base)?,
-            TypeExprKind::Dimensionless
+            TypeExprKind::IndexLabel { .. }
+            | TypeExprKind::Dimensionless
             | TypeExprKind::Bool
             | TypeExprKind::Int
             | TypeExprKind::Datetime
@@ -431,7 +432,8 @@ pub trait ExprVisitorMut<P: Phase> {
                 Self::visit_generic_args_mut(self, generic_args)?;
             }
             TypeExprKind::Indexed { base, .. } => self.visit_type_expr_mut(base)?,
-            TypeExprKind::Dimensionless
+            TypeExprKind::IndexLabel { .. }
+            | TypeExprKind::Dimensionless
             | TypeExprKind::Bool
             | TypeExprKind::Int
             | TypeExprKind::Datetime

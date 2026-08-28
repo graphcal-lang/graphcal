@@ -15,6 +15,7 @@ use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_resolve::{ModuleResolveError, ModuleResolver, SurfaceNameKind};
 use crate::syntax::names::{NameAtom, NamePath, ResolvedName};
 use crate::syntax::span::{Span, Spanned};
@@ -38,6 +39,13 @@ pub enum HirLowerError {
     /// A type-level path was not found in any namespace valid for that syntax position.
     #[error("unknown type-level name `{path}`")]
     UnknownTypePath { path: String, span: Span },
+    /// An index label appeared in a type-expression slot.
+    #[error("index label `{index}#{label}` cannot be used as a type")]
+    IndexLabelAsType {
+        index: NamePath,
+        label: IndexVariantName,
+        span: Span,
+    },
     /// A natural-number expression referenced a non-Nat generic parameter.
     #[error(
         "generic parameter `{name}` has constraint `{actual:?}`, but this position expects {expected}"
@@ -301,6 +309,13 @@ pub(crate) fn lower_type_expr(
         }
         ast::TypeExprKind::KeyApplication { generic_args } => {
             TypeExprKind::Key(lower_key_application(type_ann.span, generic_args, ctx)?)
+        }
+        ast::TypeExprKind::IndexLabel { index, label } => {
+            return Err(HirLowerError::IndexLabelAsType {
+                index: index.clone().into_spanned_name_path().value,
+                label: label.value.clone(),
+                span: type_ann.span,
+            });
         }
         ast::TypeExprKind::DimExpr(dim_expr) => lower_dim_expr_as_type(dim_expr, ctx)?,
         ast::TypeExprKind::Indexed { base, indexes } => TypeExprKind::Indexed {

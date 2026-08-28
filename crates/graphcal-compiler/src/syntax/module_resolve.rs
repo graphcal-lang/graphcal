@@ -1761,6 +1761,29 @@ impl ModuleResolver {
             })
     }
 
+    /// Return whether an instantiated declaration may be referenced by its consumer.
+    ///
+    /// Parameters are explicit instance inputs even when they are not declared
+    /// `pub`; other declaration kinds require public visibility.
+    pub(crate) fn decl_symbol_is_instance_accessible(
+        &self,
+        name: &ResolvedDeclName,
+    ) -> Result<bool, ModuleResolveError> {
+        let symbols = self.module_symbols(name.owner())?;
+        let def_name = DeclName::from_atom(name.atom().clone());
+        symbols
+            .decls
+            .get(def_name.as_str())
+            .map(|symbol| {
+                symbol.kind() == DeclSymbolKind::Param || symbol.visibility().is_public()
+            })
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: name.owner().clone(),
+                namespace: DeclNameNamespace::DISPLAY_NAME,
+                name: name.as_str().to_string(),
+            })
+    }
+
     /// Resolve a syntactic dimension path to a canonical owner + leaf.
     pub fn resolve_dimension_path(
         &self,

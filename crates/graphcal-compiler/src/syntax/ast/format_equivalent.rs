@@ -1179,6 +1179,16 @@ impl FormatEquivalent for TypeExprKind {
                 };
                 generic_args.format_equivalent(other_generic_args)
             }
+            Self::IndexLabel { index, label } => {
+                let Self::IndexLabel {
+                    index: other_index,
+                    label: other_label,
+                } = other
+                else {
+                    return false;
+                };
+                index.format_equivalent(other_index) && label.format_equivalent(other_label)
+            }
             Self::DimExpr(dim) => {
                 let Self::DimExpr(other_dim) = other else {
                     return false;
