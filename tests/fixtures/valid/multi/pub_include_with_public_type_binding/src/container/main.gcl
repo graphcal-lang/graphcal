@@ -4,4 +4,4 @@ pub type Inner {
     Inner(size: Length),
 }
 
-include container.lib(Element: Inner).{ pub origin, pub Wrapper };
+include container.lib(type Element: Inner)::{ pub origin, pub Wrapper };

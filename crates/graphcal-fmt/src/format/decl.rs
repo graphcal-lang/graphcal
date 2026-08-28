@@ -63,7 +63,8 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
     match kind {
         // Use-sites carry no blanket visibility annotation. Selective import/include
         // items render their own per-item `pub` marker.
-        DeclKind::Param(_) | DeclKind::Include(_)
+        DeclKind::Param(_)
+        | DeclKind::Include(_)
         | DeclKind::Sugar(_)
         | DeclKind::PluginImport(_) => RcDoc::nil(),
         DeclKind::Import(d) => visibility_prefix(d.visibility),
@@ -1050,6 +1051,6 @@ fn compute_multi_decl_layout(
 fn header_cell_text(cell: &MultiHeaderCell) -> String {
     match cell {
         MultiHeaderCell::Underscore { .. } => "_".to_string(),
-        MultiHeaderCell::Variant { variant, .. } => variant.value.to_string()
+        MultiHeaderCell::Variant { variant, .. } => variant.value.to_string(),
     }
 }

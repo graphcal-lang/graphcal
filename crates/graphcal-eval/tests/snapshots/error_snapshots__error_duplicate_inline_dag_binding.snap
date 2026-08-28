@@ -6,7 +6,7 @@ duplicate DAG binding `a`
     Diagnostic severity: error
 Begin snippet for duplicate_inline_dag_binding.gcl starting at line 1, column 1
 
-snippet line 1: node result: Dimensionless = @combine(a: 1.0, a: 2.0).out;
+snippet line 1: node result: Dimensionless = @combine(a: 1.0, a: 2.0)::out;
     label at line 1, column 39: first bound here
     label at line 1, column 47: duplicate binding
 diagnostic help: each name may appear at most once in a DAG binding list

@@ -7,7 +7,7 @@ dag checked {
     assert v_positive = @v > 0.0;
 }
 
-node y: Dimensionless = @checked(v: 3.0).out;
+node y: Dimensionless = @checked(v: 3.0)::out;
 
 include checked(v: 4.0) as also_fine;
-node z: Dimensionless = @y + @also_fine.out;
+node z: Dimensionless = @y + @also_fine::out;

@@ -83,9 +83,7 @@ fn parse_name_path(
         reason,
     };
     let Some((owner, member)) = name.split_once("::") else {
-        return NameAtom::parse(name)
-            .map(NamePath::from)
-            .map_err(invalid);
+        return NameAtom::parse(name).map(NamePath::from).map_err(invalid);
     };
     if member.contains("::") {
         return Err(invalid(NameAtomError::ContainsDot));

@@ -2693,8 +2693,7 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
 
     fn visit_unresolved_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
         if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel {
-            index,
-            ..
+            index, ..
         }) = &mut expr.kind
             && let Some(new) = self
                 .bindings

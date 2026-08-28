@@ -4,4 +4,4 @@ type PrivateInner {
     PrivateInner(size: Length),
 }
 
-include container.lib(Element: PrivateInner).{ pub origin };
+include container.lib(type Element: PrivateInner)::{ pub origin };

@@ -897,7 +897,9 @@ fn parse_import_brace_list_no_alias() {
 
 #[test]
 fn parse_import_brace_list_with_alias() {
-    let file = Parser::new("import helper::{x as y};").parse_file().unwrap();
+    let file = Parser::new("import helper::{x as y};")
+        .parse_file()
+        .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
@@ -2043,10 +2045,7 @@ fn parse_plugin_import_rejects_pub() {
         Parser::new("pub import plugin \"p\" as x { fn f(a: Dimensionless) -> Dimensionless; }")
             .parse_file()
             .unwrap_err();
-    assert!(
-        format!("{err:?}").contains("whole-DAG import"),
-        "{err:?}"
-    );
+    assert!(format!("{err:?}").contains("whole-DAG import"), "{err:?}");
 }
 
 #[test]

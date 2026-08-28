@@ -59,8 +59,8 @@ pub dag right {
     std::fs::write(
         &root,
         r"
-import mission.lib.left.shared.{ value as left };
-import mission.lib.right.shared.{ value as right };
+import mission.lib.left.shared::{ value as left };
+import mission.lib.right.shared::{ value as right };
 node total: Dimensionless = @left + @right;
 ",
     )
@@ -148,10 +148,10 @@ fn inline_self_import_rejects_assertions_like_cross_file_imports() {
         r"
 pub assert okay = true;
 dag calculation {
-    import self.{ okay };
+    import self::{ okay };
     pub node out: Dimensionless = 1.0;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
         "self.gcl",
     )
@@ -169,10 +169,10 @@ fn inline_self_import_rejects_plots_like_cross_file_imports() {
         r"
 pub plot chart = { mark: point, encode: { x: 1.0 } };
 dag calculation {
-    import self.{ chart };
+    import self::{ chart };
     pub node out: Dimensionless = 1.0;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
         "self.gcl",
     )
@@ -250,14 +250,14 @@ fn inline_self_imports_match_cross_file_pure_import_policy() {
             self_source: r"
 pub const node scale: Dimensionless = 2.0;
 dag calculation {
-    import self.{ scale };
+    import self::{ scale };
     pub node out: Dimensionless = @scale;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
             library_source: "pub const node scale: Dimensionless = 2.0;\n",
             importer_source: r"
-import parity.lib.{ scale };
+import parity.lib::{ scale };
 node result: Dimensionless = @scale;
 ",
             expected: PureImportOutcome::Success,
@@ -267,14 +267,14 @@ node result: Dimensionless = @scale;
             self_source: r"
 param source: Dimensionless = 2.0;
 dag calculation {
-    import self.{ source };
+    import self::{ source };
     pub node out: Dimensionless = 1.0;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
             library_source: "param source: Dimensionless = 2.0;\n",
             importer_source: r"
-import parity.lib.{ source };
+import parity.lib::{ source };
 node result: Dimensionless = 1.0;
 ",
             expected: PureImportOutcome::RuntimeRejected,
@@ -284,14 +284,14 @@ node result: Dimensionless = 1.0;
             self_source: r"
 pub node source: Dimensionless = 2.0;
 dag calculation {
-    import self.{ source };
+    import self::{ source };
     pub node out: Dimensionless = 1.0;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
             library_source: "pub node source: Dimensionless = 2.0;\n",
             importer_source: r"
-import parity.lib.{ source };
+import parity.lib::{ source };
 node result: Dimensionless = 1.0;
 ",
             expected: PureImportOutcome::RuntimeRejected,
@@ -301,14 +301,14 @@ node result: Dimensionless = 1.0;
             self_source: r"
 pub assert okay = true;
 dag calculation {
-    import self.{ okay };
+    import self::{ okay };
     pub node out: Dimensionless = 1.0;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
             library_source: "pub assert okay = true;\n",
             importer_source: r"
-import parity.lib.{ okay };
+import parity.lib::{ okay };
 node result: Dimensionless = 1.0;
 ",
             expected: PureImportOutcome::AssertionRejected,
@@ -318,14 +318,14 @@ node result: Dimensionless = 1.0;
             self_source: r"
 pub plot chart = { mark: point, encode: { x: 1.0 } };
 dag calculation {
-    import self.{ chart };
+    import self::{ chart };
     pub node out: Dimensionless = 1.0;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
             library_source: "pub plot chart = { mark: point, encode: { x: 1.0 } };\n",
             importer_source: r"
-import parity.lib.{ chart };
+import parity.lib::{ chart };
 node result: Dimensionless = 1.0;
 ",
             expected: PureImportOutcome::VisualizationRejected,
@@ -335,14 +335,14 @@ node result: Dimensionless = 1.0;
             self_source: r"
 pub type Choice { Pick }
 dag calculation {
-    import self.{ type Choice, Pick };
+    import self::{ type Choice, Pick };
     pub node out: Choice = Pick;
 }
-node result: Choice = @calculation().out;
+node result: Choice = @calculation()::out;
 ",
             library_source: "pub type Choice { Pick }\n",
             importer_source: r"
-import parity.lib.{ type Choice, Pick };
+import parity.lib::{ type Choice, Pick };
 node result: Choice = Pick;
 ",
             expected: PureImportOutcome::Success,
@@ -352,15 +352,15 @@ node result: Choice = Pick;
             self_source: r"
 pub dag helper { pub node out: Dimensionless = 2.0; }
 dag calculation {
-    import self.{ helper };
-    pub node out: Dimensionless = @helper().out;
+    import self::{ helper };
+    pub node out: Dimensionless = @helper()::out;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
             library_source: "pub dag helper { pub node out: Dimensionless = 2.0; }\n",
             importer_source: r"
-import parity.lib.{ helper };
-node result: Dimensionless = @helper().out;
+import parity.lib::{ helper };
+node result: Dimensionless = @helper()::out;
 ",
             expected: PureImportOutcome::Success,
         },

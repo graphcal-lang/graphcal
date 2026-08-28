@@ -1,4 +1,4 @@
 pub index Mode = { A, B };
 
-#[expected_fail(Mode.A)]
-assert check = for mode: Mode { mode == Mode.B };
+#[expected_fail(Mode#A)]
+assert check = for mode: Mode { mode == Mode#B };

@@ -19,13 +19,13 @@ pub type GuidanceMode {
 }
 
 param delta_v: Velocity[Maneuver] = {
-    Maneuver.Departure: 1.0 km/s,
-    Maneuver.Insertion: 1.0 km/s,
+    Maneuver#Departure: 1.0 km/s,
+    Maneuver#Insertion: 1.0 km/s,
 };
 
 param boost: Velocity[Phase] = {
-    Phase.Launch: 1.0 km/s,
-    Phase.Cruise: 1.0 km/s,
+    Phase#Launch: 1.0 km/s,
+    Phase#Cruise: 1.0 km/s,
 };
 
 param maneuver: ManeuverKind = LowThrust(thrust: 0.5 N, duration: 3600.0 s);

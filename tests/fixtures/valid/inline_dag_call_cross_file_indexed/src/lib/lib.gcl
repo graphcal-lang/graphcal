@@ -1,7 +1,7 @@
 pub index Region = { A, B };
 
 pub dag doubler {
-    import lib.lib.{ index Region };
+    import lib.lib::{ index Region };
 
     param v: Length[Region];
 

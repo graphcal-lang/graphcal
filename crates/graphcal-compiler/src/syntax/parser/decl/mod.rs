@@ -49,7 +49,8 @@ const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibil
     match &mut decl.kind {
         // Params and includes carry no blanket visibility. Selective items
         // carry their own `pub`; whole imports use ImportDecl.visibility.
-        DeclKind::Param(_) | DeclKind::Include(_)
+        DeclKind::Param(_)
+        | DeclKind::Include(_)
         | DeclKind::Sugar(_)
         | DeclKind::PluginImport(_) => {}
         DeclKind::Import(d) => {

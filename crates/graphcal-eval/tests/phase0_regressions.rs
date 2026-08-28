@@ -182,7 +182,7 @@ fn dynamic_unit_scale_must_be_scalar_dimensionless_quantity() {
         "param factor: Length = 2.0 m;",
         "param factor: Bool = true;",
         "param factor: Int = 2;",
-        "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };",
+        "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };",
         "pub type Config { Config(value: Dimensionless) }\nparam factor: Config = Config(value: 2.0);",
     ];
     for declarations in invalid_factors {
@@ -265,9 +265,9 @@ fn write_imported_binding_collision_project(
         let import = if qualified_import {
             format!("import collision.config_{name} as config;\n")
         } else {
-            format!("import collision.config_{name}.{{ C }};\n")
+            format!("import collision.config_{name}::{{ C }};\n")
         };
-        let reference = if qualified_import { "@config.C" } else { "@C" };
+        let reference = if qualified_import { "@config::C" } else { "@C" };
         std::fs::write(
             package_dir.join(format!("leaf_{name}.gcl")),
             format!(
@@ -279,7 +279,7 @@ fn write_imported_binding_collision_project(
             std::fs::write(
                 package_dir.join(format!("lib_{name}.gcl")),
                 format!(
-                    "param p: Dimensionless;\ninclude collision.leaf_{name}(p: @p) as leaf;\npub node out: Dimensionless = @leaf.out;\n"
+                    "param p: Dimensionless;\ninclude collision.leaf_{name}(p: @p) as leaf;\npub node out: Dimensionless = @leaf::out;\n"
                 ),
             )
             .unwrap();
@@ -327,7 +327,7 @@ fn assert_imported_binding_collision_values(
     for (index, (name, imported_value)) in libraries.iter().enumerate() {
         #[expect(clippy::cast_precision_loss, reason = "small test fixture index")]
         let expected = imported_value + (index + 1) as f64;
-        let actual = value_for(&result, &format!("{name}.out"))
+        let actual = value_for(&result, &format!("{name}::out"))
             .si_value()
             .unwrap();
         assert!(
@@ -373,7 +373,7 @@ import plugin "graphcal:demo" as demo {
     fn factor(x: Dimensionless) -> Dimensionless;
 }
 param trigger: Dimensionless = 2.0;
-unit Bad: Length = (demo.factor(@trigger)) m;
+unit Bad: Length = (demo::factor(@trigger)) m;
 "#,
     );
     assert!(matches!(err, GraphcalError::ExternCallNotAllowed { .. }));
@@ -458,7 +458,7 @@ fn nested_include_rejects_runtime_dependent_unit_namespace() {
     .unwrap();
     std::fs::write(
         package_dir.join("wrapper.gcl"),
-        "import nested_dynamic_instances.lib as units;\nparam first_factor: Dimensionless;\nparam second_factor: Dimensionless;\ninclude nested_dynamic_instances.lib(factor: @first_factor) as first;\ninclude nested_dynamic_instances.lib(factor: @second_factor) as second;\npub node out: units.Money = @first.out + @second.out;\n",
+        "import nested_dynamic_instances.lib as units;\nparam first_factor: Dimensionless;\nparam second_factor: Dimensionless;\ninclude nested_dynamic_instances.lib(factor: @first_factor) as first;\ninclude nested_dynamic_instances.lib(factor: @second_factor) as second;\npub node out: units::Money = @first::out + @second::out;\n",
     )
     .unwrap();
     let root = package_dir.join("main.gcl");
@@ -510,7 +510,7 @@ fn included_dynamic_unit_error_uses_producer_source() {
     let span = label.inner();
     assert_eq!(
         &source.inner()[span.offset()..span.offset() + span.len()],
-        "missing"
+        "@missing"
     );
 }
 
@@ -545,7 +545,7 @@ fn include_binding_lowering_error_uses_importer_source() {
             assert!(span.offset() + span.len() <= src.inner().len());
             assert_eq!(
                 &src.inner()[span.offset()..span.offset() + span.len()],
-                "missing"
+                "@missing"
             );
         }
         other => panic!("expected importer-owned N002 diagnostic, got {other:?}"),
@@ -594,7 +594,7 @@ param cost: Dimensionless[Phase];
 fn type_only_import_from_library_with_required_runtime_inputs_compiles() {
     let (_dir, root) = write_required_runtime_input_type_project(
         r"
-import pkg.lib.{ type Foo };
+import pkg.lib::{ type Foo };
 pub type Bar { Bar(inner: Foo) }
 ",
     );
@@ -611,7 +611,7 @@ fn module_type_import_from_library_with_required_runtime_inputs_compiles() {
     let (_dir, root) = write_required_runtime_input_type_project(
         r"
 import pkg.lib as lib;
-pub type Bar { Bar(inner: lib.Foo) }
+pub type Bar { Bar(inner: lib::Foo) }
 ",
     );
 
@@ -626,7 +626,7 @@ pub type Bar { Bar(inner: lib.Foo) }
 fn explicit_include_reports_its_missing_required_index() {
     let (_dir, root) = write_required_runtime_input_type_project(
         r"
-include pkg.lib().{ cost };
+include pkg.lib()::{ cost };
 ",
     );
 
@@ -710,7 +710,7 @@ fn self_reference_outside_unfold_is_still_a_cycle() {
 #[test]
 fn fully_qualified_self_import_is_not_a_circular_import() {
     // Regression: the top-level import loop lacked the self-path guard the
-    // inline-dag loop has, so `import nasa.main.velocity.{v};` inside
+    // inline-dag loop has, so `import nasa.main.velocity::{v};` inside
     // main.gcl recursed into itself and reported the misleading
     // `circular import detected: main.gcl -> main.gcl` (and, once guarded,
     // panicked on the not-yet-registered self DagId). Self-file imports are
@@ -730,7 +730,7 @@ fn fully_qualified_self_import_is_not_a_circular_import() {
         "dag velocity {\n\
              pub node v: Dimensionless = 2.0;\n\
          }\n\
-         import nasa.main.velocity.{v};\n\
+         import nasa.main.velocity::{v};\n\
          node out: Dimensionless = @v + 1.0;\n",
     )
     .unwrap();
@@ -772,7 +772,7 @@ import plugin "graphcal:demo" as demo {
 pub dag mid {
     param a: Length;
     param b: Length;
-    pub node m: Length = demo.lerp(@a, @b, 0.5);
+    pub node m: Length = demo::lerp(@a, @b, 0.5);
 }
 "#,
     )
@@ -782,7 +782,7 @@ pub dag mid {
         &root,
         r"
 import pkg.lib as lib;
-node midpoint: Length = @lib.mid(a: 1.0 m, b: 3.0 m).m;
+node midpoint: Length = @lib.mid(a: 1.0 m, b: 3.0 m)::m;
 ",
     )
     .unwrap();

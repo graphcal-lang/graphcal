@@ -1,8 +1,8 @@
 import lib.lib as lib;
-import lib.lib.{ index Region };
+import lib.lib::{ index Region };
 
 param dist: Length[Region] = {
-    Region.A: 1.0 m,
-    Region.B: 2.0 m,
+    Region#A: 1.0 m,
+    Region#B: 2.0 m,
 };
-node picked: Length = @lib.doubler(v: @dist).result[Region.A];
+node picked: Length = @lib.doubler(v: @dist)::result[Region#A];

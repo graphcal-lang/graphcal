@@ -1774,9 +1774,7 @@ impl ModuleResolver {
         symbols
             .decls
             .get(def_name.as_str())
-            .map(|symbol| {
-                symbol.kind() == DeclSymbolKind::Param || symbol.visibility().is_public()
-            })
+            .map(|symbol| symbol.kind() == DeclSymbolKind::Param || symbol.visibility().is_public())
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
                 namespace: DeclNameNamespace::DISPLAY_NAME,
@@ -2476,7 +2474,9 @@ impl ModuleResolver {
             if let Some(imported) = selected_symbols(scope).get(atom.as_str()) {
                 return Ok(imported.resolved().clone());
             }
-            if let Some(actual) = self.visible_surface_kind_for_bare_name(owner, atom, Ns::LOOKUP_NAMESPACE)? {
+            if let Some(actual) =
+                self.visible_surface_kind_for_bare_name(owner, atom, Ns::LOOKUP_NAMESPACE)?
+            {
                 return Err(ModuleResolveError::WrongUniverseName {
                     owner: owner.clone(),
                     name: atom.to_string(),
@@ -2517,11 +2517,8 @@ impl ModuleResolver {
             return Ok(imported.resolved().clone());
         }
 
-        if let Some(actual) = self.visible_surface_kind_for_qualified_leaf(
-            &target_ref,
-            leaf,
-            Ns::LOOKUP_NAMESPACE,
-        )?
+        if let Some(actual) =
+            self.visible_surface_kind_for_qualified_leaf(&target_ref, leaf, Ns::LOOKUP_NAMESPACE)?
         {
             return Err(ModuleResolveError::WrongUniverseName {
                 owner: target_ref.owner,
@@ -2609,9 +2606,7 @@ impl ModuleResolver {
                 .module_aliases
                 .get(segment.as_str());
             if let Some(nested_alias) = nested_alias {
-                if alias_target.access.requires_public()
-                    && !nested_alias.visibility().is_public()
-                {
+                if alias_target.access.requires_public() && !nested_alias.visibility().is_public() {
                     return Err(ModuleResolveError::PrivateName {
                         owner: target,
                         namespace: "dag alias",
@@ -2960,14 +2955,12 @@ fn register_plugin_imports(
                     .get(alias_atom.as_str())
                     .map(ModuleSymbolLookup::span)
             });
-        if let Some(first) = local_term_span
-            .or_else(|| {
-                scope
-                    .plugin_aliases
-                    .get(plugin.alias.value.as_str())
-                    .map(PluginAliasTarget::span)
-            })
-        {
+        if let Some(first) = local_term_span.or_else(|| {
+            scope
+                .plugin_aliases
+                .get(plugin.alias.value.as_str())
+                .map(PluginAliasTarget::span)
+        }) {
             return Err(ModuleResolveError::DuplicateImportName {
                 owner: owner.clone(),
                 namespace: "Term",

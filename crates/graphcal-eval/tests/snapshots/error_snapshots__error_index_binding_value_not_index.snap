@@ -7,8 +7,8 @@ invalid type-level binding value for `Axis`
 Begin snippet for index_binding_value_not_index.gcl starting at line 7, column 1
 
 snippet line 7: include scale(
-snippet line 8:     Axis: 3,
-    label at line 8, column 11: expected a compatible type-level binding argument
+snippet line 8:     index Axis: 3,
+    label at line 8, column 17: expected a compatible type-level binding argument
 snippet line 9:     xs: table[Fin(3)] {
-diagnostic help: index bindings accept a compatible index name or structural axis such as `Axis: Fin(3)`; type and dimension bindings accept a compatible name
+diagnostic help: index bindings accept a compatible index name or structural axis such as `index Axis: Fin(3)`; type and dimension bindings use the explicit `type` and `dim` markers
 diagnostic code: graphcal::M016

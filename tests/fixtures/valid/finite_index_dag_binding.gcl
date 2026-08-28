@@ -6,7 +6,7 @@ dag scale {
 }
 
 include scale(
-    Axis: Fin(1 + 2),
+    index Axis: Fin(1 + 2),
     xs: table[Fin(3)] {
         1.0;
         2.0;
@@ -14,4 +14,4 @@ include scale(
     }
 ) as scaled;
 
-node out: Dimensionless[Fin(3)] = @scaled.ys;
+node out: Dimensionless[Fin(3)] = @scaled::ys;

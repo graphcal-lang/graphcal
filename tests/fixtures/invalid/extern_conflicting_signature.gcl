@@ -5,4 +5,4 @@ import plugin "graphcal:demo" as a {
 import plugin "graphcal:demo" as b {
     fn lerp(a: Dimensionless, b: Dimensionless, t: Dimensionless) -> Dimensionless;
 }
-node x: Dimensionless = a.lerp(1.0, 2.0, 0.5);
+node x: Dimensionless = a::lerp(1.0, 2.0, 0.5);

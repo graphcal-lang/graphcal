@@ -5,14 +5,14 @@ assert single_finite = for i: Fin(2) { to_int(i) == 0 };
 
 index Mode = { Boost, Cruise };
 
-// Mixed tuple keys: named axes use `Index.Variant`, Fin axes use `#N`,
+// Mixed tuple keys: named axes use `Index#Variant`, Fin axes use `#N`,
 // in assertion axis order.
-#[expected_fail((Mode.Boost, #1))]
+#[expected_fail((Mode#Boost, #1))]
 assert mixed = for m: Mode {
     for i: Fin(2) {
         match m {
-            Mode.Boost => if to_int(i) == 1 { false } else { true },
-            Mode.Cruise => true,
+            Mode#Boost => if to_int(i) == 1 { false } else { true },
+            Mode#Cruise => true,
         }
     }
 };

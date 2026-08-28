@@ -1348,11 +1348,10 @@ impl FormatEquivalent for UnresolvedRef {
                     label: other_label,
                     span: _,
                 },
-            ) => {
-                index.format_equivalent(other_index) && label.format_equivalent(other_label)
+            ) => index.format_equivalent(other_index) && label.format_equivalent(other_label),
+            (Self::Path(_), Self::IndexLabel { .. }) | (Self::IndexLabel { .. }, Self::Path(_)) => {
+                false
             }
-            (Self::Path(_), Self::IndexLabel { .. })
-            | (Self::IndexLabel { .. }, Self::Path(_)) => false,
         }
     }
 }

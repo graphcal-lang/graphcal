@@ -170,9 +170,7 @@ fn run_member_lookup(
 
 fn run_duplicate(space: OracleNamespace) -> Result<(), CompileError> {
     let source = match space {
-        OracleNamespace::Static => {
-            "dim Subject = Length;\nindex Subject = { Only };\n"
-        }
+        OracleNamespace::Static => "dim Subject = Length;\nindex Subject = { Only };\n",
         OracleNamespace::Term => "type Left { Subject }\ntype Right { Subject }\n",
         OracleNamespace::Unit => {
             "const unit Subject: Length = 1.0 m;\nconst unit Subject: Length = 2.0 m;\n"
@@ -229,14 +227,10 @@ fn run_label(owner: &str, label: &str) -> Result<(), CompileError> {
 
 fn run_scenario(scenario: &OracleScenario) -> Result<(), CompileError> {
     match scenario {
-        OracleScenario::VisibleLookup { occupied, query } => {
-            run_visible_lookup(occupied, *query)
-        }
+        OracleScenario::VisibleLookup { occupied, query } => run_visible_lookup(occupied, *query),
         OracleScenario::MemberLookup { occupied, query } => run_member_lookup(occupied, *query),
         OracleScenario::DuplicateSlot { space } => run_duplicate(*space),
-        OracleScenario::InputBinding { target, selector } => {
-            run_input_binding(*target, *selector)
-        }
+        OracleScenario::InputBinding { target, selector } => run_input_binding(*target, *selector),
         OracleScenario::Label { owner, label } => run_label(owner, label),
     }
 }

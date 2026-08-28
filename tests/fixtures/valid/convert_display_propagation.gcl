@@ -17,17 +17,17 @@ dag mydag {
 }
 
 param a: Length = 1500.0 m;
-include mydag(x: @a).{ out as inst_out };
+include mydag(x: @a)::{ out as inst_out };
 node projected: Length = @inst_out;
 
 node s: S = S(a: 100.0 m -> km);
 node field_read: Length = @s.a;
 
 param xs: Length[R] = {
-    R.A: 1000.0 m -> km,
-    R.B: 2000.0 m -> km,
+    R#A: 1000.0 m -> km,
+    R#B: 2000.0 m -> km,
 };
-node entry_read: Length = @xs[R.A];
+node entry_read: Length = @xs[R#A];
 node whole_read: Length[R] = @xs;
 
 const node c: Length = 1500.0 m -> km;

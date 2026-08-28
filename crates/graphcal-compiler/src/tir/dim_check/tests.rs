@@ -1603,11 +1603,16 @@ node b: a = 1.0;";
 }
 
 #[test]
-fn index_label_syntax_is_not_a_type_reference_form() {
+fn index_label_syntax_is_rejected_as_a_type_without_fallback() {
     let source = "\
 pub index M = { A };
 param x: M#A = 1.0;";
-    assert!(Parser::new(source).parse_file().is_err());
+    let err = check(source).unwrap_err();
+    assert!(
+        matches!(&err, GraphcalError::EvalError { message, .. }
+            if message == "index label `M#A` cannot be used as a type"),
+        "got: {err:?}"
+    );
 }
 
 #[test]

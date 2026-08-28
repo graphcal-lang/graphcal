@@ -1,2 +1,2 @@
 // Error: importing a private item from another file (V001).
-import lib.lib.{ secret };
+import lib.lib::{ secret };

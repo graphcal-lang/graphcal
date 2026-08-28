@@ -4,16 +4,16 @@
 index Case = { A, B };
 
 node actual: Length[Case] = {
-    Case.A: 1.0 m,
-    Case.B: 2.0 m,
+    Case#A: 1.0 m,
+    Case#B: 2.0 m,
 };
 node expected: Length[Case] = {
-    Case.A: 1.0 m,
-    Case.B: 2.5 m,
+    Case#A: 1.0 m,
+    Case#B: 2.5 m,
 };
 node per_key_tol: Length[Case] = {
-    Case.A: 0.01 m,
-    Case.B: 0.6 m,
+    Case#A: 0.01 m,
+    Case#B: 0.6 m,
 };
 
 // Unindexed tolerance applied to every key.
@@ -31,5 +31,5 @@ assert near_unindexed = @actual ~= 1.5 m +/- 1.0 m;
 
 // Per-variant expected_fail works on indexed tolerance assertions exactly
 // as on indexed boolean ones.
-#[expected_fail(Case.B)]
+#[expected_fail(Case#B)]
 assert known_off = @actual ~= @expected +/- 0.1 m;

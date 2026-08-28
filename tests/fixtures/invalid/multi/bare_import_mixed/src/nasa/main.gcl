@@ -1,5 +1,5 @@
 // Mix of bare module path and file-based import/include
-import nasa.constants.{ g0 };
-include local_params().{ isp };
+import nasa.constants::{ g0 };
+include local_params()::{ isp };
 
 node v_exhaust: Velocity = @isp * @g0;

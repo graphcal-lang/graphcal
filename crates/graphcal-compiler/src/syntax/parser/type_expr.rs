@@ -46,58 +46,58 @@ impl Parser<'_> {
             } else {
                 let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
                 match bare_name.as_deref() {
-                Some("Dimensionless") => TypeExpr {
-                    kind: TypeExprKind::Dimensionless,
-                    constraints: vec![],
-                    span: path_span,
-                },
-                Some("Bool") => TypeExpr {
-                    kind: TypeExprKind::Bool,
-                    constraints: vec![],
-                    span: path_span,
-                },
-                Some("Int") => TypeExpr {
-                    kind: TypeExprKind::Int,
-                    constraints: vec![],
-                    span: path_span,
-                },
-                Some("Datetime") => {
-                    if self.lexer.peek() == Some(&Token::Lt) {
-                        // Datetime<TT> — built-in parameterized type, kept in
-                        // its own variant so TIR resolution doesn't need to
-                        // string-match the built-in type name.
-                        let (type_args, closing_span) = self.parse_type_arg_list()?;
-                        TypeExpr {
-                            kind: TypeExprKind::DatetimeApplication { type_args },
-                            constraints: vec![],
-                            span: path_span.merge(closing_span),
-                        }
-                    } else {
-                        // Bare Datetime (= Datetime<UTC>)
-                        TypeExpr {
-                            kind: TypeExprKind::Datetime,
-                            constraints: vec![],
-                            span: path_span,
-                        }
-                    }
-                }
-                Some("Complex") => self.parse_complex_type(path_span)?,
-                Some("Key") => self.parse_key_type(path_span)?,
-                _ if self.lexer.peek() == Some(&Token::Lt) => {
-                    // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
-                    // `<` cannot follow a complete dim expr in type position,
-                    // so no casing heuristic is needed — the previous
-                    // ASCII-uppercase check silently misparsed non-ASCII
-                    // type names into dim expressions.
-                    let name = path.into_spanned_name_path();
-                    let (generic_args, closing_span) = self.parse_generic_arg_list()?;
-                    let span = name.span.merge(closing_span);
-                    TypeExpr {
-                        kind: TypeExprKind::TypeApplication { name, generic_args },
+                    Some("Dimensionless") => TypeExpr {
+                        kind: TypeExprKind::Dimensionless,
                         constraints: vec![],
-                        span,
+                        span: path_span,
+                    },
+                    Some("Bool") => TypeExpr {
+                        kind: TypeExprKind::Bool,
+                        constraints: vec![],
+                        span: path_span,
+                    },
+                    Some("Int") => TypeExpr {
+                        kind: TypeExprKind::Int,
+                        constraints: vec![],
+                        span: path_span,
+                    },
+                    Some("Datetime") => {
+                        if self.lexer.peek() == Some(&Token::Lt) {
+                            // Datetime<TT> — built-in parameterized type, kept in
+                            // its own variant so TIR resolution doesn't need to
+                            // string-match the built-in type name.
+                            let (type_args, closing_span) = self.parse_type_arg_list()?;
+                            TypeExpr {
+                                kind: TypeExprKind::DatetimeApplication { type_args },
+                                constraints: vec![],
+                                span: path_span.merge(closing_span),
+                            }
+                        } else {
+                            // Bare Datetime (= Datetime<UTC>)
+                            TypeExpr {
+                                kind: TypeExprKind::Datetime,
+                                constraints: vec![],
+                                span: path_span,
+                            }
+                        }
                     }
-                }
+                    Some("Complex") => self.parse_complex_type(path_span)?,
+                    Some("Key") => self.parse_key_type(path_span)?,
+                    _ if self.lexer.peek() == Some(&Token::Lt) => {
+                        // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
+                        // `<` cannot follow a complete dim expr in type position,
+                        // so no casing heuristic is needed — the previous
+                        // ASCII-uppercase check silently misparsed non-ASCII
+                        // type names into dim expressions.
+                        let name = path.into_spanned_name_path();
+                        let (generic_args, closing_span) = self.parse_generic_arg_list()?;
+                        let span = name.span.merge(closing_span);
+                        TypeExpr {
+                            kind: TypeExprKind::TypeApplication { name, generic_args },
+                            constraints: vec![],
+                            span,
+                        }
+                    }
                     _ => {
                         let dim_expr = self.parse_dim_expr_after_first_path(path)?;
                         let span = dim_expr.span;

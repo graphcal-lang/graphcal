@@ -24,30 +24,30 @@ param t_frac: Dimensionless = 0.25;
 param v0: Velocity = 100.0 m/s;
 param v1: Velocity = 300.0 m/s;
 
-node v_mid: Velocity = demo.lerp(@v0, @v1, @t_frac);
-node pace: Time / Length = demo.inverse(@v_mid);
-node scale: Length = demo.geometric_mean(4.0 m, 9.0 m);
+node v_mid: Velocity = demo::lerp(@v0, @v1, @t_frac);
+node pace: Time / Length = demo::inverse(@v_mid);
+node scale: Length = demo::geometric_mean(4.0 m, 9.0 m);
 
 node delta_v: Velocity[Maneuver] = {
-    Maneuver.Departure: 2.0 km/s,
-    Maneuver.Correction: 0.5 km/s,
-    Maneuver.Insertion: 1.5 km/s,
+    Maneuver#Departure: 2.0 km/s,
+    Maneuver#Correction: 0.5 km/s,
+    Maneuver#Insertion: 1.5 km/s,
 };
-node dv_share: Dimensionless[Maneuver] = demo.normalize(@delta_v);
+node dv_share: Dimensionless[Maneuver] = demo::normalize(@delta_v);
 node dv_share_total: Dimensionless = sum(@dv_share);
 
 param thrust_grid: Force[Fin(2), Fin(3)] = table[Fin(2), Fin(3)] {
     1.0 N, 2.0 N, 3.0 N;
     4.0 N, 5.0 N, 6.0 N;
 };
-node transposed_thrust: Force[Fin(3), Fin(2)] = demo.matrix_transpose(@thrust_grid);
+node transposed_thrust: Force[Fin(3), Fin(2)] = demo::matrix_transpose(@thrust_grid);
 
 assert v_mid_interpolates = @v_mid == 150.0 m/s;
 assert scale_is_geometric = @scale == 6.0 m;
-node dv_span: DvRange = demo.dv_range(@delta_v);
+node dv_span: DvRange = demo::dv_range(@delta_v);
 node dv_spread: Velocity = @dv_span.max - @dv_span.min;
 
-assert departure_share = @dv_share[Maneuver.Departure] == 0.5;
+assert departure_share = @dv_share[Maneuver#Departure] == 0.5;
 assert shares_sum_to_one = @dv_share_total == 1.0;
 assert matrix_axes_are_reordered = @transposed_thrust[2, 1] == 6.0 N;
 assert spread_is_range = @dv_spread == 1.5 km/s;

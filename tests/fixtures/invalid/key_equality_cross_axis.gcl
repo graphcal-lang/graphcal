@@ -2,4 +2,4 @@
 index Maneuver = { Departure, Correction };
 index Phase = { Launch, Cruise };
 
-node same: Bool = Maneuver.Departure == Phase.Launch;
+node same: Bool = Maneuver#Departure == Phase#Launch;

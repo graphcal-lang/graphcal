@@ -467,8 +467,7 @@ pub(super) fn check_generics_leakage(
             };
 
             if let Some(namespace) = importer_local_type_names.get(&substituted)
-                && !importer_external_surface
-                    .is_static_explicit_export(&substituted)
+                && !importer_external_surface.is_static_explicit_export(&substituted)
             {
                 return Err(CompileError::Eval(GraphcalError::GenericsLeakage {
                     reexport_kind: decl_kind_str.to_string(),

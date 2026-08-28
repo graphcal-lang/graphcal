@@ -716,9 +716,11 @@ fn resolve_external_surface_keeps_explicit_exports_and_input_ports_distinct() {
     ";
     let resolved = parse_and_resolve(source).unwrap();
     for name in ["Speed", "GravityAccel"] {
-        assert!(resolved.external_surface.is_static_explicit_export(
-            &crate::syntax::names::NameAtom::parse(name).unwrap()
-        ));
+        assert!(
+            resolved
+                .external_surface
+                .is_static_explicit_export(&crate::syntax::names::NameAtom::parse(name).unwrap())
+        );
     }
     assert!(
         resolved

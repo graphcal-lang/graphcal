@@ -1424,7 +1424,7 @@ impl<'a> ExprLowerer<'a> {
                         variant_span: label.span,
                     })
                 }
-            }
+            },
             ast::ExprKind::GraphRef(name) => self.lower_graph_ref(name)?,
             ast::ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,
@@ -1792,16 +1792,14 @@ impl<'a> ExprLowerer<'a> {
                     span,
                 })
             }
-            Err(ExprLowerError::UnknownGraphRef { .. }) => {
-                Err(ExprLowerError::ModuleResolve {
-                    source: ModuleResolveError::UnknownName {
-                        owner: self.ctx.owner.clone(),
-                        namespace: "Term",
-                        name: ident.name.to_string(),
-                    },
-                    span,
-                })
-            }
+            Err(ExprLowerError::UnknownGraphRef { .. }) => Err(ExprLowerError::ModuleResolve {
+                source: ModuleResolveError::UnknownName {
+                    owner: self.ctx.owner.clone(),
+                    namespace: "Term",
+                    name: ident.name.to_string(),
+                },
+                span,
+            }),
             Err(error) => Err(error),
         }
     }
@@ -1929,10 +1927,7 @@ impl<'a> ExprLowerer<'a> {
         )
     }
 
-    fn lower_graph_ref(
-        &self,
-        name: &Spanned<ScopedName>,
-    ) -> Result<ExprKind, ExprLowerError> {
+    fn lower_graph_ref(&self, name: &Spanned<ScopedName>) -> Result<ExprKind, ExprLowerError> {
         let resolved = self.resolve_decl_scoped_name(&name.value, name.span)?;
         let kind_identity = match self
             .ctx
@@ -1973,7 +1968,10 @@ impl<'a> ExprLowerer<'a> {
         let permitted = match role {
             Some(ModuleAliasRole::ImportedDag) => kind == DeclSymbolKind::Const,
             Some(ModuleAliasRole::IncludedInstance) | None => {
-                matches!(kind, DeclSymbolKind::Const | DeclSymbolKind::Param | DeclSymbolKind::Node)
+                matches!(
+                    kind,
+                    DeclSymbolKind::Const | DeclSymbolKind::Param | DeclSymbolKind::Node
+                )
             }
         };
         if !permitted {
@@ -2054,10 +2052,8 @@ impl<'a> ExprLowerer<'a> {
                     return Ok(());
                 }
 
-                let template_name = ResolvedDeclName::from_def(
-                    template.clone(),
-                    resolved.to_unowned_def_name(),
-                );
+                let template_name =
+                    ResolvedDeclName::from_def(template.clone(), resolved.to_unowned_def_name());
                 if self
                     .ctx
                     .resolver
@@ -3068,7 +3064,11 @@ mod tests {
         let graph_refs = deps.graph_refs.into_iter().collect::<Vec<_>>();
         assert!(deps.const_refs.is_empty());
         assert_eq!(graph_refs.len(), 2, "{graph_refs:?}");
-        assert!(graph_refs.iter().all(|reference| reference.owner() == &lib_id));
+        assert!(
+            graph_refs
+                .iter()
+                .all(|reference| reference.owner() == &lib_id)
+        );
         assert_eq!(
             graph_refs
                 .iter()

@@ -4,9 +4,9 @@ pub index Maneuver = { Departure, Correction };
 index Phase = { Launch, Cruise };
 
 param dv: Velocity[Maneuver] = {
-    Maneuver.Departure: 2.0 km/s,
-    Maneuver.Correction: 0.1 km/s,
+    Maneuver#Departure: 2.0 km/s,
+    Maneuver#Correction: 0.1 km/s,
 };
 
-node k: Key<Phase> = Phase.Launch;
+node k: Key<Phase> = Phase#Launch;
 node bad: Velocity = @dv[@k];

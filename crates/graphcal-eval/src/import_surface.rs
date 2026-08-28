@@ -130,11 +130,7 @@ pub fn extract_external_decl_surface_from_declarations(
                 graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
                     for item in items {
                         if item.is_pub {
-                            insert_explicit(
-                                &mut surface,
-                                item.namespace,
-                                item.local_name_atom(),
-                            );
+                            insert_explicit(&mut surface, item.namespace, item.local_name_atom());
                         }
                     }
                 }
@@ -182,9 +178,8 @@ pub fn extract_external_decl_surface_from_declarations(
                         | ProjectDeclKind::Plot
                         | ProjectDeclKind::Figure
                         | ProjectDeclKind::Layer
-                        | ProjectDeclKind::Dag => surface.insert_explicit_export(
-                            DeclName::from_atom(identity.name.clone()),
-                        ),
+                        | ProjectDeclKind::Dag => surface
+                            .insert_explicit_export(DeclName::from_atom(identity.name.clone())),
                     }
                 }
             }
@@ -664,13 +659,11 @@ mod tests {
         );
         let surface = extract_external_decl_surface(&file);
 
-        for exported in ["Exposed", "thrust"] {
-            assert!(
-                surface.is_explicit_export(&DeclName::expect_valid(exported)),
-                "{exported} should be explicitly exported"
-            );
-        }
-        for private in ["core", "engine", "helper", "fuel_flow"] {
+        assert!(
+            surface.is_explicit_export(&DeclName::expect_valid("thrust")),
+            "thrust should be explicitly exported in the Term surface"
+        );
+        for private in ["Exposed", "core", "engine", "helper", "fuel_flow"] {
             assert!(
                 !surface.is_externally_nameable(&DeclName::expect_valid(private)),
                 "{private} must remain private"

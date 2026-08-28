@@ -1,6 +1,6 @@
-assert first = true;
-assert second = true;
+assert premise_a = true;
+assert premise_b = true;
 
-#[assumes(first)]
-#[assumes(second)]
+#[assumes(premise_a)]
+#[assumes(premise_b)]
 node output: Dimensionless = 1.0;

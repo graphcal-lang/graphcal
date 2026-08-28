@@ -1598,7 +1598,9 @@ pub enum GraphcalError {
     #[error("`{name}` is not a {expected} input of the invoked DAG")]
     #[diagnostic(
         code(graphcal::M011),
-        help("the binding marker selects exactly one input category; correct the marker or target name")
+        help(
+            "the binding marker selects exactly one input category; correct the marker or target name"
+        )
     )]
     DagInputCategoryMismatch {
         name: String,

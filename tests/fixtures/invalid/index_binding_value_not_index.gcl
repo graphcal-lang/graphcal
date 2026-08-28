@@ -5,7 +5,7 @@ dag scale {
 }
 
 include scale(
-    Axis: 3,
+    index Axis: 3,
     xs: table[Fin(3)] {
         1.0;
         2.0;

@@ -2,25 +2,25 @@
 // without hiding axis selection or element-wise behavior.
 pub index Factor = { Width, Height, Depth };
 param edges: Length[Factor] = {
-    Factor.Width: 2.0 m,
-    Factor.Height: 3.0 m,
-    Factor.Depth: 4.0 m,
+    Factor#Width: 2.0 m,
+    Factor#Height: 3.0 m,
+    Factor#Depth: 4.0 m,
 };
 node box_volume: Volume = product(@edges);
 param scale_factors: Dimensionless[Factor] = {
-    Factor.Width: 2.0,
-    Factor.Height: 3.0,
-    Factor.Depth: 4.0,
+    Factor#Width: 2.0,
+    Factor#Height: 3.0,
+    Factor#Depth: 4.0,
 };
 
 pub index BudgetLine = { Structure, Payload };
 param means: Mass[BudgetLine] = {
-    BudgetLine.Structure: 100.0 kg,
-    BudgetLine.Payload: 50.0 kg,
+    BudgetLine#Structure: 100.0 kg,
+    BudgetLine#Payload: 50.0 kg,
 };
 param sigmas: Mass[BudgetLine] = {
-    BudgetLine.Structure: 3.0 kg,
-    BudgetLine.Payload: 4.0 kg,
+    BudgetLine#Structure: 3.0 kg,
+    BudgetLine#Payload: 4.0 kg,
 };
 node budget_mean: Mass = sum(@means);
 node budget_sigma: Mass = rss(@sigmas);
@@ -39,7 +39,7 @@ dag generic_product {
     param values: Dimensionless[Axis];
     pub node result: Dimensionless = product(@values);
 }
-include generic_product(Axis: Factor, values: @scale_factors) as reusable_product;
+include generic_product(index Axis: Factor, values: @scale_factors) as reusable_product;
 
 // Frames stay nominal and project-defined; generic wrappers prevent an ECI
 // vector or ECI-to-body attitude from being silently reinterpreted.
@@ -87,7 +87,7 @@ assert volume_result = @box_volume == 24.0 m^3;
 assert mean_result = @budget_mean == 150.0 kg;
 assert rss_result = @budget_sigma == 5.0 kg;
 assert nested_product_result = @chained_product == 720.0;
-assert reusable_product_result = @reusable_product.result == 24.0;
+assert reusable_product_result = @reusable_product::result == 24.0;
 assert rotation_trace = trace(@body_from_eci.elements) == 3.0;
 assert vector_field = @position.z == 3.0 m;
 assert transformed_frame = @body_position.z == 3.0 m;

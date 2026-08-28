@@ -2,7 +2,7 @@
 source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
-// Module include: qualified graph refs with @
+// A pure module import cannot read runtime params from a DAG blueprint.
 import params.lib;
 
-node total_mass: Mass = @params.dry_mass + @params.fuel_mass;
+node total_mass: Mass = @lib::dry_mass + @lib::fuel_mass;

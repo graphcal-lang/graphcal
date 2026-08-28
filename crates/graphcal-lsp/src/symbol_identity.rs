@@ -322,11 +322,7 @@ impl SourceSymbolPath {
     }
 
     #[must_use]
-    pub const fn index_label(
-        module: Vec<NameAtom>,
-        index: NameAtom,
-        label: NameAtom,
-    ) -> Self {
+    pub const fn index_label(module: Vec<NameAtom>, index: NameAtom, label: NameAtom) -> Self {
         Self::IndexLabel {
             module,
             index,
@@ -335,11 +331,7 @@ impl SourceSymbolPath {
     }
 
     #[must_use]
-    pub const fn associated(
-        namespace: Vec<NameAtom>,
-        owner: NameAtom,
-        member: NameAtom,
-    ) -> Self {
+    pub const fn associated(namespace: Vec<NameAtom>, owner: NameAtom, member: NameAtom) -> Self {
         Self::Associated {
             namespace,
             owner,

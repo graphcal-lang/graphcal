@@ -5,5 +5,5 @@ index Maneuver = { Departure };
 param k: Key<Fin(3)>;
 
 node x: Dimensionless = match @k {
-    Maneuver.Departure => 1.0,
+    Maneuver#Departure => 1.0,
 };

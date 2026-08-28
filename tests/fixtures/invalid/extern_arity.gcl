@@ -2,4 +2,4 @@
 import plugin "graphcal:demo" as demo {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
-node x: Dimensionless = demo.lerp(1.0, 2.0);
+node x: Dimensionless = demo::lerp(1.0, 2.0);

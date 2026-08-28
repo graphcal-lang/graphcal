@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
-    Expr, ExprKind, ForBinding, ForBindingIndex, KeyFormKind, MatchArm, MatchPattern,
-    NatExpr, PatternBinding,
+    Expr, ExprKind, ForBinding, ForBindingIndex, KeyFormKind, MatchArm, MatchPattern, NatExpr,
+    PatternBinding,
 };
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
@@ -808,7 +808,8 @@ node x: Dimensionless = match @r {
 
     #[test]
     fn parse_member_match_pattern_with_bindings_remains_syntactic() {
-        let source = "node x: Dimensionless = match @phase { module::Launch(label: value) => 1.0 };";
+        let source =
+            "node x: Dimensionless = match @phase { module::Launch(label: value) => 1.0 };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {

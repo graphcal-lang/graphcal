@@ -13,21 +13,25 @@ pub index SpatialAxis = { X, Y, Z };
 pub index Samples = { First, Second };
 
 param displacement: Length[SpatialAxis] = {
-    SpatialAxis.X: 3.0 m,
-    SpatialAxis.Y: 4.0 m,
-    SpatialAxis.Z: 12.0 m,
+    SpatialAxis#X: 3.0 m,
+    SpatialAxis#Y: 4.0 m,
+    SpatialAxis#Z: 12.0 m,
 };
 param durations: Time[Samples] = {
-    Samples.First: 5.0 s,
-    Samples.Second: 12.0 s,
+    Samples#First: 5.0 s,
+    Samples#Second: 12.0 s,
 };
 
 include magnitude(
-    ElementDim: Length,
-    Axis: SpatialAxis,
+    dim ElementDim: Length,
+    index Axis: SpatialAxis,
     values: @displacement
 ) as displacement_magnitude;
-include magnitude(ElementDim: Time, Axis: Samples, values: @durations) as duration_magnitude;
+include magnitude(
+    dim ElementDim: Time,
+    index Axis: Samples,
+    values: @durations
+) as duration_magnitude;
 
-assert displacement_result = @displacement_magnitude.result == 13.0 m;
-assert duration_result = @duration_magnitude.result == 13.0 s;
+assert displacement_result = @displacement_magnitude::result == 13.0 m;
+assert duration_result = @duration_magnitude::result == 13.0 s;

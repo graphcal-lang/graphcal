@@ -12,7 +12,7 @@ param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 dag hohmann_transfer {
-    import hohmann.{ type TransferResult, TransferResult, r_earth, gm_earth };
+    import hohmann::{ type TransferResult, TransferResult, r_earth, gm_earth };
 
     param parking_alt: Length;
 
@@ -33,7 +33,9 @@ dag hohmann_transfer {
     );
 }
 
-include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt).{ result as transfer };
+include hohmann_transfer(parking_alt: @parking_alt, target_alt: @target_alt)::{
+    result as transfer
+};
 
 node total_dv: Velocity = @transfer.total_dv;
 node tof_hours: Time = @transfer.tof -> h;

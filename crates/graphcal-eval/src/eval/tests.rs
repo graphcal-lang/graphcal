@@ -127,15 +127,15 @@ fn safety_attributes_reject_repetition_and_invalid_assumptions() {
     let invalid_assumes = [
         "assert guard = true;\n#[assumes]\nnode output: Dimensionless = 1.0;",
         "assert guard = true;\n#[assumes(guard, guard)]\nnode output: Dimensionless = 1.0;",
-        "assert first = true;\nassert second = true;\n#[assumes(first)]\n#[assumes(second)]\nnode output: Dimensionless = 1.0;",
+        "assert premise_a = true;\nassert premise_b = true;\n#[assumes(premise_a)]\n#[assumes(premise_b)]\nnode output: Dimensionless = 1.0;",
     ];
     for source in invalid_assumes {
         assert!(compile_and_eval_named(source, "test.gcl").is_err());
     }
 
-    let valid = "assert first = true;\n\
-                 assert second = true;\n\
-                 #[assumes(second, first)]\n\
+    let valid = "assert premise_a = true;\n\
+                 assert premise_b = true;\n\
+                 #[assumes(premise_b, premise_a)]\n\
                  node output: Dimensionless = 1.0;";
     assert!(compile_and_eval_named(valid, "test.gcl").is_ok());
 }
@@ -147,7 +147,7 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
             ("lib.gcl", "pub assert check = false;\n"),
             (
                 "main.gcl",
-                "include pipeline.lib().{\n    #[expected_fail]\n    #[expected_fail]\n    check,\n};\n",
+                "include pipeline.lib()::{\n    #[expected_fail]\n    #[expected_fail]\n    check,\n};\n",
             ),
         ],
         "main.gcl",
@@ -162,7 +162,7 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
     ));
 
     let inline = "dag checks { pub assert check = false; }\n\
-                  include checks().{\n\
+                  include checks()::{\n\
                       #[expected_fail]\n\
                       #[expected_fail]\n\
                       check,\n\
@@ -195,7 +195,7 @@ fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
 
         let aliased = format!(
             "dag producer {{ pub node value: Dimensionless = 1.0; }}\n\
-             include producer().{{ value as {scale} }};\n\
+             include producer()::{{ value as {scale} }};\n\
              node copied: Dimensionless = @{scale};\n\
              node event: Datetime<{scale}> = epoch<{scale}>(\"2024-01-01T00:00:00\");"
         );
@@ -209,7 +209,8 @@ fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
     .unwrap_err();
     assert!(matches!(
         bare_error,
-        CompileError::Eval(GraphcalError::DimensionMismatch { found, .. }) if found == "time scale"
+        CompileError::Eval(GraphcalError::BareGraphDeclarationRef { name, .. })
+            if name.to_string() == "UTC"
     ));
 }
 
@@ -230,7 +231,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     ];
 
     for (item, expected_name) in invalid_imports {
-        let main = format!("import pipeline.lib.{{ {item} }};\n");
+        let main = format!("import pipeline.lib::{{ {item} }};\n");
         let (_directory, root) =
             write_pipeline_project(&[("lib.gcl", library), ("main.gcl", &main)], "main.gcl");
         let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
@@ -242,8 +243,8 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     }
 
     let invalid_includes = [
-        "include pipeline.lib().{ runtime as E };\n",
-        "dag producer { pub node value: Dimensionless = 1.0; }\ninclude producer().{ value as E };\n",
+        "include pipeline.lib()::{ runtime as E };\n",
+        "dag producer { pub node value: Dimensionless = 1.0; }\ninclude producer()::{ value as E };\n",
     ];
     for main in invalid_includes {
         let error = if main.starts_with("dag") {
@@ -262,7 +263,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let (_directory, root) = write_pipeline_project(
         &[
             ("lib.gcl", "pub const node value: Dimensionless = 1.0;\n"),
-            ("middle.gcl", "import pipeline.lib.{ pub value as E };\n"),
+            ("middle.gcl", "import pipeline.lib::{ pub value as E };\n"),
             ("main.gcl", "import pipeline.middle as middle;\n"),
         ],
         "main.gcl",
@@ -287,7 +288,7 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
     ];
     for selectors in file_selectors {
         let main = format!(
-            "include pipeline.lib().{{ {selectors} }};\n\
+            "include pipeline.lib()::{{ {selectors} }};\n\
              #[assumes(first_check)]\n\
              node dependent: Dimensionless = 1.0;\n"
         );
@@ -305,7 +306,7 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
         "#[hidden] chart as first_chart, chart as second_chart",
     ] {
         let source =
-            format!("dag producer {{ {producer} }}\ninclude producer().{{ {selectors} }};");
+            format!("dag producer {{ {producer} }}\ninclude producer()::{{ {selectors} }};");
         let error = compile_and_eval_named(&source, "test.gcl").unwrap_err();
         assert!(matches!(
             error,
@@ -317,13 +318,16 @@ fn repeated_include_producers_are_rejected_before_metadata_maps() {
 #[test]
 fn unique_include_producers_remain_order_independent() {
     let producer = "dag producer {\n\
-                        pub node first: Dimensionless = 1.0;\n\
-                        pub node second: Dimensionless = 2.0;\n\
+                        pub node output_a: Dimensionless = 1.0;\n\
+                        pub node output_b: Dimensionless = 2.0;\n\
                     }\n";
-    for selectors in ["first as x, second as y", "second as y, first as x"] {
+    for selectors in [
+        "output_a as x, output_b as y",
+        "output_b as y, output_a as x",
+    ] {
         let source = format!(
             "{producer}\n\
-             include producer().{{ {selectors} }};\n\
+             include producer()::{{ {selectors} }};\n\
              node total: Dimensionless = @x + @y;"
         );
         compile_and_eval_named(&source, "test.gcl").unwrap();
@@ -348,7 +352,7 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
     let (_directory, root) = write_pipeline_project(
         &[
             ("lib.gcl", "pub node value: Dimensionless = 1.0;\n"),
-            ("main.gcl", "include pipeline.lib().{ #[lazy] value };\n"),
+            ("main.gcl", "include pipeline.lib()::{ #[lazy] value };\n"),
         ],
         "main.gcl",
     );
@@ -360,7 +364,7 @@ fn lazy_attribute_is_rejected_on_declarations_and_include_items() {
 
     let inline_error = compile_and_eval_named(
         "dag producer { pub node value: Dimensionless = 1.0; }\n\
-         include producer().{ #[lazy(guard)] value };",
+         include producer()::{ #[lazy(guard)] value };",
         "test.gcl",
     )
     .unwrap_err();
@@ -449,8 +453,8 @@ fn empty_and_default_equivalent_includes_share_instance_semantics() {
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
-    assert_quantity_value(&result, "defaults.output", 6.0);
-    assert_quantity_value(&result, "configured.output", 6.0);
+    assert_quantity_value(&result, "defaults::output", 6.0);
+    assert_quantity_value(&result, "configured::output", 6.0);
     assert_eq!(
         result
             .assertions
@@ -458,8 +462,8 @@ fn empty_and_default_equivalent_includes_share_instance_semantics() {
             .map(|(name, outcome, _)| (name.to_string(), outcome))
             .collect::<Vec<_>>(),
         [
-            ("defaults.positive".to_string(), &AssertResult::Pass),
-            ("configured.positive".to_string(), &AssertResult::Pass),
+            ("defaults::positive".to_string(), &AssertResult::Pass),
+            ("configured::positive".to_string(), &AssertResult::Pass),
         ]
     );
 }
@@ -481,8 +485,8 @@ fn repeated_empty_includes_keep_distinct_output_names() {
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
-    assert_quantity_value(&result, "first.output", 2.0);
-    assert_quantity_value(&result, "second.output", 2.0);
+    assert_quantity_value(&result, "first::output", 2.0);
+    assert_quantity_value(&result, "second::output", 2.0);
 }
 
 #[test]
@@ -493,7 +497,7 @@ fn check_rejects_all_unbound_required_params_in_same_file_include() {
          param value: Dimensionless;\n\
          pub node out: Dimensionless = @factor * @value;\n\
          }\n\
-         include scale().{ out };\n",
+         include scale()::{ out };\n",
         "test.gcl",
     )
     .expect_err("an include must bind every required param");
@@ -509,7 +513,7 @@ fn check_rejects_partially_bound_required_params_in_same_file_include() {
          param value: Dimensionless;\n\
          pub node out: Dimensionless = @factor * @value;\n\
          }\n\
-         include scale(value: 3.0).{ out };\n",
+         include scale(value: 3.0)::{ out };\n",
         "test.gcl",
     )
     .expect_err("a partial include must report its remaining required params");
@@ -526,7 +530,7 @@ fn check_rejects_unbound_required_params_in_cross_file_include() {
                 "param factor: Dimensionless;\n\
                  pub node out: Dimensionless = @factor * 2.0;\n",
             ),
-            ("main.gcl", "include pipeline.lib().{ out };\n"),
+            ("main.gcl", "include pipeline.lib()::{ out };\n"),
         ],
         "main.gcl",
     );
@@ -546,7 +550,7 @@ fn nested_configured_includes_keep_instance_local_bindings_and_assertions() {
             ),
             (
                 "middle.gcl",
-                "param input: Dimensionless;\ninclude pipeline.leaf(input: @input) as leaf;\npub node output: Dimensionless = @leaf.output;\n",
+                "param input: Dimensionless;\ninclude pipeline.leaf(input: @input) as leaf;\npub node output: Dimensionless = @leaf::output;\n",
             ),
             (
                 "main.gcl",
@@ -557,8 +561,8 @@ fn nested_configured_includes_keep_instance_local_bindings_and_assertions() {
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
-    assert_quantity_value(&result, "first.output", 2.0);
-    assert_quantity_value(&result, "second.output", 5.0);
+    assert_quantity_value(&result, "first::output", 2.0);
+    assert_quantity_value(&result, "second::output", 5.0);
     assert_eq!(
         result
             .assertions
@@ -579,7 +583,7 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
             ),
             (
                 "main.gcl",
-                "import pipeline.lib.{ rate_positive };\n#[assumes(rate_positive)]\nnode checked: Bool = true;\n",
+                "import pipeline.lib::{ rate_positive };\n#[assumes(rate_positive)]\nnode checked: Bool = true;\n",
             ),
         ],
         "main.gcl",
@@ -602,7 +606,7 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
             ),
             (
                 "main.gcl",
-                "import pipeline.lib as lib;\nnode price: lib.Money = 3.0 lib.EUR;\n",
+                "import pipeline.lib as lib;\nnode price: lib::Money = 3.0 lib::EUR;\n",
             ),
         ],
         "main.gcl",
@@ -619,7 +623,7 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
 
     std::fs::write(
         &unit_root,
-        "import pipeline.lib as lib;\nconst unit LocalEUR: lib.Money = 1.0 lib.EUR;\n",
+        "import pipeline.lib as lib;\nconst unit LocalEUR: lib::Money = 1.0 lib::EUR;\n",
     )
     .unwrap();
     let unit_definition_error = compile_to_tir_project(&unit_root, None, &fs())
@@ -643,7 +647,7 @@ fn pure_module_import_can_call_an_instance_with_dynamic_units() {
             ),
             (
                 "main.gcl",
-                "import pipeline.lib as lib;\nnode result: lib.Money = @lib().converted;\n",
+                "import pipeline.lib as lib;\nnode result: lib::Money = @lib()::converted;\n",
             ),
         ],
         "main.gcl",
@@ -665,7 +669,7 @@ fn repeated_dag_calls_keep_dynamic_unit_scales_instance_scoped() {
             ),
             (
                 "main.gcl",
-                "import pipeline.lib as lib;\nnode low: lib.Money = @lib(rate: 1.5).converted;\nnode high: lib.Money = @lib(rate: 3.0).converted;\n",
+                "import pipeline.lib as lib;\nnode low: lib::Money = @lib(rate: 1.5)::converted;\nnode high: lib::Money = @lib(rate: 3.0)::converted;\n",
             ),
         ],
         "main.gcl",
@@ -739,7 +743,7 @@ fn nested_instances_retain_template_and_concrete_parent_identity() {
             ),
             (
                 "middle.gcl",
-                "param input: Dimensionless;\ninclude pipeline.leaf(input: @input) as leaf;\npub node output: Dimensionless = @leaf.output;\n",
+                "param input: Dimensionless;\ninclude pipeline.leaf(input: @input) as leaf;\npub node output: Dimensionless = @leaf::output;\n",
             ),
             (
                 "main.gcl",
@@ -785,7 +789,7 @@ fn project_type_store_keeps_imported_definitions_under_their_canonical_owner() {
             ),
             (
                 "main.gcl",
-                "import pipeline.lib as lib;\nnode value: lib.Measure = 1.0 lib.u;\n",
+                "import pipeline.lib as lib;\nnode value: lib::Measure = 1.0 lib::u;\n",
             ),
         ],
         "main.gcl",
@@ -854,11 +858,11 @@ fn diamond_imports_install_one_canonical_shared_definition() {
             ),
             (
                 "left.gcl",
-                "import pipeline.shared as left_shared;\nconst node left_value: left_shared.SharedMeasure = 1.0 left_shared.su;\n",
+                "import pipeline.shared as left_shared;\nconst node left_value: left_shared::SharedMeasure = 1.0 left_shared::su;\n",
             ),
             (
                 "right.gcl",
-                "import pipeline.shared as right_shared;\nconst node right_value: right_shared.SharedMeasure = 2.0 right_shared.su;\n",
+                "import pipeline.shared as right_shared;\nconst node right_value: right_shared::SharedMeasure = 2.0 right_shared::su;\n",
             ),
             (
                 "main.gcl",
@@ -922,7 +926,7 @@ fn same_leaf_definitions_from_distinct_modules_keep_distinct_canonical_owners() 
             ),
             (
                 "main.gcl",
-                "import pipeline.left as left;\nimport pipeline.right as right;\nnode left_value: left.Measure = 1.0 left.u;\nnode right_value: right.Measure = 2.0 right.u;\n",
+                "import pipeline.left as left;\nimport pipeline.right as right;\nnode left_value: left::Measure = 1.0 left::u;\nnode right_value: right::Measure = 2.0 right::u;\n",
             ),
         ],
         "main.gcl",
@@ -964,11 +968,11 @@ fn checked_project_preparation_does_not_recompile_dependencies() {
         &[
             (
                 "lib.gcl",
-                "import plugin \"graphcal:session-test\" as test {\n    fn count(x: Dimensionless) -> Dimensionless;\n}\npub node output: Dimensionless = test.count(2.0);\n",
+                "import plugin \"graphcal:session-test\" as test {\n    fn count(x: Dimensionless) -> Dimensionless;\n}\npub node output: Dimensionless = test::count(2.0);\n",
             ),
             (
                 "main.gcl",
-                "include pipeline.lib().{ output };\nnode result: Dimensionless = @output;\n",
+                "include pipeline.lib()::{ output };\nnode result: Dimensionless = @output;\n",
             ),
         ],
         "main.gcl",
@@ -1173,7 +1177,7 @@ fn eval_complex_milestone() {
         }
         other => panic!("expected a complex value, got {other:?}"),
     }
-    match find("product") {
+    match find("complex_product") {
         Value::Complex { si_value, .. } => {
             assert_eq!((si_value.re(), si_value.im()), (-9.0, 38.0));
         }
@@ -1206,8 +1210,8 @@ fn indexed_tolerance_reports_failing_keys_with_detail() {
     // failing key with its actual/expected/delta detail.
     let result = compile_and_eval(
         "index Case = { A, B };\n\
-         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
-         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         node actual: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.5 };\n\
          assert close = @actual ~= @expected +/- 0.1;",
     )
     .unwrap();
@@ -1215,7 +1219,7 @@ fn indexed_tolerance_reports_failing_keys_with_detail() {
         super::types::AssertResult::Fail { message } => {
             assert_eq!(
                 message,
-                "failed at Case.B (actual 2, expected 2.5 +/- 0.1, off by 0.5)"
+                "failed at Case#B (actual 2, expected 2.5 +/- 0.1, off by 0.5)"
             );
         }
         other => panic!("expected Fail, got {other:?}"),
@@ -1226,9 +1230,9 @@ fn indexed_tolerance_reports_failing_keys_with_detail() {
 fn indexed_tolerance_per_key_and_explicit_relative_pass() {
     let result = compile_and_eval(
         "index Case = { A, B };\n\
-         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
-         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
-         node tol: Dimensionless[Case] = { Case.A: 0.01, Case.B: 0.6 };\n\
+         node actual: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.5 };\n\
+         node tol: Dimensionless[Case] = { Case#A: 0.01, Case#B: 0.6 };\n\
          node relative_tol: Dimensionless[Case] = for case: Case { abs(@expected[case]) * 0.25 };\n\
          assert per_key = @actual ~= @expected +/- @tol;\n\
          assert relative = @actual ~= @expected +/- @relative_tol;",
@@ -1250,9 +1254,9 @@ fn indexed_tolerance_respects_per_variant_expected_fail() {
     let source = |tol: &str| {
         format!(
             "index Case = {{ A, B }};\n\
-             node actual: Dimensionless[Case] = {{ Case.A: 1.0, Case.B: 2.0 }};\n\
-             node expected: Dimensionless[Case] = {{ Case.A: 1.0, Case.B: 2.5 }};\n\
-             #[expected_fail(Case.B)]\n\
+             node actual: Dimensionless[Case] = {{ Case#A: 1.0, Case#B: 2.0 }};\n\
+             node expected: Dimensionless[Case] = {{ Case#A: 1.0, Case#B: 2.5 }};\n\
+             #[expected_fail(Case#B)]\n\
              assert known = @actual ~= @expected +/- {tol};"
         )
     };
@@ -1264,7 +1268,7 @@ fn indexed_tolerance_respects_per_variant_expected_fail() {
     match &result.assertions[0].1 {
         super::types::AssertResult::Fail { message } => {
             assert!(
-                message.contains("unexpected pass at Case.B"),
+                message.contains("unexpected pass at Case#B"),
                 "unexpected message: {message}"
             );
         }
@@ -1276,8 +1280,8 @@ fn indexed_tolerance_respects_per_variant_expected_fail() {
 fn explicit_for_compares_indexed_values_element_wise() {
     let result = compile_and_eval(
         "index Case = { A, B };\n\
-         node actual: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };\n\
-         node expected: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.5 };\n\
+         node actual: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };\n\
+         node expected: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.5 };\n\
          node same: Bool[Case] = for case: Case { @actual[case] == @expected[case] };\n\
          node below: Bool[Case] = for case: Case { @actual[case] < 3.0 };\n\
          assert per_key_report = for case: Case { @actual[case] == @expected[case] };",
@@ -1316,7 +1320,7 @@ fn explicit_for_compares_indexed_values_element_wise() {
     );
     match &result.assertions[0].1 {
         super::types::AssertResult::Fail { message } => {
-            assert_eq!(message, "failed at Case.B");
+            assert_eq!(message, "failed at Case#B");
         }
         other => panic!("expected per-key Fail, got {other:?}"),
     }
@@ -1357,12 +1361,12 @@ fn expected_fail_finite_position_unexpected_pass_fails() {
 fn expected_fail_mixed_named_and_finite_tuple_key() {
     let result = compile_and_eval(
         "index Mode = { Boost, Cruise };\n\
-         #[expected_fail((Mode.Boost, #1))]\n\
-         assert m = for m: Mode {\n\
+         #[expected_fail((Mode#Boost, #1))]\n\
+         assert m = for mode: Mode {\n\
              for i: Fin(2) {\n\
-                 match m {\n\
-                     Mode.Boost => if to_int(i) == 1 { false } else { true },\n\
-                     Mode.Cruise => true,\n\
+                 match mode {\n\
+                     Mode#Boost => if to_int(i) == 1 { false } else { true },\n\
+                     Mode#Cruise => true,\n\
                  }\n\
              }\n\
          };",
@@ -1381,7 +1385,7 @@ fn inline_dag_call_with_failing_assert_fails_calling_node() {
              pub node out: Dimensionless = @v * 2.0;\n\
              assert v_positive = @v > 0.0;\n\
          }\n\
-         node y: Dimensionless = @checked(v: -3.0).out;\n\
+         node y: Dimensionless = @checked(v: -3.0)::out;\n\
          node independent: Dimensionless = 1.0;",
     )
     .unwrap();
@@ -1418,7 +1422,7 @@ fn inline_dag_call_with_passing_assert_succeeds() {
              pub node out: Dimensionless = @v * 2.0;\n\
              assert v_positive = @v > 0.0;\n\
          }\n\
-         node y: Dimensionless = @checked(v: 3.0).out;",
+         node y: Dimensionless = @checked(v: 3.0)::out;",
     )
     .unwrap();
     assert!((find_value(&result, "y") - 6.0).abs() < f64::EPSILON);
@@ -1440,7 +1444,7 @@ fn inline_dag_call_respects_expected_fail() {
                  #[expected_fail]\n\
                  assert is_neg = @v < 0.0;\n\
              }}\n\
-             node y: Dimensionless = @checked(v: {v}).out;"
+             node y: Dimensionless = @checked(v: {v})::out;"
         )
     };
 
@@ -2162,7 +2166,7 @@ node n: Int = count(@flags);
 fn eval_scan_uses_index_order_for_map_literals() {
     let source = r"
 index Phase = { A, B };
-node x: Dimensionless[Phase] = { Phase.B: 10.0, Phase.A: 1.0 };
+node x: Dimensionless[Phase] = { Phase#B: 10.0, Phase#A: 1.0 };
 node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
 ";
     let result = compile_and_eval(source).unwrap();
@@ -2178,7 +2182,7 @@ node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
 fn eval_scan_order_follows_label_declaration_order() {
     let source = r"
 index Phase = { B, A };
-node x: Dimensionless[Phase] = { Phase.A: 1.0, Phase.B: 10.0 };
+node x: Dimensionless[Phase] = { Phase#A: 1.0, Phase#B: 10.0 };
 node y: Dimensionless[Phase] = scan(@x, 0.0, |acc, val| acc + val);
 ";
     let result = compile_and_eval(source).unwrap();
@@ -2262,14 +2266,14 @@ fn eval_scan_supports_heterogeneous_accumulator() {
     let source = r"
 index Flag = { A, B, C };
 node flags: Bool[Flag] = {
-    Flag.A: true,
-    Flag.B: false,
-    Flag.C: true,
+    Flag#A: true,
+    Flag#B: false,
+    Flag#C: true,
 };
 node count_true: Int[Flag] = scan(
     @flags,
     0,
-    |count, flag| if flag { count + 1 } else { count }
+    |tally, flag| if flag { tally + 1 } else { tally }
 );
 ";
     let result = compile_and_eval(source).unwrap();
@@ -2609,7 +2613,7 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
         }
         pub index Axis = { X, Y };
         param distance: Length;
-        param count: Int;
+        param sample_count: Int;
         param enabled: Bool;
         param axis_key: Key<Axis>;
         param when: Datetime;
@@ -2617,7 +2621,7 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
         param choice: Choice;
         param samples: Int[Axis];
         param choices: Choice[Axis];
-        node total: Int = @samples[Axis.X] + @samples[Axis.Y];
+        node total: Int = @samples[Axis#X] + @samples[Axis#Y];
         pub node accepted: Bool = @total == 3;
         pub node echo: Choice = @choice;
     ";
@@ -2635,13 +2639,13 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
         .bind_expression(&DeclName::expect_valid("distance"), &parse_expr("2.0 m"))
         .unwrap();
     first
-        .bind_expression(&DeclName::expect_valid("count"), &parse_expr("5"))
+        .bind_expression(&DeclName::expect_valid("sample_count"), &parse_expr("5"))
         .unwrap();
     first
         .bind_expression(&DeclName::expect_valid("enabled"), &parse_expr("true"))
         .unwrap();
     first
-        .bind_expression(&DeclName::expect_valid("axis_key"), &parse_expr("Axis.X"))
+        .bind_expression(&DeclName::expect_valid("axis_key"), &parse_expr("Axis#X"))
         .unwrap();
     first
         .bind_expression(
@@ -2664,13 +2668,13 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
     first
         .bind_expression(
             &DeclName::expect_valid("samples"),
-            &parse_expr("{ Axis.X: 1, Axis.Y: 2 }"),
+            &parse_expr("{ Axis#X: 1, Axis#Y: 2 }"),
         )
         .unwrap();
     first
         .bind_expression(
             &DeclName::expect_valid("choices"),
-            &parse_expr("{ Axis.X: A, Axis.Y: B(value: 9) }"),
+            &parse_expr("{ Axis#X: A, Axis#Y: B(value: 9) }"),
         )
         .unwrap();
     let first_row = first.finish().unwrap();
@@ -2705,13 +2709,13 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
         .bind_expression(&DeclName::expect_valid("distance"), &parse_expr("4.0 m"))
         .unwrap();
     second
-        .bind_expression(&DeclName::expect_valid("count"), &parse_expr("6"))
+        .bind_expression(&DeclName::expect_valid("sample_count"), &parse_expr("6"))
         .unwrap();
     second
         .bind_expression(&DeclName::expect_valid("enabled"), &parse_expr("false"))
         .unwrap();
     second
-        .bind_expression(&DeclName::expect_valid("axis_key"), &parse_expr("Axis.Y"))
+        .bind_expression(&DeclName::expect_valid("axis_key"), &parse_expr("Axis#Y"))
         .unwrap();
     second
         .bind_expression(
@@ -2731,13 +2735,13 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
     second
         .bind_expression(
             &DeclName::expect_valid("samples"),
-            &parse_expr("{ Axis.X: 10, Axis.Y: 20 }"),
+            &parse_expr("{ Axis#X: 10, Axis#Y: 20 }"),
         )
         .unwrap();
     second
         .bind_expression(
             &DeclName::expect_valid("choices"),
-            &parse_expr("{ Axis.X: B(value: 8), Axis.Y: A }"),
+            &parse_expr("{ Axis#X: B(value: 8), Axis#Y: A }"),
         )
         .unwrap();
     let second_result = prepared.evaluate(&second.finish().unwrap()).unwrap();
@@ -2784,7 +2788,7 @@ fn prepared_project_binds_coordinate_and_finite_keys() {
 #[test]
 fn prepared_binding_literals_use_the_expected_numeric_type_exactly() {
     let project = crate::loader::LoadedProject::from_source(
-        "param ratio: Dimensionless; param count: Int;",
+        "param ratio: Dimensionless; param sample_count: Int;",
         "numeric-bindings.gcl",
     )
     .unwrap();
@@ -2794,11 +2798,11 @@ fn prepared_binding_literals_use_the_expected_numeric_type_exactly() {
         .bind_expression(&DeclName::expect_valid("ratio"), &parse_expr("1"))
         .unwrap();
     bindings
-        .bind_expression(&DeclName::expect_valid("count"), &parse_expr("2.0"))
+        .bind_expression(&DeclName::expect_valid("sample_count"), &parse_expr("2.0"))
         .unwrap();
     let result = prepared.evaluate(&bindings.finish().unwrap()).unwrap();
     assert!((find_value(&result, "ratio") - 1.0).abs() < f64::EPSILON);
-    assert_eq!(find_int_value(&result, "count"), 2);
+    assert_eq!(find_int_value(&result, "sample_count"), 2);
 }
 
 #[test]
@@ -2846,7 +2850,7 @@ fn external_map_bindings_reject_entries_deeper_than_the_declared_schema() {
     let error = bindings
         .bind_external_expression(
             &DeclName::expect_valid("samples"),
-            &parse_expr("{ (Axis.X, Extra.Only): 1 }"),
+            &parse_expr("{ (Axis#X, Extra#Only): 1 }"),
             &input,
             (4usize, 9usize).into(),
         )
@@ -2867,17 +2871,17 @@ fn external_map_bindings_reject_entries_deeper_than_the_declared_schema() {
 #[test]
 fn external_binding_errors_retain_boundary_source_and_parameter() {
     let project =
-        crate::loader::LoadedProject::from_source("param count: Int;", "model.gcl").unwrap();
+        crate::loader::LoadedProject::from_source("param sample_count: Int;", "model.gcl").unwrap();
     let prepared = prepare_from_project(&project).unwrap();
     let input = miette::NamedSource::new(
         "input.json",
-        std::sync::Arc::new("{\n  \"count\": true\n}".to_string()),
+        std::sync::Arc::new("{\n  \"sample_count\": true\n}".to_string()),
     );
     let mut bindings = prepared.binding_builder();
 
     let error = bindings
         .bind_external_expression(
-            &DeclName::expect_valid("count"),
+            &DeclName::expect_valid("sample_count"),
             &parse_expr("true"),
             &input,
             (4usize, 7usize).into(),
@@ -2888,7 +2892,7 @@ fn external_binding_errors_retain_boundary_source_and_parameter() {
         CompileError::ExternalBinding {
             name, reason, span, ..
         } => {
-            assert_eq!(name.as_str(), "count");
+            assert_eq!(name.as_str(), "sample_count");
             assert!(
                 reason.contains("declared Int, inferred Bool"),
                 "unexpected reason: {reason}"
@@ -2906,7 +2910,7 @@ fn tenax_v2_projection_is_strict_and_preserves_typed_domains() {
         pub index Mode = { Zulu, Alpha };
         param length: Length(min: 0.0 m, max: 10.0 m);
         param ratio: Dimensionless(min: -1.0, max: 1.0);
-        param count: Int(min: -2, max: 2);
+        param sample_count: Int(min: -2, max: 2);
         param mode: Key<Mode>;
         pub node selected: Bool = true;
     ";
@@ -3161,7 +3165,7 @@ fn eval_integers_milestone() {
 
     assert_eq!(find_int_value(&result, "a"), 10);
     assert_eq!(find_int_value(&result, "b"), 3);
-    assert_eq!(find_int_value(&result, "sum"), 13);
+    assert_eq!(find_int_value(&result, "int_sum"), 13);
     assert_eq!(find_int_value(&result, "diff"), 7);
     assert_eq!(find_int_value(&result, "prod"), 30);
     assert_eq!(find_int_value(&result, "quot"), 3); // truncating division
@@ -3280,14 +3284,14 @@ fn write_nested_file_include_project(main_source: &str) -> (tempfile::TempDir, s
         package_dir.join("middle.gcl"),
         "param x: Dimensionless;\n\
          include demo.leaf(x: @x) as leaf;\n\
-         pub node out: Dimensionless = @leaf.doubled;\n",
+         pub node out: Dimensionless = @leaf::doubled;\n",
     )
     .unwrap();
     std::fs::write(
         package_dir.join("upper.gcl"),
         "param x: Dimensionless;\n\
          include demo.middle(x: @x) as middle;\n\
-         pub node out: Dimensionless = @middle.out;\n",
+         pub node out: Dimensionless = @middle::out;\n",
     )
     .unwrap();
     let root = package_dir.join("main.gcl");
@@ -3299,7 +3303,7 @@ fn write_nested_file_include_project(main_source: &str) -> (tempfile::TempDir, s
 fn nested_instantiated_file_include_evaluates_immediate_scope_binding() {
     let (_dir, root) = write_nested_file_include_project(
         "include demo.middle(x: 3.0) as middle;\n\
-         pub node result: Dimensionless = @middle.out;\n",
+         pub node result: Dimensionless = @middle::out;\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -3331,7 +3335,7 @@ fn write_package_root_child_include_project(
 fn include_instance_can_share_its_display_path_with_a_source_module() {
     let (_dir, root) = write_package_root_child_include_project(
         "include app.defaults() as defaults;\n\
-         pub node result: Dimensionless = @defaults.output;\n",
+         pub node result: Dimensionless = @defaults::output;\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -3342,7 +3346,7 @@ fn include_instance_can_share_its_display_path_with_a_source_module() {
 fn aliased_include_does_not_bind_the_source_module_name() {
     let (_dir, root) = write_package_root_child_include_project(
         "include app.defaults() as configured;\n\
-         pub node leaked: Dimensionless = @defaults().output;\n",
+         pub node leaked: Dimensionless = @defaults()::output;\n",
     );
 
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
@@ -3361,7 +3365,7 @@ fn nested_instantiated_file_include_keeps_multiple_instances_isolated() {
     let (_dir, root) = write_nested_file_include_project(
         "include demo.middle(x: 3.0) as first;\n\
          include demo.middle(x: 5.0) as second;\n\
-         pub node result: Dimensionless = @first.out + @second.out;\n",
+         pub node result: Dimensionless = @first::out + @second::out;\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -3385,14 +3389,14 @@ fn nested_instantiated_file_include_resolves_aliased_sibling_outputs_in_bindings
     .unwrap();
     std::fs::write(
         package_dir.join("a.gcl"),
-        "import example.axes.{ index Item };\n\
+        "import example.axes::{ index Item };\n\
          param input: Dimensionless[Item];\n\
          pub node a_values: Dimensionless[Item] = @input;\n",
     )
     .unwrap();
     std::fs::write(
         package_dir.join("b.gcl"),
-        "import example.axes.{ index Item };\n\
+        "import example.axes::{ index Item };\n\
          param input: Dimensionless[Item];\n\
          pub node b_values: Dimensionless[Item] =\n\
              for item: Item { @input[item] * 2.0 };\n",
@@ -3400,7 +3404,7 @@ fn nested_instantiated_file_include_resolves_aliased_sibling_outputs_in_bindings
     .unwrap();
     std::fs::write(
         package_dir.join("c.gcl"),
-        "import example.axes.{ index Item };\n\
+        "import example.axes::{ index Item };\n\
          param left: Dimensionless[Item];\n\
          param right: Dimensionless[Item];\n\
          pub node combined: Dimensionless[Item] =\n\
@@ -3409,23 +3413,23 @@ fn nested_instantiated_file_include_resolves_aliased_sibling_outputs_in_bindings
     .unwrap();
     std::fs::write(
         package_dir.join("middle.gcl"),
-        "import example.axes.{ index Item };\n\
+        "import example.axes::{ index Item };\n\
          param input: Dimensionless[Item];\n\
          include example.a(input: @input) as a;\n\
-         include example.b(input: @a.a_values) as b;\n\
-         include example.c(left: @a.a_values, right: @b.b_values) as c;\n\
-         pub node result: Dimensionless[Item] = @c.combined;\n",
+         include example.b(input: @a::a_values) as b;\n\
+         include example.c(left: @a::a_values, right: @b::b_values) as c;\n\
+         pub node result: Dimensionless[Item] = @c::combined;\n",
     )
     .unwrap();
     let root = package_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "import example.axes.{ index Item };\n\
+        "import example.axes::{ index Item };\n\
          node input: Dimensionless[Item] = {\n\
-             Item.One: 1.0,\n\
-             Item.Two: 2.0,\n\
+             Item#One: 1.0,\n\
+             Item#Two: 2.0,\n\
          };\n\
-         include example.middle(input: @input).{ pub result };\n",
+         include example.middle(input: @input)::{ pub result };\n",
     )
     .unwrap();
 
@@ -3439,13 +3443,13 @@ fn nested_instantiated_file_include_resolves_aliased_sibling_outputs_in_bindings
 #[test]
 fn nested_instantiated_file_include_reexports_requested_plot() {
     let (dir, root) = write_nested_file_include_project(
-        "include demo.middle(x: 3.0).{ out, chart };\n\
+        "include demo.middle(x: 3.0)::{ out, chart };\n\
          pub node result: Dimensionless = @out;\n",
     );
     std::fs::write(
         dir.path().join("src/demo/middle.gcl"),
         "param x: Dimensionless;\n\
-         include demo.leaf(x: @x).{ doubled, pub chart };\n\
+         include demo.leaf(x: @x)::{ doubled, pub chart };\n\
          pub node out: Dimensionless = @doubled;\n",
     )
     .unwrap();
@@ -3460,25 +3464,25 @@ fn nested_instantiated_file_include_reexports_requested_plot() {
 fn three_level_instantiated_file_include_preserves_assertion_instance_path() {
     let (_dir, root) = write_nested_file_include_project(
         "include demo.upper(x: -1.0) as upper;\n\
-         pub node result: Dimensionless = @upper.out;\n",
+         pub node result: Dimensionless = @upper::out;\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert!((find_value(&result, "result") - (-2.0)).abs() < f64::EPSILON);
     assert!(result.assertions.iter().any(|(name, outcome, _)| {
-        name.to_string() == "upper.middle.leaf.positive"
+        name.to_string() == "upper.middle.leaf::positive"
             && matches!(outcome, super::types::AssertResult::Fail { .. })
     }));
-    assert!(result.output_surface.contains(&scoped_name("upper.out")));
+    assert!(result.output_surface.contains(&scoped_name("upper::out")));
     assert!(
         !result
             .output_surface
-            .contains(&scoped_name("upper.middle.out"))
+            .contains(&scoped_name("upper.middle::out"))
     );
     assert!(
         !result
             .output_surface
-            .contains(&scoped_name("upper.middle.leaf.private_value"))
+            .contains(&scoped_name("upper.middle.leaf::private_value"))
     );
 }
 
@@ -3510,8 +3514,8 @@ fn write_same_leaf_include_project(main_source: &str) -> (tempfile::TempDir, std
 #[test]
 fn project_selective_includes_allow_distinct_modules_with_same_leaf_name() {
     let (_dir, root) = write_same_leaf_include_project(
-        "include app.analysis.shared(input: 2.0).{ output as analyzed };\n\
-         include app.presentation.shared(input: 5.0).{ output as rendered };\n\
+        "include app.analysis.shared(input: 2.0)::{ output as analyzed };\n\
+         include app.presentation.shared(input: 5.0)::{ output as rendered };\n\
          node combined: Dimensionless = @analyzed + @rendered;\n",
     );
 
@@ -3530,8 +3534,8 @@ fn project_selective_includes_allow_distinct_modules_with_same_leaf_name() {
 #[test]
 fn project_selective_includes_still_reject_duplicate_local_names() {
     let (_dir, root) = write_same_leaf_include_project(
-        "include app.analysis.shared(input: 2.0).{ output as duplicate };\n\
-         include app.presentation.shared(input: 5.0).{ output as duplicate };\n",
+        "include app.analysis.shared(input: 2.0)::{ output as duplicate };\n\
+         include app.presentation.shared(input: 5.0)::{ output as duplicate };\n",
     );
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
 
@@ -3543,7 +3547,7 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
                 ..
             },
         )) => {
-            assert_eq!(namespace, "name");
+            assert_eq!(namespace, "Term");
             assert_eq!(name, "duplicate");
         }
         other => panic!("expected a duplicate local declaration diagnostic, got {other:?}"),
@@ -3589,9 +3593,9 @@ fn project_selective_includes_allow_multiple_instances_of_same_module() {
     let root = package_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "include app.shared(input: 2.0).{ output as first };\n\
-         include app.shared(input: 3.0).{ output as second };\n\
-         node combined: Dimensionless = @first + @second;\n",
+        "include app.shared(input: 2.0)::{ output as first };\n\
+         include app.shared(input: 3.0)::{ output as other };\n\
+         node combined: Dimensionless = @first + @other;\n",
     )
     .unwrap();
 
@@ -3617,7 +3621,7 @@ fn project_import_preserves_structural_finite_index_identity() {
     let root = source_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "import app.lib.{ values };\nconst node copied: Dimensionless[Fin(2)] = @values;\n",
+        "import app.lib::{ values };\nconst node copied: Dimensionless[Fin(2)] = @values;\n",
     )
     .unwrap();
 
@@ -3649,7 +3653,7 @@ fn project_selective_import_item_rejects_unknown_attribute() {
     let root = root_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "import attr.lib.{ #[bogus] x };\nnode y: Dimensionless = @x;\n",
+        "import attr.lib::{ #[bogus] x };\nnode y: Dimensionless = @x;\n",
     )
     .unwrap();
 
@@ -3675,16 +3679,16 @@ fn project_qualified_index_type_annotation_and_variant_arg() {
         root_dir.join("lib.gcl"),
         "pub index Phase = { Burn, Coast };\n\
          pub dim GravityAccel = Length / Time^2;\n\
-         pub node thrust: Dimensionless[Phase] = { Phase.Burn: 3.0, Phase.Coast: 5.0 };\n",
+         pub node thrust: Dimensionless[Phase] = { Phase#Burn: 3.0, Phase#Coast: 5.0 };\n",
     )
     .unwrap();
     let root = root_dir.join("main.gcl");
     std::fs::write(
         &root,
         "import mission.lib as lib;\n\
-         node thrust: Dimensionless[lib.Phase] = { lib.Phase.Burn: 3.0, lib.Phase.Coast: 5.0 };\n\
-         node burn: Dimensionless = @thrust[lib.Phase.Burn];\n\
-         node accel: lib.GravityAccel = 9.80665 m/s^2;\n",
+         node thrust: Dimensionless[lib::Phase] = { lib::Phase#Burn: 3.0, lib::Phase#Coast: 5.0 };\n\
+         node burn: Dimensionless = @thrust[lib::Phase#Burn];\n\
+         node accel: lib::GravityAccel = 9.80665 m/s^2;\n",
     )
     .unwrap();
 
@@ -3949,8 +3953,8 @@ fn write_imported_unit_dependency_project(
     std::fs::write(
         root_dir.join("rates.gcl"),
         "import unit_dependencies.foundation as foundation;\n\
-         pub dim ScoreRate = foundation.Score / Time;\n\
-         pub const unit point_per_second: ScoreRate = 1.0 foundation.point / s;\n\
+         pub dim ScoreRate = foundation::Score / Time;\n\
+         pub const unit point_per_second: ScoreRate = 1.0 foundation::point / s;\n\
          pub type RateMeasurement { RateMeasurement(value: ScoreRate) }\n",
     )
     .unwrap();
@@ -3980,7 +3984,7 @@ fn imported_record_field_constraint_uses_defining_unit_scope_through_module_alia
         "import record_scope.schema as schema;\n\
          base dim ConsumerCurrency;\n\
          base unit credit: ConsumerCurrency;\n\
-         param price: schema.Price;\n\
+         param price: schema::Price;\n\
          node result: Dimensionless = 1.0;\n",
     );
 
@@ -3990,7 +3994,7 @@ fn imported_record_field_constraint_uses_defining_unit_scope_through_module_alia
 #[test]
 fn imported_record_field_constraint_uses_defining_unit_scope_through_selective_type_import() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
-        "import record_scope.schema.{type Price};\n\
+        "import record_scope.schema::{type Price};\n\
          base dim ConsumerCurrency;\n\
          base unit credit: ConsumerCurrency;\n\
          param price: Price;\n\
@@ -4003,7 +4007,7 @@ fn imported_record_field_constraint_uses_defining_unit_scope_through_selective_t
 #[test]
 fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
-        "import record_scope.schema.{type Receipt};\n\
+        "import record_scope.schema::{type Receipt};\n\
          param receipt: Receipt;\n\
          pub node accepted: Bool = true;\n",
     );
@@ -4030,7 +4034,7 @@ fn prepared_imported_record_binding_uses_canonical_nested_constructors_and_units
 #[test]
 fn prepared_imported_record_binding_enforces_nested_definition_site_constraint() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
-        "import record_scope.schema.{type Receipt};\n\
+        "import record_scope.schema::{type Receipt};\n\
          param receipt: Receipt;\n\
          pub node accepted: Bool = true;\n",
     );
@@ -4053,7 +4057,7 @@ fn prepared_imported_record_binding_enforces_nested_definition_site_constraint()
 #[test]
 fn selectively_imported_dimension_retains_transitive_definition_site_dependencies() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
-        "import record_scope.schema.{dim ScaledRate};\n\
+        "import record_scope.schema::{dim ScaledRate};\n\
          param rate: ScaledRate;\n\
          pub node accepted: Bool = true;\n",
     );
@@ -4065,7 +4069,7 @@ fn selectively_imported_dimension_retains_transitive_definition_site_dependencie
 fn module_imported_dimension_retains_transitive_definition_site_dependencies() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
         "import record_scope.schema as schema;\n\
-         param rate: schema.ScaledRate;\n\
+         param rate: schema::ScaledRate;\n\
          pub node accepted: Bool = true;\n",
     );
 
@@ -4075,7 +4079,7 @@ fn module_imported_dimension_retains_transitive_definition_site_dependencies() {
 #[test]
 fn selectively_imported_record_retains_transitive_definition_site_field_types() {
     let (_dir, root) = write_custom_unit_constrained_record_type_project(
-        "import record_scope.schema.{type Receipt};\n\
+        "import record_scope.schema::{type Receipt};\n\
          param receipt: Receipt;\n\
          pub node accepted: Bool = true;\n",
     );
@@ -4086,7 +4090,7 @@ fn selectively_imported_record_retains_transitive_definition_site_field_types() 
 #[test]
 fn selectively_imported_base_unit_retains_custom_dimension_dependency() {
     let (_dir, root) = write_imported_unit_dependency_project(
-        "import unit_dependencies.foundation.{type Measurement, unit point};\n\
+        "import unit_dependencies.foundation::{type Measurement, unit point};\n\
          param measurement: Measurement;\n\
          assert nonnegative = @measurement.value >= 0.0 point;\n",
     );
@@ -4097,7 +4101,7 @@ fn selectively_imported_base_unit_retains_custom_dimension_dependency() {
 #[test]
 fn selectively_imported_derived_unit_retains_aliased_dependencies() {
     let (_dir, root) = write_imported_unit_dependency_project(
-        "import unit_dependencies.rates.{type RateMeasurement, unit point_per_second};\n\
+        "import unit_dependencies.rates::{type RateMeasurement, unit point_per_second};\n\
          param rate: RateMeasurement;\n\
          assert nonnegative = @rate.value >= 0.0 point_per_second;\n",
     );
@@ -4109,8 +4113,8 @@ fn selectively_imported_derived_unit_retains_aliased_dependencies() {
 fn module_imported_unit_retains_custom_dimension_dependency() {
     let (_dir, root) = write_imported_unit_dependency_project(
         "import unit_dependencies.rates as rates;\n\
-         param rate: rates.RateMeasurement;\n\
-         assert nonnegative = @rate.value >= 0.0 rates.point_per_second;\n",
+         param rate: rates::RateMeasurement;\n\
+         assert nonnegative = @rate.value >= 0.0 rates::point_per_second;\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4119,7 +4123,7 @@ fn module_imported_unit_retains_custom_dimension_dependency() {
 #[test]
 fn selectively_imported_unit_does_not_expose_its_backing_dimension_name() {
     let (_dir, root) = write_imported_unit_dependency_project(
-        "import unit_dependencies.foundation.{unit point};\n\
+        "import unit_dependencies.foundation::{unit point};\n\
          param score: Score;\n\
          assert nonnegative = @score >= 0.0 point;\n",
     );
@@ -4137,8 +4141,8 @@ fn project_constructor_call_uses_resolved_owner_with_same_leaf_constructors() {
     let (_dir, root) = write_same_leaf_constructor_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node action: a.Action = a.Pick(distance: 2.0 m);\n\
-         node command: b.Command = b.Pick(duration: 3.0 s);\n",
+         node action: a::Action = a::Pick(distance: 2.0 m);\n\
+         node command: b::Command = b::Pick(duration: 3.0 s);\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4149,10 +4153,10 @@ fn project_match_pattern_uses_resolved_constructor_and_binding() {
     let (_dir, root) = write_same_leaf_constructor_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node action: a::Action = a::Pick(distance: 2.0 m);\n\
          node distance: Length = match @action {\n\
-             a.Pick(distance: d) => d,\n\
-             a.Idle => 0.0 m,\n\
+             a::Pick(distance: d) => d,\n\
+             a::Idle => 0.0 m,\n\
          };\n",
     );
 
@@ -4164,8 +4168,8 @@ fn project_struct_type_uses_resolved_owner_with_same_leaf_types() {
     let (_dir, root) = write_same_leaf_struct_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node action: a.Item = a.Pick(distance: 2.0 m);\n\
-         node command: b.Item = b.Pick(duration: 3.0 s);\n",
+         node action: a::Item = a::Pick(distance: 2.0 m);\n\
+         node command: b::Item = b::Pick(duration: 3.0 s);\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4176,7 +4180,7 @@ fn project_struct_type_rejects_same_leaf_wrong_owner_constructor() {
     let (_dir, root) = write_same_leaf_struct_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node bad: a.Item = b.Pick(duration: 3.0 s);\n",
+         node bad: a::Item = b::Pick(duration: 3.0 s);\n",
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
@@ -4190,7 +4194,7 @@ fn project_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
     let (_dir, root) = write_same_leaf_record_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node item: a.Item = a.Item(distance: 2.0 m);\n\
+         node item: a::Item = a::Item(distance: 2.0 m);\n\
          node distance: Length = @item.distance;\n",
     );
 
@@ -4202,8 +4206,8 @@ fn eval_constructor_calls_preserve_same_leaf_struct_owners() {
     let (_dir, root) = write_same_leaf_constructor_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node action: a.Action = a.Pick(distance: 2.0 m);\n\
-         node command: b.Command = b.Pick(duration: 3.0 s);\n",
+         node action: a::Action = a::Pick(distance: 2.0 m);\n\
+         node command: b::Command = b::Pick(duration: 3.0 s);\n",
     );
 
     let (_tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4236,15 +4240,15 @@ fn eval_constructor_match_uses_resolved_owner_and_binding() {
     let (_dir, root) = write_same_leaf_constructor_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node action: a.Action = a.Pick(distance: 2.0 m);\n\
-         node command: b.Command = b.Pick(duration: 3.0 s);\n\
+         node action: a::Action = a::Pick(distance: 2.0 m);\n\
+         node command: b::Command = b::Pick(duration: 3.0 s);\n\
          node distance: Length = match @action {\n\
-             a.Pick(distance: d) => d,\n\
-             a.Idle => 0.0 m,\n\
+             a::Pick(distance: d) => d,\n\
+             a::Idle => 0.0 m,\n\
          };\n\
          node duration: Time = match @command {\n\
-             b.Pick(duration: t) => t,\n\
-             b.Idle => 0.0 s,\n\
+             b::Pick(duration: t) => t,\n\
+             b::Idle => 0.0 s,\n\
          };\n",
     );
 
@@ -4258,8 +4262,8 @@ fn eval_field_access_uses_resolved_struct_type_def_with_same_leaf_types() {
     let (_dir, root) = write_same_leaf_record_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node item: a.Item = a.Item(distance: 2.0 m);\n\
-         node other: b.Item = b.Item(duration: 3.0 s);\n\
+         node item: a::Item = a::Item(distance: 2.0 m);\n\
+         node other: b::Item = b::Item(duration: 3.0 s);\n\
          node distance: Length = @item.distance;\n",
     );
 
@@ -4272,10 +4276,10 @@ fn eval_constructor_match_rejects_runtime_owner_mismatch_with_same_leaf_construc
     let (_dir, root) = write_same_leaf_constructor_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node action: a.Action = a.Pick(distance: 2.0 m);\n\
+         node action: a::Action = a::Pick(distance: 2.0 m);\n\
          node distance: Length = match @action {\n\
-             a.Pick(distance: d) => d,\n\
-             a.Idle => 0.0 m,\n\
+             a::Pick(distance: d) => d,\n\
+             a::Idle => 0.0 m,\n\
          };\n",
     );
 
@@ -4342,8 +4346,8 @@ fn eval_field_access_rejects_runtime_owner_mismatch_with_same_leaf_type() {
     let (_dir, root) = write_same_leaf_record_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node item: a.Item = a.Item(distance: 2.0 m);\n\
-         node other: b.Item = b.Item(duration: 3.0 s);\n\
+         node item: a::Item = a::Item(distance: 2.0 m);\n\
+         node other: b::Item = b::Item(duration: 3.0 s);\n\
          node distance: Length = @item.distance;\n",
     );
 
@@ -4409,8 +4413,8 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
     let (_dir, root) = write_same_leaf_same_field_constrained_record_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node a_ok: a.Item = a.Item(value: 2.0 m);\n\
-         node b_bad: b.Item = b.Item(value: 2.0 m);\n",
+         node a_ok: a::Item = a::Item(value: 2.0 m);\n\
+         node b_bad: b::Item = b::Item(value: 2.0 m);\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -4423,7 +4427,7 @@ fn eval_struct_field_constraints_use_resolved_owner_with_same_leaf_types_and_fie
         .as_ref();
     assert!(
         a_ok.is_ok(),
-        "a_ok should satisfy a.Item's constraint: {a_ok:?}"
+        "a_ok should satisfy a::Item's constraint: {a_ok:?}"
     );
     let b_bad = result
         .nodes
@@ -4445,7 +4449,7 @@ fn project_declared_type_preserves_same_leaf_index_owner() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n",
+         node series: Dimensionless[a::Phase] = for p: a::Phase { 1.0 };\n",
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4472,8 +4476,8 @@ fn project_declared_type_preserves_same_leaf_struct_owner() {
     let (_dir, root) = write_same_leaf_record_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node item: a.Item = a.Item(distance: 2.0 m);\n\
-         node other: b.Item = b.Item(duration: 3.0 s);\n",
+         node item: a::Item = a::Item(distance: 2.0 m);\n\
+         node other: b::Item = b::Item(duration: 3.0 s);\n",
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4503,8 +4507,8 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
     let (_dir, root) = write_same_leaf_constrained_record_type_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node item: a.Item = a.Item(distance: 2.0 m);\n\
-         node other: b.Item = b.Item(duration: 3.0 s);\n",
+         node item: a::Item = a::Item(distance: 2.0 m);\n\
+         node other: b::Item = b::Item(duration: 3.0 s);\n",
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4612,7 +4616,7 @@ pub type Bundle<
 param value: Bundle<Length, Phase, Marker, 2> = Bundle<Length, Phase, Marker, 2>(
     scalar: 1.0 m^2,
     payload: Marker,
-    series: { Phase.A: 2.0 m^2 },
+    series: { Phase#A: 2.0 m^2 },
     fixed: Fixed<3>(value: 1.0),
 );
 ";
@@ -4840,8 +4844,8 @@ fn project_generic_struct_defaults_preserve_same_leaf_owner() {
         &root,
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node a_wrap: a.Wrap<Length> = a.Wrap<Length>(value: 1.0 m);\n\
-         node b_wrap: b.Wrap<Time> = b.Wrap<Time>(value: 1.0 s);\n",
+         node a_wrap: a::Wrap<Length> = a::Wrap<Length>(value: 1.0 m);\n\
+         node b_wrap: b::Wrap<Time> = b::Wrap<Time>(value: 1.0 s);\n",
     )
     .unwrap();
 
@@ -4881,8 +4885,8 @@ fn project_index_access_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
-         node burn: Dimensionless = @series[a.Phase.Burn];\n",
+         node series: Dimensionless[a::Phase] = for p: a::Phase { 1.0 };\n\
+         node burn: Dimensionless = @series[a::Phase#Burn];\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -4893,8 +4897,8 @@ fn project_index_access_rejects_same_leaf_wrong_owner() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
-         node bad: Dimensionless = @series[b.Phase.Warm];\n",
+         node series: Dimensionless[a::Phase] = for p: a::Phase { 1.0 };\n\
+         node bad: Dimensionless = @series[b::Phase#Warm];\n",
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
@@ -4908,7 +4912,7 @@ fn project_for_comp_rejects_same_leaf_wrong_owner() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = for p: b.Phase { 1.0 };\n",
+         node series: Dimensionless[a::Phase] = for p: b::Phase { 1.0 };\n",
     );
 
     match compile_to_tir_project(&root, None, &fs()) {
@@ -4922,9 +4926,9 @@ fn project_map_literal_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = {\n\
-             a.Phase.Burn: 1.0,\n\
-             a.Phase.Coast: 2.0,\n\
+         node series: Dimensionless[a::Phase] = {\n\
+             a::Phase#Burn: 1.0,\n\
+             a::Phase#Coast: 2.0,\n\
          };\n",
     );
 
@@ -4936,9 +4940,9 @@ fn project_map_literal_rejects_same_leaf_wrong_owner_key() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = {\n\
-             a.Phase.Burn: 1.0,\n\
-             b.Phase.Warm: 2.0,\n\
+         node series: Dimensionless[a::Phase] = {\n\
+             a::Phase#Burn: 1.0,\n\
+             b::Phase#Warm: 2.0,\n\
          };\n",
     );
 
@@ -4953,8 +4957,8 @@ fn project_map_literal_missing_variants_uses_resolved_owner() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = {\n\
-             a.Phase.Burn: 1.0,\n\
+         node series: Dimensionless[a::Phase] = {\n\
+             a::Phase#Burn: 1.0,\n\
          };\n",
     );
 
@@ -4978,7 +4982,7 @@ fn project_table_literal_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = table[a.Phase] {\n\
+         node series: Dimensionless[a::Phase] = table[a::Phase] {\n\
              Burn: 1.0;\n\
              Coast: 2.0;\n\
          };\n",
@@ -4992,11 +4996,11 @@ fn project_variant_literal_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = {\n\
-             a.Phase.Burn: 1.0,\n\
-             a.Phase.Coast: 2.0,\n\
+         node series: Dimensionless[a::Phase] = {\n\
+             a::Phase#Burn: 1.0,\n\
+             a::Phase#Coast: 2.0,\n\
          };\n\
-         node burn: Dimensionless = @series[a.Phase.Burn];\n",
+         node burn: Dimensionless = @series[a::Phase#Burn];\n",
     );
 
     compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -5007,13 +5011,13 @@ fn project_label_match_uses_resolved_owner_with_same_leaf_indexes() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node code: Dimensionless[a.Phase] = for p: a.Phase {\n\
+         node code: Dimensionless[a::Phase] = for p: a::Phase {\n\
              match p {\n\
-                 a.Phase.Burn => 1.0,\n\
-                 a.Phase.Coast => 2.0,\n\
+                 a::Phase#Burn => 1.0,\n\
+                 a::Phase#Coast => 2.0,\n\
              }\n\
          };\n\
-         node burn_code: Dimensionless = @code[a.Phase.Burn];\n",
+         node burn_code: Dimensionless = @code[a::Phase#Burn];\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -5025,10 +5029,10 @@ fn project_label_match_rejects_same_leaf_wrong_owner_pattern() {
     let (_dir, root) = write_same_leaf_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node code: Dimensionless[a.Phase] = for p: a.Phase {\n\
+         node code: Dimensionless[a::Phase] = for p: a::Phase {\n\
              match p {\n\
-                 a.Phase.Burn => 1.0,\n\
-                 b.Phase.Warm => 2.0,\n\
+                 a::Phase#Burn => 1.0,\n\
+                 b::Phase#Warm => 2.0,\n\
              }\n\
          };\n",
     );
@@ -5044,17 +5048,17 @@ fn project_expected_fail_keys_accept_resolved_index_owner_with_same_leaf_indexes
     let (_dir, root) = write_same_leaf_same_variant_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node a_checks: Bool[a.Phase] = {\n\
-             a.Phase.Burn: false,\n\
-             a.Phase.Coast: true,\n\
+         node a_checks: Bool[a::Phase] = {\n\
+             a::Phase#Burn: false,\n\
+             a::Phase#Coast: true,\n\
          };\n\
-         #[expected_fail(a.Phase.Burn)]\n\
+         #[expected_fail(a::Phase#Burn)]\n\
          assert a_expected = @a_checks;\n\
-         node b_checks: Bool[b.Phase] = {\n\
-             b.Phase.Burn: false,\n\
-             b.Phase.Coast: true,\n\
+         node b_checks: Bool[b::Phase] = {\n\
+             b::Phase#Burn: false,\n\
+             b::Phase#Coast: true,\n\
          };\n\
-         #[expected_fail(b.Phase.Burn)]\n\
+         #[expected_fail(b::Phase#Burn)]\n\
          assert b_expected = @b_checks;\n",
     );
 
@@ -5092,11 +5096,11 @@ fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node b_checks: Bool[b.Phase] = {\n\
-             b.Phase.Burn: false,\n\
-             b.Phase.Coast: true,\n\
+         node b_checks: Bool[b::Phase] = {\n\
+             b::Phase#Burn: false,\n\
+             b::Phase#Coast: true,\n\
          };\n\
-         #[expected_fail(a.Phase.Burn)]\n\
+         #[expected_fail(a::Phase#Burn)]\n\
          assert b_expected = @b_checks;\n",
     );
 
@@ -5113,38 +5117,38 @@ fn project_expected_fail_keys_reject_same_leaf_wrong_owner() {
 #[test]
 fn eval_index_collections_preserve_same_leaf_owners_across_runtime_boundaries() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
-        "import collide.a.{ index Phase };\n\
+        "import collide.a::{ index Phase };\n\
          import collide.a as a;\n\
          import collide.b as b;\n\
          dag pick_a {\n\
-             import collide.a.{ index Phase };\n\
+             import collide.a::{ index Phase };\n\
              param series: Dimensionless[Phase];\n\
-             pub node burn: Dimensionless = @series[Phase.Burn];\n\
+             pub node burn: Dimensionless = @series[Phase#Burn];\n\
              pub node echoed: Dimensionless[Phase] = for p: Phase { @series[p] };\n\
          }\n\
-         node map_a: Dimensionless[a.Phase] = {\n\
-             a.Phase.Burn: 10.0,\n\
-             a.Phase.Coast: 20.0,\n\
+         node map_a: Dimensionless[a::Phase] = {\n\
+             a::Phase#Burn: 10.0,\n\
+             a::Phase#Coast: 20.0,\n\
          };\n\
-         node map_b: Dimensionless[b.Phase] = {\n\
-             b.Phase.Burn: 1.0,\n\
-             b.Phase.Coast: 2.0,\n\
+         node map_b: Dimensionless[b::Phase] = {\n\
+             b::Phase#Burn: 1.0,\n\
+             b::Phase#Coast: 2.0,\n\
          };\n\
          node table_a: Dimensionless[Phase] = table[Phase] {\n\
              Burn: 3.0;\n\
              Coast: 4.0;\n\
          };\n\
-         node for_a: Dimensionless[a.Phase] = for p: a.Phase {\n\
+         node for_a: Dimensionless[a::Phase] = for p: a::Phase {\n\
              match p {\n\
-                 a.Phase.Burn => @map_a[p],\n\
-                 a.Phase.Coast => @pick_a(series: @map_a).echoed[p],\n\
+                 a::Phase#Burn => @map_a[p],\n\
+                 a::Phase#Coast => @pick_a(series: @map_a)::echoed[p],\n\
              }\n\
          };\n\
-         node scan_a: Dimensionless[a.Phase] = scan(@map_a, 0.0, |acc, val| acc + val);\n\
-         node total: Dimensionless = @pick_a(series: @map_a).burn\n\
-             + @table_a[Phase.Burn]\n\
-             + @for_a[a.Phase.Coast]\n\
-             + @scan_a[a.Phase.Coast];\n",
+         node scan_a: Dimensionless[a::Phase] = scan(@map_a, 0.0, |acc, val| acc + val);\n\
+         node total: Dimensionless = @pick_a(series: @map_a)::burn\n\
+             + @table_a[Phase#Burn]\n\
+             + @for_a[a::Phase#Coast]\n\
+             + @scan_a[a::Phase#Coast];\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -5181,7 +5185,7 @@ fn eval_unfold_uses_resolved_explicit_range_index_owner_with_same_leaf_indexes()
     let (_dir, root) = write_same_leaf_range_index_project(
         "import collide.b as b;\n\
          import collide.a as a;\n\
-         node y: Dimensionless[a.Step] = unfold(a.Step, 0.0, |prev_y, prev_t, t| prev_y + 1.0);\n",
+         node y: Dimensionless[a::Step] = unfold(a::Step, 0.0, |prev_y, prev_t, t| prev_y + 1.0);\n",
     );
 
     let (_tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -5217,11 +5221,11 @@ fn eval_index_access_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series: Dimensionless[a.Phase] = {\n\
-             a.Phase.Burn: 1.0,\n\
-             a.Phase.Coast: 2.0,\n\
+         node series: Dimensionless[a::Phase] = {\n\
+             a::Phase#Burn: 1.0,\n\
+             a::Phase#Coast: 2.0,\n\
          };\n\
-         node burn: Dimensionless = @series[a.Phase.Burn];\n",
+         node burn: Dimensionless = @series[a::Phase#Burn];\n",
     );
 
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
@@ -5293,10 +5297,10 @@ fn eval_label_match_rejects_runtime_owner_mismatch_with_same_leaf_variant() {
     let (_dir, root) = write_same_leaf_same_variant_index_project(
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node code: Dimensionless[a.Phase] = for p: a.Phase {\n\
+         node code: Dimensionless[a::Phase] = for p: a::Phase {\n\
              match p {\n\
-                 a.Phase.Burn => 1.0,\n\
-                 a.Phase.Coast => 2.0,\n\
+                 a::Phase#Burn => 1.0,\n\
+                 a::Phase#Coast => 2.0,\n\
              }\n\
          };\n",
     );
@@ -5554,7 +5558,7 @@ fn project_pub_import_reexport_selective() {
 #[test]
 fn project_include_overrides_index_no_param_binding_v005() {
     // V005: overriding `Phase` orphans the `cost` default (which mentions
-    // `Phase.Design` / `Phase.Build`) because the importer forgot to
+    // `Phase#Design` / `Phase#Build`) because the importer forgot to
     // re-bind `cost` in the same include statement.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
         "../../tests/fixtures/invalid/multi/include_overrides_index_no_param_binding/src/lib/main.gcl",
@@ -5739,7 +5743,7 @@ fn imported_generic_field_obligation_is_checked_in_the_consumer() {
             (
                 "src/sem/main.gcl",
                 "import sem.lib as lib;\n\
-                 node bad: lib.Box<Time> = lib.Box<Time>(x: 1.0 s);\n",
+                 node bad: lib::Box<Time> = lib::Box<Time>(x: 1.0 s);\n",
             ),
         ],
         "src/sem/main.gcl",
@@ -5795,7 +5799,7 @@ fn selective_import_wrong_category_preserves_marker_and_alternatives() {
                 "pub const node JPY: Length = 1.0 m;\n\
                  pub const unit JPY: Length = 1.0 m;\n",
             ),
-            ("src/sem/main.gcl", "import sem.lib.{ dim JPY };\n"),
+            ("src/sem/main.gcl", "import sem.lib::{ dim JPY };\n"),
         ],
         "src/sem/main.gcl",
     );
@@ -5829,7 +5833,7 @@ dag pass_through {
 
 pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
 include pass_through(
-    Step: DistanceStep,
+    index Step: DistanceStep,
     samples: for distance: DistanceStep { distance },
 ) as output;
 ";
@@ -5863,10 +5867,10 @@ dag pass_through {
 
 pub index Phase = { Start, End };
 include pass_through(
-    Step: Phase,
+    index Step: Phase,
     samples: {
-        Phase.Start: 1.0 m,
-        Phase.End: 2.0 m,
+        Phase#Start: 1.0 m,
+        Phase#End: 2.0 m,
     },
 ) as output;
 ";
@@ -5922,8 +5926,8 @@ dag pass_through {
 
 pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
 include pass_through(
-    AxisDim: Time,
-    Step: TimeStep,
+    dim AxisDim: Time,
+    index Step: TimeStep,
     samples: for time: TimeStep { coord(time) },
 ) as output;
 ";
@@ -5939,14 +5943,14 @@ dag inner {
     pub node n: Int = count(for step: InnerStep { step });
 }
 
-dag outer {
+dag wrapper {
     pub(bind) index OuterStep: Time;
-    include inner(InnerStep: OuterStep) as inner_run;
+    include inner(index InnerStep: OuterStep) as inner_run;
     pub node n: Int = 1;
 }
 
 pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
-include outer(OuterStep: TimeStep) as output;
+include wrapper(index OuterStep: TimeStep) as output;
 ";
 
     compile_and_eval(source).unwrap();
@@ -5970,8 +5974,8 @@ pub node result: AxisDim[Step] = @samples;
                 r"
 pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
 include sem.library(
-    AxisDim: Time,
-    Step: TimeStep,
+    dim AxisDim: Time,
+    index Step: TimeStep,
     samples: for time: TimeStep { coord(time) },
 ) as output;
 ",
@@ -6002,7 +6006,7 @@ pub dag pass_through {
                 r"
 pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
 include sem.library.pass_through(
-    Step: DistanceStep,
+    index Step: DistanceStep,
     samples: for distance: DistanceStep { distance },
 ) as output;
 ",
@@ -6036,7 +6040,7 @@ fn file_dag_index_dimension_diagnostic_uses_importer_source_span() {
                 r"
 pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
 include sem.library(
-    Step: DistanceStep,
+    index Step: DistanceStep,
     samples: for distance: DistanceStep { distance },
 ) as output;
 ",
@@ -6052,7 +6056,7 @@ include sem.library(
         .render_report(&mut rendered, diagnostic)
         .unwrap();
 
-    assert!(rendered.contains("Step: DistanceStep"), "{rendered}");
+    assert!(rendered.contains("index Step: DistanceStep"), "{rendered}");
     assert!(!rendered.contains("OutOfBounds"), "{rendered}");
 }
 
@@ -6068,7 +6072,7 @@ dag analyze {
 }
 
 param input: Speed = 1.0 m/s;
-node result: Speed = @analyze(v: @input).out;
+node result: Speed = @analyze(v: @input)::out;
 ";
 
     let result = compile_and_eval_named(source, "test.gcl");
@@ -6090,11 +6094,11 @@ fn inline_dag_body_import_drives_dependency_loading() {
                 "src/sem/main.gcl",
                 "\
 dag scaled {
-    import sem.lib.{ scale };
+    import sem.lib::{ scale };
     param x: Dimensionless;
     pub node out: Dimensionless = @x * @scale;
 }
-node result: Dimensionless = @scaled(x: 2.0).out;
+node result: Dimensionless = @scaled(x: 2.0)::out;
 ",
             ),
         ],
@@ -6123,11 +6127,11 @@ fn inline_dag_body_value_import_is_available_to_call() {
 import sem.lib as lib;
 
 dag scaled {
-    import sem.lib.{ scale };
+    import sem.lib::{ scale };
     param x: Dimensionless;
     pub node out: Dimensionless = @x * @scale;
 }
-node result: Dimensionless = @scaled(x: 2.0).out;
+node result: Dimensionless = @scaled(x: 2.0)::out;
 ",
             ),
         ],
@@ -6147,13 +6151,13 @@ dag inner {
     pub node y: Dimensionless = @x + 1.0;
 }
 
-dag outer {
+dag wrapper {
     param z: Dimensionless;
-    include inner(x: @z).{ y };
+    include inner(x: @z)::{ y };
     pub node out: Dimensionless = @y + 1.0;
 }
 
-node result: Dimensionless = @outer(z: 2.0).out;
+node result: Dimensionless = @wrapper(z: 2.0)::out;
 ";
 
     let result = compile_and_eval(source).unwrap();
@@ -6164,14 +6168,14 @@ node result: Dimensionless = @outer(z: 2.0).out;
 #[test]
 fn nested_inline_dag_is_compilable_from_parent_body() {
     let source = "\
-dag outer {
+dag wrapper {
     dag inner {
         pub node result: Dimensionless = 4.0;
     }
-    pub node out: Dimensionless = @inner().result + 1.0;
+    pub node out: Dimensionless = @inner()::result + 1.0;
 }
 
-node result: Dimensionless = @outer().out;
+node result: Dimensionless = @wrapper()::out;
 ";
 
     let result = compile_and_eval(source).unwrap();
@@ -6188,7 +6192,7 @@ dag stage {
     pub node reported: Force = @thrust;
 }
 
-include stage(thrust: 10.0 N).{ internal_scratch };
+include stage(thrust: 10.0 N)::{ internal_scratch };
 node used: Force = @internal_scratch;
 ";
 
@@ -6210,13 +6214,14 @@ dag stage {
 }
 
 include stage(thrust: 10.0 N) as inst;
-node used: Force = @inst.internal_scratch;
+node used: Force = @inst::internal_scratch;
 ";
 
     let error = compile_and_eval(source).unwrap_err();
     assert!(matches!(
         error,
-        CompileError::Eval(GraphcalError::UnknownGraphRef { .. })
+        CompileError::Eval(GraphcalError::ImportPrivateItem { name, .. })
+            if name == "internal_scratch"
     ));
 }
 
@@ -6232,13 +6237,13 @@ fn inline_dag_include_and_call_share_body_import_semantics() {
                 "src/sem/main.gcl",
                 "\
 dag scaled {
-    import sem.lib.{ scale };
+    import sem.lib::{ scale };
     param x: Dimensionless;
     pub node out: Dimensionless = @x * @scale;
 }
 
-include scaled(x: 3.0).{ out as included };
-node called: Dimensionless = @scaled(x: 3.0).out;
+include scaled(x: 3.0)::{ out as included };
+node called: Dimensionless = @scaled(x: 3.0)::out;
 node difference: Dimensionless = @included - @called;
 ",
             ),
@@ -6267,7 +6272,7 @@ pub type Payload {
 }
 
 pub dag make_payload {
-    import sem.lib.{ type Payload, Payload };
+    import sem.lib::{ type Payload, Payload };
 
     pub node out: Payload = Payload(x: 1.0);
 }
@@ -6275,7 +6280,7 @@ pub dag make_payload {
             ),
             (
                 "src/sem/main.gcl",
-                "include sem.lib.make_payload().{ out };\n",
+                "include sem.lib.make_payload()::{ out };\n",
             ),
         ],
         "src/sem/main.gcl",
@@ -6296,14 +6301,17 @@ pub type Payload {
 }
 
 pub dag use_default {
-    import sem.lib.{ type Payload, Payload };
+    import sem.lib::{ type Payload, Payload };
 
     param p: Payload = Payload(x: 1.0);
     pub node y: Dimensionless = @p.x;
 }
 ",
             ),
-            ("src/sem/main.gcl", "include sem.lib.use_default().{ y };\n"),
+            (
+                "src/sem/main.gcl",
+                "include sem.lib.use_default()::{ y };\n",
+            ),
         ],
         "src/sem/main.gcl",
     );
@@ -6362,14 +6370,14 @@ dag bound_dag {
     param x: Dimensionless = 1.0;
 }
 
-include default_dag().{ x as default_x };
-include bound_dag(x: 2.0).{ x as bound_x };
-node sum: Dimensionless = @default_x + @bound_x;
+include default_dag()::{ x as default_x };
+include bound_dag(x: 2.0)::{ x as bound_x };
+node combined: Dimensionless = @default_x + @bound_x;
 ";
     let result = compile_and_eval(source).unwrap();
     assert!((find_value(&result, "default_x") - 1.0).abs() < 1e-10);
     assert!((find_value(&result, "bound_x") - 2.0).abs() < 1e-10);
-    assert!((find_value(&result, "sum") - 3.0).abs() < 1e-10);
+    assert!((find_value(&result, "combined") - 3.0).abs() < 1e-10);
 }
 
 #[test]
@@ -6382,10 +6390,10 @@ fn inline_dag_recursive_error() {
     let source = r"
 dag recursive {
     param x: Dimensionless;
-    include recursive(x: 1.0).{result};
+    include recursive(x: 1.0)::{result};
     node result: Dimensionless = @x;
 }
-include recursive(x: 1.0).{result};
+include recursive(x: 1.0)::{result};
 ";
     let result = compile_and_eval(source);
     assert!(result.is_err(), "recursive DAG should fail");
@@ -6403,12 +6411,12 @@ fn inline_dag_from_source() {
 dag add_velocities {
     param a: Velocity;
     param b: Velocity;
-    pub node sum: Velocity = @a + @b;
+    pub node combined: Velocity = @a + @b;
 }
 
 param v1: Velocity = 10.0 m/s;
 param v2: Velocity = 5.0 m/s;
-include add_velocities(a: @v1, b: @v2).{sum as total};
+include add_velocities(a: @v1, b: @v2)::{combined as total};
 node result: Velocity = @total;
 ";
     let result = compile_and_eval(source).unwrap();
@@ -6430,7 +6438,7 @@ dag scale {
 }
 
 param src: Length = 10.0 m;
-node doubled: Length = @scale(factor: 2.0, v: @src).result;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
 ";
     let result = compile_and_eval(source).unwrap();
     let doubled = find_value(&result, "doubled");
@@ -6449,7 +6457,7 @@ dag combine {
     pub node result: Dimensionless = @a * 10.0 + @b;
 }
 
-node combined: Dimensionless = @combine(b: 2.0, a: 1.0).result;
+node combined: Dimensionless = @combine(b: 2.0, a: 1.0)::result;
 ";
     let result = compile_and_eval(source).unwrap();
     assert!((find_value(&result, "combined") - 12.0).abs() < 1e-10);
@@ -6465,7 +6473,7 @@ dag combine {
 }
 
 include combine(b: 2.0, a: 1.0) as combined;
-node result: Dimensionless = @combined.result;
+node result: Dimensionless = @combined::result;
 ";
     let result = compile_and_eval(source).unwrap();
     assert!((find_value(&result, "result") - 12.0).abs() < 1e-10);
@@ -6478,8 +6486,8 @@ dag config {
     param factor: Dimensionless = 2.0;
 }
 
-node default_factor: Dimensionless = @config().factor;
-node bound_factor: Dimensionless = @config(factor: 3.0).factor;
+node default_factor: Dimensionless = @config()::factor;
+node bound_factor: Dimensionless = @config(factor: 3.0)::factor;
 ";
     let result = compile_and_eval(source).unwrap();
     assert!((find_value(&result, "default_factor") - 2.0).abs() < 1e-10);
@@ -6498,7 +6506,7 @@ dag two_step {
 }
 
 param src: Length = 3.0 m;
-node out: Length = @two_step(v: @src).result;
+node out: Length = @two_step(v: @src)::result;
 ";
     let result = compile_and_eval(source).unwrap();
     let out = find_value(&result, "out");
@@ -6512,13 +6520,13 @@ fn eval_inline_dag_call_imports_parent_const_with_alias() {
 pub const node seed_len: Length = 3.0 m;
 
 dag scaled {
-    import test.{seed_len as imported_seed};
+    import test::{seed_len as imported_seed};
 
     param factor: Dimensionless;
     pub node result: Length = @imported_seed * @factor;
 }
 
-node out: Length = @scaled(factor: 4.0).result;
+node out: Length = @scaled(factor: 4.0)::result;
 ";
     let result = compile_and_eval_named(source, "test.gcl").unwrap();
     let out = find_value(&result, "out");
@@ -6531,18 +6539,18 @@ fn cached_inline_template_refines_parent_const_types_for_repeated_instances() {
 pub const node radius: Length = 10.0 m;
 
 dag shifted {
-    import test.{radius};
+    import test::{radius};
 
     param altitude: Length;
     pub node result: Length = @radius + @altitude;
 }
 
-include shifted(altitude: 1.0 m).{ result as first };
-include shifted(altitude: 2.0 m).{ result as second };
+include shifted(altitude: 1.0 m)::{ result as first };
+include shifted(altitude: 2.0 m)::{ result as shifted_again };
 ";
     let result = compile_and_eval_named(source, "test.gcl").unwrap();
     assert!((find_value(&result, "first") - 11.0).abs() < 1e-10);
-    assert!((find_value(&result, "second") - 12.0).abs() < 1e-10);
+    assert!((find_value(&result, "shifted_again") - 12.0).abs() < 1e-10);
 }
 
 #[test]
@@ -6588,7 +6596,7 @@ fn absolute_inline_call_path_reports_imported_name_diagnostic() {
 
 #[test]
 fn eval_inline_dag_namespace_alias_at_field() {
-    // Issue #518: `include foo() as bar; @bar.member` was N002.
+    // Issue #518: `include foo() as bar; @bar::member` was N002.
     // Two instances confirm distinct namespaces.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/valid/inline_dag_namespace/main.gcl");
@@ -6601,7 +6609,7 @@ fn eval_inline_dag_namespace_alias_at_field() {
 
 #[test]
 fn eval_cross_file_include_namespace_alias_at_field() {
-    // Issue #518: `include path(...) as alias; @alias.member` across files.
+    // Issue #518: `include path(...) as alias; @alias::member` across files.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/valid/multi/instantiated_import_module/src/rocket/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -6611,7 +6619,7 @@ fn eval_cross_file_include_namespace_alias_at_field() {
 
 #[test]
 fn eval_import_namespace_alias_at_field() {
-    // Issue #518: `import path as alias; @alias.const_member` across files.
+    // Issue #518: `import path as alias; @alias::const_member` across files.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/valid/multi/module_import_alias/src/constants/main.gcl");
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
@@ -6644,7 +6652,7 @@ fn eval_qualified_const_refs_with_colliding_leaf_names() {
         &root,
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         const node combined: Dimensionless = @a.shared + @b.shared;\n\
+         const node combined: Dimensionless = @a::shared + @b::shared;\n\
          const node shared: Dimensionless = @combined + 1.0;\n\
          node out: Dimensionless = @shared;\n",
     )
@@ -6672,20 +6680,20 @@ fn eval_included_struct_array_field_access_uses_imported_type_metadata() {
     .unwrap();
     std::fs::write(
         root_dir.join("data.gcl"),
-        "import repro.types.{ type Item, Item };\n\
+        "import repro.types::{ type Item, Item };\n\
          pub index ItemId = { Only };\n\
          pub node items: Item[ItemId] = {\n\
-             ItemId.Only: Item(mass: 1.0 kg),\n\
+             ItemId#Only: Item(mass: 1.0 kg),\n\
          };\n",
     )
     .unwrap();
     let root = root_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "import repro.types.{ type Item };\n\
-         import repro.data.{ index ItemId };\n\
-         include repro.data().{ items };\n\
-         node first_mass: Mass = @items[ItemId.Only].mass;\n",
+        "import repro.types::{ type Item };\n\
+         import repro.data::{ index ItemId };\n\
+         include repro.data()::{ items };\n\
+         node first_mass: Mass = @items[ItemId#Only].mass;\n",
     )
     .unwrap();
 
@@ -6722,7 +6730,7 @@ fn eval_qualified_runtime_refs_with_colliding_leaf_names() {
         &root,
         "include collide.a() as a;\n\
          include collide.b() as b;\n\
-         node total: Dimensionless = @a.shared + @b.shared;\n\
+         node total: Dimensionless = @a::shared + @b::shared;\n\
          node shared: Dimensionless = @total + 1.0;\n\
          node out: Dimensionless = @shared;\n",
     )
@@ -6759,7 +6767,7 @@ fn eval_qualified_params_with_colliding_leaf_names() {
         "include collide.a() as a;\n\
          include collide.b() as b;\n\
          param shared: Dimensionless = 100.0;\n\
-         node total: Dimensionless = @a.shared + @b.shared + @shared;\n",
+         node total: Dimensionless = @a::shared + @b::shared + @shared;\n",
     )
     .unwrap();
 
@@ -6791,8 +6799,8 @@ fn eval_selective_import_aliases_with_colliding_leaf_names() {
     let root = root_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "import collide.a.{ shared as a_shared };\n\
-         import collide.b.{ shared as b_shared };\n\
+        "import collide.a::{ shared as a_shared };\n\
+         import collide.b::{ shared as b_shared };\n\
          const node shared: Dimensionless = 100.0;\n\
          node total: Dimensionless = @a_shared + @b_shared + @shared;\n",
     )
@@ -6826,8 +6834,8 @@ fn eval_overrides_reject_included_implementation_params() {
     let root = root_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "include collide.a().{ shared as a_shared };\n\
-         include collide.b().{ shared as b_shared };\n\
+        "include collide.a()::{ shared as a_shared };\n\
+         include collide.b()::{ shared as b_shared };\n\
          node total: Dimensionless = @a_shared + @b_shared;\n",
     )
     .unwrap();
@@ -6850,7 +6858,7 @@ fn eval_overrides_reject_included_implementation_params() {
 #[test]
 fn eval_include_dep_with_aliased_module_import() {
     // End-to-end coverage for including a dep that itself imports another
-    // module under an alias (`import lib as mission;` + `@mission.C`).
+    // module under an alias (`import lib as mission;` + `@mission::C`).
     // The merge must keep the dep's qualified imported-value keys intact
     // (see `merge_dependency_keeps_qualified_imported_value_keys` in
     // graphcal-compiler for the unit-level regression test).
@@ -6870,13 +6878,13 @@ fn eval_include_dep_with_aliased_module_import() {
     std::fs::write(
         root_dir.join("dep.gcl"),
         "import collide.lib as mission;\n\
-         pub node out: Dimensionless = @mission.C * 2.0;\n",
+         pub node out: Dimensionless = @mission::C * 2.0;\n",
     )
     .unwrap();
     let root = root_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "include collide.dep().{ out as dep_out };\n\
+        "include collide.dep()::{ out as dep_out };\n\
          node total: Dimensionless = @dep_out + 1.0;\n",
     )
     .unwrap();
@@ -6888,7 +6896,7 @@ fn eval_include_dep_with_aliased_module_import() {
 
 #[test]
 fn eval_inline_dag_include_cross_file_self_import() {
-    // Cross-file `include` of a DAG whose body has `import <self>.{...}`
+    // Cross-file `include` of a DAG whose body has `import <self>::{...}`
     // (resolved against the dag's parent file). The parent's value must
     // flow through `merge_dependency` into the importer's IR for eval.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
@@ -6914,8 +6922,8 @@ dag id_len {
     pub node result: Length = @v;
 }
 
-param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
-node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
+param dist: Length[Region] = { Region#A: 1.0 m, Region#B: 2.0 m };
+node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
 ";
     let result = compile_and_eval(source).unwrap();
     // distances is indexed, look it up by cell.
@@ -6954,13 +6962,13 @@ dag id_len {
     pub node result: Length = @v;
 }
 
-param dist_primary: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
-param dist_secondary: Length[Region] = { Region.A: 10.0 m, Region.B: 20.0 m };
+param dist_primary: Length[Region] = { Region#A: 1.0 m, Region#B: 2.0 m };
+param dist_secondary: Length[Region] = { Region#A: 10.0 m, Region#B: 20.0 m };
 
 node effective: Length[Source, Region] = for s: Source, r: Region {
     match s {
-        Source.Primary   => @id_len(v: @dist_primary[r]).result,
-        Source.Secondary => @id_len(v: @dist_secondary[r]).result,
+        Source#Primary   => @id_len(v: @dist_primary[r])::result,
+        Source#Secondary => @id_len(v: @dist_secondary[r])::result,
     }
 };
 ";
@@ -7031,7 +7039,7 @@ dag forward {
 }
 
 param src: Length = 3.0 m;
-node out: Length = @forward(v: @src).b;
+node out: Length = @forward(v: @src)::b;
 ";
     let result = compile_and_eval(source).unwrap();
     let out = find_value(&result, "out");
@@ -7054,8 +7062,8 @@ fn eval_cross_file_inline_dag_nested_call_uses_canonical_target_with_same_leaf_o
         "pub dag helper {\n\
              pub node result: Dimensionless = 2.0;\n\
          }\n\
-         pub dag outer {\n\
-             pub node result: Dimensionless = @helper().result + 10.0;\n\
+         pub dag wrapper {\n\
+             pub node result: Dimensionless = @helper()::result + 10.0;\n\
          }\n",
     )
     .unwrap();
@@ -7064,8 +7072,8 @@ fn eval_cross_file_inline_dag_nested_call_uses_canonical_target_with_same_leaf_o
         "pub dag helper {\n\
              pub node result: Dimensionless = 100.0;\n\
          }\n\
-         pub dag outer {\n\
-             pub node result: Dimensionless = @helper().result + 1000.0;\n\
+         pub dag wrapper {\n\
+             pub node result: Dimensionless = @helper()::result + 1000.0;\n\
          }\n",
     )
     .unwrap();
@@ -7077,9 +7085,9 @@ fn eval_cross_file_inline_dag_nested_call_uses_canonical_target_with_same_leaf_o
          dag helper {\n\
              pub node result: Dimensionless = 10000.0;\n\
          }\n\
-         node out_a: Dimensionless = @a.outer().result;\n\
-         node out_b: Dimensionless = @b.outer().result;\n\
-         node out_local: Dimensionless = @helper().result;\n\
+         node out_a: Dimensionless = @a.wrapper()::result;\n\
+         node out_b: Dimensionless = @b.wrapper()::result;\n\
+         node out_local: Dimensionless = @helper()::result;\n\
          node total: Dimensionless = @out_a + @out_b + @out_local;\n",
     )
     .unwrap();
@@ -7123,8 +7131,8 @@ fn eval_public_values_preserve_same_leaf_imported_index_owners() {
         &root,
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
-         node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n",
+         node series_a: Dimensionless[a::Phase] = for p: a::Phase { 1.0 };\n\
+         node series_b: Dimensionless[b::Phase] = for p: b::Phase { 2.0 };\n",
     )
     .unwrap();
 
@@ -7165,15 +7173,15 @@ fn eval_inline_dag_call_indexed_output_projection() {
 pub index Region = { A, B };
 
 dag doubler {
-    import input.{ index Region };
+    import input::{ index Region };
 
     param v: Length[Region];
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
 }
 
-param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 3.0 m };
-node out_a: Length = @doubler(v: @dist).result[Region.A];
-node out_b: Length = @doubler(v: @dist).result[Region.B];
+param dist: Length[Region] = { Region#A: 1.0 m, Region#B: 3.0 m };
+node out_a: Length = @doubler(v: @dist)::result[Region#A];
+node out_b: Length = @doubler(v: @dist)::result[Region#B];
 ";
     let result = compile_and_eval(source).unwrap();
     let a = find_value(&result, "out_a");
@@ -7252,8 +7260,8 @@ param schedule: Datetime(
     min: datetime("2024-01-01T00:00:00Z"),
     max: datetime("2024-12-31T23:59:59Z"),
 )[Event] = {
-    Event.Early: datetime("2023-12-31T23:59:59Z"),
-    Event.OnTime: datetime("2024-06-01T00:00:00Z"),
+    Event#Early: datetime("2023-12-31T23:59:59Z"),
+    Event#OnTime: datetime("2024-06-01T00:00:00Z"),
 };
 "#,
     )
@@ -7329,8 +7337,8 @@ type Schedule {
     )[Slot]),
 }
 node BAD: Schedule = Schedule(events: {
-    Slot.First: datetime("2024-06-01T00:00:00Z"),
-    Slot.Second: datetime("2025-01-01T00:00:00Z"),
+    Slot#First: datetime("2024-06-01T00:00:00Z"),
+    Slot#Second: datetime("2025-01-01T00:00:00Z"),
 });
 "#,
     )
@@ -7370,16 +7378,16 @@ param event: Datetime(min: @start) = datetime("2024-06-01T00:00:00Z");
 #[test]
 fn int_domain_constraints_preserve_i64_extremes() {
     let result = compile_and_eval(
-        "param minimum: Int(\
+        "param min_value: Int(\
          min: -9223372036854775807 - 1, \
          max: 9223372036854775807) = -9223372036854775807 - 1;\n\
-         param maximum: Int(\
+         param max_value: Int(\
          min: -9223372036854775807 - 1, \
          max: 9223372036854775807) = 9223372036854775807;",
     )
     .unwrap();
-    assert_eq!(find_int_value(&result, "minimum"), i64::MIN);
-    assert_eq!(find_int_value(&result, "maximum"), i64::MAX);
+    assert_eq!(find_int_value(&result, "min_value"), i64::MIN);
+    assert_eq!(find_int_value(&result, "max_value"), i64::MAX);
 }
 
 // ---- Domain constraints on struct/union member fields (#450 Pos 1+2) ----
@@ -7660,14 +7668,14 @@ dag bumper {
     pub node out: Velocity = @v * 2.0;
 }
 param speed: Velocity = 1000.0 m/s;
-include bumper(v: @speed).{ out as doubled };
+include bumper(v: @speed)::{ out as doubled };
 ";
     let result = compile_and_eval(source).unwrap();
     let (_, v_result, _) = result
         .all
         .iter()
-        .find(|(n, _, _)| n.to_string() == "bumper.v")
-        .expect("bumper.v not found");
+        .find(|(n, _, _)| n.to_string() == "bumper::v")
+        .expect("bumper::v not found");
     assert!(v_result.is_err(), "v should violate domain constraint");
 }
 
@@ -7678,7 +7686,7 @@ dag bumper {
     param v: Velocity(min: 1.0 kg);
     pub node out: Velocity = @v;
 }
-include bumper(v: 5.0 m/s).{ out };
+include bumper(v: 5.0 m/s)::{ out };
 ";
     let err = compile_and_eval(source).unwrap_err();
     assert!(
@@ -7702,7 +7710,7 @@ dag with_const {
 }
 
 param src: Length = 4.0 m;
-node out: Length = @with_const(v: @src).result;
+node out: Length = @with_const(v: @src)::result;
 ";
     let result = compile_and_eval(source).unwrap();
     let out = find_value(&result, "out");
@@ -7730,8 +7738,8 @@ fn dag_local_required_types_enable_reusable_linear_algebra() {
     let source = include_str!("../../../../tests/fixtures/valid/linear_algebra_reusable_dag.gcl");
     let result = compile_and_eval(source).unwrap();
 
-    assert!((find_value(&result, "displacement_magnitude.result") - 13.0).abs() < 1e-12);
-    assert!((find_value(&result, "duration_magnitude.result") - 13.0).abs() < 1e-12);
+    assert!((find_value(&result, "displacement_magnitude::result") - 13.0).abs() < 1e-12);
+    assert!((find_value(&result, "duration_magnitude::result") - 13.0).abs() < 1e-12);
     assert!(
         result
             .assertions

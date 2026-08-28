@@ -1,4 +1,4 @@
-import demo.vocabulary.{ type Envelope };
+import demo.vocabulary::{ type Envelope };
 
 param envelope: Envelope;
 pub node accepted: Bool = true;

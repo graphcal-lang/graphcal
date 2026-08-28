@@ -583,17 +583,19 @@ fn classify_param_bindings(
                 }));
             }
             category => {
-                return Err(CompileError::Eval(GraphcalError::DagInputCategoryMismatch {
-                    name: binding_name.to_string(),
-                    expected: match category {
-                        InputBindingCategory::Unmarked => "param",
-                        InputBindingCategory::Type => "type",
-                        InputBindingCategory::Dimension => "dim",
-                        InputBindingCategory::Index => "index",
+                return Err(CompileError::Eval(
+                    GraphcalError::DagInputCategoryMismatch {
+                        name: binding_name.to_string(),
+                        expected: match category {
+                            InputBindingCategory::Unmarked => "param",
+                            InputBindingCategory::Type => "type",
+                            InputBindingCategory::Dimension => "dim",
+                            InputBindingCategory::Index => "index",
+                        },
+                        src: file_src.clone(),
+                        span: binding.name.span.into(),
                     },
-                    src: file_src.clone(),
-                    span: binding.name.span.into(),
-                }));
+                ));
             }
         }
     }
@@ -726,11 +728,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                 let is_graph_value = is_term_namespace
                     && (dep_index.is_const(orig_name) || dep_index.is_runtime(orig_name));
                 if is_graph_value {
-                    validate_reserved_alias(
-                        ReservedNameNamespace::Term,
-                        import_item,
-                        file_src,
-                    )?;
+                    validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;
                 }
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
@@ -981,11 +979,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                             .is_some_and(|(name, _)| name == orig_name.as_str())
                     });
                 if is_graph_value {
-                    validate_reserved_alias(
-                        ReservedNameNamespace::Term,
-                        import_item,
-                        file_src,
-                    )?;
+                    validate_reserved_alias(ReservedNameNamespace::Term, import_item, file_src)?;
                 }
                 let hidden =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;

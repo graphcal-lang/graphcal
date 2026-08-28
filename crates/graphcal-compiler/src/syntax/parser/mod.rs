@@ -241,7 +241,6 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-
     #[error("`^0` exponent has no effect")]
     #[diagnostic(
         code(graphcal::P016),

@@ -791,11 +791,7 @@ impl Parser<'_> {
                     || ("EOF".to_string(), start_span),
                     |(tok, span)| (tok.to_string(), span),
                 );
-                Err(self.unexpected_token(
-                    "`:` after label in map literal",
-                    &found,
-                    found_span,
-                ))
+                Err(self.unexpected_token("`:` after label in map literal", &found, found_span))
             }
         } else if self.lexer.peek() == Some(&Token::LParen) {
             // Could be tuple-key map literal: { (Index#Label, ...): expr, ... }

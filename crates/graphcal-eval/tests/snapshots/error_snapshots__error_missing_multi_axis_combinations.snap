@@ -2,14 +2,14 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-non-exhaustive map literal: missing 3 entries; first missing entry is (missing_multi_axis_combinations.Row.First, missing_multi_axis_combinations.Column.Right)
+non-exhaustive map literal: missing 3 entries; first missing entry is (missing_multi_axis_combinations.Row#First, missing_multi_axis_combinations.Column#Right)
     Diagnostic severity: error
 Begin snippet for missing_multi_axis_combinations.gcl starting at line 3, column 1
 
 snippet line 3: 
 snippet line 4: param values: Dimensionless[Row, Column] = {
     label starting at line 4, column 44: error here
-snippet line 5:     (Row.First, Column.Left): 1.0,
+snippet line 5:     (Row#First, Column#Left): 1.0,
 snippet line 6: };
     label ending at line 6, column 1: error here
 diagnostic code: graphcal::E001

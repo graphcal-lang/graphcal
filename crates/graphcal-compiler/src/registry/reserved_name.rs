@@ -7,10 +7,10 @@
 use thiserror::Error;
 
 use crate::builtin::{BuiltinConst, BuiltinFnName};
-use crate::registry::time_scale::TimeScale;
 use crate::registry::prelude::{
     PRELUDE_BUILTIN_TYPE_NAMES, PRELUDE_DIMENSION_NAMES, PRELUDE_UNIT_NAMES,
 };
+use crate::registry::time_scale::TimeScale;
 use crate::syntax::names::NameAtom;
 
 /// Semantic namespace into which a source-visible local name is introduced.
@@ -92,9 +92,7 @@ pub fn validate_reserved_name(
         }
         ReservedNameNamespace::Term => BuiltinConst::parse(name.as_str())
             .map(ReservedName::BuiltinConstant)
-            .or_else(|| {
-                BuiltinFnName::parse(name.as_str()).map(ReservedName::BuiltinFunction)
-            })
+            .or_else(|| BuiltinFnName::parse(name.as_str()).map(ReservedName::BuiltinFunction))
             .or_else(|| {
                 matches!(
                     name.as_str(),

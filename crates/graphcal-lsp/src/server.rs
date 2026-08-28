@@ -2334,9 +2334,11 @@ fn selective_import_spelling(
             local.clone(),
             leaf,
         )),
-        SymbolKey::Field(_) | SymbolKey::GenericParam(_) => Some(
-            SourceSymbolPath::associated(Vec::new(), local.clone(), leaf),
-        ),
+        SymbolKey::Field(_) | SymbolKey::GenericParam(_) => Some(SourceSymbolPath::associated(
+            Vec::new(),
+            local.clone(),
+            leaf,
+        )),
         _ => Some(SourceSymbolPath::module_member(vec![local.clone()], leaf)),
     }
 }
@@ -3656,7 +3658,8 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        for (spelling, expected_uri) in [("left::Measure", left_uri), ("right::Measure", right_uri)] {
+        for (spelling, expected_uri) in [("left::Measure", left_uri), ("right::Measure", right_uri)]
+        {
             let offset = text.find(spelling).unwrap() + spelling.find("::").unwrap() + 3;
             let resolved = resolve_symbol_at(&analysis, offset)
                 .unwrap_or_else(|| panic!("resolve `{spelling}`"));
@@ -4034,8 +4037,7 @@ node bad: Mass = mass + length;
 
         let table_axis = text.find("table[axes::Scenario").unwrap() + "table[axes::".len();
         let slice_axis = text.find("[axes::Scenario#Nominal]").unwrap() + "[axes::".len();
-        let slice_variant =
-            text.find("axes::Scenario#Nominal").unwrap() + "axes::Scenario#".len();
+        let slice_variant = text.find("axes::Scenario#Nominal").unwrap() + "axes::Scenario#".len();
         let column_variant = text.find(": X;").unwrap() + 2;
         let row_variant = text.find("A: 1.0;").unwrap();
 

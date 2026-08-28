@@ -76,7 +76,7 @@ import plugin "graphcal:sdk-drift" as sdk {
     fn f_struct(x: Dimensionless) -> DriftStruct;
 }
 
-node ok: Dimensionless = sdk.f_dimensionless(1.0);
+node ok: Dimensionless = sdk::f_dimensionless(1.0);
 "#;
 
 /// Register every macro-manifest signature under the drift identity, the

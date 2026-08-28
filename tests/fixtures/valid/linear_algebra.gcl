@@ -25,7 +25,7 @@ param square: Length[Fin(2), Fin(2)] = table[Fin(2), Fin(2)] {
 };
 
 node dot_ab: Length = dot(@a, @b);
-node product: Length[Fin(2), Fin(2)] = matmul(@A, @B);
+node matrix_product: Length[Fin(2), Fin(2)] = matmul(@A, @B);
 node A_t: Length[Fin(3), Fin(2)] = transpose(@A);
 node square_trace: Length = trace(@square);
 node a_norm: Length = norm(@a);
@@ -63,8 +63,8 @@ node square_det: Area = det(@square);
 node inverse_identity_00: Dimensionless = @square_inverse[0, 0] * @square[0, 0] + @square_inverse[0, 1] * @square[1, 0];
 
 assert dot_result = @dot_ab == 32.0 m;
-assert matmul_00 = @product[0, 0] == 58.0 m;
-assert matmul_11 = @product[1, 1] == 154.0 m;
+assert matmul_00 = @matrix_product[0, 0] == 58.0 m;
+assert matmul_11 = @matrix_product[1, 1] == 154.0 m;
 assert transpose_20 = @A_t[2, 0] == 3.0 m;
 assert trace_result = @square_trace == 5.0 m;
 assert norm_result = @a_norm ~= 3.7416573867739413 m +/- 1.0e-12 m;

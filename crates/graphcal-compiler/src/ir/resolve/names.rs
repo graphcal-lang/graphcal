@@ -24,15 +24,13 @@ pub fn parse_expected_fail_args(
     let keys: Vec<ParsedExpectedFailKey> = args
         .iter()
         .map(|arg| match arg {
-            AttributeArg::IndexLabel {
-                index,
-                label,
-                span,
-            } => Ok(vec![ExpectedFailKeyPart::parsed(
-                index.value.clone(),
-                label.value.clone(),
-                *span,
-            )]),
+            AttributeArg::IndexLabel { index, label, span } => {
+                Ok(vec![ExpectedFailKeyPart::parsed(
+                    index.value.clone(),
+                    label.value.clone(),
+                    *span,
+                )])
+            }
             AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
                 src: src.clone(),
                 span: path.span.into(),
@@ -47,21 +45,17 @@ pub fn parse_expected_fail_args(
                 let key: Result<ParsedExpectedFailKey, GraphcalError> = elements
                     .iter()
                     .map(|elem| match elem {
-                        AttributeArg::IndexLabel {
-                            index,
-                            label,
-                            span,
-                        } => Ok(ExpectedFailKeyPart::parsed(
-                            index.value.clone(),
-                            label.value.clone(),
-                            *span,
-                        )),
-                        AttributeArg::Path { path } => {
-                            Err(GraphcalError::ExpectedFailInvalidArg {
-                                src: src.clone(),
-                                span: path.span.into(),
-                            })
+                        AttributeArg::IndexLabel { index, label, span } => {
+                            Ok(ExpectedFailKeyPart::parsed(
+                                index.value.clone(),
+                                label.value.clone(),
+                                *span,
+                            ))
                         }
+                        AttributeArg::Path { path } => Err(GraphcalError::ExpectedFailInvalidArg {
+                            src: src.clone(),
+                            span: path.span.into(),
+                        }),
                         AttributeArg::FinitePosition { position, span } => {
                             Ok(ExpectedFailKeyPart::FinitePosition {
                                 position: *position,

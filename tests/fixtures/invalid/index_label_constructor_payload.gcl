@@ -5,4 +5,4 @@ type Wrapper {
     Wrapper(value: Dimensionless),
 }
 
-node x: Wrapper = Wrapper(value: Maneuver.A);
+node x: Wrapper = Wrapper(value: Maneuver#A);

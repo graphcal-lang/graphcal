@@ -44,9 +44,13 @@ fn imported_module_target(
     if binding.role != graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
         return None;
     }
-    Some(children.iter().fold(binding.target.clone(), |target, child| {
-        target.child(child.as_str())
-    }))
+    Some(
+        children
+            .iter()
+            .fold(binding.target.clone(), |target, child| {
+                target.child(child.as_str())
+            }),
+    )
 }
 
 fn is_imported_dynamic_unit_during_lowering(

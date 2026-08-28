@@ -302,7 +302,7 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     let main = project.join("src/mission/main.gcl");
     std::fs::write(
         &main,
-        "import units_v1.lib.{ one };\n\
+        "import units_v1.lib::{ one };\n\
          node two: Dimensionless = @one + 1.0;\n",
     )
     .unwrap();
@@ -424,12 +424,12 @@ fn concurrent_lock_commands_publish_one_shared_source_safely() {
     let main_a = write_package_project(
         &project_a,
         &dependency,
-        "import units.lib.{ one };\nnode a: Dimensionless = @one;\n",
+        "import units.lib::{ one };\nnode a: Dimensionless = @one;\n",
     );
     let main_b = write_package_project(
         &project_b,
         &dependency,
-        "import units.lib.{ one };\nnode b: Dimensionless = @one;\n",
+        "import units.lib::{ one };\nnode b: Dimensionless = @one;\n",
     );
     let cache = dir.path().join("cache");
 
@@ -548,7 +548,7 @@ fn deps_lock_rejects_transitive_local_git_before_materialization() {
              parent = {{ git = \"{}\", rev = \"{parent_rev}\" }}\n",
             test_remote_git_url(&parent_repo)
         ),
-        "import parent.lib.{ one };\nnode two: Dimensionless = @one + 1.0;\n",
+        "import parent.lib::{ one };\nnode two: Dimensionless = @one + 1.0;\n",
     );
     let cache = dir.path().join("cache");
 
@@ -587,7 +587,7 @@ fn package_consumers_fail_without_lockfile() {
              units = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
             test_remote_git_url(&dep_repo)
         ),
-        "import units.lib.{ one };\n\
+        "import units.lib::{ one };\n\
          node two: Dimensionless = @one + 1.0;\n",
     );
     let cache = dir.path().join("cache");
@@ -627,7 +627,7 @@ fn package_consumers_reject_cached_source_hash_mismatch() {
              units = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
             test_remote_git_url(&dep_repo)
         ),
-        "import units.lib.{ one };\n\
+        "import units.lib::{ one };\n\
          node two: Dimensionless = @one + 1.0;\n",
     );
     let cache = dir.path().join("cache");
@@ -716,7 +716,7 @@ fn deps_lock_supports_contextual_transitive_resolution() {
              units = {{ git = \"{}\", rev = \"{units_rev1}\" }}\n",
             test_remote_git_url(&units_repo)
         ),
-        "import units.lib.{ one as units_one };\n\
+        "import units.lib::{ one as units_one };\n\
          pub const node one: Dimensionless = @units_one;\n",
     );
     let thermal_repo = dir.path().join("thermal-repo");
@@ -728,7 +728,7 @@ fn deps_lock_supports_contextual_transitive_resolution() {
              units = {{ git = \"{}\", rev = \"{units_rev2}\" }}\n",
             test_remote_git_url(&units_repo)
         ),
-        "import units.lib.{ one as units_one };\n\
+        "import units.lib::{ one as units_one };\n\
          pub const node one: Dimensionless = @units_one;\n",
     );
     let project = dir.path().join("mission");
@@ -741,9 +741,9 @@ fn deps_lock_supports_contextual_transitive_resolution() {
             test_remote_git_url(&orbital_repo),
             test_remote_git_url(&thermal_repo)
         ),
-        "import orbital.lib.{ one as orbital_one };\n\
-         import thermal.lib.{ one as thermal_one };\n\
-         node sum: Dimensionless = @orbital_one + @thermal_one;\n",
+        "import orbital.lib::{ one as orbital_one };\n\
+         import thermal.lib::{ one as thermal_one };\n\
+         node combined: Dimensionless = @orbital_one + @thermal_one;\n",
     );
     let cache = dir.path().join("cache");
 
@@ -782,14 +782,14 @@ fn deps_lock_supports_contextual_transitive_resolution() {
     assert!(
         stdout
             .lines()
-            .any(|line| line.starts_with("sum") && line.contains("= 3")),
+            .any(|line| line.starts_with("combined") && line.contains("= 3")),
         "stdout: {stdout}"
     );
 
     let bad_main = project.join("src/mission/bad.gcl");
     std::fs::write(
         &bad_main,
-        "import units.lib.{ one };\n\
+        "import units.lib::{ one };\n\
          node x: Dimensionless = @one;\n",
     )
     .unwrap();
@@ -847,9 +847,9 @@ fn package_instance_identities_distinguish_aliases_and_revisions() {
             test_remote_git_url(&units_repo),
             test_remote_git_url(&units_repo)
         ),
-        "import units_a.lib.{ dim Money as MoneyA, price as price_a };\n\
-         import units_b.lib.{ price as price_b };\n\
-         import units_v2.lib.{ dim Money as MoneyV2, price as price_v2 };\n\
+        "import units_a.lib::{ dim Money as MoneyA, price as price_a };\n\
+         import units_b.lib::{ price as price_b };\n\
+         import units_v2.lib::{ dim Money as MoneyV2, price as price_v2 };\n\
          node shared_sum: MoneyA = @price_a + @price_b;\n\
          node keep_v2: MoneyV2 = @price_v2;\n",
     );
@@ -883,8 +883,8 @@ fn package_instance_identities_distinguish_aliases_and_revisions() {
     let bad_main = project.join("src/mission/bad_money.gcl");
     std::fs::write(
         &bad_main,
-        "import units_a.lib.{ dim Money as MoneyA, price as price_a };\n\
-         import units_v2.lib.{ price as price_v2 };\n\
+        "import units_a.lib::{ dim Money as MoneyA, price as price_a };\n\
+         import units_v2.lib::{ price as price_v2 };\n\
          node bad_sum: MoneyA = @price_a + @price_v2;\n",
     )
     .unwrap();
@@ -1002,15 +1002,15 @@ dag units {
     pub node distance: Length = 1.0 DynamicM;
 }
 node rates: Dimensionless[Rate] = {
-    Rate.Two: 2.0,
-    Rate.Three: 3.0,
+    Rate#Two: 2.0,
+    Rate#Three: 3.0,
 };
 node values: Length[Rate] = for rate: Rate {
-    @units(rate: @rates[rate]).distance
+    @units(rate: @rates[rate])::distance
 };
 node reversed: Length[Order] = {
-    Order.First: @values[Rate.Three],
-    Order.Second: @values[Rate.Two],
+    Order#First: @values[Rate#Three],
+    Order#Second: @values[Rate#Two],
 };
 ",
     );
@@ -1170,8 +1170,8 @@ fn eval_heterogeneous_table_units_are_never_misrepresented_by_one_caption() {
         "index R = { A, B };\n\
          index C = { X };\n\
          node grid: Length[R, C] = {\n\
-             (R.A, C.X): 1000.0 m -> km,\n\
-             (R.B, C.X): 2000.0 m -> m,\n\
+             (R#A, C#X): 1000.0 m -> km,\n\
+             (R#B, C#X): 2000.0 m -> m,\n\
          };\n",
     );
 
@@ -1246,12 +1246,12 @@ fn eval_same_leaf_imported_indexes_keep_names_and_display_metadata() {
         &root,
         "import collide.a as a;\n\
          import collide.b as b;\n\
-         node series_a: Dimensionless[a.Phase] = for p: a.Phase { 1.0 };\n\
-         node series_b: Dimensionless[b.Phase] = for p: b.Phase { 2.0 };\n\
-         node samples_a: Time[a.TimeStep] = for t: a.TimeStep { coord(t) };\n\
-         node samples_b: Time[b.TimeStep] = for t: b.TimeStep { coord(t) };\n\
-         node peak_a: Key<a.TimeStep> = argmax(@samples_a);\n\
-         node peak_b: Key<b.TimeStep> = argmax(@samples_b);\n",
+         node series_a: Dimensionless[a::Phase] = for p: a::Phase { 1.0 };\n\
+         node series_b: Dimensionless[b::Phase] = for p: b::Phase { 2.0 };\n\
+         node samples_a: Time[a::TimeStep] = for t: a::TimeStep { coord(t) };\n\
+         node samples_b: Time[b::TimeStep] = for t: b::TimeStep { coord(t) };\n\
+         node peak_a: Key<a::TimeStep> = argmax(@samples_a);\n\
+         node peak_b: Key<b::TimeStep> = argmax(@samples_b);\n",
     )
     .unwrap();
 
@@ -1319,7 +1319,7 @@ dag calc {
 }
 
 param x: Dimensionless = 1.0;
-include calc(x: @x).{ out };
+include calc(x: @x)::{ out };
 ",
     );
 
@@ -1335,7 +1335,7 @@ include calc(x: @x).{ out };
     let surface_stdout = String::from_utf8(surface.stdout).unwrap();
     assert!(surface_stdout.contains("x   = 1"), "{surface_stdout}");
     assert!(surface_stdout.contains("out = 4"), "{surface_stdout}");
-    assert!(!surface_stdout.contains("calc."), "{surface_stdout}");
+    assert!(!surface_stdout.contains("calc::"), "{surface_stdout}");
 
     let all = graphcal_bin()
         .args(["eval", root.to_str().unwrap(), "--output-view", "all"])
@@ -1347,7 +1347,7 @@ include calc(x: @x).{ out };
         String::from_utf8_lossy(&all.stderr)
     );
     let all_stdout = String::from_utf8(all.stdout).unwrap();
-    for expected in ["calc.x", "calc.internal", "calc.out", "out"] {
+    for expected in ["calc::x", "calc::internal", "calc::out", "out"] {
         assert!(
             all_stdout.contains(expected),
             "missing `{expected}`:\n{all_stdout}"
@@ -1374,7 +1374,7 @@ fn eval_output_view_is_consistent_for_empty_file_include_and_json() {
     let root = write_temp_file(
         dir.path(),
         "src/pkg/main.gcl",
-        "include pkg.lib().{ out };\n",
+        "include pkg.lib()::{ out };\n",
     );
 
     let run_json = |extra: &[&str]| {
@@ -1392,12 +1392,12 @@ fn eval_output_view_is_consistent_for_empty_file_include_and_json() {
 
     let surface = run_json(&[]);
     assert_eq!(surface["node"]["out"]["si_value"].as_f64(), Some(4.0));
-    assert!(surface["node"].get("lib.internal").is_none());
+    assert!(surface["node"].get("lib::internal").is_none());
     assert!(surface["param"].get("out").is_none());
 
     let all = run_json(&["--output-view", "all"]);
-    assert_eq!(all["node"]["lib.internal"]["si_value"].as_f64(), Some(2.0));
-    assert_eq!(all["node"]["lib.out"]["si_value"].as_f64(), Some(4.0));
+    assert_eq!(all["node"]["lib::internal"]["si_value"].as_f64(), Some(2.0));
+    assert_eq!(all["node"]["lib::out"]["si_value"].as_f64(), Some(4.0));
     assert_eq!(all["node"]["out"]["si_value"].as_f64(), Some(4.0));
 }
 
@@ -1415,7 +1415,7 @@ dag calc {
 }
 
 param x: Dimensionless = 1.0;
-include calc(x: @x).{ out };
+include calc(x: @x)::{ out };
 ",
     );
 
@@ -1438,7 +1438,7 @@ include calc(x: @x).{ out };
             .any(|line| line.starts_with("out ") && line.ends_with("= 1")),
         "stdout: {stdout}"
     );
-    assert!(stderr.contains("calc.broken"), "stderr: {stderr}");
+    assert!(stderr.contains("calc::broken"), "stderr: {stderr}");
     assert!(stderr.contains("division by zero"), "stderr: {stderr}");
 }
 
@@ -1460,7 +1460,7 @@ dag checked {
 
 include checked(v: 1.0) as good;
 include checked(v: -1.0) as bad;
-node sum2: Dimensionless = @good.out + @bad.out;
+node sum2: Dimensionless = @good::out + @bad::out;
 ",
     );
 
@@ -1475,21 +1475,21 @@ node sum2: Dimensionless = @good.out + @bad.out;
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    for needle in ["good.v ", "good.out", "bad.v ", "bad.out"] {
+    for needle in ["good::v ", "good::out", "bad::v ", "bad::out"] {
         assert!(
             stdout.contains(needle),
             "missing value `{needle}` from stdout:\n{stdout}"
         );
     }
     assert!(
-        stdout.contains("good.v_positive  PASS"),
+        stdout.contains("good::v_positive  PASS"),
         "good instance should pass on stdout:\n{stdout}"
     );
     assert!(
-        stderr.contains("bad.v_positive   FAIL"),
+        stderr.contains("bad::v_positive   FAIL"),
         "bad instance should fail on stderr:\n{stderr}"
     );
-    for hidden in ["good.internal", "bad.internal"] {
+    for hidden in ["good::internal", "bad::internal"] {
         assert!(!stdout.contains(hidden), "stdout:\n{stdout}");
         assert!(!stderr.contains(hidden), "stderr:\n{stderr}");
     }
@@ -1507,17 +1507,17 @@ node sum2: Dimensionless = @good.out + @bad.out;
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON");
 
     // JSON keeps one entry per instance — nothing is silently dropped.
-    assert_eq!(json["param"]["good.v"]["si_value"].as_f64(), Some(1.0));
-    assert_eq!(json["param"]["bad.v"]["si_value"].as_f64(), Some(-1.0));
-    assert_eq!(json["node"]["good.out"]["si_value"].as_f64(), Some(2.0));
-    assert_eq!(json["node"]["bad.out"]["si_value"].as_f64(), Some(-2.0));
+    assert_eq!(json["param"]["good::v"]["si_value"].as_f64(), Some(1.0));
+    assert_eq!(json["param"]["bad::v"]["si_value"].as_f64(), Some(-1.0));
+    assert_eq!(json["node"]["good::out"]["si_value"].as_f64(), Some(2.0));
+    assert_eq!(json["node"]["bad::out"]["si_value"].as_f64(), Some(-2.0));
     assert_eq!(json["node"]["sum2"]["si_value"].as_f64(), Some(0.0));
     assert_eq!(
-        json["assert"]["good.v_positive"]["status"].as_str(),
+        json["assert"]["good::v_positive"]["status"].as_str(),
         Some("pass")
     );
     assert_eq!(
-        json["assert"]["bad.v_positive"]["status"].as_str(),
+        json["assert"]["bad::v_positive"]["status"].as_str(),
         Some("fail")
     );
 }
@@ -1541,7 +1541,7 @@ dag checked {
 
 include checked(v: 1.0) as pos;
 include checked(v: -1.0) as neg;
-node use_both: Dimensionless = @pos.out + @neg.out;
+node use_both: Dimensionless = @pos::out + @neg::out;
 ",
     );
 
@@ -1557,11 +1557,11 @@ node use_both: Dimensionless = @pos.out + @neg.out;
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stdout.contains("pos.is_neg  PASS"),
+        stdout.contains("pos::is_neg  PASS"),
         "pos instance fails as expected on stdout → PASS:\n{stdout}"
     );
     assert!(
-        stderr.contains("neg.is_neg  FAIL  (assertion passed but was marked #[expected_fail])"),
+        stderr.contains("neg::is_neg  FAIL  (assertion passed but was marked #[expected_fail])"),
         "neg instance passes unexpectedly on stderr → FAIL:\n{stderr}"
     );
 }
@@ -1575,9 +1575,9 @@ fn check_rejects_duplicate_expected_fail_variant() {
         "main.gcl",
         r"
 pub index Mode = { A, B };
-param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
-param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
-#[expected_fail(Mode.A, Mode.A)]
+param lhs: Dimensionless[Mode] = { Mode#A: 1.0, Mode#B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode#A: 2.0, Mode#B: 0.0 };
+#[expected_fail(Mode#A, Mode#A)]
 assert order = for m: Mode { @lhs[m] > @rhs[m] };
 ",
     );
@@ -1603,9 +1603,9 @@ fn check_rejects_foreign_expected_fail_variant() {
         r"
 pub index Mode = { A, B };
 pub index Other = { A, B };
-param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
-param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
-#[expected_fail(Other.A)]
+param lhs: Dimensionless[Mode] = { Mode#A: 1.0, Mode#B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode#A: 2.0, Mode#B: 0.0 };
+#[expected_fail(Other#A)]
 assert order = for m: Mode { @lhs[m] > @rhs[m] };
 ",
     );
@@ -1636,11 +1636,11 @@ pub index Phase = { Hot, Cold };
 param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
 param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase {
     match p {
-        Phase.Hot => 2.0,
-        Phase.Cold => 0.0,
+        Phase#Hot => 2.0,
+        Phase#Cold => 0.0,
     }
 };
-#[expected_fail((Mode.A, Phase.Hot), (Mode.A, Phase.Hot))]
+#[expected_fail((Mode#A, Phase#Hot), (Mode#A, Phase#Hot))]
 assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 ",
     );
@@ -1667,7 +1667,7 @@ pub index Mode = { A, B };
 pub index Phase = { Hot, Cold };
 param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
 param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 2.0 };
-#[expected_fail(Mode.A)]
+#[expected_fail(Mode#A)]
 assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 ",
     );
@@ -1698,7 +1698,7 @@ pub index Mode = { A, B };
 pub index Phase = { Hot, Cold };
 param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
 param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 2.0 };
-#[expected_fail((Phase.Hot, Mode.A))]
+#[expected_fail((Phase#Hot, Mode#A))]
 assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 ",
     );
@@ -1727,7 +1727,7 @@ fn check_rejects_variant_arg_on_unindexed_expected_fail() {
 pub index Mode = { A, B };
 param lhs: Dimensionless = 1.0;
 param rhs: Dimensionless = 2.0;
-#[expected_fail(Mode.A)]
+#[expected_fail(Mode#A)]
 assert order = @lhs > @rhs;
 ",
     );
@@ -1755,9 +1755,9 @@ fn check_rejects_foreign_expected_fail_when_all_pass() {
         r"
 pub index Mode = { A, B };
 pub index Other = { A, B };
-param lhs: Dimensionless[Mode] = { Mode.A: 3.0, Mode.B: 3.0 };
-param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 2.0 };
-#[expected_fail(Other.A)]
+param lhs: Dimensionless[Mode] = { Mode#A: 3.0, Mode#B: 3.0 };
+param rhs: Dimensionless[Mode] = { Mode#A: 2.0, Mode#B: 2.0 };
+#[expected_fail(Other#A)]
 assert order = for m: Mode { @lhs[m] > @rhs[m] };
 ",
     );
@@ -1795,7 +1795,7 @@ fn check_rejects_private_include_output() {
     let root = write_temp_file(
         dir.path(),
         "src/pkg/main.gcl",
-        "include pkg.lib.helper(x: 1.0).{ hidden };\nnode y: Dimensionless = @hidden;\n",
+        "include pkg.lib.helper(x: 1.0)::{ hidden };\nnode y: Dimensionless = @hidden;\n",
     );
 
     let output = graphcal_bin()
@@ -1833,7 +1833,7 @@ fn check_rejects_private_include_output_renamed() {
     let root = write_temp_file(
         dir.path(),
         "src/pkg/main.gcl",
-        "include pkg.lib.helper(x: 1.0).{ hidden as leaked };\nnode y: Dimensionless = @leaked;\n",
+        "include pkg.lib.helper(x: 1.0)::{ hidden as leaked };\nnode y: Dimensionless = @leaked;\n",
     );
 
     let output = graphcal_bin()
@@ -1871,7 +1871,7 @@ fn check_rejects_private_include_output_via_alias() {
     let root = write_temp_file(
         dir.path(),
         "src/pkg/main.gcl",
-        "include pkg.lib.helper(x: 1.0) as h;\nnode y: Dimensionless = @h.hidden;\n",
+        "include pkg.lib.helper(x: 1.0) as h;\nnode y: Dimensionless = @h::hidden;\n",
     );
 
     let output = graphcal_bin()
@@ -1883,7 +1883,10 @@ fn check_rejects_private_include_output_via_alias() {
         ])
         .output()
         .expect("failed to run graphcal");
-    assert_diagnostic_failure(&output, &["graphcal::N002", "unknown graph reference `@h`"]);
+    assert_diagnostic_failure(
+        &output,
+        &["graphcal::V001", "cannot import private item `hidden`"],
+    );
 }
 
 #[test]
@@ -1905,7 +1908,7 @@ fn check_rejects_private_dag_include() {
     let root = write_temp_file(
         dir.path(),
         "src/pkg/main.gcl",
-        "include pkg.lib.helper(x: 1.0).{ shown };\nnode y: Dimensionless = @shown;\n",
+        "include pkg.lib.helper(x: 1.0)::{ shown };\nnode y: Dimensionless = @shown;\n",
     );
 
     let output = graphcal_bin()
@@ -2593,7 +2596,7 @@ fn eval_params_json_semantic_error_points_to_parameter_file() {
         "pub index Row = { A, B };\n\
          pub index Column = { X, Y };\n\
          param matrix: Int[Row, Column];\n\
-         node first: Int = @matrix[Row.A, Column.X];\n",
+         node first: Int = @matrix[Row#A, Column#X];\n",
     )
     .unwrap();
     std::fs::write(
@@ -2915,7 +2918,7 @@ fn eval_assertions_indexed_fail() {
         "expected within_limits FAIL: {stderr}"
     );
     assert!(
-        stderr.contains("(Mode.Normal, Phase.Cruise)"),
+        stderr.contains("(Mode#Normal, Phase#Cruise)"),
         "expected parenthesized multi-index path in failure message: {stderr}"
     );
 }
@@ -2934,7 +2937,7 @@ fn eval_assertions_compile_error_exit_code() {
 }
 #[test]
 fn eval_explicit_index_import() {
-    // Bug 3: `import lib.lib.{ index Color };` imports the Color index explicitly.
+    // Bug 3: `import lib.lib::{ index Color };` imports the Color index explicitly.
     let output = graphcal_bin()
         .args([
             "eval",
@@ -3410,8 +3413,8 @@ fn eval_expected_fail_indexed_partial() {
     );
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
-        stderr.contains("power_ok") && stderr.contains("FAIL") && stderr.contains("Mode.Eco"),
-        "expected power_ok FAIL with Mode.Eco: {stderr}"
+        stderr.contains("power_ok") && stderr.contains("FAIL") && stderr.contains("Mode#Eco"),
+        "expected power_ok FAIL with Mode#Eco: {stderr}"
     );
 }
 
@@ -3647,7 +3650,7 @@ fn recursive_parser_nesting_returns_p015_without_aborting() {
         (
             "attribute-groups",
             format!(
-                "#[expected_fail({}Mode.Boost{})]\nassert value = true;\n",
+                "#[expected_fail({}Mode#Boost{})]\nassert value = true;\n",
                 "(\n".repeat(DEPTH),
                 ")\n".repeat(DEPTH)
             ),
@@ -4208,7 +4211,7 @@ fn eval_instantiated_import_selective() {
 fn eval_instantiated_include_resolves_libraries_own_unbound_index() {
     // #851: an instantiated include of a library that declares and uses its
     // own index must resolve the inlined `for s: Step` / `Dimensionless[Step]`
-    // / `Step.A` bodies without the consumer binding `Step`. Binding is an
+    // / `Step#A` bodies without the consumer binding `Step`. Binding is an
     // override mechanism, not a requirement.
     let output = graphcal_bin()
         .args([
@@ -4231,10 +4234,10 @@ fn eval_instantiated_include_resolves_libraries_own_unbound_index() {
         );
     };
     // scale=10 applied to vals {A:1, B:2}; first = vals[A]*scale; total = sum.
-    has("s.scaled[A] = 10");
-    has("s.scaled[B] = 20");
-    has("s.first     = 10");
-    has("s.total     = 30");
+    has("s::scaled[A] = 10");
+    has("s::scaled[B] = 20");
+    has("s::first     = 10");
+    has("s::total     = 30");
 }
 
 // --- Partial parameter-binding CLI tests ---
@@ -4407,8 +4410,8 @@ fn eval_plot_display_units_scale_scalar_and_indexed_data() {
     std::fs::write(
         &file,
         "index Sample = { A, B };\n\
-         node speed: Velocity[Sample] = { Sample.A: 10.0 m/s, Sample.B: 20.0 m/s };\n\
-         node distance: Length[Sample] = { Sample.A: 1000.0 m, Sample.B: 2000.0 m };\n\
+         node speed: Velocity[Sample] = { Sample#A: 10.0 m/s, Sample#B: 20.0 m/s };\n\
+         node distance: Length[Sample] = { Sample#A: 1000.0 m, Sample#B: 2000.0 m };\n\
          node reference_distance: Length = 3000.0 m;\n\
          pub plot converted = {\n\
              mark: line,\n\
@@ -4470,8 +4473,8 @@ fn eval_plot_display_units_resolve_imported_declarations() {
         "pub index Sample = { A, B };\n\
          pub const unit display_speed: Velocity = 1.0 km/h;\n\
          pub const node speed: Velocity[Sample] = {\n\
-             Sample.A: 10.0 m/s,\n\
-             Sample.B: 20.0 m/s,\n\
+             Sample#A: 10.0 m/s,\n\
+             Sample#B: 20.0 m/s,\n\
          };\n",
     )
     .unwrap();
@@ -4482,10 +4485,10 @@ fn eval_plot_display_units_resolve_imported_declarations() {
          pub plot imported = {\n\
              mark: line,\n\
              encode: {\n\
-                 x: for sample: data.Sample {\n\
-                     @data.speed[sample] -> data.display_speed\n\
+                 x: for sample: data::Sample {\n\
+                     @data::speed[sample] -> data::display_speed\n\
                  },\n\
-                 y: for sample: data.Sample { @data.speed[sample] -> km/h },\n\
+                 y: for sample: data::Sample { @data::speed[sample] -> km/h },\n\
              },\n\
          };\n",
     )
@@ -4511,7 +4514,7 @@ fn eval_plot_display_units_resolve_imported_declarations() {
     assert_eq!(values[1]["x"].as_f64(), Some(72.0));
     assert_eq!(
         spec["encoding"]["x"]["axis"]["title"].as_str(),
-        Some("Velocity (data.display_speed)")
+        Some("Velocity (data::display_speed)")
     );
 }
 
@@ -4621,8 +4624,8 @@ fn eval_plot_mismatched_channel_axes_is_an_error() {
         &file,
         "pub index Step = { A, B, C, D };\n\
          pub index Pair = { L, R };\n\
-         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0, Step.C: 4.0, Step.D: 8.0 };\n\
-         param twos: Dimensionless[Pair] = { Pair.L: 10.0, Pair.R: 20.0 };\n\
+         param values: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0, Step#C: 4.0, Step#D: 8.0 };\n\
+         param twos: Dimensionless[Pair] = { Pair#L: 10.0, Pair#R: 20.0 };\n\
          pub plot mismatch = {\n\
              mark: line,\n\
              encode: {\n\
@@ -4666,7 +4669,7 @@ fn eval_plot_indexed_bools_encode_like_unindexed_bools() {
     std::fs::write(
         &file,
         "pub index Step = { A, B, C };\n\
-         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0, Step.C: 3.0 };\n\
+         param values: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0, Step#C: 3.0 };\n\
          node flags: Bool[Step] = for s: Step { @values[s] > 1.5 };\n\
          pub plot p = {\n\
              mark: point,\n\
@@ -4707,7 +4710,7 @@ fn eval_plot_negative_width_is_an_error() {
     std::fs::write(
         &file,
         "pub index Step = { A, B };\n\
-         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };\n\
          pub plot p = {\n\
              mark: line,\n\
              encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },\n\
@@ -4739,7 +4742,7 @@ fn check_rejects_typoed_plot_property() {
     std::fs::write(
         &file,
         "pub index Step = { A, B };\n\
-         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };\n\
          pub plot p = {\n\
              mark: line,\n\
              encode: { x: for s: Step { @vals[s] } },\n\
@@ -4961,7 +4964,7 @@ fn eval_plot_failure_reported_on_stderr() {
     std::fs::write(
         &file,
         "pub index Step = { A, B, C };\n\
-         param values: Dimensionless[Step] = { Step.A: 1.0, Step.B: 0.0, Step.C: 4.0 };\n\
+         param values: Dimensionless[Step] = { Step#A: 1.0, Step#B: 0.0, Step#C: 4.0 };\n\
          node inv: Dimensionless[Step] = for s: Step { 1.0 / @values[s] };\n\
          pub plot p = {\n\
              mark: line,\n\
@@ -5714,8 +5717,8 @@ fn check_accepts_non_empty_required_bracket_and_angle_lists() {
     let source = "\
 pub index I = { Only };
 pub type Wrapper<D: Dim> { Wrapper(value: D) }
-param values: Dimensionless[I] = { I.Only: 1.0 };
-node picked: Dimensionless = @values[I.Only];
+param values: Dimensionless[I] = { I#Only: 1.0 };
+node picked: Dimensionless = @values[I#Only];
 param wrapped: Wrapper<Dimensionless> = Wrapper<Dimensionless>(value: 1.0);
 node time: Datetime<TT> = epoch<TT>(\"2024-11-05T12:00:00\");
 ";
@@ -6062,7 +6065,7 @@ fn plot_include_project(main_source: &str) -> (tempfile::TempDir, PathBuf) {
     std::fs::write(
         root_dir.join("lib.gcl"),
         "pub index Step = { A, B };\n\
-         param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };\n\
+         param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };\n\
          pub plot lib_plot = {\n\
              mark: line,\n\
              encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },\n\
@@ -6093,7 +6096,7 @@ fn plot_names(main: &Path) -> (Vec<String>, std::process::Output) {
 #[test]
 fn include_brace_plot_renders_under_alias() {
     let (_dir, main) = plot_include_project(
-        "include pkg.lib().{ lib_plot as lp };\n\
+        "include pkg.lib()::{ lib_plot as lp };\n\
          param own: Dimensionless = 5.0;\n",
     );
     let (names, output) = plot_names(&main);
@@ -6108,7 +6111,7 @@ fn include_brace_plot_renders_under_alias() {
 #[test]
 fn unrequested_library_plots_do_not_render() {
     let (_dir, main) = plot_include_project(
-        "include pkg.lib().{ vals };\n\
+        "include pkg.lib()::{ vals };\n\
          param own: Dimensionless = 5.0;\n",
     );
     let (names, output) = plot_names(&main);
@@ -6126,7 +6129,7 @@ fn unrequested_library_plots_do_not_render() {
 #[test]
 fn hidden_include_item_composes_without_standalone_output() {
     let (_dir, main) = plot_include_project(
-        "include pkg.lib().{ #[hidden] lib_plot as lp };\n\
+        "include pkg.lib()::{ #[hidden] lib_plot as lp };\n\
          figure combo = { plots: [lp] };\n\
          param own: Dimensionless = 5.0;\n",
     );
@@ -6146,7 +6149,7 @@ fn hidden_include_item_composes_without_standalone_output() {
 #[test]
 fn import_of_plot_is_an_error() {
     let (_dir, main) = plot_include_project(
-        "import pkg.lib.{ lib_plot };\n\
+        "import pkg.lib::{ lib_plot };\n\
          param own: Dimensionless = 5.0;\n",
     );
     let output = graphcal_bin()
@@ -6181,8 +6184,8 @@ fn empty_and_configured_include_plots_evaluate_against_their_instances() {
     let main = root_dir.join("main.gcl");
     std::fs::write(
         &main,
-        "include pkg.eng().{ scaled_plot as default_plot };\n\
-         include pkg.eng(scale: 10.0).{ scaled_plot as configured_plot };\n\
+        "include pkg.eng()::{ scaled_plot as default_plot };\n\
+         include pkg.eng(scale: 10.0)::{ scaled_plot as configured_plot };\n\
          param own: Dimensionless = 5.0;\n",
     )
     .unwrap();
@@ -6223,7 +6226,7 @@ fn empty_and_configured_include_plots_evaluate_against_their_instances() {
 #[test]
 fn hidden_on_non_plot_include_item_is_an_error() {
     let (_dir, main) = plot_include_project(
-        "include pkg.lib().{ #[hidden] vals };\n\
+        "include pkg.lib()::{ #[hidden] vals };\n\
          param own: Dimensionless = 5.0;\n",
     );
     let output = graphcal_bin()
@@ -6299,7 +6302,7 @@ const PLUGIN_EVAL_SOURCE: &str = r#"
 import plugin "plugins/demo.wasm" as demo {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
-node mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);
+node mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);
 "#;
 
 #[test]
@@ -6433,9 +6436,9 @@ fn model_serve_subprocess_exchanges_persistent_arrow_streams() {
         "model.gcl",
         "pub index Mode = { A, B };\n\
          param load: Length(min: 0.0 m, max: 10.0 m);\n\
-         param count: Int(min: 0, max: 10);\n\
+         param sample_count: Int(min: 0, max: 10);\n\
          param mode: Key<Mode>;\n\
-         pub node failure: Bool = @load > 5.0 m && @count > 0 && @mode == Mode.B;\n",
+         pub node failure: Bool = @load > 5.0 m && @sample_count > 0 && @mode == Mode#B;\n",
     );
     let mut child = graphcal_bin()
         .args(["model", "serve"])
@@ -6970,7 +6973,7 @@ fn report_build_hydrated_rejects_package_dependencies() {
             "[dependencies]\nunits_v1 = {{ package = \"units\", git = \"{}\", rev = \"{dep_rev}\" }}\n",
             test_remote_git_url(&dep_repo)
         ),
-        "import units_v1.lib.{ one };\nnode two: Dimensionless = @one + 1.0;\n",
+        "import units_v1.lib::{ one };\nnode two: Dimensionless = @one + 1.0;\n",
     );
     let cache = dir.path().join("cache");
     let lock = graphcal_bin()

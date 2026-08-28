@@ -217,9 +217,7 @@ fn merge_registry_into_builder_filtered(
         if dim_bindings.contains_key(name.as_str()) {
             continue;
         }
-        if external_surface.is_some_and(|surface| {
-            !surface.is_static_explicit_export(name.atom())
-        }) {
+        if external_surface.is_some_and(|surface| !surface.is_static_explicit_export(name.atom())) {
             continue;
         }
         builder.register_dimension(name.clone(), dim.clone());
@@ -253,9 +251,9 @@ fn merge_registry_into_builder_filtered(
             if name.is_qualified() {
                 continue;
             }
-            if external_surface.is_some_and(|surface| {
-                !surface.is_unit_explicit_export(name.name().atom())
-            }) {
+            if external_surface
+                .is_some_and(|surface| !surface.is_unit_explicit_export(name.name().atom()))
+            {
                 continue;
             }
             graphcal_compiler::syntax::dimension::UnitRef::qualified(
@@ -263,9 +261,9 @@ fn merge_registry_into_builder_filtered(
                 name.name().clone(),
             )
         } else {
-            if external_surface.is_some_and(|surface| {
-                !surface.is_unit_explicit_export(name.name().atom())
-            }) {
+            if external_surface
+                .is_some_and(|surface| !surface.is_unit_explicit_export(name.name().atom()))
+            {
                 continue;
             }
             name.clone()
@@ -291,9 +289,9 @@ fn merge_registry_into_builder_filtered(
             continue;
         }
         if !index_bindings.contains_key(idx_def.name.as_str()) {
-            if external_surface.is_some_and(|surface| {
-                !surface.is_static_explicit_export(idx_def.name.atom())
-            }) {
+            if external_surface
+                .is_some_and(|surface| !surface.is_static_explicit_export(idx_def.name.atom()))
+            {
                 continue;
             }
             builder.register_index(idx_def.clone());
@@ -310,9 +308,9 @@ fn merge_registry_into_builder_filtered(
         if type_bindings.contains_key(type_def.name().as_str()) {
             continue;
         }
-        if external_surface.is_some_and(|surface| {
-            !surface.is_static_explicit_export(type_def.name().atom())
-        }) {
+        if external_surface
+            .is_some_and(|surface| !surface.is_static_explicit_export(type_def.name().atom()))
+        {
             continue;
         }
         builder.register_type(type_def.clone());

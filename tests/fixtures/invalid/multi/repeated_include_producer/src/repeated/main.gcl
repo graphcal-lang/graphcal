@@ -1,4 +1,4 @@
-include repeated.lib().{
+include repeated.lib()::{
     okay as first_check,
     okay as second_check,
 };

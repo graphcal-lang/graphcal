@@ -3,7 +3,7 @@ dag producer {
     pub assert okay = @x == 2.0;
 }
 
-include producer().{
+include producer()::{
     okay as first_check,
     okay as second_check,
 };

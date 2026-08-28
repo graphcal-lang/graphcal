@@ -1,2 +1,2 @@
 // Int domain bounds must remain exactly representable as Int.
-param count: Int(min: 0.0, max: 10.0) = 5;
+param sample_count: Int(min: 0.0, max: 10.0) = 5;

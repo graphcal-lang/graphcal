@@ -10,10 +10,10 @@ index Sample = { First, Second };
 
 node a: Complex<Length> = complex(3.0 m, 4.0 m);
 node b: Complex<Length> = complex(5.0 m, 6.0 m);
-node sum: Complex<Length> = @a + @b;
+node complex_sum: Complex<Length> = @a + @b;
 node difference: Complex<Length> = @a - @b;
 node negated: Complex<Length> = -@a;
-node product: Complex<Area> = @a * @b;
+node complex_product: Complex<Area> = @a * @b;
 node quotient: Complex<Dimensionless> = @a / @b;
 node scaled_left: Complex<Length> = 2.0 * @a;
 node scaled_right: Complex<Length> = @a * 2.0;
@@ -34,16 +34,16 @@ node wrapped_rate: ComplexRateHolder<Length> = ComplexRateHolder<Length>(
     value: complex(1.0 m/s, 2.0 m/s),
 );
 node series: Complex<Length>[Sample] = {
-    Sample.First: @a,
-    Sample.Second: @b,
+    Sample#First: @a,
+    Sample#Second: @b,
 };
 node sample_count: Int = count(@series);
 
 assert rectangular_equality = @a == complex(3.0 m, 4.0 m);
-assert sum_real = re(@sum) == 8.0 m;
-assert sum_imaginary = im(@sum) == 10.0 m;
-assert product_real = re(@product) == -9.0 m^2;
-assert product_imaginary = im(@product) == 38.0 m^2;
+assert sum_real = re(@complex_sum) == 8.0 m;
+assert sum_imaginary = im(@complex_sum) == 10.0 m;
+assert product_real = re(@complex_product) == -9.0 m^2;
+assert product_imaginary = im(@complex_product) == 38.0 m^2;
 assert negated_real = re(@negated) == -3.0 m;
 assert conjugate_imaginary = im(@conjugate) == -4.0 m;
 assert sample_count_is_two = @sample_count == 2;

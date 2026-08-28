@@ -7,7 +7,7 @@ type annotation mismatch: declared Key<Maneuver>, inferred Key<Phase>
 Begin snippet for key_cross_axis_assignment.gcl starting at line 5, column 1
 
 snippet line 5: 
-snippet line 6: node k: Key<Maneuver> = Phase.Launch;
+snippet line 6: node k: Key<Maneuver> = Phase#Launch;
     label at line 6, columns 9 to 21: declared as Key<Maneuver>
 diagnostic help: the declared type must match the inferred dimension of the expression
 diagnostic code: graphcal::D002

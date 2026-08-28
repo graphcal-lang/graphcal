@@ -5,5 +5,5 @@ import app.units_a as ua;
 import app.units_b as ub;
 
 param a: Length = 3218.688 m;
-node b: Length = @a -> ua.mile;
-node c: Length = @a -> ub.mile;
+node b: Length = @a -> ua::mile;
+node c: Length = @a -> ub::mile;

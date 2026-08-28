@@ -1,6 +1,5 @@
 ---
 source: crates/graphcal-fmt/tests/format_tests.rs
-assertion_line: 683
 expression: formatted
 ---
 // domain_quantity.gcl -- quantity params with domain constraints
@@ -14,6 +13,6 @@ param thrust: Force(min: 0.01 N) = 0.5 N;
 param efficiency: Dimensionless(max: 1.0) = 0.85;
 
 // Int constraint
-param count: Int(min: 1, max: 100) = 10;
+param sample_count: Int(min: 1, max: 100) = 10;
 
 node double_thrust: Force = @thrust * 2.0;

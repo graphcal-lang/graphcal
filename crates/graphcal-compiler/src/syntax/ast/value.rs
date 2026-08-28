@@ -152,9 +152,9 @@ impl IdentPath {
     /// Source span covering the namespace owner, `::`, and selected member.
     #[must_use]
     pub(crate) fn span(&self) -> Span {
-        self.owner
-            .as_ref()
-            .map_or(self.member.span, |owner| owner.first().span.merge(self.member.span))
+        self.owner.as_ref().map_or(self.member.span, |owner| {
+            owner.first().span.merge(self.member.span)
+        })
     }
 
     /// Drop per-segment spans while preserving the `::` boundary.
@@ -164,9 +164,7 @@ impl IdentPath {
             || NamePath::local(self.member.name.clone()),
             |owner| {
                 NamePath::member(
-                    crate::syntax::names::NamespacePath::new(
-                        owner.clone().map(|ident| ident.name),
-                    ),
+                    crate::syntax::names::NamespacePath::new(owner.clone().map(|ident| ident.name)),
                     self.member.name.clone(),
                 )
             },

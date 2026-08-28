@@ -2436,7 +2436,8 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
             .into_iter()
             .flat_map(|owner| owner.segments().iter().cloned())
             .collect();
-        let path = SourceSymbolPath::module_member(qualifier, item.name.value.name().atom().clone());
+        let path =
+            SourceSymbolPath::module_member(qualifier, item.name.value.name().atom().clone());
         table.references.push(ReferenceInfo {
             span: item.name.span,
             target: ReferenceTarget::Unresolved(UnresolvedSymbol::Unit(path)),

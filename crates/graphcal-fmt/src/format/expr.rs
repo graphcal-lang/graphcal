@@ -205,11 +205,11 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
             RcDoc::text(path.display_path())
         }
-        ExprKind::UnresolvedRef(
-            graphcal_compiler::syntax::ast::UnresolvedRef::IndexLabel {
-                index, label, ..
-            },
-        ) => RcDoc::text(format!("{}#{}", index.display_path(), label.value)),
+        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::IndexLabel {
+            index,
+            label,
+            ..
+        }) => RcDoc::text(format!("{}#{}", index.display_path(), label.value)),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
             let op_str = match op {
