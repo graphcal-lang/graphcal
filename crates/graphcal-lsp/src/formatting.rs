@@ -92,7 +92,7 @@ mod tests {
     fn wraps_long_logical_chains() {
         let source = "pub index Mode = { First, Second, Third, Fourth };\n\
 param priority: Int[Mode];\n\
-assert priorities = @priority[Mode.First] == 1 && @priority[Mode.Second] == 2 && @priority[Mode.Third] == 3 && @priority[Mode.Fourth] == 4;\n";
+assert priorities = @priority[Mode#First] == 1 && @priority[Mode#Second] == 2 && @priority[Mode#Third] == 3 && @priority[Mode#Fourth] == 4;\n";
         let edits = format_document(source)
             .expect("long chain should format")
             .expect("long chain should produce an edit");
@@ -100,7 +100,7 @@ assert priorities = @priority[Mode.First] == 1 && @priority[Mode.Second] == 2 &&
         assert!(
             edits[0]
                 .new_text
-                .contains("\n    && @priority[Mode.Second] == 2")
+                .contains("\n    && @priority[Mode#Second] == 2")
         );
     }
 }

@@ -769,22 +769,36 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse a non-empty dot-separated identifier path.
+    /// Parse a local name or a member selected after a dotted DAG path and
+    /// `::`. A dot sequence is consumed only when a later `::` proves that it
+    /// is a namespace owner; otherwise the first identifier remains local and
+    /// expression parsing handles the dot as field projection.
     fn parse_ident_path(&mut self) -> Result<IdentPath, ParseError> {
         let first = self.parse_any_ident()?;
-        let mut rest = Vec::new();
-        while self.lexer.peek() == Some(&Token::Dot)
-            && self
-                .lexer
+        let mut probe = self.lexer.clone();
+        while probe.peek() == Some(&Token::Dot)
+            && probe
                 .peek_second()
                 .is_some_and(|token| token.is_identifier())
         {
-            self.lexer.next_token(); // consume `.`
-            rest.push(self.parse_any_ident()?);
+            probe.next_token();
+            probe.next_token();
         }
-        Ok(IdentPath::new(crate::syntax::non_empty::NonEmpty::new(
-            first, rest,
-        )))
+        if probe.peek() != Some(&Token::DoubleColon) {
+            return Ok(IdentPath::bare(first));
+        }
+
+        let mut owner_rest = Vec::new();
+        while self.lexer.peek() == Some(&Token::Dot) {
+            self.lexer.next_token();
+            owner_rest.push(self.parse_any_ident()?);
+        }
+        self.expect(Token::DoubleColon)?;
+        let member = self.parse_any_ident()?;
+        Ok(IdentPath::member(
+            crate::syntax::non_empty::NonEmpty::new(first, owner_rest),
+            member,
+        ))
     }
 }
 

@@ -479,7 +479,7 @@ mod tests {
     #[test]
     fn indexed_values_remain_structured() {
         let result = compile_and_eval(
-            "index Axis = { A, B };\nnode xs: Dimensionless[Axis] = { Axis.A: 1.0, Axis.B: 2.0 };",
+            "index Axis = { A, B };\nnode xs: Dimensionless[Axis] = { Axis#A: 1.0, Axis#B: 2.0 };",
         )
         .unwrap();
         let view = EvaluationView::from(&result);
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn non_indexed_transport_variants_are_explicit() {
         let result = compile_and_eval(
-            "index Axis = { A, B };\ntype Pair { Pair(left: Dimensionless, right: Bool), }\nnode distance: Length = 3.0 m;\nnode flag: Bool = true;\nnode count: Int = 3;\nnode selected: Key<Axis> = Axis.A;\nnode impedance: Complex<Length> = complex(3.0 m, 4.0 m);\nnode pair: Pair = Pair(left: 1.0, right: true);\nnode instant: Datetime = datetime(\"2024-11-05T12:00:00Z\");",
+            "index Axis = { A, B };\ntype Pair { Pair(left: Dimensionless, right: Bool), }\nnode distance: Length = 3.0 m;\nnode flag: Bool = true;\nnode count: Int = 3;\nnode selected: Key<Axis> = Axis#A;\nnode impedance: Complex<Length> = complex(3.0 m, 4.0 m);\nnode pair: Pair = Pair(left: 1.0, right: true);\nnode instant: Datetime = datetime(\"2024-11-05T12:00:00Z\");",
         )
         .unwrap();
         let view = EvaluationView::from(&result);

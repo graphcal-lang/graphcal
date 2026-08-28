@@ -373,7 +373,7 @@ fn format_table_slices(
     // depth >= 3: emit section headers and recurse
     for (variant, inner_val) in entries {
         parts.push(format!(
-            "\n  [{}.{}]",
+            "\n  [{}#{}]",
             index_name.display_name(),
             value.indexed_entry_display_name(variant)
         ));
@@ -701,11 +701,11 @@ mod tests {
         let out = format_indexed_table("cube", &outer, &symbols);
         assert!(out.contains("cube:"), "missing top header: {out}");
         assert!(
-            out.contains("[Slab.S1]"),
+            out.contains("[Slab#S1]"),
             "missing slice header for S1: {out}"
         );
         assert!(
-            out.contains("[Slab.S2]"),
+            out.contains("[Slab#S2]"),
             "missing slice header for S2: {out}"
         );
     }

@@ -25,7 +25,7 @@ pub enum RawExprSugar {
     /// Table literal: `table[Phase, Fin(3)] { ... }`.
     ///
     /// Desugars to [`ExprKind::MapLiteral`] — the `indexes` metadata is
-    /// dropped (entries already carry full `Index.Variant` keys), and the
+    /// dropped (entries already carry full `Index#Variant` keys), and the
     /// `table` keyword is purely surface syntax preserved by the formatter
     /// via the raw AST.
     TableLiteral {
@@ -38,184 +38,193 @@ pub enum RawExprSugar {
 // Unresolved-ref variants (the only reference form in the syntax AST)
 // ---------------------------------------------------------------------------
 
-/// Unresolved reference, produced by the parser before HIR lowering.
+/// An unresolved expression reference whose namespace is selected by syntax.
 ///
-/// Carried by `ExprKind::UnresolvedRef`. The parser emits these
-/// when the meaning of an identifier path cannot be determined from syntax
-/// alone; HIR expression lowering (`crate::hir::lower_expr`) classifies and
-/// resolves them in a single pass against the lexical scope and the
-/// module-aware resolver.
-///
-/// This indirection is necessary because the same token shape can mean
-/// different expression kinds depending on declarations and local scopes. For
-/// example, the dotted expression `Foo.Bar` is parsed as the unresolved path
-/// `Foo.Bar` in both of these programs:
-///
-/// ```graphcal
-/// index Foo = { Bar };
-/// node x: Dimensionless = Foo.Bar;
-/// ```
-///
-/// and:
-///
-/// ```graphcal
-/// node x: Dimensionless = Foo.Bar;
-/// ```
-///
-/// Only after collecting names from the file can resolution know whether
-/// `Foo` is an index. In the first program `Foo.Bar` becomes a HIR variant
-/// literal; in the second it becomes a qualified constant-like reference.
-///
-/// Bare identifiers have the same issue. `PI` parses as the unresolved path
-/// `PI` both when it denotes the built-in constant:
-///
-/// ```graphcal
-/// node x: Dimensionless = PI;
-/// ```
-///
-/// and when a local binding shadows that constant:
-///
-/// ```graphcal
-/// index I = { A };
-/// node x: Dimensionless[I] = for PI: I { PI };
-/// ```
-///
-/// HIR lowering turns the first `PI` into a built-in constant reference,
-/// but the loop body `PI` in the second program into a local reference.
-///
-/// The payload is a path rather than separate "bare" and "qualified" variants
-/// so the parser records the complete syntactic structure uniformly:
-/// `Foo`, `Foo.Bar`, and `Foo.Bar.Baz` are all identifier paths. Segment-count
-/// restrictions, such as index variants currently being two-segment paths, are
-/// semantic rules enforced by HIR lowering rather than parser artifacts.
+/// A plain path is a Term reference. `Index#Label` is represented separately,
+/// so HIR lowering never probes Static and Term to decide what a dot meant.
 #[derive(Debug, Clone)]
 pub enum UnresolvedRef {
-    /// Unresolved identifier path: `Foo`, `Foo.Bar`, or `Foo.Bar.Baz`.
+    /// A bare Term name or a Term member selected after `::`.
     Path(IdentPath),
+    /// An owner-qualified index label selected by `#`.
+    IndexLabel {
+        index: IdentPath,
+        label: Spanned<IndexVariantName>,
+        span: Span,
+    },
 }
 
-/// A non-empty dot-separated identifier path in expression position.
+/// A span-aware local/member name in expression position.
+///
+/// Dotted namespace-owner segments and the member after `::` are separate
+/// fields. Consequently this type cannot encode the old ambiguous `a.b`
+/// convention.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IdentPath {
-    pub segments: NonEmpty<Ident>,
+    owner: Option<NonEmpty<Ident>>,
+    member: Ident,
 }
 
 impl IdentPath {
-    /// Construct a path from already-tokenized segments.
+    /// Construct from a segment sequence at typed construction boundaries. One
+    /// segment is local; two or more treat the final segment as the member.
     #[must_use]
-    pub const fn new(segments: NonEmpty<Ident>) -> Self {
-        Self { segments }
+    pub fn new(segments: NonEmpty<Ident>) -> Self {
+        let mut segments = segments.into_vec();
+        let member = match segments.pop() {
+            Some(member) => member,
+            None => unreachable!("NonEmpty always contains a member identifier"),
+        };
+        match NonEmpty::try_from_vec(segments) {
+            Ok(owner) => Self::member(owner, member),
+            Err(_) => Self::bare(member),
+        }
     }
 
-    /// Construct a one-segment path from an identifier.
+    /// Construct a one-segment local name.
     #[must_use]
-    fn bare(ident: Ident) -> Self {
-        Self::new(NonEmpty::singleton(ident))
+    pub const fn bare(member: Ident) -> Self {
+        Self {
+            owner: None,
+            member,
+        }
     }
 
-    /// Borrow all path segments in source order.
+    /// Construct a member selected after a dotted namespace owner and `::`.
     #[must_use]
-    pub fn segments(&self) -> &[Ident] {
-        self.segments.as_slice()
+    pub const fn member(owner: NonEmpty<Ident>, member: Ident) -> Self {
+        Self {
+            owner: Some(owner),
+            member,
+        }
     }
 
-    /// Consume and return the non-empty segment sequence.
+    /// Dotted namespace-owner segments before `::`.
+    #[must_use]
+    pub fn owner_segments(&self) -> Option<&[Ident]> {
+        self.owner.as_ref().map(NonEmpty::as_slice)
+    }
+
+    /// Consume and return all identifier segments, dropping punctuation only
+    /// at this explicit compatibility boundary.
     #[must_use]
     pub fn into_segments(self) -> NonEmpty<Ident> {
-        self.segments
+        match self.owner {
+            Some(owner) => {
+                let mut segments = owner.into_vec();
+                segments.push(self.member);
+                match NonEmpty::try_from_vec(segments) {
+                    Ok(segments) => segments,
+                    Err(_) => unreachable!("an IdentPath always contains its member"),
+                }
+            }
+            None => NonEmpty::singleton(self.member),
+        }
     }
 
-    /// Consume and return the segment vector.
+    /// Consume and return all identifier segments.
     #[must_use]
     pub fn into_vec(self) -> Vec<Ident> {
-        self.segments.into_vec()
+        self.into_segments().into_vec()
     }
 
-    /// Number of path segments. Always at least 1.
+    /// Number of source name segments. Always at least one.
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.segments.len()
+        match &self.owner {
+            Some(owner) => owner.len() + 1,
+            None => 1,
+        }
     }
 
-    /// Returns `false`; provided for API compatibility with sequence-like code.
+    /// Returns `false`; provided for sequence-like APIs.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
     }
 
-    /// Returns whether this is a one-segment identifier path.
+    /// Returns whether this is a local name with no member boundary.
     #[must_use]
     const fn is_bare(&self) -> bool {
-        self.segments.len() == 1
+        self.owner.is_none()
     }
 
-    /// Returns the source span covering the whole path.
+    /// Source span covering the namespace owner, `::`, and selected member.
     #[must_use]
     pub(crate) fn span(&self) -> Span {
-        self.segments.first().span.merge(self.segments.last().span)
+        self.owner
+            .as_ref()
+            .map_or(self.member.span, |owner| owner.first().span.merge(self.member.span))
     }
 
-    /// The written path with per-segment spans dropped.
-    ///
-    /// Use this for span-independent written identity (semantic metadata
-    /// keys); keep the `IdentPath` itself when diagnostics need segment spans.
+    /// Drop per-segment spans while preserving the `::` boundary.
     #[must_use]
     pub(crate) fn to_name_path(&self) -> crate::syntax::names::NamePath {
-        crate::syntax::names::NamePath::new(self.segments.clone().map(|ident| ident.name))
+        self.owner.as_ref().map_or_else(
+            || NamePath::local(self.member.name.clone()),
+            |owner| {
+                NamePath::member(
+                    crate::syntax::names::NamespacePath::new(
+                        owner.clone().map(|ident| ident.name),
+                    ),
+                    self.member.name.clone(),
+                )
+            },
+        )
     }
 
-    /// Returns the leaf segment of the path.
+    /// Selected local/member identifier.
     #[must_use]
-    pub fn leaf(&self) -> &Ident {
-        self.segments.last()
+    pub const fn leaf(&self) -> &Ident {
+        &self.member
     }
 
-    /// Split the path into qualifier segments and the leaf segment.
-    ///
-    /// The qualifier slice is empty for one-segment paths.
+    /// Split owner segments and selected member at a compatibility boundary.
     #[must_use]
     pub(crate) fn split_last(&self) -> (&[Ident], &Ident) {
-        let (leaf, qualifier) = self.segments.split_last();
-        (qualifier, leaf)
+        (
+            self.owner
+                .as_ref()
+                .map_or(&[] as &[Ident], NonEmpty::as_slice),
+            &self.member,
+        )
     }
 
-    /// Returns the qualifier segments before the leaf. Empty for bare paths.
+    /// Owner segments before `::`. Empty for local names.
     #[must_use]
     pub fn qualifier_segments(&self) -> &[Ident] {
         self.split_last().0
     }
 
-    /// Returns qualifier segments and leaf only when this path is qualified.
+    /// Owner segments and selected member only for a member path.
     #[must_use]
     pub fn qualifier_and_leaf(&self) -> Option<(&[Ident], &Ident)> {
-        let (qualifier, leaf) = self.split_last();
-        (!qualifier.is_empty()).then_some((qualifier, leaf))
+        self.owner
+            .as_ref()
+            .map(|owner| (owner.as_slice(), &self.member))
     }
 
-    /// Returns the only segment when this is a bare identifier path.
+    /// Selected identifier only when this is a local path.
     #[must_use]
-    pub fn as_bare(&self) -> Option<&Ident> {
-        match self.segments.as_slice() {
-            [ident] => Some(ident),
-            _ => None,
+    pub const fn as_bare(&self) -> Option<&Ident> {
+        match &self.owner {
+            None => Some(&self.member),
+            Some(_) => None,
         }
     }
 
-    /// Mutably returns the only segment when this is a bare identifier path.
+    /// Mutably return the selected identifier only for a local path.
     pub(crate) fn as_bare_mut(&mut self) -> Option<&mut Ident> {
-        match self.segments.as_mut_slice() {
-            [ident] => Some(ident),
-            _ => None,
+        match &self.owner {
+            None => Some(&mut self.member),
+            Some(_) => None,
         }
     }
 
-    /// Consume this path and return its segment when it is bare.
-    ///
-    /// Returns the original path unchanged when it is qualified.
+    /// Consume this path and return its identifier when local.
     pub(crate) fn into_bare(self) -> Result<Ident, Self> {
         if self.is_bare() {
-            let mut segments = self.segments.into_vec();
-            Ok(segments.remove(0))
+            Ok(self.member)
         } else {
             Err(self)
         }
@@ -224,24 +233,40 @@ impl IdentPath {
     /// Convert this spanned syntax path into a span-less [`NamePath`].
     #[must_use]
     fn into_name_path(self) -> NamePath {
-        NamePath::new(self.segments.map(|ident| ident.name))
+        let member = self.member.name;
+        match self.owner {
+            Some(owner) => NamePath::member(
+                crate::syntax::names::NamespacePath::new(owner.map(|ident| ident.name)),
+                member,
+            ),
+            None => NamePath::local(member),
+        }
     }
 
-    /// Convert this syntax path into a [`NamePath`] paired with the path's full span.
+    /// Pair the span-less path with its full source span.
     #[must_use]
     pub(crate) fn into_spanned_name_path(self) -> Spanned<NamePath> {
         let span = self.span();
         Spanned::new(self.into_name_path(), span)
     }
 
-    /// Human-readable path string for diagnostics and formatting boundaries.
+    /// Human-readable source spelling for diagnostics and formatting.
     #[must_use]
     pub fn display_path(&self) -> String {
-        self.segments
-            .iter()
-            .map(|segment| segment.name.as_str())
-            .collect::<Vec<_>>()
-            .join(".")
+        self.owner.as_ref().map_or_else(
+            || self.member.name.to_string(),
+            |owner| {
+                format!(
+                    "{}::{}",
+                    owner
+                        .iter()
+                        .map(|segment| segment.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("."),
+                    self.member.name
+                )
+            },
+        )
     }
 }
 
@@ -253,35 +278,42 @@ impl From<Ident> for IdentPath {
 
 impl std::fmt::Display for IdentPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (idx, segment) in self.segments.iter().enumerate() {
-            if idx > 0 {
-                f.write_str(".")?;
-            }
-            f.write_str(segment.name.as_str())?;
-        }
-        Ok(())
+        f.write_str(&self.display_path())
     }
 }
 
 impl UnresolvedRef {
-    /// Returns the source span of the underlying identifier path.
+    /// Source span of the complete syntax-directed reference.
     #[must_use]
     pub fn span(&self) -> Span {
         match self {
             Self::Path(path) => path.span(),
+            Self::IndexLabel { span, .. } => *span,
         }
     }
 }
-/// A param binding in a module instantiation: `name: expr`.
+/// Source category of one DAG input binding.
 ///
-/// Used in `include "path"(name: expr, ...) { ... };`
+/// Unmarked means exactly a Term parameter. There is intentionally no `param`
+/// marker variant; Static inputs require their explicit marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InputBindingCategory {
+    Unmarked,
+    Type,
+    Dimension,
+    Index,
+}
+
+/// One categorized input binding in an `include` or direct DAG invocation.
 #[derive(Debug, Clone)]
 pub struct ParamBinding<P: Phase = Raw> {
-    /// The param name in the imported file.
+    pub category: InputBindingCategory,
+    /// Target name in the invoked DAG's selected namespace.
     pub name: Ident,
-    /// The value expression (evaluated in the importer's scope).
+    /// Authored binding value. The category fixes how this syntax is validated;
+    /// resolution never retries a different target namespace.
     pub value: Expr<P>,
-    /// Span covering the entire `name: expr`.
+    /// Span covering the marker (when present), name, and value.
     pub(crate) span: Span,
 }
 /// The kind of a domain constraint bound: `min` or `max`.
@@ -666,7 +698,8 @@ fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
                 | BinOp::Or => None,
             }
         }
-        ExprKind::Number(_)
+        ExprKind::UnresolvedRef(UnresolvedRef::IndexLabel { .. })
+        | ExprKind::Number(_)
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
         | ExprKind::GraphRef(_)
@@ -756,14 +789,14 @@ pub enum ExprKind<P: Phase = Raw> {
         generic_args: Vec<GenericArg<P>>,
         fields: Vec<FieldInit<P>>,
     },
-    /// Map literal: `{ Maneuver.Departure: 2.46 km/s, Maneuver.Correction: 0.05 km/s }`
+    /// Map literal: `{ Maneuver#Departure: 2.46 km/s, Maneuver#Correction: 0.05 km/s }`
     MapLiteral { entries: Vec<MapEntry<P>> },
     /// For comprehension: `for m: Maneuver { @delta_v[m] + 1.0 }`
     ForComp {
         bindings: Vec<ForBinding>,
         body: Box<Expr<P>>,
     },
-    /// Index access: `@delta_v[m]`, `@delta_v[Maneuver.Departure]`, `@P[a, b]`
+    /// Index access: `@delta_v[m]`, `@delta_v[Maneuver#Departure]`, `@P[a, b]`
     IndexAccess {
         expr: Box<Expr<P>>,
         args: NonEmpty<IndexArg<P>>,
@@ -805,7 +838,7 @@ pub enum ExprKind<P: Phase = Raw> {
         scrutinee: Box<Expr<P>>,
         arms: Vec<MatchArm<P>>,
     },
-    /// Inline DAG invocation: `@dag(args).out` or `@module.dag(args).out`.
+    /// Inline DAG invocation: `@dag(args)::out` or `@module.dag(args)::out`.
     ///
     /// Each syntactic occurrence denotes a fresh DAG instantiation that is
     /// desugared during TIR lowering to the equivalent
@@ -813,16 +846,16 @@ pub enum ExprKind<P: Phase = Raw> {
     /// a distinct AST variant so source spans survive for diagnostics.
     ///
     /// The post-`@` expression as a whole must denote a graph value.
-    /// `@dag(args).out` may project an explicitly exported node or the
+    /// `@dag(args)::out` may project an explicitly exported node or the
     /// effective bound/default value of a param input port. The qualified
-    /// `@module.dag(args).out` form has the same rule. Bare `@dag(args)` is
+    /// `@module.dag(args)::out` form has the same rule. Bare `@dag(args)` is
     /// rejected because an unprojected DAG instance is not a graph value.
     InlineDagRef {
         /// Path to the DAG module being invoked. The first segment may name a
         /// local DAG or an imported module alias. An imported alias is itself
-        /// callable (`@module(args).out`) whether it targets a file root or an
+        /// callable (`@module(args)::out`) whether it targets a file root or an
         /// inline DAG; additional segments descend through child DAG modules
-        /// (`@module.child(args).out`).
+        /// (`@module.child(args)::out`).
         path: ModulePath,
         /// Param/index bindings, same shape as `include` bindings.
         args: Vec<ParamBinding<P>>,
@@ -988,7 +1021,7 @@ impl TableIndexSpec {
     }
 }
 
-/// A single key in a map literal entry: `Index.Variant`.
+/// A single key in a map literal entry: `Index#Variant`.
 ///
 /// Table sugar can mention the same semantic index more than once for one
 /// desugared key: once in `table[...]` and again in a qualified slice or
@@ -1003,8 +1036,8 @@ pub struct MapEntryKey {
 
 /// An entry in a map literal.
 ///
-/// Single-axis: `Maneuver.Departure: 2.46 km/s` (keys has 1 element)
-/// Multi-axis:  `(Phase.Launch, Maneuver.Departure): 2.46 km/s` (keys has 2+ elements)
+/// Single-axis: `Maneuver#Departure: 2.46 km/s` (keys has 1 element)
+/// Multi-axis:  `(Phase#Launch, Maneuver#Departure): 2.46 km/s` (keys has 2+ elements)
 #[derive(Debug, Clone)]
 pub struct MapEntry<P: Phase = Raw> {
     pub keys: NonEmpty<MapEntryKey>,
@@ -1260,7 +1293,7 @@ impl<P: Phase> GenericArg<P> {
 /// An argument in an index access: a qualified variant, a loop variable, or an expression.
 #[derive(Debug, Clone)]
 pub enum IndexArg<P: Phase = Raw> {
-    /// Qualified variant: `Maneuver.Departure` or `module.Maneuver.Departure`
+    /// Qualified variant: `Maneuver#Departure` or `module::Maneuver#Departure`
     Variant {
         index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
@@ -1286,7 +1319,7 @@ pub struct MatchArm<P: Phase = Raw> {
     pub span: Span,
 }
 
-/// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver.Departure`.
+/// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver#Departure`.
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
     /// Syntactic path pattern before semantic categorization.
@@ -1307,7 +1340,7 @@ pub enum MatchPattern {
         bindings: Vec<PatternBinding>,
         span: Span,
     },
-    /// Named-index label pattern: `Maneuver.Departure`.
+    /// Named-index label pattern: `Maneuver#Departure`.
     ///
     /// Index labels are fieldless, so this variant deliberately has no
     /// binding payload. This variant is semantic: producers should construct it

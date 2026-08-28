@@ -261,7 +261,7 @@ pub struct CollectedLayerEntry {
 /// One axis segment in a per-variant `#[expected_fail(...)]` key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpectedFailKeyPart<I = IndexTypeRef> {
-    /// An `Index.Variant` / `module.Index.Variant` segment for a named axis.
+    /// An `Index#Variant` / `module::Index#Variant` segment for a named axis.
     ///
     /// Before module-aware TIR resolution, `index` is the source [`NamePath`]
     /// written in the attribute. After resolution, `index` is the semantic
@@ -380,11 +380,11 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
         }
     }
 
-    /// Render this segment for diagnostics: `Index.Variant` or `#N`.
+    /// Render this segment for diagnostics: `Index#Variant` or `#N`.
     #[must_use]
     pub(crate) fn display(&self) -> String {
         match self {
-            Self::Named { index, variant, .. } => format!("{}.{variant}", index.display_name()),
+            Self::Named { index, variant, .. } => format!("{}#{variant}", index.display_name()),
             Self::FinitePosition { position, .. } => format!("#{position}"),
         }
     }
@@ -392,11 +392,10 @@ impl ExpectedFailKeyPart<IndexTypeRef> {
 
 /// A single expected-fail key: a list of index/variant pairs.
 ///
-/// - Length 1 for single-index assertions: `[Mode.Boost]`
-/// - Length >1 for multi-index assertions: `[(Mode.Boost, Phase.Launch)]`
+/// - Length 1 for single-index assertions: `[Mode#Boost]`
+/// - Length >1 for multi-index assertions: `[(Mode#Boost, Phase#Launch)]`
 pub type ExpectedFailKey<I = IndexTypeRef> = Vec<ExpectedFailKeyPart<I>>;
 
-pub(crate) type ParsedExpectedFailKeyPart = ExpectedFailKeyPart<NamePath>;
 pub(crate) type ParsedExpectedFailKey = ExpectedFailKey<NamePath>;
 pub type ParsedExpectedFail = ExpectedFail<NamePath>;
 
@@ -419,7 +418,7 @@ pub type ResolvedExpectedFail = ExpectedFail<IndexTypeRef>;
 pub enum ExpectedFail<I = IndexTypeRef> {
     /// The entire assertion is expected to fail: `#[expected_fail]`.
     All,
-    /// Specific index keys are expected to fail: `#[expected_fail(Index.Variant, ...)]`.
+    /// Specific index keys are expected to fail: `#[expected_fail(Index#Variant, ...)]`.
     Variants(Vec<ExpectedFailKey<I>>),
 }
 
@@ -436,63 +435,118 @@ enum ExternalDeclRole {
     InputPort,
 }
 
+/// Namespace component of one typed external-surface slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ExternalNamespace {
+    Static,
+    Term,
+    Unit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ExternalDeclSlot {
+    namespace: ExternalNamespace,
+    name: NameAtom,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ExternalDeclSurface {
-    roles: HashMap<DeclName, ExternalDeclRole>,
+    roles: HashMap<ExternalDeclSlot, ExternalDeclRole>,
 }
 
 impl ExternalDeclSurface {
-    /// Record a declaration carrying an explicit `pub` or `pub(bind)` export.
+    /// Record an explicitly exported flat Term.
     pub fn insert_explicit_export(&mut self, name: DeclName) {
-        self.insert(name, ExternalDeclRole::ExplicitExport);
+        self.insert(
+            ExternalNamespace::Term,
+            name.into_atom(),
+            ExternalDeclRole::ExplicitExport,
+        );
     }
 
-    /// Record a `param` declaration as a named input port.
+    /// Record an explicitly exported Static entity.
+    pub fn insert_static_export(&mut self, name: NameAtom) {
+        self.insert(
+            ExternalNamespace::Static,
+            name,
+            ExternalDeclRole::ExplicitExport,
+        );
+    }
+
+    /// Record an explicitly exported Unit entity.
+    pub fn insert_unit_export(&mut self, name: NameAtom) {
+        self.insert(
+            ExternalNamespace::Unit,
+            name,
+            ExternalDeclRole::ExplicitExport,
+        );
+    }
+
+    /// Record a `param` as a named Term input port.
     pub fn insert_input_port(&mut self, name: DeclName) {
-        self.insert(name, ExternalDeclRole::InputPort);
+        self.insert(
+            ExternalNamespace::Term,
+            name.into_atom(),
+            ExternalDeclRole::InputPort,
+        );
     }
 
-    fn insert(&mut self, name: DeclName, role: ExternalDeclRole) {
-        match self.roles.entry(name) {
+    fn insert(&mut self, namespace: ExternalNamespace, name: NameAtom, role: ExternalDeclRole) {
+        let slot = ExternalDeclSlot { namespace, name };
+        match self.roles.entry(slot) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(role);
             }
             std::collections::hash_map::Entry::Occupied(entry) => {
-                debug_assert_eq!(
-                    *entry.get(),
-                    role,
-                    "a declaration cannot be both an explicit export and an input port"
-                );
+                debug_assert_eq!(*entry.get(), role, "one external slot has one role");
             }
         }
     }
 
-    /// Whether the declaration carries an explicit `pub` or `pub(bind)` export.
+    fn role(&self, namespace: ExternalNamespace, name: &NameAtom) -> Option<ExternalDeclRole> {
+        self.roles
+            .get(&ExternalDeclSlot {
+                namespace,
+                name: name.clone(),
+            })
+            .copied()
+    }
+
+    /// Whether a flat Term carries an explicit export.
     #[must_use]
     pub fn is_explicit_export(&self, name: &DeclName) -> bool {
-        self.roles.get(name) == Some(&ExternalDeclRole::ExplicitExport)
+        self.role(ExternalNamespace::Term, name.atom()) == Some(ExternalDeclRole::ExplicitExport)
     }
 
-    /// Whether the declaration is a named `param` input port.
+    /// Whether a Static entity carries an explicit export.
+    #[must_use]
+    pub fn is_static_explicit_export(&self, name: &NameAtom) -> bool {
+        self.role(ExternalNamespace::Static, name) == Some(ExternalDeclRole::ExplicitExport)
+    }
+
+    /// Whether a Unit carries an explicit export.
+    #[must_use]
+    pub fn is_unit_explicit_export(&self, name: &NameAtom) -> bool {
+        self.role(ExternalNamespace::Unit, name) == Some(ExternalDeclRole::ExplicitExport)
+    }
+
+    /// Whether the Term is a named `param` input port.
     #[must_use]
     pub fn is_input_port(&self, name: &DeclName) -> bool {
-        self.roles.get(name) == Some(&ExternalDeclRole::InputPort)
+        self.role(ExternalNamespace::Term, name.atom()) == Some(ExternalDeclRole::InputPort)
     }
 
-    /// Whether external syntax may resolve the declaration in either role.
+    /// Whether external Term syntax can resolve the declaration in either role.
     #[must_use]
     pub fn is_externally_nameable(&self, name: &DeclName) -> bool {
-        self.roles.contains_key(name)
+        self.role(ExternalNamespace::Term, name.atom()).is_some()
     }
 
-    /// Whether the declaration may be selected from the external output surface.
-    ///
-    /// For an input port this selects its effective value after applying a
-    /// call/include binding or its default.
+    /// Whether a Term may be selected from an instance output surface.
     #[must_use]
     pub fn can_select_output(&self, name: &DeclName) -> bool {
         matches!(
-            self.roles.get(name),
+            self.role(ExternalNamespace::Term, name.atom()),
             Some(ExternalDeclRole::ExplicitExport | ExternalDeclRole::InputPort)
         )
     }

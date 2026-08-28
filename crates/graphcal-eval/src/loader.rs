@@ -555,14 +555,14 @@ impl DagBodyLocator {
 ///
 /// Produced by the loader so that downstream stages can iterate inline DAGs
 /// uniformly with file DAGs, looking up `resolved_imports` for both the body's
-/// own imports and `import <self>.{...}` references back to the parent file.
+/// own imports and `import <self>::{...}` references back to the parent file.
 #[derive(Debug, Clone)]
 pub struct LoadedDag {
     /// Abstract DAG identity for this inline dag, formed by appending the
     /// dag's name to its parent file's `DagId`.
     dag_id: DagId,
     /// The enclosing file's `DagId`. Imports whose path resolves to this id
-    /// are dag-body self-imports (`import <self>.{...}`).
+    /// are dag-body self-imports (`import <self>::{...}`).
     parent_dag_id: DagId,
     /// Stable locator into the owning file AST, which remains the single body owner.
     body_locator: DagBodyLocator,
@@ -1495,7 +1495,7 @@ fn inherit_include_instance_scopes(
 /// already hold the dependency's index declarations. This pass copies those
 /// indexes into the importer's symbol table (skipping any the include binds or
 /// overrides) so the inlined dependency bodies — `for s: Step`, `T[Step]`,
-/// `Step.A` — resolve against the importer's merged registry. See
+/// `Step#A` — resolve against the importer's merged registry. See
 /// [`graphcal_compiler::syntax::module_resolve::ModuleResolver::inline_instantiated_include_indexes`].
 fn link_include_instance_indexes(
     resolver: &mut graphcal_compiler::syntax::module_resolve::ModuleResolver,
@@ -1698,7 +1698,7 @@ fn register_module_imports(
                 if let Some(target) =
                     resolved_imports.resolved_target(&ModulePathKey::from_path(&import.path))
                 {
-                    resolver.register_import(owner, &import.path, &import.kind, target.target())?;
+                    resolver.register_import_decl(owner, import, target.target())?;
                 }
             }
             DeclKind::Include(include)
@@ -2844,7 +2844,7 @@ fn load_file_dfs<F: FileSystemReader>(
         resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.clone());
 
         // A fully-qualified import that resolves to this very file (e.g.
-        // `import pkg.main.inline_dag.{x};` inside main.gcl) is a
+        // `import pkg.main.inline_dag::{x};` inside main.gcl) is a
         // self-reference, not a dependency — recursing would trip the
         // circular-import check (mirrors the inline-dag loop below).
         if resolved.file == canonical_path {
@@ -3044,7 +3044,7 @@ fn inline_dag_dependency_paths(declarations: &[Declaration]) -> Vec<&ModulePath>
 ///
 /// - Single-segment file-stem reference (Concept 7) maps to `self_dag_id`.
 /// - A path that resolves (via the package resolver) to `canonical_path`
-///   maps to `self_dag_id` (a `import <self>.{...}` self-reference).
+///   maps to `self_dag_id` (a `import <self>::{...}` self-reference).
 /// - A path that resolves to another file already loaded by the file-level
 ///   recursion maps to that file's `DagId` from `path_to_dag_id`.
 /// - Anything else (resolution failure or a cross-file dependency that
@@ -3916,7 +3916,7 @@ path = "{escaped_outside}"
             ("src/helper/lib.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y};\nnode z: Dimensionless = @y + 1.0;",
+                "import helper.lib::{y};\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
         let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
@@ -3942,7 +3942,11 @@ path = "{escaped_outside}"
         let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
 
         let resolved_variant = resolver
-            .resolve_index_variant_path(&project.root, &name_path(&["lib", "Phase", "Burn"]))
+            .resolve_index_variant_parts(
+                &project.root,
+                &name_path(&["lib", "Phase"]),
+                &graphcal_compiler::syntax::index_name::IndexVariantName::expect_valid("Burn"),
+            )
             .unwrap();
 
         assert_eq!(resolved_variant.index().owner(), &lib_dag_id);
@@ -3959,7 +3963,7 @@ path = "{escaped_outside}"
             ("helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "main.gcl",
-                "import helper.{y};\nnode z: Dimensionless = @y + 1.0;",
+                "import helper::{y};\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
         let result = load_project(&dir.path().join("main.gcl"), None, &fs());
@@ -3983,11 +3987,11 @@ path = "{escaped_outside}"
             ),
             (
                 "src/a.gcl",
-                "import a.b.{y};\nparam x: Dimensionless = 1.0;",
+                "import a.b::{y};\nparam x: Dimensionless = 1.0;",
             ),
             (
                 "src/a/b.gcl",
-                "import a.{x};\nparam y: Dimensionless = 2.0;",
+                "import a::{x};\nparam y: Dimensionless = 2.0;",
             ),
         ]);
         let result = load_project(&dir.path().join("src/a.gcl"), None, &fs());
@@ -4001,7 +4005,7 @@ path = "{escaped_outside}"
 
     #[test]
     fn load_missing_import_file() {
-        let dir = setup_temp_dir(&[("main.gcl", "import nonexistent.{x};")]);
+        let dir = setup_temp_dir(&[("main.gcl", "import nonexistent::{x};")]);
         let result = load_project(&dir.path().join("main.gcl"), None, &fs());
         assert!(result.is_err());
     }
@@ -4035,7 +4039,7 @@ path = "{escaped_outside}"
     fn inline_dag_unresolved_body_import_is_recorded_explicitly() {
         let source = r"
 dag calc {
-  import missing.{x};
+  import missing::{x};
   param input: Dimensionless = 1.0;
   pub node output: Dimensionless = @input;
 }
@@ -4089,12 +4093,12 @@ dag calc {
             ("src/helper/lib.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y};\nnode z: Dimensionless = @y + 1.0;",
+                "import helper.lib::{y};\nnode z: Dimensionless = @y + 1.0;",
             ),
         ]);
         let root_path = dir.path().join("src/helper/main.gcl");
 
-        let overlay_source = "import helper.lib.{y};\nnode z: Dimensionless = @y + 99.0;";
+        let overlay_source = "import helper.lib::{y};\nnode z: Dimensionless = @y + 99.0;";
         let canonical = root_path.canonicalize().unwrap();
         let fs = graphcal_io::OverlayFileSystem::new(
             RealFileSystem::default(),
@@ -4146,15 +4150,15 @@ dag calc {
             ("src/graph/d.gcl", "param w: Dimensionless = 4.0;"),
             (
                 "src/graph/b.gcl",
-                "import graph.d.{w};\nparam x: Dimensionless = @w + 1.0;",
+                "import graph.d::{w};\nparam x: Dimensionless = @w + 1.0;",
             ),
             (
                 "src/graph/c.gcl",
-                "import graph.d.{w};\nparam y: Dimensionless = @w + 2.0;",
+                "import graph.d::{w};\nparam y: Dimensionless = @w + 2.0;",
             ),
             (
                 "src/graph/a.gcl",
-                "import graph.b.{x};\nimport graph.c.{y};\nnode z: Dimensionless = @x + @y;",
+                "import graph.b::{x};\nimport graph.c::{y};\nnode z: Dimensionless = @x + @y;",
             ),
         ]);
         let project = load_project(&dir.path().join("src/graph/a.gcl"), None, &fs()).unwrap();
@@ -4192,7 +4196,7 @@ dag calc {
             ("src/nasa/rocket.gcl", "param x: Dimensionless = 1.0;"),
             (
                 "src/nasa/main.gcl",
-                "import nasa.rocket.{x};\nnode y: Dimensionless = @x + 1.0;",
+                "import nasa.rocket::{x};\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
         let project = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs()).unwrap();
@@ -4209,7 +4213,7 @@ dag calc {
             ),
             (
                 "src/nasa/main.gcl",
-                "import nasa.orbital.transfer.{dv};\nnode x: Dimensionless = @dv;",
+                "import nasa.orbital.transfer::{dv};\nnode x: Dimensionless = @dv;",
             ),
         ]);
         let project = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs()).unwrap();
@@ -4229,7 +4233,7 @@ dag calc {
             ),
             (
                 "lib/myproject/main.gcl",
-                "import myproject.helpers.{x};\nnode y: Dimensionless = @x + 1.0;",
+                "import myproject.helpers::{x};\nnode y: Dimensionless = @x + 1.0;",
             ),
         ]);
         let project =
@@ -4241,7 +4245,7 @@ dag calc {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
             ("src/other/rocket.gcl", "param x: Dimensionless = 1.0;"),
-            ("src/nasa/main.gcl", "import other.rocket.{x};"),
+            ("src/nasa/main.gcl", "import other.rocket::{x};"),
         ]);
         let result = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs());
         assert!(result.is_err());
@@ -4256,7 +4260,7 @@ dag calc {
     fn load_bare_import_stdlib_deferred_error() {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
-            ("src/nasa/main.gcl", "import graphcal.math.{sin};"),
+            ("src/nasa/main.gcl", "import graphcal.math::{sin};"),
         ]);
         let result = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs());
         assert!(result.is_err());
@@ -4271,7 +4275,7 @@ dag calc {
     fn load_bare_import_file_not_found_error() {
         let dir = setup_temp_dir(&[
             ("graphcal.toml", "[package]\nname = \"nasa\"\n"),
-            ("src/nasa/main.gcl", "import nasa.nonexistent.{x};"),
+            ("src/nasa/main.gcl", "import nasa.nonexistent::{x};"),
         ]);
         let result = load_project(&dir.path().join("src/nasa/main.gcl"), None, &fs());
         assert!(result.is_err());
@@ -4303,7 +4307,7 @@ dag calc {
             ("src/myproject/helper.gcl", "param y: Dimensionless = 2.0;"),
             (
                 "src/main.gcl",
-                "import myproject.helper.{y};\nnode z: Dimensionless = @y;",
+                "import myproject.helper::{y};\nnode z: Dimensionless = @y;",
             ),
         ]);
         let result = load_project(&dir.path().join("src/main.gcl"), None, &fs());
@@ -4478,7 +4482,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
     #[test]
     fn dependency_enabled_loader_uses_overlay_for_root_package_import() {
         let fixture = locked_package_fixture(
-            "import mission.helper.{ local_value };\nnode result: Dimensionless = @local_value;",
+            "import mission.helper::{ local_value };\nnode result: Dimensionless = @local_value;",
             "pub const node one: Dimensionless = 1.0;",
         );
         let overlay_source = "pub const node local_value: Dimensionless = 99.0;";
@@ -4526,7 +4530,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
     #[test]
     fn lock_source_directory_cannot_select_an_unhashed_tree() {
         let fixture = locked_package_fixture(
-            "import units_v1.lib.{ value };\nnode result: Dimensionless = @value;",
+            "import units_v1.lib::{ value };\nnode result: Dimensionless = @value;",
             "pub const node value: Dimensionless = 1.0;",
         );
         std::fs::create_dir_all(fixture.dependency_root.join("unhashed/units")).unwrap();
@@ -4564,7 +4568,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
             ("graphcal.toml", "[package]\nname = \"mission\"\n"),
             (
                 "src/mission/main.gcl",
-                "import mission.helper.{ value };\nnode result: Dimensionless = @value;",
+                "import mission.helper::{ value };\nnode result: Dimensionless = @value;",
             ),
             (
                 "src/mission/helper.gcl",
@@ -4609,10 +4613,10 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         let fixture = locked_package_fixture(
             r"
 dag calculation {
-    import units_v1.lib.{ one };
+    import units_v1.lib::{ one };
     pub node out: Dimensionless = @one;
 }
-node result: Dimensionless = @calculation().out;
+node result: Dimensionless = @calculation()::out;
 ",
             "pub const node one: Dimensionless = 1.0;",
         );

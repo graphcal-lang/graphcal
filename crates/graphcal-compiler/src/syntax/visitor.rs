@@ -133,7 +133,7 @@ pub(crate) trait ExprVisitor<P: Phase> {
         Ok(())
     }
 
-    /// Called for unresolved reference paths (`Foo`, `Foo.Bar`, ...). Leaf
+    /// Called for unresolved reference paths (`Foo`, `Foo#Bar`, ...). Leaf
     /// node — classification happens in HIR lowering, so visitors that care
     /// about reference shapes inspect the syntactic path.
     fn visit_unresolved_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
@@ -376,7 +376,7 @@ pub trait ExprVisitorMut<P: Phase> {
         Ok(())
     }
 
-    /// Called for unresolved reference paths (`Foo`, `Foo.Bar`, ...). Leaf
+    /// Called for unresolved reference paths (`Foo`, `Foo#Bar`, ...). Leaf
     /// node — classification happens in HIR lowering, so visitors that
     /// rewrite reference shapes rewrite the syntactic path.
     fn visit_unresolved_ref_mut(&mut self, _expr: &mut Expr<P>) -> Result<(), Self::Error> {

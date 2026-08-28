@@ -4,8 +4,7 @@ use crate::syntax::ast::{
     GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr, TypeExpr,
     TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
-use crate::syntax::dimension::{UnitName, UnitRef};
-use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::dimension::UnitRef;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
@@ -559,42 +558,10 @@ impl Parser<'_> {
                 .collect::<Result<Vec<_>, ParseError>>()?;
             Ok((items, lparen_span, end_span))
         } else {
-            let ident = self.parse_any_ident()?;
-            let start_span = ident.span;
-            let mut end_span = ident.span;
-            let name = if self.lexer.peek() == Some(&Token::Dot)
-                && self
-                    .lexer
-                    .peek_second()
-                    .is_some_and(|token| token.is_identifier())
-            {
-                self.expect(Token::Dot)?;
-                let leaf = self.parse_any_ident()?;
-                // Unit references are at most `alias.unit`: module aliases are
-                // single segments, so a deeper path can never resolve.
-                if self.lexer.peek() == Some(&Token::Dot)
-                    && self
-                        .lexer
-                        .peek_second()
-                        .is_some_and(|token| token.is_identifier())
-                {
-                    return Err(ParseError::UnitReferenceTooDeep {
-                        src: self.named_source(),
-                        span: start_span.merge(leaf.span).into(),
-                    });
-                }
-                let span = start_span.merge(leaf.span);
-                end_span = leaf.span;
-                Spanned::new(
-                    UnitRef::qualified(
-                        ModuleAliasName::from_atom(ident.name),
-                        UnitName::from_atom(leaf.name),
-                    ),
-                    span,
-                )
-            } else {
-                ident.into_spanned::<UnitRef>()
-            };
+            let path = self.parse_ident_path()?;
+            let start_span = path.span();
+            let mut end_span = path.leaf().span;
+            let name = Spanned::new(UnitRef::from_name_path(path.to_name_path()), start_span);
             let power = self.parse_term_power(&mut end_span)?;
             Ok((
                 vec![UnitExprItem {
@@ -1216,12 +1183,12 @@ mod tests {
 
     #[test]
     fn parse_qualified_type_application_preserves_name_path() {
-        let source = "param v: math.Vec3<Length> = 1.0;";
+        let source = "param v: math::Vec3<Length> = 1.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, generic_args } => {
-                    assert_eq!(name.value.display_path(), "math.Vec3");
+                    assert_eq!(name.value.display_path(), "math::Vec3");
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
                     assert_eq!(generic_args.len(), 1);
                 }
@@ -1233,7 +1200,7 @@ mod tests {
 
     #[test]
     fn parse_qualified_dim_term_preserves_name_path() {
-        let source = "param v: physics.Length / Time = 1.0;";
+        let source = "param v: physics::Length / Time = 1.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
@@ -1241,7 +1208,7 @@ mod tests {
                     assert_eq!(dim_expr.terms.len(), 2);
                     assert_eq!(
                         dim_expr.terms[0].term.name.value.display_path(),
-                        "physics.Length"
+                        "physics::Length"
                     );
                     assert_eq!(dim_expr.terms[1].term.name.value.display_path(), "Time");
                 }
@@ -1253,7 +1220,7 @@ mod tests {
 
     #[test]
     fn parse_qualified_index_expr_preserves_name_path() {
-        let source = "param xs: Dimensionless[mesh.Row] = 0.0;";
+        let source = "param xs: Dimensionless[mesh::Row] = 0.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
@@ -1262,7 +1229,7 @@ mod tests {
                     let IndexExpr::Name(index_path) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(index_path.value.display_path(), "mesh.Row");
+                    assert_eq!(index_path.value.display_path(), "mesh::Row");
                     assert_eq!(index_path.value.leaf().as_str(), "Row");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),

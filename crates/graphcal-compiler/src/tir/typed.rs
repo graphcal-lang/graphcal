@@ -950,7 +950,7 @@ fn validate_public_generic_defaults(
 ) -> Result<(), GraphcalError> {
     for (type_name, type_def) in &dag.semantic.type_defs.struct_types {
         if type_name.owner() != ctx.owner
-            || !external_surface.is_explicit_export(&DeclName::from_atom(type_name.atom().clone()))
+            || !external_surface.is_static_explicit_export(type_name.atom())
         {
             continue;
         }

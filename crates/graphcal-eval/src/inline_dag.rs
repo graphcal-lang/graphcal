@@ -23,7 +23,7 @@ use crate::import_surface::{
     import_item_not_found_error, pure_import_term_disposition,
 };
 
-/// Pre-process `import <self>.{...}` declarations inside a dag body.
+/// Pre-process `import <self>::{...}` declarations inside a dag body.
 ///
 /// A self-import is one whose `ModulePath` display string is keyed in
 /// `body_resolved_imports` to `parent_dag_id` — i.e. the loader resolved

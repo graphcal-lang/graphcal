@@ -1546,7 +1546,7 @@ import plugin "plugins/demo.wasm" as demo {
 import plugin "graphcal:demo" as native {
     fn inverse<D: Dim>(x: D) -> D^-1;
 }
-node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
+node x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
 "#,
         )
         .unwrap();

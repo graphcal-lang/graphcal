@@ -304,11 +304,14 @@ pub struct LayerDecl<P: Phase = Raw> {
 ///
 /// `import nasa.rocket;` — brings the leaf module into scope.
 /// `import nasa.rocket as nr;` — brings the leaf module under an alias.
-/// `import nasa.rocket.{type Orbit, compute_thrust};` — brings only the listed names.
+/// `import nasa.rocket::{type Orbit, compute_thrust};` — brings only the listed names.
 ///
 /// No param bindings — for DAG instantiation with param bindings, use `include`.
 #[derive(Debug, Clone)]
 pub struct ImportDecl {
+    /// Leading `pub` applies only to whole-DAG aliases. Selective re-exports
+    /// carry visibility per item.
+    pub visibility: Visibility,
     pub path: ModulePath,
     pub kind: ImportKind,
 }
@@ -324,7 +327,7 @@ pub struct ImportDecl {
 ///
 /// Declares externally-provided quantity functions with explicit graphcal
 /// signatures. The alias is mandatory: extern functions are only callable
-/// qualified (`fluids.density(...)`), mirroring module-import explicitness.
+/// qualified (`fluids::density(...)`), mirroring module-import explicitness.
 /// The path string carries no filesystem semantics in Phase A; it identifies
 /// the plugin in the embedder's host function registry.
 #[derive(Debug, Clone)]
@@ -401,7 +404,7 @@ pub struct ExternFnParam<P: Phase = Raw> {
 /// `include nasa.rocket.compute_thrust(args);` — bare form; instance alias is
 /// the DAG's leaf name.
 /// `include nasa.rocket.compute_thrust(args) as ct;` — explicit instance alias.
-/// `include nasa.rocket.compute_thrust(args).{thrust};` — exposes selected
+/// `include nasa.rocket.compute_thrust(args)::{thrust};` — exposes selected
 /// outputs as nodes in the including DAG.
 #[derive(Debug, Clone)]
 pub struct IncludeDecl<P: Phase = Raw> {
@@ -459,7 +462,7 @@ pub struct ParamDecl<P: Phase = Raw> {
 //
 // A multi-decl is a single surface form — e.g.,
 //
-//     param a: T[I], const node b: U[I, J] = table[I, (_, J)] { : _, J.X, …; … };
+//     param a: T[I], const node b: U[I, J] = table[I, (_, J)] { : _, J#X, …; … };
 //
 // — represented in the AST as `DeclKind::Multi(MultiDecl)`. A dedicated
 // desugar pass (`syntax::desugar::desugar_multi_decls_in_file`) expands
@@ -731,7 +734,7 @@ pub enum MultiHeaderCell {
         span: Span,
     },
     Variant {
-        /// Required axis path from the canonical `Axis.Variant` spelling.
+        /// Required axis path from the canonical `Axis#Variant` spelling.
         axis: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
         span: Span,
@@ -785,7 +788,7 @@ mod multi_decl_shape_tests {
 param a: Int[I],
 param b: Bool[I, J]
   = table[I, (_, J)] {
-      : _, J.X;
+      : _, X;
       X: 1, true;
   };
 ";

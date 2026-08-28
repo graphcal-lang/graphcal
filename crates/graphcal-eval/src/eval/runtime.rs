@@ -906,11 +906,11 @@ fn invert_indexed_variants(
 /// Format a list of indexed paths for assertion failure messages.
 ///
 /// Each path is a slice of index/variant pairs from outermost to innermost.
-/// For single-index paths, formats as `Mode.Boost, Mode.Cruise`.
-/// For multi-index paths, formats as `(Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`.
+/// For single-index paths, formats as `Mode#Boost, Mode#Cruise`.
+/// For multi-index paths, formats as `(Phase#Launch, Maneuver#Correction), (Phase#Cruise, Maneuver#Insertion)`.
 fn format_indexed_path_part(index: &IndexTypeRef, key: &IndexEntryKey) -> String {
     match key {
-        IndexEntryKey::Named(variant) => format!("{}.{variant}", index.display_name()),
+        IndexEntryKey::Named(variant) => format!("{}#{variant}", index.display_name()),
         IndexEntryKey::Position(_) => key.to_string(),
     }
 }
@@ -1008,9 +1008,9 @@ fn check_indexed_assert_with_expected_fail(
 /// For multi-index: `Bool[Phase, Maneuver]` — entries are nested `Indexed` values.
 ///
 /// Single-index failure message example:
-///   `failed at Mode.Boost`
+///   `failed at Mode#Boost`
 /// Multi-index failure message example:
-///   `failed at (Phase.Launch, Maneuver.Correction), (Phase.Cruise, Maneuver.Insertion)`
+///   `failed at (Phase#Launch, Maneuver#Correction), (Phase#Cruise, Maneuver#Insertion)`
 fn check_indexed_assert(
     index_name: &IndexTypeRef,
     entries: &IndexMap<IndexEntryKey, RuntimeValue>,

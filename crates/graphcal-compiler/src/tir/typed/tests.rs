@@ -80,7 +80,7 @@ fn declaration_identity_lookup_keeps_unknown_names_as_typed_probes() {
         }
     }
 
-    let unknown = ScopedName::parse("dependency.missing").unwrap();
+    let unknown = ScopedName::parse("dependency::missing").unwrap();
     match tir.root().lookup_decl_identity(&unknown) {
         DeclarationIdentityLookup::DiagnosticProbe(probe) => {
             assert_eq!(probe.dag_id(), tir.root_dag_id());
@@ -251,25 +251,18 @@ fn resolve_unknown_index_error() {
 }
 
 #[test]
-fn resolve_struct_takes_priority_over_dim_param() {
-    let tir = parse_and_type_resolve(
+fn generic_dim_param_cannot_shadow_struct_type() {
+    let result = parse_and_type_resolve(
         "type TransferResult { TransferResult(value: Velocity) }\n\
          type ResolutionSubject<TransferResult: Dim> {\n\
              ResolutionSubject(value: TransferResult)\n\
          }",
-    )
-    .unwrap();
-    let resolved = tir
-        .root()
-        .semantic
-        .type_defs
-        .fields()
-        .find(|(key, _)| {
-            key.owning_type.as_str() == "ResolutionSubject" && key.field.as_str() == "value"
-        })
-        .map(|(_, field)| field.resolved_type())
-        .expect("ResolutionSubject.value should resolve through HIR");
-    assert!(matches!(resolved, ResolvedTypeExpr::Struct(..)));
+    );
+    assert!(matches!(
+        result,
+        Err(GraphcalError::EvalError { ref message, .. })
+            if message.contains("shadows a visible Static name")
+    ));
 }
 
 #[test]
@@ -664,7 +657,7 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
 fn finalized_tir_keeps_inline_dags_in_the_checked_registry() {
     let tir = parse_and_type_resolve(
         "dag child { pub node output: Dimensionless = 1.0; }\n\
-         node result: Dimensionless = @child().output;",
+         node result: Dimensionless = @child()::output;",
     )
     .unwrap();
     let child_id = tir.root_dag_id().child("child");
@@ -770,7 +763,7 @@ fn type_resolve_hohmann() {
     // hohmann.gcl uses DAG+include. Project-level `graphcal check`
     // accepts it (see the CLI tests), but single-file TIR resolution
     // rejects it: there's no project loader to resolve cross-DAG
-    // references like `import hohmann.{...}`, and `@transfer` from the
+    // references like `import hohmann::{...}`, and `@transfer` from the
     // unexpanded include surfaces as an unresolved reference during HIR
     // lowering. Resolution fails on the first unresolved name it
     // encounters.
@@ -783,7 +776,7 @@ fn type_resolve_hohmann() {
 }
 
 #[test]
-fn generic_index_param_shadows_same_named_module_index_in_type_args() {
+fn generic_index_param_cannot_shadow_module_index() {
     let source = r"
 pub index I = { A };
 pub type Box<I: Index> {
@@ -793,23 +786,11 @@ pub type Wrap<I: Index> {
     Wrap(boxed: Box<I>, values: Dimensionless[I]),
 }
 ";
-    let tir = parse_and_type_resolve(source).unwrap();
-    let boxed_field = tir
-        .root()
-        .semantic
-        .type_defs
-        .fields()
-        .find_map(|(key, field)| (key.field.as_str() == "boxed").then(|| field.resolved_type()))
-        .expect("Wrap.boxed field type");
-
-    let ResolvedTypeExpr::GenericStruct { generic_args, .. } = boxed_field else {
-        panic!("expected generic Box<I>, got {boxed_field:?}");
-    };
-    assert!(
-        matches!(&generic_args[0], ResolvedGenericArg::Index(ResolvedIndex::GenericParam(name, _)) if name.as_str() == "I"),
-        "generic argument should bind to the index parameter, got {:?}",
-        generic_args[0]
-    );
+    assert!(matches!(
+        parse_and_type_resolve(source),
+        Err(GraphcalError::EvalError { ref message, .. })
+            if message.contains("shadows a visible Static name")
+    ));
 }
 
 #[test]

@@ -131,7 +131,7 @@ pub enum Value {
     },
     Bool(bool),
     Int(i64),
-    /// A label value from a named index (e.g., `Maneuver.Departure`).
+    /// A label value from a named index (e.g., `Maneuver#Departure`).
     Label {
         /// The index identity (e.g., `Maneuver`), including a canonical owner when available.
         index_name: IndexTypeRef,

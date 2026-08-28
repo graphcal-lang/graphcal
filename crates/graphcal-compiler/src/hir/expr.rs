@@ -32,6 +32,7 @@ use crate::datetime_literal::{
     ResolveZonedDateTimeLiteralError, ZonedDateTimeLiteral,
 };
 use crate::desugar::desugared_ast as ast;
+use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use crate::registry::types::UnitRegistry;
@@ -40,7 +41,9 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
-use crate::syntax::module_resolve::{DeclSymbolKind, ModuleResolveError, ModuleResolver};
+use crate::syntax::module_resolve::{
+    DeclSymbolKind, ModuleAliasRole, ModuleResolveError, ModuleResolver,
+};
 use crate::syntax::names::{NameAtom, NameNamespace, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
@@ -102,6 +105,13 @@ pub enum ExprLowerError {
         first: Span,
         duplicate: Span,
     },
+    /// A lexical Term binder reused a visible flat Term slot.
+    #[error("local binding `{name}` shadows a visible Term")]
+    LocalBindingShadowsTerm {
+        name: LocalName,
+        original: Option<Span>,
+        duplicate: Span,
+    },
     /// A function call could not be resolved to a built-in function.
     #[error("unknown function `{path}`")]
     UnknownFunction { path: String, span: Span },
@@ -122,6 +132,13 @@ pub enum ExprLowerError {
     /// A function call supplied generic arguments that no function signature consumes.
     #[error("function `{path}` does not accept generic arguments")]
     UnsupportedFunctionGenericArgs { path: String, span: Span },
+    /// Positional call syntax targeted a constructor, whose payload fields must
+    /// be named explicitly.
+    #[error("constructor `{constructor}` requires named field arguments")]
+    PositionalArgumentsOnConstructor {
+        constructor: ResolvedConstructorName,
+        span: Span,
+    },
     /// A built-in function was called with the wrong number of arguments.
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     WrongArity {
@@ -511,14 +528,14 @@ impl Expr {
 /// desugaring can associate a bare row label with the axis in `table[...]`.
 /// Qualified slices and heterogeneous headers can also repeat that same index
 /// path, so additional index occurrences are retained for editor features.
-/// Diagnostics on a contiguous primary `Index.Variant` path can still use
+/// Diagnostics on a contiguous primary `Index#Variant` path can still use
 /// [`IndexVariantRef::path_span`], while span-precise consumers address each
 /// written occurrence independently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexVariantRef {
     /// The resolved index variant.
     pub variant: ResolvedIndexVariant,
-    /// Span of the index path as written (`Maneuver` in `Maneuver.Departure`,
+    /// Span of the index path as written (`Maneuver` in `Maneuver#Departure`,
     /// or the axis token inside `table[...]` for desugared table rows).
     /// `None` when the variant is written without an index segment (a bare
     /// label in a match pattern whose index is inferred).
@@ -539,7 +556,7 @@ impl IndexVariantRef {
     }
 
     /// Whole-reference span for diagnostics on a contiguous primary
-    /// `Index.Variant` path. For desugared table rows the primary index span
+    /// `Index#Variant` path. For desugared table rows the primary index span
     /// may live elsewhere, so prefer [`Self::variant_span`] there.
     #[must_use]
     pub fn path_span(&self) -> Span {
@@ -1002,6 +1019,12 @@ pub enum FunctionRef {
     External(ExternFnRef),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResolvedCallable {
+    Constructor(ResolvedConstructorName),
+    Function(FunctionRef),
+}
+
 impl FunctionRef {
     /// Return the built-in identity represented by this reference.
     #[must_use]
@@ -1052,9 +1075,9 @@ impl ExternFnRef {
 }
 
 impl std::fmt::Display for ExternFnRef {
-    /// Renders `alias.name` for diagnostics and display boundaries only.
+    /// Renders `alias::name` for diagnostics and display boundaries only.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.alias, self.name)
+        write!(f, "{}::{}", self.alias, self.name)
     }
 }
 
@@ -1360,14 +1383,25 @@ impl<'a> ExprLowerer<'a> {
             ast::ExprKind::Integer(value) => ExprKind::Integer(*value),
             ast::ExprKind::Bool(value) => ExprKind::Bool(*value),
             ast::ExprKind::StringLiteral(value) => ExprKind::StringLiteral(value.clone()),
-            ast::ExprKind::UnresolvedRef(unresolved) => {
-                let UnresolvedRef::Path(path) = unresolved;
-                self.lower_unresolved_path(path)?
+            ast::ExprKind::UnresolvedRef(unresolved) => match unresolved {
+                UnresolvedRef::Path(path) => self.lower_unresolved_path(path)?,
+                UnresolvedRef::IndexLabel { index, label, .. } => {
+                    let index_path = index.to_name_path();
+                    let resolved = self.resolve_index_variant_parts(
+                        &index_path,
+                        &label.value,
+                        index.span(),
+                        label.span,
+                    )?;
+                    ExprKind::VariantLiteral(IndexVariantRef {
+                        variant: resolved,
+                        index_span: Some(index.span()),
+                        additional_index_spans: Vec::new(),
+                        variant_span: label.span,
+                    })
+                }
             }
-            ast::ExprKind::GraphRef(name) => ExprKind::GraphRef(Spanned::new(
-                self.resolve_decl_scoped_name(&name.value, name.span)?,
-                name.span,
-            )),
+            ast::ExprKind::GraphRef(name) => self.lower_graph_ref(name)?,
             ast::ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,
                 lhs: Box::new(self.lower_expr(lhs)),
@@ -1381,21 +1415,28 @@ impl<'a> ExprLowerer<'a> {
                 callee,
                 generic_args,
                 args,
-            } => {
-                let function_ref = self.lower_function_ref(callee)?;
-                let function_ref = Self::lower_function_application(
-                    function_ref,
-                    generic_args,
-                    callee.display_path(),
-                    callee.span(),
-                )?;
-                Self::check_function_arity(&function_ref, args.len(), callee.span())?;
-                let args = self.lower_function_args(&function_ref, args)?;
-                ExprKind::FnCall {
-                    callee: Spanned::new(function_ref, callee.span()),
-                    args,
+            } => match self.resolve_callable(callee)? {
+                ResolvedCallable::Function(function_ref) => {
+                    let function_ref = Self::lower_function_application(
+                        function_ref,
+                        generic_args,
+                        callee.display_path(),
+                        callee.span(),
+                    )?;
+                    Self::check_function_arity(&function_ref, args.len(), callee.span())?;
+                    let args = self.lower_function_args(&function_ref, args)?;
+                    ExprKind::FnCall {
+                        callee: Spanned::new(function_ref, callee.span()),
+                        args,
+                    }
                 }
-            }
+                ResolvedCallable::Constructor(constructor) => {
+                    return Err(ExprLowerError::PositionalArgumentsOnConstructor {
+                        constructor,
+                        span: expr.span,
+                    });
+                }
+            },
             ast::ExprKind::If {
                 condition,
                 then_branch,
@@ -1420,52 +1461,26 @@ impl<'a> ExprLowerer<'a> {
                 expr: Box::new(self.lower_expr(operand)),
                 timezone: self.lower_iana_time_zone_id(timezone, expr.span)?,
             },
-            // `@alias.member` parses as `FieldAccess(GraphRef(alias), member)`.
-            // When `alias.member` resolves as a module-qualified declaration,
-            // promote the access to a qualified graph reference — this is the
-            // same promotion the project pipeline applies before evaluation,
-            // done here so every consumer of HIR (LSP included) sees the
-            // resolved identity. Otherwise it is a struct-field access.
-            ast::ExprKind::FieldAccess { expr, field } => self
-                .resolve_alias_field_access(expr, field)
-                .unwrap_or_else(|| ExprKind::FieldAccess {
-                    expr: Box::new(self.lower_expr(expr)),
-                    field: field.clone(),
-                }),
+            ast::ExprKind::FieldAccess { expr, field } => ExprKind::FieldAccess {
+                expr: Box::new(self.lower_expr(expr)),
+                field: field.clone(),
+            },
             ast::ExprKind::ConstructorCall {
                 callee,
                 generic_args,
                 fields,
             } => {
-                // Named-call syntax is ambiguous until name resolution. A real
-                // constructor wins; otherwise reclassify only a callee that is
-                // known to be a function, preserving the constructor lookup
-                // error for genuinely unknown constructor-shaped calls.
-                let resolved = match self
-                    .ctx
-                    .resolver
-                    .resolve_constructor_ident_path(self.ctx.owner, callee)
-                {
-                    Ok(resolved) => resolved,
-                    Err(constructor_error) => {
-                        return self.lower_function_ref(callee).map_or_else(
-                            |_| {
-                                Err(ExprLowerError::ModuleResolve {
-                                    source: constructor_error,
-                                    span: callee.span(),
-                                })
-                            },
-                            |function| {
-                                Err(ExprLowerError::NamedArgumentsOnFunction {
-                                    function,
-                                    argument_names: fields
-                                        .iter()
-                                        .map(|field| field.name.value.clone())
-                                        .collect(),
-                                    span: expr.span,
-                                })
-                            },
-                        );
+                let resolved = match self.resolve_callable(callee)? {
+                    ResolvedCallable::Constructor(constructor) => constructor,
+                    ResolvedCallable::Function(function) => {
+                        return Err(ExprLowerError::NamedArgumentsOnFunction {
+                            function,
+                            argument_names: fields
+                                .iter()
+                                .map(|field| field.name.value.clone())
+                                .collect(),
+                            span: expr.span,
+                        });
                     }
                 };
                 let params = self
@@ -1726,29 +1741,19 @@ impl<'a> ExprLowerer<'a> {
                 span,
             )));
         }
-        if let Ok(scale) = ident.name.as_str().parse::<TimeScale>() {
-            return Ok(ExprKind::ConstRef(Spanned::new(
-                ConstRef::TimeScale(scale),
-                span,
-            )));
-        }
         let path = NamePath::local(ident.name.clone());
-        if let Ok(constructor) = self
+        let constructor_result = self
             .ctx
             .resolver
-            .resolve_constructor_path(self.ctx.owner, &path)
-        {
+            .resolve_constructor_path(self.ctx.owner, &path);
+        if let Ok(constructor) = constructor_result {
             return Ok(ExprKind::ConstructorCall {
                 callee: Spanned::new(constructor, span),
                 generic_args: Vec::new(),
                 fields: Vec::new(),
             });
         }
-        if let Some(type_system_ref) =
-            self.resolve_bare_type_system_name(&path, &ident.name, span)?
-        {
-            return Ok(ExprKind::TypeSystemRef(Spanned::new(type_system_ref, span)));
-        }
+
         let scoped_name = ScopedName::from(ident.name.clone());
         match self.resolve_decl_scoped_name(&scoped_name, span) {
             Ok(resolved) => {
@@ -1757,173 +1762,34 @@ impl<'a> ExprLowerer<'a> {
                     .resolver
                     .decl_symbol_kind(&resolved)
                     .map_err(|source| ExprLowerError::ModuleResolve { source, span })?;
-                match kind {
-                    DeclSymbolKind::Const | DeclSymbolKind::Param | DeclSymbolKind::Node => {
-                        Err(ExprLowerError::BareGraphDeclarationRef {
-                            name: scoped_name,
-                            kind,
-                            span,
-                        })
-                    }
-                    DeclSymbolKind::Assert
-                    | DeclSymbolKind::Plot
-                    | DeclSymbolKind::Figure
-                    | DeclSymbolKind::Layer
-                    | DeclSymbolKind::Dag => self
-                        .lower_const_ref(&scoped_name, span)
-                        .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span))),
-                }
+                Err(ExprLowerError::BareGraphDeclarationRef {
+                    name: scoped_name,
+                    kind,
+                    span,
+                })
             }
-            Err(ExprLowerError::UnknownGraphRef { .. }) => self
-                .lower_const_ref(&scoped_name, span)
-                .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span))),
+            Err(ExprLowerError::UnknownGraphRef { .. }) => {
+                Err(ExprLowerError::ModuleResolve {
+                    source: ModuleResolveError::UnknownName {
+                        owner: self.ctx.owner.clone(),
+                        namespace: "Term",
+                        name: ident.name.to_string(),
+                    },
+                    span,
+                })
+            }
             Err(error) => Err(error),
         }
     }
 
-    /// Resolve a bare identifier against the type-system namespaces.
-    ///
-    /// Bare type-system names appear in value position in include-binding
-    /// RHSs (`Speed: Velocity`); downstream type checking rejects them in
-    /// genuine value positions with a precise diagnostic.
-    fn resolve_bare_type_system_name(
-        &self,
-        path: &NamePath,
-        name: &NameAtom,
-        span: Span,
-    ) -> Result<Option<TypeSystemRef>, ExprLowerError> {
-        if let Ok(struct_type) = self
-            .ctx
-            .resolver
-            .resolve_struct_type_path(self.ctx.owner, path)
-        {
-            return Ok(Some(TypeSystemRef::Type(struct_type)));
-        }
-        if let Ok(dimension) = self
-            .ctx
-            .resolver
-            .resolve_dimension_path(self.ctx.owner, path)
-        {
-            return Ok(Some(TypeSystemRef::Dimension(dimension)));
-        }
-        if let Some(prelude) = self.ctx.prelude
-            && let Some(dimension) = prelude.resolve_dimension_path(path)
-        {
-            return Ok(Some(TypeSystemRef::Dimension(dimension)));
-        }
-        if let Ok(index) = self.ctx.resolver.resolve_index_path(self.ctx.owner, path) {
-            return Ok(Some(TypeSystemRef::Index(index)));
-        }
-        let variant_name = IndexVariantName::from_atom(name.clone());
-        match self
-            .ctx
-            .resolver
-            .resolve_bare_index_variant(self.ctx.owner, &variant_name)
-        {
-            Ok(variant) => Ok(Some(TypeSystemRef::IndexVariant(variant))),
-            Err(ModuleResolveError::UnknownName { .. }) => Ok(None),
-            Err(source) => Err(ExprLowerError::ModuleResolve { source, span }),
-        }
-    }
-
-    /// Resolve a dotted reference path (`a.b`, `a.b.c`, ...) in value position.
-    ///
-    /// A two-segment path whose head names an index in scope is a variant
-    /// literal; anything else is a qualified constant-like reference
-    /// (declaration, constructor, or index variant of an imported module).
+    /// Resolve a Term member selected by an explicit `::` boundary. Index
+    /// labels never enter this path; the parser represents `Owner#Label`
+    /// separately.
     fn lower_dotted_path_ref(&self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
         let span = path.span();
-        if let [qualifier, member] = path.segments() {
-            let index_path = NamePath::local(qualifier.name.clone());
-            if self
-                .ctx
-                .resolver
-                .resolve_index_path(self.ctx.owner, &index_path)
-                .is_ok()
-            {
-                let variant = IndexVariantName::from_atom(member.name.clone());
-                let resolved = self.resolve_index_variant_parts(
-                    &index_path,
-                    &variant,
-                    qualifier.span,
-                    member.span,
-                )?;
-                return Ok(ExprKind::VariantLiteral(IndexVariantRef {
-                    variant: resolved,
-                    index_span: Some(qualifier.span),
-                    additional_index_spans: Vec::new(),
-                    variant_span: member.span,
-                }));
-            }
-        }
-
         let scoped = ScopedName::from(path.to_name_path());
-        match self.lower_const_ref(&scoped, span) {
-            Ok(const_ref) => Ok(ExprKind::ConstRef(Spanned::new(const_ref, span))),
-            // A qualified path that is not a const-like declaration can still
-            // be an index variant (`m.Season.Winter`). Resolving it here keeps
-            // the segment spans of the written path available for the literal.
-            Err(const_err) => self
-                .resolve_variant_literal_path(path)
-                .ok_or(const_err)
-                .map(ExprKind::VariantLiteral),
-        }
-    }
-
-    /// Promote `FieldAccess(GraphRef(alias), member)` to a qualified graph
-    /// reference when `alias.member` resolves as a module-qualified
-    /// declaration. Returns `None` when it does not (a struct-field access).
-    ///
-    /// Resolution goes through [`ModuleResolver::resolve_decl_path`] only —
-    /// it applies the alias boundary's visibility rule, so a private member
-    /// of an imported/included module does not get promoted (and therefore
-    /// stays an unresolved reference, exactly like writing the qualified
-    /// path directly).
-    fn resolve_alias_field_access(
-        &self,
-        inner: &ast::Expr,
-        field: &Spanned<FieldName>,
-    ) -> Option<ExprKind> {
-        let ast::ExprKind::GraphRef(name) = &inner.kind else {
-            return None;
-        };
-        if name.value.is_qualified() {
-            return None;
-        }
-        let scoped = ScopedName::qualified(
-            ModuleAliasName::from_atom(name.value.member().atom().clone()),
-            DeclName::from_atom(field.value.atom().clone()),
-        );
-        let span = name.span.merge(field.span);
-        let path = scoped.to_name_path();
-        let resolved = self
-            .ctx
-            .resolver
-            .resolve_decl_path(self.ctx.owner, &path)
-            .ok()?;
-        Some(ExprKind::GraphRef(Spanned::new(resolved, span)))
-    }
-
-    /// Resolve a dotted path as an index-variant literal, keeping the index
-    /// and variant segment spans separate. Returns `None` when the path does
-    /// not name an index variant in scope.
-    fn resolve_variant_literal_path(&self, path: &IdentPath) -> Option<IndexVariantRef> {
-        let (qualifier, member) = path.split_last();
-        let (first, rest) = qualifier.split_first()?;
-        let index_span = rest
-            .iter()
-            .fold(first.span, |merged, segment| merged.merge(segment.span));
-        let resolved = self
-            .ctx
-            .resolver
-            .resolve_index_variant_path(self.ctx.owner, &path.to_name_path())
-            .ok()?;
-        Some(IndexVariantRef {
-            variant: resolved,
-            index_span: Some(index_span),
-            additional_index_spans: Vec::new(),
-            variant_span: member.span,
-        })
+        self.lower_const_ref(&scoped, span)
+            .map(|const_ref| ExprKind::ConstRef(Spanned::new(const_ref, span)))
     }
 
     fn lower_field_init(&mut self, field: &ast::FieldInit) -> FieldInit {
@@ -2036,6 +1902,69 @@ impl<'a> ExprLowerer<'a> {
             },
             |source| Err(ExprLowerError::ModuleResolve { source, span }),
         )
+    }
+
+    fn lower_graph_ref(
+        &self,
+        name: &Spanned<ScopedName>,
+    ) -> Result<ExprKind, ExprLowerError> {
+        let resolved = self.resolve_decl_scoped_name(&name.value, name.span)?;
+        let kind_identity = match self
+            .ctx
+            .resolver
+            .resolve_decl_path(self.ctx.owner, &name.value.to_name_path())
+        {
+            Ok(identity) => identity,
+            Err(source @ ModuleResolveError::PrivateName { .. }) => {
+                return Err(ExprLowerError::ModuleResolve {
+                    source,
+                    span: name.span,
+                });
+            }
+            Err(_) => resolved.clone(),
+        };
+        let kind = match self.ctx.resolver.decl_symbol_kind(&kind_identity) {
+            Ok(kind) => kind,
+            Err(_)
+                if self
+                    .ctx
+                    .decl_bindings
+                    .is_some_and(|bindings| bindings.contains_key(&name.value)) =>
+            {
+                return Ok(ExprKind::GraphRef(Spanned::new(resolved, name.span)));
+            }
+            Err(source) => {
+                return Err(ExprLowerError::ModuleResolve {
+                    source,
+                    span: name.span,
+                });
+            }
+        };
+        let role = name
+            .value
+            .qualifier()
+            .first()
+            .and_then(|alias| self.ctx.resolver.module_alias_role(self.ctx.owner, alias));
+        let permitted = match role {
+            Some(ModuleAliasRole::ImportedDag) => kind == DeclSymbolKind::Const,
+            Some(ModuleAliasRole::IncludedInstance) | None => {
+                matches!(kind, DeclSymbolKind::Const | DeclSymbolKind::Param | DeclSymbolKind::Node)
+            }
+        };
+        if !permitted {
+            return Err(ExprLowerError::ModuleResolve {
+                source: ModuleResolveError::UnexpectedDeclKind {
+                    name: resolved,
+                    expected: match role {
+                        Some(ModuleAliasRole::ImportedDag) => "instance-independent const",
+                        Some(ModuleAliasRole::IncludedInstance) | None => "graph value",
+                    },
+                    actual: kind,
+                },
+                span: name.span,
+            });
+        }
+        Ok(ExprKind::GraphRef(Spanned::new(resolved, name.span)))
     }
 
     fn resolve_decl_scoped_name(
@@ -2336,6 +2265,22 @@ impl<'a> ExprLowerer<'a> {
         Ok(())
     }
 
+    /// Resolve one Term callee before argument-shape validation. The backing
+    /// maps are an implementation detail; namespace construction guarantees
+    /// that at most one callable category occupies the selected Term slot.
+    fn resolve_callable(&self, callee: &IdentPath) -> Result<ResolvedCallable, ExprLowerError> {
+        let constructor = self
+            .ctx
+            .resolver
+            .resolve_constructor_ident_path(self.ctx.owner, callee);
+        match constructor {
+            Ok(constructor) => Ok(ResolvedCallable::Constructor(constructor)),
+            Err(_) => self
+                .lower_function_ref(callee)
+                .map(ResolvedCallable::Function),
+        }
+    }
+
     fn lower_function_ref(
         &self,
         callee: &crate::syntax::ast::IdentPath,
@@ -2348,9 +2293,10 @@ impl<'a> ExprLowerer<'a> {
                     span: callee.span(),
                 });
         }
-        // `alias.name(...)`: an extern call when `alias` is a plugin alias in
+        // `alias::name(...)`: an extern call when `alias` is a plugin alias in
         // scope. Extern functions are only callable in this qualified form.
-        if let [qualifier, leaf] = callee.segments()
+        if let Some((qualifiers, leaf)) = callee.qualifier_and_leaf()
+            && let [qualifier] = qualifiers
             && let Some(target) = self
                 .ctx
                 .resolver
@@ -2575,28 +2521,6 @@ impl<'a> ExprLowerer<'a> {
         span: Span,
     ) -> Result<MatchPattern, ExprLowerError> {
         let name_path = path.to_name_path();
-        if bindings.is_empty()
-            && let Ok(variant) = self
-                .ctx
-                .resolver
-                .resolve_index_variant_path(self.ctx.owner, &name_path)
-        {
-            let (qualifier, member) = path.split_last();
-            let index_span = qualifier.split_first().map(|(first, rest)| {
-                rest.iter()
-                    .fold(first.span, |merged, segment| merged.merge(segment.span))
-            });
-            return Ok(MatchPattern::IndexLabel {
-                variant: IndexVariantRef {
-                    variant,
-                    index_span,
-                    additional_index_spans: Vec::new(),
-                    variant_span: member.span,
-                },
-                span,
-            });
-        }
-
         match self
             .ctx
             .resolver
@@ -2669,13 +2593,37 @@ impl<'a> ExprLowerer<'a> {
     fn push_scope(&mut self, bindings: Vec<LocalDef>) -> Result<(), ExprLowerError> {
         let mut scope = HashMap::new();
         for binding in bindings {
-            if let Some(first) = scope.insert(binding.name.clone(), binding.clone()) {
+            if let Some(first) = scope.get(binding.name.as_str()).cloned().or_else(|| {
+                self.local_scopes
+                    .iter()
+                    .rev()
+                    .find_map(|visible| visible.get(binding.name.as_str()).cloned())
+            }) {
                 return Err(ExprLowerError::DuplicateLocalBinding {
                     name: binding.name,
                     first: first.span,
                     duplicate: binding.span,
                 });
             }
+            let atom = binding.name.atom();
+            let builtin_occupied =
+                validate_reserved_name(ReservedNameNamespace::Term, atom).is_err();
+            let visible = self
+                .ctx
+                .resolver
+                .visible_term_span(self.ctx.owner, atom)
+                .map_err(|source| ExprLowerError::ModuleResolve {
+                    source,
+                    span: binding.span,
+                })?;
+            if builtin_occupied || visible.is_some() {
+                return Err(ExprLowerError::LocalBindingShadowsTerm {
+                    name: binding.name,
+                    original: visible,
+                    duplicate: binding.span,
+                });
+            }
+            scope.insert(binding.name.clone(), binding);
         }
         self.local_scopes.push(scope);
         Ok(())
@@ -2788,7 +2736,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub index Phase = { Burn, Coast };");
-        let main_source = "import lib as mission; node phase: Dimensionless = mission.Phase.Burn;";
+        let main_source = "import lib as mission; node phase: Dimensionless = mission::Phase#Burn;";
         let main = desugared_source(main_source);
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
         let scope = GenericScope::new();
@@ -2812,7 +2760,7 @@ mod tests {
         assert_eq!(slice(variant.variant_span), "Burn");
         assert_eq!(
             slice(variant.index_span.expect("written index path")),
-            "mission.Phase"
+            "mission::Phase"
         );
     }
 
@@ -2822,7 +2770,7 @@ mod tests {
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub base dim Currency; pub base unit credit: Currency;");
         let main = desugared_source(
-            "import lib as schema; node amount: Dimensionless = 1.0 schema.credit;",
+            "import lib as schema; node amount: Dimensionless = 1.0 schema::credit;",
         );
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
         let scope = GenericScope::new();
@@ -2839,7 +2787,7 @@ mod tests {
         let [term] = unit.terms.as_slice() else {
             panic!("expected one unit term, got {:?}", unit.terms);
         };
-        assert_eq!(term.name.value.spelling().to_string(), "schema.credit");
+        assert_eq!(term.name.value.spelling().to_string(), "schema::credit");
         assert_eq!(term.name.value.resolved().owner(), &lib_id);
         assert_eq!(term.name.value.resolved().as_str(), "credit");
     }
@@ -2850,7 +2798,7 @@ mod tests {
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type BurnKind { Impulsive, Coast }");
         let main = desugared_source(
-            "import lib as mission; node burn: Dimensionless = mission.Impulsive;",
+            "import lib as mission; node burn: Dimensionless = mission::Impulsive;",
         );
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
         let scope = GenericScope::new();
@@ -2982,7 +2930,7 @@ mod tests {
             desugared_source("pub type BurnKind { Impulsive(delta_v: Dimensionless), Coast }");
         let main = desugared_source(
             "import lib as mission; param burn: Dimensionless; \
-             node dv: Dimensionless = match @burn { mission.Impulsive(delta_v: dv) => dv, mission.Coast => 0.0 };",
+             node dv: Dimensionless = match @burn { mission::Impulsive(delta_v: delta) => delta, mission::Coast => 0.0 };",
         );
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
         let scope = GenericScope::new();
@@ -3025,7 +2973,7 @@ mod tests {
         let lib =
             desugared_source("pub const node C: Dimensionless = 1.0; param p: Dimensionless;");
         let main = desugared_source(
-            "import lib as mission; import lib.{p}; node x: Dimensionless = @p + mission.C;",
+            "import lib as mission; import lib::{p}; node x: Dimensionless = @p + @mission::C;",
         );
         let resolver = resolver_with_import(&lib_id, &main_id, &lib, &main);
         let scope = GenericScope::new();
@@ -3038,17 +2986,16 @@ mod tests {
         let deps = collect_expr_dependencies(&expr);
 
         let graph_refs = deps.graph_refs.into_iter().collect::<Vec<_>>();
-        let const_refs = deps.const_refs.into_iter().collect::<Vec<_>>();
-        let [graph_ref] = graph_refs.as_slice() else {
-            panic!("expected one graph dep, got {graph_refs:?}");
-        };
-        let [const_ref] = const_refs.as_slice() else {
-            panic!("expected one const dep, got {const_refs:?}");
-        };
-        assert_eq!(graph_ref.owner(), &lib_id);
-        assert_eq!(graph_ref.as_str(), "p");
-        assert_eq!(const_ref.owner(), &lib_id);
-        assert_eq!(const_ref.as_str(), "C");
+        assert!(deps.const_refs.is_empty());
+        assert_eq!(graph_refs.len(), 2, "{graph_refs:?}");
+        assert!(graph_refs.iter().all(|reference| reference.owner() == &lib_id));
+        assert_eq!(
+            graph_refs
+                .iter()
+                .map(|reference| reference.as_str())
+                .collect::<Vec<_>>(),
+            ["C", "p"]
+        );
     }
 
     fn lower_tolerant_node(source: &str, name: &str) -> (Expr, Vec<ExprLowerError>) {
@@ -3091,7 +3038,7 @@ mod tests {
             (
                 "index Axis = { Good }; param a: Dimensionless; param b: Dimensionless; \
                  node out: Dimensionless[Axis] = \
-                     { Axis.Missing: @a, Axis.Good: @b };",
+                     { Axis#Missing: @a, Axis#Good: @b };",
                 2,
                 BTreeSet::from(["a".to_string(), "b".to_string()]),
             ),
@@ -3106,7 +3053,7 @@ mod tests {
             ),
             (
                 "param a: Dimensionless; param b: Dimensionless; \
-                 node out: Dimensionless = @missing(first: @a, second: @b).result;",
+                 node out: Dimensionless = @missing(first: @a, second: @b)::result;",
                 2,
                 BTreeSet::from(["a".to_string(), "b".to_string()]),
             ),

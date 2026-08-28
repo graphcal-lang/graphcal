@@ -847,7 +847,7 @@ mod tests {
         param count: Int(min: 0, max: 10);
         param mode: Key<Mode>;
         pub node failure: Bool =
-            @load / @load > 0.5 && @count > 0 && @mode == Mode.B;
+            @load / @load > 0.5 && @count > 0 && @mode == Mode#B;
     ";
 
     fn prepared_model() -> (PreparedProject, TenaxV2Model, ArrowModelSchemas) {

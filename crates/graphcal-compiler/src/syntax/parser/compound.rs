@@ -1,7 +1,8 @@
 use crate::syntax::ast::{
-    Expr, ExprKind, ForBinding, ForBindingIndex, IdentPath, KeyFormKind, MatchArm, MatchPattern,
+    Expr, ExprKind, ForBinding, ForBindingIndex, KeyFormKind, MatchArm, MatchPattern,
     NatExpr, PatternBinding,
 };
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
@@ -72,24 +73,24 @@ impl Parser<'_> {
         })
     }
 
-    /// Parse a match pattern as syntax first.
-    ///
-    /// The parser records the complete path and any constructor-style bindings,
-    /// but deliberately does not decide whether the path denotes a union
-    /// constructor or an index label. That categorization requires name
-    /// resolution.
+    /// Parse a constructor Term pattern or an index-label pattern selected by
+    /// `#`. The punctuation fixes the lookup namespace before HIR lowering.
     fn parse_match_pattern(&mut self) -> Result<MatchPattern, ParseError> {
-        let first_ident = self.parse_any_ident()?;
-        let start_span = first_ident.span;
-        let mut rest = Vec::new();
-        while self.lexer.peek() == Some(&Token::Dot) {
+        let path = self.parse_ident_path()?;
+        let start_span = path.span();
+        if self.lexer.peek() == Some(&Token::Hash) {
             self.lexer.next_token();
-            rest.push(self.parse_any_ident()?);
+            let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+            let span = start_span.merge(variant.span);
+            return Ok(MatchPattern::IndexLabel {
+                index: path.into_spanned_name_path(),
+                variant,
+                span,
+            });
         }
-        let path = IdentPath::new(crate::syntax::non_empty::NonEmpty::new(first_ident, rest));
 
         let (bindings, end_span) = if self.lexer.peek() == Some(&Token::LParen) {
-            self.lexer.next_token(); // consume '('
+            self.lexer.next_token();
             let bindings =
                 self.parse_comma_separated(Token::RParen, Self::parse_pattern_binding)?;
             let (_, rparen_span) = self.expect(Token::RParen)?;
@@ -240,15 +241,9 @@ impl Parser<'_> {
         self.parse_named_index_path().map(ForBindingIndex::Named)
     }
 
-    /// Parse a named index path such as `Step` or `module.Step`.
+    /// Parse a named index such as `Step` or `module.child::Step`.
     fn parse_named_index_path(&mut self) -> Result<Spanned<NamePath>, ParseError> {
-        let first = self.parse_any_ident()?;
-        let mut segments = vec![first];
-        while self.lexer.peek() == Some(&Token::Dot) {
-            self.lexer.next_token();
-            segments.push(self.parse_any_ident()?);
-        }
-        Ok(Self::index_name_path_from_segments(&segments))
+        Ok(self.parse_ident_path()?.into_spanned_name_path())
     }
 
     /// Parse a nat expression: supports literals, identifiers, addition, and multiplication.
@@ -456,14 +451,13 @@ node x: Dimensionless = match @r {
 
     #[test]
     fn parse_qualified_constructor_call_preserves_callee_path() {
-        let source = "node t: Dimensionless = module.TransferResult(dv1: @a);";
+        let source = "node t: Dimensionless = module::TransferResult(dv1: @a);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ConstructorCall { callee, fields, .. } => {
-                    assert_eq!(callee.segments.len(), 2);
-                    assert_eq!(callee.segments[0].name, "module");
-                    assert_eq!(callee.segments[1].name, "TransferResult");
+                    assert_eq!(callee.owner_segments().unwrap()[0].name, "module");
+                    assert_eq!(callee.leaf().name, "TransferResult");
                     assert_eq!(fields.len(), 1);
                 }
                 other => panic!("expected ConstructorCall, got {other:?}"),
@@ -657,7 +651,7 @@ node x: Dimensionless = match @r {
 
     #[test]
     fn parse_index_access_with_variant() {
-        let source = "node x: Velocity = @dv[Maneuver.Departure];";
+        let source = "node x: Velocity = @dv[Maneuver#Departure];";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
@@ -813,8 +807,8 @@ node x: Dimensionless = match @r {
     }
 
     #[test]
-    fn parse_dotted_match_pattern_with_bindings_remains_syntactic() {
-        let source = "node x: Dimensionless = match @phase { Phase.Launch(label: value) => 1.0 };";
+    fn parse_member_match_pattern_with_bindings_remains_syntactic() {
+        let source = "node x: Dimensionless = match @phase { module::Launch(label: value) => 1.0 };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
@@ -822,7 +816,7 @@ node x: Dimensionless = match @r {
                     let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
                         panic!("expected syntactic path pattern");
                     };
-                    assert_eq!(path.segments.len(), 2);
+                    assert_eq!(path.len(), 2);
                     assert_eq!(bindings.len(), 1);
                 }
                 other => panic!("expected Match, got {other:?}"),
@@ -833,7 +827,7 @@ node x: Dimensionless = match @r {
 
     #[test]
     fn parse_tuple_match_rejected() {
-        let source = "node x: Dimensionless = match (Phase.Launch, Mode.Nominal) { (Phase.Launch, Mode.Nominal) => 1.0, _ => 0.0 };";
+        let source = "node x: Dimensionless = match (Phase#Launch, Mode#Nominal) { (Phase#Launch, Mode#Nominal) => 1.0, _ => 0.0 };";
         assert!(Parser::new(source).parse_file().is_err());
     }
 

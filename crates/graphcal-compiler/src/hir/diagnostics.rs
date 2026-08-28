@@ -383,6 +383,17 @@ pub fn expr_lower_error_to_graphcal(
             };
         }
         hir::ExprLowerError::ModuleResolve {
+            source: ModuleResolveError::PrivateName { owner, name, .. },
+            span,
+        } => {
+            return GraphcalError::ImportPrivateItem {
+                name: name.clone(),
+                file_path: owner.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
             span,
         } => {
@@ -438,6 +449,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownFunction { span, .. }
         | hir::ExprLowerError::UnknownExternFunction { span, .. }
         | hir::ExprLowerError::NamedArgumentsOnFunction { span, .. }
+        | hir::ExprLowerError::PositionalArgumentsOnConstructor { span, .. }
         | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
         | hir::ExprLowerError::WrongArity { span, .. }
         | hir::ExprLowerError::InvalidTimezone { span, .. }
@@ -448,7 +460,8 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::TimeZoneRegistryInvariant { span, .. } => *span,
         hir::ExprLowerError::NonexistentCivilDateTime { datetime_span, .. }
         | hir::ExprLowerError::RepeatedCivilDateTime { datetime_span, .. } => *datetime_span,
-        hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
+        hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. }
+        | hir::ExprLowerError::LocalBindingShadowsTerm { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
         message: err.to_string(),
@@ -480,7 +493,8 @@ pub fn hir_lower_error_to_graphcal(
         | hir::HirLowerError::ExpectedTimeScale { span }
         | hir::HirLowerError::UnknownTimeScale { span, .. }
         | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
-        hir::HirLowerError::DuplicateGenericParam { duplicate, .. } => *duplicate,
+        hir::HirLowerError::DuplicateGenericParam { duplicate, .. }
+        | hir::HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
         message: err.to_string(),

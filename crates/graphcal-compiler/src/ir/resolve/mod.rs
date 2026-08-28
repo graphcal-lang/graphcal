@@ -87,25 +87,25 @@ fn check_builtin_name_shadowing(
     for decl in &file.declarations {
         let introduced = match &decl.kind {
             DeclKind::BaseDimension(d) => Some((
-                ReservedNameNamespace::TypeSystem,
+                ReservedNameNamespace::Static,
                 "dimension",
                 d.name.value.atom(),
                 d.name.span,
             )),
             DeclKind::Dimension(d) => Some((
-                ReservedNameNamespace::TypeSystem,
+                ReservedNameNamespace::Static,
                 "dimension",
                 d.name.value.atom(),
                 d.name.span,
             )),
             DeclKind::Type(t) => Some((
-                ReservedNameNamespace::TypeSystem,
+                ReservedNameNamespace::Static,
                 "type",
                 t.name.value.atom(),
                 t.name.span,
             )),
             DeclKind::Index(i) => Some((
-                ReservedNameNamespace::TypeSystem,
+                ReservedNameNamespace::Static,
                 "index",
                 i.name.value.atom(),
                 i.name.span,
@@ -117,31 +117,56 @@ fn check_builtin_name_shadowing(
                 u.name.span,
             )),
             DeclKind::Param(p) => Some((
-                ReservedNameNamespace::GraphValue,
+                ReservedNameNamespace::Term,
                 "param",
                 p.name.value.atom(),
                 p.name.span,
             )),
             DeclKind::Node(n) => Some((
-                ReservedNameNamespace::GraphValue,
+                ReservedNameNamespace::Term,
                 "node",
                 n.name.value.atom(),
                 n.name.span,
             )),
             DeclKind::ConstNode(c) => Some((
-                ReservedNameNamespace::GraphValue,
+                ReservedNameNamespace::Term,
                 "const node",
                 c.name.value.atom(),
                 c.name.span,
             )),
-            DeclKind::Assert(_)
-            | DeclKind::Plot(_)
-            | DeclKind::Figure(_)
-            | DeclKind::Layer(_)
-            | DeclKind::Import(_)
+            DeclKind::Assert(a) => Some((
+                ReservedNameNamespace::Term,
+                "assert",
+                a.name.value.atom(),
+                a.name.span,
+            )),
+            DeclKind::Plot(p) => Some((
+                ReservedNameNamespace::Term,
+                "plot",
+                p.name.value.atom(),
+                p.name.span,
+            )),
+            DeclKind::Figure(f) => Some((
+                ReservedNameNamespace::Term,
+                "figure",
+                f.name.value.atom(),
+                f.name.span,
+            )),
+            DeclKind::Layer(l) => Some((
+                ReservedNameNamespace::Term,
+                "layer",
+                l.name.value.atom(),
+                l.name.span,
+            )),
+            DeclKind::Dag(d) => Some((
+                ReservedNameNamespace::Term,
+                "dag",
+                d.name.value.atom(),
+                d.name.span,
+            )),
+            DeclKind::Import(_)
             | DeclKind::PluginImport(_)
             | DeclKind::Include(_)
-            | DeclKind::Dag(_)
             | DeclKind::Sugar(_) => None,
         };
 
@@ -154,6 +179,25 @@ fn check_builtin_name_shadowing(
                 src: src.clone(),
                 span: span.into(),
             });
+        }
+        if let DeclKind::Type(type_decl) = &decl.kind
+            && let TypeDeclBody::Constructors(constructors) = &type_decl.body
+        {
+            for constructor in constructors {
+                if validate_reserved_name(
+                    ReservedNameNamespace::Term,
+                    constructor.name.value.atom(),
+                )
+                .is_err()
+                {
+                    return Err(GraphcalError::BuiltinNameShadowed {
+                        kind: "constructor",
+                        name: constructor.name.value.to_string(),
+                        src: src.clone(),
+                        span: constructor.name.span.into(),
+                    });
+                }
+            }
         }
     }
 
@@ -172,7 +216,7 @@ fn check_imported_graph_value_names(
         .filter(|(name, _)| !name.is_qualified())
         .try_for_each(|(name, span)| {
             let atom = name.member().atom();
-            validate_reserved_name(ReservedNameNamespace::GraphValue, atom).map_err(|_| {
+            validate_reserved_name(ReservedNameNamespace::Term, atom).map_err(|_| {
                 GraphcalError::BuiltinNameShadowed {
                     kind: "graph-value alias",
                     name: atom.to_string(),
@@ -183,43 +227,36 @@ fn check_imported_graph_value_names(
         })
 }
 
-fn check_exclusive_universe_collisions(
+fn check_static_namespace_collisions(
     file: &File,
     src: &NamedSource<Arc<String>>,
-    names: &HashMap<ScopedName, Span>,
 ) -> Result<(), GraphcalError> {
-    let mut occupied = names
-        .iter()
-        .filter(|(name, _)| !name.is_qualified())
-        .map(|(name, span)| (name.member().atom().clone(), *span))
-        .collect::<HashMap<_, _>>();
-
+    let mut occupied = HashMap::new();
     for (atom, span) in file
         .declarations
         .iter()
-        .filter_map(|decl| exclusive_universe_decl(&decl.kind))
+        .filter_map(|decl| static_namespace_decl(&decl.kind))
     {
         register_exclusive_universe_name(&mut occupied, atom, span, src)?;
     }
-
     Ok(())
 }
 
-fn exclusive_universe_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
+fn static_namespace_decl(decl: &DeclKind) -> Option<(&NameAtom, Span)> {
     match decl {
-        DeclKind::Param(p) => Some((p.name.value.atom(), p.name.span)),
-        DeclKind::Node(n) => Some((n.name.value.atom(), n.name.span)),
-        DeclKind::ConstNode(c) => Some((c.name.value.atom(), c.name.span)),
-        DeclKind::Assert(a) => Some((a.name.value.atom(), a.name.span)),
-        DeclKind::Plot(p) => Some((p.name.value.atom(), p.name.span)),
-        DeclKind::Figure(f) => Some((f.name.value.atom(), f.name.span)),
-        DeclKind::Layer(l) => Some((l.name.value.atom(), l.name.span)),
-        DeclKind::Dag(d) => Some((d.name.value.atom(), d.name.span)),
         DeclKind::BaseDimension(d) => Some((d.name.value.atom(), d.name.span)),
         DeclKind::Dimension(d) => Some((d.name.value.atom(), d.name.span)),
         DeclKind::Type(t) => Some((t.name.value.atom(), t.name.span)),
         DeclKind::Index(i) => Some((i.name.value.atom(), i.name.span)),
-        DeclKind::Unit(_)
+        DeclKind::Param(_)
+        | DeclKind::Node(_)
+        | DeclKind::ConstNode(_)
+        | DeclKind::Assert(_)
+        | DeclKind::Plot(_)
+        | DeclKind::Figure(_)
+        | DeclKind::Layer(_)
+        | DeclKind::Dag(_)
+        | DeclKind::Unit(_)
         | DeclKind::Import(_)
         | DeclKind::PluginImport(_)
         | DeclKind::Include(_) => None,
@@ -278,6 +315,12 @@ fn check_value_namespace_collisions(
                 l.name.span,
                 src,
             )?,
+            DeclKind::Dag(d) => register_value_namespace_name(
+                &mut value_names,
+                d.name.value.atom(),
+                d.name.span,
+                src,
+            )?,
             DeclKind::Type(t) => {
                 if let TypeDeclBody::Constructors(members) = &t.body {
                     for member in members {
@@ -296,8 +339,7 @@ fn check_value_namespace_collisions(
             | DeclKind::Index(_)
             | DeclKind::Import(_)
             | DeclKind::PluginImport(_)
-            | DeclKind::Include(_)
-            | DeclKind::Dag(_) => {}
+            | DeclKind::Include(_) => {}
             DeclKind::Sugar(_) => crate::syntax::desugar::unreachable_post_desugar(),
         }
     }
@@ -419,7 +461,7 @@ fn collect_local_declarations(
     let mut assert_names: HashSet<DeclName> = HashSet::new();
 
     check_builtin_name_shadowing(file, src)?;
-    check_exclusive_universe_collisions(file, src, names)?;
+    check_static_namespace_collisions(file, src)?;
     check_value_namespace_collisions(file, src, names)?;
 
     // Classify the externally addressable surface without treating `param`
@@ -439,19 +481,19 @@ fn collect_local_declarations(
                 external_surface.insert_explicit_export(name);
             }
             DeclKind::BaseDimension(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
+                external_surface.insert_static_export(name.into_atom());
             }
             DeclKind::Dimension(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
+                external_surface.insert_static_export(name.into_atom());
             }
             DeclKind::Unit(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
+                external_surface.insert_unit_export(name.into_atom());
             }
             DeclKind::Type(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
+                external_surface.insert_static_export(name.into_atom());
             }
             DeclKind::Index(d) if d.visibility.is_public() => {
-                external_surface.insert_explicit_export(name);
+                external_surface.insert_static_export(name.into_atom());
             }
             DeclKind::Dag(d) if d.visibility.is_public() => {
                 external_surface.insert_explicit_export(name);
@@ -835,7 +877,7 @@ fn validate_private_in_public(
             };
             let ref_decl_name = DeclName::from_atom(ref_name.clone());
             if let Some((referenced, _)) = local_type_names.get(ref_name)
-                && !external_surface.is_explicit_export(&ref_decl_name)
+                && !external_surface.is_static_explicit_export(ref_decl_name.atom())
             {
                 return Err(GraphcalError::PrivateInPublic {
                     pub_kind,

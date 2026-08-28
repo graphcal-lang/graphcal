@@ -495,7 +495,7 @@ dag scale {
 }
 
 param speed: Dimensionless = 10.0;
-node doubled: Dimensionless = @scale(factor: 2.0, v: @speed).result;
+node doubled: Dimensionless = @scale(factor: 2.0, v: @speed)::result;
 ",
         );
         let ir = project_tir(&tir).unwrap();
@@ -533,8 +533,8 @@ dag scale {
 param speed: Velocity = 10.0 m/s;
 include scale(factor: 2.0, v: @speed) as doubled;
 include scale(factor: 3.0, v: @speed) as tripled;
-node doubled_result: Velocity = @doubled.result;
-node tripled_result: Velocity = @tripled.result;
+node doubled_result: Velocity = @doubled::result;
+node tripled_result: Velocity = @tripled::result;
 ",
         );
         let ir = project_tir(&tir).unwrap();

@@ -444,7 +444,7 @@ mod tests {
             "pub const node value: Dimensionless = 1.0;\n",
         )
         .unwrap();
-        let source = "import app.lib.{ value as E };\n";
+        let source = "import app.lib::{ value as E };\n";
         let root = source_dir.join("main.gcl");
         std::fs::write(&root, source).unwrap();
 
@@ -833,7 +833,7 @@ param event: Datetime<TT>(
 
     #[test]
     fn duplicate_dag_binding_has_original_as_related_information() {
-        let source = "node result: Dimensionless = @combine(a: 1.0, a: 2.0).out;";
+        let source = "node result: Dimensionless = @combine(a: 1.0, a: 2.0)::out;";
         let diagnostics = produce_diagnostics(source, "test.gcl");
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         assert!(matches!(
@@ -892,7 +892,7 @@ param event: Datetime<TT>(
     #[test]
     fn indexed_comparison_produces_explicit_for_diagnostic() {
         let source = "index Case = { A, B };\n\
-                      node values: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };\n\
+                      node values: Length[Case] = { Case#A: 1.0 m, Case#B: 2.0 m };\n\
                       node bad: Bool[Case] = @values < 3.0 m;";
         let diagnostics = produce_diagnostics(source, "test.gcl");
         assert!(diagnostics.iter().any(|diagnostic| {
@@ -1157,7 +1157,7 @@ param event: Datetime<TT>(
     #[test]
     fn repeated_include_producer_has_both_selection_spans() {
         let source = "dag producer { pub node value: Dimensionless = 1.0; }\n\
-                      include producer().{ value as first, value as second };";
+                      include producer()::{ value as first, value as second };";
         let diagnostics = produce_diagnostics(source, "test.gcl");
         let [diagnostic] = diagnostics.as_slice() else {
             panic!("expected one diagnostic, got {diagnostics:?}");
@@ -1259,7 +1259,7 @@ param event: Datetime<TT>(
         )
         .unwrap();
         let main_path = dir.path().join("src/app/main.gcl");
-        let source = "import app.lib.{ dim JPY };\n";
+        let source = "import app.lib::{ dim JPY };\n";
         std::fs::write(&main_path, source).unwrap();
 
         let diagnostics = produce_diagnostics_for_file(&main_path, source);
@@ -1295,7 +1295,7 @@ param event: Datetime<TT>(
         let main_path = dir.path().join("src/app/main.gcl");
 
         for (source, expected) in [
-            ("import app.lib.{ positive };\n", "graphcal::M024"),
+            ("import app.lib::{ positive };\n", "graphcal::M024"),
             (
                 "import app.lib as lib;\nnode price: lib.Money = 1.0 lib.EUR;\n",
                 "graphcal::M025",
@@ -1318,12 +1318,12 @@ param event: Datetime<TT>(
         for (source, expected) in [
             (
                 "pub assert okay = true;\n\
-                 dag calculation { import self.{ okay }; }\n",
+                 dag calculation { import self::{ okay }; }\n",
                 "graphcal::M024",
             ),
             (
                 "pub plot chart = { mark: point, encode: { x: 1.0 } };\n\
-                 dag calculation { import self.{ chart }; }\n",
+                 dag calculation { import self::{ chart }; }\n",
                 "graphcal::M021",
             ),
         ] {
@@ -1378,7 +1378,7 @@ param event: Datetime<TT>(
 dag config {
     param factor: Dimensionless = 2.0;
 }
-node factor: Dimensionless = @config().factor;
+node factor: Dimensionless = @config()::factor;
 ";
         assert!(produce_diagnostics(source, "test.gcl").is_empty());
     }
@@ -1392,10 +1392,10 @@ dag scale {
     pub node ys: Dimensionless[Axis] = for i: Axis { @xs[i] * 2.0 };
 }
 include scale(
-    Axis: Fin(3),
+    index Axis: Fin(3),
     xs: table[Fin(3)] { 1.0; 2.0; 3.0; },
 ) as scaled;
-node out: Dimensionless[Fin(3)] = @scaled.ys;
+node out: Dimensionless[Fin(3)] = @scaled::ys;
 ";
         assert!(produce_diagnostics(source, "test.gcl").is_empty());
     }
@@ -1411,7 +1411,7 @@ dag pass_through {
 
 pub index DistanceStep = range(0.0 m, 2.0 m, step: 1.0 m);
 include pass_through(
-    Step: DistanceStep,
+    index Step: DistanceStep,
     samples: for distance: DistanceStep { distance },
 ) as output;
 ";
@@ -1477,8 +1477,8 @@ include pass_through(
         // are OK because `param` directly declares an input port.
         let source = concat!(
             "pub(bind) index Phase = { Design, Test };\n",
-            "param x: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };\n",
-            "node design: Dimensionless = @x[Phase.Design];\n",
+            "param x: Dimensionless[Phase] = { Phase#Design: 1.0, Phase#Test: 2.0 };\n",
+            "node design: Dimensionless = @x[Phase#Design];\n",
         );
         let diags = produce_diagnostics(source, "test.gcl");
         assert!(!diags.is_empty());

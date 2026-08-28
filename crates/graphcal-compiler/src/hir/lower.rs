@@ -79,6 +79,13 @@ pub enum HirLowerError {
         first: Span,
         duplicate: Span,
     },
+    /// A Static generic binder reused a visible Static slot.
+    #[error("generic parameter `{name}` shadows a visible Static name")]
+    GenericParamShadowsStatic {
+        name: GenericParamName,
+        original: Option<Span>,
+        duplicate: Span,
+    },
     /// `Datetime<...>` has the wrong number of arguments.
     #[error("type `Datetime` expects 0 or 1 type argument(s), got {got}")]
     WrongDatetimeArgCount { got: usize, span: Span },
@@ -1048,7 +1055,7 @@ mod tests {
             "pub base dim Length; pub index Phase = { Burn }; pub type Vec3<D: Dim> { Vec3(x: D) }",
         );
         let main = desugared_source(
-            "import lib as physics; param v: physics.Vec3<physics.Length>[physics.Phase];",
+            "import lib as physics; param v: physics::Vec3<physics::Length>[physics::Phase];",
         );
         let (import_path, import_kind) = first_import(&main);
 

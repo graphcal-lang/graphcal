@@ -218,7 +218,7 @@ fn merge_registry_into_builder_filtered(
             continue;
         }
         if external_surface.is_some_and(|surface| {
-            !surface.is_explicit_export(&DeclName::from_atom(name.atom().clone()))
+            !surface.is_static_explicit_export(name.atom())
         }) {
             continue;
         }
@@ -254,17 +254,17 @@ fn merge_registry_into_builder_filtered(
                 continue;
             }
             if external_surface.is_some_and(|surface| {
-                !surface.is_explicit_export(&DeclName::from_atom(name.name().atom().clone()))
+                !surface.is_unit_explicit_export(name.name().atom())
             }) {
                 continue;
             }
             graphcal_compiler::syntax::dimension::UnitRef::qualified(
-                alias.clone(),
+                graphcal_compiler::syntax::names::NamespacePath::root(alias.atom().clone()),
                 name.name().clone(),
             )
         } else {
             if external_surface.is_some_and(|surface| {
-                !surface.is_explicit_export(&DeclName::from_atom(name.name().atom().clone()))
+                !surface.is_unit_explicit_export(name.name().atom())
             }) {
                 continue;
             }
@@ -292,7 +292,7 @@ fn merge_registry_into_builder_filtered(
         }
         if !index_bindings.contains_key(idx_def.name.as_str()) {
             if external_surface.is_some_and(|surface| {
-                !surface.is_explicit_export(&DeclName::from_atom(idx_def.name.atom().clone()))
+                !surface.is_static_explicit_export(idx_def.name.atom())
             }) {
                 continue;
             }
@@ -311,7 +311,7 @@ fn merge_registry_into_builder_filtered(
             continue;
         }
         if external_surface.is_some_and(|surface| {
-            !surface.is_explicit_export(&DeclName::from_atom(type_def.name().atom().clone()))
+            !surface.is_static_explicit_export(type_def.name().atom())
         }) {
             continue;
         }

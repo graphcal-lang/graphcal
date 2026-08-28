@@ -2463,19 +2463,22 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
     type Error = GraphcalError;
 
     fn visit_unresolved_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) = &expr.kind
-        else {
+        let ExprKind::UnresolvedRef(reference) = &expr.kind else {
             return Ok(());
         };
-        if let [head, variant] = path.segments() {
-            let index = IndexName::from_atom(head.name.clone());
-            self.check_label(&index, format!("`{}.{}`", head.name, variant.name))?;
+        match reference {
+            crate::syntax::ast::UnresolvedRef::IndexLabel { index, label, .. } => {
+                let name = IndexName::from_atom(index.leaf().name.clone());
+                self.check_label(&name, format!("`{index}#{}`", label.value))
+            }
+            crate::syntax::ast::UnresolvedRef::Path(path) => {
+                if let Some(name) = path.as_bare() {
+                    let constructor = ConstructorName::from_atom(name.name.clone());
+                    self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
+                }
+                Ok(())
+            }
         }
-        if let Some(name) = path.as_bare() {
-            let constructor = ConstructorName::from_atom(name.name.clone());
-            self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
-        }
-        Ok(())
     }
 
     fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
@@ -2520,13 +2523,9 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                     index, variant, ..
                 } => {
                     let name = IndexName::from_atom(index.value.leaf().clone());
-                    self.check_label(&name, format!("`{}.{}`", index.value, variant.value))?;
+                    self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
                 }
                 crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
-                    if let [head, variant] = path.segments() {
-                        let name = IndexName::from_atom(head.name.clone());
-                        self.check_label(&name, format!("`{}.{}`", head.name, variant.name))?;
-                    }
                     if let Some(name) = path.as_bare() {
                         let constructor = ConstructorName::from_atom(name.name.clone());
                         self.check_constructor(
@@ -2686,18 +2685,20 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
     }
 
     fn visit_unresolved_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        // A two-segment path whose head names a rebound index is a variant
-        // literal of that index (`Phase.Burn`). Only a declared target can
-        // preserve such a label-bearing reference.
-        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) =
-            &mut expr.kind
-            && let [head, _variant] = path.segments.as_mut_slice()
+        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel {
+            index,
+            ..
+        }) = &mut expr.kind
             && let Some(new) = self
                 .bindings
-                .get(head.name.as_str())
+                .get(index.leaf().name.as_str())
                 .and_then(types::IndexBindingTarget::declared_name)
         {
-            head.name = new.atom().clone();
+            let span = index.span();
+            *index = crate::syntax::ast::IdentPath::from(crate::syntax::ast::Ident {
+                name: new.atom().clone(),
+                span,
+            });
         }
         Ok(())
     }
@@ -2808,18 +2809,7 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
                             index.value = new.clone().into();
                         }
                     }
-                    // A two-segment path pattern whose head names a rebound
-                    // index is an index-label pattern; rewrite the head.
-                    crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
-                        if let [head, _variant] = path.segments.as_mut_slice()
-                            && let Some(new) = self
-                                .bindings
-                                .get(head.name.as_str())
-                                .and_then(types::IndexBindingTarget::declared_name)
-                        {
-                            head.name = new.atom().clone();
-                        }
-                    }
+                    crate::desugar::desugared_ast::MatchPattern::Path { .. } => {}
                     crate::desugar::desugared_ast::MatchPattern::Constructor { .. } => {}
                 }
                 self.visit_expr_mut(&mut arm.body)?;
@@ -3137,6 +3127,7 @@ fn substitute_type_names_in_expr(
                 ident.name = parsed_name;
             }
         }
+        ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel { .. }) => {}
 
         ExprKind::InlineDagRef { args, .. } => {
             for binding in args {
@@ -5790,7 +5781,7 @@ mod tests {
             panic!("Box should retain exactly one generic parameter");
         };
         let Some(crate::hir::GenericArg::Type(default)) = parameter.default() else {
-            panic!("Box.T should have a HIR type default");
+            panic!("Box#T should have a HIR type default");
         };
         assert!(matches!(
             &default.kind,
@@ -5921,8 +5912,9 @@ mod tests {
             matches!(
                 &error,
                 GraphcalError::UnknownDimension { name, .. }
-                    if name.segments().iter().map(NameAtom::as_str).collect::<Vec<_>>()
-                        == ["missing", "Dimension"]
+                    if name.owner().is_some_and(|owner| owner.segments()
+                        .iter().map(NameAtom::as_str).eq(["missing"]))
+                        && name.leaf().as_str() == "Dimension"
             ),
             "{error:?}"
         );

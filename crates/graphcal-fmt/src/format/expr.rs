@@ -205,6 +205,11 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => {
             RcDoc::text(path.display_path())
         }
+        ExprKind::UnresolvedRef(
+            graphcal_compiler::syntax::ast::UnresolvedRef::IndexLabel {
+                index, label, ..
+            },
+        ) => RcDoc::text(format!("{}#{}", index.display_path(), label.value)),
         ExprKind::BinOp { op, lhs, rhs } => format_binop(fmt, *op, lhs, rhs),
         ExprKind::UnaryOp { op, operand } => {
             let op_str = match op {
@@ -269,7 +274,7 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                 .iter()
                 .map(|a| match a {
                     IndexArg::Variant { index, variant } => {
-                        RcDoc::text(format!("{}.{}", index.value, variant.value.as_str()))
+                        RcDoc::text(format!("{}#{}", index.value, variant.value.as_str()))
                     }
                     IndexArg::Var(ident) => RcDoc::text(ident.name.clone()),
                     IndexArg::Expr(e) => format_delimited_expr(fmt, e),
@@ -572,7 +577,7 @@ pub fn format_map_literal(fmt: &mut Formatter<'_>, entries: &[MapEntry]) -> RcDo
         // The parser guarantees a map literal never mixes key ranks: scalar
         // syntax always yields exactly one key, tuple syntax always two or
         // more. Rendering each rank in its own syntax therefore round-trips.
-        let render_key = |key: &MapEntryKey| format!("{}.{}", key.index.value, key.variant.value);
+        let render_key = |key: &MapEntryKey| format!("{}#{}", key.index.value, key.variant.value);
         let key_doc = match e.keys.as_slice() {
             [key] => RcDoc::text(render_key(key)),
             keys => {
@@ -878,13 +883,13 @@ fn format_table_sliced(
     let slice_dims = ndim - 2;
 
     // Group entries by their slice keys (first N-2 keys).
-    // Named axes render as `Index.Variant`; finite positions render as `#N`.
+    // Named axes render as `Index#Variant`; finite positions render as `#N`.
     let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
     for (idx, e) in entries.iter().enumerate() {
         let slice_key: Vec<String> = (0..slice_dims)
             .map(|i| match &indexes[i] {
                 TableIndexSpec::Named(_) => {
-                    format!("{}.{}", e.keys[i].index.value, e.keys[i].variant.value)
+                    format!("{}#{}", e.keys[i].index.value, e.keys[i].variant.value)
                 }
                 TableIndexSpec::Finite { .. } => e.keys[i].variant.value.to_string(),
             })
@@ -1089,20 +1094,14 @@ fn append_pattern_bindings(name: RcDoc<'static>, bindings: &[PatternBinding]) ->
 pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
     match p {
         MatchPattern::Path { path, bindings, .. } => {
-            let name = RcDoc::text(
-                path.segments
-                    .iter()
-                    .map(|segment| segment.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join("."),
-            );
+            let name = RcDoc::text(path.display_path());
             if bindings.is_empty() {
                 return name;
             }
             append_pattern_bindings(name, bindings)
         }
         MatchPattern::IndexLabel { index, variant, .. } => {
-            RcDoc::text(format!("{}.{}", index.value, variant.value))
+            RcDoc::text(format!("{}#{}", index.value, variant.value))
         }
         MatchPattern::Constructor { name, bindings, .. } => {
             let name = RcDoc::text(name.value.as_str().to_string());
@@ -1163,7 +1162,14 @@ fn format_inline_dag_ref(
     let binding_docs: Vec<RcDoc<'static>> = args
         .iter()
         .map(|b| {
-            RcDoc::text(b.name.name.clone())
+            let marker = match b.category {
+                graphcal_compiler::syntax::ast::InputBindingCategory::Unmarked => "",
+                graphcal_compiler::syntax::ast::InputBindingCategory::Type => "type ",
+                graphcal_compiler::syntax::ast::InputBindingCategory::Dimension => "dim ",
+                graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
+            };
+            RcDoc::text(marker)
+                .append(RcDoc::text(b.name.name.clone()))
                 .append(RcDoc::text(": "))
                 .append(format_delimited_expr(fmt, &b.value))
         })
@@ -1171,6 +1177,6 @@ fn format_inline_dag_ref(
     let path_text = path.display_path();
     RcDoc::text(format!("@{path_text}"))
         .append(soft_parenthesized_list(binding_docs, false))
-        .append(RcDoc::text("."))
+        .append(RcDoc::text("::"))
         .append(RcDoc::text(output.to_string()))
 }

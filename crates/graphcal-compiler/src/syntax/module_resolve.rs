@@ -96,6 +96,21 @@ pub enum DeclSymbolKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum FlatNamespace {
+    Static,
+    Term,
+}
+
+impl std::fmt::Display for FlatNamespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Static => "Static",
+            Self::Term => "Term",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ExclusiveNameKind {
     Value,
     Dimension,
@@ -105,26 +120,20 @@ enum ExclusiveNameKind {
 }
 
 impl ExclusiveNameKind {
-    /// Whether two namespaces can collide at a source use site.
-    ///
-    /// Values, dimensions, types, and indexes share sort-inferred positions
-    /// and are mutually exclusive. Constructors are term-sorted and therefore
-    /// collide with values, but may coexist with their owning type (and with
-    /// names confined to other sort-fixed positions).
-    fn conflicts_with(self, other: Self) -> bool {
-        match (self, other) {
-            (Self::Constructor, Self::Value) | (Self::Value, Self::Constructor) => true,
-            (Self::Constructor, _) | (_, Self::Constructor) => false,
-            _ => self != other,
+    const fn namespace(self) -> FlatNamespace {
+        match self {
+            Self::Value | Self::Constructor => FlatNamespace::Term,
+            Self::Dimension | Self::StructType | Self::Index => FlatNamespace::Static,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExclusiveNameBinding {
-    kind: ExclusiveNameKind,
     span: Span,
 }
+
+type ExclusiveNameOccupancy = HashMap<(FlatNamespace, NameAtom), ExclusiveNameBinding>;
 
 impl DeclSymbolKind {
     /// Returns whether this declaration can be referenced from const-like
@@ -167,8 +176,8 @@ impl ModuleAccess {
 /// Semantic role of a module alias introduced by an import or include.
 ///
 /// An imported module names a reusable DAG blueprint, so its alias may be
-/// invoked directly (`@alias(args).out`) or used to reach a child DAG
-/// (`@alias.child(args).out`). An included instance is already instantiated;
+/// invoked directly (`@alias(args)::out`) or used to reach a child DAG
+/// (`@alias::child(args)::out`). An included instance is already instantiated;
 /// its alias is only a namespace for the selected instance's members.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModuleAliasRole {
@@ -603,7 +612,7 @@ impl ModuleSymbols {
 
     fn insert_value_decl(
         &mut self,
-        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        exclusive_names: &mut ExclusiveNameOccupancy,
         name: &Spanned<DeclName>,
         visibility: SymbolVisibility,
         kind: DeclSymbolKind,
@@ -619,7 +628,7 @@ impl ModuleSymbols {
 
     fn insert_dimension_decl(
         &mut self,
-        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        exclusive_names: &mut ExclusiveNameOccupancy,
         name: &Spanned<DimName>,
         visibility: SymbolVisibility,
     ) -> Result<(), ModuleResolveError> {
@@ -634,7 +643,7 @@ impl ModuleSymbols {
 
     fn insert_type_decl(
         &mut self,
-        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        exclusive_names: &mut ExclusiveNameOccupancy,
         type_decl: &ast::TypeDecl,
     ) -> Result<(), ModuleResolveError> {
         let visibility = SymbolVisibility::from(type_decl.visibility);
@@ -676,7 +685,7 @@ impl ModuleSymbols {
 
     fn insert_index_decl(
         &mut self,
-        exclusive_names: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        exclusive_names: &mut ExclusiveNameOccupancy,
         index: &ast::IndexDecl,
     ) -> Result<(), ModuleResolveError> {
         self.insert_exclusive_name(
@@ -690,33 +699,26 @@ impl ModuleSymbols {
 
     fn insert_exclusive_name(
         &self,
-        occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+        occupied: &mut ExclusiveNameOccupancy,
         atom: &NameAtom,
         kind: ExclusiveNameKind,
         span: Span,
     ) -> Result<(), ModuleResolveError> {
-        match occupied.get(atom) {
-            Some(first) if first.kind.conflicts_with(kind) => {
-                Err(ModuleResolveError::DuplicateSymbol {
-                    owner: self.owner.clone(),
-                    namespace: "name",
-                    name: atom.to_string(),
-                    first: first.span,
-                    duplicate: span,
-                })
-            }
-            _ => {
-                let should_replace_constructor = occupied
-                    .get(atom)
-                    .is_some_and(|binding| binding.kind == ExclusiveNameKind::Constructor)
-                    && kind != ExclusiveNameKind::Constructor;
-                if should_replace_constructor {
-                    occupied.insert(atom.clone(), ExclusiveNameBinding { kind, span });
-                } else {
-                    occupied
-                        .entry(atom.clone())
-                        .or_insert(ExclusiveNameBinding { kind, span });
-                }
+        let namespace = kind.namespace();
+        let slot = (namespace, atom.clone());
+        match occupied.get(&slot) {
+            Some(first) => Err(ModuleResolveError::DuplicateSymbol {
+                owner: self.owner.clone(),
+                namespace: match namespace {
+                    FlatNamespace::Static => "Static",
+                    FlatNamespace::Term => "Term",
+                },
+                name: atom.to_string(),
+                first: first.span,
+                duplicate: span,
+            }),
+            None => {
+                occupied.insert(slot, ExclusiveNameBinding { span });
                 Ok(())
             }
         }
@@ -917,10 +919,11 @@ pub struct ModuleAliasTarget {
     span: Span,
     access: ModuleAccess,
     role: ModuleAliasRole,
+    visibility: SymbolVisibility,
 }
 
 impl ModuleAliasTarget {
-    /// Canonical DAG/module targeted by the alias.
+    /// Canonical DAG/module targeted by the alias::
     #[must_use]
     pub const fn target(&self) -> &DagId {
         &self.target
@@ -932,7 +935,7 @@ impl ModuleAliasTarget {
         self.span
     }
 
-    /// Visibility rule for names reached through this alias.
+    /// Visibility rule for names reached through this alias::
     #[must_use]
     pub const fn access(&self) -> ModuleAccess {
         self.access
@@ -942,6 +945,12 @@ impl ModuleAliasTarget {
     #[must_use]
     pub const fn role(&self) -> ModuleAliasRole {
         self.role
+    }
+
+    /// Whether this whole-DAG alias is reachable through an importing module.
+    #[must_use]
+    pub const fn visibility(&self) -> SymbolVisibility {
+        self.visibility
     }
 }
 
@@ -1128,32 +1137,46 @@ impl std::fmt::Display for SurfaceNameKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LookupNamespace {
+    Static,
+    Term,
+    Unit,
+}
+
 trait ResolvableNamespace: NameNamespace {
     const SURFACE_KIND: SurfaceNameKind;
+    const LOOKUP_NAMESPACE: LookupNamespace;
 }
 
 impl ResolvableNamespace for DeclNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Value;
+    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Term;
 }
 
 impl ResolvableNamespace for DimNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Dimension;
+    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Static;
 }
 
 impl ResolvableNamespace for UnitNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Unit;
+    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Unit;
 }
 
 impl ResolvableNamespace for StructTypeNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Type;
+    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Static;
 }
 
 impl ResolvableNamespace for IndexNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Index;
+    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Static;
 }
 
 impl ResolvableNamespace for ConstructorNameNamespace {
     const SURFACE_KIND: SurfaceNameKind = SurfaceNameKind::Constructor;
+    const LOOKUP_NAMESPACE: LookupNamespace = LookupNamespace::Term;
 }
 
 #[derive(Debug, Clone)]
@@ -1163,6 +1186,7 @@ enum ImportAddition {
         target: DagId,
         access: ModuleAccess,
         role: ModuleAliasRole,
+        visibility: SymbolVisibility,
     },
     Decl {
         local: Spanned<DeclName>,
@@ -1246,7 +1270,7 @@ impl ModuleResolver {
         }
         let symbols = ModuleSymbols::from_declarations(owner.clone(), declarations)?;
         let scope = self.scopes.entry(owner.clone()).or_default();
-        register_plugin_imports(&owner, scope, declarations)?;
+        register_plugin_imports(&owner, scope, &symbols, declarations)?;
         self.modules.insert(owner, symbols);
         Ok(())
     }
@@ -1283,6 +1307,20 @@ impl ModuleResolver {
                 })?;
         *target = scope;
         Ok(())
+    }
+
+    /// Role of one source-visible module alias in the owner's Term scope.
+    #[must_use]
+    pub(crate) fn module_alias_role(
+        &self,
+        owner: &DagId,
+        alias: &ModuleAliasName,
+    ) -> Option<ModuleAliasRole> {
+        self.scopes
+            .get(owner)?
+            .module_aliases
+            .get(alias.as_str())
+            .map(ModuleAliasTarget::role)
     }
 
     /// Look up an extern-plugin alias visible from `owner`.
@@ -1507,6 +1545,25 @@ impl ModuleResolver {
             target,
             ModuleAccess::PublicOnly,
             ModuleAliasRole::ImportedDag,
+            SymbolVisibility::Private,
+        )
+    }
+
+    /// Register an import while preserving a leading whole-DAG `pub` marker.
+    pub fn register_import_decl(
+        &mut self,
+        owner: &DagId,
+        import: &ast::ImportDecl,
+        target: &DagId,
+    ) -> Result<(), ModuleResolveError> {
+        self.register_import_with_access(
+            owner,
+            &import.path,
+            &import.kind,
+            target,
+            ModuleAccess::PublicOnly,
+            ModuleAliasRole::ImportedDag,
+            SymbolVisibility::from(import.visibility),
         )
     }
 
@@ -1529,6 +1586,7 @@ impl ModuleResolver {
             target,
             ModuleAccess::PublicOnly,
             ModuleAliasRole::IncludedInstance,
+            SymbolVisibility::Private,
         )
     }
 
@@ -1537,7 +1595,7 @@ impl ModuleResolver {
     /// An instantiated `include` inlines the dependency's declaration bodies
     /// into the importer (see `ir::lower::merge_dependency`). Those bodies
     /// reference the dependency's own indexes by their bare names (`for s:
-    /// Step`, `T[Step]`, `Step.A`), which are not bound to any importer symbol.
+    /// Step`, `T[Step]`, `Step#A`), which are not bound to any importer symbol.
     /// The dependency's declarations live in the synthetic include module
     /// `source`; copy each of its index symbols — re-homed onto the importer so
     /// they resolve against the flat merged registry that backs the importer's
@@ -1593,13 +1651,10 @@ impl ModuleResolver {
         let target_symbols = self.module_symbols(importer)?;
         let mut occupied = self.exclusive_name_occupancy(importer)?;
         for (name, symbol) in &injected {
-            if let Some(first) = occupied
-                .get(name.atom())
-                .filter(|binding| binding.kind == ExclusiveNameKind::Index)
-            {
+            if let Some(first) = occupied.get(&(FlatNamespace::Static, name.atom().clone())) {
                 return Err(ModuleResolveError::DuplicateSymbol {
                     owner: importer.clone(),
-                    namespace: IndexNameNamespace::DISPLAY_NAME,
+                    namespace: "Static",
                     name: name.to_string(),
                     first: first.span,
                     duplicate: symbol.span(),
@@ -1631,14 +1686,16 @@ impl ModuleResolver {
         target: &DagId,
         access: ModuleAccess,
         role: ModuleAliasRole,
+        alias_visibility: SymbolVisibility,
     ) -> Result<(), ModuleResolveError> {
         self.module_symbols(owner)?;
         self.module_symbols(target)?;
-        if matches!(kind, ImportKind::Selective(_)) {
+        if matches!(kind, ImportKind::Selective(_)) || alias_visibility.is_public() {
             self.ensure_module_path_visible(target, access)?;
         }
 
-        let additions = self.import_additions(path, kind, target, access, role)?;
+        let additions =
+            self.import_additions(path, kind, target, access, role, alias_visibility)?;
         self.check_import_exclusive_name_collisions(owner, &additions)?;
         let scope =
             self.scopes
@@ -1803,27 +1860,6 @@ impl ModuleResolver {
         })
     }
 
-    /// Resolve a syntactic index-variant path such as `Index.Variant` or
-    /// `module.Index.Variant`.
-    pub fn resolve_index_variant_path(
-        &self,
-        owner: &DagId,
-        path: &NamePath,
-    ) -> Result<ResolvedIndexVariant, ModuleResolveError> {
-        let (index_segments, variant_atom) = path.split_last();
-        let index_path = name_path_from_slice(index_segments).ok_or_else(|| {
-            ModuleResolveError::ExpectedIndexVariantPath {
-                owner: owner.clone(),
-                path: path.display_path(),
-            }
-        })?;
-        self.resolve_index_variant_parts(
-            owner,
-            &index_path,
-            &IndexVariantName::from_atom(variant_atom.clone()),
-        )
-    }
-
     /// Resolve an already-split index path plus variant leaf to a canonical
     /// index-variant identity.
     ///
@@ -1831,7 +1867,7 @@ impl ModuleResolver {
     /// index path and variant leaf separately (map keys, index arguments, and
     /// match labels). It avoids reconstructing a dotted string or re-parsing
     /// source text just to validate the variant against the canonical index.
-    pub(crate) fn resolve_index_variant_parts(
+    pub fn resolve_index_variant_parts(
         &self,
         owner: &DagId,
         index_path: &NamePath,
@@ -1858,58 +1894,11 @@ impl ModuleResolver {
         Ok(ResolvedIndexVariant::new(resolved_index, variant.clone()))
     }
 
-    /// Resolve a bare variant leaf by searching local and selectively imported
-    /// indexes in the current module scope.
-    pub(crate) fn resolve_bare_index_variant(
-        &self,
-        owner: &DagId,
-        variant: &IndexVariantName,
-    ) -> Result<ResolvedIndexVariant, ModuleResolveError> {
-        let local = self.module_symbols(owner)?;
-        let scope = self.module_scope(owner)?;
-        let mut candidates = Vec::new();
-
-        for symbol in local.indexes.values() {
-            if symbol.variants().contains_key(variant.as_str()) {
-                let resolved = symbol.resolved().clone();
-                if !candidates.contains(&resolved) {
-                    candidates.push(resolved);
-                }
-            }
-        }
-        for imported in scope.selected_indexes.values() {
-            let resolved = imported.resolved();
-            let index_owner = resolved.owner().clone();
-            let index_name = IndexName::from_atom(resolved.atom().clone());
-            let target_symbols = self.module_symbols(&index_owner)?;
-            let Some(symbol) = target_symbols.indexes.get(index_name.as_str()) else {
-                continue;
-            };
-            if symbol.variants().contains_key(variant.as_str()) && !candidates.contains(resolved) {
-                candidates.push(resolved.clone());
-            }
-        }
-        candidates.sort();
-        match candidates.as_slice() {
-            [] => Err(ModuleResolveError::UnknownName {
-                owner: owner.clone(),
-                namespace: IndexVariantNameNamespace::DISPLAY_NAME,
-                name: variant.to_string(),
-            }),
-            [index] => Ok(ResolvedIndexVariant::new(index.clone(), variant.clone())),
-            _ => Err(ModuleResolveError::AmbiguousIndexVariant {
-                owner: owner.clone(),
-                variant: variant.clone(),
-                indexes: candidates,
-            }),
-        }
-    }
-
     /// Resolve a source DAG/module call path to its canonical [`DagId`].
     ///
     /// The first segment names a reusable DAG module in the caller's scope. It
     /// may be a local inline DAG, a sibling DAG visible from an inline body, or
-    /// an imported module alias. That binding is itself callable regardless of
+    /// an imported module alias:: That binding is itself callable regardless of
     /// whether its canonical target is a file root or an inline DAG; remaining
     /// path segments descend through child DAG modules uniformly.
     pub fn resolve_module_path(
@@ -2033,6 +2022,7 @@ impl ModuleResolver {
         target: &DagId,
         access: ModuleAccess,
         role: ModuleAliasRole,
+        alias_visibility: SymbolVisibility,
     ) -> Result<Vec<ImportAddition>, ModuleResolveError> {
         match kind {
             ImportKind::Module { alias } => {
@@ -2047,6 +2037,7 @@ impl ModuleResolver {
                     target: target.clone(),
                     access,
                     role,
+                    visibility: alias_visibility,
                 }])
             }
             ImportKind::Selective(items) => items
@@ -2073,7 +2064,7 @@ impl ModuleResolver {
     fn exclusive_name_occupancy(
         &self,
         owner: &DagId,
-    ) -> Result<HashMap<NameAtom, ExclusiveNameBinding>, ModuleResolveError> {
+    ) -> Result<ExclusiveNameOccupancy, ModuleResolveError> {
         let local = self.module_symbols(owner)?;
         let scope = self.module_scope(owner)?;
         let mut occupied = HashMap::new();
@@ -2120,6 +2111,22 @@ impl ModuleResolver {
             &scope.selected_constructors,
             ExclusiveNameKind::Constructor,
         );
+        for (alias, target) in &scope.module_aliases {
+            occupied.insert(
+                (FlatNamespace::Term, alias.atom().clone()),
+                ExclusiveNameBinding {
+                    span: target.span(),
+                },
+            );
+        }
+        for (alias, target) in &scope.plugin_aliases {
+            occupied.insert(
+                (FlatNamespace::Term, alias.atom().clone()),
+                ExclusiveNameBinding {
+                    span: target.span(),
+                },
+            );
+        }
 
         Ok(occupied)
     }
@@ -2446,7 +2453,7 @@ impl ModuleResolver {
             if let Some(imported) = selected_symbols(scope).get(atom.as_str()) {
                 return Ok(imported.resolved().clone());
             }
-            if let Some(actual) = self.visible_surface_kind_for_bare_name(owner, atom)? {
+            if let Some(actual) = self.visible_surface_kind_for_bare_name(owner, atom, Ns::LOOKUP_NAMESPACE)? {
                 return Err(ModuleResolveError::WrongUniverseName {
                     owner: owner.clone(),
                     name: atom.to_string(),
@@ -2462,24 +2469,7 @@ impl ModuleResolver {
         }
 
         let (qualifier, leaf) = path.split_last();
-        let target_ref = match self.resolve_module_qualifier(owner, qualifier) {
-            Ok(target_ref) => target_ref,
-            Err(
-                err @ (ModuleResolveError::UnknownModuleAlias { .. }
-                | ModuleResolveError::UnknownModule { .. }),
-            ) => {
-                if let Some(actual) = self.visible_index_variant_path_kind(owner, path)? {
-                    return Err(ModuleResolveError::WrongUniverseName {
-                        owner: owner.clone(),
-                        name: path.display_path(),
-                        expected: Ns::SURFACE_KIND,
-                        actual,
-                    });
-                }
-                return Err(err);
-            }
-            Err(err) => return Err(err),
-        };
+        let target_ref = self.resolve_module_qualifier(owner, qualifier)?;
         let target = self.module_symbols(&target_ref.owner)?;
         if let Some(symbol) = local_symbols(target).get(leaf.as_str()) {
             if target_ref.access.requires_public() && !symbol.visibility().is_public() {
@@ -2504,8 +2494,11 @@ impl ModuleResolver {
             return Ok(imported.resolved().clone());
         }
 
-        if let Some(actual) =
-            self.visible_surface_kind_for_qualified_leaf(&target_ref, leaf, path)?
+        if let Some(actual) = self.visible_surface_kind_for_qualified_leaf(
+            &target_ref,
+            leaf,
+            Ns::LOOKUP_NAMESPACE,
+        )?
         {
             return Err(ModuleResolveError::WrongUniverseName {
                 owner: target_ref.owner,
@@ -2526,29 +2519,29 @@ impl ModuleResolver {
         &self,
         owner: &DagId,
         atom: &NameAtom,
+        namespace: LookupNamespace,
     ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
         let local = self.module_symbols(owner)?;
-        if let Some(kind) = surface_kind_in_local_symbols(local, atom, false) {
+        if let Some(kind) = surface_kind_in_local_symbols(local, atom, false, namespace) {
             return Ok(Some(kind));
         }
         let scope = self.module_scope(owner)?;
-        Ok(surface_kind_in_scope(scope, atom, false))
+        Ok(surface_kind_in_scope(scope, atom, false, namespace))
     }
 
     fn visible_surface_kind_for_qualified_leaf(
         &self,
         target_ref: &ResolvedModuleQualifier,
         leaf: &NameAtom,
-        path: &NamePath,
+        namespace: LookupNamespace,
     ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
-        if let Some(kind) = self.visible_index_variant_path_kind(&target_ref.owner, path)? {
-            return Ok(Some(kind));
-        }
-
         let target = self.module_symbols(&target_ref.owner)?;
-        if let Some(kind) =
-            surface_kind_in_local_symbols(target, leaf, target_ref.access.requires_public())
-        {
+        if let Some(kind) = surface_kind_in_local_symbols(
+            target,
+            leaf,
+            target_ref.access.requires_public(),
+            namespace,
+        ) {
             return Ok(Some(kind));
         }
         let target_scope = self.module_scope(&target_ref.owner)?;
@@ -2556,25 +2549,8 @@ impl ModuleResolver {
             target_scope,
             leaf,
             target_ref.access.requires_public(),
+            namespace,
         ))
-    }
-
-    fn visible_index_variant_path_kind(
-        &self,
-        owner: &DagId,
-        path: &NamePath,
-    ) -> Result<Option<SurfaceNameKind>, ModuleResolveError> {
-        match self.resolve_index_variant_path(owner, path) {
-            Ok(_) => Ok(Some(SurfaceNameKind::IndexLabel)),
-            Err(
-                ModuleResolveError::UnknownName { .. }
-                | ModuleResolveError::UnknownIndexVariant { .. }
-                | ModuleResolveError::ExpectedIndexVariantPath { .. }
-                | ModuleResolveError::UnknownModuleAlias { .. }
-                | ModuleResolveError::UnknownModule { .. },
-            ) => Ok(None),
-            Err(err) => Err(err),
-        }
     }
 
     fn resolve_module_qualifier(
@@ -2605,9 +2581,26 @@ impl ModuleResolver {
         let mut target = alias_target.target.clone();
         self.ensure_module_path_visible(&target, alias_target.access)?;
         for segment in rest {
-            target = target.child(segment.as_str());
-            if !self.modules.contains_key(&target) {
-                return Err(ModuleResolveError::UnknownModule { owner: target });
+            let nested_alias = self
+                .module_scope(&target)?
+                .module_aliases
+                .get(segment.as_str());
+            if let Some(nested_alias) = nested_alias {
+                if alias_target.access.requires_public()
+                    && !nested_alias.visibility().is_public()
+                {
+                    return Err(ModuleResolveError::PrivateName {
+                        owner: target,
+                        namespace: "dag alias",
+                        name: segment.to_string(),
+                    });
+                }
+                target = nested_alias.target().clone();
+            } else {
+                target = target.child(segment.as_str());
+                if !self.modules.contains_key(&target) {
+                    return Err(ModuleResolveError::UnknownModule { owner: target });
+                }
             }
             self.ensure_module_path_visible(&target, alias_target.access)?;
         }
@@ -2636,6 +2629,94 @@ impl ModuleResolver {
     #[must_use]
     pub fn scope(&self, owner: &DagId) -> Option<&ModuleScope> {
         self.scopes.get(owner)
+    }
+
+    /// Definition/import span occupying one visible Static slot.
+    pub(crate) fn visible_static_span(
+        &self,
+        owner: &DagId,
+        name: &NameAtom,
+    ) -> Result<Option<Span>, ModuleResolveError> {
+        let local = self.module_symbols(owner)?;
+        let scope = self.module_scope(owner)?;
+        Ok(local
+            .dimensions
+            .get(name.as_str())
+            .map(ModuleSymbolLookup::span)
+            .or_else(|| {
+                local
+                    .struct_types
+                    .get(name.as_str())
+                    .map(ModuleSymbolLookup::span)
+            })
+            .or_else(|| {
+                local
+                    .indexes
+                    .get(name.as_str())
+                    .map(ModuleSymbolLookup::span)
+            })
+            .or_else(|| {
+                scope
+                    .selected_dimensions
+                    .get(name.as_str())
+                    .map(ImportedSymbol::span)
+            })
+            .or_else(|| {
+                scope
+                    .selected_struct_types
+                    .get(name.as_str())
+                    .map(ImportedSymbol::span)
+            })
+            .or_else(|| {
+                scope
+                    .selected_indexes
+                    .get(name.as_str())
+                    .map(ImportedSymbol::span)
+            }))
+    }
+
+    /// Definition/import span occupying one visible flat Term slot.
+    pub(crate) fn visible_term_span(
+        &self,
+        owner: &DagId,
+        name: &NameAtom,
+    ) -> Result<Option<Span>, ModuleResolveError> {
+        let local = self.module_symbols(owner)?;
+        let scope = self.module_scope(owner)?;
+        Ok(local
+            .decls
+            .get(name.as_str())
+            .map(ModuleDeclSymbol::span)
+            .or_else(|| {
+                local
+                    .constructors
+                    .get(name.as_str())
+                    .map(ModuleSymbolLookup::span)
+            })
+            .or_else(|| {
+                scope
+                    .selected_decls
+                    .get(name.as_str())
+                    .map(ImportedSymbol::span)
+            })
+            .or_else(|| {
+                scope
+                    .selected_constructors
+                    .get(name.as_str())
+                    .map(ImportedSymbol::span)
+            })
+            .or_else(|| {
+                scope
+                    .module_aliases
+                    .get(name.as_str())
+                    .map(ModuleAliasTarget::span)
+            })
+            .or_else(|| {
+                scope
+                    .plugin_aliases
+                    .get(name.as_str())
+                    .map(PluginAliasTarget::span)
+            }))
     }
 
     fn module_scope(&self, owner: &DagId) -> Result<&ModuleScope, ModuleResolveError> {
@@ -2697,6 +2778,7 @@ impl ModuleScope {
                 target,
                 access,
                 role,
+                visibility,
             } => {
                 // Module aliases and plugin aliases share one qualifier
                 // namespace: `alias.name` must have a single meaning.
@@ -2716,6 +2798,7 @@ impl ModuleScope {
                     target,
                     access,
                     role,
+                    visibility,
                     ModuleAliasNameNamespace::DISPLAY_NAME,
                 )
             }
@@ -2802,6 +2885,7 @@ fn insert_module_alias(
     target: DagId,
     access: ModuleAccess,
     role: ModuleAliasRole,
+    visibility: SymbolVisibility,
     namespace_name: &'static str,
 ) -> Result<(), ModuleResolveError> {
     if let Some(first) = map.get(alias.value.as_str()) {
@@ -2820,6 +2904,7 @@ fn insert_module_alias(
             span: alias.span,
             access,
             role,
+            visibility,
         },
     );
     Ok(())
@@ -2834,18 +2919,37 @@ fn insert_module_alias(
 fn register_plugin_imports(
     owner: &DagId,
     scope: &mut ModuleScope,
+    symbols: &ModuleSymbols,
     declarations: &[ast::Declaration],
 ) -> Result<(), ModuleResolveError> {
     for decl in declarations {
         let ast::DeclKind::PluginImport(plugin) = &decl.kind else {
             continue;
         };
-        if let Some(first) = scope.plugin_aliases.get(plugin.alias.value.as_str()) {
+        let alias_atom = plugin.alias.value.atom();
+        let local_term_span = symbols
+            .decls
+            .get(alias_atom.as_str())
+            .map(ModuleDeclSymbol::span)
+            .or_else(|| {
+                symbols
+                    .constructors
+                    .get(alias_atom.as_str())
+                    .map(ModuleSymbolLookup::span)
+            });
+        if let Some(first) = local_term_span
+            .or_else(|| {
+                scope
+                    .plugin_aliases
+                    .get(plugin.alias.value.as_str())
+                    .map(PluginAliasTarget::span)
+            })
+        {
             return Err(ModuleResolveError::DuplicateImportName {
                 owner: owner.clone(),
-                namespace: ModuleAliasNameNamespace::DISPLAY_NAME,
+                namespace: "Term",
                 name: plugin.alias.value.to_string(),
-                first: first.span(),
+                first,
                 duplicate: plugin.alias.span,
             });
         }
@@ -2877,6 +2981,7 @@ fn surface_kind_in_local_symbols(
     symbols: &ModuleSymbols,
     atom: &NameAtom,
     requires_public: bool,
+    namespace: LookupNamespace,
 ) -> Option<SurfaceNameKind> {
     macro_rules! probe {
         ($map:expr, $kind:expr) => {
@@ -2888,12 +2993,18 @@ fn surface_kind_in_local_symbols(
         };
     }
 
-    probe!(symbols.decls, SurfaceNameKind::Value);
-    probe!(symbols.dimensions, SurfaceNameKind::Dimension);
-    probe!(symbols.units, SurfaceNameKind::Unit);
-    probe!(symbols.struct_types, SurfaceNameKind::Type);
-    probe!(symbols.indexes, SurfaceNameKind::Index);
-    probe!(symbols.constructors, SurfaceNameKind::Constructor);
+    match namespace {
+        LookupNamespace::Static => {
+            probe!(symbols.dimensions, SurfaceNameKind::Dimension);
+            probe!(symbols.struct_types, SurfaceNameKind::Type);
+            probe!(symbols.indexes, SurfaceNameKind::Index);
+        }
+        LookupNamespace::Term => {
+            probe!(symbols.decls, SurfaceNameKind::Value);
+            probe!(symbols.constructors, SurfaceNameKind::Constructor);
+        }
+        LookupNamespace::Unit => probe!(symbols.units, SurfaceNameKind::Unit),
+    }
     None
 }
 
@@ -2901,6 +3012,7 @@ fn surface_kind_in_scope(
     scope: &ModuleScope,
     atom: &NameAtom,
     requires_public: bool,
+    namespace: LookupNamespace,
 ) -> Option<SurfaceNameKind> {
     macro_rules! probe {
         ($map:expr, $kind:expr) => {
@@ -2912,17 +3024,23 @@ fn surface_kind_in_scope(
         };
     }
 
-    probe!(scope.selected_decls, SurfaceNameKind::Value);
-    probe!(scope.selected_dimensions, SurfaceNameKind::Dimension);
-    probe!(scope.selected_units, SurfaceNameKind::Unit);
-    probe!(scope.selected_struct_types, SurfaceNameKind::Type);
-    probe!(scope.selected_indexes, SurfaceNameKind::Index);
-    probe!(scope.selected_constructors, SurfaceNameKind::Constructor);
+    match namespace {
+        LookupNamespace::Static => {
+            probe!(scope.selected_dimensions, SurfaceNameKind::Dimension);
+            probe!(scope.selected_struct_types, SurfaceNameKind::Type);
+            probe!(scope.selected_indexes, SurfaceNameKind::Index);
+        }
+        LookupNamespace::Term => {
+            probe!(scope.selected_decls, SurfaceNameKind::Value);
+            probe!(scope.selected_constructors, SurfaceNameKind::Constructor);
+        }
+        LookupNamespace::Unit => probe!(scope.selected_units, SurfaceNameKind::Unit),
+    }
     None
 }
 
 fn seed_exclusive_names<Ns, S>(
-    occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+    occupied: &mut ExclusiveNameOccupancy,
     symbols: &HashMap<NameDef<Ns>, S>,
     kind: ExclusiveNameKind,
 ) where
@@ -2931,19 +3049,8 @@ fn seed_exclusive_names<Ns, S>(
 {
     for (name, symbol) in symbols {
         occupied
-            .entry(name.atom().clone())
-            .and_modify(|binding| {
-                if binding.kind == ExclusiveNameKind::Constructor
-                    && kind != ExclusiveNameKind::Constructor
-                {
-                    *binding = ExclusiveNameBinding {
-                        kind,
-                        span: symbol.span(),
-                    };
-                }
-            })
+            .entry((kind.namespace(), name.atom().clone()))
             .or_insert_with(|| ExclusiveNameBinding {
-                kind,
                 span: symbol.span(),
             });
     }
@@ -2951,7 +3058,7 @@ fn seed_exclusive_names<Ns, S>(
 
 fn check_import_addition_exclusive_names(
     owner: &DagId,
-    occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+    occupied: &mut ExclusiveNameOccupancy,
     additions: &[ImportAddition],
 ) -> Result<(), ModuleResolveError> {
     for addition in additions {
@@ -2991,7 +3098,14 @@ fn check_import_addition_exclusive_names(
                 ExclusiveNameKind::Constructor,
                 local.span,
             )?,
-            ImportAddition::ModuleAlias { .. } | ImportAddition::Unit { .. } => {}
+            ImportAddition::ModuleAlias { alias, .. } => register_import_exclusive_name(
+                owner,
+                occupied,
+                alias.value.atom(),
+                ExclusiveNameKind::Value,
+                alias.span,
+            )?,
+            ImportAddition::Unit { .. } => {}
         }
     }
     Ok(())
@@ -3063,33 +3177,26 @@ where
 
 fn register_import_exclusive_name(
     owner: &DagId,
-    occupied: &mut HashMap<NameAtom, ExclusiveNameBinding>,
+    occupied: &mut ExclusiveNameOccupancy,
     atom: &NameAtom,
     kind: ExclusiveNameKind,
     span: Span,
 ) -> Result<(), ModuleResolveError> {
-    if let Some(first) = occupied.get(atom)
-        && (first.kind == kind || first.kind.conflicts_with(kind))
-    {
+    let namespace = kind.namespace();
+    let slot = (namespace, atom.clone());
+    if let Some(first) = occupied.get(&slot) {
         return Err(ModuleResolveError::DuplicateImportName {
             owner: owner.clone(),
-            namespace: "name",
+            namespace: match namespace {
+                FlatNamespace::Static => "Static",
+                FlatNamespace::Term => "Term",
+            },
             name: atom.to_string(),
             first: first.span,
             duplicate: span,
         });
     }
-    let should_replace_constructor = occupied
-        .get(atom)
-        .is_some_and(|binding| binding.kind == ExclusiveNameKind::Constructor)
-        && kind != ExclusiveNameKind::Constructor;
-    if should_replace_constructor {
-        occupied.insert(atom.clone(), ExclusiveNameBinding { kind, span });
-    } else {
-        occupied
-            .entry(atom.clone())
-            .or_insert(ExclusiveNameBinding { kind, span });
-    }
+    occupied.insert(slot, ExclusiveNameBinding { span });
     Ok(())
 }
 
@@ -3143,21 +3250,8 @@ where
         })
 }
 
-fn name_path_from_slice(segments: &[NameAtom]) -> Option<NamePath> {
-    NonEmpty::try_from_vec(segments.to_vec())
-        .ok()
-        .map(NamePath::new)
-}
-
 fn ident_path_to_name_path(path: &IdentPath) -> NamePath {
-    let segments = path.segments();
-    NamePath::new(NonEmpty::new(
-        segments[0].name.clone(),
-        segments[1..]
-            .iter()
-            .map(|ident| ident.name.clone())
-            .collect(),
-    ))
+    path.to_name_path()
 }
 
 /// Errors produced while building or using module-aware symbol tables.
@@ -3175,7 +3269,7 @@ pub enum ModuleResolveError {
         owner: DagId,
         alias: ModuleAliasName,
     },
-    /// A call path is ambiguous between a local DAG and an imported module alias.
+    /// A call path is ambiguous between a local DAG and an imported module alias::
     #[error("DAG name `{name}` is ambiguous in `{owner}`")]
     AmbiguousCallableModule {
         owner: DagId,
@@ -3242,7 +3336,7 @@ pub enum ModuleResolveError {
         namespace: &'static str,
         name: String,
     },
-    /// A path did not have enough segments to denote `Index.Variant`.
+    /// A path did not have enough segments to denote `Index#Variant`.
     #[error("expected index-variant path in module `{owner}`, got `{path}`")]
     ExpectedIndexVariantPath { owner: DagId, path: String },
     /// The index exists, but the requested variant is absent.
@@ -3345,7 +3439,7 @@ mod tests {
             err,
             ModuleResolveError::DuplicateSymbol {
                 owner: err_owner,
-                namespace: "name",
+                namespace: "Static",
                 name,
                 ..
             } if err_owner == owner && name == "M"
@@ -3363,7 +3457,7 @@ mod tests {
             err,
             ModuleResolveError::DuplicateSymbol {
                 owner: err_owner,
-                namespace: "name",
+                namespace: "Static",
                 name,
                 ..
             } if err_owner == owner && name == "M"
@@ -3371,11 +3465,11 @@ mod tests {
     }
 
     #[test]
-    fn alias_reimport_of_same_index_does_not_ambiguous_bare_variant() {
+    fn aliases_of_same_index_preserve_label_identity() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub index Phase = { Burn, Coast };");
-        let main = desugared_source("import lib.{ index Phase, index Phase as P };");
+        let main = desugared_source("import lib::{ index Phase, index Phase as P };");
         let imports = imports(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3389,11 +3483,21 @@ mod tests {
             .register_import(&main_id, imports[0].0, imports[0].1, &lib_id)
             .unwrap();
 
-        let index_variant = resolver
-            .resolve_bare_index_variant(&main_id, &IndexVariantName::expect_valid("Burn"))
+        let direct = resolver
+            .resolve_index_variant_parts(
+                &main_id,
+                &path(&["Phase"]),
+                &IndexVariantName::expect_valid("Burn"),
+            )
             .unwrap();
-        assert_eq!(index_variant.index().as_str(), "Phase");
-        assert_eq!(index_variant.variant().as_str(), "Burn");
+        let alias = resolver
+            .resolve_index_variant_parts(
+                &main_id,
+                &path(&["P"]),
+                &IndexVariantName::expect_valid("Burn"),
+            )
+            .unwrap();
+        assert_eq!(direct, alias);
     }
 
     #[test]
@@ -3455,7 +3559,7 @@ mod tests {
                 err,
                 ModuleResolveError::DuplicateSymbol {
                     owner: err_owner,
-                    namespace: "name",
+                    namespace: "Term",
                     name,
                     ..
                 } if err_owner == owner && name == "Red"
@@ -3468,7 +3572,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub base unit m: Dimensionless;");
-        let main = desugared_source("base unit m: Dimensionless;\nimport lib.{ unit m };");
+        let main = desugared_source("base unit m: Dimensionless;\nimport lib::{ unit m };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3498,7 +3602,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type Foreign { Mk }");
-        let main = desugared_source("type Local { Mk }\nimport lib.{ Mk };");
+        let main = desugared_source("type Local { Mk }\nimport lib::{ Mk };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3531,11 +3635,11 @@ mod tests {
         for (lib_source, main_source) in [
             (
                 "pub type Foreign { Red }",
-                "const node Red: Dimensionless = 1.0;\nimport lib.{ Red };",
+                "const node Red: Dimensionless = 1.0;\nimport lib::{ Red };",
             ),
             (
                 "pub const node Red: Dimensionless = 1.0;",
-                "type Local { Red }\nimport lib.{ Red };",
+                "type Local { Red }\nimport lib::{ Red };",
             ),
         ] {
             let lib = desugared_source(lib_source);
@@ -3556,7 +3660,7 @@ mod tests {
                 err,
                 ModuleResolveError::DuplicateImportName {
                     owner,
-                    namespace: "name",
+                    namespace: "Term",
                     name,
                     ..
                 } if owner == main_id && name == "Red"
@@ -3597,7 +3701,7 @@ mod tests {
             err,
             ModuleResolveError::DuplicateSymbol {
                 owner,
-                namespace: "IndexName",
+                namespace: "Static",
                 name,
                 ..
             } if owner == main_id && name == "Step"
@@ -3611,10 +3715,9 @@ mod tests {
         let bound = HashSet::new();
 
         for (main_source, expected_namespace) in [
-            ("node Clash: Dimensionless = 1.0;", "name"),
-            ("base dim Clash;", "name"),
-            ("type Clash { MkClash }", "name"),
-            ("index Clash = { Local };", "IndexName"),
+            ("base dim Clash;", "Static"),
+            ("type Clash { MkClash }", "Static"),
+            ("index Clash = { Local };", "Static"),
         ] {
             let main_id = DagId::root_in_package("test", "main");
             let main = desugared_source(main_source);
@@ -3651,7 +3754,7 @@ mod tests {
         let main_id = DagId::root_in_package("test", "main");
         let type_lib = desugared_source("pub type Imported { MkImported }");
         let source = desugared_source("pub index Clash = { A };");
-        let main = desugared_source("import type_lib.{ type Imported as Clash };");
+        let main = desugared_source("import type_lib::{ type Imported as Clash };");
         let (import_path, import_kind) = first_import(&main);
         let bound = HashSet::new();
 
@@ -3679,7 +3782,7 @@ mod tests {
             err,
             ModuleResolveError::DuplicateSymbol {
                 owner,
-                namespace: "name",
+                namespace: "Static",
                 name,
                 ..
             } if owner == main_id && name == "Clash"
@@ -3714,7 +3817,7 @@ mod tests {
             err,
             ModuleResolveError::DuplicateSymbol {
                 owner,
-                namespace: "name",
+                namespace: "Static",
                 name,
                 ..
             } if owner == main_id && name == "Zulu"
@@ -3761,13 +3864,13 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_bare_variant_candidates_are_sorted() {
+    fn equal_labels_under_different_indexes_resolve_by_explicit_owner() {
         let a_id = DagId::root_in_package("test", "a");
         let z_id = DagId::root_in_package("test", "z");
         let main_id = DagId::root_in_package("test", "main");
         let a = desugared_source("pub index AIndex = { Shared };");
         let z = desugared_source("pub index ZIndex = { Shared };");
-        let main = desugared_source("import z.{ index ZIndex };\nimport a.{ index AIndex };");
+        let main = desugared_source("import z::{ index ZIndex };\nimport a::{ index AIndex };");
         let imports = imports(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3783,15 +3886,21 @@ mod tests {
             .register_import(&main_id, imports[1].0, imports[1].1, &a_id)
             .unwrap();
 
-        let err = resolver
-            .resolve_bare_index_variant(&main_id, &IndexVariantName::expect_valid("Shared"))
-            .unwrap_err();
-        let ModuleResolveError::AmbiguousIndexVariant { indexes, .. } = err else {
-            panic!("expected ambiguous variant, got {err:?}");
-        };
-        let mut sorted = indexes.clone();
-        sorted.sort();
-        assert_eq!(indexes, sorted);
+        let a_label = resolver
+            .resolve_index_variant_parts(
+                &main_id,
+                &path(&["AIndex"]),
+                &IndexVariantName::expect_valid("Shared"),
+            )
+            .unwrap();
+        let z_label = resolver
+            .resolve_index_variant_parts(
+                &main_id,
+                &path(&["ZIndex"]),
+                &IndexVariantName::expect_valid("Shared"),
+            )
+            .unwrap();
+        assert_ne!(a_label.index(), z_label.index());
     }
 
     #[test]
@@ -3802,8 +3911,8 @@ mod tests {
         let type_lib = desugared_source("pub type M { Mk(v: Dimensionless) }");
         let index_lib = desugared_source("pub index M = { A, B };");
         let main = desugared_source(
-            "import type_lib.{ type M };
-             import index_lib.{ index M };",
+            "import type_lib::{ type M };
+             import index_lib::{ index M };",
         );
         let imports = imports(&main);
 
@@ -3828,7 +3937,7 @@ mod tests {
             err,
             ModuleResolveError::DuplicateImportName {
                 owner,
-                namespace: "name",
+                namespace: "Static",
                 name,
                 ..
             } if owner == main_id && name == "M"
@@ -3855,7 +3964,11 @@ mod tests {
             .unwrap();
 
         let resolved_name = resolver
-            .resolve_index_variant_path(&main_id, &path(&["physics", "Phase", "Burn"]))
+            .resolve_index_variant_parts(
+                &main_id,
+                &path(&["physics", "Phase"]),
+                &IndexVariantName::expect_valid("Burn"),
+            )
             .unwrap();
 
         assert_eq!(resolved_name.index().owner(), &lib_id);
@@ -3868,7 +3981,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type Vec3 { Vec3 }");
-        let main = desugared_source("import lib.{ type Vec3 as Vector };");
+        let main = desugared_source("import lib::{ type Vec3 as Vector };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3897,7 +4010,7 @@ mod tests {
         let main = desugared_source(
             "pub type TransferResult { TransferResult }
              dag build_transfer {
-                 import main.{ type TransferResult };
+                 import main::{ type TransferResult };
              }",
         );
         let dag = first_dag(&main);
@@ -3930,12 +4043,10 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            ModuleResolveError::WrongUniverseName {
+            ModuleResolveError::UnknownName {
                 owner,
+                namespace: "ConstructorName",
                 name,
-                expected: SurfaceNameKind::Constructor,
-                actual: SurfaceNameKind::Type,
-                ..
             } if owner == child_id && name == "TransferResult"
         ));
     }
@@ -3945,7 +4056,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub index M = { A };");
-        let main = desugared_source("import lib.{ type M };");
+        let main = desugared_source("import lib::{ type M };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -3979,7 +4090,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub type Foo { MkFoo }");
-        let main = desugared_source("import lib.{ Foo };");
+        let main = desugared_source("import lib::{ Foo };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -4016,7 +4127,7 @@ mod tests {
             "pub const node JPY: Dimensionless = 1.0;\n\
              pub base unit JPY: Dimensionless;",
         );
-        let main = desugared_source("import lib.{ dim JPY };");
+        let main = desugared_source("import lib::{ dim JPY };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -4080,7 +4191,7 @@ mod tests {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("node hidden: Dimensionless = 1.0;");
-        let main = desugared_source("include lib().{ hidden };");
+        let main = desugared_source("include lib()::{ hidden };");
         let (include_path, include_kind) = first_include(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -4271,7 +4382,7 @@ mod tests {
             }",
         );
         let helper = first_dag(&lib);
-        let main = desugared_source("import lib.helper.{ result };");
+        let main = desugared_source("import lib.helper::{ result };");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -4359,7 +4470,7 @@ mod tests {
         let main_id = DagId::root_in_package("test", "main");
         let lib = desugared_source("pub dag helper { pub node result: Dimensionless = 1.0; }");
         let helper = first_dag(&lib);
-        let main = desugared_source("import lib.{helper as imported};");
+        let main = desugared_source("import lib::{helper as imported};");
         let (import_path, import_kind) = first_import(&main);
 
         let mut resolver = ModuleResolver::default();
@@ -4477,7 +4588,7 @@ mod tests {
     }
 
     #[test]
-    fn local_dag_and_imported_module_alias_are_ambiguous_when_called() {
+    fn local_dag_and_imported_module_alias_collide_in_term_namespace() {
         let lib_id = DagId::root_in_package("test", "lib");
         let main_id = DagId::root_in_package("test", "main");
         let local_id = main_id.child("shared");
@@ -4494,14 +4605,13 @@ mod tests {
             .add_module(main_id.clone(), &main.declarations)
             .unwrap();
         resolver.add_module(local_id, &local.body).unwrap();
-        resolver
-            .register_import(&main_id, import_path, import_kind, &lib_id)
-            .unwrap();
-
         assert!(matches!(
-            resolver.resolve_module_path(&main_id, &module_path(&["shared"])),
-            Err(ModuleResolveError::AmbiguousCallableModule { targets, .. })
-                if targets.len() == 2
+            resolver.register_import(&main_id, import_path, import_kind, &lib_id),
+            Err(ModuleResolveError::DuplicateImportName {
+                namespace: "Term",
+                name,
+                ..
+            }) if name == "shared"
         ));
     }
 
@@ -4512,7 +4622,7 @@ mod tests {
         let calculation_id = root_id.child("calculation");
         let root = desugared_source(
             "pub dag helper {}
-             dag calculation { import self.{ helper }; }",
+             dag calculation { import self::{ helper }; }",
         );
         let [helper, calculation] = root
             .declarations
@@ -4676,8 +4786,8 @@ mod tests {
         let middle_id = DagId::root_in_package("test", "middle");
         let main_id = DagId::root_in_package("test", "main");
         let leaf = desugared_source("pub dim Acceleration = Length / Time^2;");
-        let middle = desugared_source("import leaf.{ pub dim Acceleration };");
-        let main = desugared_source("import middle.{ dim Acceleration };");
+        let middle = desugared_source("import leaf::{ pub dim Acceleration };");
+        let main = desugared_source("import middle::{ dim Acceleration };");
         let (middle_import_path, middle_import_kind) = first_import(&middle);
         let (main_import_path, main_import_kind) = first_import(&main);
 

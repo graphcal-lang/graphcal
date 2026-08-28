@@ -222,14 +222,14 @@ pub type Wrapper<T: Type, I: Index> { Wrapper(value: T, values: Dimensionless[I]
 
 param record: Record = Record(x: 1.0);
 param fixed: Fixed = Fixed(x: 2.0);
-param values: Dimensionless[Axis] = { Axis.A: 3.0, Axis.B: 4.0 };
+param values: Dimensionless[Axis] = { Axis#A: 3.0, Axis#B: 4.0 };
 param fixed_values: Dimensionless[FixedAxis] = {
-    FixedAxis.A: 5.0,
-    FixedAxis.B: 6.0,
+    FixedAxis#A: 5.0,
+    FixedAxis#B: 6.0,
 };
-param dependent: Dimensionless = @record.x + @fixed.x + match Axis.A {
-    Axis.A => 1.0,
-    Axis.B => 2.0,
+param dependent: Dimensionless = @record.x + @fixed.x + match Axis#A {
+    Axis#A => 1.0,
+    Axis#B => 2.0,
 };
 param wrapped: Wrapper<Record, Axis> =
     Wrapper<Record, Axis>(value: @record, values: @values);
@@ -330,7 +330,7 @@ fn node_entry_body_is_authoritative_for_hir_dimension_check() {
 fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir(
         "index Phase = { Burn };\n\
-         node y: Dimensionless[Phase] = for p: Phase { match p { Phase.Burn => 1.0 } };",
+         node y: Dimensionless[Phase] = for p: Phase { match p { Phase#Burn => 1.0 } };",
     );
     tir.root_mut().nodes[0].expr.kind =
         crate::hir::ExprKind::StringLiteral("not indexed".to_string());
@@ -417,9 +417,9 @@ fn check_annotation_mismatch() {
 fn check_expected_fail_rejects_duplicate_key() {
     let source = "\
 pub index Mode = { A, B };
-param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
-param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
-#[expected_fail(Mode.A, Mode.A)]
+param lhs: Dimensionless[Mode] = { Mode#A: 1.0, Mode#B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode#A: 2.0, Mode#B: 0.0 };
+#[expected_fail(Mode#A, Mode#A)]
 assert order = for m: Mode { @lhs[m] > @rhs[m] };
 ";
     let err = check(source).unwrap_err();
@@ -434,9 +434,9 @@ fn check_expected_fail_rejects_foreign_index_key() {
     let source = "\
 pub index Mode = { A, B };
 pub index Other = { A, B };
-param lhs: Dimensionless[Mode] = { Mode.A: 1.0, Mode.B: 1.0 };
-param rhs: Dimensionless[Mode] = { Mode.A: 2.0, Mode.B: 0.0 };
-#[expected_fail(Other.A)]
+param lhs: Dimensionless[Mode] = { Mode#A: 1.0, Mode#B: 1.0 };
+param rhs: Dimensionless[Mode] = { Mode#A: 2.0, Mode#B: 0.0 };
+#[expected_fail(Other#A)]
 assert order = for m: Mode { @lhs[m] > @rhs[m] };
 ";
     let err = check(source).unwrap_err();
@@ -453,7 +453,7 @@ pub index Mode = { A, B };
 pub index Phase = { Hot, Cold };
 param lhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 1.0 };
 param rhs: Dimensionless[Mode, Phase] = for m: Mode, p: Phase { 2.0 };
-#[expected_fail(Mode.A)]
+#[expected_fail(Mode#A)]
 assert order = for m: Mode, p: Phase { @lhs[m, p] > @rhs[m, p] };
 ";
     let err = check(source).unwrap_err();
@@ -469,7 +469,7 @@ fn check_expected_fail_rejects_variant_key_on_unindexed_assertion() {
 pub index Mode = { A, B };
 param lhs: Dimensionless = 1.0;
 param rhs: Dimensionless = 2.0;
-#[expected_fail(Mode.A)]
+#[expected_fail(Mode#A)]
 assert order = @lhs > @rhs;
 ";
     let err = check(source).unwrap_err();
@@ -582,9 +582,9 @@ fn check_indexed_param_map_literal() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };";
     let types = check(source).unwrap();
     let velocity = (Dimension::base(BaseDimId::Prelude(
@@ -607,9 +607,9 @@ fn check_for_comprehension() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node doubled: Velocity[Maneuver] = for m: Maneuver { @dv[m] + @dv[m] };";
     check(source).unwrap();
@@ -620,9 +620,9 @@ fn check_for_comprehension_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node bad: Length[Maneuver] = for m: Maneuver { @dv[m] };";
     let err = check(source).unwrap_err();
@@ -637,11 +637,11 @@ fn check_index_access_with_variant() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
-param first: Velocity = @dv[Maneuver.Departure];";
+param first: Velocity = @dv[Maneuver#Departure];";
     check(source).unwrap();
 }
 
@@ -650,8 +650,8 @@ fn check_map_literal_missing_variant() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -665,9 +665,9 @@ fn check_map_literal_extra_variant() {
     let source = "\
 pub index Maneuver = { Departure, Correction };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -690,7 +690,7 @@ fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
         .collect::<Vec<_>>()
         .join(", ");
     let tuple = (0..AXIS_COUNT)
-        .map(|axis| format!("A{axis}.X"))
+        .map(|axis| format!("A{axis}#X"))
         .collect::<Vec<_>>()
         .join(", ");
     writeln!(
@@ -704,7 +704,7 @@ fn incomplete_large_axis_map_reports_one_bounded_missing_witness() {
         matches!(&error, GraphcalError::EvalError { message, .. }
             if message.contains("missing 524287 entries")
                 && message.contains("first missing entry")
-                && message.contains("A18.Y")),
+                && message.contains("A18#Y")),
         "got: {error:?}"
     );
 }
@@ -723,7 +723,7 @@ fn map_key_space_overflow_is_preempted_by_the_eager_shape_policy() {
         .collect::<Vec<_>>()
         .join(", ");
     let tuple = (0..axis_count)
-        .map(|axis| format!("A{axis}.X"))
+        .map(|axis| format!("A{axis}#X"))
         .collect::<Vec<_>>()
         .join(", ");
     writeln!(
@@ -751,9 +751,9 @@ fn check_index_mismatch_in_for() {
 pub index Phase = { Coast, Burn };
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node bad: Velocity[Phase] = for p: Phase { @dv[p] };";
     let err = check(source).unwrap_err();
@@ -768,9 +768,9 @@ fn check_sum_aggregation() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node total_dv: Velocity = sum(@dv);";
     check(source).unwrap();
@@ -781,9 +781,9 @@ fn check_product_and_rss_aggregation_dimensions() {
     let source = "\
 pub index Factor = { A, B, C };
 param lengths: Length[Factor] = {
-    Factor.A: 2.0 m,
-    Factor.B: 3.0 m,
-    Factor.C: 4.0 m,
+    Factor#A: 2.0 m,
+    Factor#B: 3.0 m,
+    Factor#C: 4.0 m,
 };
 node volume: Volume = product(@lengths);
 node root_sum_square: Length = rss(@lengths);";
@@ -831,9 +831,9 @@ fn check_mean_aggregation() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node avg_dv: Velocity = mean(@dv);";
     check(source).unwrap();
@@ -844,8 +844,8 @@ fn check_minimum_maximum_aggregations() {
     let source = "\
 pub index Case = { Low, High };
 param values: Length[Case] = {
-Case.Low: 1.0 m,
-Case.High: 2.0 m,
+Case#Low: 1.0 m,
+Case#High: 2.0 m,
 };
 node low: Length = minimum(@values);
 node high: Length = maximum(@values);";
@@ -874,7 +874,7 @@ fn check_linear_algebra_preserves_axes_and_dimensions() {
     let source = "\
 param a: Length[Fin(2), Fin(3)] = for i: Fin(2), j: Fin(3) { 1.0 m };
 param b: Time[Fin(3), Fin(4)] = for i: Fin(3), j: Fin(4) { 1.0 s };
-node product: Length * Time[Fin(2), Fin(4)] = matmul(@a, @b);
+node matrix_product: Length * Time[Fin(2), Fin(4)] = matmul(@a, @b);
 node transposed: Length[Fin(3), Fin(2)] = transpose(@a);";
     check(source).unwrap();
 }
@@ -938,9 +938,9 @@ fn check_scan() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node cum_dv: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc + val);";
     check(source).unwrap();
@@ -951,13 +951,13 @@ fn check_scan_supports_heterogeneous_accumulator() {
     let source = "\
 pub index Flag = { A, B };
 param flags: Bool[Flag] = {
-Flag.A: true,
-Flag.B: false,
+Flag#A: true,
+Flag#B: false,
 };
 node count_true: Int[Flag] = scan(
     @flags,
     0,
-    |count, flag| if flag { count + 1 } else { count }
+    |count_acc, flag| if flag { count_acc + 1 } else { count_acc }
 );";
     check(source).unwrap();
 }
@@ -992,9 +992,9 @@ fn check_scan_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node bad: Velocity[Maneuver] = scan(@dv, 0.0 m, |acc, val| acc + val);";
     let err = check(source).unwrap_err();
@@ -1020,9 +1020,9 @@ fn check_for_with_sum() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node total: Velocity = sum(for m: Maneuver { @dv[m] });";
     check(source).unwrap();
@@ -1035,8 +1035,8 @@ fn check_comparison_rejects_indexed_operands_for_every_operator() {
     let prefix = "\
 index Case = { A, B };
 node values: Length[Case] = {
-Case.A: 1.0 m,
-Case.B: 2.0 m,
+Case#A: 1.0 m,
+Case#B: 2.0 m,
 };";
 
     for op in ["==", "!=", "<", "<=", ">", ">="] {
@@ -1063,8 +1063,8 @@ Case.B: 2.0 m,
 fn check_explicit_for_comparison_of_indexed_values() {
     let source = "\
 index Case = { A, B };
-node lhs: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };
-node rhs: Length[Case] = { Case.A: 1.0 m, Case.B: 2.5 m };
+node lhs: Length[Case] = { Case#A: 1.0 m, Case#B: 2.0 m };
+node rhs: Length[Case] = { Case#A: 1.0 m, Case#B: 2.5 m };
 node same: Bool[Case] = for case: Case { @lhs[case] == @rhs[case] };
 node below: Bool[Case] = for case: Case { @lhs[case] < 3.0 m };";
     check(source).unwrap();
@@ -1443,9 +1443,9 @@ fn check_scan_body_type_mismatch() {
     let source = "\
 pub index Maneuver = { Departure, Correction, Insertion };
 param dv: Velocity[Maneuver] = {
-Maneuver.Departure: 2.46 km / s,
-Maneuver.Correction: 0.5 km / s,
-Maneuver.Insertion: 1.8 km / s,
+Maneuver#Departure: 2.46 km / s,
+Maneuver#Correction: 0.5 km / s,
+Maneuver#Insertion: 1.8 km / s,
 };
 node bad: Velocity[Maneuver] = scan(@dv, 0.0 km / s, |acc, val| acc * val);";
     let err = check(source).unwrap_err();
@@ -1476,8 +1476,8 @@ fn check_map_literal_inconsistent_element_dims() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param x: Dimensionless[Phase] = {
-Phase.Coast: 1.0,
-Phase.Burn: 2.0 m,
+Phase#Coast: 1.0,
+Phase#Burn: 2.0 m,
 };";
     let err = check(source).unwrap_err();
     // The map entries have different dimensions: first is Dimensionless, second is Length
@@ -1498,10 +1498,10 @@ fn check_index_access_unknown_variant() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param x: Dimensionless[Phase] = {
-Phase.Coast: 1.0,
-Phase.Burn: 2.0,
+Phase#Coast: 1.0,
+Phase#Burn: 2.0,
 };
-param bad: Dimensionless = @x[Phase.NoSuch];";
+param bad: Dimensionless = @x[Phase#NoSuch];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::UnknownVariant { .. }),
@@ -1516,7 +1516,7 @@ fn check_index_access_on_quantity() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param x: Dimensionless = 1.0;
-param bad: Dimensionless = @x[Phase.Coast];";
+param bad: Dimensionless = @x[Phase#Coast];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::EvalError { .. }),
@@ -1532,10 +1532,10 @@ fn check_index_access_wrong_index() {
 pub index Phase = { Coast, Burn };
 pub index Stage = { First, Second };
 param x: Dimensionless[Phase] = {
-Phase.Coast: 1.0,
-Phase.Burn: 2.0,
+Phase#Coast: 1.0,
+Phase#Burn: 2.0,
 };
-param bad: Dimensionless = @x[Stage.First];";
+param bad: Dimensionless = @x[Stage#First];";
     let err = check(source).unwrap_err();
     assert!(
         matches!(err, GraphcalError::IndexMismatch { .. }),
@@ -1568,60 +1568,56 @@ node bad: Dimensionless = @v[0 - 1];";
 }
 
 #[test]
-fn check_ambiguous_bare_index_label_surfaces_resolver_error() {
+fn bare_term_does_not_probe_owner_scoped_index_labels() {
     let source = "\
 pub index M = { A };
 pub index P = { A };
 node x: Dimensionless = A;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("ambiguous index label `A`")),
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unknown Term `A`")),
         "got: {err:?}"
     );
 }
 
 #[test]
-fn check_prelude_dimension_in_value_position_is_not_unknown_local() {
+fn value_position_does_not_probe_static_prelude_dimension() {
     let source = "node x: Dimensionless = Length;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message == "dimension `Length` cannot be used as a value"),
+        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("unknown Term `Length`")),
         "got: {err:?}"
     );
 }
 
 #[test]
-fn check_value_name_in_type_position_reports_wrong_universe() {
+fn type_position_does_not_probe_term_value() {
     let source = "\
 node a: Dimensionless = 1.0;
 node b: a = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`a` is a value, not a type")),
+        matches!(&err, GraphcalError::UnknownDimension { name, .. } if name.as_bare() == Some(&crate::syntax::names::NameAtom::parse("a").unwrap())),
         "got: {err:?}"
     );
 }
 
 #[test]
-fn check_index_label_in_type_position_reports_wrong_universe() {
+fn index_label_syntax_is_not_a_type_reference_form() {
     let source = "\
 pub index M = { A };
-param x: M.A = 1.0;";
-    let err = check(source).unwrap_err();
-    assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`M.A` is an index label, not a type")),
-        "got: {err:?}"
-    );
+param x: M#A = 1.0;";
+    assert!(Parser::new(source).parse_file().is_err());
 }
 
 #[test]
-fn check_constructor_name_in_type_position_reports_wrong_universe() {
+fn type_position_does_not_probe_term_constructor() {
     let source = "\
 type Pos { MkPos(v: Dimensionless) }
 param p: MkPos = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, GraphcalError::EvalError { message, .. } if message.contains("`MkPos` is a constructor, not a type")),
+        matches!(&err, GraphcalError::UnknownDimension { name, .. } if name.as_bare() == Some(&crate::syntax::names::NameAtom::parse("MkPos").unwrap())),
         "got: {err:?}"
     );
 }
@@ -1701,7 +1697,7 @@ fn dynamic_unit_scale_requires_scalar_dimensionless_quantity() {
         "param factor: Length = 2.0 m;",
         "param factor: Bool = true;",
         "param factor: Int = 2;",
-        "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };",
+        "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };",
     ] {
         let source = format!(
             "base dim Money;\nbase unit USD: Money;\n{factor}\nunit EUR: Money = (@factor) USD;"
@@ -1870,8 +1866,8 @@ fn check_map_literal_error_in_entry() {
     let source = "\
 pub index Phase = { Coast, Burn };
 param bad: Dimensionless[Phase] = {
-Phase.Coast: 1.0 foobar,
-Phase.Burn: 2.0,
+Phase#Coast: 1.0 foobar,
+Phase#Burn: 2.0,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -1888,8 +1884,8 @@ fn check_map_literal_mixed_index_names() {
 pub index Phase = { Coast, Burn };
 pub index Stage = { First, Second };
 param x: Dimensionless[Phase] = {
-Phase.Coast: 1.0,
-Stage.Second: 2.0,
+Phase#Coast: 1.0,
+Stage#Second: 2.0,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -1941,7 +1937,7 @@ fn quantity_local_cannot_index_named_indexed_value() {
     let source = "\
 pub index Phase = { A };
 pub index TimeStep = range(0.0 s, 1.0 s, step: 1.0 s);
-param v: Dimensionless[Phase] = { Phase.A: 1.0 };
+param v: Dimensionless[Phase] = { Phase#A: 1.0 };
 node w: Dimensionless[TimeStep] = for t: TimeStep { @v[t] };";
     let err = check(source).unwrap_err();
     assert!(
@@ -2060,7 +2056,7 @@ index Phase = { Start, End };
 node values: Dimensionless[Phase] = unfold(
     Phase,
     1.0,
-    |prev_value, prev_phase, phase| prev_value + 1.0
+    |prev_value, prev_phase_key, phase_key| prev_value + 1.0
 );";
     let err = check(source).unwrap_err();
     assert!(
@@ -2258,8 +2254,8 @@ fn domain_bound_indexed_dimension_checked() {
     let source = "\
 pub index Maneuver = { Departure, Correction };
 param dv: Velocity(min: 1.0 m)[Maneuver] = {
-Maneuver.Departure: 1.0 m / s,
-Maneuver.Correction: 0.5 m / s,
+Maneuver#Departure: 1.0 m / s,
+Maneuver#Correction: 0.5 m / s,
 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -2731,7 +2727,7 @@ dag scale {
 }
 
 param src: Length = 10.0 m;
-node doubled: Length = @scale(factor: 2.0, v: @src).result;
+node doubled: Length = @scale(factor: 2.0, v: @src)::result;
 ";
 
 #[test]
@@ -2753,8 +2749,8 @@ dag config {
     param factor: Dimensionless = 2.0;
 }
 
-node default_factor: Dimensionless = @config().factor;
-node bound_factor: Dimensionless = @config(factor: 3.0).factor;
+node default_factor: Dimensionless = @config()::factor;
+node bound_factor: Dimensionless = @config(factor: 3.0)::factor;
 ";
     let types = check(source).unwrap();
     assert_eq!(
@@ -2771,7 +2767,7 @@ node bound_factor: Dimensionless = @config(factor: 3.0).factor;
 fn inline_dag_call_unknown_dag() {
     let source = "\
 param src: Length = 10.0 m;
-node y: Length = @nope(v: @src).result;
+node y: Length = @nope(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2789,7 +2785,7 @@ dag id_len {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @id_len(bogus: @src).result;
+node y: Length = @id_len(bogus: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2808,7 +2804,7 @@ dag scale {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @scale(v: @src).result;
+node y: Length = @scale(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2826,7 +2822,7 @@ dag id_len {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @id_len(v: @src).nope;
+node y: Length = @id_len(v: @src)::nope;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2844,7 +2840,7 @@ dag id_len {
 }
 
 param src: Time = 10.0 s;
-node y: Length = @id_len(v: @src).result;
+node y: Length = @id_len(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2865,8 +2861,8 @@ dag id_len {
     pub node result: Length = @v;
 }
 
-param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 2.0 m };
-node distances: Length[Region] = for r: Region { @id_len(v: @dist[r]).result };
+param dist: Length[Region] = { Region#A: 1.0 m, Region#B: 2.0 m };
+node distances: Length[Region] = for r: Region { @id_len(v: @dist[r])::result };
 ";
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude(
@@ -2893,7 +2889,7 @@ dag bogus {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @bogus(v: @src).result;
+node y: Length = @bogus(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2908,14 +2904,14 @@ fn inline_dag_indexed_output_type_flows_through() {
 pub index Region = { A, B };
 
 dag doubler {
-    import test.{ index Region };
+    import test::{ index Region };
 
     param v: Length[Region];
     pub node result: Length[Region] = for r: Region { @v[r] * 2.0 };
 }
 
-param dist: Length[Region] = { Region.A: 1.0 m, Region.B: 3.0 m };
-node out: Length = @doubler(v: @dist).result[Region.A];
+param dist: Length[Region] = { Region#A: 1.0 m, Region#B: 3.0 m };
+node out: Length = @doubler(v: @dist)::result[Region#A];
 ";
     let types = check(source).unwrap();
     let length = Dimension::base(BaseDimId::Prelude(
@@ -2938,7 +2934,7 @@ dag private_result {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @private_result(v: @src).hidden;
+node y: Length = @private_result(v: @src)::hidden;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2965,11 +2961,11 @@ fn inline_dag_self_recursive_cycle_detected() {
     let source = "\
 dag loop_self {
     param v: Length;
-    pub node result: Length = @loop_self(v: @v).result;
+    pub node result: Length = @loop_self(v: @v)::result;
 }
 
 param src: Length = 1.0 m;
-node y: Length = @loop_self(v: @src).result;
+node y: Length = @loop_self(v: @src)::result;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -2983,16 +2979,16 @@ fn inline_dag_mutual_recursion_cycle_detected() {
     let source = "\
 dag a {
     param v: Length;
-    pub node out: Length = @b(v: @v).out;
+    pub node out: Length = @b(v: @v)::out;
 }
 
 dag b {
     param v: Length;
-    pub node out: Length = @a(v: @v).out;
+    pub node out: Length = @a(v: @v)::out;
 }
 
 param src: Length = 1.0 m;
-node y: Length = @a(v: @src).out;
+node y: Length = @a(v: @src)::out;
 ";
     let err = check(source).unwrap_err();
     assert!(
@@ -3014,7 +3010,7 @@ dag forward {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @forward(v: @src).b;
+node y: Length = @forward(v: @src)::b;
 ";
     // Phase B only covers compile; actual runtime topo-sort is Phase C.
     // Still, compile must accept this program (no dim errors).
@@ -3137,9 +3133,9 @@ index Step = { Start, End };
 plot p = {
     mark: rect,
     encode: {
-        x: for phase: Phase { phase },
+        x: for phase_key: Phase { phase_key },
         y: 1.0,
-        color: for phase: Phase, step: Step { 1 },
+        color: for phase_key: Phase, step: Step { 1 },
     },
 };
 ";
@@ -3159,7 +3155,7 @@ plot p = {
         color: true,
         size: 1,
         detail: @instant,
-        text: Phase.A,
+        text: Phase#A,
     },
 };
 "#;
@@ -3179,7 +3175,7 @@ fn check_rejects_ineffective_conversion_inside_plot_encoding() {
 fn check_unknown_plot_property_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, caption: \"typo\" };";
     let err = check(source).unwrap_err();
     assert!(
@@ -3192,7 +3188,7 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, caption: \"typo\
 fn check_unknown_mark_property_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line { strokewidth: 3.0 }, encode: { x: for s: Step { @vals[s] } } };";
     let err = check(source).unwrap_err();
     assert!(
@@ -3205,7 +3201,7 @@ plot p = { mark: line { strokewidth: 3.0 }, encode: { x: for s: Step { @vals[s] 
 fn check_string_property_with_number_value_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, title: 42.0 };";
     let err = check(source).unwrap_err();
     assert!(
@@ -3224,7 +3220,7 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, title: 42.0 };";
 fn check_numeric_property_with_string_value_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, width: \"wide\" };";
     let err = check(source).unwrap_err();
     assert!(
@@ -3243,7 +3239,7 @@ plot p = { mark: line, encode: { x: for s: Step { @vals[s] } }, width: \"wide\" 
 fn check_dimensioned_mark_property_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line { stroke_width: 2.0 m }, encode: { x: for s: Step { @vals[s] } } };";
     let err = check(source).unwrap_err();
     assert!(
@@ -3262,7 +3258,7 @@ plot p = { mark: line { stroke_width: 2.0 m }, encode: { x: for s: Step { @vals[
 fn check_figure_width_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [p], width: 300.0 };";
     let err = check(source).unwrap_err();
@@ -3276,7 +3272,7 @@ figure f = { plots: [p], width: 300.0 };";
 fn check_layer_width_is_accepted() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 layer l = { plots: [p], width: 300.0, title: \"ok\" };";
     check(source).unwrap();
@@ -3286,7 +3282,7 @@ layer l = { plots: [p], width: 300.0, title: \"ok\" };";
 fn check_valid_plot_properties_pass() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = {
     mark: line { stroke_width: 2.0, opacity: 0.5, color: \"steelblue\", filled: true },
     encode: { x: for s: Step { @vals[s] }, y: for s: Step { @vals[s] } },
@@ -3303,7 +3299,7 @@ plot p = {
 fn check_unknown_plot_reference_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot real_plot = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [real_plot, my_polt] };";
     let err = check(source).unwrap_err();
@@ -3317,10 +3313,10 @@ figure f = { plots: [real_plot, my_polt] };";
 fn check_figure_referencing_figure_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure inner = { plots: [p] };
-figure outer = { plots: [inner] };";
+figure outer_figure = { plots: [inner] };";
     let err = check(source).unwrap_err();
     assert!(
         matches!(
@@ -3338,7 +3334,7 @@ figure outer = { plots: [inner] };";
 fn check_duplicate_plot_reference_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [p, p] };";
     let err = check(source).unwrap_err();
@@ -3352,7 +3348,7 @@ figure f = { plots: [p, p] };";
 fn check_valid_plot_references_pass() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 plot q = { mark: point, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [p, q] };
@@ -3366,7 +3362,7 @@ layer l = { plots: [p, q] };";
 fn check_hidden_on_plot_is_accepted() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 #[hidden]
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
     check(source).unwrap();
@@ -3391,7 +3387,7 @@ node x: Dimensionless = 1.0;";
 fn check_hidden_on_figure_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 #[hidden]
 figure f = { plots: [p] };";
@@ -3409,7 +3405,7 @@ figure f = { plots: [p] };";
 fn check_hidden_with_args_is_rejected() {
     let source = "\
 pub index Step = { A, B };
-param vals: Dimensionless[Step] = { Step.A: 1.0, Step.B: 2.0 };
+param vals: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };
 #[hidden(now)]
 plot p = { mark: line, encode: { x: for s: Step { @vals[s] } } };";
     let err = check(source).unwrap_err();

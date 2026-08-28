@@ -3175,15 +3175,15 @@ mod tests {
                         pub node distance: Length = 1.0 DynamicM;\n\
                     }\n\
                     node rates: Dimensionless[Rate] = {\n\
-                        Rate.Two: 2.0,\n\
-                        Rate.Three: 3.0,\n\
+                        Rate#Two: 2.0,\n\
+                        Rate#Three: 3.0,\n\
                     };\n\
                     node values: Length[Rate] = for rate: Rate {\n\
-                        @units(rate: @rates[rate]).distance\n\
+                        @units(rate: @rates[rate])::distance\n\
                     };\n\
                     node reversed: Length[Order] = {\n\
-                        Order.First: @values[Rate.Three],\n\
-                        Order.Second: @values[Rate.Two],\n\
+                        Order#First: @values[Rate#Three],\n\
+                        Order#Second: @values[Rate#Two],\n\
                     };\n";
         let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
         assert!(
@@ -3547,7 +3547,7 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "include lib.lib().{ doubled };\nnode result: Dimensionless = @doubled + 1.0;\n",
+                "include lib.lib()::{ doubled };\nnode result: Dimensionless = @doubled + 1.0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/lib/main.gcl");
@@ -3583,8 +3583,8 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/app/main.gcl",
-                "include app.analysis.shared(input: 2.0).{ output as analyzed };\n\
-                 include app.presentation.shared(input: 5.0).{ output as rendered };\n\
+                "include app.analysis.shared(input: 2.0)::{ output as analyzed };\n\
+                 include app.presentation.shared(input: 5.0)::{ output as rendered };\n\
                  node combined: Dimensionless = @analyzed + @rendered;\n",
             ),
         ]);
@@ -3658,7 +3658,7 @@ node bad: Mass = mass + length;
             ("src/helper/lib.gcl", "this is not valid graphcal"),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y};\nnode z: Dimensionless = 1.0;",
+                "import helper.lib::{y};\nnode z: Dimensionless = 1.0;",
             ),
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
@@ -3722,7 +3722,7 @@ node bad: Mass = mass + length;
             ("src/helper/util/lib.gcl", "this is not valid graphcal"),
             (
                 "src/helper/main.gcl",
-                "import helper.util.lib.{y};\nnode z: Dimensionless = 1.0;",
+                "import helper.util.lib::{y};\nnode z: Dimensionless = 1.0;",
             ),
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
@@ -3763,7 +3763,7 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;",
+                "import helper.lib::{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;",
             ),
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
@@ -3804,8 +3804,8 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y as first};\n\
-                 import helper.lib.{y as second};\n\
+                "import helper.lib::{y as first};\n\
+                 import helper.lib::{y as second};\n\
                  node z: Dimensionless = @first + @second;",
             ),
         ]);
@@ -3827,7 +3827,7 @@ node bad: Mass = mass + length;
         }
     }
 
-    /// Issue #631 case 1+2: `@module.dag(args).out` — both the DAG name and
+    /// Issue #631 case 1+2: `@module.dag(args)::out` — both the DAG name and
     /// the output projection must resolve to the imported library file.
     #[test]
     fn goto_definition_resolves_cross_file_inline_dag_call() {
@@ -3847,7 +3847,7 @@ node bad: Mass = mass + length;
                 "src/lib/main.gcl",
                 "import lib.lib as lib;\n\
                  param speed: Velocity = 10.0 m/s;\n\
-                 node doubled: Velocity = @lib.scale(factor: 2.0, v: @speed).result;\n",
+                 node doubled: Velocity = @lib.scale(factor: 2.0, v: @speed)::result;\n",
             ),
         ]);
         let main_path = dir.path().join("src/lib/main.gcl");
@@ -3903,10 +3903,10 @@ node bad: Mass = mass + length;
                 "src/lib/main.gcl",
                 "import lib.library as file_dag;\n\
                  import lib.library.helper as inline_dag;\n\
-                 import lib.library.{helper as selected_dag};\n\
-                 node a: Dimensionless = @file_dag(x: 2.0).doubled;\n\
-                 node b: Dimensionless = @inline_dag(x: 3.0).tripled;\n\
-                 node c: Dimensionless = @selected_dag(x: 4.0).tripled;\n",
+                 import lib.library::{helper as selected_dag};\n\
+                 node a: Dimensionless = @file_dag(x: 2.0)::doubled;\n\
+                 node b: Dimensionless = @inline_dag(x: 3.0)::tripled;\n\
+                 node c: Dimensionless = @selected_dag(x: 4.0)::tripled;\n",
             ),
         ]);
         let main_path = dir.path().join("src/lib/main.gcl");
@@ -3950,11 +3950,11 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "import lib.lib.{ index Color };\n\
+                "import lib.lib::{ index Color };\n\
                  param favorite: Dimensionless[Color] = {\n    \
-                     Color.Red: 1.0,\n    \
-                     Color.Green: 2.0,\n    \
-                     Color.Blue: 3.0,\n\
+                     Color#Red: 1.0,\n    \
+                     Color#Green: 2.0,\n    \
+                     Color#Blue: 3.0,\n\
                  };\n",
             ),
         ]);
@@ -3970,8 +3970,8 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        // Cursor on `Red` inside `Color.Red:`.
-        let red_offset = text.find("Color.Red").expect("Color.Red token") + "Color.".len();
+        // Cursor on `Red` inside `Color#Red:`.
+        let red_offset = text.find("Color#Red").expect("Color#Red token") + "Color.".len();
         let red_resolved = resolve_symbol_at(&analysis, red_offset + 1).expect("resolve `Red`");
         let SymbolLocation::Imported(red_imported) = red_resolved.location else {
             panic!("expected `Red` to resolve to an imported definition");
@@ -3996,7 +3996,7 @@ node bad: Mass = mass + length;
                 "import lib.axes as axes;\n\
                  param cube: Dimensionless[axes.Scenario, axes.Row, axes.Column] =\n    \
                      table[axes.Scenario, axes.Row, axes.Column] {\n        \
-                         [axes.Scenario.Nominal]\n        \
+                         [axes::Scenario#Nominal]\n        \
                          : X;\n        \
                          A: 1.0;\n    \
                      };\n",
@@ -4015,8 +4015,8 @@ node bad: Mass = mass + length;
         );
 
         let table_axis = text.find("table[axes.Scenario").unwrap() + "table[axes.".len();
-        let slice_axis = text.find("[axes.Scenario.Nominal]").unwrap() + "[axes.".len();
-        let slice_variant = text.find("axes.Scenario.Nominal").unwrap() + "axes.Scenario.".len();
+        let slice_axis = text.find("[axes::Scenario#Nominal]").unwrap() + "[axes.".len();
+        let slice_variant = text.find("axes::Scenario#Nominal").unwrap() + "axes.Scenario.".len();
         let column_variant = text.find(": X;").unwrap() + 2;
         let row_variant = text.find("A: 1.0;").unwrap();
 
@@ -4049,11 +4049,11 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "import lib.lib.{ index Color as Palette };\n\
+                "import lib.lib::{ index Color as Palette };\n\
                  param favorite: Dimensionless[Palette] = {\n    \
-                     Palette.Red: 1.0,\n    \
-                     Palette.Green: 2.0,\n    \
-                     Palette.Blue: 3.0,\n\
+                     Palette#Red: 1.0,\n    \
+                     Palette#Green: 2.0,\n    \
+                     Palette#Blue: 3.0,\n\
                  };\n",
             ),
         ]);
@@ -4062,18 +4062,18 @@ node bad: Mass = mass + length;
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
 
-        let palette_red_key = imported_target_for_spelling(&analysis, "Palette.Red")
-            .expect("expected imported binding under local alias `Palette.Red`");
+        let palette_red_key = imported_target_for_spelling(&analysis, "Palette#Red")
+            .expect("expected imported binding under local alias `Palette#Red`");
         assert!(
             analysis.imported_definitions.contains_key(palette_red_key),
-            "expected imported variant under local alias `Palette.Red`, got: {:?}",
+            "expected imported variant under local alias `Palette#Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
     }
 
     /// Issue #830: goto-definition and hover must resolve symbols brought in
     /// by module imports — bare (`import gotom.lib;` → `@lib.g0`) and aliased
-    /// (`import gotom.lib as alias_lib;` → `@alias_lib.g0`).
+    /// (`import gotom.lib as alias_lib;` → `@alias_lib::g0`).
     #[test]
     fn module_imported_symbols_resolve_for_goto_and_hover() {
         use crate::resolve::{SymbolLocation, resolve_symbol_at};
@@ -4089,7 +4089,7 @@ node bad: Mass = mass + length;
                 "import gotom.lib;\n\
                  import gotom.lib as alias_lib;\n\
                  node g: Acceleration = @lib.g0;\n\
-                 node g2: Acceleration = @alias_lib.g0;\n",
+                 node g2: Acceleration = @alias_lib::g0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/gotom/main.gcl");
@@ -4104,7 +4104,7 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        for (needle, prefix) in [("@lib.g0", "@lib."), ("@alias_lib.g0", "@alias_lib.")] {
+        for (needle, prefix) in [("@lib.g0", "@lib."), ("@alias_lib::g0", "@alias_lib::")] {
             let offset = text.find(needle).expect("reference in main.gcl") + prefix.len();
             let resolved = resolve_symbol_at(&analysis, offset)
                 .unwrap_or_else(|| panic!("expected `{needle}` to resolve"));
@@ -4488,7 +4488,7 @@ node momentum: Force * Time = @mass * @velocity;
             ),
             (
                 "src/fresh/main.gcl",
-                "import fresh.lib.{y};\nnode z: Dimensionless = @y + 1.0;\n",
+                "import fresh.lib::{y};\nnode z: Dimensionless = @y + 1.0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/fresh/main.gcl");
@@ -4595,10 +4595,10 @@ node momentum: Force * Time = @mass * @velocity;
             ),
             (
                 "src/gotom/main.gcl",
-                "import gotom.lib.{g0};\n\
+                "import gotom.lib::{g0};\n\
                  import gotom.lib as m;\n\
                  node g: Acceleration = @g0;\n\
-                 node g2: Acceleration = @m.g0;\n",
+                 node g2: Acceleration = @m::g0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/gotom/main.gcl");
@@ -4655,8 +4655,8 @@ node momentum: Force * Time = @mass * @velocity;
                  const node from_a: Dimensionless = a.bias;\n\
                  node phase_score: Dimensionless[a.Phase] = for phase: a.Phase {\n\
                      match phase {\n\
-                         a.Phase.Burn => a.bias,\n\
-                         a.Phase.Coast => b.bias,\n\
+                         a::Phase#Burn => a.bias,\n\
+                         a::Phase#Coast => b.bias,\n\
                      }\n\
                  };\n\
                  node item: a.Item = a.Pick(distance: a.bias);\n",
@@ -4679,7 +4679,7 @@ node momentum: Force * Time = @mass * @velocity;
         for (needle, token_prefix) in [
             ("a.bias", "a."),
             ("a.Phase]", "a."),
-            ("a.Phase.Burn", "a.Phase."),
+            ("a::Phase#Burn", "a.Phase."),
             ("a.Item", "a."),
             ("a.Pick", "a."),
         ] {

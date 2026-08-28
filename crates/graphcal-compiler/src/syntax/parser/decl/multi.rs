@@ -304,19 +304,32 @@ impl Parser<'_> {
                 let header_cells = slice
                     .header_cells
                     .iter()
-                    .map(|c| match c {
+                    .enumerate()
+                    .map(|(index, cell)| match cell {
                         HeaderCell::Underscore(sp) => {
                             ast::MultiHeaderCell::Underscore { span: *sp }
                         }
-                        HeaderCell::Variant {
-                            axis,
-                            variant,
-                            span,
-                        } => ast::MultiHeaderCell::Variant {
-                            axis: axis.clone(),
-                            variant: variant.clone(),
-                            span: *span,
-                        },
+                        HeaderCell::Variant { variant, span } => {
+                            let axis = slice.column_layout.iter().find_map(|layout| match layout {
+                                SlotColumnSpan::Range {
+                                    start,
+                                    end,
+                                    extra_axis,
+                                } if (*start..*end).contains(&index) => Some(extra_axis.clone()),
+                                SlotColumnSpan::Single(_) | SlotColumnSpan::Range { .. } => None,
+                            });
+                            let axis = match axis {
+                                Some(axis) => axis,
+                                None => unreachable!(
+                                    "validated variant header belongs to an extra-axis slot"
+                                ),
+                            };
+                            ast::MultiHeaderCell::Variant {
+                                axis,
+                                variant: variant.clone(),
+                                span: *span,
+                            }
+                        }
                     })
                     .collect();
                 let column_layout = slice
@@ -685,17 +698,16 @@ impl Parser<'_> {
                 Ok(HeaderCell::Underscore(span))
             }
             Some(token) if token.is_identifier() => {
-                let (axis, variant, span) = self.parse_index_variant_path()?;
+                let variant = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
                 Ok(HeaderCell::Variant {
-                    axis,
+                    span: variant.span,
                     variant,
-                    span,
                 })
             }
             _ => {
                 let (tok, span) = self.advance()?;
                 Err(self.unexpected_token(
-                    "`_` or a qualified `Axis.Variant` label in header row",
+                    "`_` or a bare label in the axis-determined header row",
                     &tok.to_string(),
                     span,
                 ))
@@ -1062,7 +1074,7 @@ param      n_installed:       Int[Component],
 const node mass_per_unit:     Mass[Component],
 param      power_mode:        Bool[Component, OperationMode]
   = table[Component, (_, _, _, OperationMode)] {
-      :            _,       _, _,      OperationMode.Safe,  OperationMode.Nominal;
+      :            _,       _, _,      Safe,  Nominal;
       ComponentA:  10.0 W,  1, 2.5 kg,                true,                   true;
       ComponentB:  12.0 W,  2, 3.1 kg,               false,                   true;
   };
@@ -1104,7 +1116,7 @@ param      power_mode:        Bool[Component, OperationMode]
 param a: Bool[Component, OperationMode],
 param b: Bool[Component, OperationMode]
   = table[Component, (OperationMode, OperationMode)] {
-      :           OperationMode.Safe, OperationMode.Nominal, OperationMode.Safe, OperationMode.Nominal;
+      :           Safe, Nominal, Safe, Nominal;
       ComponentA:               true,                 false,               false,                  true;
   };
 ";
@@ -1124,11 +1136,11 @@ index Component = { ComponentA };
 param p: Int[Phase, Component],
 param q: Int[Phase, Component]
   = table[Phase, Component, (_, _)] {
-      [Phase.Launch]
+      [Phase#Launch]
       :           _, _;
       ComponentA: 1, 2;
 
-      [Phase.Cruise]
+      [Phase#Cruise]
       :           _, _;
       ComponentA: 3, 4;
   };
@@ -1176,7 +1188,7 @@ param q: Int[Phase, Component]
 param p: Int[Phase, Component],
 param q: Int[Phase, Component]
   = table[Phase, Component, (_, _)] {
-      [Foo.Launch]
+      [Foo#Launch]
       :           _, _;
       ComponentA: 1, 2;
   };
@@ -1189,8 +1201,8 @@ param q: Int[Phase, Component]
     }
 
     #[test]
-    fn multi_decl_v2_canonical_qualified_header_cells_accepted() {
-        // Heterogeneous header labels must retain the extra-axis owner.
+    fn multi_decl_v2_contextual_bare_header_cells_accepted() {
+        // The slot's declared extra axis determines each bare label owner.
         let source = r"
 index Component = { ComponentA };
 index OpMode = { Safe, Nominal };
@@ -1198,7 +1210,7 @@ index OpMode = { Safe, Nominal };
 param p: Power[Component],
 param m: Bool[Component, OpMode]
   = table[Component, (_, OpMode)] {
-      :           _,      OpMode.Safe, OpMode.Nominal;
+      :           _,      Safe, Nominal;
       ComponentA: 10.0 W, true,         false;
   };
 ";
@@ -1210,12 +1222,12 @@ param m: Bool[Component, OpMode]
     }
 
     #[test]
-    fn multi_decl_v2_bare_header_cells_rejected() {
+    fn multi_decl_v2_qualified_header_cells_rejected() {
         let source = r"
 param p: Power[Component],
 param m: Bool[Component, OpMode]
   = table[Component, (_, OpMode)] {
-      :           _,      Safe, Nominal;
+      :           _,      OpMode#Safe, OpMode#Nominal;
       ComponentA: 10.0 W, true, false;
   };
 ";
@@ -1225,11 +1237,11 @@ param m: Bool[Component, OpMode]
     #[test]
     fn multi_decl_preserves_qualified_axis_and_label_paths() {
         let source = r"
-param p: Int[mission.Phase, mission.Component],
-param m: Bool[mission.Phase, mission.Component, mission.Mode]
-  = table[mission.Phase, mission.Component, (_, mission.Mode)] {
-      [mission.Phase.Launch]
-      :           _, mission.Mode.Safe;
+param p: Int[mission::Phase, mission::Component],
+param m: Bool[mission::Phase, mission::Component, mission::Mode]
+  = table[mission::Phase, mission::Component, (_, mission::Mode)] {
+      [mission::Phase#Launch]
+      :           _, Safe;
       ComponentA: 1, true;
   };
 ";
@@ -1239,25 +1251,25 @@ param m: Bool[mission.Phase, mission.Component, mission.Mode]
         let TableIndexSpec::Named(slice_axis) = &multi.shared_axes()[0] else {
             panic!("expected named slice axis")
         };
-        assert_eq!(slice_axis.value.display_path(), "mission.Phase");
+        assert_eq!(slice_axis.value.display_path(), "mission::Phase");
         let TableIndexSpec::Named(row_axis) = &multi.shared_axes()[1] else {
             panic!("expected named row axis")
         };
-        assert_eq!(row_axis.value.display_path(), "mission.Component");
+        assert_eq!(row_axis.value.display_path(), "mission::Component");
         let ast::MultiSlotAxis::Axis(slot_axis) = &multi.slot_axes()[1] else {
             panic!("expected named slot axis")
         };
-        assert_eq!(slot_axis.value.display_path(), "mission.Mode");
+        assert_eq!(slot_axis.value.display_path(), "mission::Mode");
         let ast::MultiHeaderCell::Variant { axis, variant, .. } =
             &multi.slices()[0].header_cells()[1]
         else {
             panic!("expected qualified header variant")
         };
-        assert_eq!(axis.value.display_path(), "mission.Mode");
+        assert_eq!(axis.value.display_path(), "mission::Mode");
         assert_eq!(variant.value.as_str(), "Safe");
         assert_eq!(
             multi.slices()[0].prefix_keys()[0].index.value.to_string(),
-            "mission.Phase"
+            "mission::Phase"
         );
     }
 }
@@ -1271,13 +1283,12 @@ pub(super) enum SlotAxis {
     Axis(Spanned<NamePath>),
 }
 
-/// A parsed header-row cell: `_` or a qualified axis variant.
+/// A parsed header-row cell. The owning axis is reconstructed from the slot
+/// layout, so labels remain bare within the table body.
 #[derive(Debug, Clone)]
 pub(super) enum HeaderCell {
     Underscore(Span),
     Variant {
-        /// Required axis path from the canonical `Axis.Variant` spelling.
-        axis: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
         span: Span,
     },
@@ -1319,12 +1330,6 @@ enum LayoutError {
         header_count: usize,
         span: Span,
     },
-    AxisMismatch {
-        span: Span,
-        slot_name: String,
-        expected_axis: String,
-        got_axis: String,
-    },
     NotEnoughCells {
         slot_name: String,
         span: Span,
@@ -1359,18 +1364,6 @@ impl LayoutError {
                 src: src.clone(),
                 span: span.into(),
             },
-            Self::AxisMismatch {
-                span,
-                slot_name,
-                expected_axis,
-                got_axis,
-            } => ParseError::MultiDeclUnsupportedShape {
-                reason: format!(
-                    "header cell for slot `{slot_name}` is qualified with `{got_axis}.…`, but the slot's extra axis is `{expected_axis}`",
-                ),
-                src: src.clone(),
-                span: span.into(),
-            },
             Self::NotEnoughCells { slot_name, span } => ParseError::MultiDeclUnsupportedShape {
                 reason: format!(
                     "slot `{slot_name}` is declared with an extra axis but has zero variant cells in the header row",
@@ -1386,8 +1379,8 @@ impl LayoutError {
 ///
 /// For each tuple entry:
 /// - `Underscore` → consume exactly one header cell, which must be `_`.
-/// - `Axis(name)` → consume all contiguous non-`_` cells until the next `_`
-///   (or end of row). Qualified cells must match the axis name.
+/// - `Axis(name)` → consume all contiguous bare-label cells until the next `_`
+///   (or end of row); the slot declaration supplies their owner.
 ///
 /// The last rule assumes **at most one extra-axis slot** in v2; v3 will
 /// disambiguate adjacent extra-axis slots by axis lookup.
@@ -1429,15 +1422,7 @@ fn build_column_layout(
                 while cursor < header_cells.len() {
                     match &header_cells[cursor] {
                         HeaderCell::Underscore(_) => break,
-                        HeaderCell::Variant { axis, span, .. } => {
-                            if axis.value != extra_axis.value {
-                                return Err(LayoutError::AxisMismatch {
-                                    span: *span,
-                                    slot_name,
-                                    expected_axis: extra_axis.value.display_path(),
-                                    got_axis: axis.value.display_path(),
-                                });
-                            }
+                        HeaderCell::Variant { .. } => {
                             cursor += 1;
                         }
                     }

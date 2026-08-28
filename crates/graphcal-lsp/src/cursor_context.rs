@@ -27,7 +27,7 @@ pub struct ImportItemCompletionContext {
 
 /// The broad completion context at the cursor position.
 pub enum CompletionContext {
-    /// Inside `import module.{ ... }`.
+    /// Inside `import module::{ ... }`.
     ImportItem(ImportItemCompletionContext),
     /// After `@` — complete param and node names.
     GraphRef,
@@ -412,13 +412,13 @@ mod tests {
     #[test]
     fn selective_import_completion_recovers_path_and_category_marker() {
         for (source, expected) in [
-            ("import finance.units.{ ", None),
+            ("import finance.units::{ ", None),
             (
-                "import finance.units.{ unit ",
+                "import finance.units::{ unit ",
                 Some(graphcal_compiler::syntax::ast::ImportItemNamespace::Unit),
             ),
             (
-                "import finance.units.{ JPY, index ",
+                "import finance.units::{ JPY, index ",
                 Some(graphcal_compiler::syntax::ast::ImportItemNamespace::Index),
             ),
         ] {
@@ -434,7 +434,7 @@ mod tests {
             assert_eq!(context.namespace, expected);
         }
 
-        let include = "include finance.units().{ ";
+        let include = "include finance.units()::{ ";
         assert!(!matches!(
             determine_completion_context(include, include.len()),
             CompletionContext::ImportItem(_)

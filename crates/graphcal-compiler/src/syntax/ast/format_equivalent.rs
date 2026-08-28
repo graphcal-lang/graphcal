@@ -235,15 +235,26 @@ impl FormatEquivalent for Attribute {
 impl FormatEquivalent for AttributeArg {
     fn format_equivalent(&self, other: &Self) -> bool {
         match self {
-            Self::Path { segments, span: _ } => {
-                let Self::Path {
-                    segments: other_segments,
+            Self::Path { path } => {
+                let Self::Path { path: other_path } = other else {
+                    return false;
+                };
+                path.format_equivalent(other_path)
+            }
+            Self::IndexLabel {
+                index,
+                label,
+                span: _,
+            } => {
+                let Self::IndexLabel {
+                    index: other_index,
+                    label: other_label,
                     span: _,
                 } = other
                 else {
                     return false;
                 };
-                segments.format_equivalent(other_segments)
+                index.format_equivalent(other_index) && label.format_equivalent(other_label)
             }
             Self::FinitePosition { position, span: _ } => {
                 let Self::FinitePosition {
@@ -776,12 +787,19 @@ impl FormatEquivalent for GenericParam {
 
 impl FormatEquivalent for ImportDecl {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self { path, kind } = self;
         let Self {
+            visibility,
+            path,
+            kind,
+        } = self;
+        let Self {
+            visibility: other_visibility,
             path: other_path,
             kind: other_kind,
         } = other;
-        path.format_equivalent(other_path) && kind.format_equivalent(other_kind)
+        visibility == other_visibility
+            && path.format_equivalent(other_path)
+            && kind.format_equivalent(other_kind)
     }
 }
 
@@ -1307,35 +1325,51 @@ impl FormatEquivalent for UnitExprItem {
 
 impl FormatEquivalent for UnresolvedRef {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self::Path(a) = self;
-        let Self::Path(b) = other;
-        a.format_equivalent(b)
+        match (self, other) {
+            (Self::Path(first), Self::Path(second)) => first.format_equivalent(second),
+            (
+                Self::IndexLabel {
+                    index,
+                    label,
+                    span: _,
+                },
+                Self::IndexLabel {
+                    index: other_index,
+                    label: other_label,
+                    span: _,
+                },
+            ) => {
+                index.format_equivalent(other_index) && label.format_equivalent(other_label)
+            }
+            (Self::Path(_), Self::IndexLabel { .. })
+            | (Self::IndexLabel { .. }, Self::Path(_)) => false,
+        }
     }
 }
 
 impl FormatEquivalent for IdentPath {
     fn format_equivalent(&self, other: &Self) -> bool {
-        let Self { segments } = self;
-        let Self {
-            segments: other_segments,
-        } = other;
-        segments.format_equivalent(other_segments)
+        self.to_name_path() == other.to_name_path()
     }
 }
 
 impl FormatEquivalent for ParamBinding {
     fn format_equivalent(&self, other: &Self) -> bool {
         let Self {
+            category,
             name,
             value,
             span: _,
         } = self;
         let Self {
+            category: other_category,
             name: other_name,
             value: other_value,
             span: _,
         } = other;
-        name.format_equivalent(other_name) && value.format_equivalent(other_value)
+        category == other_category
+            && name.format_equivalent(other_name)
+            && value.format_equivalent(other_value)
     }
 }
 

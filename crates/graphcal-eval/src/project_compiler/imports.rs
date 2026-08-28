@@ -379,14 +379,14 @@ fn validate_reserved_alias(
     graphcal_compiler::registry::reserved_name::validate_reserved_name(namespace, local_name)
         .map_err(|_| {
             let kind = match namespace {
-                ReservedNameNamespace::TypeSystem => match import_item.namespace {
+                ReservedNameNamespace::Static => match import_item.namespace {
                     ImportItemNamespace::Type => "type alias",
                     ImportItemNamespace::Dimension => "dimension alias",
                     ImportItemNamespace::Index => "index alias",
-                    ImportItemNamespace::Term | ImportItemNamespace::Unit => "type-system alias",
+                    ImportItemNamespace::Term | ImportItemNamespace::Unit => "Static alias",
                 },
                 ReservedNameNamespace::Unit => "unit alias",
-                ReservedNameNamespace::GraphValue => "graph-value alias",
+                ReservedNameNamespace::Term => "Term alias",
             };
             CompileError::Eval(GraphcalError::BuiltinNameShadowed {
                 kind,
@@ -510,13 +510,9 @@ struct ClassifiedBindings {
     dims: DepToImporter<DimName>,
 }
 
-/// Classify each param binding against the dep's declaration index, returning
-/// per-kind binding maps. Rejects bindings whose name targets a non-bindable
-/// dep declaration (const/node/assert) or no dep declaration at all.
-///
-/// Caller-specific validation (e.g. index-kind matching, registry lookups for
-/// already-compiled dependency artifacts) layers on top of this — this helper only
-/// answers "is `binding_name` a param/type/dim/index of the dep, or invalid?".
+/// Route each binding through the namespace/category selected by its authored
+/// marker. No branch retries another namespace when the selected target is
+/// absent or has the wrong capability.
 fn classify_param_bindings(
     param_bindings: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
     dep_index: &DepDeclIndex<'_>,
@@ -531,58 +527,75 @@ fn classify_param_bindings(
         dims: HashMap::new(),
     };
     for binding in param_bindings {
+        use graphcal_compiler::syntax::ast::InputBindingCategory;
+
         let binding_name = &binding.name.name;
-        if dep_index.params.contains(binding_name.as_str()) {
-            out.params
-                .insert(DeclName::expect_valid(binding_name), binding.value.clone());
-            continue;
+        match binding.category {
+            InputBindingCategory::Unmarked if dep_index.params.contains(binding_name.as_str()) => {
+                out.params
+                    .insert(DeclName::expect_valid(binding_name), binding.value.clone());
+            }
+            InputBindingCategory::Type if dep_index.types.contains(binding_name.as_str()) => {
+                let rhs_name = lowering::extract_type_name_from_binding_expr(
+                    &binding.value,
+                    binding_name,
+                    file_src,
+                )?;
+                out.types.insert(
+                    StructTypeName::expect_valid(binding_name),
+                    StructTypeName::expect_valid(rhs_name),
+                );
+            }
+            InputBindingCategory::Dimension if dep_index.dims.contains(binding_name.as_str()) => {
+                let rhs_name = lowering::extract_type_name_from_binding_expr(
+                    &binding.value,
+                    binding_name,
+                    file_src,
+                )?;
+                out.dims.insert(
+                    DimName::expect_valid(binding_name),
+                    DimName::expect_valid(rhs_name),
+                );
+            }
+            InputBindingCategory::Index
+                if dep_index.indexes.contains_key(binding_name.as_str()) =>
+            {
+                let dep_name = IndexName::expect_valid(binding_name);
+                let target =
+                    lowering::extract_index_binding_target(&binding.value, &dep_name, file_src)?;
+                out.index_spans.insert(dep_name.clone(), binding.value.span);
+                out.indexes.insert(dep_name, target);
+            }
+            InputBindingCategory::Unmarked => {
+                if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
+                    return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
+                        name: binding_name.to_string(),
+                        actual_kind: *kind,
+                        src: file_src.clone(),
+                        span: binding.name.span.into(),
+                    }));
+                }
+                return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
+                    name: binding_name.to_string(),
+                    file_path: dep_path_for_error.to_string(),
+                    src: file_src.clone(),
+                    span: binding.name.span.into(),
+                }));
+            }
+            category => {
+                return Err(CompileError::Eval(GraphcalError::DagInputCategoryMismatch {
+                    name: binding_name.to_string(),
+                    expected: match category {
+                        InputBindingCategory::Unmarked => "param",
+                        InputBindingCategory::Type => "type",
+                        InputBindingCategory::Dimension => "dim",
+                        InputBindingCategory::Index => "index",
+                    },
+                    src: file_src.clone(),
+                    span: binding.name.span.into(),
+                }));
+            }
         }
-        if dep_index.types.contains(binding_name.as_str()) {
-            let rhs_name = lowering::extract_type_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-            out.types.insert(
-                StructTypeName::expect_valid(binding_name),
-                StructTypeName::expect_valid(rhs_name),
-            );
-            continue;
-        }
-        if dep_index.dims.contains(binding_name.as_str()) {
-            let rhs_name = lowering::extract_type_name_from_binding_expr(
-                &binding.value,
-                binding_name,
-                file_src,
-            )?;
-            out.dims.insert(
-                DimName::expect_valid(binding_name),
-                DimName::expect_valid(rhs_name),
-            );
-            continue;
-        }
-        if dep_index.indexes.contains_key(binding_name.as_str()) {
-            let dep_name = IndexName::expect_valid(binding_name);
-            let target =
-                lowering::extract_index_binding_target(&binding.value, &dep_name, file_src)?;
-            out.index_spans.insert(dep_name.clone(), binding.value.span);
-            out.indexes.insert(dep_name, target);
-            continue;
-        }
-        if let Some(kind) = dep_index.other.get(binding_name.as_str()) {
-            return Err(CompileError::Eval(GraphcalError::BindingNotAParam {
-                name: binding_name.to_string(),
-                actual_kind: *kind,
-                src: file_src.clone(),
-                span: binding.name.span.into(),
-            }));
-        }
-        return Err(CompileError::Eval(GraphcalError::UnknownParamBinding {
-            name: binding_name.to_string(),
-            file_path: dep_path_for_error.to_string(),
-            src: file_src.clone(),
-            span: binding.name.span.into(),
-        }));
     }
     Ok(out)
 }
@@ -714,7 +727,7 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     && (dep_index.is_const(orig_name) || dep_index.is_runtime(orig_name));
                 if is_graph_value {
                     validate_reserved_alias(
-                        ReservedNameNamespace::GraphValue,
+                        ReservedNameNamespace::Term,
                         import_item,
                         file_src,
                     )?;
@@ -969,7 +982,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                     });
                 if is_graph_value {
                     validate_reserved_alias(
-                        ReservedNameNamespace::GraphValue,
+                        ReservedNameNamespace::Term,
                         import_item,
                         file_src,
                     )?;
@@ -1171,8 +1184,8 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         ImportItemNamespace::Unit => ReservedNameNamespace::Unit,
                         ImportItemNamespace::Type
                         | ImportItemNamespace::Dimension
-                        | ImportItemNamespace::Index => ReservedNameNamespace::TypeSystem,
-                        ImportItemNamespace::Term => ReservedNameNamespace::GraphValue,
+                        | ImportItemNamespace::Index => ReservedNameNamespace::Static,
+                        ImportItemNamespace::Term => ReservedNameNamespace::Term,
                     };
                     validate_reserved_alias(namespace, import_item, file_src)?;
                     if import_item.namespace == ImportItemNamespace::Unit {
@@ -1217,7 +1230,7 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                 match disposition {
                     PureImportTermDisposition::BindConstant => {
                         validate_reserved_alias(
-                            ReservedNameNamespace::GraphValue,
+                            ReservedNameNamespace::Term,
                             import_item,
                             file_src,
                         )?;

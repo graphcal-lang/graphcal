@@ -11,7 +11,7 @@ impl Parser<'_> {
     /// Parse an import declaration:
     ///   `import nasa.rocket;`
     ///   `import nasa.rocket as nr;`
-    ///   `import nasa.rocket.{type Orbit, compute_thrust as ct};`
+    ///   `import nasa.rocket::{type Orbit, compute_thrust as ct};`
     pub(super) fn parse_import_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Import)?;
 
@@ -39,13 +39,17 @@ impl Parser<'_> {
             ));
         }
 
-        let (kind, end_span) = self.parse_import_tail("`.{`, `as`, or `;` after path", true)?;
+        let (kind, end_span) = self.parse_import_tail("`::{`, `as`, or `;` after path", true)?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
             doc: None,
             attributes: vec![],
-            kind: DeclKind::Import(crate::syntax::ast::ImportDecl { path, kind }),
+            kind: DeclKind::Import(crate::syntax::ast::ImportDecl {
+                visibility: crate::syntax::ast::Visibility::Private,
+                path,
+                kind,
+            }),
             span,
         })
     }
@@ -192,7 +196,7 @@ impl Parser<'_> {
     /// Parse an include declaration:
     ///   `include nasa.rocket.compute_thrust(args);`
     ///   `include nasa.rocket.compute_thrust(args) as ct;`
-    ///   `include nasa.rocket.compute_thrust(args).{thrust};`
+    ///   `include nasa.rocket.compute_thrust(args)::{thrust};`
     pub(super) fn parse_include_decl(&mut self) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Include)?;
 
@@ -210,7 +214,7 @@ impl Parser<'_> {
         };
 
         let (kind, end_span) =
-            self.parse_import_tail("`.{`, `as`, or `;` after param bindings", false)?;
+            self.parse_import_tail("`::{`, `as`, or `;` after param bindings", false)?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -227,8 +231,8 @@ impl Parser<'_> {
 
     /// Parse a dot-separated module path: `IDENT { "." IDENT }`.
     ///
-    /// Stops before any `.` that is *not* immediately followed by an identifier;
-    /// such a `.` belongs to the brace-list tail (`.{ ... }`).
+    /// Dots are always package/DAG path separators in this production. The
+    /// selective member boundary is the distinct `::{ ... }` token sequence.
     fn parse_module_path(&mut self) -> Result<ModulePath, ParseError> {
         let first = self.parse_any_ident()?;
         let path_start = first.span;
@@ -256,16 +260,15 @@ impl Parser<'_> {
     /// Parse the trailing portion of an import or include declaration:
     ///   `;`                    → bare module form
     ///   `as IDENT ;`           → aliased form
-    ///   `.{ items, ... } ;`    → brace-list form
+    ///   `::{ items, ... } ;`   → brace-list form
     fn parse_import_tail(
         &mut self,
         hint: &str,
         allow_category_marker: bool,
     ) -> Result<(ImportKind, crate::syntax::span::Span), ParseError> {
         match self.lexer.peek() {
-            Some(Token::Dot) => {
-                // Brace-list form: `.{ X, Y as Z }`
-                self.advance()?; // consume `.`
+            Some(Token::DoubleColon) => {
+                self.advance()?;
                 if self.lexer.peek() != Some(&Token::LBrace) {
                     let found = self
                         .lexer
@@ -273,7 +276,7 @@ impl Parser<'_> {
                         .map_or_else(|| "end of file".to_string(), ToString::to_string);
                     let (_, span) = self.advance()?;
                     return Err(self.unexpected_token(
-                        "`{` to begin a brace-list selector after `.`",
+                        "`{` to begin a brace-list selector after `::`",
                         &found,
                         span,
                     ));
@@ -366,7 +369,7 @@ impl Parser<'_> {
             // Accept any identifier (imports can be any casing).
             let name = p.parse_any_ident()?;
 
-            // Optional `as` alias.
+            // Optional `as` alias::
             let alias = if p.lexer.peek() == Some(&Token::As) {
                 p.lexer.next_token(); // consume `as`
                 Some(p.parse_any_ident()?)
@@ -387,19 +390,39 @@ impl Parser<'_> {
         Ok(names.into_vec())
     }
 
-    /// Parse the unique `(name: expr, ...)` bindings of an include or DAG call.
+    /// Parse categorized DAG bindings. Unmarked targets are parameters;
+    /// `type`, `dim`, and `index` select Static targets. `param` is invalid.
     pub(in crate::syntax::parser) fn parse_import_param_bindings(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {
         self.expect(Token::LParen)?;
 
         let bindings = self.parse_comma_separated(Token::RParen, |p| {
+            let (category, marker_span) = match p.lexer.peek() {
+                Some(Token::Type) => {
+                    let (_, span) = p.advance()?;
+                    (crate::syntax::ast::InputBindingCategory::Type, Some(span))
+                }
+                Some(Token::Dimension) => {
+                    let (_, span) = p.advance()?;
+                    (
+                        crate::syntax::ast::InputBindingCategory::Dimension,
+                        Some(span),
+                    )
+                }
+                Some(Token::Index) => {
+                    let (_, span) = p.advance()?;
+                    (crate::syntax::ast::InputBindingCategory::Index, Some(span))
+                }
+                _ => (crate::syntax::ast::InputBindingCategory::Unmarked, None),
+            };
             let name_ident = p.parse_any_ident()?;
             let name_span = name_ident.span;
             p.expect(Token::Colon)?;
             let value = p.parse_expr()?;
-            let binding_span = name_span.merge(value.span);
+            let binding_span = marker_span.unwrap_or(name_span).merge(value.span);
             Ok(crate::syntax::ast::ParamBinding {
+                category,
                 name: name_ident,
                 value,
                 span: binding_span,
@@ -409,7 +432,9 @@ impl Parser<'_> {
         self.expect(Token::RParen)?;
         let mut declared = std::collections::HashMap::new();
         for binding in &bindings {
-            if let Some(first) = declared.insert(&binding.name.name, binding.name.span) {
+            if let Some(first) =
+                declared.insert((binding.category, &binding.name.name), binding.name.span)
+            {
                 return Err(ParseError::DuplicateDagBinding {
                     name: binding.name.name.clone(),
                     src: self.named_source(),

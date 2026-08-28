@@ -163,7 +163,7 @@ impl Parser<'_> {
         Spanned::new(IndexEntryKey::position(position), span)
     }
 
-    /// Build one map-entry key from a parsed `Index.Variant` path.
+    /// Build one map-entry key from a parsed `Index#Variant` path.
     ///
     /// Map-literal keys always name their axis directly, so they carry no
     /// additional index spans; those only arise for shared-axis table headers.
@@ -430,7 +430,7 @@ impl Parser<'_> {
 
     /// Parse a 3D+ table with slice sections: `[SliceLabel1, ...] header; rows; ...`
     ///
-    /// Slice labels are `Index.Variant` for named axes, or `#N` for `Finite` axes.
+    /// Slice labels are `Index#Variant` for named axes, or `#N` for `Finite` axes.
     fn parse_table_sliced(
         &mut self,
         indexes: &[TableIndexSpec],
@@ -534,7 +534,7 @@ impl Parser<'_> {
             // key ranks that no formatted rendering could round-trip.
             if let Some((&Token::LParen, span)) = self.lexer.peek_with_span() {
                 return Err(self.unexpected_token(
-                    "single-key map entry (`Index.Variant: value`)",
+                    "single-key map entry (`Index#Variant: value`)",
                     &Token::LParen.to_string(),
                     span,
                 ));
@@ -554,7 +554,7 @@ impl Parser<'_> {
 
     /// Parse a tuple-key map literal after `{` has been consumed.
     ///
-    /// `{ (Index1.Variant1, Index2.Variant2): expr, ... }`
+    /// `{ (Index1#Variant1, Index2#Variant2): expr, ... }`
     pub(super) fn parse_tuple_key_map_literal(
         &mut self,
         brace_span: Span,
@@ -597,7 +597,7 @@ impl Parser<'_> {
                     .map(|(token, span)| (token.to_string(), span));
                 if let Some((found, span)) = scalar_key {
                     return Err(self.unexpected_token(
-                        "tuple-key map entry (`(Index.Variant, ...): value`)",
+                        "tuple-key map entry (`(Index#Variant, ...): value`)",
                         &found,
                         span,
                     ));
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn parse_map_literal() {
-        let source = "param dv: Velocity[Maneuver] = { Maneuver.Departure: 2.0 km/s, Maneuver.Correction: 0.05 km/s };";
+        let source = "param dv: Velocity[Maneuver] = { Maneuver#Departure: 2.0 km/s, Maneuver#Correction: 0.05 km/s };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.value.as_ref().unwrap().kind {
@@ -655,7 +655,7 @@ mod tests {
     /// syntax, which the formatter re-renders unparenthesized.
     #[test]
     fn tuple_key_map_requires_at_least_two_keys() {
-        let source = "param x: Dimensionless[A] = { (A.One): 1.0 };";
+        let source = "param x: Dimensionless[A] = { (A#One): 1.0 };";
         let error = Parser::new(source).parse_file().unwrap_err();
 
         let ParseError::UnexpectedToken { found, .. } = error else {
@@ -669,8 +669,8 @@ mod tests {
     /// parser selects the map grammar from the first entry alone.
     #[test]
     fn map_literal_rejects_mixed_key_ranks() {
-        let scalar_first = "param x: Dimensionless[A, B] = { A.One: 1.0, (A.One, B.Two): 2.0 };";
-        let tuple_first = "param x: Dimensionless[A, B] = { (A.One, B.Two): 2.0, A.One: 1.0 };";
+        let scalar_first = "param x: Dimensionless[A, B] = { A#One: 1.0, (A#One, B#Two): 2.0 };";
+        let tuple_first = "param x: Dimensionless[A, B] = { (A#One, B#Two): 2.0, A#One: 1.0 };";
 
         for (source, expected_found) in [(scalar_first, "("), (tuple_first, "identifier")] {
             let error = Parser::new(source).parse_file().unwrap_err();
@@ -809,10 +809,10 @@ mod tests {
     #[test]
     fn sliced_tables_require_data_rows_in_every_section() {
         let source = r"param m: M = table[T, P, M] {
-            [T.Empty]
+            [T#Empty]
             : o;
 
-            [T.Full]
+            [T#Full]
             : o;
             r: 1;
         };";
@@ -946,12 +946,12 @@ mod tests {
     #[test]
     fn parse_table_3d() {
         let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
-        [Time.T1]
+        [Time#T1]
         : Departure, Correction;
         Launch: 5000.0 kg, 0.0 kg;
         Cruise: 0.0 kg, 4500.0 kg;
 
-        [Time.T2]
+        [Time#T2]
         : Departure, Correction;
         Launch: 4800.0 kg, 0.0 kg;
         Cruise: 0.0 kg, 4300.0 kg;
@@ -987,7 +987,7 @@ mod tests {
 
     #[test]
     fn parse_table_qualified_axis_path() {
-        let source = r"param v: Dimensionless[mission.Maneuver] = table[mission.Maneuver] {
+        let source = r"param v: Dimensionless[mission::Maneuver] = table[mission::Maneuver] {
         Departure: 2.46;
     };";
         let file = Parser::new(source).parse_file().unwrap();
@@ -1000,10 +1000,10 @@ mod tests {
                     let TableIndexSpec::Named(axis) = &indexes[0] else {
                         panic!("expected named axis")
                     };
-                    assert_eq!(axis.value.display_path(), "mission.Maneuver");
+                    assert_eq!(axis.value.display_path(), "mission::Maneuver");
                     assert_eq!(
                         entries[0].keys[0].index.value.to_string(),
-                        "mission.Maneuver"
+                        "mission::Maneuver"
                     );
                 }
                 other => panic!("expected TableLiteral, got {other:?}"),
@@ -1014,8 +1014,8 @@ mod tests {
 
     #[test]
     fn parse_table_qualified_slice_path() {
-        let source = r"param m: Dimensionless[mission.Time, Phase, Maneuver] = table[mission.Time, Phase, Maneuver] {
-        [mission.Time.T1]
+        let source = r"param m: Dimensionless[mission::Time, Phase, Maneuver] = table[mission::Time, Phase, Maneuver] {
+        [mission::Time#T1]
         : Departure;
         Launch: 1.0;
     };";
@@ -1029,8 +1029,8 @@ mod tests {
                     let TableIndexSpec::Named(axis) = &indexes[0] else {
                         panic!("expected named axis")
                     };
-                    assert_eq!(axis.value.display_path(), "mission.Time");
-                    assert_eq!(entries[0].keys[0].index.value.to_string(), "mission.Time");
+                    assert_eq!(axis.value.display_path(), "mission::Time");
+                    assert_eq!(entries[0].keys[0].index.value.to_string(), "mission::Time");
                     assert_eq!(entries[0].keys[0].variant.value.to_string(), "T1");
                     assert_eq!(entries[0].keys[0].additional_index_spans, vec![axis.span]);
                 }
@@ -1065,13 +1065,13 @@ mod tests {
     #[test]
     fn parse_table_rejects_qualified_ordinary_labels() {
         let qualified_column = r"param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
-        : Maneuver.Departure;
+        : Maneuver#Departure;
         Launch: 1.0;
     };";
         assert!(Parser::new(qualified_column).parse_file().is_err());
 
         let qualified_row = r"param m: Dimensionless[Phase] = table[Phase] {
-        Phase.Launch: 1.0;
+        Phase#Launch: 1.0;
     };";
         assert!(Parser::new(qualified_row).parse_file().is_err());
     }
@@ -1079,7 +1079,7 @@ mod tests {
     #[test]
     fn parse_table_3d_rejects_wrong_slice_axis_qualifier() {
         let source = r"param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
-        [Phase.T1]
+        [Phase#T1]
         : Departure;
         Launch: 5000.0 kg;
     };";
@@ -1093,8 +1093,8 @@ mod tests {
 
     #[test]
     fn parse_table_3d_rejects_wrong_qualified_slice_path_with_same_leaf() {
-        let source = r"param m: Mass[a.Time, Phase, Maneuver] = table[a.Time, Phase, Maneuver] {
-        [b.Time.T1]
+        let source = r"param m: Mass[a::Time, Phase, Maneuver] = table[a::Time, Phase, Maneuver] {
+        [b::Time#T1]
         : Departure;
         Launch: 5000.0 kg;
     };";
@@ -1102,7 +1102,7 @@ mod tests {
         assert!(matches!(
             err,
             ParseError::UnexpectedToken { expected, found, .. }
-                if expected == "slice axis `a.Time`" && found == "b.Time"
+                if expected == "slice axis `a::Time`" && found == "b::Time"
         ));
     }
 

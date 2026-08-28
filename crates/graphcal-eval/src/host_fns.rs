@@ -605,13 +605,13 @@ import plugin "graphcal:test-abi-policy" as test {
     fn non_finite_array<D: Dim, I: Index>(values: D[I]) -> D[I];
     fn non_finite_record() -> QuantityResult;
 }
-param values: Dimensionless[Axis] = { Axis.A: 1.0, Axis.B: 2.0 };
-node valid_bool: Bool = test.signed_zero_bool();
-node valid_int: Int = test.signed_zero_int();
-node bad_bool: Bool = test.invalid_bool();
-node bad_quantity: Dimensionless = test.non_finite_quantity();
-node bad_array: Dimensionless[Axis] = test.non_finite_array(@values);
-node bad_record: QuantityResult = test.non_finite_record();
+param values: Dimensionless[Axis] = { Axis#A: 1.0, Axis#B: 2.0 };
+node valid_bool: Bool = test::signed_zero_bool();
+node valid_int: Int = test::signed_zero_int();
+node bad_bool: Bool = test::invalid_bool();
+node bad_quantity: Dimensionless = test::non_finite_quantity();
+node bad_array: Dimensionless[Axis] = test::non_finite_array(@values);
+node bad_record: QuantityResult = test::non_finite_record();
 "#;
         let project = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
         let result = crate::eval::compile_and_eval_from_project_with_host_fns(
@@ -672,8 +672,8 @@ import plugin "graphcal:test-exact-int" as test {
     fn fractional_scalar() -> Int;
     fn fractional_record() -> IntResult;
 }
-node invalid_scalar: Int = test.fractional_scalar();
-node invalid_record: IntResult = test.fractional_record();
+node invalid_scalar: Int = test::fractional_scalar();
+node invalid_record: IntResult = test::fractional_record();
 "#;
         let project = crate::loader::LoadedProject::from_source(source, "test.gcl").unwrap();
         let result = crate::eval::compile_and_eval_from_project_with_host_fns(

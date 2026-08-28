@@ -98,7 +98,7 @@ impl IndexVariantName {
     }
 }
 
-/// A fully qualified index variant name, rendered as `Index.Variant`.
+/// A fully qualified index variant name, rendered as `Index#Variant`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct QualifiedIndexVariantName {
     index: IndexName,
@@ -127,7 +127,7 @@ impl QualifiedIndexVariantName {
 
 impl std::fmt::Display for QualifiedIndexVariantName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.index, self.variant)
+        write!(f, "{}#{}", self.index, self.variant)
     }
 }
 
@@ -180,7 +180,7 @@ impl std::fmt::Debug for ResolvedIndexVariant {
 
 impl std::fmt::Display for ResolvedIndexVariant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.index, self.variant)
+        write!(f, "{}#{}", self.index, self.variant)
     }
 }
 
@@ -199,6 +199,6 @@ mod tests {
         assert_eq!(variant.index().owner().to_string(), "mission");
         assert_eq!(variant.index().as_str(), "Phase");
         assert_eq!(variant.variant().as_str(), "Burn");
-        assert_eq!(variant.to_string(), "mission.Phase.Burn");
+        assert_eq!(variant.to_string(), "mission.Phase#Burn");
     }
 }

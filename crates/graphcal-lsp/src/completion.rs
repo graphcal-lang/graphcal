@@ -507,12 +507,12 @@ mod tests {
         )
         .unwrap();
         let main_path = dir.path().join("src/app/main.gcl");
-        let analyzed_source = "import app.lib.{ JPY };\n";
+        let analyzed_source = "import app.lib::{ JPY };\n";
         std::fs::write(&main_path, analyzed_source).unwrap();
         let uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
         let analysis = crate::server::run_analysis_for_test(&uri, analyzed_source);
 
-        let unmarked = "import app.lib.{ ";
+        let unmarked = "import app.lib::{ ";
         let labels = completion(&analysis, unmarked, unmarked.len())
             .unwrap_or_default()
             .into_iter()
@@ -532,7 +532,7 @@ mod tests {
             );
         }
 
-        let marked = "import app.lib.{ unit ";
+        let marked = "import app.lib::{ unit ";
         let items = completion(&analysis, marked, marked.len()).unwrap_or_default();
         assert_eq!(
             items
@@ -720,7 +720,7 @@ dag d {
     param inner: Mass;
     node doubled: Mass = @inner * 2.0;
 }
-include d(inner: @outer).{ doubled as result };
+include d(inner: @outer)::{ doubled as result };
 ";
         let uri = tower_lsp::lsp_types::Url::parse("untitled:test.gcl").unwrap();
         let analysis = crate::server::run_analysis_for_test(&uri, source);
@@ -759,7 +759,7 @@ include d(inner: @outer).{ doubled as result };
     #[test]
     fn imported_symbol_completion_uses_local_alias() {
         // Regression: completion items for imported symbols used the
-        // defining file's spelling — `import helper.lib.{y as renamed};`
+        // defining file's spelling — `import helper.lib::{y as renamed};`
         // offered `y`, which does not resolve in the importing file.
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src/helper")).unwrap();
@@ -775,7 +775,7 @@ include d(inner: @outer).{ doubled as result };
         .unwrap();
         let main_path = dir.path().join("src/helper/main.gcl");
         let main_text =
-            "import helper.lib.{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;\n";
+            "import helper.lib::{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
         let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
