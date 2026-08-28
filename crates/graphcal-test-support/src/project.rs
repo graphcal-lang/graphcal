@@ -527,7 +527,7 @@ struct QualifiedValueRef {
 
 impl QualifiedValueRef {
     fn render(&self) -> String {
-        format!("@{}.{}", self.alias, self.name)
+        format!("@{}::{}", self.alias, self.name)
     }
 }
 

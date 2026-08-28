@@ -2493,7 +2493,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
             for arg in args {
                 if let crate::desugar::desugared_ast::IndexArg::Variant { index, variant } = arg {
                     let name = IndexName::from_atom(index.value.leaf().clone());
-                    self.check_label(&name, format!("`{}.{}`", index.value, variant.value))?;
+                    self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
                 }
             }
         }
@@ -2509,7 +2509,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
             for key in &entry.keys {
                 if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value {
                     let index = IndexName::from_atom(index_name.leaf().clone());
-                    self.check_label(&index, format!("`{}.{}`", index_name, key.variant.value))?;
+                    self.check_label(&index, format!("`{}#{}`", index_name, key.variant.value))?;
                 }
             }
             self.visit_expr(&entry.value)?;

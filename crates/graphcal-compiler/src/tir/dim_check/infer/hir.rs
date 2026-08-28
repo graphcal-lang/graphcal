@@ -391,7 +391,7 @@ fn check_index_override_dependency(
             }
             let detail = match nominal_use {
                 IndexNominalUse::Label(variant) => {
-                    format!("index label `{overridden}.{variant}`")
+                    format!("index label `{overridden}#{variant}`")
                 }
                 IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
             };

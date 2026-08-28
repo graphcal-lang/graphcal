@@ -122,32 +122,34 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
             Token::LParen => {
                 if depth == 0 {
                     // Found unmatched `(`. Check if preceded by identifier,
-                    // walking back over `alias.` qualifier segments so
-                    // extern calls (`fluids.density(`) keep their qualified
-                    // name.
+                    // walking back over dotted DAG paths and an explicit
+                    // `::` member boundary so extern calls
+                    // (`fluids::density(`) keep their qualified name.
                     if i > 0
                         && let (name_token, name_span) = &tokens[i - 1]
                         && name_token.is_identifier()
                     {
-                        let mut segments = vec![
-                            source[name_span.offset()..name_span.offset() + name_span.len()]
-                                .to_string(),
-                        ];
+                        let mut name = source
+                            [name_span.offset()..name_span.offset() + name_span.len()]
+                            .to_string();
                         let mut j = i - 1;
                         while j >= 2
-                            && tokens[j - 1].0 == Token::Dot
+                            && matches!(tokens[j - 1].0, Token::Dot | Token::DoubleColon)
                             && let (seg_token, seg_span) = &tokens[j - 2]
                             && seg_token.is_identifier()
                         {
-                            segments.push(
-                                source[seg_span.offset()..seg_span.offset() + seg_span.len()]
-                                    .to_string(),
-                            );
+                            let separator = match tokens[j - 1].0 {
+                                Token::Dot => ".",
+                                Token::DoubleColon => "::",
+                                _ => unreachable!("separator was matched above"),
+                            };
+                            let segment =
+                                &source[seg_span.offset()..seg_span.offset() + seg_span.len()];
+                            name = format!("{segment}{separator}{name}");
                             j -= 2;
                         }
-                        segments.reverse();
                         return Some(FnCallContext {
-                            fn_name: segments.join("."),
+                            fn_name: name,
                             active_param: comma_count,
                         });
                     }
@@ -513,10 +515,10 @@ mod tests {
 
     #[test]
     fn qualified_contextual_name_is_an_ordinary_fn_call() {
-        let source = "plugin.scan()";
+        let source = "plugin::scan()";
         let offset = source.len() - 1;
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "plugin.scan");
+        assert_eq!(ctx.fn_name, "plugin::scan");
         assert_eq!(ctx.active_param, 0);
     }
 

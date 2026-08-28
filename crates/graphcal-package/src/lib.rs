@@ -3264,7 +3264,7 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
 
     #[test]
     fn git_urls_parse_into_supported_remote_transports() {
-        let https = GitUrl::new("HTTPS://GitHub#COM/acme/orbital.git/").unwrap();
+        let https = GitUrl::new("HTTPS://GitHub.COM/acme/orbital.git/").unwrap();
         assert_eq!(https.transport(), GitTransport::Https);
         assert_eq!(https.to_string(), "https://github.com/acme/orbital.git");
 
@@ -3283,7 +3283,7 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
     #[test]
     fn git_source_cache_keys_bind_canonical_url_and_immutable_commit() {
         let source = GitSourceId::new(
-            GitUrl::new("HTTPS://GitHub#COM/acme/orbital.git/").unwrap(),
+            GitUrl::new("HTTPS://GitHub.COM/acme/orbital.git/").unwrap(),
             GitCommitHash::new("a".repeat(40)).unwrap(),
         );
         let equivalent = GitSourceId::new(

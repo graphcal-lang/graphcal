@@ -1563,7 +1563,7 @@ fn build_extern_fn_signatures(
                 .collect();
             format!("<{}>", vars.join(", "))
         };
-        let qualified = format!("{}.{}", function.alias, function.name);
+        let qualified = format!("{}::{}", function.alias, function.name);
         let label = format!(
             "fn {qualified}{binders}({}) -> {}",
             parameters.join(", "),

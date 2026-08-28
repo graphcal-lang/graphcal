@@ -2088,7 +2088,7 @@ fn collect_plugin_import_decl(
             )),
             DefinitionInfo {
                 doc: None,
-                name: format!("{}.{}", p.alias.value, function.name.value),
+                name: format!("{}::{}", p.alias.value, function.name.value),
                 category: SymbolCategory::ExternFn,
                 name_span: function.name.span,
                 decl_span: function.span,

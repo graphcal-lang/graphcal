@@ -1819,7 +1819,7 @@ mod tests {
 
     #[test]
     fn parse_inline_dag_ref_qualified_accepted() {
-        // `@<module>.<dag>(args).<out>` projects a graph value from a DAG
+        // `@<module>.<dag>(args)::<out>` projects a graph value from a DAG
         // brought into scope via `import path as module` (or `import path;`).
         // The value may be an explicit node export or a param input port.
         let file = Parser::new("node y: Length = @geom.clamp(x: @p)::result;")
@@ -1904,7 +1904,7 @@ mod tests {
 
     #[test]
     fn parse_inline_dag_ref_no_projection_rejected() {
-        // `@dag(args)` (no `.<out>` projection) is rejected because an
+        // `@dag(args)` (no `::<out>` projection) is rejected because an
         // unprojected DAG instance is not a graph value.
         let result = Parser::new("node y: Length = @dag(x: @p);").parse_file();
         assert!(
@@ -1915,7 +1915,7 @@ mod tests {
 
     #[test]
     fn parse_inline_dag_ref_qualified_no_projection_rejected() {
-        // `@module.dag(args)` (no `.<out>` projection) is rejected for the
+        // `@module.dag(args)` (no `::<out>` projection) is rejected for the
         // same reason — same rule, applied to a qualified path.
         let result = Parser::new("node y: Length = @geom.clamp(x: @p);").parse_file();
         assert!(

@@ -240,7 +240,7 @@ impl ValueView {
                 let index = index_name.display_name().as_str().to_string();
                 let variant = variant.as_str().to_string();
                 Self::Label {
-                    display: format!("{index}.{variant}"),
+                    display: format!("{index}#{variant}"),
                     index,
                     variant,
                 }
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn non_indexed_transport_variants_are_explicit() {
         let result = compile_and_eval(
-            "index Axis = { A, B };\ntype Pair { Pair(left: Dimensionless, right: Bool), }\nnode distance: Length = 3.0 m;\nnode flag: Bool = true;\nnode count: Int = 3;\nnode selected: Key<Axis> = Axis#A;\nnode impedance: Complex<Length> = complex(3.0 m, 4.0 m);\nnode pair: Pair = Pair(left: 1.0, right: true);\nnode instant: Datetime = datetime(\"2024-11-05T12:00:00Z\");",
+            "index Axis = { A, B };\ntype Pair { Pair(left: Dimensionless, right: Bool), }\nnode distance: Length = 3.0 m;\nnode flag: Bool = true;\nnode item_count: Int = 3;\nnode selected: Key<Axis> = Axis#A;\nnode impedance: Complex<Length> = complex(3.0 m, 4.0 m);\nnode pair: Pair = Pair(left: 1.0, right: true);\nnode instant: Datetime = datetime(\"2024-11-05T12:00:00Z\");",
         )
         .unwrap();
         let view = EvaluationView::from(&result);

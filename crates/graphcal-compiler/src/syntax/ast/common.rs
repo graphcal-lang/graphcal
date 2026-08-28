@@ -110,7 +110,7 @@ impl From<Visibility> for BindableVisibility {
 ///   - `Module { alias: Some(a) }`: aliased form `include path(args) as a;`.
 #[derive(Debug, Clone)]
 pub enum ImportKind {
-    /// Brace-list selector: `path.{ X, Y as Z, ... }`.
+    /// Brace-list selector: `path::{ X, Y as Z, ... }`.
     Selective(Vec<ImportItem>),
     /// Bare or aliased form.
     Module {

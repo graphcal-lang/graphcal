@@ -1008,7 +1008,7 @@ impl TypeSystemRef {
             Self::Dimension(name) => format!("dimension `{}`", name.as_str()),
             Self::Index(name) => format!("index `{}`", name.as_str()),
             Self::IndexVariant(variant) => format!(
-                "index label `{}.{}`",
+                "index label `{}#{}`",
                 variant.index().as_str(),
                 variant.variant()
             ),

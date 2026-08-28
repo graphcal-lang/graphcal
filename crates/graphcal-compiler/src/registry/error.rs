@@ -826,7 +826,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::D003),
         help(
-            "a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias.unit`"
+            "a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias::unit`"
         )
     )]
     UnknownUnit {
@@ -2042,7 +2042,7 @@ pub enum GraphcalError {
     /// must not appear in bodies that cannot themselves be re-bound by
     /// importers (the defining library must abstract over the index).
     #[error(
-        "variant literal `{index}.{variant}` of `pub(bind) index` cannot be used in the defining file"
+        "variant literal `{index}#{variant}` of `pub(bind) index` cannot be used in the defining file"
     )]
     #[diagnostic(
         code(graphcal::V004),

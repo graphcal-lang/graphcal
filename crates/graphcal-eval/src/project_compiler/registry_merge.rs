@@ -233,7 +233,7 @@ fn merge_registry_into_builder_filtered(
     // Import units.
     //
     // Module imports (`unit_alias` present) expose only the dependency's own
-    // `pub` units, re-keyed under the import alias (`alias.unit`); the
+    // `pub` units, re-keyed under the import alias (`alias::unit`); the
     // dependency's alias-qualified imports and non-pub units stay internal to
     // it, and nothing lands in the importer's bare unit scope. Bare names in
     // the importer come only from its own declarations, selective imports,

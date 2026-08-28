@@ -213,17 +213,17 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("inline DAG call requires `.<out>` projection")]
+    #[error("inline DAG call requires `::<out>` projection")]
     #[diagnostic(
         code(graphcal::P014),
         help(
-            "add `.<output_name>` after the call; an instantiated DAG without a projection is not a graph value"
+            "add `::<output_name>` after the call; an instantiated DAG without a projection is not a graph value"
         )
     )]
     InlineDagCallMissingProjection {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("expected `.<out>` projection here")]
+        #[label("expected `::<out>` projection here")]
         span: SourceSpan,
     },
 
@@ -241,19 +241,6 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("unit reference path is too deep")]
-    #[diagnostic(
-        code(graphcal::P017),
-        help(
-            "unit references are at most `alias.unit` — a bare name for local, selectively imported, or prelude units, or one module-alias qualifier for module-imported units"
-        )
-    )]
-    UnitReferenceTooDeep {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("at most one `alias.` qualifier is allowed here")]
-        span: SourceSpan,
-    },
 
     #[error("`^0` exponent has no effect")]
     #[diagnostic(
@@ -409,7 +396,6 @@ impl ParseError {
             | Self::NatSubtractionUnsupported { src, .. }
             | Self::ExpectedIndexFoundNat { src, .. }
             | Self::ObsoleteStructuralRange { src, .. }
-            | Self::UnitReferenceTooDeep { src, .. }
             | Self::DuplicatePlotField { src, .. }
             | Self::MissingPlotEncoding { src, .. }
             | Self::EmptyCompositionPlots { src, .. } => src,
