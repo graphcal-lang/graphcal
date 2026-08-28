@@ -19,7 +19,7 @@ pub struct FnCallContext {
 /// Cursor inside one selective-import brace-list item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportItemCompletionContext {
-    /// Structured module path preceding `.{`.
+    /// Structured module path preceding `::{`.
     pub module_path: graphcal_compiler::syntax::non_empty::NonEmpty<String>,
     /// Explicit marker already typed for the current item, if any.
     pub namespace: Option<graphcal_compiler::syntax::ast::ImportItemNamespace>,
@@ -266,7 +266,7 @@ fn selective_import_completion_context(
         }
         _ => false,
     })?;
-    if tokens[open].0 != Token::LBrace || open < 3 || tokens[open - 1].0 != Token::Dot {
+    if tokens[open].0 != Token::LBrace || open < 3 || tokens[open - 1].0 != Token::DoubleColon {
         return None;
     }
 

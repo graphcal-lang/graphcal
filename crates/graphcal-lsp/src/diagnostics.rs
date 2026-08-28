@@ -321,7 +321,7 @@ mod tests {
 
     use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
     use graphcal_compiler::registry::error::GraphcalError;
-    use graphcal_compiler::syntax::names::{NameAtom, NamePath};
+    use graphcal_compiler::syntax::names::{NameAtom, NamePath, NamespacePath};
     use graphcal_compiler::syntax::non_empty::NonEmpty;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::syntax::span::Span;
@@ -375,12 +375,12 @@ mod tests {
 
     #[test]
     fn qualified_unknown_dimension_retains_its_path_without_auto_import_data() {
-        let source = "missing.Dimension";
+        let source = "missing::Dimension";
         let named_source = NamedSource::new("test.gcl", Arc::new(source.to_string()));
-        let path = NamePath::new(NonEmpty::new(
-            NameAtom::parse("missing").unwrap(),
-            vec![NameAtom::parse("Dimension").unwrap()],
-        ));
+        let path = NamePath::member(
+            NamespacePath::new(NonEmpty::singleton(NameAtom::parse("missing").unwrap())),
+            NameAtom::parse("Dimension").unwrap(),
+        );
         let error = CompileError::Eval(GraphcalError::UnknownDimension {
             name: path,
             src: named_source,
@@ -391,7 +391,7 @@ mod tests {
             panic!("expected one unknown-dimension diagnostic");
         };
 
-        assert!(diagnostic.message.contains("missing.Dimension"));
+        assert!(diagnostic.message.contains("missing::Dimension"));
         assert_eq!(diagnostic.data, None);
     }
 
@@ -456,9 +456,9 @@ mod tests {
             diagnostic.code,
             Some(NumberOrString::String("graphcal::N009".to_string()))
         );
-        assert!(diagnostic.message.contains("graph-value alias `E`"));
-        assert_eq!(diagnostic.range.start, Position::new(0, 26));
-        assert_eq!(diagnostic.range.end, Position::new(0, 27));
+        assert!(diagnostic.message.contains("Term alias `E`"));
+        assert_eq!(diagnostic.range.start, Position::new(0, 27));
+        assert_eq!(diagnostic.range.end, Position::new(0, 28));
     }
 
     #[test]
@@ -1028,7 +1028,7 @@ param event: Datetime<TT>(
             "import plugin \"graphcal:demo\" as demo {\n",
             "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;\n",
             "}\n",
-            "node x: Dimensionless = demo.lerp(a: 1.0, b: 2.0, t: 0.5);",
+            "node x: Dimensionless = demo::lerp(a: 1.0, b: 2.0, t: 0.5);",
         );
         let diagnostics = produce_diagnostics(source, "test.gcl");
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
@@ -1040,16 +1040,16 @@ param event: Datetime<TT>(
         assert!(
             diagnostic
                 .message
-                .contains("function `demo.lerp` uses positional arguments")
+                .contains("function `demo::lerp` uses positional arguments")
         );
         assert!(
             diagnostic
                 .message
-                .contains("write `demo.lerp(a_value, b_value, t_value)`")
+                .contains("write `demo::lerp(a_value, b_value, t_value)`")
         );
         assert_eq!(diagnostic.range.start.line, 3);
         assert_eq!(diagnostic.range.start.character, 24);
-        assert_eq!(diagnostic.range.end.character, 57);
+        assert_eq!(diagnostic.range.end.character, 58);
     }
 
     #[test]
@@ -1101,7 +1101,7 @@ param event: Datetime<TT>(
                 true,
             ),
             (
-                "assert first = true;\nassert second = true;\n#[assumes(first)]\n#[assumes(second)]\nnode output: Dimensionless = 1.0;",
+                "assert premise_a = true;\nassert premise_b = true;\n#[assumes(premise_a)]\n#[assumes(premise_b)]\nnode output: Dimensionless = 1.0;",
                 "graphcal::A019",
                 true,
             ),
@@ -1297,7 +1297,7 @@ param event: Datetime<TT>(
         for (source, expected) in [
             ("import app.lib::{ positive };\n", "graphcal::M024"),
             (
-                "import app.lib as lib;\nnode price: lib.Money = 1.0 lib.EUR;\n",
+                "import app.lib as lib;\nnode price: lib::Money = 1.0 lib::EUR;\n",
                 "graphcal::M025",
             ),
             ("include app.lib() as lib;\n", "graphcal::M026"),

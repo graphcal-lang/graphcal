@@ -1019,14 +1019,14 @@ node total: Velocity = @dv[Maneuver#Departure];
     }
 
     #[test]
-    fn rename_index_updates_multi_decl_axis_and_qualified_headers() {
+    fn rename_index_updates_multi_decl_axis_and_contextual_headers() {
         let source = "\
 index Component = { A };
 index Mode = { Safe, Nominal };
 param scalar: Dimensionless[Component],
 param enabled: Bool[Component, Mode]
     = table[Component, (_, Mode)] {
-        : _, Mode#Safe, Mode#Nominal;
+        : _, Safe, Nominal;
         A: 1.0, true, false;
     };
 ";
@@ -1039,7 +1039,7 @@ param enabled: Bool[Component, Mode]
         assert_eq!(
             file_edits.len(),
             source.match_indices("Mode").count(),
-            "every type, slot-axis, and header-axis occurrence must be renamed: {file_edits:?}"
+            "every type and slot-axis occurrence must be renamed: {file_edits:?}"
         );
         for edit in file_edits {
             let line = source.lines().nth(edit.range.start.line as usize).unwrap();
@@ -1057,7 +1057,7 @@ param enabled: Bool[Component, Mode]
         assert_eq!(
             variant_edits.len(),
             source.match_indices("Safe").count(),
-            "the declaration and qualified header variant must both be renamed"
+            "the declaration and contextual header variant must both be renamed"
         );
         for edit in variant_edits {
             let line = source.lines().nth(edit.range.start.line as usize).unwrap();

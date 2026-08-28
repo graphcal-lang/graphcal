@@ -179,7 +179,7 @@ impl<'a> HirRefCollector<'a> {
     fn record_unresolved(err: &hir::ExprLowerError, table: &mut SymbolTable) {
         let (target, span) = match err {
             hir::ExprLowerError::UnknownGraphRef { name, span } => {
-                let path = SourceSymbolPath::qualified(
+                let path = SourceSymbolPath::module_member(
                     name.qualifier()
                         .iter()
                         .map(|segment| segment.atom().clone())
@@ -198,7 +198,7 @@ impl<'a> HirRefCollector<'a> {
                     .into_iter()
                     .flat_map(|owner| owner.segments().iter().cloned())
                     .collect();
-                let path = SourceSymbolPath::qualified(qualifier, name.name().atom().clone());
+                let path = SourceSymbolPath::module_member(qualifier, name.name().atom().clone());
                 (UnresolvedSymbol::Unit(path), *span)
             }
             hir::ExprLowerError::UnknownFunction { path, span } => {
@@ -2436,7 +2436,7 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
             .into_iter()
             .flat_map(|owner| owner.segments().iter().cloned())
             .collect();
-        let path = SourceSymbolPath::qualified(qualifier, item.name.value.name().atom().clone());
+        let path = SourceSymbolPath::module_member(qualifier, item.name.value.name().atom().clone());
         table.references.push(ReferenceInfo {
             span: item.name.span,
             target: ReferenceTarget::Unresolved(UnresolvedSymbol::Unit(path)),

@@ -304,7 +304,7 @@ fn complete_graph_refs(
     // imported dags (`Qualified` with more than one segment) need call
     // arguments and are not bare `@`-referenceable.
     let imported = analysis.imported_bindings.iter().filter_map(|binding| {
-        (binding.spelling().qualifier().len() <= 1)
+        (binding.spelling().namespace_depth() <= 1)
             .then(|| analysis.imported_definitions.get(binding.target()))
             .flatten()
             .map(|imported| (&imported.definition, binding.spelling().to_string()))
@@ -621,16 +621,15 @@ mod tests {
         let main_path = dir.path().join("src/app/main.gcl");
         let main_text = "import app.units as u;\n\
                          param a: Length = 3218.688 m;\n\
-                         node b: Length = @a -> u.mile;\n";
+                         node b: Length = @a -> u::mile;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
         let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
 
-        let offset = main_text.find("-> u.mile").unwrap() + 3;
+        let offset = main_text.find("-> u::mile").unwrap() + 3;
         let items = completion(&analysis, main_text, offset).unwrap_or_default();
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        eprintln!("LABELS: {labels:?}");
-        assert!(labels.contains(&"u.mile"));
+        assert!(labels.contains(&"u::mile"));
         assert!(!labels.contains(&"mile"));
     }
 
@@ -651,16 +650,16 @@ mod tests {
         )
         .unwrap();
         let main_path = dir.path().join("src/app/main.gcl");
-        let main_text = "import app.lib as m;\nparam v: m.Speed = 3.0 m/s;\n";
+        let main_text = "import app.lib as m;\nparam v: m::Speed = 3.0 m/s;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = tower_lsp::lsp_types::Url::from_file_path(&main_path).unwrap();
         let analysis = crate::server::run_analysis_for_test(&main_uri, main_text);
 
         // Cursor right after `: `, at the start of the type annotation.
-        let offset = main_text.find(": m.Speed").unwrap() + 2;
+        let offset = main_text.find(": m::Speed").unwrap() + 2;
         let items = completion(&analysis, main_text, offset).unwrap_or_default();
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
-        for expected in ["m.Speed", "m.Point", "m.Axis"] {
+        for expected in ["m::Speed", "m::Point", "m::Axis"] {
             assert!(
                 labels.contains(&expected),
                 "type completion must offer the qualified `{expected}`: {labels:?}"
@@ -699,8 +698,8 @@ mod tests {
         let items = completion(&analysis, main_text, offset).unwrap_or_default();
         let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
         assert!(
-            labels.contains(&"m.g0"),
-            "expression completion must offer the qualified `m.g0`: {labels:?}"
+            labels.contains(&"m::g0"),
+            "expression completion must offer the qualified `m::g0`: {labels:?}"
         );
         assert!(
             !labels.contains(&"g0"),
