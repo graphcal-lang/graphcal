@@ -1139,6 +1139,11 @@ impl UnfrozenIR {
         // Entries already visible in this IR (including prefixed include
         // instances and dag self-imports) bind their written names to
         // canonical identities for the lowering below.
+        let instance_templates = self
+            .instances
+            .iter()
+            .map(|record| (record.id.owner().clone(), record.id.template().clone()))
+            .collect::<HashMap<_, _>>();
         let mut decl_bindings = HashMap::new();
         for (name, declaration_owner) in self
             .consts
@@ -1190,7 +1195,8 @@ impl UnfrozenIR {
             )
             .with_prelude(&prelude)
             .with_unit_registry(&registry.units)
-            .with_decl_bindings(&decl_bindings);
+            .with_decl_bindings(&decl_bindings)
+            .with_instance_templates(&instance_templates);
             crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
                 crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
             })
@@ -1377,7 +1383,8 @@ impl UnfrozenIR {
                         )
                         .with_prelude(&prelude)
                         .with_unit_registry(&registry.units)
-                        .with_decl_bindings(&decl_bindings);
+                        .with_decl_bindings(&decl_bindings)
+                        .with_instance_templates(&instance_templates);
                         crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
                             crate::hir::diagnostics::expr_lower_error_to_graphcal(&err, body_src)
                         })?
@@ -2463,19 +2470,22 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
     type Error = GraphcalError;
 
     fn visit_unresolved_ref(&mut self, expr: &Expr) -> Result<(), Self::Error> {
-        let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) = &expr.kind
-        else {
+        let ExprKind::UnresolvedRef(reference) = &expr.kind else {
             return Ok(());
         };
-        if let [head, variant] = path.segments() {
-            let index = IndexName::from_atom(head.name.clone());
-            self.check_label(&index, format!("`{}.{}`", head.name, variant.name))?;
+        match reference {
+            crate::syntax::ast::UnresolvedRef::IndexLabel { index, label, .. } => {
+                let name = IndexName::from_atom(index.leaf().name.clone());
+                self.check_label(&name, format!("`{index}#{}`", label.value))
+            }
+            crate::syntax::ast::UnresolvedRef::Path(path) => {
+                if let Some(name) = path.as_bare() {
+                    let constructor = ConstructorName::from_atom(name.name.clone());
+                    self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
+                }
+                Ok(())
+            }
         }
-        if let Some(name) = path.as_bare() {
-            let constructor = ConstructorName::from_atom(name.name.clone());
-            self.check_constructor(&constructor, format!("constructor `{constructor}`"))?;
-        }
-        Ok(())
     }
 
     fn visit_single_child(&mut self, expr: &Expr, inner: &Expr) -> Result<(), Self::Error> {
@@ -2483,7 +2493,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
             for arg in args {
                 if let crate::desugar::desugared_ast::IndexArg::Variant { index, variant } = arg {
                     let name = IndexName::from_atom(index.value.leaf().clone());
-                    self.check_label(&name, format!("`{}.{}`", index.value, variant.value))?;
+                    self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
                 }
             }
         }
@@ -2499,7 +2509,7 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
             for key in &entry.keys {
                 if let crate::syntax::ast::MapEntryIndex::Named(index_name) = &key.index.value {
                     let index = IndexName::from_atom(index_name.leaf().clone());
-                    self.check_label(&index, format!("`{}.{}`", index_name, key.variant.value))?;
+                    self.check_label(&index, format!("`{}#{}`", index_name, key.variant.value))?;
                 }
             }
             self.visit_expr(&entry.value)?;
@@ -2520,13 +2530,9 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                     index, variant, ..
                 } => {
                     let name = IndexName::from_atom(index.value.leaf().clone());
-                    self.check_label(&name, format!("`{}.{}`", index.value, variant.value))?;
+                    self.check_label(&name, format!("`{}#{}`", index.value, variant.value))?;
                 }
                 crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
-                    if let [head, variant] = path.segments() {
-                        let name = IndexName::from_atom(head.name.clone());
-                        self.check_label(&name, format!("`{}.{}`", head.name, variant.name))?;
-                    }
                     if let Some(name) = path.as_bare() {
                         let constructor = ConstructorName::from_atom(name.name.clone());
                         self.check_constructor(
@@ -2686,18 +2692,19 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
     }
 
     fn visit_unresolved_ref_mut(&mut self, expr: &mut Expr) -> Result<(), Self::Error> {
-        // A two-segment path whose head names a rebound index is a variant
-        // literal of that index (`Phase.Burn`). Only a declared target can
-        // preserve such a label-bearing reference.
-        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) =
-            &mut expr.kind
-            && let [head, _variant] = path.segments.as_mut_slice()
+        if let ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel {
+            index, ..
+        }) = &mut expr.kind
             && let Some(new) = self
                 .bindings
-                .get(head.name.as_str())
+                .get(index.leaf().name.as_str())
                 .and_then(types::IndexBindingTarget::declared_name)
         {
-            head.name = new.atom().clone();
+            let span = index.span();
+            *index = crate::syntax::ast::IdentPath::from(crate::syntax::ast::Ident {
+                name: new.atom().clone(),
+                span,
+            });
         }
         Ok(())
     }
@@ -2808,19 +2815,8 @@ impl ExprVisitorMut<crate::syntax::phase::Desugared> for IndexSubstituter<'_> {
                             index.value = new.clone().into();
                         }
                     }
-                    // A two-segment path pattern whose head names a rebound
-                    // index is an index-label pattern; rewrite the head.
-                    crate::desugar::desugared_ast::MatchPattern::Path { path, .. } => {
-                        if let [head, _variant] = path.segments.as_mut_slice()
-                            && let Some(new) = self
-                                .bindings
-                                .get(head.name.as_str())
-                                .and_then(types::IndexBindingTarget::declared_name)
-                        {
-                            head.name = new.atom().clone();
-                        }
-                    }
-                    crate::desugar::desugared_ast::MatchPattern::Constructor { .. } => {}
+                    crate::desugar::desugared_ast::MatchPattern::Path { .. }
+                    | crate::desugar::desugared_ast::MatchPattern::Constructor { .. } => {}
                 }
                 self.visit_expr_mut(&mut arm.body)?;
             }
@@ -3015,7 +3011,8 @@ pub fn substitute_type_expr_indexes(
                 substitute_type_expr_indexes(arg, bindings);
             }
         }
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
@@ -3094,7 +3091,8 @@ where
                 substitute_type_expr_nominal_names(arg, bindings);
             }
         }
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
@@ -3125,7 +3123,8 @@ fn substitute_type_names_in_expr(
         | ExprKind::Bool(_)
         | ExprKind::StringLiteral(_)
         | ExprKind::QuantityLiteral { .. }
-        | ExprKind::GraphRef(_) => {}
+        | ExprKind::GraphRef(_)
+        | ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::IndexLabel { .. }) => {}
 
         // A bare reference path naming a rebound type is a nullary
         // constructor use; rewrite it to the importer's constructor name.
@@ -3137,7 +3136,6 @@ fn substitute_type_names_in_expr(
                 ident.name = parsed_name;
             }
         }
-
         ExprKind::InlineDagRef { args, .. } => {
             for binding in args {
                 substitute_type_names_in_expr(&mut binding.value, bindings);
@@ -4514,7 +4512,8 @@ fn find_non_earlier_type_reference(
     use crate::desugar::desugared_ast::TypeExprKind;
 
     match &type_expr.kind {
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => None,
@@ -5257,7 +5256,8 @@ fn resolve_extern_value_kind(
                 src,
             )
         }
-        TypeExprKind::Datetime
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::KeyApplication { .. }
@@ -5533,7 +5533,8 @@ fn resolve_extern_struct_field(
             let monomial = resolve_extern_dim_monomial(dim_expr, &[], registry, src)?;
             Ok(StructFieldKind::Quantity(monomial.fixed))
         }
-        TypeExprKind::Datetime
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Datetime
         | TypeExprKind::DatetimeApplication { .. }
         | TypeExprKind::ComplexApplication { .. }
         | TypeExprKind::KeyApplication { .. }
@@ -5790,7 +5791,7 @@ mod tests {
             panic!("Box should retain exactly one generic parameter");
         };
         let Some(crate::hir::GenericArg::Type(default)) = parameter.default() else {
-            panic!("Box.T should have a HIR type default");
+            panic!("Box#T should have a HIR type default");
         };
         assert!(matches!(
             &default.kind,
@@ -5921,8 +5922,9 @@ mod tests {
             matches!(
                 &error,
                 GraphcalError::UnknownDimension { name, .. }
-                    if name.segments().iter().map(NameAtom::as_str).collect::<Vec<_>>()
-                        == ["missing", "Dimension"]
+                    if name.owner().is_some_and(|owner| owner.segments()
+                        .iter().map(NameAtom::as_str).eq(["missing"]))
+                        && name.leaf().as_str() == "Dimension"
             ),
             "{error:?}"
         );

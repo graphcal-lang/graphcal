@@ -126,12 +126,13 @@ STRING
 (* Closure:     "|"                                         *)
 (* Attribute:   "#"                                         *)
 (* Delimiters:  "("  ")"  "{"  "}"  "["  "]"              *)
-(* Separators:  ";"  ","  ":"  "."                         *)
+(* Separators:  ";"  ","  ":"  "."  "::"  "#"             *)
 (* Reference:   "@"                                         *)
 (* Wildcard:    "_"                                         *)
-(* Path:        "."   (uniform; module paths, member access,
-                       attribute paths, qualified variants,
-                       match patterns, map keys, output projection) *)
+(* Paths:       "." traverses module/DAG paths and projects runtime fields;
+                "::" crosses from a module/DAG/plugin/instance namespace to
+                     one member;
+                "#" selects an index label from its explicit Static owner. *)
 (* ================================================================== *)
 (* 2. Source File                                                     *)
 (* ================================================================== *)
@@ -172,7 +173,8 @@ attribute_arg
    | attribute_group;
 
 attribute_path
-   = IDENT, { ".", IDENT };
+   = index_label
+   | ident_path;
 
 (* Positional key for a Fin axis (e.g. `#[expected_fail(#2)]`), matching *)
 (* the `#N` slice-label syntax used by `table` expressions.              *)
@@ -263,7 +265,7 @@ multi_slice_section
    = "[", multi_slice_label, { ",", multi_slice_label }, "]", multi_single;
 
 multi_slice_label
-   = qualified_variant
+   = index_label
    | "#", NAT_LITERAL;
 
 multi_single
@@ -274,7 +276,7 @@ multi_header_row
 
 header_label
    = "_"
-   | qualified_variant;
+   | IDENT;
 
 multi_data_row
    = [ IDENT, ":" ], expr, { ",", expr }, ";";
@@ -371,8 +373,9 @@ field_decl
    carry domain constraints and index axes, e.g. `dv: Velocity[Maneuver]`
    or `values: D[Fin(N)]`. Generic `Type` arguments, by contrast,
    exclude indexed DeclTypes. *)
-(* Constructors live in a separate namespace from types — the same
-   lexeme may name both. *)
+(* Constructors are flat Terms while types are Static, so a primary
+   constructor may share its type's spelling. Constructors collide with every
+   other flat Term in the module. *)
 
 generic_params
    = "<", generic_param, { ",", generic_param }, [ "," ], ">";
@@ -437,23 +440,22 @@ index_decl
                           (brings: rocket -- the module leaf)
    2. Module with alias:  import nasa.rocket as nr;
                           (brings: nr)
-   3. Brace list:         import nasa.rocket.{type Orbit, dim Length, compute_thrust as ct};
+   3. Brace list:         import nasa.rocket::{ type Orbit, dim Length, compute_thrust as ct };
                           (brings: only the listed names; the brace
                            form does NOT also bring the module leaf)
 
    A whole-module binding names the exact reusable DAG module and is callable
-   as `@rocket(args).out` / `@nr(args).out`, whether its target is a file root
+   as `@rocket(args)::out` / `@nr(args)::out`, whether its target is a file root
    or an inline DAG. Additional segments reach child DAGs. A selectively
    imported DAG is callable by its selected local name as well.
 
    Alias and brace list are mutually exclusive:
-   `import nasa.rocket as nr.{type Orbit};` is a parse error.
+   `import nasa.rocket as nr::{ type Orbit };` is a parse error.
 
-   Import use-sites have no leading visibility. A brace item marked
-   `pub` is re-exported individually; bare and aliased module imports
-   remain private qualified bindings. This keeps facade surfaces
-   explicit and prevents a dependency from silently widening them.
-   `pub import ...` and `pub(bind) import ...` are parse errors. *)
+   A leading `pub` is valid only for a whole-DAG import (bare or aliased),
+   creating a public DAG alias with the same canonical target. Selective
+   re-exports use `pub` on each brace item. `pub(bind) import ...` and a
+   leading `pub` on a selective import are invalid. *)
 import_decl
    = "import", module_path, [ import_tail ], ";"
    | plugin_import_decl;
@@ -465,7 +467,7 @@ import_decl
    `import plugin.foo;` (a module path) is unaffected.
 
    The alias is mandatory -- extern functions are only callable qualified
-   through it (`fluids.density(...)`), never bare. No `pub`: plugin
+   through it (`fluids::density(...)`), never bare. No `pub`: plugin
    functions cannot be re-exported.
 
    Each `fn` may declare generic variables in explicit angle-bracket
@@ -503,7 +505,7 @@ extern_fn_param
 
 import_tail
    = "as", IDENT
-   | ".", "{", import_item_list, "}";
+   | "::", "{", import_item_list, "}";
 
 module_path
    = IDENT, { ".", IDENT };
@@ -538,7 +540,7 @@ import_category
                           (sugar for `as compute_thrust` -- the
                            DAG's leaf name becomes the alias)
    2. Aliased:            include nasa.rocket.compute_thrust(args) as ct;
-   3. Brace list:         include nasa.rocket.compute_thrust(args).{ thrust };
+   3. Brace list:         include nasa.rocket.compute_thrust(args)::{ thrust };
                           (selects outputs; renaming permitted)
 
    Alias and brace list are mutually exclusive. Include use-sites have
@@ -550,7 +552,7 @@ include_decl
 
 include_tail
    = "as", IDENT
-   | ".", "{", include_item_list, "}";
+   | "::", "{", include_item_list, "}";
 
 include_item_list
    = include_item, { ",", include_item }, [ "," ];
@@ -563,13 +565,15 @@ include_param_bindings
             { ",", include_param_binding }, [ "," ] ], ")";
 
 (* Binding names are semantically unique within one list. Their order has no
-   effect: each name selects exactly one value or type-level input port.
-   The dependency determines the RHS sort after parsing: value ports consume
-   expr; index ports consume index_expr (including Fin(nat_expr)); type and
-   dimension ports consume compatible names. The shared parser retains the RHS
-   as expr until that target namespace is known. *)
+   effect. An unmarked binding selects exactly a param Term. Static ports require
+   an explicit `type`, `dim`, or `index` marker; there is deliberately no
+   `param` marker. The shared parser retains the RHS as expr until the selected
+   target category is known. *)
 include_param_binding
-   = IDENT, ":", expr;
+   = [ input_binding_category ], IDENT, ":", expr;
+
+input_binding_category
+   = "type" | "dim" | "index";
 
 (* --- dag --- *)
 (* DAG blocks define reusable, parameterized computation. They
@@ -684,7 +688,10 @@ type_expr_base
    | complex_type
    | key_type
    | type_application
+   | index_label
    | dim_expr;
+(* `index_label` is retained here so `M#A` receives a namespace/category
+   diagnostic in a type slot; semantic lowering always rejects it as a type. *)
 
 datetime_type
    = "Datetime", [ "<", type_expr, { ",", type_expr }, [ "," ], ">" ];
@@ -713,14 +720,14 @@ type_constraint
    = ( "min" | "max" ), ":", expr;
 
 (* Generic type application: Vec3<Length, ECI>, FixedVec<N + 1>,
-   module.Vec3<Length>. `Datetime<Scale>` is represented by datetime_type
+   module::Vec3<Length>. `Datetime<Scale>` is represented by datetime_type
    above. Arguments are sorted as Dim, Index, Nat, or Type only after the
    referenced declaration is known. *)
 type_application
    = ident_path, "<", generic_arg, { ",", generic_arg }, [ "," ], ">";
 
 (* Index expressions in indexed types: T[I], T[Fin(3)], T[Fin(N + 1)],
-   T[module.I]. Nat expressions are never lifted implicitly to Index. *)
+   T[module::I]. Nat expressions are never lifted implicitly to Index. *)
 index_expr_list
    = index_expr, { ",", index_expr }, [ "," ];
 
@@ -774,17 +781,18 @@ signed_integer
    Unit expressions share dim_expr's structure and exponent grammar. Unit
    references follow the same scoping rules as every other imported category:
    a bare IDENT names a local declaration, a selective import, or a prelude
-   unit; `IDENT "." IDENT` names a `pub` unit through a module-import alias
-   (`u.mile`). Module aliases are single segments, so deeper paths are
-   rejected with P017. *)
+   unit; `namespace::unit` names a public unit through a module alias. *)
 unit_expr
    = [ "1", "/" ], unit_term, { ( "*" | "/" ), unit_term };
 (* The optional `1/` prefix is the reciprocal shorthand (e.g. `1/min`); the
    literal `1` numerator contributes nothing and only `1` is allowed there. *)
 
 unit_term
-   = IDENT, [ ".", IDENT ], [ "^", exponent ]
+   = unit_ref, [ "^", exponent ]
    | "(", unit_expr, ")", [ "^", exponent ];
+
+unit_ref
+   = ident_path;
 
 (* ================================================================== *)
 (* 6. Expressions                                                     *)
@@ -893,38 +901,34 @@ string_literal
 
 (* --- References --- *)
 graph_ref
-   = "@", IDENT, { ".", IDENT }, [ inline_dag_call_suffix ];
+   = "@", ( inline_dag_call | ident_path );
 
-inline_dag_call_suffix
-   = "(", [ include_param_binding,
+inline_dag_call
+   = dag_path,
+     "(", [ include_param_binding,
             { ",", include_param_binding }, [ "," ] ],
-     ")", ".", IDENT;
+     ")", "::", IDENT;
 
 (* Inline calls inherit include_param_binding's unique-name rule. *)
 
-(* @name                              -- graph ref (param, node, or const node).
-   @name(args).out                    -- invocation of a local DAG or an imported
-                                         module alias. The imported target may
-                                         be a file root or an inline DAG.
-   @module.child(args).out            -- invocation of a child DAG reached from
-                                         an imported alias or local DAG module.
-   @name.field, @name.field.subfield  -- struct field projection on a graph
-                                         reference (no `(` follows the path).
+(* @name                               -- local graph ref.
+   @instance::out                      -- member of an included instance.
+   @name(args)::out                    -- invocation of a local DAG or imported
+                                          module alias.
+   @module.child(args)::out            -- invocation of a child DAG reached by
+                                          dotted DAG traversal.
+   @name.field, @name.field.subfield   -- runtime struct field projection.
 
    What `@` enforces is semantic, not syntactic: the post-`@` expression
-   must denote a graph value. `@dag(args).out` projects an externally
-   projectable value from the fresh DAG instance: either an explicitly
-   exported node or a param's effective bound/default value. Imported file
-   modules and inline DAG modules follow the same rule: an alias bound by
-   `import <path> as module` is callable as `@module(args).out`, while
-   `@module.child(args).out` descends to a child DAG. Unprojected forms are
-   rejected because a DAG instance is not itself a graph value; the rule does
-   not depend on how many segments precede the `(`.
+   must denote a graph value. `@dag(args)::out` projects an externally
+   projectable value from the fresh DAG instance. Imported file modules and
+   inline DAG modules follow the same rule. Unprojected forms are rejected
+   because a DAG instance is not itself a graph value.
 
-   Each inline-call call site denotes a fresh DAG instantiation and
-   desugars to a synthetic `include ... as <id>; @<id>.out` during TIR
-   lowering. Built-in constants (PI, E, TAU) and user-defined const nodes
-   both use their names directly; graph declarations require `@`. *)
+   Each inline-call call site denotes a fresh DAG instantiation and desugars
+   to a synthetic `include ... as <id>; @<id>::out` during TIR lowering.
+   Built-in constants (PI, E, TAU) and user-defined const nodes use their
+   names directly; runtime graph declarations require `@`. *)
 
 (* --- Identifier expression --- *)
 (* Dispatches based on the token(s) following an identifier path:
@@ -934,8 +938,17 @@ inline_dag_call_suffix
      qualified callees have the same parsed shape; argument form
      distinguishes function-call syntax (positional args) from
      constructor-call syntax (named args). Semantic resolution happens later. *)
-ident_path
+namespace_path
    = IDENT, { ".", IDENT };
+
+(* A local name has no member boundary. A qualified name crosses exactly one
+   explicit `::` boundary after a dotted namespace/DAG path. *)
+ident_path
+   = IDENT
+   | namespace_path, "::", IDENT;
+
+dag_path
+   = namespace_path;
 
 ident_expr
    = ident_path,
@@ -987,10 +1000,10 @@ field_init
    = IDENT, ":", expr;
 
 (* --- Map literal --- *)
-(* Single-axis map literals use qualified variant keys:
-     { Index.Variant1: expr1, module.Index.Variant2: expr2, ... }
+(* Single-axis map literals use owner-qualified label keys:
+     { Index#Variant1: expr1, module::Index#Variant2: expr2, ... }
    Multi-axis map literals use tuple keys:
-     { (I1.V1, I2.V2): expr1, (I1.V1, I2.V3): expr2, ... }
+     { (I1#V1, I2#V2): expr1, (I1#V1, I2#V3): expr2, ... }
    All labels of the index (or all label tuples) must be present
    (totality requirement).
 
@@ -1004,18 +1017,18 @@ map_literal
    | "{", tuple_key_entry, { ",", tuple_key_entry }, [ "," ], "}";
 
 single_key_entry
-   = ident_path, ":", expr;              (* path must contain at least two segments *)
+   = index_label, ":", expr;
 
 tuple_key_entry
-   = "(", ident_path, ",", ident_path,
-     { ",", ident_path }, ")", ":", expr;  (* each key path must contain at least two segments *)
+   = "(", index_label, ",", index_label,
+     { ",", index_label }, ")", ":", expr;
 
 (* --- Table expression (syntax sugar, desugars to map_literal) ---     *)
 (*                                                                      *)
 (* The body grammar is context-sensitive: whether a header row is       *)
-(* expected, whether data rows carry row labels, and whether slice      *)
-(* labels are `Index.Variant` / `module.Index.Variant` or `#N` all      *)
-(* depend on whether the corresponding axis is named or `Fin(N)`.       *)
+(* expected, whether data rows carry contextual bare labels, and whether*)
+(* slice labels are `Index#Variant` / `module::Index#Variant` or `#N`   *)
+(* all depend on whether the corresponding axis is named or `Fin(N)`.   *)
 table_expr
    = "table", "[", index_list, "]", "{", table_body, "}";
 
@@ -1037,7 +1050,7 @@ table_slice_section
    = "[", table_slice_label, { ",", table_slice_label }, "]", table_single;
 
 table_slice_label
-   = qualified_variant          (* for named axes *)
+   = index_label                (* for named axes *)
    | "#", NAT_LITERAL;          (* for Fin axes *)
 
 (* When the column axis is Fin, `table_header_row` is omitted.          *)
@@ -1055,8 +1068,8 @@ table_data_row
 table_data_row_1d
    = [ IDENT, ":" ], expr, ";";
 
-qualified_variant
-   = IDENT, ".", IDENT, { ".", IDENT };
+index_label
+   = ident_path, "#", IDENT;
 
 (* --- Parenthesized expression --- *)
 paren_expr
@@ -1073,12 +1086,11 @@ match_arm
 (* 8. Patterns                                                        *)
 (* ================================================================== *)
 match_pattern
-   = ident_path,
-     [ "(", [ pattern_binding_list ], ")" ];
+   = index_label
+   | ident_path, [ "(", [ pattern_binding_list ], ")" ];
 
-(* Whether a pattern path is a constructor or an index label is semantic.
-   The parser preserves the path and optional bindings; name resolution
-   categorizes only when it has enough context. *)
+(* `#` selects an index label syntactically. Plain Term paths are resolved as
+   constructors; only constructors may carry payload bindings. *)
 
 pattern_binding_list
    = pattern_binding, { ",", pattern_binding }, [ "," ];

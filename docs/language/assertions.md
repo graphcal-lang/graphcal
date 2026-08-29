@@ -55,7 +55,7 @@ assert all_stages_ok = for stage: Stage {
     @thrust[stage] > @min_thrust
 };
 // If First and Third fail:
-//   FAIL  (failed at Stage.First, Stage.Third)
+//   FAIL  (failed at Stage#First, Stage#Third)
 ```
 
 Comparison operators require unindexed operands and never broadcast. Use an
@@ -132,13 +132,13 @@ same order (`D011` otherwise):
 ```
 index Case = { A, B };
 
-node actual: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };
-node expected: Length[Case] = { Case.A: 1.0 m, Case.B: 2.5 m };
-node tol: Length[Case] = { Case.A: 0.01 m, Case.B: 0.6 m };
+node actual: Length[Case] = { Case#A: 1.0 m, Case#B: 2.0 m };
+node expected: Length[Case] = { Case#A: 1.0 m, Case#B: 2.5 m };
+node tol: Length[Case] = { Case#A: 0.01 m, Case#B: 0.6 m };
 
 // Unindexed tolerance applied to every key:
 assert close = @actual ~= @expected +/- 0.1 m;
-//   FAIL  (failed at Case.B (actual 2, expected 2.5 +/- 0.1, off by 0.5))
+//   FAIL  (failed at Case#B (actual 2, expected 2.5 +/- 0.1, off by 0.5))
 
 // Per-key tolerance over the same axes:
 assert per_key = @actual ~= @expected +/- @tol;
@@ -151,7 +151,7 @@ assert relative = @actual ~= @expected +/- @relative_tol;
 ```
 
 Each failing key is reported with its own actual/expected/delta detail.
-Per-variant `#[expected_fail(Case.B)]` works on indexed tolerance assertions
+Per-variant `#[expected_fail(Case#B)]` works on indexed tolerance assertions
 exactly as on indexed boolean ones.
 
 ## Attributes
@@ -170,8 +170,8 @@ node safety_factor: Dimensionless = 1.5;
 #[name]                                     // no arguments
 #[name(arg1)]                               // one argument
 #[name(arg1, arg2, arg3)]                   // multiple arguments
-#[name(Index.Variant)]                     // qualified path argument
-#[name((Idx.A, Idx.B), (Idx.C, Idx.D))] // tuple key arguments
+#[name(Index#Variant)]                     // qualified path argument
+#[name((Idx#A, Idx#B), (Idx#C, Idx#D))] // tuple key arguments
 ```
 
 Multiple attributes can be stacked:
@@ -269,12 +269,12 @@ failures while other variants must still pass:
 ```
 index Mode = { Normal, Eco, Boost };
 
-#[expected_fail(Mode.Boost)]
+#[expected_fail(Mode#Boost)]
 assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
 ```
 
-Here, `Mode.Boost` is expected to fail (and is treated as a pass if it does),
-while `Mode.Normal` and `Mode.Eco` must still pass normally.
+Here, `Mode#Boost` is expected to fail (and is treated as a pass if it does),
+while `Mode#Normal` and `Mode#Eco` must still pass normally.
 
 #### Per-Tuple-Key Form (Multi Index)
 
@@ -284,7 +284,7 @@ For multi-indexed assertions, tuple keys identify specific index combinations:
 index Mode = { Normal, Eco, Boost };
 index Phase = { Launch, Cruise };
 
-#[expected_fail((Mode.Normal, Phase.Cruise), (Mode.Boost, Phase.Launch))]
+#[expected_fail((Mode#Normal, Phase#Cruise), (Mode#Boost, Phase#Launch))]
 assert within_limits = for m: Mode, p: Phase { @actual[m, p] < @threshold[m, p] };
 ```
 
@@ -299,12 +299,12 @@ assert steps_ok = for i: Fin(3) { @residual[i] < @tolerance };
 ```
 
 In multi-axis tuple keys, each component uses its axis's key form — named
-axes use `Index.Variant`, while `Fin` axes use `#N` — in assertion axis order:
+axes use `Index#Variant`, while `Fin` axes use `#N` — in assertion axis order:
 
 ```
 index Mode = { Normal, Boost };
 
-#[expected_fail((Mode.Boost, #2))]
+#[expected_fail((Mode#Boost, #2))]
 assert grid_ok = for m: Mode, i: Fin(4) { @value[m, i] < @limit };
 ```
 
@@ -328,7 +328,7 @@ not run its assertions, and assertions cannot be imported as values (`M024`).
 
 Assertions run for each explicit `include` instance. This keeps their outcomes
 attached to the same parameter bindings and runtime values that they validate.
-An `#[expected_fail(Index.Variant)]` written on the included assertion resolves
+An `#[expected_fail(Index#Variant)]` written on the included assertion resolves
 `Index` in that assertion's defining module, and diagnostics point to that
 module's source. An `#[expected_fail(...)]` written on an include brace item
 instead resolves in the including module.
@@ -341,7 +341,7 @@ pub assert limit_positive = @limit > 0.0;
 
 ```
 // main.gcl
-include checks(limit: 50.0).{ limit, limit_positive };
+include checks(limit: 50.0)::{ limit, limit_positive };
 
 #[assumes(limit_positive)]
 node ratio: Dimensionless = @limit / 2.0;

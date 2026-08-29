@@ -9,4 +9,4 @@ dag scale {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @scale(v: @src).result;
+node y: Length = @scale(v: @src)::result;

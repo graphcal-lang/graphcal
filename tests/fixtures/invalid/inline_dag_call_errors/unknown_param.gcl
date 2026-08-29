@@ -7,4 +7,4 @@ dag id_len {
 }
 
 param src: Length = 10.0 m;
-node y: Length = @id_len(bogus: @src).result;
+node y: Length = @id_len(bogus: @src)::result;

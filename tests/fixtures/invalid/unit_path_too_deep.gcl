@@ -1,4 +1,4 @@
-// error: unit references are at most `alias.unit` (P017); module aliases are
-// single segments, so a deeper path can never resolve.
+// Error: a package path is not an in-scope namespace alias. Import the module
+// first, then select the unit through that alias with `::`.
 param a: Length = 3218.688 m;
-node bad: Length = @a -> app.units.mile;
+node bad: Length = @a -> app.units::mile;

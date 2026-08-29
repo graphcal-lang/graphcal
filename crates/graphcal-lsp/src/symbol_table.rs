@@ -179,7 +179,7 @@ impl<'a> HirRefCollector<'a> {
     fn record_unresolved(err: &hir::ExprLowerError, table: &mut SymbolTable) {
         let (target, span) = match err {
             hir::ExprLowerError::UnknownGraphRef { name, span } => {
-                let path = SourceSymbolPath::qualified(
+                let path = SourceSymbolPath::module_member(
                     name.qualifier()
                         .iter()
                         .map(|segment| segment.atom().clone())
@@ -196,9 +196,9 @@ impl<'a> HirRefCollector<'a> {
                 let qualifier = name
                     .qualifier()
                     .into_iter()
-                    .map(|segment| segment.atom().clone())
+                    .flat_map(|owner| owner.segments().iter().cloned())
                     .collect();
-                let path = SourceSymbolPath::qualified(qualifier, name.name().atom().clone());
+                let path = SourceSymbolPath::module_member(qualifier, name.name().atom().clone());
                 (UnresolvedSymbol::Unit(path), *span)
             }
             hir::ExprLowerError::UnknownFunction { path, span } => {
@@ -268,7 +268,7 @@ impl<'a> HirRefCollector<'a> {
 
     /// Record references for an index-variant reference: the variant segment
     /// targets the variant symbol, and the index segment (when one is written
-    /// — the `Maneuver` in `Maneuver.Departure`, or the axis token inside
+    /// — the `Maneuver` in `Maneuver#Departure`, or the axis token inside
     /// `table[...]` for desugared table rows) targets the index declaration.
     /// Keeping the two segments separate makes rename edits and goto-def
     /// segment-precise instead of splicing whole qualified paths.
@@ -1585,11 +1585,10 @@ fn collect_attribute_refs(
         refs: &HirRefCollector<'_>,
     ) {
         match argument {
-            AttributeArg::Path { segments, .. } => {
-                let path = NamePath::new(segments.clone().map(|segment| segment.name));
+            AttributeArg::Path { path } => {
                 table.references.push(ReferenceInfo {
-                    span: segments.last().span,
-                    target: refs.declaration_target(&path),
+                    span: path.span,
+                    target: refs.declaration_target(&path.value),
                 });
             }
             AttributeArg::Group { elements, .. } => {
@@ -1597,7 +1596,7 @@ fn collect_attribute_refs(
                     collect_argument(element, table, refs);
                 }
             }
-            AttributeArg::FinitePosition { .. } => {}
+            AttributeArg::IndexLabel { .. } | AttributeArg::FinitePosition { .. } => {}
         }
     }
 
@@ -2088,7 +2087,7 @@ fn collect_plugin_import_decl(
             )),
             DefinitionInfo {
                 doc: None,
-                name: format!("{}.{}", p.alias.value, function.name.value),
+                name: format!("{}::{}", p.alias.value, function.name.value),
                 category: SymbolCategory::ExternFn,
                 name_span: function.name.span,
                 decl_span: function.span,
@@ -2224,7 +2223,8 @@ fn collect_type_expr_refs_in_scope(
     refs: &mut HirRefCollector<'_>,
 ) {
     match &type_expr.kind {
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
@@ -2433,9 +2433,10 @@ fn collect_unit_expr_refs(unit_expr: &UnitExpr, table: &mut SymbolTable) {
             .value
             .qualifier()
             .into_iter()
-            .map(|segment| segment.atom().clone())
+            .flat_map(|owner| owner.segments().iter().cloned())
             .collect();
-        let path = SourceSymbolPath::qualified(qualifier, item.name.value.name().atom().clone());
+        let path =
+            SourceSymbolPath::module_member(qualifier, item.name.value.name().atom().clone());
         table.references.push(ReferenceInfo {
             span: item.name.span,
             target: ReferenceTarget::Unresolved(UnresolvedSymbol::Unit(path)),
@@ -2827,7 +2828,7 @@ dag d {
     param inner: Dimensionless;
     node doubled: Dimensionless = @inner * 2.0;
 }
-include d(inner: @outer).{ doubled as result };
+include d(inner: @outer)::{ doubled as result };
 plot p = { mark: point, encode: { x: @outer } };
 figure f = { plots: [p] };
 ";
@@ -3005,14 +3006,14 @@ param q: Int[I]
     // --- Inline DAG invocation LSP coverage (issue #451) ---
 
     /// Issues #827/#828 repro: a table literal over a named index plus a
-    /// qualified `Index.Variant` access.
+    /// qualified `Index#Variant` access.
     const TABLE_SOURCE: &str = "\
 pub index Maneuver = { Departure, Correction };
 param dv: Velocity[Maneuver] = table[Maneuver] {
     Departure: 2.0 km/s;
     Correction: 0.1 km/s;
 };
-node total: Velocity = @dv[Maneuver.Departure];
+node total: Velocity = @dv[Maneuver#Departure];
 ";
 
     fn table_for(source: &str) -> SymbolTable {
@@ -3093,13 +3094,13 @@ node total: Velocity = @dv[Maneuver.Departure];
     }
 
     /// The table-axis token inside `table[...]` and the index segment of a
-    /// qualified `Index.Variant` path resolve to the index declaration.
+    /// qualified `Index#Variant` path resolve to the index declaration.
     #[test]
     fn index_segments_resolve_to_index_declaration() {
         let source = TABLE_SOURCE;
         let table = table_for(source);
         let axis_offset = source.find("table[Maneuver]").unwrap() + "table[".len();
-        let qualifier_offset = source.find("@dv[Maneuver.Departure]").unwrap() + "@dv[".len();
+        let qualifier_offset = source.find("@dv[Maneuver#Departure]").unwrap() + "@dv[".len();
         for offset in [axis_offset, qualifier_offset] {
             let reference = table
                 .find_reference_at(offset)
@@ -3111,14 +3112,14 @@ node total: Velocity = @dv[Maneuver.Departure];
         }
     }
 
-    /// Issue #828: the reference recorded for `Maneuver.Departure` in an
+    /// Issue #828: the reference recorded for `Maneuver#Departure` in an
     /// index access must address only the `Departure` segment so rename
-    /// rewrites `@dv[Maneuver.Departure]` into `@dv[Maneuver.Begin]`.
+    /// rewrites `@dv[Maneuver#Departure]` into `@dv[Maneuver#Begin]`.
     #[test]
     fn qualified_variant_reference_is_segment_precise() {
         let source = TABLE_SOURCE;
         let table = table_for(source);
-        let departure_offset = source.find("Maneuver.Departure").unwrap() + "Maneuver.".len();
+        let departure_offset = source.find("Maneuver#Departure").unwrap() + "Maneuver.".len();
         let reference = table
             .find_reference_at(departure_offset)
             .expect("expected variant reference at `Departure` segment");
@@ -3133,14 +3134,14 @@ node total: Velocity = @dv[Maneuver.Departure];
         assert_eq!(slice(source, reference.span), "Departure");
     }
 
-    /// Variant literals (`Season.Winter` in expression position) and match
+    /// Variant literals (`Season#Winter` in expression position) and match
     /// patterns get the same segment-precise spans.
     #[test]
     fn variant_literal_and_match_pattern_references_are_segment_precise() {
         let source = "\
 index Season = { Winter, Summer };
-node pick: Season = Season.Winter;
-node out: Dimensionless = match @pick { Season.Winter => 1.0, Season.Summer => 2.0 };
+node pick: Season = Season#Winter;
+node out: Dimensionless = match @pick { Season#Winter => 1.0, Season#Summer => 2.0 };
 ";
         let table = table_for(source);
         let winter_key = definition_key(&table, SymbolCategory::IndexVariant, "Winter");

@@ -176,7 +176,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M021),
         help(
-            "plots are runtime sinks evaluated against an instance; request them through an include brace list instead: `include path(...).{{ {name} }}`"
+            "plots are runtime sinks evaluated against an instance; request them through an include brace list instead: `include path(...)::{{ {name} }}`"
         )
     )]
     ImportPlotItem {
@@ -191,7 +191,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M024),
         help(
-            "assertions run in concrete DAG instances; use `include path(...).{{ {name} }}` or evaluate the library as an entry DAG"
+            "assertions run in concrete DAG instances; use `include path(...)::{{ {name} }}` or evaluate the library as an entry DAG"
         )
     )]
     ImportAssertionItem {
@@ -826,7 +826,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::D003),
         help(
-            "a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias.unit`"
+            "a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias::unit`"
         )
     )]
     UnknownUnit {
@@ -1202,7 +1202,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M006),
         help(
-            "module-qualified references start with a local name introduced by `import`; call an aliased module through that alias, for example `import pkg.module as m; @m(...).out`"
+            "module-qualified references start with a local name introduced by `import`; call an aliased module through that alias, for example `import pkg.module as m; @m(...)::out`"
         )
     )]
     UnknownModule {
@@ -1414,7 +1414,7 @@ pub enum GraphcalError {
     },
 
     #[error(
-        "invalid argument in `#[expected_fail(...)]`: expected `Index.Variant`, `module.Index.Variant`, `#N` (Fin axes), or grouped variants"
+        "invalid argument in `#[expected_fail(...)]`: expected `Index#Variant`, `module::Index#Variant`, `#N` (Fin axes), or grouped variants"
     )]
     #[diagnostic(code(graphcal::A009))]
     ExpectedFailInvalidArg {
@@ -1440,7 +1440,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A011),
         help(
-            "use `#[expected_fail(Index.Variant, ...)]` (qualified `module.Index.Variant` also works) to specify which variants are expected to fail; for finite structural axes use `#[expected_fail(#N, ...)]`"
+            "use `#[expected_fail(Index#Variant, ...)]` (qualified `module::Index#Variant` also works) to specify which variants are expected to fail; for finite structural axes use `#[expected_fail(#N, ...)]`"
         )
     )]
     ExpectedFailAllOnIndexed {
@@ -1463,7 +1463,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A013),
         help(
-            "single-index assertions require `Index.Variant` keys; multi-index assertions require full tuple keys in assertion axis order"
+            "single-index assertions require `Index#Variant` keys; multi-index assertions require full tuple keys in assertion axis order"
         )
     )]
     ExpectedFailKeyShapeMismatch {
@@ -1595,6 +1595,22 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("`{name}` is not a {expected} input of the invoked DAG")]
+    #[diagnostic(
+        code(graphcal::M011),
+        help(
+            "the binding marker selects exactly one input category; correct the marker or target name"
+        )
+    )]
+    DagInputCategoryMismatch {
+        name: String,
+        expected: &'static str,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("no {expected} input with this name")]
+        span: SourceSpan,
+    },
+
     #[error("module path starts with `{path_first}` but package name is `{package_name}`")]
     #[diagnostic(
         code(graphcal::M013),
@@ -1632,7 +1648,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M017),
         help(
-            "a Graphcal file is either part of a real package (lives at `<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`) or a standalone virtual-package script. Standalone files may only reference their own top-level decls (via `import <file_stem>.{{...}};`) or their own inline DAGs. To pull symbols from a sibling file, add a `graphcal.toml` and place this file inside the package's namespace directory."
+            "a Graphcal file is either part of a real package (lives at `<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`) or a standalone virtual-package script. Standalone files may only reference their own top-level decls (via `import <file_stem>::{{...}};`) or their own inline DAGs. To pull symbols from a sibling file, add a `graphcal.toml` and place this file inside the package's namespace directory."
         )
     )]
     CrossFileImportInVirtualPackage {
@@ -1647,7 +1663,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::M016),
         help(
-            "index bindings accept a compatible index name or structural axis such as `{name}: Fin(3)`; type and dimension bindings accept a compatible name"
+            "index bindings accept a compatible index name or structural axis such as `index {name}: Fin(3)`; type and dimension bindings use the explicit `type` and `dim` markers"
         )
     )]
     InvalidTypeLevelBindingValue {
@@ -2028,7 +2044,7 @@ pub enum GraphcalError {
     /// must not appear in bodies that cannot themselves be re-bound by
     /// importers (the defining library must abstract over the index).
     #[error(
-        "variant literal `{index}.{variant}` of `pub(bind) index` cannot be used in the defining file"
+        "variant literal `{index}#{variant}` of `pub(bind) index` cannot be used in the defining file"
     )]
     #[diagnostic(
         code(graphcal::V004),
@@ -2337,6 +2353,7 @@ impl GraphcalError {
             | Self::RequiredParamNotProvided { src, .. }
             | Self::UnknownParamBinding { src, .. }
             | Self::BindingNotAParam { src, .. }
+            | Self::DagInputCategoryMismatch { src, .. }
             | Self::PackageNameMismatch { src, .. }
             | Self::StdlibNotImplemented { src, .. }
             | Self::CrossFileImportInVirtualPackage { src, .. }

@@ -3,12 +3,12 @@
 index Case = { A, B };
 
 node actual: Length[Case] = {
-    Case.A: 1.0 m,
-    Case.B: 2.0 m,
+    Case#A: 1.0 m,
+    Case#B: 2.0 m,
 };
 node expected: Length[Case] = {
-    Case.A: 1.0 m,
-    Case.B: 2.5 m,
+    Case#A: 1.0 m,
+    Case#B: 2.5 m,
 };
 
 assert close = @actual ~= @expected +/- 0.1 m;

@@ -2,4 +2,4 @@
 // key's ordinal would couple programs to label declaration order.
 index Maneuver = { Departure, Correction };
 
-node n: Int = to_int(Maneuver.Departure);
+node n: Int = to_int(Maneuver#Departure);

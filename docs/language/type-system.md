@@ -388,8 +388,8 @@ this table is the complete inventory of declaration forms:
 | `plot p = { ... };` | a chart specification | value | — |
 | `figure f = { ... };` / `layer l = { ... };` | plot compositions (tiled / overlaid) | value | — |
 | `dag d { ... }` | a reusable sub-DAG blueprint | value | — (there is no function type) |
-| `import pkg.mod;` / `... as m;` / `....{ items }` | a callable DAG-module alias or the listed items | module/DAG or per item | — |
-| `import plugin "name" as ns { fn ...; }` | extern functions, callable as `ns.fn(...)` | plugin alias | extern signatures over `Dim`/`Index` variables |
+| `import pkg.mod;` / `... as m;` / `...::{ items }` | a callable DAG-module alias or the listed items | module/DAG or per item | — |
+| `import plugin "name" as ns { fn ...; }` | extern functions, callable as `ns::fn(...)` | plugin alias | extern signatures over `Dim`/`Index` variables |
 | `include pkg.dag(bindings) ...;` | an embedded DAG instance; selected outputs as nodes | value | outputs' DeclTypes |
 | `<P: Dim>` etc. in a `type` header | a generic parameter | scoped to its declaration | its declared kind |
 
@@ -505,7 +505,7 @@ node critical_dv: Velocity = @delta_v[@critical];
 ```
 
 Keys are introduced by qualified label expressions
-(`Maneuver.Departure : Key<Maneuver>`), loop variables, `argmax`/`argmin`,
+(`Maneuver#Departure : Key<Maneuver>`), loop variables, `argmax`/`argmin`,
 and the explicit formers `key`, `fin_key`, `floor_key`, `ceil_key`, and
 `nearest_key`; they are eliminated by element access, same-axis `==`/`!=`,
 exhaustive `match` (concrete named axes), and the extractions `coord`
@@ -518,7 +518,7 @@ keys do not cross the experimental plugin ABI.
 `Int` is a 64-bit signed integer. It is always dimensionless and cannot carry a physical dimension.
 
 ```
-param count: Int = 42;
+param item_count: Int = 42;
 const node seven: Int = 7;
 ```
 
@@ -530,7 +530,7 @@ Integer arithmetic uses checked operations -- overflow is a runtime error, not s
 
 ```
 param enabled: Bool = true;
-node active: Bool = @enabled && @count > 0;
+node active: Bool = @enabled && @item_count > 0;
 ```
 
 #### Datetime
@@ -704,7 +704,7 @@ Type expressions can carry **domain constraints** that declare valid value range
 param bus_mass: Mass(min: 100.0 kg, max: 2000.0 kg) = 500.0 kg;
 param thrust: Force(min: 0.01 N) = 0.5 N;           // min only
 param efficiency: Dimensionless(max: 1.0) = 0.85;    // max only
-param count: Int(min: 1, max: 100) = 10;             // exact Int constraints
+param sample_count: Int(min: 1, max: 100) = 10;      // exact Int constraints
 param launch: Datetime(
     min: datetime("2025-01-01T00:00:00Z"),
     max: datetime("2025-12-31T23:59:59Z"),
@@ -750,9 +750,9 @@ For indexed types, constraints apply **element-wise** to each entry:
 
 ```
 param delta_v: Velocity(min: 0.0 m/s, max: 10000.0 m/s)[Maneuver] = {
-    Maneuver.Departure: 3200.0 m/s,
-    Maneuver.Correction: 500.0 m/s,
-    Maneuver.Insertion: 1800.0 m/s,
+    Maneuver#Departure: 3200.0 m/s,
+    Maneuver#Correction: 500.0 m/s,
+    Maneuver#Insertion: 1800.0 m/s,
 };
 ```
 
@@ -894,19 +894,19 @@ those per-axis orders and carry every axis extent explicitly.
 A named index declares a finite, ordered set of labels usable as a collection axis. The `index` keyword declares:
 
 1. An **axis marker**: `Maneuver` can be used in `T[Maneuver]` to create indexed types.
-2. An ordered, closed set of **index labels**: `Maneuver.Departure` identifies one position on that axis. The label declaration order is the axis's index order, so reordering the labels of an `index` declaration is a semantic change for order-sensitive consumers such as `scan`.
+2. An ordered, closed set of **index labels**: `Maneuver#Departure` identifies one position on that axis. The label declaration order is the axis's index order, so reordering the labels of an `index` declaration is a semantic change for order-sensitive consumers such as `scan`.
 
 ```
 index Maneuver = { Departure, Correction, Insertion };
 ```
 
-Named index labels use qualified syntax (`Maneuver.Departure`), distinguishing
+Named index labels use qualified syntax (`Maneuver#Departure`), distinguishing
 them from algebraic-type constructors, which use bare syntax (`Nominal`). This
 reflects a genuine semantic difference: labels identify positions within a
 collection axis, while constructors form values of an algebraic type.
 
 A qualified label is a **self-typed constant**: as an expression,
-`Maneuver.Departure` has type `Key<Maneuver>` and is an ordinary value — it
+`Maneuver#Departure` has type `Key<Maneuver>` and is an ordinary value — it
 can be stored in nodes, compared with `==`, passed through DAG parameters,
 and used in constructor payloads (see [Index Keys](indexes.md#index-keys)).
 Exactly as a constructor name is both an expression and a pattern, the label
@@ -914,10 +914,10 @@ spelling additionally remains a *syntactic selector* in pattern-like
 positions:
 
 - Indexed type axes name the index itself: `Velocity[Maneuver]`
-- Element access: `@delta_v[Maneuver.Departure]` (the label as a constant key)
-- Map and table keys: `{ Maneuver.Departure: 2.46 km/s, ... }` (selector)
+- Element access: `@delta_v[Maneuver#Departure]` (the label as a constant key)
+- Map and table keys: `{ Maneuver#Departure: 2.46 km/s, ... }` (selector)
 - `for` bindings and index access through their loop variables: `for m: Maneuver { @delta_v[m] }`
-- `match` patterns over `Key<Maneuver>` scrutinees: `match m { Maneuver.Departure => ..., ... }`
+- `match` patterns over `Key<Maneuver>` scrutinees: `match m { Maneuver#Departure => ..., ... }`
 
 An algebraic type with only unit constructors (e.g., `type Foo { A, B }`) is
 NOT automatically an index. The `index` keyword explicitly marks an
@@ -978,9 +978,9 @@ additive arithmetic above. See [Index Keys](indexes.md#index-keys).
 
 ```
 param delta_v: Velocity[Maneuver] = {
-    Maneuver.Departure: 2.46 km/s,
-    Maneuver.Correction: 0.05 km/s,
-    Maneuver.Insertion: 1.48 km/s,
+    Maneuver#Departure: 2.46 km/s,
+    Maneuver#Correction: 0.05 km/s,
+    Maneuver#Insertion: 1.48 km/s,
 }
 ```
 
@@ -988,23 +988,23 @@ param delta_v: Velocity[Maneuver] = {
 
 ```
 param delta_v_budget: Velocity[Phase, Maneuver] = {
-    (Phase.Launch, Maneuver.Departure): 2.46 km/s,
-    (Phase.Launch, Maneuver.Correction): 0.0 m/s,
-    (Phase.Launch, Maneuver.Insertion): 0.0 m/s,
-    (Phase.Cruise, Maneuver.Departure): 0.0 m/s,
-    (Phase.Cruise, Maneuver.Correction): 0.05 km/s,
-    (Phase.Cruise, Maneuver.Insertion): 0.0 m/s,
-    (Phase.Arrival, Maneuver.Departure): 0.0 m/s,
-    (Phase.Arrival, Maneuver.Correction): 0.0 m/s,
-    (Phase.Arrival, Maneuver.Insertion): 1.48 km/s,
+    (Phase#Launch, Maneuver#Departure): 2.46 km/s,
+    (Phase#Launch, Maneuver#Correction): 0.0 m/s,
+    (Phase#Launch, Maneuver#Insertion): 0.0 m/s,
+    (Phase#Cruise, Maneuver#Departure): 0.0 m/s,
+    (Phase#Cruise, Maneuver#Correction): 0.05 km/s,
+    (Phase#Cruise, Maneuver#Insertion): 0.0 m/s,
+    (Phase#Arrival, Maneuver#Departure): 0.0 m/s,
+    (Phase#Arrival, Maneuver#Correction): 0.0 m/s,
+    (Phase#Arrival, Maneuver#Insertion): 1.48 km/s,
 }
 ```
 
-Single-axis map literals use bare keys (`Maneuver.Departure: ...`); multi-axis map literals use tuple keys (`(Phase.Launch, Maneuver.Departure): ...`).
+Single-axis map literals use bare keys (`Maneuver#Departure: ...`); multi-axis map literals use tuple keys (`(Phase#Launch, Maneuver#Departure): ...`).
 
 Map (and `table`) literal entry order is not significant: the constructed
 value is normalized to the index order, so a literal that lists
-`Maneuver.Insertion` first is identical to one written in declaration order.
+`Maneuver#Insertion` first is identical to one written in declaration order.
 
 **`for` comprehension** (one value per label):
 
@@ -1027,14 +1027,14 @@ node matrix: Dimensionless[Row, Col] = for r: Row, c: Col {
 **Indexing** -- extracts a single element by providing all index labels:
 
 ```
-@delta_v[Maneuver.Departure]                // Velocity[Maneuver] -> Velocity
-@matrix[Row.R1, Col.C2]                    // Dimensionless[Row, Col] -> Dimensionless
+@delta_v[Maneuver#Departure]                // Velocity[Maneuver] -> Velocity
+@matrix[Row#R1, Col#C2]                    // Dimensionless[Row, Col] -> Dimensionless
 ```
 
 No partial indexing -- all axes must be specified. To extract a "slice" along one axis, use explicit `for`:
 
 ```
-node row1: Dimensionless[Col] = for c: Col { @matrix[Row.R1, c] }
+node row1: Dimensionless[Col] = for c: Col { @matrix[Row#R1, c] }
 ```
 
 **Aggregation** -- reduces exactly one axis. Direct multi-axis aggregation is
@@ -1082,7 +1082,7 @@ node bad_sum: Velocity[Maneuver] = @delta_v + @extra_dv;
 node bad_limit: Bool[Maneuver] = @delta_v < 3.0 km/s;
 
 // CORRECT: explicit element-wise operations
-node sum: Velocity[Maneuver] = for m: Maneuver {
+node combined: Velocity[Maneuver] = for m: Maneuver {
     @delta_v[m] + @extra_dv[m]
 };
 node below_limit: Bool[Maneuver] = for m: Maneuver {
@@ -1297,9 +1297,9 @@ expr.field_name
 ### Index Access
 
 ```
-expr[Index.Variant]        // access a specific element
+expr[Index#Variant]        // access a specific element
 expr[loop_var]              // access with a for-binding variable
-expr[Index1.V1, Index2.V2] // multi-dimensional access
+expr[Index1#V1, Index2#V2] // multi-dimensional access
 ```
 
 - `expr` must be an indexed type `T[I]` (or `T[I1, I2]` for multi-dimensional).
@@ -1332,7 +1332,7 @@ ConstructorName                                   // unit constructor
 ### Index Label
 
 ```
-IndexName.VariantName
+IndexName#VariantName
 ```
 
 - References a specific label of a named index.
@@ -1361,14 +1361,14 @@ match scrutinee {
 - For algebraic-type scrutinees, arms use constructor patterns (bare or
   module-qualified) and can bind payload fields explicitly with
   `field: variable` or `field: _`.
-- For named-axis key scrutinees, arms use qualified index-label patterns (`Index.Label` or `module.Index.Label`) and cannot bind fields.
+- For named-axis key scrutinees, arms use qualified index-label patterns (`Index#Label` or `module::Index#Label`) and cannot bind fields.
 - All arm expressions must have the same type.
 - The result type is the common type of the arms.
 
 ### Map Literal
 
 ```
-{ Index.Variant1: expr1, module.Index.Variant2: expr2, ... }
+{ Index#Variant1: expr1, module::Index#Variant2: expr2, ... }
 ```
 
 - All variants of the index must be covered.
@@ -1378,7 +1378,7 @@ match scrutinee {
 For multi-axis map literals, use tuple keys:
 
 ```
-{ (I1.V1, I2.V2): expr1, (I1.V1, I2.V3): expr2, ... }
+{ (I1#V1, I2#V2): expr1, (I1#V1, I2#V3): expr2, ... }
 ```
 
 - All label tuples must be present.
@@ -1484,7 +1484,7 @@ include hohmann_transfer(
     gm: @gm_earth,
     r1: @r_earth + @parking_alt,
     r2: @r_earth + @target_alt,
-).{ total_dv };
+)::{ total_dv };
 ```
 
 ## Generics
@@ -1635,9 +1635,37 @@ widening: `Key<Fin(N)>` is accepted where `Key<Fin(M)>` is expected when
 (`Key<TimeStep>` is not a `Time`; extract with `coord`).
 
 A qualified label expression has the key type of its axis
-(`Maneuver.Departure : Key<Maneuver>`), so keys participate in type
+(`Maneuver#Departure : Key<Maneuver>`), so keys participate in type
 equivalence like any other primitive. In pattern position the same spelling
 stays a selector; use `match` over a `Key<X>` value for case analysis.
+
+## Name Namespaces and Path Syntax
+
+Graphcal resolves every source position in exactly one of three namespaces:
+
+- **Static** — nominal types, dimensions, indexes, and generic type-level binders;
+- **Term** — params, nodes, constants, constructors, functions, DAG/plugin/instance aliases, index labels, and lexical bindings;
+- **Unit** — prelude, base, constant-scaled, and runtime-scaled units.
+
+Each namespace has one collision domain per scope. Categories within a namespace
+do not get private fallback tables: two flat Terms with the same name conflict,
+while a Static, Term, and Unit may deliberately share one spelling. Built-ins
+occupy exactly one namespace. Lookup is syntax-directed and never probes another
+namespace when the selected lookup fails.
+
+Path punctuation preserves that selection:
+
+- `.` traverses a dotted DAG path before a boundary, or projects a runtime
+  field after an expression;
+- `::` crosses from a module, DAG, plugin, or configured instance to one member
+  (`lib::Orbit`, `demo::lerp(...)`, `@stage::delta_v`);
+- `#` selects a label from an explicit index owner (`Phase#Burn`,
+  `mission::Phase#Burn`).
+
+DAG input bindings follow the same rule. An unmarked binding means exactly a
+`param`; Static inputs require `type`, `dim`, or `index`. There is no `param`
+marker. Lexical Term binders may not shadow another visible local or flat Term,
+and Static generic binders may not shadow a visible Static name.
 
 ## Complete Entity Map
 
@@ -1655,9 +1683,9 @@ stays a selector; use `match` over a `Key<X>` value for case analysis.
 | `Fin` position | ValueType (`Key<Fin(N)>`) | Yes (as key) | Yes (as key) | Yes | Indexing, equality, additive key arithmetic, `to_int` extraction |
 | Built-in constant (`PI`, `E`, `TAU`) | ValueType (`Dimensionless`) | Yes | Yes | Yes | Bare reference, no `@` |
 | Built-in function | No | No | No | No | Calling only |
-| Extern function | No | No | No | No | Qualified calling only (`ns.fn(...)`) |
-| DAG module (file root or inline block) | No | No | No | No | `include` instantiation and inline `@d(args).out` calls |
-| Imported module alias | No | No | No | No | Direct DAG calls (`@m(args).out`) and qualification (`m.item`, `@m.child(args).out`) |
+| Extern function | No | No | No | No | Qualified calling only (`ns::fn(...)`) |
+| DAG module (file root or inline block) | No | No | No | No | `include` instantiation and inline `@d(args)::out` calls |
+| Imported module alias | No | No | No | No | Direct DAG calls (`@m(args)::out`) and qualification (`m::item`, `@m.child(args)::out`) |
 | Dimension | No; inhabits `Dim` | No | As generic `<D: Dim>` | As generic | In quantity type syntax |
 | Time scale | No; inhabits semantic `TimeScale` | No | No | No | In `Datetime<TT>`-style type syntax |
 | Unit | No (compile-time) | No | No | No | In literals and conversion targets |
@@ -1667,7 +1695,11 @@ stays a selector; use `match` over a `Key<X>` value for case analysis.
 | String literal | No (no `String` type) | No | No | No | Single-line boundary syntax: datetime arguments, timezone targets, plot properties, plugin paths |
 | Attribute | No | No | No | No | Declaration metadata only |
 
-Named index labels use qualified syntax (`Maneuver.Departure`) while algebraic
-constructors use bare or module-qualified syntax (`Nominal` or
-`module.Nominal`). Labels belong to the index universe; constructors belong to
-the constructor namespace and form values of their enclosing algebraic type.
+Named index labels use owner-qualified syntax (`Maneuver#Departure`) while
+algebraic constructors use bare or module-qualified syntax (`Nominal` or
+`module::Nominal`). Both are Terms, but labels live in their canonical index's
+associated Term scope while constructors live in the module's flat Term scope.
+Consequently different indexes may reuse a label, and a label may share its
+spelling with a flat constructor without introducing category-specific lookup.
+A primary constructor may also share the Static type's spelling because Static
+and Term are distinct namespaces.

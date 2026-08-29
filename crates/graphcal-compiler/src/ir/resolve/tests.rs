@@ -126,28 +126,17 @@ fn resolve_rejects_dimension_type_name_collision() {
 }
 
 #[test]
-fn resolve_rejects_value_index_name_collision() {
-    let err =
-        parse_and_resolve("param M: Dimensionless = 1.0;\npub index M = { A, B };").unwrap_err();
-    assert!(matches!(
-        err,
-        GraphcalError::DuplicateName { ref name, .. } if name == "M"
-    ));
+fn term_value_and_static_index_may_share_a_name() {
+    parse_and_resolve("param M: Dimensionless = 1.0;\npub index M = { A, B };").unwrap();
 }
 
 #[test]
-fn resolve_does_not_fall_through_to_same_spelled_prelude_unit() {
-    let err = compile_to_tir(
+fn static_index_and_prelude_unit_resolve_independently() {
+    compile_to_tir(
         "pub index s = { A };
-         param sample: Time[s] = { s.A: 1.0 s };",
+         param sample: Time[s] = { s#A: 1.0 s };",
     )
-    .unwrap_err();
-
-    assert!(matches!(
-        err,
-        GraphcalError::EvalError { ref message, .. }
-            if message.contains("`s` is an index, not a unit")
-    ));
+    .unwrap();
 }
 
 #[test]
@@ -282,7 +271,7 @@ fn named_arguments_on_extern_report_positional_call_syntax() {
 import plugin "graphcal:demo" as demo {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
-node x: Dimensionless = demo.lerp(a: 1.0, b: 2.0, t: 0.5);
+node x: Dimensionless = demo::lerp(a: 1.0, b: 2.0, t: 0.5);
 "#,
     )
     .unwrap_err();
@@ -292,18 +281,17 @@ node x: Dimensionless = demo.lerp(a: 1.0, b: 2.0, t: 0.5);
             ref name,
             ref positional_call,
             ..
-        } if name == "demo.lerp"
-            && positional_call == "demo.lerp(a_value, b_value, t_value)"
+        } if name == "demo::lerp"
+            && positional_call == "demo::lerp(a_value, b_value, t_value)"
     ));
 }
 
 #[test]
-fn unknown_constructor_shaped_call_keeps_constructor_diagnostic() {
+fn unknown_named_call_reports_one_unknown_term_callee() {
     let err = compile_to_tir("node x: Dimensionless = Missing(value: 1.0);").unwrap_err();
     assert!(matches!(
         err,
-        GraphcalError::EvalError { ref message, .. }
-            if message.contains("unknown ConstructorName `Missing`")
+        GraphcalError::UnknownFunction { ref name, .. } if name == "Missing"
     ));
 }
 
@@ -490,7 +478,7 @@ fn resolve_node_with_convert() {
 #[test]
 fn resolve_import_decl_skipped() {
     // import declarations should not be treated as param/node/const
-    let source = "import helper.{something};";
+    let source = "import helper::{something};";
     let file = parse_and_desugar(source);
     let resolved = resolve(&file, &make_src(source)).unwrap();
     assert!(resolved.params.is_empty());
@@ -504,9 +492,9 @@ fn resolve_indexed_param() {
         r"
         pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
-            Color.Red: 1.0,
-            Color.Green: 2.0,
-            Color.Blue: 3.0,
+            Color#Red: 1.0,
+            Color#Green: 2.0,
+            Color#Blue: 3.0,
         };
     ",
     )
@@ -520,9 +508,9 @@ fn resolve_for_comprehension() {
         r"
         pub index Color = { Red, Green, Blue };
         param values: Dimensionless[Color] = {
-            Color.Red: 1.0,
-            Color.Green: 2.0,
-            Color.Blue: 3.0,
+            Color#Red: 1.0,
+            Color#Green: 2.0,
+            Color#Blue: 3.0,
         };
         node doubled: Dimensionless[Color] = for c: Color { @values[c] * 2.0 };
     ",
@@ -537,9 +525,9 @@ fn resolve_scan_expression() {
         r"
         pub index Step = { First, Second, Third };
         param vals: Dimensionless[Step] = {
-            Step.First: 1.0,
-            Step.Second: 2.0,
-            Step.Third: 3.0,
+            Step#First: 1.0,
+            Step#Second: 2.0,
+            Step#Third: 3.0,
         };
         node cumul: Dimensionless[Step] = scan(@vals, 0.0, |acc, val| acc + val);
     ",
@@ -706,7 +694,7 @@ fn resolve_private_in_public_index_in_type() {
     let source = r"
         pub index Phase = { Alpha, Beta };
         index Step = { Xray, Yankee };
-        pub node costs: Dimensionless[Phase, Step] = { Phase.Alpha: { Step.Xray: 1.0, Step.Yankee: 2.0 }, Phase.Beta: { Step.Xray: 3.0, Step.Yankee: 4.0 } };
+        pub node costs: Dimensionless[Phase, Step] = { Phase#Alpha: { Step#Xray: 1.0, Step#Yankee: 2.0 }, Phase#Beta: { Step#Xray: 3.0, Step#Yankee: 4.0 } };
     ";
     let err = parse_and_resolve(source).unwrap_err();
     // May get PubIndexVariantLiteral before PrivateInPublic.
@@ -727,13 +715,18 @@ fn resolve_external_surface_keeps_explicit_exports_and_input_ports_distinct() {
         node speed: Speed = @input_speed;
     ";
     let resolved = parse_and_resolve(source).unwrap();
-    for name in ["Speed", "GravityAccel", "g0"] {
+    for name in ["Speed", "GravityAccel"] {
         assert!(
             resolved
                 .external_surface
-                .is_explicit_export(&DeclName::expect_valid(name))
+                .is_static_explicit_export(&crate::syntax::names::NameAtom::parse(name).unwrap())
         );
     }
+    assert!(
+        resolved
+            .external_surface
+            .is_explicit_export(&DeclName::expect_valid("g0"))
+    );
     let input = DeclName::expect_valid("input_speed");
     assert!(resolved.external_surface.is_input_port(&input));
     assert!(resolved.external_surface.is_externally_nameable(&input));
@@ -755,9 +748,9 @@ fn resolve_param_default_with_pub_bind_variant_literal_ok() {
     let source = r"
         pub(bind) index Phase = { Design, Build, Test };
         param cost: Dimensionless[Phase] = {
-            Phase.Design: 100.0,
-            Phase.Build: 200.0,
-            Phase.Test: 50.0,
+            Phase#Design: 100.0,
+            Phase#Build: 200.0,
+            Phase#Test: 50.0,
         };
     ";
     parse_and_resolve(source).unwrap();
@@ -770,11 +763,11 @@ fn resolve_node_with_pub_bind_variant_literal_fires_v004() {
     let source = r"
         pub(bind) index Phase = { Design, Build, Test };
         param cost: Dimensionless[Phase] = {
-            Phase.Design: 1.0,
-            Phase.Build: 2.0,
-            Phase.Test: 3.0,
+            Phase#Design: 1.0,
+            Phase#Build: 2.0,
+            Phase#Test: 3.0,
         };
-        node design_cost: Dimensionless = @cost[Phase.Design];
+        node design_cost: Dimensionless = @cost[Phase#Design];
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
@@ -785,8 +778,8 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
     let source = r"
         pub(bind) index Phase = { Design, Build };
         pub const node costs: Dimensionless[Phase] = {
-            Phase.Design: 1.0,
-            Phase.Build: 2.0,
+            Phase#Design: 1.0,
+            Phase#Build: 2.0,
         };
     ";
     let err = compile_to_tir(source).unwrap_err();
@@ -797,14 +790,14 @@ fn resolve_const_with_pub_bind_variant_literal_fires_v004() {
 fn resolve_private_assert_with_pub_bind_variant_literal_ok() {
     // A10(b) carve-out: private sink kinds are pruned from the merged
     // IR when the file is used as a library, so literal mentions of
-    // `Phase.v` cannot orphan anything under override.
+    // `Phase#v` cannot orphan anything under override.
     let source = r"
         pub(bind) index Phase = { Design, Build };
         param cost: Dimensionless[Phase] = {
-            Phase.Design: 1.0,
-            Phase.Build: 2.0,
+            Phase#Design: 1.0,
+            Phase#Build: 2.0,
         };
-        assert design_cheap = @cost[Phase.Design] < 10.0;
+        assert design_cheap = @cost[Phase#Design] < 10.0;
     ";
     compile_to_tir(source).unwrap();
 }
@@ -816,10 +809,10 @@ fn resolve_public_assert_with_pub_bind_variant_literal_fires_v004() {
     let source = r"
         pub(bind) index Phase = { Design, Build };
         param cost: Dimensionless[Phase] = {
-            Phase.Design: 1.0,
-            Phase.Build: 2.0,
+            Phase#Design: 1.0,
+            Phase#Build: 2.0,
         };
-        pub assert design_cheap = @cost[Phase.Design] < 10.0;
+        pub assert design_cheap = @cost[Phase#Design] < 10.0;
     ";
     let err = compile_to_tir(source).unwrap_err();
     assert!(matches!(err, GraphcalError::PubIndexVariantLiteral { .. }));
@@ -832,8 +825,8 @@ fn resolve_node_with_plain_pub_variant_literal_ok() {
     let source = r"
         pub index Phase = { Design, Build };
         pub const node costs: Dimensionless[Phase] = {
-            Phase.Design: 1.0,
-            Phase.Build: 2.0,
+            Phase#Design: 1.0,
+            Phase#Build: 2.0,
         };
     ";
     parse_and_resolve(source).unwrap();
@@ -963,12 +956,16 @@ fn resolve_pub_type_checks_nested_generic_default_dependencies() {
 }
 
 #[test]
-fn generic_default_parameter_shadowing_private_type_is_not_a_visibility_leak() {
+fn generic_parameter_cannot_shadow_private_static_type() {
     let source = r"
         type Shadow { Shadow }
         pub type Wrapper<Shadow: Type, T: Type = Shadow> { Wrapper(value: T) }
     ";
-    compile_to_tir(source).unwrap();
+    assert!(matches!(
+        compile_to_tir(source),
+        Err(GraphcalError::EvalError { ref message, .. })
+            if message.contains("shadows a visible Static name")
+    ));
 }
 
 #[test]

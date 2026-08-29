@@ -64,10 +64,10 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
         // Use-sites carry no blanket visibility annotation. Selective import/include
         // items render their own per-item `pub` marker.
         DeclKind::Param(_)
-        | DeclKind::Import(_)
         | DeclKind::Include(_)
         | DeclKind::Sugar(_)
         | DeclKind::PluginImport(_) => RcDoc::nil(),
+        DeclKind::Import(d) => visibility_prefix(d.visibility),
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
@@ -135,12 +135,11 @@ fn attribute_has_magic_trailing_comma(fmt: &Formatter<'_>, attr: &Attribute) -> 
 
 fn format_attribute_arg(arg: &graphcal_compiler::syntax::ast::AttributeArg) -> RcDoc<'static> {
     match arg {
-        graphcal_compiler::syntax::ast::AttributeArg::Path { segments, .. } => {
-            let parts: Vec<RcDoc<'static>> = segments
-                .iter()
-                .map(|s| RcDoc::text(s.name.clone()))
-                .collect();
-            RcDoc::intersperse(parts, RcDoc::text("."))
+        graphcal_compiler::syntax::ast::AttributeArg::Path { path } => {
+            RcDoc::text(path.value.display_path())
+        }
+        graphcal_compiler::syntax::ast::AttributeArg::IndexLabel { index, label, .. } => {
+            RcDoc::text(format!("{}#{}", index.value, label.value))
         }
         graphcal_compiler::syntax::ast::AttributeArg::FinitePosition { position, .. } => {
             RcDoc::text(format!("#{position}"))
@@ -480,7 +479,7 @@ fn format_import_decl(fmt: &Formatter<'_>, d: &ImportDecl) -> RcDoc<'static> {
     format_import_or_include_kind(fmt, path_doc, RcDoc::nil(), &d.kind)
 }
 
-/// `include path(x: 1.0 km).{ name };` or `include path() as alias;`.
+/// `include path(x: 1.0 km)::{ name };` or `include path() as alias;`.
 ///
 /// `include` always emits `(...)` — even when the binding list is empty —
 /// because the param-binding parens are part of the include grammar (the
@@ -519,7 +518,7 @@ fn format_import_or_include_path(
     RcDoc::text(format!("{keyword} {path_str}"))
 }
 
-/// Format a selective import/include suffix (`.{ ... };`).
+/// Format a selective import/include suffix (`::{ ... };`).
 ///
 /// The selector is a suffix of the import/include head, but it must choose its
 /// own layout after the head has been rendered. A multiline include binding
@@ -536,15 +535,15 @@ fn format_selective_import_or_include(
 
 fn format_selective_import_or_include_suffix(item_docs: Vec<RcDoc<'static>>) -> RcDoc<'static> {
     if item_docs.is_empty() {
-        return RcDoc::text(".{ };");
+        return RcDoc::text("::{ };");
     }
 
-    let single_line = RcDoc::text(".{ ")
+    let single_line = RcDoc::text("::{ ")
         .append(RcDoc::intersperse(item_docs.clone(), RcDoc::text(", ")))
         .append(RcDoc::text(" };"));
 
     let multi_items = RcDoc::intersperse(item_docs, RcDoc::text(",").append(RcDoc::line())).group();
-    let multi_line = RcDoc::text(".{")
+    let multi_line = RcDoc::text("::{")
         .append(RcDoc::hardline().append(multi_items).nest(INDENT))
         .append(RcDoc::hardline())
         .append(RcDoc::text("};"));
@@ -607,7 +606,14 @@ fn format_include_param_bindings(
     let binding_docs: Vec<RcDoc<'static>> = bindings
         .iter()
         .map(|b| {
-            RcDoc::text(b.name.name.clone())
+            let marker = match b.category {
+                graphcal_compiler::syntax::ast::InputBindingCategory::Unmarked => "",
+                graphcal_compiler::syntax::ast::InputBindingCategory::Type => "type ",
+                graphcal_compiler::syntax::ast::InputBindingCategory::Dimension => "dim ",
+                graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
+            };
+            RcDoc::text(marker)
+                .append(RcDoc::text(b.name.name.clone()))
                 .append(RcDoc::text(": "))
                 .append(format_expr(fmt, &b.value))
         })
@@ -903,7 +909,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         if si > 0 {
             out.push('\n');
         }
-        // Slice prefix `[A.a, B.b]`.
+        // Slice prefix `[A#a, B#b]`.
         if !slice.prefix_keys().is_empty() {
             let labels = slice
                 .prefix_keys()
@@ -966,12 +972,12 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
 fn format_multi_decl_key(key: &MapEntryKey) -> String {
     match (&key.index.value, &key.variant.value) {
         (MapEntryIndex::Named(index), IndexEntryKey::Named(variant)) => {
-            format!("{index}.{variant}")
+            format!("{index}#{variant}")
         }
         (MapEntryIndex::Finite(_), IndexEntryKey::Position(position)) => {
             format!("#{position}")
         }
-        (index, variant) => format!("{index}.{variant}"),
+        (index, variant) => format!("{index}#{variant}"),
     }
 }
 
@@ -1045,8 +1051,6 @@ fn compute_multi_decl_layout(
 fn header_cell_text(cell: &MultiHeaderCell) -> String {
     match cell {
         MultiHeaderCell::Underscore { .. } => "_".to_string(),
-        MultiHeaderCell::Variant { axis, variant, .. } => {
-            format!("{}.{}", axis.value, variant.value)
-        }
+        MultiHeaderCell::Variant { variant, .. } => variant.value.to_string(),
     }
 }

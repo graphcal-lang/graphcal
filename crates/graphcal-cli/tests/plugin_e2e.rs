@@ -187,17 +187,17 @@ fn scaffolded_plugin_builds_locks_and_evaluates() {
 index Leg = { Ascent, Coast, Descent };
 
 param a: Length = 1.0 m;
-node mid: Length = kernels.lerp(@a, 3.0 m, 0.5);
-node bad: Dimensionless = kernels.checked_sqrt(-1.0);
-node fine: Dimensionless = kernels.checked_sqrt(9.0);
+node mid: Length = kernels::lerp(@a, 3.0 m, 0.5);
+node bad: Dimensionless = kernels::checked_sqrt(-1.0);
+node fine: Dimensionless = kernels::checked_sqrt(9.0);
 
 node dv: Velocity[Leg] = {
-    Leg.Ascent: 3.0 km/s,
-    Leg.Coast: 0.5 km/s,
-    Leg.Descent: 0.5 km/s,
+    Leg#Ascent: 3.0 km/s,
+    Leg#Coast: 0.5 km/s,
+    Leg#Descent: 0.5 km/s,
 };
-node dv_share: Dimensionless[Leg] = kernels.share(@dv);
-node ascent_share: Dimensionless = @dv_share[Leg.Ascent];
+node dv_share: Dimensionless[Leg] = kernels::share(@dv);
+node ascent_share: Dimensionless = @dv_share[Leg#Ascent];
 "#,
     )
     .unwrap();

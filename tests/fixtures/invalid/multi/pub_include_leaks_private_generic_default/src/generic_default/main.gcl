@@ -2,4 +2,4 @@ type PrivateElement {
     PrivateElement(size: Length),
 }
 
-include generic_default.lib(Element: PrivateElement).{ pub Wrapper };
+include generic_default.lib(type Element: PrivateElement)::{ pub Wrapper };

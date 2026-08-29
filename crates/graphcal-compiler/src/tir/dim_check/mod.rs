@@ -1847,7 +1847,7 @@ fn check_field_domain_constraint_dimensions(
             }
             // For a single-variant collision (record-shape) the display
             // name is `Type.field`; for a true multi-variant union it's
-            // `Type.Variant.field` so diagnostics disambiguate which
+            // `Type#Variant.field` so diagnostics disambiguate which
             // constructor a violating bound belongs to.
             let display_name = if variant.name().as_str() == type_def.name().as_str() {
                 format!("{}.{}", type_def.name(), field.name())

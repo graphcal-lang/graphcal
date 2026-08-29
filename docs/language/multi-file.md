@@ -39,7 +39,7 @@ The package consists of exactly one module: the file itself. The only
 import path that resolves in a virtual package is the file's own stem
 (see [Self-Reference](#self-reference-a-file-is-its-own-package)
 below). There are no sibling-file imports from a virtual-package file;
-the loader rejects `import helper.{X};` with a structured error pointing
+the loader rejects `import helper::{X};` with a structured error pointing
 you at [Promoting to a Real Package](#promoting-to-a-real-package).
 
 This applies even when a `graphcal.toml` sits next to the file. A
@@ -57,7 +57,7 @@ exactly as the path is written.
 A path like `nasa.rocket.dynamics` walks the tree starting at the
 package root: package `nasa` → directory `rocket` → file `dynamics.gcl`
 (or an inline `dag dynamics { ... }` declared inside `rocket.gcl`). The
-path before any `.{...}` or `as` clause **always names a module**, never
+path before any `::{...}` or `as` clause **always names a module**, never
 a symbol — the parser knows the module/symbol boundary from syntax
 alone.
 
@@ -79,7 +79,7 @@ down** — no implicit additions.
 ```graphcal
 import nasa.rocket;                                      // bare: brings `rocket`
 import nasa.rocket as nr;                                // alias: brings `nr`
-import nasa.rocket.{type Orbit, dim Length, compute_thrust as ct};
+import nasa.rocket::{type Orbit, dim Length, compute_thrust as ct};
 // brace: brings `Orbit`, `Length`, and `ct` only
 ```
 
@@ -89,14 +89,14 @@ The forms differ in what enters scope:
 |--------------------------------------------------------|--------------------------------------------|
 | `import nasa.rocket;`                                  | `rocket` (the module, by its leaf name)    |
 | `import nasa.rocket as nr;`                            | `nr` (the module under alias)              |
-| `import nasa.rocket.{type Orbit};`                     | `Orbit` only — **not** `rocket`            |
-| `import nasa.rocket.{type Orbit, dim Length, compute_thrust as ct};` | `Orbit`, `Length`, and `ct` only |
-| `import nasa.rocket as nr.{type Orbit};`               | parse error — alias and brace mutually exclusive |
+| `import nasa.rocket::{type Orbit};`                     | `Orbit` only — **not** `rocket`            |
+| `import nasa.rocket::{type Orbit, dim Length, compute_thrust as ct};` | `Orbit`, `Length`, and `ct` only |
+| `import nasa.rocket as nr::{type Orbit};`               | parse error — alias and brace mutually exclusive |
 
 A whole-module name denotes the exact imported DAG module, not merely a prefix
 for its contents. Because file roots and inline DAGs are one abstraction,
-`@rocket(args).out` or `@nr(args).out` invokes that target directly, while
-`@rocket.child(args).out` descends to an exported child DAG. Imported module
+`@rocket(args)::out` or `@nr(args)::out` invokes that target directly, while
+`@rocket.child(args)::out` descends to an exported child DAG. Imported module
 aliases and local DAGs share this callable namespace; if both bind the same
 spelling to different targets, a call is ambiguous and must be renamed.
 
@@ -105,8 +105,8 @@ two statements:
 
 ```graphcal
 import nasa.rocket;            // brings: rocket
-import nasa.rocket.{type Orbit}; // brings: Orbit
-// Now both `rocket.Orbit` and `Orbit` are usable.
+import nasa.rocket::{type Orbit}; // brings: Orbit
+// Now both `rocket::Orbit` and `Orbit` are usable.
 ```
 
 This is a deliberate divergence from Gleam: Graphcal's brace form does
@@ -129,7 +129,7 @@ are then rejected by the pure-import policy):
 | `index Name` | Index |
 
 ```graphcal
-import nasa.rocket.{
+import nasa.rocket::{
     type Orbit,
     dim Length,
     unit nautical_mile,
@@ -148,12 +148,12 @@ Type names and constructors intentionally occupy different namespaces. To
 import both sides of a same-spelled type/constructor pair, write both items:
 
 ```graphcal
-import school.records.{type Student, Student};
+import school.records::{type Student, Student};
 ```
 
 Units may likewise share a spelling with a term because units are used only in
 unit positions. Import each side explicitly, for example
-`import finance.{unit JPY, JPY};`. A value and a constructor may **not** share
+`import finance::{unit JPY, JPY};`. A value and a constructor may **not** share
 a name because both are terms and would be indistinguishable in expressions.
 
 Imported type-system declarations retain semantic dependencies from their
@@ -171,7 +171,7 @@ separate term import when consumer source explicitly constructs a value.
 Each item in a brace list may be aliased independently:
 
 ```graphcal
-import nasa.rocket.{type Orbit as O, compute_thrust as ct};
+import nasa.rocket::{type Orbit as O, compute_thrust as ct};
 ```
 
 Aliases obey the same namespace-specific reservation rules as direct
@@ -180,13 +180,13 @@ local declarations (N009):
 - `type`, `dim`, and `index` aliases cannot reuse a prelude dimension or
   built-in type spelling.
 - `unit` aliases cannot reuse a prelude unit spelling.
-- aliases of graph values cannot reuse a built-in numeric constant spelling
-  such as `E` or `PI`.
+- Term aliases cannot reuse any visible Term spelling, including built-in
+  constants or functions such as `E`, `PI`, `sum`, or `sin`.
 
-These are separate namespace policies, not one global reserved-word list.
-Graph-value aliases may use time-scale and built-in-function spellings because
-`@UTC`, `Datetime<UTC>`, and `sin(...)` are structurally disambiguated.
-Selective `include` items and `pub` re-exports apply the same rules.
+These are namespace policies, not one global reserved-word list. A Term alias
+may still use a Static time-scale spelling such as `UTC`, because those names
+occupy different namespaces. Selective `include` items and `pub` re-exports
+apply the same rules.
 
 ### What `import` may bring
 
@@ -200,7 +200,7 @@ Only compile-time names cross the `import` boundary:
 | `type` | `type TypeName` | `TypeName` |
 | `index` | `index IndexName` | `IndexName` |
 | constructor | `name` | Used in value expressions |
-| `dag` | `name` | Used with `include` or `@name(args).out` |
+| `dag` | `name` | Used with `include` or `@name(args)::out` |
 
 Runtime values — non-`const` `node` and any `param` — are **not**
 importable. To consume runtime values from another file, instantiate
@@ -218,16 +218,16 @@ module-qualified path to select the owner explicitly:
 import collide.a as a;
 import collide.b as b;
 
-const node gain: Dimensionless = a.bias;
-node phase_score: Dimensionless[a.Phase] = for phase: a.Phase {
-    match phase {
-        a.Phase.Burn => 1.0,
-        a.Phase.Coast => 2.0,
+const node gain: Dimensionless = a::bias;
+node phase_score: Dimensionless[a::Phase] = for current_phase: a::Phase {
+    match current_phase {
+        a::Phase#Burn => 1.0,
+        a::Phase#Coast => 2.0,
     }
 };
-node result: a.Item = a.Pick(distance: 2.0 m);
-node span: Length = 2.0 a.mile;
-node span_miles: Length = @span -> a.mile;
+node result: a::Item = a::Pick(distance: 2.0 m);
+node span: Length = 2.0 a::mile;
+node span_miles: Length = @span -> a::mile;
 ```
 
 The compiler resolves those paths to the canonical exported item; it does not
@@ -235,35 +235,36 @@ merge same-leaf types, indexes, constructors, or labels from different modules.
 
 ### Selective import re-exports
 
-An import is always a private use-site. To re-export a binding, select it
-explicitly and put `pub` on that item:
+Selective imports re-export bindings one item at a time by putting `pub` on the
+item:
 
 ```graphcal
-import nasa.rocket.{ pub type Orbit, compute_thrust };
+import nasa.rocket::{ pub type Orbit, compute_thrust };
 //                   ^^^ only `Orbit` is re-exported
 ```
 
-Bare and aliased imports remain private qualified bindings. This prevents a
-new export in a dependency from silently widening an intermediate module's
-public API:
+Bare and aliased imports are private by default. A leading `pub` on a whole-DAG
+import creates a public DAG alias without flattening any members:
 
 ```graphcal
-import nasa.rocket;       // private binding named `rocket`
-import nasa.rocket as r;  // private binding named `r`
+import nasa.rocket;             // private alias `rocket`
+import nasa.rocket as r;        // private alias `r`
+pub import nasa.rocket;         // public alias `rocket`
+pub import nasa.rocket as nr;   // public alias `nr`
 ```
 
-All leading visibility forms are rejected. Put `pub` on each selected item
-instead:
+A public alias preserves the target's canonical identity. The target and every
+DAG ancestor must be publicly reachable; package-root DAGs are valid targets.
+A leading `pub` on a selective import is invalid because each selected item
+carries its own visibility:
 
 ```graphcal
-pub import nasa.rocket;                    // parse error
-pub import nasa.rocket.{ type Orbit };     // parse error
-pub(bind) import nasa.rocket;              // parse error
-import nasa.rocket.{ pub type Orbit };     // explicit public binding
+pub import nasa.rocket::{ type Orbit }; // parse error
+import nasa.rocket::{ pub type Orbit }; // explicit selective re-export
+pub(bind) import nasa.rocket;           // parse error
 ```
 
-Imports are use-sites and are never bindable; `pub(bind)` belongs only on
-bindable declarations.
+Imports are never bindable; `pub(bind)` belongs only on bindable declarations.
 
 ## The `include` Form
 
@@ -273,30 +274,31 @@ in parentheses is **mandatory** (it may be empty), which makes
 `include` syntactically distinct from `import`.
 
 ```graphcal
-// Bare: leaf becomes the alias; outputs accessed as @compute_thrust.<output>
+// Bare: leaf becomes the alias; outputs accessed as @compute_thrust::<output>
 include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg);
-node t: Force = @compute_thrust.thrust;
+node t: Force = @compute_thrust::thrust;
 
-// Aliased: outputs accessed as @ct.<output>
+// Aliased: outputs accessed as @ct::<output>
 include nasa.rocket.compute_thrust(orbit: @o) as ct;
-node t: Force = @ct.thrust;
+node t: Force = @ct::thrust;
 
 // Brace list: selects (and optionally renames) outputs as direct nodes
-include nasa.rocket.compute_thrust(orbit: @o).{ thrust };
-include nasa.rocket.compute_thrust(orbit: @o).{ thrust, isp, mass_flow as mdot };
+include nasa.rocket.compute_thrust(orbit: @o)::{ thrust };
+include nasa.rocket.compute_thrust(orbit: @o)::{ thrust, isp, mass_flow as mdot };
 node t: Force = @thrust;
 
-// Category markers are import-only; include selectors are always node outputs.
-// include nasa.rocket.compute_thrust(orbit: @o).{ dim thrust }; // parse error
+// Category markers are import-only; include selectors are unmarked Terms.
+// The selected Term must be a projectable param, node, assertion, or visualization.
+// include nasa.rocket.compute_thrust(orbit: @o)::{ dim thrust }; // parse error
 ```
 
 | Form                                                            | Result                                                |
 |-----------------------------------------------------------------|-------------------------------------------------------|
 | `include path.dag(args);`                                       | Sugar for `... as dag` — leaf name is the alias       |
-| `include path.dag(args) as a;`                                  | Outputs reached as `@a.<output>`                      |
-| `include path.dag(args).{x};`                                   | `x` itself becomes a node in the current DAG          |
-| `include path.dag(args).{x as y};`                              | Same, renamed                                         |
-| `include path.dag(args) as a.{x};`                              | parse error — alias and brace mutually exclusive      |
+| `include path.dag(args) as a;`                                  | Outputs reached as `@a::<output>`                      |
+| `include path.dag(args)::{x};`                                   | `x` itself becomes a node in the current DAG          |
+| `include path.dag(args)::{x as y};`                              | Same, renamed                                         |
+| `include path.dag(args) as a::{x};`                              | parse error — alias and brace mutually exclusive      |
 
 Each output selected through a brace list or reached through an include alias
 must be public, including for a same-file DAG. Across a module boundary, the
@@ -330,11 +332,11 @@ pub node doubled: Dimensionless = @x * 2.0;
 // middle.gcl
 param x: Dimensionless;
 include demo.leaf(x: @x) as leaf;
-pub node out: Dimensionless = @leaf.doubled;
+pub node out: Dimensionless = @leaf::doubled;
 
 // main.gcl
 include demo.middle(x: 3.0) as middle;
-node result: Dimensionless = @middle.out; // 6.0
+node result: Dimensionless = @middle::out; // 6.0
 ```
 
 Nesting may be arbitrarily deep as long as the project dependency graph is
@@ -364,10 +366,10 @@ the param interface, however, must still be brought into scope by
 
 ```graphcal
 dag mission {
-    import nasa.rocket.{type Orbit};          // type for the param
+    import nasa.rocket::{type Orbit};          // type for the param
     param o: Orbit;
 
-    include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg).{ thrust };
+    include nasa.rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg)::{ thrust };
 
     node total: Force = @thrust + 100.0 N;
 }
@@ -385,7 +387,7 @@ An include is also a private use-site. Re-export only explicitly selected
 outputs by marking each output `pub` inside the brace list:
 
 ```graphcal
-include nasa.rocket.compute_thrust(orbit: @o).{ pub thrust, mass_flow };
+include nasa.rocket.compute_thrust(orbit: @o)::{ pub thrust, mass_flow };
 //                                                      ^^^^^^^^^ private here
 ```
 
@@ -395,19 +397,19 @@ not expose a dependency-controlled output namespace wholesale.
 
 ### DAG call expression
 
-Inside an expression, `@dag(args).out` is sugar for an anonymous runtime
-`include ... as <synthetic>; @<synthetic>.out`. The projection must name an
+Inside an expression, `@dag(args)::out` is sugar for an anonymous runtime
+`include ... as <synthetic>; @<synthetic>::out`. The projection must name an
 externally projectable value in the DAG: either an explicitly exported node or
 a param input port. Projecting a param reads its effective call binding or,
 when omitted, its default.
 
 ```graphcal
 dag mission {
-    import nasa.rocket.{compute_thrust, type Orbit};
+    import nasa.rocket::{compute_thrust, type Orbit};
     param o: Orbit;
-    node t: Force = @compute_thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
+    node t: Force = @compute_thrust(orbit: @o, dry_mass: 800.0 kg)::thrust;
     node effective_mass: Mass =
-        @compute_thrust(orbit: @o, dry_mass: 800.0 kg).dry_mass;
+        @compute_thrust(orbit: @o, dry_mass: 800.0 kg)::dry_mass;
 }
 ```
 
@@ -429,11 +431,11 @@ may reference local variables from an enclosing `for`, `scan`,
 
 ```graphcal
 node distances: Length[Region] = for r: Region {
-    @scale(factor: 2.0, v: @dist[r]).result
+    @scale(factor: 2.0, v: @dist[r])::result
 };
 ```
 
-#### Imported module calls: `@module(args).out`
+#### Imported module calls: `@module(args)::out`
 
 Every file root and every inline `dag` block is the same kind of DAG module. A
 whole-module `import` binds its exact target as a reusable module alias, so the
@@ -443,11 +445,11 @@ DAG:
 ```graphcal
 // Invoke the imported file-root DAG itself.
 import nasa.rocket as rocket;
-node file_output: Force = @rocket(orbit: @o).thrust;
+node file_output: Force = @rocket(orbit: @o)::thrust;
 
 // Invoke an inline DAG imported by its full module path.
 import nasa.rocket.compute_thrust as thrust;
-node inline_output: Force = @thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
+node inline_output: Force = @thrust(orbit: @o, dry_mass: 800.0 kg)::thrust;
 ```
 
 An unaliased import binds the path's leaf (`import nasa.rocket;` binds
@@ -455,8 +457,8 @@ An unaliased import binds the path's leaf (`import nasa.rocket;` binds
 the same way:
 
 ```graphcal
-import nasa.rocket.{compute_thrust as thrust};
-node t: Force = @thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
+import nasa.rocket::{compute_thrust as thrust};
+node t: Force = @thrust(orbit: @o, dry_mass: 800.0 kg)::thrust;
 ```
 
 The alias can also qualify a child DAG. After importing the file module, the
@@ -464,7 +466,7 @@ same `compute_thrust` DAG can be reached as:
 
 ```graphcal
 import nasa.rocket as rocket;
-node t: Force = @rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg).thrust;
+node t: Force = @rocket.compute_thrust(orbit: @o, dry_mass: 800.0 kg)::thrust;
 ```
 
 The projected member must be an explicitly exported node or a param input port.
@@ -472,7 +474,7 @@ Across a module boundary, every inline DAG traversed by the call path must also
 be explicitly exported; a file root is its package-addressable module.
 
 What *is* still rejected is dropping the projection: `@dag(args)`,
-`@module(args)`, and `@module.dag(args)` without the trailing `.<out>` are parse
+`@module(args)`, and `@module.dag(args)` without the trailing `::<out>` are parse
 errors. A DAG instance with no projection is not a graph value, which is what
 `@` requires.
 
@@ -488,7 +490,7 @@ dag analyze {
     type IntermediateResult { IntermediateResult(value: Length) }
 
     dag deeper {
-        import orbit_analysis.analyze.{type IntermediateResult};
+        import orbit_analysis.analyze::{type IntermediateResult};
         param r: IntermediateResult;
         // ...
     }
@@ -506,7 +508,7 @@ parents never alias each other.
 project dependency edges. They load dependencies, import values and
 compile-time names with the same visibility checks as file-root
 imports, and are honored whether the DAG is consumed with
-`include dag(args)` or as `@dag(args).out`.
+`include dag(args)` or as `@dag(args)::out`.
 
 Sibling top-level DAGs are addressed the same way:
 
@@ -519,7 +521,7 @@ dag double {
 
 dag analyze {
     param input_dist: Length;
-    include orbit_analysis.double(x: @input_dist).{ y as doubled };
+    include orbit_analysis.double(x: @input_dist)::{ y as doubled };
     node final: Length = @doubled + 1.0 m;
 }
 ```
@@ -546,7 +548,7 @@ const node earth_mu: GravParam = 3.986e5 km^3/s^2;
 
 dag analyze {
     dag energy {
-        import dynamics.{type OrbitType, earth_mu};   // file's own name
+        import dynamics::{type OrbitType, earth_mu};   // file's own name
         param o: OrbitType;
         node e: SpecificEnergy = -@earth_mu / (2.0 * @o.sma);
     }
@@ -567,7 +569,7 @@ type OrbitType { OrbitType(sma: Length, ecc: Dimensionless) }
 
 dag analyze {
     dag energy {
-        import nasa.rocket.dynamics.{type OrbitType};
+        import nasa.rocket.dynamics::{type OrbitType};
         param o: OrbitType;
         // ...
     }
@@ -595,7 +597,7 @@ dag analyze {
 }
 
 dag analyze_ok {
-    import dynamics.{type OrbitType};
+    import dynamics::{type OrbitType};
     param o: OrbitType;
 }
 ```
@@ -632,9 +634,9 @@ my_project/
 The files are now addressed as:
 
 ```graphcal
-import nasa.constants.{g0};
-import nasa.rocket.{type Orbit, compute_thrust};
-import nasa.orbital.transfer.{dv};
+import nasa.constants::{g0};
+import nasa.rocket::{type Orbit, compute_thrust};
+import nasa.orbital.transfer::{dv};
 ```
 
 ### Migrating self-references
@@ -644,10 +646,10 @@ be rewritten from the bare file stem to the full package path:
 
 ```graphcal
 // Before (virtual package `dynamics`):
-import dynamics.{type OrbitType};
+import dynamics::{type OrbitType};
 
 // After (real package `nasa`, file at src/nasa/rocket/dynamics.gcl):
-import nasa.rocket.dynamics.{type OrbitType};
+import nasa.rocket.dynamics::{type OrbitType};
 ```
 
 The LSP rename refactor handles the mechanical part of this rewrite.
@@ -729,8 +731,8 @@ units_v2 = { package = "units", git = "https://github.com/acme/units.git", rev =
 Source resolves those aliases explicitly:
 
 ```graphcal
-import units_v1.si.{unit m as m_v1};
-import units_v2.si.{unit m as m_v2};
+import units_v1.si::{unit m as m_v1};
+import units_v2.si::{unit m as m_v2};
 ```
 
 Run `graphcal deps lock` before checking or evaluating a package with
@@ -853,7 +855,7 @@ and user source may not begin a path with either segment except to
 import from the stdlib:
 
 ```graphcal
-import std.math.{sin, cos};   // (reserved) — stdlib import
+import std.math::{sin, cos};   // (reserved) — stdlib import
 ```
 
 The standard library itself is still being designed; references in
@@ -907,10 +909,10 @@ A param remains readable as an output. Selection returns its supplied value, or
 its default when the caller omits the binding:
 
 ```graphcal
-include external_dag().{ x as default_x };
-include external_dag(x: 1.0).{ x as bound_x };
+include external_dag()::{ x as default_x };
+include external_dag(x: 1.0)::{ x as bound_x };
 
-node projected: Dimensionless = @external_dag().x;
+node projected: Dimensionless = @external_dag()::x;
 ```
 
 Selecting or re-exporting that effective value does not preserve the input-port
@@ -934,7 +936,7 @@ Importing a private non-`param` item produces error `V001`:
 
 ```graphcal
 // ERROR: cannot import private item `internal_helper` from `lib`
-import lib.{internal_helper};
+import lib::{internal_helper};
 ```
 
 ### Required items must be `pub(bind)`
@@ -996,10 +998,10 @@ error `V004`:
 
 ```graphcal
 pub(bind) index Phase = { Design, Test };
-// ERROR: variant literal `Phase.Design` of `pub(bind) index` cannot be
+// ERROR: variant literal `Phase#Design` of `pub(bind) index` cannot be
 //        used in the defining file
 param phase_cost: Dimensionless[Phase];
-pub node cost: Dimensionless = @phase_cost[Phase.Design];
+pub node cost: Dimensionless = @phase_cost[Phase#Design];
 ```
 
 ### Include overrides must reconcile (`V005`)
@@ -1017,18 +1019,18 @@ different nominal contract — error `V005`:
 ```graphcal
 // lib.gcl
 pub(bind) index Phase = { Design, Test };
-param cost: Dimensionless[Phase] = { Phase.Design: 1.0, Phase.Test: 2.0 };
+param cost: Dimensionless[Phase] = { Phase#Design: 1.0, Phase#Test: 2.0 };
 
 // main.gcl
 pub(bind) index NewPhase = { Review, Ship };
 // ERROR: include overrides index `Phase` but does not re-bind `cost`,
-//        whose default mentions `Phase.Design`
-include lib(Phase: NewPhase);
+//        whose default mentions `Phase#Design`
+include lib(index Phase: NewPhase);
 
 // Fix: re-bind `cost` as well.
 include lib(
-    Phase: NewPhase,
-    cost: { NewPhase.Review: 1.0, NewPhase.Ship: 2.0 },
+    index Phase: NewPhase,
+    cost: { NewPhase#Review: 1.0, NewPhase#Ship: 2.0 },
 );
 ```
 
@@ -1052,11 +1054,11 @@ pub const node origin: Element = Element;
 // main.gcl
 type Inner { Inner } // private at the importer
 // ERROR: re-exported const node `origin` references private type `Inner`
-include container(Element: Inner).{ pub origin };
+include container(type Element: Inner)::{ pub origin };
 
 // Fix: make the substituted name visible too.
 pub type Inner { Inner }
-include container(Element: Inner).{ pub origin };
+include container(type Element: Inner)::{ pub origin };
 ```
 
 V006 checks only outputs/items explicitly marked `pub`; adding another public
@@ -1067,14 +1069,14 @@ than being reinterpreted as a same-spelled importer declaration.
 
 ## Parameterized Includes
 
-A bound `param` or `index` in an `include` instantiates the dependency
-with a specific value or type-level argument. This is how reusable "library"
+A param binding or explicitly marked `type`, `dim`, or `index` binding in an
+`include` instantiates the dependency with a specific value or type-level argument. This is how reusable "library"
 DAGs are specialized at the call site.
 
 ### Param bindings
 
 ```graphcal
-include nasa.rocket.compute_thrust(dry_mass: 800.0 kg).{ thrust };
+include nasa.rocket.compute_thrust(dry_mass: 800.0 kg)::{ thrust };
 ```
 
 Multiple instantiations with different values produce independent
@@ -1084,14 +1086,14 @@ sub-graphs:
 include nasa.rocket.compute_thrust(dry_mass: 800.0 kg, isp: 320.0 s) as stage_1;
 include nasa.rocket.compute_thrust(dry_mass: 500.0 kg, isp: 450.0 s) as stage_2;
 
-node total_dv: Velocity = @stage_1.delta_v + @stage_2.delta_v;
+node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```
 
 Binding expressions can reference `@` values from the surrounding scope:
 
 ```graphcal
 param my_mass: Mass = 800.0 kg;
-include nasa.rocket.compute_thrust(dry_mass: @my_mass).{ thrust };
+include nasa.rocket.compute_thrust(dry_mass: @my_mass)::{ thrust };
 ```
 
 ### Required parameters
@@ -1115,7 +1117,7 @@ pub node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```graphcal
 // main.gcl
 include lib.rocket_engine(dry_mass: 800.0 kg) as engine;
-node dv: Velocity = @engine.delta_v;
+node dv: Velocity = @engine::delta_v;
 ```
 
 If an `include` or inline DAG call omits a required param, the compiler emits
@@ -1141,9 +1143,9 @@ pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 pub index MyPhase = { Design, Build, Test };
 
 include lib.budget(
-    Phase: MyPhase,
-    cost: { MyPhase.Design: 10.0, MyPhase.Build: 20.0, MyPhase.Test: 5.0 },
-).{ total };
+    index Phase: MyPhase,
+    cost: { MyPhase#Design: 10.0, MyPhase#Build: 20.0, MyPhase#Test: 5.0 },
+)::{ total };
 
 node result: Dimensionless = @total;  // 35.0
 ```
@@ -1158,7 +1160,7 @@ dag scale {
 }
 
 include scale(
-    Axis: Fin(3),
+    index Axis: Fin(3),
     xs: table[Fin(3)] { 1.0; 2.0; 3.0; },
 ) as scaled;
 ```
@@ -1186,10 +1188,10 @@ pub(bind) index Step: Time;   // requires dimension Time
 
 // main.gcl
 index MyStep = range(0.0 s, 10.0 s, step: 1.0 s);     // OK
-include lib(Step: MyStep);
+include lib(index Step: MyStep);
 
 index DistStep = range(0.0 m, 100.0 m, step: 10.0 m); // dimension is Length
-include lib(Step: DistStep);                              // ERROR: dimension mismatch
+include lib(index Step: DistStep);                              // ERROR: dimension mismatch
 ```
 
 ### Partial bindings
@@ -1213,9 +1215,9 @@ include lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2800.0 kg, isp: 320.0 s) as r;
 - A binding list is a unique name-to-argument mapping. Binding order has no
   effect, and repeating a value, index, type, or dimension target is a compile
   error rather than a last-binding-wins override.
-- A value binding name must identify a `param` input port in the included
-  module; index/type/dim bindings target declarations explicitly marked
-  `pub(bind)`.
+- An unmarked binding name identifies exactly a `param` input port. Static
+  bindings require the explicit `index`, `type`, or `dim` marker and target a
+  declaration marked `pub(bind)`. The `param` marker is invalid.
 - Binding a `node`, `const node`, or unknown name is a compile error.
 - Required input ports of an included/called DAG must be provided by bindings;
   required input ports of the entry DAG must be provided by `--param`,
@@ -1237,10 +1239,10 @@ Graphcal detects circular imports at compile time:
 
 ```graphcal
 // a.gcl
-import b.{x};
+import b::{x};
 
 // b.gcl
-import a.{y};
+import a::{y};
 // ERROR: circular import detected
 ```
 
@@ -1299,7 +1301,7 @@ pub node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 include project.lib.rocket(dry_mass: 800.0 kg, fuel_mass: 2000.0 kg, isp: 320.0 s) as stage_1;
 include project.lib.rocket(dry_mass: 500.0 kg, fuel_mass: 1200.0 kg, isp: 450.0 s) as stage_2;
 
-node total_dv: Velocity = @stage_1.delta_v + @stage_2.delta_v;
+node total_dv: Velocity = @stage_1::delta_v + @stage_2::delta_v;
 ```
 
 ### Reusable Templates with Required Indexes
@@ -1317,9 +1319,9 @@ pub node total: Dimensionless = sum(for p: Phase { @cost[p] });
 pub index ProjectPhase = { Design, Build, Test };
 
 include project.lib.budget(
-    Phase: ProjectPhase,
-    cost: { ProjectPhase.Design: 10.0, ProjectPhase.Build: 20.0, ProjectPhase.Test: 5.0 },
-).{ total };
+    index Phase: ProjectPhase,
+    cost: { ProjectPhase#Design: 10.0, ProjectPhase#Build: 20.0, ProjectPhase#Test: 5.0 },
+)::{ total };
 
 node project_cost: Dimensionless = @total;
 ```
@@ -1339,7 +1341,7 @@ importer declaration needs to name that instance-local outcome in
 `#[assumes(...)]`:
 
 ```graphcal
-include project.checks(limit: 50.0).{ limit, limit_positive };
+include project.checks(limit: 50.0)::{ limit, limit_positive };
 
 #[assumes(limit_positive)]
 node ratio: Dimensionless = @limit / 2.0;

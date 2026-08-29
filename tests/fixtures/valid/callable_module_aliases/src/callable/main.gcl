@@ -1,22 +1,22 @@
 import callable.library as file_dag;
 import callable.library.helper as inline_dag;
-import callable.library.{ helper as selected_dag };
+import callable.library::{ helper as selected_dag };
 import callable.library;
 import callable.library.helper;
 
-node file_result: Dimensionless = @file_dag(x: 2.0).doubled;
-node file_param_result: Dimensionless = @file_dag(x: 7.0).x;
-node inline_result: Dimensionless = @inline_dag(x: 3.0).tripled;
-node selected_result: Dimensionless = @selected_dag(x: 4.0).tripled;
-node unaliased_file_result: Dimensionless = @library(x: 5.0).doubled;
-node unaliased_inline_result: Dimensionless = @helper(x: 6.0).tripled;
+node file_result: Dimensionless = @file_dag(x: 2.0)::doubled;
+node file_param_result: Dimensionless = @file_dag(x: 7.0)::x;
+node inline_result: Dimensionless = @inline_dag(x: 3.0)::tripled;
+node selected_result: Dimensionless = @selected_dag(x: 4.0)::tripled;
+node unaliased_file_result: Dimensionless = @library(x: 5.0)::doubled;
+node unaliased_inline_result: Dimensionless = @helper(x: 6.0)::tripled;
 
 dag wrapper {
     import callable.library as nested_file;
     import callable.library.helper as nested_inline;
 
     param x: Dimensionless;
-    pub node result: Dimensionless = @nested_file(x: @x).doubled + @nested_inline(x: @x).tripled;
+    pub node result: Dimensionless = @nested_file(x: @x)::doubled + @nested_inline(x: @x)::tripled;
 }
 
-node nested_scope_result: Dimensionless = @wrapper(x: 8.0).result;
+node nested_scope_result: Dimensionless = @wrapper(x: 8.0)::result;

@@ -28,7 +28,7 @@ A `dag` block is a named template — it does not execute until you
 ## Including a DAG Block
 
 Use `include` to instantiate a DAG block. The argument list is mandatory
-(it may be empty); outputs are projected via the `.{ ... }` brace list,
+(it may be empty); outputs are projected via the `::{ ... }` brace list,
 and the statement ends with `;`:
 
 ```
@@ -37,12 +37,12 @@ const node r_earth: Length = 6371.0 km;
 param parking_alt: Length = 200.0 km;
 
 include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt)
-    .{ v as v_parking };
+    ::{ v as v_parking };
 ```
 
 - **Named arguments**: `gm: @gm_earth` passes `@gm_earth` to the `gm`
   parameter. Arguments are evaluated in the surrounding scope.
-- **Output selection**: `.{ v as v_parking }` selects the public `v` node and
+- **Output selection**: `::{ v as v_parking }` selects the public `v` node and
   renames it to `v_parking`. An included output must be declared `pub`, even
   when the DAG is in the same file.
 - The included nodes become regular nodes in your computation graph.
@@ -74,7 +74,7 @@ include hohmann_transfer(
     gm: @gm_earth,
     r1: @r_earth + @parking_alt,
     r2: @r_earth + @target_alt,
-).{ total_dv as transfer_dv, dv1 as departure_dv };
+)::{ total_dv as transfer_dv, dv1 as departure_dv };
 ```
 
 ## Aliasing the Whole Include
@@ -84,7 +84,7 @@ instantiation instead of using a brace list:
 
 ```
 include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt) as parking;
-node v_parking: Velocity = @parking.v;
+node v_parking: Velocity = @parking::v;
 ```
 
 Alias and brace list are mutually exclusive on a single `include`.
@@ -95,13 +95,13 @@ Included outputs are regular graph nodes, referenced with `@`:
 
 ```
 include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt)
-    .{ v as v_parking };
+    ::{ v as v_parking };
 
 include hohmann_transfer(
     gm: @gm_earth,
     r1: @r_earth + @parking_alt,
     r2: @r_earth + @target_alt,
-).{ total_dv as transfer_dv };
+)::{ total_dv as transfer_dv };
 
 node total: Velocity = @v_parking + @transfer_dv;
 ```
@@ -120,7 +120,7 @@ explicitly inside the `dag` body. See
 
 - **`dag`** blocks for defining reusable computation templates
 - **`include`** to instantiate a DAG block with named arguments
-- **Output selection** with `.{ name as alias }` to pick and rename
+- **Output selection** with `::{ name as alias }` to pick and rename
   outputs
 - **Whole-include aliasing** with `as` for grouping outputs under a
   prefix

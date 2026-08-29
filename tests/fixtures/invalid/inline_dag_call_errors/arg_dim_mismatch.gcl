@@ -7,4 +7,4 @@ dag id_len {
 }
 
 param src: Time = 10.0 s;
-node y: Length = @id_len(v: @src).result;
+node y: Length = @id_len(v: @src)::result;

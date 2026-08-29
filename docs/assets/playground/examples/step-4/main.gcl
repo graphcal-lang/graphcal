@@ -1,7 +1,7 @@
 pub dim GravParam = Length^3 / Time^2;
 
 dag orbital_velocity {
-    import main.{dim GravParam};
+    import main::{ dim GravParam };
 
     param gm: GravParam;
     param r: Length;
@@ -9,7 +9,7 @@ dag orbital_velocity {
 }
 
 dag hohmann_transfer {
-    import main.{dim GravParam};
+    import main::{ dim GravParam };
 
     param gm: GravParam;
     param r1: Length;
@@ -28,12 +28,12 @@ param parking_alt: Length = 200.0 km;
 param target_alt: Length = 35786.0 km;
 
 include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt)
-    .{ v as v_parking };
+    ::{ v as v_parking };
 
 include hohmann_transfer(
     gm: @gm_earth,
     r1: @r_earth + @parking_alt,
     r2: @r_earth + @target_alt,
-).{ total_dv as transfer_dv, dv1 as departure_dv };
+)::{ total_dv as transfer_dv, dv1 as departure_dv };
 
 node total: Velocity = @v_parking + @transfer_dv;

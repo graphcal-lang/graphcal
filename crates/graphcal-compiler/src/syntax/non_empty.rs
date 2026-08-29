@@ -142,6 +142,14 @@ impl<T> NonEmpty<T> {
         self.items
     }
 
+    /// Consume the sequence into its last item and the preceding items.
+    #[must_use]
+    pub(crate) fn into_last_and_init(mut self) -> (T, Vec<T>) {
+        let last_index = self.items.len() - 1;
+        let last = self.items.remove(last_index);
+        (last, self.items)
+    }
+
     /// Borrow as a slice.
     #[must_use]
     pub fn as_slice(&self) -> &[T] {

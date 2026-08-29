@@ -175,9 +175,16 @@ fn validate_assumes_arguments(
         .try_fold(
             (HashMap::<DeclName, Span>::new(), Vec::new()),
             |(mut seen, mut names), argument| {
-                let ident = match argument {
-                    AttributeArg::Path { segments, .. } if segments.len() == 1 => segments.first(),
-                    AttributeArg::Path { .. }
+                let (atom, span) = match argument {
+                    AttributeArg::Path { path } => match path.value.as_bare() {
+                        Some(atom) => (atom, path.span),
+                        None => {
+                            return Err(AttributeValidationError::InvalidAssumesArgument {
+                                span: argument.span(),
+                            });
+                        }
+                    },
+                    AttributeArg::IndexLabel { .. }
                     | AttributeArg::FinitePosition { .. }
                     | AttributeArg::Group { .. } => {
                         return Err(AttributeValidationError::InvalidAssumesArgument {
@@ -185,17 +192,17 @@ fn validate_assumes_arguments(
                         });
                     }
                 };
-                let name = DeclName::from_atom(ident.name.clone());
-                seen.insert(name.clone(), ident.span).map_or_else(
+                let name = DeclName::from_atom(atom.clone());
+                seen.insert(name.clone(), span).map_or_else(
                     || {
-                        names.push(Spanned::new(name.clone(), ident.span));
+                        names.push(Spanned::new(name.clone(), span));
                         Ok((seen, names))
                     },
                     |first| {
                         Err(AttributeValidationError::DuplicateAssumesArgument {
                             name: name.clone(),
                             first,
-                            duplicate: ident.span,
+                            duplicate: span,
                         })
                     },
                 )
@@ -337,7 +344,7 @@ mod tests {
                 "duplicate",
             ),
             (
-                "#[assumes(module.first)]\nnode output: Dimensionless = 1.0;",
+                "#[assumes(module::first)]\nnode output: Dimensionless = 1.0;",
                 "invalid",
             ),
         ];

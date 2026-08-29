@@ -19,7 +19,7 @@ pub struct FnCallContext {
 /// Cursor inside one selective-import brace-list item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportItemCompletionContext {
-    /// Structured module path preceding `.{`.
+    /// Structured module path preceding `::{`.
     pub module_path: graphcal_compiler::syntax::non_empty::NonEmpty<String>,
     /// Explicit marker already typed for the current item, if any.
     pub namespace: Option<graphcal_compiler::syntax::ast::ImportItemNamespace>,
@@ -27,7 +27,7 @@ pub struct ImportItemCompletionContext {
 
 /// The broad completion context at the cursor position.
 pub enum CompletionContext {
-    /// Inside `import module.{ ... }`.
+    /// Inside `import module::{ ... }`.
     ImportItem(ImportItemCompletionContext),
     /// After `@` — complete param and node names.
     GraphRef,
@@ -122,32 +122,34 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
             Token::LParen => {
                 if depth == 0 {
                     // Found unmatched `(`. Check if preceded by identifier,
-                    // walking back over `alias.` qualifier segments so
-                    // extern calls (`fluids.density(`) keep their qualified
-                    // name.
+                    // walking back over dotted DAG paths and an explicit
+                    // `::` member boundary so extern calls
+                    // (`fluids::density(`) keep their qualified name.
                     if i > 0
                         && let (name_token, name_span) = &tokens[i - 1]
                         && name_token.is_identifier()
                     {
-                        let mut segments = vec![
-                            source[name_span.offset()..name_span.offset() + name_span.len()]
-                                .to_string(),
-                        ];
+                        let mut name = source
+                            [name_span.offset()..name_span.offset() + name_span.len()]
+                            .to_string();
                         let mut j = i - 1;
                         while j >= 2
-                            && tokens[j - 1].0 == Token::Dot
+                            && matches!(tokens[j - 1].0, Token::Dot | Token::DoubleColon)
                             && let (seg_token, seg_span) = &tokens[j - 2]
                             && seg_token.is_identifier()
                         {
-                            segments.push(
-                                source[seg_span.offset()..seg_span.offset() + seg_span.len()]
-                                    .to_string(),
-                            );
+                            let separator = if tokens[j - 1].0 == Token::Dot {
+                                "."
+                            } else {
+                                "::"
+                            };
+                            let segment =
+                                &source[seg_span.offset()..seg_span.offset() + seg_span.len()];
+                            name = format!("{segment}{separator}{name}");
                             j -= 2;
                         }
-                        segments.reverse();
                         return Some(FnCallContext {
-                            fn_name: segments.join("."),
+                            fn_name: name,
                             active_param: comma_count,
                         });
                     }
@@ -266,7 +268,7 @@ fn selective_import_completion_context(
         }
         _ => false,
     })?;
-    if tokens[open].0 != Token::LBrace || open < 3 || tokens[open - 1].0 != Token::Dot {
+    if tokens[open].0 != Token::LBrace || open < 3 || tokens[open - 1].0 != Token::DoubleColon {
         return None;
     }
 
@@ -412,13 +414,13 @@ mod tests {
     #[test]
     fn selective_import_completion_recovers_path_and_category_marker() {
         for (source, expected) in [
-            ("import finance.units.{ ", None),
+            ("import finance.units::{ ", None),
             (
-                "import finance.units.{ unit ",
+                "import finance.units::{ unit ",
                 Some(graphcal_compiler::syntax::ast::ImportItemNamespace::Unit),
             ),
             (
-                "import finance.units.{ JPY, index ",
+                "import finance.units::{ JPY, index ",
                 Some(graphcal_compiler::syntax::ast::ImportItemNamespace::Index),
             ),
         ] {
@@ -434,7 +436,7 @@ mod tests {
             assert_eq!(context.namespace, expected);
         }
 
-        let include = "include finance.units().{ ";
+        let include = "include finance.units()::{ ";
         assert!(!matches!(
             determine_completion_context(include, include.len()),
             CompletionContext::ImportItem(_)
@@ -513,10 +515,10 @@ mod tests {
 
     #[test]
     fn qualified_contextual_name_is_an_ordinary_fn_call() {
-        let source = "plugin.scan()";
+        let source = "plugin::scan()";
         let offset = source.len() - 1;
         let ctx = find_fn_call_context(source, offset).unwrap();
-        assert_eq!(ctx.fn_name, "plugin.scan");
+        assert_eq!(ctx.fn_name, "plugin::scan");
         assert_eq!(ctx.active_param, 0);
     }
 

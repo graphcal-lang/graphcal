@@ -180,7 +180,7 @@ fn plan_does_not_invoke_runtime_host_functions() {
         "import plugin \"graphcal:demo\" as demo {\n\
              fn inverse<D: Dim>(x: D) -> D^-1;\n\
          }\n\
-         node trap: Dimensionless = demo.inverse(0.0);\n",
+         node trap: Dimensionless = demo::inverse(0.0);\n",
     );
     let plan = run(&["dump", "plan", path.to_str().unwrap()]);
     assert!(

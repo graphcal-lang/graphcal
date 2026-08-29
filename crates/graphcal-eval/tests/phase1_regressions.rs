@@ -88,7 +88,7 @@ dag helper {
     pub node out: Dimensionless = @x + 1.0;
 }
 param input: Dimensionless;
-pub node result: Dimensionless = @helper(x: @input).out;
+pub node result: Dimensionless = @helper(x: @input)::out;
 ";
     std::fs::write(package.join("a.gcl"), library).unwrap();
     std::fs::write(package.join("b.gcl"), library).unwrap();
@@ -98,7 +98,7 @@ pub node result: Dimensionless = @helper(x: @input).out;
         r"
 include calls.a(input: 1.0) as a;
 include calls.b(input: 2.0) as b;
-node total: Dimensionless = @a.result + @b.result;
+node total: Dimensionless = @a::result + @b::result;
 ",
     )
     .unwrap();
@@ -128,7 +128,7 @@ dag chart_config {
 plot p = {
     mark: line,
     encode: { x: 1.0 },
-    width: @chart_config().width,
+    width: @chart_config()::width,
 };
 ",
     );
@@ -170,10 +170,10 @@ fn generic_dimension_arguments_keep_canonical_module_owners() {
 base dim Foo;
 base unit foo: Foo;
 node local: Foo = 1.0 foo;
-node from_a: a.Box<a.Foo> = a.Box<a.Foo>(x: 1.0 a.foo);
-node from_b: b.Box<b.Foo> = b.Box<b.Foo>(x: 1.0 b.foo);
-node compound: a.Box<a.Foo * b.Foo> =
-    a.Box<a.Foo * b.Foo>(x: (1.0 a.foo) * (1.0 b.foo));
+node from_a: a::Box<a::Foo> = a::Box<a::Foo>(x: 1.0 a::foo);
+node from_b: b::Box<b::Foo> = b::Box<b::Foo>(x: 1.0 b::foo);
+node compound: a::Box<a::Foo * b::Foo> =
+    a::Box<a::Foo * b::Foo>(x: (1.0 a::foo) * (1.0 b::foo));
 "
             ),
         )
@@ -199,8 +199,8 @@ import owner_dims.b as b;
 plot p = {
     mark: point,
     encode: {
-        x: for item: a.Axis { item },
-        y: for item: b.Axis { item },
+        x: for item: a::Axis { item },
+        y: for item: b::Axis { item },
     },
 };
 ",
@@ -225,7 +225,7 @@ fn same_leaf_dimension_mismatch_diagnostic_qualifies_owners() {
         r"
 import owner_dims.a as a;
 import owner_dims.b as b;
-node bad: a.Box<a.Foo> = a.Box<a.Foo>(x: 1.0 b.foo);
+node bad: a::Box<a::Foo> = a::Box<a::Foo>(x: 1.0 b::foo);
 ",
     )
     .unwrap();
@@ -252,25 +252,25 @@ dag helper {
     pub const node fixed: Dimensionless = 1.0;
     pub node out: Dimensionless = @fixed;
 }
-const node value: Dimensionless = @helper().out;
+const node value: Dimensionless = @helper()::out;
 ",
         r"
 dag helper {
     param value: Dimensionless = 1.0;
 }
-const node value: Dimensionless = @helper().value;
+const node value: Dimensionless = @helper()::value;
 ",
         r"
 dag helper {
     pub node min_value: Dimensionless = 0.0;
 }
-param value: Dimensionless(min: @helper().min_value) = 1.0;
+param value: Dimensionless(min: @helper()::min_value) = 1.0;
 ",
         r"
 dag helper {
     pub node min_value: Dimensionless = 0.0;
 }
-type Box { Box(value: Dimensionless(min: @helper().min_value)) }
+type Box { Box(value: Dimensionless(min: @helper()::min_value)) }
 ",
     ] {
         assert!(
@@ -301,7 +301,7 @@ fn file_root_dag_call_is_also_runtime_only() {
     let root = package.join("main.gcl");
     std::fs::write(
         &root,
-        "import call_phase.library as library;\nconst node value: Dimensionless = @library().out;\n",
+        "import call_phase.library as library;\nconst node value: Dimensionless = @library()::out;\n",
     )
     .unwrap();
 
@@ -403,11 +403,11 @@ pub node out: Dimensionless = @extracted;
     for main in [
         r"
 type Other { Other(x: Dimensionless) }
-include reconcile.library(Record: Other, record: Other(x: 2.0)) as instance;
+include reconcile.library(type Record: Other, record: Other(x: 2.0)) as instance;
 ",
         r"
 type Other { Other(y: Dimensionless) }
-include reconcile.library(Record: Other, record: Other(y: 2.0)) as instance;
+include reconcile.library(type Record: Other, record: Other(y: 2.0)) as instance;
 ",
     ] {
         assert_type_override_requires_reconciliation(library, main, "extracted");
@@ -424,9 +424,9 @@ param extracted: Dimensionless = @record.x;
 pub node out: Dimensionless = @extracted;
 ",
         r"
-import reconcile.replacement.{ type Other as Replacement, Other as MakeReplacement };
+import reconcile.replacement::{ type Other as Replacement, Other as MakeReplacement };
 include reconcile.library(
-    Record: Replacement,
+    type Record: Replacement,
     record: MakeReplacement(x: 2.0),
 ) as instance;
 ",
@@ -444,7 +444,7 @@ include reconcile.library(
 fn canonical_alias_equal_to_replacement_is_not_a_false_dependency() {
     let result = compile_reconciliation_project_with_files(
         r"
-import reconcile.replacement.{ type Other as Existing, Other as MakeExisting };
+import reconcile.replacement::{ type Other as Existing, Other as MakeExisting };
 pub(bind) type Record { Record(x: Dimensionless) }
 param record: Record = Record(x: 1.0);
 param existing: Existing = MakeExisting(x: 3.0);
@@ -452,9 +452,9 @@ param extracted: Dimensionless = @existing.x;
 pub node out: Dimensionless = @record.x + @extracted;
 ",
         r"
-import reconcile.replacement.{ type Other as Existing, Other as MakeExisting };
+import reconcile.replacement::{ type Other as Existing, Other as MakeExisting };
 include reconcile.library(
-    Record: Existing,
+    type Record: Existing,
     record: MakeExisting(x: 2.0),
 ) as instance;
 ",
@@ -484,11 +484,11 @@ pub node out: Dimensionless = @extracted;
     for main in [
         r"
 type Other { Left(value: Dimensionless), Right(value: Dimensionless) }
-include reconcile.library(Record: Other, record: Left(value: 2.0)) as instance;
+include reconcile.library(type Record: Other, record: Left(value: 2.0)) as instance;
 ",
         r"
 type Other { Alpha(value: Dimensionless), Beta(value: Dimensionless) }
-include reconcile.library(Record: Other, record: Alpha(value: 2.0)) as instance;
+include reconcile.library(type Record: Other, record: Alpha(value: 2.0)) as instance;
 ",
     ] {
         assert_type_override_requires_reconciliation(library, main, "extracted");
@@ -507,9 +507,9 @@ pub node out: Dimensionless = @extracted;
 ";
     let main = r"
 type Other { Other(x: Dimensionless) }
-import reconcile.library.{ type Wrapper, Wrapper, Record };
+import reconcile.library::{ type Wrapper, Wrapper, Record };
 include reconcile.library(
-    Record: Other,
+    type Record: Other,
     seed: Wrapper(value: Record(x: 1.0)),
 ) as instance;
 ";
@@ -528,8 +528,8 @@ pub node out: Dimensionless = @record.x;
 ";
     let main = r"
 type Other { Other(x: Dimensionless) }
-import reconcile.library.{ type Wrapper, Wrapper };
-include reconcile.library(Record: Other, record: Other(x: 2.0)) as instance;
+import reconcile.library::{ type Wrapper, Wrapper };
+include reconcile.library(type Record: Other, record: Other(x: 2.0)) as instance;
 ";
 
     assert_type_override_requires_reconciliation(library, main, "wrapped");
@@ -548,16 +548,16 @@ pub node out: Dimensionless = sum(@values);
     for main in [
         r"
 index Other = { X, Y };
-import reconcile.library.{ type Vector, Vector };
+import reconcile.library::{ type Vector, Vector };
 include reconcile.library(
-    Axis: Other,
-    values: { Other.X: 3.0, Other.Y: 4.0 },
+    index Axis: Other,
+    values: { Other#X: 3.0, Other#Y: 4.0 },
 ) as instance;
 ",
         r"
-import reconcile.library.{ type Vector, Vector };
+import reconcile.library::{ type Vector, Vector };
 include reconcile.library(
-    Axis: Fin(2),
+    index Axis: Fin(2),
     values: for i: Fin(2) { 3.0 },
 ) as instance;
 ",
@@ -579,7 +579,7 @@ pub dag reusable {
     let main = r"
 type Other { Other(x: Dimensionless) }
 include reconcile.library.reusable(
-    Record: Other,
+    type Record: Other,
     record: Other(x: 2.0),
 ) as instance;
 ";
@@ -598,7 +598,7 @@ dag reusable {
     pub node out: Dimensionless = @extracted;
 }
 type Other { Other(x: Dimensionless) }
-include reusable(Record: Other, record: Other(x: 2.0)) as instance;
+include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
 ",
     );
 
@@ -627,7 +627,7 @@ pub node out: Dimensionless = @extracted;
         r"
 type Other { Other(x: Dimensionless) }
 include reconcile.library(
-    Record: Other,
+    type Record: Other,
     record: Other(x: 2.0),
     extracted: 2.0,
 ) as instance;

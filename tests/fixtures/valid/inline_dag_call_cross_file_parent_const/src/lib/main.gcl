@@ -1,5 +1,5 @@
 import lib.lib as lib;
 
-node earth_half: Length = @lib.scale_earth(factor: 0.5).result;
-node default_factor: Dimensionless = @lib.scale_earth().factor;
-node bound_factor: Dimensionless = @lib.scale_earth(factor: 0.5).factor;
+node earth_half: Length = @lib.scale_earth(factor: 0.5)::result;
+node default_factor: Dimensionless = @lib.scale_earth()::factor;
+node bound_factor: Dimensionless = @lib.scale_earth(factor: 0.5)::factor;

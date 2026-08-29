@@ -213,17 +213,17 @@ pub enum ParseError {
         span: SourceSpan,
     },
 
-    #[error("inline DAG call requires `.<out>` projection")]
+    #[error("inline DAG call requires `::<out>` projection")]
     #[diagnostic(
         code(graphcal::P014),
         help(
-            "add `.<output_name>` after the call; an instantiated DAG without a projection is not a graph value"
+            "add `::<output_name>` after the call; an instantiated DAG without a projection is not a graph value"
         )
     )]
     InlineDagCallMissingProjection {
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("expected `.<out>` projection here")]
+        #[label("expected `::<out>` projection here")]
         span: SourceSpan,
     },
 
@@ -238,20 +238,6 @@ pub enum ParseError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("nesting exceeds the limit here")]
-        span: SourceSpan,
-    },
-
-    #[error("unit reference path is too deep")]
-    #[diagnostic(
-        code(graphcal::P017),
-        help(
-            "unit references are at most `alias.unit` — a bare name for local, selectively imported, or prelude units, or one module-alias qualifier for module-imported units"
-        )
-    )]
-    UnitReferenceTooDeep {
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("at most one `alias.` qualifier is allowed here")]
         span: SourceSpan,
     },
 
@@ -409,7 +395,6 @@ impl ParseError {
             | Self::NatSubtractionUnsupported { src, .. }
             | Self::ExpectedIndexFoundNat { src, .. }
             | Self::ObsoleteStructuralRange { src, .. }
-            | Self::UnitReferenceTooDeep { src, .. }
             | Self::DuplicatePlotField { src, .. }
             | Self::MissingPlotEncoding { src, .. }
             | Self::EmptyCompositionPlots { src, .. } => src,
@@ -769,22 +754,36 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Parse a non-empty dot-separated identifier path.
+    /// Parse a local name or a member selected after a dotted DAG path and
+    /// `::`. A dot sequence is consumed only when a later `::` proves that it
+    /// is a namespace owner; otherwise the first identifier remains local and
+    /// expression parsing handles the dot as field projection.
     fn parse_ident_path(&mut self) -> Result<IdentPath, ParseError> {
         let first = self.parse_any_ident()?;
-        let mut rest = Vec::new();
-        while self.lexer.peek() == Some(&Token::Dot)
-            && self
-                .lexer
+        let mut probe = self.lexer.clone();
+        while probe.peek() == Some(&Token::Dot)
+            && probe
                 .peek_second()
                 .is_some_and(|token| token.is_identifier())
         {
-            self.lexer.next_token(); // consume `.`
-            rest.push(self.parse_any_ident()?);
+            probe.next_token();
+            probe.next_token();
         }
-        Ok(IdentPath::new(crate::syntax::non_empty::NonEmpty::new(
-            first, rest,
-        )))
+        if probe.peek() != Some(&Token::DoubleColon) {
+            return Ok(IdentPath::bare(first));
+        }
+
+        let mut owner_rest = Vec::new();
+        while self.lexer.peek() == Some(&Token::Dot) {
+            self.lexer.next_token();
+            owner_rest.push(self.parse_any_ident()?);
+        }
+        self.expect(Token::DoubleColon)?;
+        let member = self.parse_any_ident()?;
+        Ok(IdentPath::member(
+            crate::syntax::non_empty::NonEmpty::new(first, owner_rest),
+            member,
+        ))
     }
 }
 

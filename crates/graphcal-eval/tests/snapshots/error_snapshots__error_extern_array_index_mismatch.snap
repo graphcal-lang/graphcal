@@ -6,8 +6,8 @@ dimension mismatch: expected an axis over `Maneuver` (index variable `I` was bou
     Diagnostic severity: error
 Begin snippet for extern_array_index_mismatch.gcl starting at line 10, column 1
 
-snippet line 10: node b: Velocity[Phase] = { Phase.Boost: 2.0 km/s, Phase.Coast: 0.1 km/s };
-snippet line 11: node bad: Velocity = demo.dot(@a, @b);
-    label at line 11, columns 35 to 36: has dimension Velocity[Phase]
-diagnostic help: axes sharing index variable `I` of `demo.dot` must use the same typed index
+snippet line 10: node b: Velocity[Phase] = { Phase#Boost: 2.0 km/s, Phase#Coast: 0.1 km/s };
+snippet line 11: node bad: Velocity = demo::dot(@a, @b);
+    label at line 11, columns 36 to 37: has dimension Velocity[Phase]
+diagnostic help: axes sharing index variable `I` of `demo::dot` must use the same typed index
 diagnostic code: graphcal::D001

@@ -391,7 +391,7 @@ fn check_index_override_dependency(
             }
             let detail = match nominal_use {
                 IndexNominalUse::Label(variant) => {
-                    format!("index label `{overridden}.{variant}`")
+                    format!("index label `{overridden}#{variant}`")
                 }
                 IndexNominalUse::TypeArgument => format!("index `{overridden}`"),
             };
@@ -691,7 +691,7 @@ fn infer_hir_type_inner(
                 &IndexTypeRef::from_resolved(variant.variant.index().clone()),
                 IndexNominalUse::Label(variant.variant.variant()),
             )?;
-            // A qualified label is self-typed: `Maneuver.Departure` is a
+            // A qualified label is self-typed: `Maneuver#Departure` is a
             // constant of type `Key<Maneuver>` — the axis is in the spelling.
             InferredType::Key(InferredIndex::from_resolved(
                 variant.variant.index().clone(),

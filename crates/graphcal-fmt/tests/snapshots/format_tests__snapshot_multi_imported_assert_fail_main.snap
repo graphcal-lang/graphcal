@@ -3,6 +3,6 @@ source: crates/graphcal-fmt/tests/format_tests.rs
 expression: formatted
 ---
 // Assertions are outcomes of this explicit include instance, not imports.
-include lib.lib().{ value, always_fails };
+include lib.lib()::{ value, always_fails };
 
 node result: Dimensionless = @value + 1.0;

@@ -2,4 +2,4 @@
 index Maneuver = { A, B };
 
 node x: Bool[Maneuver] = for m: Maneuver { m == m };
-node y: Bool[Maneuver] = for m: Maneuver { m == Maneuver.A };
+node y: Bool[Maneuver] = for m: Maneuver { m == Maneuver#A };

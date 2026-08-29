@@ -6,7 +6,7 @@
         "type": "Request",
         "fields": {
           "amount": "2.0 credit",
-          "mode": "Mode.Safe"
+          "mode": "Mode#Safe"
         }
       }
     }

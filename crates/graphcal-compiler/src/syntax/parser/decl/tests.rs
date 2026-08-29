@@ -88,8 +88,8 @@ fn contextual_keywords_are_identifiers_outside_special_contexts() {
         "param range: Dimensionless = 1.0; node points: Dimensionless = range;",
         "dim linspace = Dimensionless; unit step: Dimensionless = 1.0 linspace;",
         "index scan = { unfold, range, linspace, step, points, Fin };",
-        "import scan.unfold.{linspace as step};",
-        "import range.points.{Fin as step};",
+        "import scan.unfold::{linspace as step};",
+        "import range.points::{Fin as step};",
         "type scan<unfold: Type> { scan(step: unfold) }",
         "param value: scan<unfold>[linspace];",
         "node value: Dimensionless = 1.0 scan.step;",
@@ -864,7 +864,7 @@ fn parse_index_linspace_decl() {
 
 #[test]
 fn parse_empty_import_and_include_selectors_rejected() {
-    for source in ["import helper.{};", "include helper().{};"] {
+    for source in ["import helper::{};", "include helper()::{};"] {
         let error = Parser::new(source).parse_file().unwrap_err();
         assert!(
             matches!(error, ParseError::UnexpectedToken { .. }),
@@ -875,7 +875,7 @@ fn parse_empty_import_and_include_selectors_rejected() {
 
 #[test]
 fn parse_import_brace_list_no_alias() {
-    let file = Parser::new("import helper.{x, Y};").parse_file().unwrap();
+    let file = Parser::new("import helper::{x, Y};").parse_file().unwrap();
     assert_eq!(file.declarations.len(), 1);
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
@@ -897,7 +897,9 @@ fn parse_import_brace_list_no_alias() {
 
 #[test]
 fn parse_import_brace_list_with_alias() {
-    let file = Parser::new("import helper.{x as y};").parse_file().unwrap();
+    let file = Parser::new("import helper::{x as y};")
+        .parse_file()
+        .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
         panic!("expected Import");
     };
@@ -913,7 +915,7 @@ fn parse_import_brace_list_with_alias() {
 #[test]
 fn parse_import_category_items_with_aliases() {
     let file = Parser::new(
-        "import helper.{type Student as Pupil, dim Length as Distance, unit m as metre, index Case as Scenario};",
+        "import helper::{type Student as Pupil, dim Length as Distance, unit m as metre, index Case as Scenario};",
     )
     .parse_file()
     .unwrap();
@@ -945,7 +947,7 @@ fn parse_import_category_items_with_aliases() {
 #[test]
 fn parse_include_rejects_import_category_markers() {
     for marker in ["type", "dim", "unit", "index"] {
-        let source = format!("include helper().{{{marker} Item}};");
+        let source = format!("include helper()::{{{marker} Item}};");
         assert!(
             Parser::new(&source).parse_file().is_err(),
             "marker: {marker}"
@@ -955,7 +957,7 @@ fn parse_include_rejects_import_category_markers() {
 
 #[test]
 fn parse_import_brace_list_mixed_alias() {
-    let file = Parser::new("import f.{x, Y as Z, w};")
+    let file = Parser::new("import f::{x, Y as Z, w};")
         .parse_file()
         .unwrap();
     let DeclKind::Import(u) = &file.declarations[0].kind else {
@@ -976,7 +978,7 @@ fn parse_import_brace_list_mixed_alias() {
 
 #[test]
 fn parse_import_alias_missing_name_error() {
-    let result = Parser::new("import f.{x as};").parse_file();
+    let result = Parser::new("import f::{x as};").parse_file();
     assert!(result.is_err());
 }
 
@@ -1019,7 +1021,7 @@ fn parse_import_module_missing_alias_ident_error() {
 
 #[test]
 fn parse_import_dotted_path_selective() {
-    let file = Parser::new("import nasa.rocket.{delta_v};")
+    let file = Parser::new("import nasa.rocket::{delta_v};")
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations.len(), 1);
@@ -1081,7 +1083,7 @@ fn parse_include_dotted_path_with_param_bindings() {
 
 #[test]
 fn include_binding_recovers_finite_index_argument_shape() {
-    let file = Parser::new("include scale(Axis: Fin(1 + 2)) as scaled;")
+    let file = Parser::new("include scale(index Axis: Fin(1 + 2)) as scaled;")
         .parse_file()
         .unwrap();
     let DeclKind::Include(include) = &file.declarations[0].kind else {
@@ -1106,7 +1108,7 @@ fn duplicate_include_binding_is_rejected() {
 #[test]
 fn parse_import_with_param_bindings_error() {
     // import with param bindings should fail — use include instead
-    let result = Parser::new("import rocket(dry_mass: 800.0 kg).{delta_v};").parse_file();
+    let result = Parser::new("import rocket(dry_mass: 800.0 kg)::{delta_v};").parse_file();
     assert!(result.is_err());
 }
 
@@ -1132,29 +1134,28 @@ fn parse_import_rejects_old_parent_path_error() {
 }
 
 #[test]
-fn leading_pub_on_import_or_include_is_rejected_with_selective_help() {
+fn leading_pub_creates_only_a_whole_dag_import_alias() {
+    let file = Parser::new("pub import helper as public_helper;")
+        .parse_file()
+        .unwrap();
+    let DeclKind::Import(import) = &file.declarations[0].kind else {
+        panic!("expected import");
+    };
+    assert_eq!(import.visibility, crate::syntax::ast::Visibility::Public);
+
     for source in [
-        "pub import helper;",
-        "pub import helper.{x};",
+        "pub import helper::{x};",
         "pub include container(x: 1.0) as c;",
-        "pub include container(x: 1.0).{thrust};",
+        "pub include container(x: 1.0)::{thrust};",
     ] {
-        let error = Parser::new(source).parse_file().unwrap_err();
-        assert!(
-            matches!(
-                error,
-                ParseError::UnexpectedToken { ref expected, ref found, .. }
-                    if expected.contains("put `pub` on each selected item") && found == "`pub`"
-            ),
-            "unexpected error for `{source}`: {error:?}"
-        );
+        assert!(Parser::new(source).parse_file().is_err(), "{source}");
     }
 }
 
 #[test]
 fn parse_import_brace_list_pub_items() {
-    // `import path.{ pub a, b };` — only `a` is re-exported.
-    let file = Parser::new("import helper.{pub x, Y as Z};")
+    // `import path::{ pub a, b };` — only `a` is re-exported.
+    let file = Parser::new("import helper::{pub x, Y as Z};")
         .parse_file()
         .unwrap();
     let decl = &file.declarations[0];
@@ -1173,7 +1174,7 @@ fn parse_import_brace_list_pub_items() {
 
 #[test]
 fn parse_leading_pub_with_selective_pub_error() {
-    let result = Parser::new("pub import f.{pub a};").parse_file();
+    let result = Parser::new("pub import f::{pub a};").parse_file();
     assert!(result.is_err(), "leading `pub` must always be rejected");
 }
 
@@ -1199,7 +1200,7 @@ fn parse_pub_bind_on_include_error() {
 #[test]
 fn parse_pub_bind_on_import_item_error() {
     // `pub(bind)` inside the brace list is also rejected.
-    let result = Parser::new("import f.{pub(bind) a};").parse_file();
+    let result = Parser::new("import f::{pub(bind) a};").parse_file();
     assert!(result.is_err());
 }
 
@@ -1223,10 +1224,10 @@ fn parse_attribute_with_one_arg() {
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.name.name, "assumes");
     assert_eq!(attr.args.len(), 1);
-    let AttributeArg::Path { segments, .. } = &attr.args[0] else {
+    let AttributeArg::Path { path } = &attr.args[0] else {
         panic!("expected attribute path arg");
     };
-    assert_eq!(segments.as_slice()[0].name, "pressure_safe");
+    assert_eq!(path.value.as_bare().unwrap(), "pressure_safe");
 }
 
 #[test]
@@ -1237,20 +1238,14 @@ fn parse_attribute_with_multiple_args() {
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.name.name, "assumes");
     assert_eq!(attr.args.len(), 2);
-    let AttributeArg::Path {
-        segments: first, ..
-    } = &attr.args[0]
-    else {
+    let AttributeArg::Path { path: first } = &attr.args[0] else {
         panic!("expected first attribute path arg");
     };
-    let AttributeArg::Path {
-        segments: second, ..
-    } = &attr.args[1]
-    else {
+    let AttributeArg::Path { path: second } = &attr.args[1] else {
         panic!("expected second attribute path arg");
     };
-    assert_eq!(first.as_slice()[0].name, "pressure_safe");
-    assert_eq!(second.as_slice()[0].name, "temp_bounded");
+    assert_eq!(first.value.as_bare().unwrap(), "pressure_safe");
+    assert_eq!(second.value.as_bare().unwrap(), "temp_bounded");
 }
 
 #[test]
@@ -1310,41 +1305,50 @@ fn parse_attribute_expected_fail_no_args() {
 
 #[test]
 fn parse_attribute_qualified_path() {
-    let file = Parser::new("#[expected_fail(Mode.Boost)]\nassert x = true;")
+    let file = Parser::new("#[expected_fail(Mode#Boost)]\nassert x = true;")
         .parse_file()
         .unwrap();
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.args.len(), 1);
-    let AttributeArg::Path { segments, .. } = &attr.args[0] else {
-        panic!("expected Path, got {:?}", attr.args[0]);
+    let AttributeArg::IndexLabel { index, label, .. } = &attr.args[0] else {
+        panic!("expected IndexLabel, got {:?}", attr.args[0]);
     };
-    assert_eq!(segments.len(), 2);
-    assert_eq!(segments[0].name, "Mode");
-    assert_eq!(segments[1].name, "Boost");
+    assert_eq!(index.value.as_bare().unwrap(), "Mode");
+    assert_eq!(label.value.as_str(), "Boost");
 }
 
 #[test]
 fn parse_attribute_multiple_qualified_paths() {
-    let file = Parser::new("#[expected_fail(Mode.Boost, Mode.Eco)]\nassert x = true;")
+    let file = Parser::new("#[expected_fail(Mode#Boost, Mode#Eco)]\nassert x = true;")
         .parse_file()
         .unwrap();
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.args.len(), 2);
-    let AttributeArg::Path { segments: s0, .. } = &attr.args[0] else {
-        panic!("expected Path, got {:?}", attr.args[0]);
+    let AttributeArg::IndexLabel {
+        index: i0,
+        label: l0,
+        ..
+    } = &attr.args[0]
+    else {
+        panic!("expected IndexLabel, got {:?}", attr.args[0]);
     };
-    assert_eq!(s0[0].name, "Mode");
-    assert_eq!(s0[1].name, "Boost");
-    let AttributeArg::Path { segments: s1, .. } = &attr.args[1] else {
-        panic!("expected Path, got {:?}", attr.args[1]);
+    assert_eq!(i0.value.as_bare().unwrap(), "Mode");
+    assert_eq!(l0.value.as_str(), "Boost");
+    let AttributeArg::IndexLabel {
+        index: i1,
+        label: l1,
+        ..
+    } = &attr.args[1]
+    else {
+        panic!("expected IndexLabel, got {:?}", attr.args[1]);
     };
-    assert_eq!(s1[0].name, "Mode");
-    assert_eq!(s1[1].name, "Eco");
+    assert_eq!(i1.value.as_bare().unwrap(), "Mode");
+    assert_eq!(l1.value.as_str(), "Eco");
 }
 
 #[test]
 fn parse_attribute_group_arg() {
-    let file = Parser::new("#[expected_fail((Mode.Boost, Phase.Launch))]\nassert x = true;")
+    let file = Parser::new("#[expected_fail((Mode#Boost, Phase#Launch))]\nassert x = true;")
         .parse_file()
         .unwrap();
     let attr = &file.declarations[0].attributes[0];
@@ -1353,22 +1357,32 @@ fn parse_attribute_group_arg() {
         panic!("expected Group, got {:?}", attr.args[0]);
     };
     assert_eq!(elements.len(), 2);
-    let AttributeArg::Path { segments: s0, .. } = &elements[0] else {
-        panic!("expected Path, got {:?}", elements[0]);
+    let AttributeArg::IndexLabel {
+        index: i0,
+        label: l0,
+        ..
+    } = &elements[0]
+    else {
+        panic!("expected IndexLabel, got {:?}", elements[0]);
     };
-    assert_eq!(s0[0].name, "Mode");
-    assert_eq!(s0[1].name, "Boost");
-    let AttributeArg::Path { segments: s1, .. } = &elements[1] else {
-        panic!("expected Path, got {:?}", elements[1]);
+    assert_eq!(i0.value.as_bare().unwrap(), "Mode");
+    assert_eq!(l0.value.as_str(), "Boost");
+    let AttributeArg::IndexLabel {
+        index: i1,
+        label: l1,
+        ..
+    } = &elements[1]
+    else {
+        panic!("expected IndexLabel, got {:?}", elements[1]);
     };
-    assert_eq!(s1[0].name, "Phase");
-    assert_eq!(s1[1].name, "Launch");
+    assert_eq!(i1.value.as_bare().unwrap(), "Phase");
+    assert_eq!(l1.value.as_str(), "Launch");
 }
 
 #[test]
 fn parse_attribute_multiple_groups() {
     let source =
-        "#[expected_fail((Mode.Boost, Phase.Launch), (Mode.Eco, Phase.Cruise))]\nassert x = true;";
+        "#[expected_fail((Mode#Boost, Phase#Launch), (Mode#Eco, Phase#Cruise))]\nassert x = true;";
     let file = Parser::new(source).parse_file().unwrap();
     let attr = &file.declarations[0].attributes[0];
     assert_eq!(attr.args.len(), 2);
@@ -1380,7 +1394,7 @@ fn parse_attribute_multiple_groups() {
 fn deeply_nested_attribute_groups_exhaust_the_shared_nesting_budget() {
     let depth = MAX_NESTING_DEPTH + 1;
     let source = format!(
-        "#[expected_fail({}Mode.Boost{})]\nassert x = true;",
+        "#[expected_fail({}Mode#Boost{})]\nassert x = true;",
         "(".repeat(depth),
         ")".repeat(depth)
     );
@@ -1427,8 +1441,8 @@ fn parse_required_range_simple() {
 
 #[test]
 fn parse_include_item_with_expected_fail() {
-    let source = "include lib(Phase: MyPhase).{
-    #[expected_fail(MyPhase.X)]
+    let source = "include lib(index Phase: MyPhase)::{
+    #[expected_fail(MyPhase#X)]
     my_assert,
 };";
     let file = Parser::new(source).parse_file().unwrap();
@@ -1447,7 +1461,7 @@ fn parse_include_item_with_expected_fail() {
 
 #[test]
 fn parse_include_item_with_expected_fail_and_alias() {
-    let source = "include lib(Phase: MyPhase).{
+    let source = "include lib(index Phase: MyPhase)::{
     #[expected_fail]
     my_assert as local_assert,
 };";
@@ -1467,7 +1481,7 @@ fn parse_include_item_with_expected_fail_and_alias() {
 
 #[test]
 fn parse_import_item_no_attributes() {
-    let source = "import lib.{x, y};";
+    let source = "import lib::{x, y};";
     let file = Parser::new(source).parse_file().unwrap();
     let DeclKind::Import(imp) = &file.declarations[0].kind else {
         panic!("expected import");
@@ -1610,7 +1624,7 @@ fn deeply_nested_dag_declarations_exhaust_the_shared_nesting_budget() {
 
 #[test]
 fn parse_include_single_segment_dag_name() {
-    let file = Parser::new("include my_dag(x: 1.0).{result};")
+    let file = Parser::new("include my_dag(x: 1.0)::{result};")
         .parse_file()
         .unwrap();
     assert_eq!(file.declarations.len(), 1);
@@ -2031,10 +2045,7 @@ fn parse_plugin_import_rejects_pub() {
         Parser::new("pub import plugin \"p\" as x { fn f(a: Dimensionless) -> Dimensionless; }")
             .parse_file()
             .unwrap_err();
-    assert!(
-        format!("{err:?}").contains("without leading visibility"),
-        "{err:?}"
-    );
+    assert!(format!("{err:?}").contains("whole-DAG import"), "{err:?}");
 }
 
 #[test]

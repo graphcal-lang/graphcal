@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn one_axis_value_flattens_to_entries() {
         let body = body_of(
-            "pub index Case = { A, B };\nnode xs: Dimensionless[Case] = { Case.A: 1.0, Case.B: 2.0 };",
+            "pub index Case = { A, B };\nnode xs: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };",
             "xs",
         );
         assert_eq!(

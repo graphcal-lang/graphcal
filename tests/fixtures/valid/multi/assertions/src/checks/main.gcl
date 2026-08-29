@@ -1,5 +1,5 @@
 // main.gcl -- instance-local cross-file assumes test
-include checks.lib().{ limit, limit_positive };
+include checks.lib()::{ limit, limit_positive };
 
 param value: Dimensionless = 42.0;
 

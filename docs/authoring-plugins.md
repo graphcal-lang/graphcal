@@ -249,7 +249,7 @@ import plugin "plugins/fluid_props.wasm" as fluids {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
 
-node rho: Mass / Volume = fluids.air_density(@chamber_p, @chamber_t);
+node rho: Mass / Volume = fluids::air_density(@chamber_p, @chamber_t);
 ```
 
 ```bash

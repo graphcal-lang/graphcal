@@ -1,6 +1,6 @@
 name = "graphcal-formal"
 version = "0.1.0"
-defaultTargets = ["Graphcal", "required-bindability-oracle"]
+defaultTargets = ["Graphcal", "required-bindability-oracle", "namespace-resolution-oracle"]
 
 [[lean_lib]]
 name = "Graphcal"
@@ -8,3 +8,7 @@ name = "Graphcal"
 [[lean_exe]]
 name = "required-bindability-oracle"
 root = "Graphcal.Static.RequiredBindabilityOracle"
+
+[[lean_exe]]
+name = "namespace-resolution-oracle"
+root = "Graphcal.Static.NamespaceResolutionOracle"

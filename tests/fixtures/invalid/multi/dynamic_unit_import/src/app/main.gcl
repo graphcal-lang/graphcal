@@ -2,5 +2,5 @@
 // scale stays encapsulated inside an entry or explicitly called DAG.
 include app.fx() as fx;
 
-param mine: fx.Money = 100.0 fx.USD;
-node p: fx.Money = @mine -> fx.EUR;
+param mine: fx::Money = 100.0 fx::USD;
+node p: fx::Money = @mine -> fx::EUR;

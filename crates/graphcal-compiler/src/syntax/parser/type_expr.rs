@@ -4,8 +4,8 @@ use crate::syntax::ast::{
     GenericConstraint, GenericParam, Ident, IdentPath, IndexExpr, MulDivOp, NatExpr, TypeExpr,
     TypeExprKind, UnitDef, UnitExpr, UnitExprItem,
 };
-use crate::syntax::dimension::{UnitName, UnitRef};
-use crate::syntax::module_name::ModuleAliasName;
+use crate::syntax::dimension::UnitRef;
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::span::Spanned;
@@ -35,68 +35,77 @@ impl Parser<'_> {
         let mut base = if self.lexer.peek().is_some_and(|token| token.is_identifier()) {
             let path = self.parse_ident_path()?;
             let path_span = path.span();
-            let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
-
-            match bare_name.as_deref() {
-                Some("Dimensionless") => TypeExpr {
-                    kind: TypeExprKind::Dimensionless,
+            if self.lexer.peek() == Some(&Token::Hash) {
+                self.lexer.next_token();
+                let label = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+                TypeExpr {
+                    span: path_span.merge(label.span),
+                    kind: TypeExprKind::IndexLabel { index: path, label },
                     constraints: vec![],
-                    span: path_span,
-                },
-                Some("Bool") => TypeExpr {
-                    kind: TypeExprKind::Bool,
-                    constraints: vec![],
-                    span: path_span,
-                },
-                Some("Int") => TypeExpr {
-                    kind: TypeExprKind::Int,
-                    constraints: vec![],
-                    span: path_span,
-                },
-                Some("Datetime") => {
-                    if self.lexer.peek() == Some(&Token::Lt) {
-                        // Datetime<TT> — built-in parameterized type, kept in
-                        // its own variant so TIR resolution doesn't need to
-                        // string-match the built-in type name.
-                        let (type_args, closing_span) = self.parse_type_arg_list()?;
-                        TypeExpr {
-                            kind: TypeExprKind::DatetimeApplication { type_args },
-                            constraints: vec![],
-                            span: path_span.merge(closing_span),
-                        }
-                    } else {
-                        // Bare Datetime (= Datetime<UTC>)
-                        TypeExpr {
-                            kind: TypeExprKind::Datetime,
-                            constraints: vec![],
-                            span: path_span,
+                }
+            } else {
+                let bare_name = path.as_bare().map(|ident| ident.name.as_str().to_string());
+                match bare_name.as_deref() {
+                    Some("Dimensionless") => TypeExpr {
+                        kind: TypeExprKind::Dimensionless,
+                        constraints: vec![],
+                        span: path_span,
+                    },
+                    Some("Bool") => TypeExpr {
+                        kind: TypeExprKind::Bool,
+                        constraints: vec![],
+                        span: path_span,
+                    },
+                    Some("Int") => TypeExpr {
+                        kind: TypeExprKind::Int,
+                        constraints: vec![],
+                        span: path_span,
+                    },
+                    Some("Datetime") => {
+                        if self.lexer.peek() == Some(&Token::Lt) {
+                            // Datetime<TT> — built-in parameterized type, kept in
+                            // its own variant so TIR resolution doesn't need to
+                            // string-match the built-in type name.
+                            let (type_args, closing_span) = self.parse_type_arg_list()?;
+                            TypeExpr {
+                                kind: TypeExprKind::DatetimeApplication { type_args },
+                                constraints: vec![],
+                                span: path_span.merge(closing_span),
+                            }
+                        } else {
+                            // Bare Datetime (= Datetime<UTC>)
+                            TypeExpr {
+                                kind: TypeExprKind::Datetime,
+                                constraints: vec![],
+                                span: path_span,
+                            }
                         }
                     }
-                }
-                Some("Complex") => self.parse_complex_type(path_span)?,
-                Some("Key") => self.parse_key_type(path_span)?,
-                _ if self.lexer.peek() == Some(&Token::Lt) => {
-                    // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
-                    // `<` cannot follow a complete dim expr in type position,
-                    // so no casing heuristic is needed — the previous
-                    // ASCII-uppercase check silently misparsed non-ASCII
-                    // type names into dim expressions.
-                    let name = path.into_spanned_name_path();
-                    let (generic_args, closing_span) = self.parse_generic_arg_list()?;
-                    let span = name.span.merge(closing_span);
-                    TypeExpr {
-                        kind: TypeExprKind::TypeApplication { name, generic_args },
-                        constraints: vec![],
-                        span,
+                    Some("Complex") => self.parse_complex_type(path_span)?,
+                    Some("Key") => self.parse_key_type(path_span)?,
+                    _ if self.lexer.peek() == Some(&Token::Lt) => {
+                        // Type application: Vec3<Length, ECI> or module.Vec3<Length>.
+                        // `<` cannot follow a complete dim expr in type position,
+                        // so no casing heuristic is needed — the previous
+                        // ASCII-uppercase check silently misparsed non-ASCII
+                        // type names into dim expressions.
+                        let name = path.into_spanned_name_path();
+                        let (generic_args, closing_span) = self.parse_generic_arg_list()?;
+                        let span = name.span.merge(closing_span);
+                        TypeExpr {
+                            kind: TypeExprKind::TypeApplication { name, generic_args },
+                            constraints: vec![],
+                            span,
+                        }
                     }
-                }
-                _ => {
-                    let dim_expr = self.parse_dim_expr_after_first_path(path)?;
-                    let span = dim_expr.span;
-                    TypeExpr {
-                        kind: TypeExprKind::DimExpr(dim_expr),
-                        constraints: vec![],
-                        span,
+                    _ => {
+                        let dim_expr = self.parse_dim_expr_after_first_path(path)?;
+                        let span = dim_expr.span;
+                        TypeExpr {
+                            kind: TypeExprKind::DimExpr(dim_expr),
+                            constraints: vec![],
+                            span,
+                        }
                     }
                 }
             }
@@ -559,42 +568,10 @@ impl Parser<'_> {
                 .collect::<Result<Vec<_>, ParseError>>()?;
             Ok((items, lparen_span, end_span))
         } else {
-            let ident = self.parse_any_ident()?;
-            let start_span = ident.span;
-            let mut end_span = ident.span;
-            let name = if self.lexer.peek() == Some(&Token::Dot)
-                && self
-                    .lexer
-                    .peek_second()
-                    .is_some_and(|token| token.is_identifier())
-            {
-                self.expect(Token::Dot)?;
-                let leaf = self.parse_any_ident()?;
-                // Unit references are at most `alias.unit`: module aliases are
-                // single segments, so a deeper path can never resolve.
-                if self.lexer.peek() == Some(&Token::Dot)
-                    && self
-                        .lexer
-                        .peek_second()
-                        .is_some_and(|token| token.is_identifier())
-                {
-                    return Err(ParseError::UnitReferenceTooDeep {
-                        src: self.named_source(),
-                        span: start_span.merge(leaf.span).into(),
-                    });
-                }
-                let span = start_span.merge(leaf.span);
-                end_span = leaf.span;
-                Spanned::new(
-                    UnitRef::qualified(
-                        ModuleAliasName::from_atom(ident.name),
-                        UnitName::from_atom(leaf.name),
-                    ),
-                    span,
-                )
-            } else {
-                ident.into_spanned::<UnitRef>()
-            };
+            let path = self.parse_ident_path()?;
+            let start_span = path.span();
+            let mut end_span = path.leaf().span;
+            let name = Spanned::new(UnitRef::from_name_path(path.to_name_path()), start_span);
             let power = self.parse_term_power(&mut end_span)?;
             Ok((
                 vec![UnitExprItem {
@@ -1216,12 +1193,12 @@ mod tests {
 
     #[test]
     fn parse_qualified_type_application_preserves_name_path() {
-        let source = "param v: math.Vec3<Length> = 1.0;";
+        let source = "param v: math::Vec3<Length> = 1.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
                 TypeExprKind::TypeApplication { name, generic_args } => {
-                    assert_eq!(name.value.display_path(), "math.Vec3");
+                    assert_eq!(name.value.display_path(), "math::Vec3");
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
                     assert_eq!(generic_args.len(), 1);
                 }
@@ -1233,7 +1210,7 @@ mod tests {
 
     #[test]
     fn parse_qualified_dim_term_preserves_name_path() {
-        let source = "param v: physics.Length / Time = 1.0;";
+        let source = "param v: physics::Length / Time = 1.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
@@ -1241,7 +1218,7 @@ mod tests {
                     assert_eq!(dim_expr.terms.len(), 2);
                     assert_eq!(
                         dim_expr.terms[0].term.name.value.display_path(),
-                        "physics.Length"
+                        "physics::Length"
                     );
                     assert_eq!(dim_expr.terms[1].term.name.value.display_path(), "Time");
                 }
@@ -1253,7 +1230,7 @@ mod tests {
 
     #[test]
     fn parse_qualified_index_expr_preserves_name_path() {
-        let source = "param xs: Dimensionless[mesh.Row] = 0.0;";
+        let source = "param xs: Dimensionless[mesh::Row] = 0.0;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Param(p) => match &p.type_ann.kind {
@@ -1262,7 +1239,7 @@ mod tests {
                     let IndexExpr::Name(index_path) = &indexes[0] else {
                         panic!("expected Name")
                     };
-                    assert_eq!(index_path.value.display_path(), "mesh.Row");
+                    assert_eq!(index_path.value.display_path(), "mesh::Row");
                     assert_eq!(index_path.value.leaf().as_str(), "Row");
                 }
                 other => panic!("expected Indexed type, got {other:?}"),

@@ -2,4 +2,4 @@
 // are opaque.
 index Maneuver = { Departure, Correction };
 
-node t: Dimensionless = coord(Maneuver.Departure);
+node t: Dimensionless = coord(Maneuver#Departure);

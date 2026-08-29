@@ -180,7 +180,7 @@ fn exhaustive_expression_context_matrix_preserves_ast_and_is_idempotent() {
         ("boolean", "true"),
         ("string", "\"UTC\""),
         ("graph reference", "@value"),
-        ("inline DAG reference", "@compute().output"),
+        ("inline DAG reference", "@compute()::output"),
         ("unresolved reference", "value"),
         ("binary", "1.0 + 2.0"),
         ("unary", "-1.0"),
@@ -191,7 +191,7 @@ fn exhaustive_expression_context_matrix_preserves_ast_and_is_idempotent() {
         ("timezone display", "@time -> \"UTC\""),
         ("field access", "@value.field"),
         ("constructor", "Result(value: 1.0)"),
-        ("map", "{ Axis.A: 1.0 }"),
+        ("map", "{ Axis#A: 1.0 }"),
         ("table", "table[Fin(1)] { 1.0; }"),
         ("comprehension", "for i: Fin(1) { 1.0 }"),
         ("index access", "@value[0]"),
@@ -201,7 +201,7 @@ fn exhaustive_expression_context_matrix_preserves_ast_and_is_idempotent() {
             "unfold(Axis, 0.0, |state, previous, current| state)",
         ),
         ("key form", "key(Axis, @value)"),
-        ("match", "match @value { Axis.A => 1.0, }"),
+        ("match", "match @value { Axis#A => 1.0, }"),
     ];
     let contexts = [
         TestExpressionContext::Prefix,
@@ -313,13 +313,13 @@ proptest! {
 #[test]
 fn contextual_keyword_identifiers_round_trip() {
     let source = "\
-import scan.unfold.{linspace as step};
+import scan.unfold::{linspace as step};
 dim range = Dimensionless;
 unit points: Dimensionless = 1.0 range;
 index Fin = { only };
 type scan<unfold: Type> { scan(step: unfold) }
 param step: scan<unfold>[linspace];
-node unfold: Dimensionless = plugin.scan(1.0);
+node unfold: Dimensionless = plugin::scan(1.0);
 ";
     let formatted = format_source(source).expect("contextual identifiers should format");
     graphcal_compiler::syntax::parser::Parser::new(&formatted)
@@ -542,51 +542,51 @@ fn format_dimension_decl() {
 
 #[test]
 fn format_import_category_items() {
-    let source = "import school.records.{pub type Student as Pupil,dim Information,unit JPY,index Category,Student};";
+    let source = "import school.records::{pub type Student as Pupil,dim Information,unit JPY,index Category,Student};";
     let formatted = format_source(source).unwrap();
     assert_eq!(
         formatted,
-        "import school.records.{\n    pub type Student as Pupil, dim Information, unit JPY, index Category, Student\n};\n"
+        "import school.records::{\n    pub type Student as Pupil, dim Information, unit JPY, index Category, Student\n};\n"
     );
 }
 
 #[test]
 fn format_long_include_selector_keeps_empty_bindings_attached() {
-    let source = "include a.very.very.very.very.very.very.very.very.very.very.very.long.dag_name().{ node1, node2, node3 };";
+    let source = "include a.very.very.very.very.very.very.very.very.very.very.very.long.dag_name()::{ node1, node2, node3 };";
     let formatted = format_source(source).unwrap();
     assert_eq!(
         formatted,
-        "include a.very.very.very.very.very.very.very.very.very.very.very.long.dag_name().{\n    node1, node2, node3\n};\n"
+        "include a.very.very.very.very.very.very.very.very.very.very.very.long.dag_name()::{\n    node1, node2, node3\n};\n"
     );
 }
 
 #[test]
 fn format_long_include_selector_splits_items_when_needed() {
-    let source = "include package.subsystem.very.long.dag_name().{ output_node_with_a_very_very_long_name_one, output_node_with_a_very_very_long_name_two, output_node_with_a_very_very_long_name_three };";
+    let source = "include package.subsystem.very.long.dag_name()::{ output_node_with_a_very_very_long_name_one, output_node_with_a_very_very_long_name_two, output_node_with_a_very_very_long_name_three };";
     let formatted = format_source(source).unwrap();
     assert_eq!(
         formatted,
-        "include package.subsystem.very.long.dag_name().{\n    output_node_with_a_very_very_long_name_one,\n    output_node_with_a_very_very_long_name_two,\n    output_node_with_a_very_very_long_name_three\n};\n"
+        "include package.subsystem.very.long.dag_name()::{\n    output_node_with_a_very_very_long_name_one,\n    output_node_with_a_very_very_long_name_two,\n    output_node_with_a_very_very_long_name_three\n};\n"
     );
 }
 
 #[test]
 fn format_single_include_selector_stays_inline_after_multiline_bindings() {
-    let source = "include lib.lib(Phase: MyPhase, cost: { MyPhase.Design: 10.0, MyPhase.Build: 20.0 }).{ total };";
+    let source = "include lib.lib(index Phase: MyPhase, cost: { MyPhase#Design: 10.0, MyPhase#Build: 20.0 })::{ total };";
     let formatted = format_source(source).unwrap();
     assert_eq!(
         formatted,
-        "include lib.lib(\n    Phase: MyPhase,\n    cost: {\n        MyPhase.Design: 10.0,\n        MyPhase.Build: 20.0,\n    }\n).{ total };\n"
+        "include lib.lib(\n    index Phase: MyPhase,\n    cost: {\n        MyPhase#Design: 10.0,\n        MyPhase#Build: 20.0,\n    }\n)::{ total };\n"
     );
 }
 
 #[test]
 fn format_empty_parenthesized_lists_are_atomic() {
-    let source = "node value: Dimensionless = a.very.very.very.very.very.very.very.very.very.very.very.long.function_name();";
+    let source = "node value: Dimensionless = a.very.very.very.very.very.very.very.very.very.very.very.long::function_name();";
     let formatted = format_source(source).unwrap();
     assert_eq!(
         formatted,
-        "node value: Dimensionless = a.very.very.very.very.very.very.very.very.very.very.very.long.function_name();\n"
+        "node value: Dimensionless = a.very.very.very.very.very.very.very.very.very.very.very.long::function_name();\n"
     );
 }
 
@@ -728,11 +728,11 @@ fn format_attribute_with_args() {
 
 #[test]
 fn long_expected_fail_argument_list_expands_and_round_trips() {
-    let source = "#[expected_fail(Mode.Normal, Mode.Economy, Mode.Sport, Mode.Track, Mode.Snow, Mode.Gravel, Mode.Emergency)]\nassert power_ok = true;\n";
+    let source = "#[expected_fail(Mode#Normal, Mode#Economy, Mode#Sport, Mode#Track, Mode#Snow, Mode#Gravel, Mode#Emergency)]\nassert power_ok = true;\n";
     let formatted = format_source(source).expect("long expected_fail attribute should format");
     assert_eq!(
         formatted,
-        "#[expected_fail(\n    Mode.Normal,\n    Mode.Economy,\n    Mode.Sport,\n    Mode.Track,\n    Mode.Snow,\n    Mode.Gravel,\n    Mode.Emergency,\n)]\nassert power_ok = true;\n"
+        "#[expected_fail(\n    Mode#Normal,\n    Mode#Economy,\n    Mode#Sport,\n    Mode#Track,\n    Mode#Snow,\n    Mode#Gravel,\n    Mode#Emergency,\n)]\nassert power_ok = true;\n"
     );
     graphcal_compiler::syntax::parser::Parser::new(&formatted)
         .parse_file()
@@ -742,11 +742,11 @@ fn long_expected_fail_argument_list_expands_and_round_trips() {
 
 #[test]
 fn trailing_comma_forces_multiline_attribute_argument_list() {
-    let source = "#[expected_fail(Mode.Boost, Mode.Eco,)]\nassert known_failures = true;\n";
+    let source = "#[expected_fail(Mode#Boost, Mode#Eco,)]\nassert known_failures = true;\n";
     let formatted = format_source(source).expect("magic trailing comma should format");
     assert_eq!(
         formatted,
-        "#[expected_fail(\n    Mode.Boost,\n    Mode.Eco,\n)]\nassert known_failures = true;\n"
+        "#[expected_fail(\n    Mode#Boost,\n    Mode#Eco,\n)]\nassert known_failures = true;\n"
     );
     assert_eq!(format_source(&formatted).unwrap(), formatted);
 }
@@ -775,17 +775,17 @@ fn format_assert_bool() {
 fn long_logical_chain_breaks_at_aligned_operators() {
     let source = "pub index Mode = { First, Second, Third, Fourth };\n\
 param priority: Int[Mode];\n\
-assert priorities = @priority[Mode.First] == 1 && @priority[Mode.Second] == 2 && @priority[Mode.Third] == 3 && @priority[Mode.Fourth] == 4;\n";
+assert priorities = @priority[Mode#First] == 1 && @priority[Mode#Second] == 2 && @priority[Mode#Third] == 3 && @priority[Mode#Fourth] == 4;\n";
     let formatted = format_source(source).expect("logical chain should format");
     assert_eq!(
         formatted,
         concat!(
             "pub index Mode = { First, Second, Third, Fourth };\n",
             "param priority: Int[Mode];\n",
-            "assert priorities = @priority[Mode.First] == 1\n",
-            "    && @priority[Mode.Second] == 2\n",
-            "    && @priority[Mode.Third] == 3\n",
-            "    && @priority[Mode.Fourth] == 4;\n",
+            "assert priorities = @priority[Mode#First] == 1\n",
+            "    && @priority[Mode#Second] == 2\n",
+            "    && @priority[Mode#Third] == 3\n",
+            "    && @priority[Mode#Fourth] == 4;\n",
         )
     );
     assert_eq!(format_source(&formatted).unwrap(), formatted);
@@ -896,7 +896,7 @@ param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
         "2D table header row missing: {formatted}"
     );
     assert!(
-        !formatted.contains("Phase::"),
+        !formatted.contains("Phase#"),
         "2D table should not use qualified syntax: {formatted}"
     );
 }
@@ -904,37 +904,37 @@ param m: Dimensionless[Phase, Maneuver] = table[Phase, Maneuver] {
 #[test]
 fn format_table_qualified_axis_and_slice_paths() {
     let source = r"
-param m: Dimensionless[mission.Time, mission.Phase, mission.Maneuver] = table[mission.Time, mission.Phase, mission.Maneuver] {
-    [mission.Time.T1]
+param m: Dimensionless[mission::Time, mission::Phase, mission::Maneuver] = table[mission::Time, mission::Phase, mission::Maneuver] {
+    [mission::Time#T1]
     : Departure;
     Launch: 1.0;
 };
 ";
     let formatted = format_source(source).unwrap();
     assert!(
-        formatted.contains("table[mission.Time, mission.Phase, mission.Maneuver]"),
+        formatted.contains("table[mission::Time, mission::Phase, mission::Maneuver]"),
         "qualified table axes were not preserved: {formatted}"
     );
     assert!(
-        formatted.contains("[mission.Time.T1]"),
+        formatted.contains("[mission::Time#T1]"),
         "qualified slice label was not preserved: {formatted}"
     );
 }
 
 #[test]
-fn format_multi_decl_preserves_qualified_header_labels() {
+fn format_multi_decl_keeps_header_labels_contextual() {
     let source = r"
 param p: Dimensionless[Component],
-param enabled: Bool[Component, mission.Mode]
-    = table[Component, (_, mission.Mode)] {
-        : _, mission.Mode.Safe, mission.Mode.Nominal;
+param enabled: Bool[Component, mission::Mode]
+    = table[Component, (_, mission::Mode)] {
+        : _, Safe, Nominal;
         A: 1.0, true, false;
     };
 ";
     let formatted = format_source(source).unwrap();
     assert!(
-        formatted.contains("mission.Mode.Safe") && formatted.contains("mission.Mode.Nominal"),
-        "qualified heterogeneous headers were not preserved: {formatted}"
+        formatted.contains("Safe, Nominal;") && !formatted.contains("Mode#"),
+        "contextual heterogeneous headers were not preserved: {formatted}"
     );
 }
 
@@ -943,8 +943,8 @@ fn format_map_literal_not_converted_to_table() {
     let source = r"
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
-    Maneuver.Departure: 2.46,
-    Maneuver.Correction: 0.12,
+    Maneuver#Departure: 2.46,
+    Maneuver#Correction: 0.12,
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -953,7 +953,7 @@ param dv: Dimensionless[Maneuver] = {
         "Map literal should not be converted to table: {formatted}"
     );
     assert!(
-        formatted.contains("Maneuver.Departure"),
+        formatted.contains("Maneuver#Departure"),
         "Map literal should use qualified syntax: {formatted}"
     );
 }
@@ -1437,9 +1437,9 @@ index Phase = { Coast, Burn };
 node x: Dimensionless[Phase] = for p: Phase {
     match p {
         // coasting
-        Phase.Coast => 0.0,
+        Phase#Coast => 0.0,
         // burning
-        Phase.Burn => 1.0,
+        Phase#Burn => 1.0,
     }
 };
 ";
@@ -1453,7 +1453,7 @@ node x: Dimensionless[Phase] = for p: Phase {
         "Comment before match arm lost: {formatted}"
     );
     let coast_comment = formatted.find("// coasting").unwrap();
-    let coast_arm = formatted.find("Phase.Coast =>").unwrap();
+    let coast_arm = formatted.find("Phase#Coast =>").unwrap();
     assert!(
         coast_comment < coast_arm,
         "Comment should appear before its match arm: {formatted}"
@@ -1465,8 +1465,8 @@ fn preserves_trailing_comment_in_map_literal() {
     let source = r"
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
-    Maneuver.Departure: 2.46, // departure
-    Maneuver.Correction: 0.12, // correction
+    Maneuver#Departure: 2.46, // departure
+    Maneuver#Correction: 0.12, // correction
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -1495,9 +1495,9 @@ fn preserves_leading_comment_in_map_literal() {
 index Maneuver = { Departure, Correction };
 param dv: Dimensionless[Maneuver] = {
     // departure entry
-    Maneuver.Departure: 2.46,
+    Maneuver#Departure: 2.46,
     // correction entry
-    Maneuver.Correction: 0.12,
+    Maneuver#Correction: 0.12,
 };
 ";
     let formatted = format_source(source).unwrap();
@@ -1506,7 +1506,7 @@ param dv: Dimensionless[Maneuver] = {
         "Leading comment on map entry lost: {formatted}"
     );
     let comment_pos = formatted.find("// departure entry").unwrap();
-    let entry_pos = formatted.find("Maneuver.Departure").unwrap();
+    let entry_pos = formatted.find("Maneuver#Departure").unwrap();
     assert!(
         comment_pos < entry_pos,
         "Leading comment should appear before map entry: {formatted}"
@@ -1520,22 +1520,22 @@ index Scenario = { Nominal, Contingency };
 index Phase = { Launch, Cruise };
 index Maneuver = { Departure };
 param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
-    [Scenario.Nominal]
+    [Scenario#Nominal]
            : Departure;
     Launch:  5000.0;
 
-    [Scenario.Contingency]
+    [Scenario#Contingency]
            : Departure;
     Launch:  4800.0;
 
-    [Scenario.Nominal]
+    [Scenario#Nominal]
            : Departure;
     Cruise:  4500.0;
 };
 ";
     let formatted = format_source(source).unwrap();
     assert_eq!(
-        formatted.matches("[Scenario.Nominal]").count(),
+        formatted.matches("[Scenario#Nominal]").count(),
         1,
         "duplicate Nominal slice header after formatting: {formatted}"
     );
@@ -1548,13 +1548,13 @@ index Scenario = { Nominal, Contingency };
 index Phase = { Launch, Cruise, Arrival };
 index Maneuver = { Departure, Correction, Insertion };
 param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase, Maneuver] {
-    [Scenario.Nominal] // nominal scenario
+    [Scenario#Nominal] // nominal scenario
            : Departure, Correction, Insertion;
     Launch:  5000.0,        0.0,       0.0;
     Cruise:     0.0,     4500.0,       0.0;
     Arrival:    0.0,        0.0,    4000.0;
 
-    [Scenario.Contingency] // contingency scenario
+    [Scenario#Contingency] // contingency scenario
            : Departure, Correction, Insertion;
     Launch:  4800.0,        0.0,       0.0;
     Cruise:     0.0,     4200.0,       0.0;
@@ -1575,13 +1575,13 @@ param mass_3d: Dimensionless[Scenario, Phase, Maneuver] = table[Scenario, Phase,
     for line in formatted.lines() {
         if line.contains("// nominal scenario") {
             assert!(
-                line.contains("[Scenario.Nominal]"),
+                line.contains("[Scenario#Nominal]"),
                 "Comment not on same line as slice header: {formatted}"
             );
         }
         if line.contains("// contingency scenario") {
             assert!(
-                line.contains("[Scenario.Contingency]"),
+                line.contains("[Scenario#Contingency]"),
                 "Comment not on same line as slice header: {formatted}"
             );
         }

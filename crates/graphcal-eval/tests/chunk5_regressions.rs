@@ -27,8 +27,8 @@ dag bounded {
     param x: Dimensionless(max: 1.0);
     pub node result: Dimensionless = @x;
 }
-include bounded(x: 2.0).{ result as included };
-node called: Dimensionless = @bounded(x: 2.0).result;
+include bounded(x: 2.0)::{ result as included };
+node called: Dimensionless = @bounded(x: 2.0)::result;
 ",
     )
     .unwrap();
@@ -45,8 +45,8 @@ dag bounded {
     param x: Dimensionless(max: 1.0) = 2.0;
     pub node result: Dimensionless = @x;
 }
-include bounded().{ result as included };
-node called: Dimensionless = @bounded().result;
+include bounded()::{ result as included };
+node called: Dimensionless = @bounded()::result;
 ",
     )
     .unwrap();
@@ -63,8 +63,8 @@ dag bounded {
     param x: Dimensionless;
     pub node result: Dimensionless(max: 1.0) = @x;
 }
-include bounded(x: 2.0).{ result as included };
-node called: Dimensionless = @bounded(x: 2.0).result;
+include bounded(x: 2.0)::{ result as included };
+node called: Dimensionless = @bounded(x: 2.0)::result;
 ",
     )
     .unwrap();
@@ -81,7 +81,7 @@ dag bounded {
     const node LIMIT: Dimensionless(max: 1.0) = 2.0;
     pub node result: Dimensionless = @LIMIT;
 }
-node called: Dimensionless = @bounded().result;
+node called: Dimensionless = @bounded()::result;
 ",
     )
     .unwrap_err();
@@ -100,8 +100,8 @@ dag bounded {
     param xs: Dimensionless(max: 1.0)[Fin(2)];
     pub node result: Dimensionless[Fin(2)] = @xs;
 }
-include bounded(xs: for i: Fin(2) { 2.0 }).{ result as included };
-node called: Dimensionless[Fin(2)] = @bounded(xs: for i: Fin(2) { 2.0 }).result;
+include bounded(xs: for i: Fin(2) { 2.0 })::{ result as included };
+node called: Dimensionless[Fin(2)] = @bounded(xs: for i: Fin(2) { 2.0 })::result;
 ",
     )
     .unwrap();
@@ -134,7 +134,7 @@ pub type Item { Item(value: Length(min: @MIN)) }
     std::fs::write(
         &root,
         r"
-import constraints.schema.{ type Item, Item };
+import constraints.schema::{ type Item, Item };
 node good: Item = Item(value: 2.0 m);
 ",
     )
@@ -144,7 +144,7 @@ node good: Item = Item(value: 2.0 m);
     std::fs::write(
         &root,
         r"
-import constraints.schema.{ EXPORTED };
+import constraints.schema::{ EXPORTED };
 node good: Dimensionless = @EXPORTED;
 ",
     )
@@ -194,8 +194,8 @@ fn mean_uses_a_scaled_accumulator() {
         r"
 index Sample = { A, B };
 node values: Dimensionless[Sample] = {
-    Sample.A: 1.0e308,
-    Sample.B: 1.0e308,
+    Sample#A: 1.0e308,
+    Sample#B: 1.0e308,
 };
 node average: Dimensionless = mean(@values);
 ",
@@ -281,8 +281,8 @@ dag grid {
     pub node values: Dimensionless[Row, Column] =
         for row: Row, column: Column { 1.0 };
 }
-include grid(Row: Fin(1000000), Column: Fin(1000000)) as giant;
-node unreachable: Dimensionless = count(@giant.values);
+include grid(index Row: Fin(1000000), index Column: Fin(1000000)) as giant;
+node unreachable: Dimensionless = count(@giant::values);
 ",
     )
     .unwrap_err();
@@ -306,17 +306,17 @@ node lhs: Dimensionless[Fin(216), Fin(216)] =
     for row: Fin(216), column: Fin(216) { 1.0 };
 node rhs: Dimensionless[Fin(216), Fin(216)] =
     for row: Fin(216), column: Fin(216) { 1.0 };
-node product: Dimensionless[Fin(216), Fin(216)] = matmul(@lhs, @rhs);
+node matrix_product: Dimensionless[Fin(216), Fin(216)] = matmul(@lhs, @rhs);
 ",
     )
     .unwrap();
 
-    let (_, product) = result
+    let (_, matrix_product) = result
         .nodes
         .iter()
-        .find(|(name, _)| name.to_string() == "product")
+        .find(|(name, _)| name.to_string() == "matrix_product")
         .unwrap();
-    let error = product.as_ref().unwrap_err().to_string();
+    let error = matrix_product.as_ref().unwrap_err().to_string();
     assert!(error.contains("evaluation budget"), "{error}");
 }
 
@@ -400,8 +400,8 @@ type IndexedHolder { IndexedHolder(values: Dimensionless[Sample]) }
 type KeyHolder { KeyHolder(key: Key<TimeStep>) }
 node constructors_differ: Bool = A != B;
 node indexed_equal: Bool =
-    IndexedHolder(values: { Sample.A: 1.0, Sample.B: 2.0 }) ==
-    IndexedHolder(values: { Sample.A: 1.0, Sample.B: 2.0 });
+    IndexedHolder(values: { Sample#A: 1.0, Sample#B: 2.0 }) ==
+    IndexedHolder(values: { Sample#A: 1.0, Sample#B: 2.0 });
 node coordinate_equal: Bool =
     KeyHolder(key: nearest_key(TimeStep, 1.0 s)) ==
     KeyHolder(key: nearest_key(TimeStep, 1.0 s));
@@ -435,7 +435,7 @@ fn dag_call_output_keeps_definition_owned_presentation() {
 dag units {
     pub node distance: Length = 1000.0 m -> km;
 }
-node called: Length = @units().distance;
+node called: Length = @units()::distance;
 ",
     )
     .unwrap();
@@ -486,9 +486,9 @@ dag units {
 }
 node values: Length[Rate] = for rate: Rate {
     @units(rate: match rate {
-        Rate.Low => 2.0,
-        Rate.High => 3.0,
-    }).distance
+        Rate#Low => 2.0,
+        Rate#High => 3.0,
+    })::distance
 };
 ",
     )
@@ -508,7 +508,7 @@ dag units {
     unit DynamicM: Length = (@rate) m;
     pub node distance: Length = 1.0 DynamicM;
 }
-node original: Length = @units(rate: 2.0).distance;
+node original: Length = @units(rate: 2.0)::distance;
 node copies: Length[Fin(2)] = for i: Fin(2) { @original };
 ",
     )
@@ -531,24 +531,24 @@ dag units {
     pub node distance: Length = 1.0 DynamicM;
 }
 node rates: Dimensionless[Rate] = {
-    Rate.Two: 2.0,
-    Rate.Three: 3.0,
+    Rate#Two: 2.0,
+    Rate#Three: 3.0,
 };
 node values: Length[Rate] = for rate: Rate {
-    @units(rate: @rates[rate]).distance
+    @units(rate: @rates[rate])::distance
 };
 node reversed: Length[Order] = {
-    Order.First: @values[Rate.Three],
-    Order.Second: @values[Rate.Two],
+    Order#First: @values[Rate#Three],
+    Order#Second: @values[Rate#Two],
 };
 node authored_reverse: Length[Order] = {
-    Order.Second: @values[Rate.Two],
-    Order.First: @values[Rate.Three],
+    Order#Second: @values[Rate#Two],
+    Order#First: @values[Rate#Three],
 };
 node selected: Length[Order] = for order: Order {
     match order {
-        Order.First => @values[Rate.Three],
-        Order.Second => @values[Rate.Two],
+        Order#First => @values[Rate#Three],
+        Order#Second => @values[Rate#Two],
     }
 };
 plot reordered = {
@@ -592,22 +592,22 @@ dag units {
     pub node distance: Length = 1.0 DynamicM;
 }
 node rates: Dimensionless[Rate] = {
-    Rate.Two: 2.0,
-    Rate.Three: 3.0,
+    Rate#Two: 2.0,
+    Rate#Three: 3.0,
 };
 node values: Length[Rate] = for rate: Rate {
-    @units(rate: @rates[rate]).distance
+    @units(rate: @rates[rate])::distance
 };
 node selected: Length[Selection] = {
-    Selection.First: @values[Rate.Three],
-    Selection.Second: @values[Rate.Three],
-    Selection.Third: @values[Rate.Two],
+    Selection#First: @values[Rate#Three],
+    Selection#Second: @values[Rate#Three],
+    Selection#Third: @values[Rate#Two],
 };
 node packed: Pair = Pair(
-    right: @values[Rate.Two],
-    left: @values[Rate.Three],
+    right: @values[Rate#Two],
+    left: @values[Rate#Three],
 );
-node only_three: Length = @values[Rate.Three];
+node only_three: Length = @values[Rate#Three];
 ",
     )
     .unwrap();
@@ -634,15 +634,15 @@ dag units {
     pub node fixed: Length = 6.0 m -> DynamicM;
 }
 node rates: Dimensionless[Rate] = {
-    Rate.Two: 2.0,
-    Rate.Three: 3.0,
+    Rate#Two: 2.0,
+    Rate#Three: 3.0,
 };
 node values: Length[Rate] = for rate: Rate {
-    @units(rate: @rates[rate]).fixed
+    @units(rate: @rates[rate])::fixed
 };
 node reversed: Length[Order] = {
-    Order.First: @values[Rate.Three],
-    Order.Second: @values[Rate.Two],
+    Order#First: @values[Rate#Three],
+    Order#Second: @values[Rate#Two],
 };
 ",
     )
@@ -676,20 +676,20 @@ dag inner {
     unit DynamicM: Length = (@rate) m;
     pub node distance: Length = 1.0 DynamicM;
 }
-dag outer {
+dag wrapper {
     param rate: Dimensionless;
-    pub node distance: Length = @inner(rate: @rate).distance;
+    pub node distance: Length = @inner(rate: @rate)::distance;
 }
 node rates: Dimensionless[Rate] = {
-    Rate.Two: 2.0,
-    Rate.Three: 3.0,
+    Rate#Two: 2.0,
+    Rate#Three: 3.0,
 };
 node values: Length[Rate] = for rate: Rate {
-    @outer(rate: @rates[rate]).distance
+    @wrapper(rate: @rates[rate])::distance
 };
 node reversed: Length[Order] = {
-    Order.First: @values[Rate.Three],
-    Order.Second: @values[Rate.Two],
+    Order#First: @values[Rate#Three],
+    Order#Second: @values[Rate#Two],
 };
 ",
     )
@@ -727,16 +727,16 @@ index Series = { First, Second };
 node source: Length[Scenario, Model, Distance] =
     for scenario: Scenario, model: Model, distance: Distance {
         match model {
-            Model.A => 1.0 m,
-            Model.B => 0.001 km,
+            Model#A => 1.0 m,
+            Model#B => 0.001 km,
         }
     };
 
 node consumer: Length[Series, Distance] =
     for series: Series, distance: Distance {
         match series {
-            Series.First => @source[Scenario.Baseline, Model.A, distance],
-            Series.Second => @source[Scenario.Baseline, Model.B, distance],
+            Series#First => @source[Scenario#Baseline, Model#A, distance],
+            Series#Second => @source[Scenario#Baseline, Model#B, distance],
         }
     };
 ",
@@ -762,18 +762,18 @@ index Series = { First, Second };
 node source: Length[Scenario, Model, Distance] =
     for scenario: Scenario, model: Model, distance: Distance {
         match model {
-            Model.A => 1.0 m,
-            Model.B => 0.001 km,
+            Model#A => 1.0 m,
+            Model#B => 0.001 km,
         }
     };
 
 node consumer: Length[Series, Distance] =
     for series: Series, distance: Distance {
         @source[
-            Scenario.Baseline,
+            Scenario#Baseline,
             match series {
-                Series.First => Model.A,
-                Series.Second => Model.B,
+                Series#First => Model#A,
+                Series#Second => Model#B,
             },
             distance,
         ]

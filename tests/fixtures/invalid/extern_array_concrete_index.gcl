@@ -6,5 +6,5 @@ import plugin "graphcal:demo" as demo {
     fn boost(xs: Velocity[Maneuver]) -> Velocity;
 }
 
-node dv: Velocity[Maneuver] = { Maneuver.Departure: 1.0 km/s, Maneuver.Correction: 0.5 km/s, Maneuver.Insertion: 1.5 km/s };
-node top: Velocity = demo.boost(@dv);
+node dv: Velocity[Maneuver] = { Maneuver#Departure: 1.0 km/s, Maneuver#Correction: 0.5 km/s, Maneuver#Insertion: 1.5 km/s };
+node top: Velocity = demo::boost(@dv);

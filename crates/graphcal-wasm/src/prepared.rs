@@ -526,7 +526,7 @@ assert positive = @delta_v > 0.0 m/s;
         let prepared = prepare_ok(
             "pub index Mode = { Nominal, Safe };\n\
              param enabled: Bool = true;\n\
-             param mode: Key<Mode> = Mode.Nominal;\n\
+             param mode: Key<Mode> = Mode#Nominal;\n\
              node out: Dimensionless = if @enabled { 1.0 } else { 0.0 };\n",
         );
         let ports = prepared.ports();
@@ -540,14 +540,14 @@ assert positive = @delta_v > 0.0 m/s;
 
     /// The hydration runtime emits these exact expression shapes from its
     /// controls: checkbox -> `true`/`false`, stepper -> integer text,
-    /// select -> `Index.Variant`. Each must bind as a closed value.
+    /// select -> `Index#Variant`. Each must bind as a closed value.
     #[test]
     fn control_emitted_expressions_bind() {
         let prepared = prepare_ok(
             "pub index Mode = { Nominal, Safe };\n\
              param enabled: Bool = true;\n\
              param retries: Int(min: 0, max: 5) = 1;\n\
-             param mode: Key<Mode> = Mode.Nominal;\n\
+             param mode: Key<Mode> = Mode#Nominal;\n\
              node out: Dimensionless = if @enabled { 1.0 } else { 0.0 };\n",
         );
         let outcome = prepared.evaluate(&[
@@ -561,7 +561,7 @@ assert positive = @delta_v > 0.0 m/s;
             },
             BindingRequest {
                 name: "mode".to_string(),
-                expr: "Mode.Safe".to_string(),
+                expr: "Mode#Safe".to_string(),
             },
         ]);
         let EvaluateOutcome::Evaluated { evaluation } = outcome else {

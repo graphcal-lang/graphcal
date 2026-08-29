@@ -7,7 +7,7 @@ dimension mismatch: expected Key<Maneuver>, found Key<Phase>
 Begin snippet for key_equality_cross_axis.gcl starting at line 4, column 1
 
 snippet line 4: 
-snippet line 5: node same: Bool = Maneuver.Departure == Phase.Launch;
+snippet line 5: node same: Bool = Maneuver#Departure == Phase#Launch;
     label at line 5, columns 41 to 52: has dimension Key<Phase>
 diagnostic help: equality operands must have the same type
 diagnostic code: graphcal::D001

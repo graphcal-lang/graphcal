@@ -2,7 +2,7 @@
 source: crates/graphcal-eval/tests/error_snapshots.rs
 expression: rendered
 ---
-ambiguous index label `A` in module `ambiguous_bare_index_label`; qualify it with an index name
+unknown Term `A` in module `ambiguous_bare_index_label`
     Diagnostic severity: error
 Begin snippet for ambiguous_bare_index_label.gcl starting at line 4, column 1
 

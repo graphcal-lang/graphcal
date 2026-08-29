@@ -156,7 +156,7 @@ import plugin "plugins/demo.wasm" as demo {
 fn wasm_plugin_evaluates_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
     let source = format!(
-        "{LERP_IMPORT}\nparam a: Length = 1.0 m;\nnode mid: Length = demo.lerp(@a, 3.0 m, 0.5);\n"
+        "{LERP_IMPORT}\nparam a: Length = 1.0 m;\nnode mid: Length = demo::lerp(@a, 3.0 m, 0.5);\n"
     );
     let result = eval_project_with_plugin(
         dir.path(),
@@ -176,7 +176,7 @@ fn declared_signature_must_match_the_manifest() {
 import plugin "plugins/demo.wasm" as demo {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2;
 }
-node x: Dimensionless = demo.lerp(1.0, 3.0, 0.5);
+node x: Dimensionless = demo::lerp(1.0, 3.0, 0.5);
 "#;
     let err = eval_project_with_plugin(
         dir.path(),
@@ -206,7 +206,7 @@ fn param_and_dim_var_renaming_is_not_a_mismatch() {
 import plugin "plugins/demo.wasm" as demo {
     fn lerp<T: Dim>(lo: T, hi: T, frac: Dimensionless) -> T;
 }
-node mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);
+node mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);
 "#;
     let result = eval_project_with_plugin(
         dir.path(),
@@ -273,7 +273,7 @@ fn forbidden_imports_surface_as_a_dedicated_diagnostic() {
             quantity_var("D", 1, 1),
         )],
     );
-    let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);\n");
+    let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);\n");
     let err = eval_project_with_plugin(dir.path(), &source, Some(("plugins/demo.wasm", bytes)))
         .unwrap_err();
     let CompileError::Eval(GraphcalError::PluginForbiddenImport {
@@ -291,7 +291,7 @@ fn forbidden_imports_surface_as_a_dedicated_diagnostic() {
 #[test]
 fn missing_plugin_file_is_reported_at_the_import() {
     let dir = tempfile::tempdir().unwrap();
-    let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);\n");
+    let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);\n");
     let err = eval_project_with_plugin(dir.path(), &source, None).unwrap_err();
     let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, .. }) = err else {
         panic!("expected PluginLoadFailed, got {err:?}");
@@ -306,7 +306,7 @@ fn plugin_paths_may_not_leave_the_project_root() {
 import plugin "../outside.wasm" as demo {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
-node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
+node x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
 "#;
     let err = eval_project_with_plugin(dir.path(), source, None).unwrap_err();
     let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, .. }) = err else {
@@ -317,7 +317,7 @@ node x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);
 
 #[test]
 fn from_source_projects_report_missing_filesystem() {
-    let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo.lerp(0.0, 1.0, 0.5);\n");
+    let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);\n");
     let project = LoadedProject::from_source(&source, "buffer.gcl").unwrap();
     let registry = HostFunctionRegistry::new();
     let err = graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
@@ -360,8 +360,8 @@ import plugin "plugins/inv.wasm" as inv {
     fn inverse<D: Dim>(x: D) -> D^-1;
 }
 param zero: Dimensionless = 0.0;
-node bad: Dimensionless = inv.inverse(@zero);
-node good: Dimensionless = inv.inverse(4.0);
+node bad: Dimensionless = inv::inverse(@zero);
+node good: Dimensionless = inv::inverse(4.0);
 node dependent: Dimensionless = @bad + 1.0;
 "#;
     let result =
@@ -404,7 +404,7 @@ fn eval_package_project(
     let root = dir.join("src/proj/main.gcl");
     std::fs::write(
         &root,
-        format!("{LERP_IMPORT}\nnode mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);\n"),
+        format!("{LERP_IMPORT}\nnode mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);\n"),
     )
     .unwrap();
 
@@ -516,7 +516,7 @@ fuel_per_call = 100000
 import plugin "plugins/work.wasm" as worker {
     fn work(x: Dimensionless) -> Dimensionless;
 }
-node result: Dimensionless = worker.work(7.0);
+node result: Dimensionless = worker::work(7.0);
 "#,
     )
     .unwrap();
@@ -601,7 +601,7 @@ fn virtual_projects_without_a_manifest_load_unpinned() {
     // test documents the boundary by contrast: same layout plus a manifest
     // demands a pin (see `unpinned_plugins_are_rejected_in_package_projects`).
     let dir = tempfile::tempdir().unwrap();
-    let source = format!("{LERP_IMPORT}\nnode mid: Length = demo.lerp(1.0 m, 3.0 m, 0.5);\n");
+    let source = format!("{LERP_IMPORT}\nnode mid: Length = demo::lerp(1.0 m, 3.0 m, 0.5);\n");
     let result = eval_project_with_plugin(
         dir.path(),
         &source,
@@ -621,8 +621,8 @@ import plugin "graphcal:demo" as native {
 import plugin "plugins/demo.wasm" as wasm {
     fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
 }
-node a: Dimensionless = native.inverse(4.0);
-node b: Length = wasm.lerp(1.0 m, 3.0 m, 0.5);
+node a: Dimensionless = native::inverse(4.0);
+node b: Length = wasm::lerp(1.0 m, 3.0 m, 0.5);
 "#;
     if let Some((relative, bytes)) = Some(("plugins/demo.wasm", lerp_plugin())) {
         let path = dir.path().join(relative);
@@ -727,11 +727,11 @@ import plugin "plugins/arrays.wasm" as arrays {
 index Maneuver = { Departure, Correction, Insertion };
 
 node dv: Velocity[Maneuver] = {
-    Maneuver.Departure: 2.0 km/s,
-    Maneuver.Correction: 0.5 km/s,
-    Maneuver.Insertion: 1.5 km/s,
+    Maneuver#Departure: 2.0 km/s,
+    Maneuver#Correction: 0.5 km/s,
+    Maneuver#Insertion: 1.5 km/s,
 };
-node margined: Velocity[Maneuver] = arrays.scale(@dv, 1.25);
+node margined: Velocity[Maneuver] = arrays::scale(@dv, 1.25);
 node margin_total: Velocity = sum(@margined);
 "#;
     let result = eval_project_with_plugin(
@@ -818,12 +818,12 @@ import plugin "plugins/scalars.wasm" as scalars {
 }
 
 index Item = { A, B, C };
-node flags: Bool[Item] = { Item.A: true, Item.B: false, Item.C: true };
-node inverted: Bool[Item] = scalars.invert(@flags);
-node first_flag: Bool = @inverted[Item.A];
-node numbers: Int[Item] = { Item.A: 1, Item.B: -2, Item.C: 3 };
-node incremented: Int[Item] = scalars.increment(@numbers);
-node second_number: Int = @incremented[Item.B];
+node flags: Bool[Item] = { Item#A: true, Item#B: false, Item#C: true };
+node inverted: Bool[Item] = scalars::invert(@flags);
+node first_flag: Bool = @inverted[Item#A];
+node numbers: Int[Item] = { Item#A: 1, Item#B: -2, Item#C: 3 };
+node incremented: Int[Item] = scalars::increment(@numbers);
+node second_number: Int = @incremented[Item#B];
 "#;
     let result = eval_project_with_plugin(
         dir.path(),
@@ -850,8 +850,8 @@ import plugin "plugins/scalars.wasm" as scalars {
     fn increment<I: Index>(values: Int[I]) -> Int[I];
 }
 index Item = { A, B };
-node numbers: Int[Item] = { Item.A: 1, Item.B: 2 };
-node bad: Bool[Item] = scalars.invert(@numbers);
+node numbers: Int[Item] = { Item#A: 1, Item#B: 2 };
+node bad: Bool[Item] = scalars::invert(@numbers);
 "#;
     let err = eval_project_with_plugin(
         dir.path(),
@@ -877,8 +877,8 @@ import plugin "plugins/arrays.wasm" as arrays {
 }
 
 index Phase = { Boost, Coast };
-node xs: Length[Phase] = { Phase.Boost: 1.0 m, Phase.Coast: 2.0 m };
-node bad: Dimensionless[Phase] = arrays.scale(@xs, 2.0);
+node xs: Length[Phase] = { Phase#Boost: 1.0 m, Phase#Coast: 2.0 m };
+node bad: Dimensionless[Phase] = arrays::scale(@xs, 2.0);
 "#;
     let err = eval_project_with_plugin(
         dir.path(),
@@ -998,8 +998,8 @@ import plugin "plugins/span.wasm" as stats {
 type DvSpan { DvSpan(lo: Velocity, hi: Velocity) }
 
 index Phase = { Boost, Coast };
-node dv: Velocity[Phase] = { Phase.Boost: 2.0 km/s, Phase.Coast: 0.5 km/s };
-node span: DvSpan = stats.span(@dv);
+node dv: Velocity[Phase] = { Phase#Boost: 2.0 km/s, Phase#Coast: 0.5 km/s };
+node span: DvSpan = stats::span(@dv);
 node spread: Velocity = @span.hi - @span.lo;
 "#;
     let result = eval_project_with_plugin(
@@ -1027,8 +1027,8 @@ import plugin "plugins/span.wasm" as stats {
 type DvSpan { DvSpan(minimum: Velocity, maximum: Velocity) }
 
 index Phase = { Boost, Coast };
-node dv: Velocity[Phase] = { Phase.Boost: 2.0 km/s, Phase.Coast: 0.5 km/s };
-node span: DvSpan = stats.span(@dv);
+node dv: Velocity[Phase] = { Phase#Boost: 2.0 km/s, Phase#Coast: 0.5 km/s };
+node span: DvSpan = stats::span(@dv);
 "#;
     let err = eval_project_with_plugin(
         dir.path(),

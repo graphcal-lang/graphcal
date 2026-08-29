@@ -122,7 +122,7 @@ fn make_auto_import_actions(
             let import_item = item.render();
             let edit = TextEdit {
                 range: Range::default(),
-                new_text: format!("import {path}.{{ {import_item} }};\n"),
+                new_text: format!("import {path}::{{ {import_item} }};\n"),
             };
             let mut changes = HashMap::new();
             changes.insert(uri.clone(), vec![edit]);
@@ -621,7 +621,7 @@ mod tests {
         let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
         assert_eq!(
             edits[0].new_text,
-            "import finance.units.{ dim Information };\n"
+            "import finance.units::{ dim Information };\n"
         );
     }
 
@@ -675,7 +675,7 @@ mod tests {
     #[test]
     fn d019_indexed_comparison_has_no_automatic_rewrite() {
         let analysis = analysis_from_source(
-            "index Case = { A, B };\nnode values: Length[Case] = { Case.A: 1.0 m, Case.B: 2.0 m };\nnode bad: Bool[Case] = @values < 3.0 m;",
+            "index Case = { A, B };\nnode values: Length[Case] = { Case#A: 1.0 m, Case#B: 2.0 m };\nnode bad: Bool[Case] = @values < 3.0 m;",
         );
         let uri = Url::parse("file:///test.gcl").unwrap();
         let diag = make_diag(

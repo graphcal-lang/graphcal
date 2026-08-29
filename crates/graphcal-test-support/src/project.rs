@@ -527,7 +527,7 @@ struct QualifiedValueRef {
 
 impl QualifiedValueRef {
     fn render(&self) -> String {
-        format!("@{}.{}", self.alias, self.name)
+        format!("@{}::{}", self.alias, self.name)
     }
 }
 
@@ -630,7 +630,7 @@ impl Declaration {
                         0 => "First",
                         _ => "Second",
                     };
-                    writeln!(source, "    {index}.{variant}: {value}.0,")
+                    writeln!(source, "    {index}#{variant}: {value}.0,")
                         .expect("writing to String cannot fail");
                 }
                 source.push_str("};");
@@ -761,7 +761,7 @@ mod tests {
         );
         let source = renamed.render().root_source().to_string();
         assert!(source.contains("as renamed_owner"));
-        assert!(source.contains("@renamed_owner.shared"));
+        assert!(source.contains("@renamed_owner::shared"));
         assert!(!source.contains("left_owner"));
         assert_eq!(renamed.expected(), project.expected());
     }

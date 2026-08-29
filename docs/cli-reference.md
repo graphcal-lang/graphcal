@@ -288,7 +288,7 @@ the JSON sources is selected.
 Binding names are unqualified parameter names declared directly in the entry
 file. Imported and included implementation parameters are not independently
 addressable; expose an entry parameter and pass it into the dependency instead.
-Qualified strings such as `module.x=...` are rejected at the CLI boundary
+Qualified strings such as `module::x=...` are rejected at the CLI boundary
 instead of being interpreted as leaf names.
 
 Entry-file params are the entry DAG's named input ports. Ports not supplied by
@@ -377,7 +377,7 @@ delta_v    = 4284.300858 m/s
 graphcal eval engine.gcl --param 'dry_mass=800.0 kg'
 
 # Bind several params from inline JSON
-graphcal eval engine.gcl --params-json '{"dry_mass":"800.0 kg","mode":"Mode.Nominal"}'
+graphcal eval engine.gcl --params-json '{"dry_mass":"800.0 kg","mode":"Mode#Nominal"}'
 
 # Read the same JSON schema from a file or stdin
 graphcal eval engine.gcl --params-json-file scenario.json
@@ -404,8 +404,8 @@ are rejected, while ordinary binary64 rounding follows the JSON numeric policy.
 
 ```json
 {
-  "phase": { "index": "mission.Phase", "entries": { "Burn": 1, "Coast": 0 } },
-  "choice": { "variant": "mission.Pick", "fields": { "distance": "2.0 m" } }
+  "phase": { "index": "mission::Phase", "entries": { "Burn": 1, "Coast": 0 } },
+  "choice": { "variant": "mission::Pick", "fields": { "distance": "2.0 m" } }
 }
 ```
 
@@ -680,7 +680,7 @@ param cycles: Int(min: 0, max: 100_000);
 param mode: Key<Mode>;
 
 pub node failure: Bool =
-    @load > 8_000.0 N && @cycles > 50_000 && @mode == Mode.Degraded;
+    @load > 8_000.0 N && @cycles > 50_000 && @mode == Mode#Degraded;
 ```
 
 ```bash

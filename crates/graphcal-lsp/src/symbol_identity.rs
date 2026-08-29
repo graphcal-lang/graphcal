@@ -262,59 +262,155 @@ impl SymbolId {
 }
 
 /// A structured source spelling before semantic resolution.
+///
+/// Each variant retains the authored boundary operation. Module members,
+/// callable DAG paths, index labels, and associated symbols must never be
+/// reconstructed by splitting a punctuation-encoded string.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SourceSymbolPath {
-    qualifier: Vec<NameAtom>,
-    leaf: NameAtom,
+pub enum SourceSymbolPath {
+    Local(NameAtom),
+    ModuleMember {
+        namespace: graphcal_compiler::syntax::non_empty::NonEmpty<NameAtom>,
+        member: NameAtom,
+    },
+    DagPath(graphcal_compiler::syntax::non_empty::NonEmpty<NameAtom>),
+    IndexLabel {
+        module: Vec<NameAtom>,
+        index: NameAtom,
+        label: NameAtom,
+    },
+    Associated {
+        namespace: Vec<NameAtom>,
+        owner: NameAtom,
+        member: NameAtom,
+    },
 }
 
 impl SourceSymbolPath {
     #[must_use]
     pub fn from_name_path(path: &NamePath) -> Self {
-        let qualifier = path
-            .qualifier_and_leaf()
-            .map_or_else(Vec::new, |(qualifier, _)| qualifier.to_vec());
-        Self {
-            qualifier,
-            leaf: path.leaf().clone(),
-        }
+        path.qualifier_and_leaf().map_or_else(
+            || Self::Local(path.leaf().clone()),
+            |(namespace, member)| Self::ModuleMember {
+                namespace: graphcal_compiler::syntax::non_empty::NonEmpty::new(
+                    namespace[0].clone(),
+                    namespace[1..].to_vec(),
+                ),
+                member: member.clone(),
+            },
+        )
     }
 
     #[must_use]
     pub const fn local(leaf: NameAtom) -> Self {
-        Self {
-            qualifier: Vec::new(),
-            leaf,
+        Self::Local(leaf)
+    }
+
+    #[must_use]
+    pub fn module_member(namespace: Vec<NameAtom>, member: NameAtom) -> Self {
+        match graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(namespace) {
+            Ok(namespace) => Self::ModuleMember { namespace, member },
+            Err(_) => Self::Local(member),
         }
     }
 
     #[must_use]
-    pub const fn qualified(qualifier: Vec<NameAtom>, leaf: NameAtom) -> Self {
-        Self { qualifier, leaf }
+    pub fn dag_path(segments: Vec<NameAtom>) -> Option<Self> {
+        graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(segments)
+            .ok()
+            .map(Self::DagPath)
     }
 
     #[must_use]
-    pub fn qualifier(&self) -> &[NameAtom] {
-        &self.qualifier
+    pub const fn index_label(module: Vec<NameAtom>, index: NameAtom, label: NameAtom) -> Self {
+        Self::IndexLabel {
+            module,
+            index,
+            label,
+        }
     }
 
     #[must_use]
-    pub const fn leaf(&self) -> &NameAtom {
-        &self.leaf
+    pub const fn associated(namespace: Vec<NameAtom>, owner: NameAtom, member: NameAtom) -> Self {
+        Self::Associated {
+            namespace,
+            owner,
+            member,
+        }
+    }
+
+    #[must_use]
+    pub fn leaf(&self) -> &NameAtom {
+        match self {
+            Self::Local(leaf)
+            | Self::ModuleMember { member: leaf, .. }
+            | Self::IndexLabel { label: leaf, .. }
+            | Self::Associated { member: leaf, .. } => leaf,
+            Self::DagPath(path) => path.last(),
+        }
     }
 
     #[must_use]
     pub const fn is_local(&self) -> bool {
-        self.qualifier.is_empty()
+        matches!(self, Self::Local(_))
+    }
+
+    #[must_use]
+    pub const fn namespace_depth(&self) -> usize {
+        match self {
+            Self::Local(_) => 0,
+            Self::ModuleMember { namespace, .. } => namespace.len(),
+            Self::DagPath(path) => path.len().saturating_sub(1),
+            Self::IndexLabel { .. } | Self::Associated { .. } => usize::MAX,
+        }
     }
 }
 
 impl std::fmt::Display for SourceSymbolPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for segment in &self.qualifier {
-            write!(f, "{segment}.")?;
+        fn write_dotted(
+            f: &mut std::fmt::Formatter<'_>,
+            segments: &[NameAtom],
+        ) -> std::fmt::Result {
+            for (position, segment) in segments.iter().enumerate() {
+                if position > 0 {
+                    f.write_str(".")?;
+                }
+                segment.fmt(f)?;
+            }
+            Ok(())
         }
-        self.leaf.fmt(f)
+
+        match self {
+            Self::Local(leaf) => leaf.fmt(f),
+            Self::ModuleMember { namespace, member } => {
+                write_dotted(f, namespace.as_slice())?;
+                write!(f, "::{member}")
+            }
+            Self::DagPath(path) => write_dotted(f, path.as_slice()),
+            Self::IndexLabel {
+                module,
+                index,
+                label,
+            } => {
+                if !module.is_empty() {
+                    write_dotted(f, module)?;
+                    f.write_str("::")?;
+                }
+                write!(f, "{index}#{label}")
+            }
+            Self::Associated {
+                namespace,
+                owner,
+                member,
+            } => {
+                if !namespace.is_empty() {
+                    write_dotted(f, namespace)?;
+                    f.write_str("::")?;
+                }
+                write!(f, "{owner}.{member}")
+            }
+        }
     }
 }
 

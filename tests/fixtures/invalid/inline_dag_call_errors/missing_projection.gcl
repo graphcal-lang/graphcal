@@ -1,4 +1,4 @@
-// Error fixture: bare `@dag(args)` with no `.<out>` projection is rejected.
+// Error fixture: bare `@dag(args)` with no `::<out>` projection is rejected.
 // `@` requires a graph value; an instantiated DAG without projection is not
 // one, so the form is ill-formed regardless of qualification.
 dag scale {

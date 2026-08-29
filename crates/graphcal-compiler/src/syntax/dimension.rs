@@ -2,8 +2,9 @@
 
 use std::fmt;
 
-use crate::syntax::module_name::ModuleAliasName;
-use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath, ResolvedName};
+use crate::syntax::names::{
+    NameAtom, NameDef, NameNamespace, NamePath, NamespacePath, ResolvedName,
+};
 
 /// Dimension namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -47,61 +48,54 @@ pub type ResolvedUnitName = ResolvedName<UnitNameNamespace>;
 /// dimensions, such as `sqrt: D -> D^(1/2)` or `least: (D, D) -> D`.
 pub type DimVarName = NameDef<DimVarNameNamespace>;
 
-/// A unit reference, optionally qualified by a module alias.
-///
-/// Unit references follow the same scoping rules as every other imported
-/// category: a bare name (`mile`) refers to a local declaration, a selective
-/// import, or a prelude unit; a qualified name (`u.mile`) refers to a `pub`
-/// unit of the module imported as `u`. The qualifier is at most one module
-/// alias — unit references never nest deeper.
-///
-/// The `Display` impl renders `u.mile` / `mile` for diagnostics and formatting
-/// boundaries only; the compiler core matches on the typed parts.
+/// A Unit name selected locally or after a dotted DAG path and `::`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct UnitRef {
-    /// Module alias qualifying `name`, or `None` for a file-local reference.
-    qualifier: Option<ModuleAliasName>,
-    /// The unit leaf name inside the qualifier scope.
+    owner: Option<NamespacePath>,
     name: UnitName,
 }
 
 impl UnitRef {
-    /// Create an unqualified (file-local, selective-import, or prelude) unit reference.
+    /// Create an unqualified local/selective/prelude Unit reference.
     #[must_use]
     pub fn local(name: impl Into<UnitName>) -> Self {
         Self {
-            qualifier: None,
+            owner: None,
             name: name.into(),
         }
     }
 
-    /// Create a unit reference qualified by a module alias (`u.mile`).
+    /// Create a Unit member selected after `::`.
     #[must_use]
-    pub const fn qualified(qualifier: ModuleAliasName, name: UnitName) -> Self {
+    pub const fn qualified(owner: NamespacePath, name: UnitName) -> Self {
         Self {
-            qualifier: Some(qualifier),
+            owner: Some(owner),
             name,
         }
     }
 
-    /// The module alias qualifying this reference, if any.
+    /// Construct from the namespace-neutral syntax reference parser.
     #[must_use]
-    pub const fn qualifier(&self) -> Option<&ModuleAliasName> {
-        self.qualifier.as_ref()
+    pub fn from_name_path(path: NamePath) -> Self {
+        let (owner, name) = path.into_parts();
+        Self {
+            owner,
+            name: UnitName::from_atom(name),
+        }
     }
 
-    /// Convert this syntax reference to the generic path shape consumed by the
-    /// module resolver.
+    /// The dotted DAG/module owner before `::`, if any.
+    #[must_use]
+    pub const fn qualifier(&self) -> Option<&NamespacePath> {
+        self.owner.as_ref()
+    }
+
+    /// Convert to the namespace-neutral path consumed by the resolver.
     #[must_use]
     pub(crate) fn to_name_path(&self) -> NamePath {
-        self.qualifier.as_ref().map_or_else(
+        self.owner.as_ref().map_or_else(
             || NamePath::local(self.name.atom().clone()),
-            |qualifier| {
-                NamePath::qualified_path(
-                    std::iter::once(qualifier.atom().clone()),
-                    self.name.atom().clone(),
-                )
-            },
+            |owner| NamePath::member(owner.clone(), self.name.atom().clone()),
         )
     }
 
@@ -114,7 +108,7 @@ impl UnitRef {
     /// Returns whether this reference is module-qualified.
     #[must_use]
     pub const fn is_qualified(&self) -> bool {
-        self.qualifier.is_some()
+        self.owner.is_some()
     }
 }
 
@@ -138,8 +132,8 @@ impl From<NameAtom> for UnitRef {
 
 impl fmt::Display for UnitRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(qualifier) = &self.qualifier {
-            write!(f, "{qualifier}.")?;
+        if let Some(owner) = &self.owner {
+            write!(f, "{owner}::")?;
         }
         write!(f, "{}", self.name)
     }

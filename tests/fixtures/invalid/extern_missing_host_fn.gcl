@@ -3,4 +3,4 @@
 import plugin "graphcal:demo" as demo {
     fn not_provided(x: Dimensionless) -> Dimensionless;
 }
-node x: Dimensionless = demo.not_provided(1.0);
+node x: Dimensionless = demo::not_provided(1.0);

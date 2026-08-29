@@ -30,7 +30,7 @@ use graphcal_compiler::syntax::ast::{
 };
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
-use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath};
+use graphcal_compiler::syntax::names::{NameAtom, NameAtomError, NamePath, NamespacePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::syntax::type_name::FieldName;
@@ -43,11 +43,24 @@ fn synth_ident_path(
     param: &str,
     role: &'static str,
 ) -> Result<IdentPath, JsonInputError> {
-    let segments = parse_name_atoms(name, param, role)?;
-    Ok(IdentPath::new(segments.map(|name| Ident {
-        name,
-        span: SYNTH_SPAN,
-    })))
+    let path = parse_name_path(name, param, role)?;
+    let (owner, member) = path.into_parts();
+    Ok(match owner {
+        Some(owner) => IdentPath::member(
+            owner.into_segments().map(|name| Ident {
+                name,
+                span: SYNTH_SPAN,
+            }),
+            Ident {
+                name: member,
+                span: SYNTH_SPAN,
+            },
+        ),
+        None => IdentPath::bare(Ident {
+            name: member,
+            span: SYNTH_SPAN,
+        }),
+    })
 }
 
 fn synth_name_path(
@@ -55,31 +68,34 @@ fn synth_name_path(
     param: &str,
     role: &'static str,
 ) -> Result<NamePath, JsonInputError> {
-    parse_name_atoms(name, param, role).map(NamePath::new)
+    parse_name_path(name, param, role)
 }
 
-fn parse_name_atoms(
+fn parse_name_path(
     name: &str,
     param: &str,
     role: &'static str,
-) -> Result<NonEmpty<NameAtom>, JsonInputError> {
-    let atoms = name
-        .split('.')
-        .map(|segment| {
-            NameAtom::parse(segment).map_err(|reason| JsonInputError::InvalidName {
-                param: param.to_string(),
-                role,
-                value: name.to_string(),
-                reason,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    NonEmpty::try_from_vec(atoms).map_err(|_| JsonInputError::InvalidName {
+) -> Result<NamePath, JsonInputError> {
+    let invalid = |reason| JsonInputError::InvalidName {
         param: param.to_string(),
         role,
         value: name.to_string(),
-        reason: NameAtomError::Empty,
-    })
+        reason,
+    };
+    let Some((owner, member)) = name.split_once("::") else {
+        return NameAtom::parse(name).map(NamePath::from).map_err(invalid);
+    };
+    if member.contains("::") {
+        return Err(invalid(NameAtomError::ContainsDot));
+    }
+    let owner = owner
+        .split('.')
+        .map(NameAtom::parse)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(invalid)?;
+    let owner = NonEmpty::try_from_vec(owner).map_err(|_| invalid(NameAtomError::Empty))?;
+    let member = NameAtom::parse(member).map_err(invalid)?;
+    Ok(NamePath::member(NamespacePath::new(owner), member))
 }
 
 // ---------------------------------------------------------------------------
@@ -956,22 +972,22 @@ mod tests {
     #[test]
     fn structured_json_accepts_qualified_constructor_and_index_paths() {
         let json = r#"{
-            "status": {"variant": "lib.Pick", "fields": {"distance": 1}},
-            "series": {"index": "lib.Phase", "entries": {"Burn": 1, "Coast": 2}}
+            "status": {"variant": "lib::Pick", "fields": {"distance": 1}},
+            "series": {"index": "lib::Phase", "entries": {"Burn": 1, "Coast": 2}}
         }"#;
         let overrides = json_to_overrides(json).unwrap();
 
         match &overrides[&DeclName::expect_valid("status")].kind {
             ExprKind::ConstructorCall { callee, .. } => {
-                let segments: Vec<_> = callee.segments().iter().map(|s| s.name.as_str()).collect();
-                assert_eq!(segments, ["lib", "Pick"]);
+                assert_eq!(callee.owner_segments().unwrap()[0].name, "lib");
+                assert_eq!(callee.leaf().name, "Pick");
             }
             other => panic!("expected ConstructorCall, got {other:?}"),
         }
 
         match &overrides[&DeclName::expect_valid("series")].kind {
             ExprKind::MapLiteral { entries } => {
-                assert_eq!(entries[0].keys[0].index.value.to_string(), "lib.Phase");
+                assert_eq!(entries[0].keys[0].index.value.to_string(), "lib::Phase");
             }
             other => panic!("expected MapLiteral, got {other:?}"),
         }

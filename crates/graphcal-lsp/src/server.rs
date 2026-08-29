@@ -1563,7 +1563,7 @@ fn build_extern_fn_signatures(
                 .collect();
             format!("<{}>", vars.join(", "))
         };
-        let qualified = format!("{}.{}", function.alias, function.name);
+        let qualified = format!("{}::{}", function.alias, function.name);
         let label = format!(
             "fn {qualified}{binders}({}) -> {}",
             parameters.join(", "),
@@ -2267,7 +2267,9 @@ fn collect_module_import_definitions(
 ) -> std::result::Result<(), Cancelled> {
     for (key, definition) in &imported_table.definitions {
         cancellation.checkpoint()?;
-        let Some(spelling) = module_import_spelling(key, module_name, target_module) else {
+        let Some(spelling) =
+            module_import_spelling(key, definition.category, module_name, target_module)
+        else {
             continue;
         };
         insert_imported_def(
@@ -2322,13 +2324,22 @@ fn selective_import_spelling(
         }
         _ => false,
     };
-    if attached {
-        Some(SourceSymbolPath::qualified(
-            vec![local.clone()],
-            NameAtom::parse(key.leaf_name()).ok()?,
-        ))
-    } else {
-        None
+    if !attached {
+        return None;
+    }
+    let leaf = NameAtom::parse(key.leaf_name()).ok()?;
+    match key {
+        SymbolKey::IndexVariant(_) => Some(SourceSymbolPath::index_label(
+            Vec::new(),
+            local.clone(),
+            leaf,
+        )),
+        SymbolKey::Field(_) | SymbolKey::GenericParam(_) => Some(SourceSymbolPath::associated(
+            Vec::new(),
+            local.clone(),
+            leaf,
+        )),
+        _ => Some(SourceSymbolPath::module_member(vec![local.clone()], leaf)),
     }
 }
 
@@ -2373,6 +2384,7 @@ const fn selective_import_allows_category(
 /// Source-visible spelling contributed by a module import.
 fn module_import_spelling(
     key: &SymbolKey,
+    category: SymbolCategory,
     module_name: &NameAtom,
     target_module: &graphcal_compiler::dag_id::DagId,
 ) -> Option<SourceSymbolPath> {
@@ -2386,23 +2398,31 @@ fn module_import_spelling(
     }
 
     let owner = key.owner()?;
-    let mut qualifier = module_relative_qualifier(module_name, owner, target_module)?;
+    let qualifier = module_relative_qualifier(module_name, owner, target_module)?;
+    let leaf = NameAtom::parse(key.leaf_name()).ok()?;
     match key {
-        SymbolKey::IndexVariant(id) => {
-            qualifier.push(NameAtom::parse(id.index().as_str()).ok()?);
+        SymbolKey::IndexVariant(id) => Some(SourceSymbolPath::index_label(
+            qualifier,
+            NameAtom::parse(id.index().as_str()).ok()?,
+            leaf,
+        )),
+        SymbolKey::Field(id) => Some(SourceSymbolPath::associated(
+            qualifier,
+            NameAtom::parse(id.owner().as_str()).ok()?,
+            leaf,
+        )),
+        SymbolKey::GenericParam(id) => Some(SourceSymbolPath::associated(
+            qualifier,
+            NameAtom::parse(id.owner().as_str()).ok()?,
+            leaf,
+        )),
+        SymbolKey::Declaration(_) if category == SymbolCategory::Dag => {
+            let mut segments = qualifier;
+            segments.push(leaf);
+            SourceSymbolPath::dag_path(segments)
         }
-        SymbolKey::Field(id) => {
-            qualifier.push(NameAtom::parse(id.owner().as_str()).ok()?);
-        }
-        SymbolKey::GenericParam(id) => {
-            qualifier.push(NameAtom::parse(id.owner().as_str()).ok()?);
-        }
-        _ => {}
+        _ => Some(SourceSymbolPath::module_member(qualifier, leaf)),
     }
-    Some(SourceSymbolPath::qualified(
-        qualifier,
-        NameAtom::parse(key.leaf_name()).ok()?,
-    ))
 }
 
 fn module_relative_qualifier(
@@ -3175,15 +3195,15 @@ mod tests {
                         pub node distance: Length = 1.0 DynamicM;\n\
                     }\n\
                     node rates: Dimensionless[Rate] = {\n\
-                        Rate.Two: 2.0,\n\
-                        Rate.Three: 3.0,\n\
+                        Rate#Two: 2.0,\n\
+                        Rate#Three: 3.0,\n\
                     };\n\
                     node values: Length[Rate] = for rate: Rate {\n\
-                        @units(rate: @rates[rate]).distance\n\
+                        @units(rate: @rates[rate])::distance\n\
                     };\n\
                     node reversed: Length[Order] = {\n\
-                        Order.First: @values[Rate.Three],\n\
-                        Order.Second: @values[Rate.Two],\n\
+                        Order#First: @values[Rate#Three],\n\
+                        Order#Second: @values[Rate#Two],\n\
                     };\n";
         let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
         assert!(
@@ -3547,7 +3567,7 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "include lib.lib().{ doubled };\nnode result: Dimensionless = @doubled + 1.0;\n",
+                "include lib.lib()::{ doubled };\nnode result: Dimensionless = @doubled + 1.0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/lib/main.gcl");
@@ -3583,8 +3603,8 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/app/main.gcl",
-                "include app.analysis.shared(input: 2.0).{ output as analyzed };\n\
-                 include app.presentation.shared(input: 5.0).{ output as rendered };\n\
+                "include app.analysis.shared(input: 2.0)::{ output as analyzed };\n\
+                 include app.presentation.shared(input: 5.0)::{ output as rendered };\n\
                  node combined: Dimensionless = @analyzed + @rendered;\n",
             ),
         ]);
@@ -3618,8 +3638,8 @@ node bad: Mass = mass + length;
                 "src/app/main.gcl",
                 "import app.left as left;\n\
                  import app.right as right;\n\
-                 node left_value: left.Measure = 1.0 left.u;\n\
-                 node right_value: right.Measure = 2.0 right.u;\n",
+                 node left_value: left::Measure = 1.0 left::u;\n\
+                 node right_value: right::Measure = 2.0 right::u;\n",
             ),
         ]);
         let main_path = dir.path().join("src/app/main.gcl");
@@ -3638,8 +3658,9 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        for (spelling, expected_uri) in [("left.Measure", left_uri), ("right.Measure", right_uri)] {
-            let offset = text.find(spelling).unwrap() + spelling.find('.').unwrap() + 2;
+        for (spelling, expected_uri) in [("left::Measure", left_uri), ("right::Measure", right_uri)]
+        {
+            let offset = text.find(spelling).unwrap() + spelling.find("::").unwrap() + 3;
             let resolved = resolve_symbol_at(&analysis, offset)
                 .unwrap_or_else(|| panic!("resolve `{spelling}`"));
             let SymbolLocation::Imported(imported) = resolved.location else {
@@ -3658,7 +3679,7 @@ node bad: Mass = mass + length;
             ("src/helper/lib.gcl", "this is not valid graphcal"),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y};\nnode z: Dimensionless = 1.0;",
+                "import helper.lib::{y};\nnode z: Dimensionless = 1.0;",
             ),
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
@@ -3722,7 +3743,7 @@ node bad: Mass = mass + length;
             ("src/helper/util/lib.gcl", "this is not valid graphcal"),
             (
                 "src/helper/main.gcl",
-                "import helper.util.lib.{y};\nnode z: Dimensionless = 1.0;",
+                "import helper.util.lib::{y};\nnode z: Dimensionless = 1.0;",
             ),
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
@@ -3763,7 +3784,7 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;",
+                "import helper.lib::{y as renamed};\nnode z: Dimensionless = @renamed + 1.0;",
             ),
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
@@ -3804,9 +3825,9 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/helper/main.gcl",
-                "import helper.lib.{y as first};\n\
-                 import helper.lib.{y as second};\n\
-                 node z: Dimensionless = @first + @second;",
+                "import helper.lib::{y as first};\n\
+                 import helper.lib::{y as other};\n\
+                 node z: Dimensionless = @first + @other;",
             ),
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
@@ -3816,9 +3837,9 @@ node bad: Mass = mass + length;
         assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
 
         let first = imported_target_for_spelling(&analysis, "first").unwrap();
-        let second = imported_target_for_spelling(&analysis, "second").unwrap();
-        assert_eq!(first, second);
-        for spelling in ["@first", "@second"] {
+        let other = imported_target_for_spelling(&analysis, "other").unwrap();
+        assert_eq!(first, other);
+        for spelling in ["@first", "@other"] {
             let offset = text.find(spelling).unwrap() + 1;
             assert_eq!(
                 crate::resolve::resolve_symbol_at(&analysis, offset).map(|resolved| resolved.key),
@@ -3827,7 +3848,7 @@ node bad: Mass = mass + length;
         }
     }
 
-    /// Issue #631 case 1+2: `@module.dag(args).out` — both the DAG name and
+    /// Issue #631 case 1+2: `@module.dag(args)::out` — both the DAG name and
     /// the output projection must resolve to the imported library file.
     #[test]
     fn goto_definition_resolves_cross_file_inline_dag_call() {
@@ -3847,7 +3868,7 @@ node bad: Mass = mass + length;
                 "src/lib/main.gcl",
                 "import lib.lib as lib;\n\
                  param speed: Velocity = 10.0 m/s;\n\
-                 node doubled: Velocity = @lib.scale(factor: 2.0, v: @speed).result;\n",
+                 node doubled: Velocity = @lib.scale(factor: 2.0, v: @speed)::result;\n",
             ),
         ]);
         let main_path = dir.path().join("src/lib/main.gcl");
@@ -3872,7 +3893,7 @@ node bad: Mass = mass + length;
         assert_eq!(scale_imported.uri, lib_uri, "scale should jump to lib.gcl");
 
         // Cursor on `result` (the output projection).
-        let result_offset = text.find(").result").expect("`.result` projection") + 2;
+        let result_offset = text.find(")::result").expect("`::result` projection") + 3;
         let result_resolved =
             resolve_symbol_at(&analysis, result_offset).expect("resolve `result`");
         let SymbolLocation::Imported(result_imported) = result_resolved.location else {
@@ -3903,10 +3924,10 @@ node bad: Mass = mass + length;
                 "src/lib/main.gcl",
                 "import lib.library as file_dag;\n\
                  import lib.library.helper as inline_dag;\n\
-                 import lib.library.{helper as selected_dag};\n\
-                 node a: Dimensionless = @file_dag(x: 2.0).doubled;\n\
-                 node b: Dimensionless = @inline_dag(x: 3.0).tripled;\n\
-                 node c: Dimensionless = @selected_dag(x: 4.0).tripled;\n",
+                 import lib.library::{helper as selected_dag};\n\
+                 node a: Dimensionless = @file_dag(x: 2.0)::doubled;\n\
+                 node b: Dimensionless = @inline_dag(x: 3.0)::tripled;\n\
+                 node c: Dimensionless = @selected_dag(x: 4.0)::tripled;\n",
             ),
         ]);
         let main_path = dir.path().join("src/lib/main.gcl");
@@ -3950,11 +3971,11 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "import lib.lib.{ index Color };\n\
+                "import lib.lib::{ index Color };\n\
                  param favorite: Dimensionless[Color] = {\n    \
-                     Color.Red: 1.0,\n    \
-                     Color.Green: 2.0,\n    \
-                     Color.Blue: 3.0,\n\
+                     Color#Red: 1.0,\n    \
+                     Color#Green: 2.0,\n    \
+                     Color#Blue: 3.0,\n\
                  };\n",
             ),
         ]);
@@ -3970,8 +3991,8 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        // Cursor on `Red` inside `Color.Red:`.
-        let red_offset = text.find("Color.Red").expect("Color.Red token") + "Color.".len();
+        // Cursor on `Red` inside `Color#Red:`.
+        let red_offset = text.find("Color#Red").expect("Color#Red token") + "Color#".len();
         let red_resolved = resolve_symbol_at(&analysis, red_offset + 1).expect("resolve `Red`");
         let SymbolLocation::Imported(red_imported) = red_resolved.location else {
             panic!("expected `Red` to resolve to an imported definition");
@@ -3994,9 +4015,9 @@ node bad: Mass = mass + length;
             (
                 "src/lib/main.gcl",
                 "import lib.axes as axes;\n\
-                 param cube: Dimensionless[axes.Scenario, axes.Row, axes.Column] =\n    \
-                     table[axes.Scenario, axes.Row, axes.Column] {\n        \
-                         [axes.Scenario.Nominal]\n        \
+                 param cube: Dimensionless[axes::Scenario, axes::Row, axes::Column] =\n    \
+                     table[axes::Scenario, axes::Row, axes::Column] {\n        \
+                         [axes::Scenario#Nominal]\n        \
                          : X;\n        \
                          A: 1.0;\n    \
                      };\n",
@@ -4014,9 +4035,9 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        let table_axis = text.find("table[axes.Scenario").unwrap() + "table[axes.".len();
-        let slice_axis = text.find("[axes.Scenario.Nominal]").unwrap() + "[axes.".len();
-        let slice_variant = text.find("axes.Scenario.Nominal").unwrap() + "axes.Scenario.".len();
+        let table_axis = text.find("table[axes::Scenario").unwrap() + "table[axes::".len();
+        let slice_axis = text.find("[axes::Scenario#Nominal]").unwrap() + "[axes::".len();
+        let slice_variant = text.find("axes::Scenario#Nominal").unwrap() + "axes::Scenario#".len();
         let column_variant = text.find(": X;").unwrap() + 2;
         let row_variant = text.find("A: 1.0;").unwrap();
 
@@ -4049,11 +4070,11 @@ node bad: Mass = mass + length;
             ),
             (
                 "src/lib/main.gcl",
-                "import lib.lib.{ index Color as Palette };\n\
+                "import lib.lib::{ index Color as Palette };\n\
                  param favorite: Dimensionless[Palette] = {\n    \
-                     Palette.Red: 1.0,\n    \
-                     Palette.Green: 2.0,\n    \
-                     Palette.Blue: 3.0,\n\
+                     Palette#Red: 1.0,\n    \
+                     Palette#Green: 2.0,\n    \
+                     Palette#Blue: 3.0,\n\
                  };\n",
             ),
         ]);
@@ -4062,18 +4083,18 @@ node bad: Mass = mass + length;
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&uri, &text, &[], test_plugin_host());
 
-        let palette_red_key = imported_target_for_spelling(&analysis, "Palette.Red")
-            .expect("expected imported binding under local alias `Palette.Red`");
+        let palette_red_key = imported_target_for_spelling(&analysis, "Palette#Red")
+            .expect("expected imported binding under local alias `Palette#Red`");
         assert!(
             analysis.imported_definitions.contains_key(palette_red_key),
-            "expected imported variant under local alias `Palette.Red`, got: {:?}",
+            "expected imported variant under local alias `Palette#Red`, got: {:?}",
             analysis.imported_definitions.keys().collect::<Vec<_>>(),
         );
     }
 
     /// Issue #830: goto-definition and hover must resolve symbols brought in
     /// by module imports — bare (`import gotom.lib;` → `@lib.g0`) and aliased
-    /// (`import gotom.lib as alias_lib;` → `@alias_lib.g0`).
+    /// (`import gotom.lib as alias_lib;` → `@alias_lib::g0`).
     #[test]
     fn module_imported_symbols_resolve_for_goto_and_hover() {
         use crate::resolve::{SymbolLocation, resolve_symbol_at};
@@ -4088,8 +4109,8 @@ node bad: Mass = mass + length;
                 "src/gotom/main.gcl",
                 "import gotom.lib;\n\
                  import gotom.lib as alias_lib;\n\
-                 node g: Acceleration = @lib.g0;\n\
-                 node g2: Acceleration = @alias_lib.g0;\n",
+                 node g: Acceleration = @lib::g0;\n\
+                 node g2: Acceleration = @alias_lib::g0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/gotom/main.gcl");
@@ -4104,7 +4125,7 @@ node bad: Mass = mass + length;
             analysis.diagnostics,
         );
 
-        for (needle, prefix) in [("@lib.g0", "@lib."), ("@alias_lib.g0", "@alias_lib.")] {
+        for (needle, prefix) in [("@lib::g0", "@lib::"), ("@alias_lib::g0", "@alias_lib::")] {
             let offset = text.find(needle).expect("reference in main.gcl") + prefix.len();
             let resolved = resolve_symbol_at(&analysis, offset)
                 .unwrap_or_else(|| panic!("expected `{needle}` to resolve"));
@@ -4488,7 +4509,7 @@ node momentum: Force * Time = @mass * @velocity;
             ),
             (
                 "src/fresh/main.gcl",
-                "import fresh.lib.{y};\nnode z: Dimensionless = @y + 1.0;\n",
+                "import fresh.lib::{y};\nnode z: Dimensionless = @y + 1.0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/fresh/main.gcl");
@@ -4595,10 +4616,10 @@ node momentum: Force * Time = @mass * @velocity;
             ),
             (
                 "src/gotom/main.gcl",
-                "import gotom.lib.{g0};\n\
+                "import gotom.lib::{g0};\n\
                  import gotom.lib as m;\n\
                  node g: Acceleration = @g0;\n\
-                 node g2: Acceleration = @m.g0;\n",
+                 node g2: Acceleration = @m::g0;\n",
             ),
         ]);
         let main_path = dir.path().join("src/gotom/main.gcl");
@@ -4611,7 +4632,7 @@ node momentum: Force * Time = @mass * @velocity;
             analysis.diagnostics,
         );
 
-        for spelling in ["g0", "m.g0"] {
+        for spelling in ["g0", "m::g0"] {
             let key = imported_target_for_spelling(&analysis, spelling)
                 .unwrap_or_else(|| panic!("expected imported binding for {spelling}"));
             let imported = analysis
@@ -4652,14 +4673,14 @@ node momentum: Force * Time = @mass * @velocity;
                 "src/proj/main.gcl",
                 "import proj.a as a;\n\
                  import proj.b as b;\n\n\
-                 const node from_a: Dimensionless = a.bias;\n\
-                 node phase_score: Dimensionless[a.Phase] = for phase: a.Phase {\n\
-                     match phase {\n\
-                         a.Phase.Burn => a.bias,\n\
-                         a.Phase.Coast => b.bias,\n\
+                 const node from_a: Dimensionless = a::bias;\n\
+                 node phase_score: Dimensionless[a::Phase] = for current_phase: a::Phase {\n\
+                     match current_phase {\n\
+                         a::Phase#Burn => a::bias,\n\
+                         a::Phase#Coast => b::bias,\n\
                      }\n\
                  };\n\
-                 node item: a.Item = a.Pick(distance: a.bias);\n",
+                 node item: a::Item = a::Pick(distance: a::bias);\n",
             ),
         ]);
         let main_path = dir.path().join("src/proj/main.gcl");
@@ -4677,11 +4698,11 @@ node momentum: Force * Time = @mass * @velocity;
         );
 
         for (needle, token_prefix) in [
-            ("a.bias", "a."),
-            ("a.Phase]", "a."),
-            ("a.Phase.Burn", "a.Phase."),
-            ("a.Item", "a."),
-            ("a.Pick", "a."),
+            ("a::bias", "a::"),
+            ("a::Phase]", "a::"),
+            ("a::Phase#Burn", "a::Phase#"),
+            ("a::Item", "a::"),
+            ("a::Pick", "a::"),
         ] {
             let offset = text.find(needle).expect("token in main.gcl") + token_prefix.len();
             let resolved = resolve_symbol_at(&analysis, offset + 1)

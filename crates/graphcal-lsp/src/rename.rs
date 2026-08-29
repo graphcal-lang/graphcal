@@ -502,7 +502,7 @@ dag d {
     param inner: Dimensionless;
     node doubled: Dimensionless = @inner * 2.0;
 }
-include d(inner: @outer).{ doubled as result };
+include d(inner: @outer)::{ doubled as result };
 plot p = { mark: point, encode: { x: @outer } };
 figure f = { plots: [p] };
 ";
@@ -649,7 +649,7 @@ figure f = { plots: [p] };
         let lib_text = "pub const node y: Dimensionless = 2.0;";
         std::fs::write(&lib_path, lib_text).unwrap();
         let main_path = dir.path().join("src/helper/main.gcl");
-        let main_text = "import helper.lib.{y};\nnode z: Dimensionless = @y + 1.0;\n";
+        let main_text = "import helper.lib::{y};\nnode z: Dimensionless = @y + 1.0;\n";
         std::fs::write(&main_path, main_text).unwrap();
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let lib_uri = Url::from_file_path(lib_path.canonicalize().unwrap()).unwrap();
@@ -721,11 +721,11 @@ figure f = { plots: [p] };
             ("lib.gcl", "pub node doubled: Dimensionless = 2.0;\n"),
             (
                 "consumer.gcl",
-                "include helper.lib().{ doubled as local };\npub node result: Dimensionless = @local + 1.0;\n",
+                "include helper.lib()::{ doubled as local };\npub node result: Dimensionless = @local + 1.0;\n",
             ),
             (
                 "main.gcl",
-                "include helper.lib().{ doubled };\ninclude helper.consumer().{ result };\nnode total: Dimensionless = @doubled + @result;\n",
+                "include helper.lib()::{ doubled };\ninclude helper.consumer()::{ result };\nnode total: Dimensionless = @doubled + @result;\n",
             ),
         ] {
             std::fs::write(source_dir.join(name), source).unwrap();
@@ -778,16 +778,16 @@ figure f = { plots: [p] };
             ("lib.gcl", "pub const node y: Dimensionless = 2.0;\n"),
             (
                 "a.gcl",
-                "import helper.lib.{ pub y };\nconst node occupied: Dimensionless = 0.0;\npub const node a_value: Dimensionless = @y;\n",
+                "import helper.lib::{ pub y };\nconst node occupied: Dimensionless = 0.0;\npub const node a_value: Dimensionless = @y;\n",
             ),
             (
                 "b.gcl",
-                "import helper.lib.{ y as alias };\npub const node b_value: Dimensionless = @alias;\n",
+                "import helper.lib::{ y as alias };\npub const node b_value: Dimensionless = @alias;\n",
             ),
             ("other.gcl", "pub const node y: Dimensionless = 40.0;\n"),
             (
                 "main.gcl",
-                "import helper.lib.{ y };\nimport helper.a.{ y as through_a, a_value };\nimport helper.b.{ b_value };\nimport helper.other as other;\nnode total: Dimensionless = @y + @through_a + @a_value + @b_value + @other.y;\n",
+                "import helper.lib::{ y };\nimport helper.a::{ y as through_a, a_value };\nimport helper.b::{ b_value };\nimport helper.other as other;\nnode total: Dimensionless = @y + @through_a + @a_value + @b_value + @other.y;\n",
             ),
         ];
         for (name, source) in files {
@@ -954,7 +954,7 @@ node kinetic: Energy = 0.5 * @mass * @velocity ^ 2;
         let source = "\
 index Season = { Winter, Summer };
 index Hemisphere = { North, Winter };
-node pick: Season = Season.Summer;
+node pick: Season = Season#Summer;
 ";
         let analysis = analysis_from_source(source);
         let uri = Url::parse("file:///test.gcl").unwrap();
@@ -977,7 +977,7 @@ node pick: Season = Season.Summer;
 
     /// Issues #827/#828: renaming an index variant must edit exactly the
     /// variant identifier tokens — not table-axis-to-row-label merges and not
-    /// whole `Index.Variant` qualified paths.
+    /// whole `Index#Variant` qualified paths.
     #[test]
     fn rename_index_variant_edits_are_segment_precise() {
         let source = "\
@@ -986,7 +986,7 @@ param dv: Velocity[Maneuver] = table[Maneuver] {
     Departure: 2.0 km/s;
     Correction: 0.1 km/s;
 };
-node total: Velocity = @dv[Maneuver.Departure];
+node total: Velocity = @dv[Maneuver#Departure];
 ";
         let analysis = analysis_from_source(source);
         let uri = Url::parse("file:///test.gcl").unwrap();
@@ -1019,14 +1019,14 @@ node total: Velocity = @dv[Maneuver.Departure];
     }
 
     #[test]
-    fn rename_index_updates_multi_decl_axis_and_qualified_headers() {
+    fn rename_index_updates_multi_decl_axis_and_contextual_headers() {
         let source = "\
 index Component = { A };
 index Mode = { Safe, Nominal };
 param scalar: Dimensionless[Component],
 param enabled: Bool[Component, Mode]
     = table[Component, (_, Mode)] {
-        : _, Mode.Safe, Mode.Nominal;
+        : _, Safe, Nominal;
         A: 1.0, true, false;
     };
 ";
@@ -1039,7 +1039,7 @@ param enabled: Bool[Component, Mode]
         assert_eq!(
             file_edits.len(),
             source.match_indices("Mode").count(),
-            "every type, slot-axis, and header-axis occurrence must be renamed: {file_edits:?}"
+            "every type and slot-axis occurrence must be renamed: {file_edits:?}"
         );
         for edit in file_edits {
             let line = source.lines().nth(edit.range.start.line as usize).unwrap();
@@ -1057,7 +1057,7 @@ param enabled: Bool[Component, Mode]
         assert_eq!(
             variant_edits.len(),
             source.match_indices("Safe").count(),
-            "the declaration and qualified header variant must both be renamed"
+            "the declaration and contextual header variant must both be renamed"
         );
         for edit in variant_edits {
             let line = source.lines().nth(edit.range.start.line as usize).unwrap();

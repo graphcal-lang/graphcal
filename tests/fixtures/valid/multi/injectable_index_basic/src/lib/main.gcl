@@ -2,11 +2,11 @@
 index MyPhase = { Design, Build };
 
 include lib.lib(
-    Phase: MyPhase,
+    index Phase: MyPhase,
     cost: {
-        MyPhase.Design: 10.0,
-        MyPhase.Build: 20.0,
+        MyPhase#Design: 10.0,
+        MyPhase#Build: 20.0,
     }
-).{ total };
+)::{ total };
 
 node result: Dimensionless = @total;

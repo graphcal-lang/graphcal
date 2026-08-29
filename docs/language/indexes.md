@@ -14,13 +14,15 @@ Declare a finite index with named labels:
 index Maneuver = { Departure, Correction, Insertion };
 ```
 
-Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver.Departure`.
+Labels conventionally use `PascalCase` and are namespaced by the index: `Maneuver#Departure`.
 
-Named labels identify positions on an index axis. As an expression, a
-qualified label is a self-typed constant [index key](#index-keys) of type
-`Key<Maneuver>`. Like a constructor name, the same spelling also serves as a
-syntactic selector in map/table keys, expected-fail keys, include index
-bindings, and `match` patterns.
+Named labels identify positions on an index axis. As an expression, an
+owner-qualified label is a self-typed constant [index key](#index-keys) of type
+`Key<Maneuver>`. `#` selects the canonical index owner directly; lookup never
+probes a flat constructor or another index with the same label. Different
+indexes may therefore reuse a label, and a label may share its spelling with a
+flat constructor. The same label spelling also serves as a selector in
+map/table keys, expected-fail keys, and `match` patterns.
 
 The label list is **ordered**: the sequence in which labels are declared is the
 index order of the axis. Every index kind carries such an intrinsic order —
@@ -57,9 +59,9 @@ Annotate a type with `[IndexName]` to create an indexed value:
 
 ```
 node delta_v: Velocity[Maneuver] = {
-    Maneuver.Departure: 2.46 km/s,
-    Maneuver.Correction: 0.12 km/s,
-    Maneuver.Insertion: 1.83 km/s,
+    Maneuver#Departure: 2.46 km/s,
+    Maneuver#Correction: 0.12 km/s,
+    Maneuver#Insertion: 1.83 km/s,
 };
 ```
 
@@ -75,16 +77,16 @@ cannot request an unbounded allocation. An oversized concrete shape is a
 An indexed value is a **total map**: every label of the index must appear
 exactly once, and the compiler rejects missing or duplicate entries. The
 written order of map entries is presentation only — the constructed value is
-normalized to the index order, so listing `Maneuver.Insertion` first produces
+normalized to the index order, so listing `Maneuver#Insertion` first produces
 exactly the same value. Only the `index` declaration determines the order; a
 map or table literal cannot override it.
 
 ## Element Access
 
-Access a specific element with `[Index.Label]`:
+Access a specific element with `[Index#Label]`:
 
 ```
-node departure_dv: Velocity = @delta_v[Maneuver.Departure];
+node departure_dv: Velocity = @delta_v[Maneuver#Departure];
 ```
 
 Or with a loop variable, which is a key of the iterated axis:
@@ -186,9 +188,9 @@ is exact and never a floating-point lookup.
 ```
 index Maneuver = { Departure, Correction, Insertion };
 param delta_v: Velocity[Maneuver] = {
-    Maneuver.Departure: 2.46 km/s,
-    Maneuver.Correction: 0.12 km/s,
-    Maneuver.Insertion: 1.83 km/s,
+    Maneuver#Departure: 2.46 km/s,
+    Maneuver#Correction: 0.12 km/s,
+    Maneuver#Insertion: 1.83 km/s,
 };
 
 node critical: Key<Maneuver> = argmax(@delta_v);
@@ -198,13 +200,13 @@ node critical_dv: Velocity = @delta_v[@critical];
 ### Labels Are Key Constants
 
 A qualified label is a self-typed constant expression:
-`Maneuver.Departure : Key<Maneuver>`. Exactly as a constructor name is both
+`Maneuver#Departure : Key<Maneuver>`. Exactly as a constructor name is both
 an expression and a pattern, the label spelling keeps its selector role in
 pattern-like positions — `match` arms, map/table keys, table headers and
 slices — while everywhere else it is a `Key`-typed term:
 
 ```
-node fallback: Key<Maneuver> = Maneuver.Correction;
+node fallback: Key<Maneuver> = Maneuver#Correction;
 ```
 
 Axis-less spellings are never keys implicitly: `node k: Key<Fin(3)> = 1;` is
@@ -243,9 +245,9 @@ label patterns used for named-index loop variables:
 
 ```
 node contingency: Dimensionless = match @critical {
-    Maneuver.Departure  => 1.10,
-    Maneuver.Correction => 1.50,
-    Maneuver.Insertion  => 1.25,
+    Maneuver#Departure  => 1.10,
+    Maneuver#Correction => 1.50,
+    Maneuver#Insertion  => 1.25,
 };
 ```
 
@@ -302,7 +304,7 @@ All introduction forms state their axis explicitly:
 
 | Form | Checking | Fallible? |
 |------|----------|-----------|
-| Label expression `Maneuver.Departure` | compile time | no |
+| Label expression `Maneuver#Departure` | compile time | no |
 | Loop variable | compile time | no |
 | `argmax(v)` / `argmin(v)` | — | no (axes are non-empty) |
 | `key(Fin(N), c)` with static `c` | compile-time range check | no |
@@ -320,7 +322,7 @@ with an explicit search policy instead.
 
 ```
 param readings: Pressure[Fin(8)] = for i: Fin(8) { 100.0 Pa };
-node second: Key<Fin(8)> = key(Fin(8), 1);
+node second_key: Key<Fin(8)> = key(Fin(8), 1);
 param requested: Int = 5;
 node channel: Key<Fin(8)> = fin_key(Fin(8), @requested);
 node selected: Pressure = @readings[@channel];
@@ -443,7 +445,7 @@ never to how a particular value was written:
 - **`Fin(N)`**: ascending positions `#0` through `#(N-1)`.
 
 Because indexed values are normalized to index order, scanning a map literal
-that lists `Maneuver.Insertion` first still accumulates `Departure` first.
+that lists `Maneuver#Insertion` first still accumulates `Departure` first.
 
 ## Multi-Indexed Values
 
@@ -453,22 +455,22 @@ Values can be indexed by multiple label indexes using tuple keys:
 index Phase = { Launch, Cruise, Arrival };
 
 node spacecraft_mass: Mass[Phase, Maneuver] = {
-    (Phase.Launch, Maneuver.Departure): 5000.0 kg,
-    (Phase.Launch, Maneuver.Correction): 0.0 kg,
-    (Phase.Launch, Maneuver.Insertion): 0.0 kg,
-    (Phase.Cruise, Maneuver.Departure): 0.0 kg,
-    (Phase.Cruise, Maneuver.Correction): 4500.0 kg,
-    (Phase.Cruise, Maneuver.Insertion): 0.0 kg,
-    (Phase.Arrival, Maneuver.Departure): 0.0 kg,
-    (Phase.Arrival, Maneuver.Correction): 0.0 kg,
-    (Phase.Arrival, Maneuver.Insertion): 4000.0 kg,
+    (Phase#Launch, Maneuver#Departure): 5000.0 kg,
+    (Phase#Launch, Maneuver#Correction): 0.0 kg,
+    (Phase#Launch, Maneuver#Insertion): 0.0 kg,
+    (Phase#Cruise, Maneuver#Departure): 0.0 kg,
+    (Phase#Cruise, Maneuver#Correction): 4500.0 kg,
+    (Phase#Cruise, Maneuver#Insertion): 0.0 kg,
+    (Phase#Arrival, Maneuver#Departure): 0.0 kg,
+    (Phase#Arrival, Maneuver#Correction): 0.0 kg,
+    (Phase#Arrival, Maneuver#Insertion): 4000.0 kg,
 };
 ```
 
 Access elements with multiple index arguments:
 
 ```
-node launch_dep: Mass = @spacecraft_mass[Phase.Launch, Maneuver.Departure];
+node launch_dep: Mass = @spacecraft_mass[Phase#Launch, Maneuver#Departure];
 ```
 
 ## Mixed Label and Coordinate Indexes
@@ -484,9 +486,9 @@ index Maneuver = { Departure, Correction, Insertion };
 index TimeStep = range(0.0 s, 1.0 s, step: 0.5 s);
 
 node accel: Acceleration[Maneuver] = {
-    Maneuver.Departure: 10.0 m/s^2,
-    Maneuver.Correction: 5.0 m/s^2,
-    Maneuver.Insertion: -3.0 m/s^2,
+    Maneuver#Departure: 10.0 m/s^2,
+    Maneuver#Correction: 5.0 m/s^2,
+    Maneuver#Insertion: -3.0 m/s^2,
 };
 
 node v: Velocity[Maneuver, TimeStep] = for m: Maneuver, t: TimeStep {
@@ -505,9 +507,9 @@ comprehension over a coordinate index:
 
 ```
 node v: Velocity[Maneuver, TimeStep] = {
-    Maneuver.Departure: for t: TimeStep { @accel[Maneuver.Departure] * coord(t) },
-    Maneuver.Correction: for t: TimeStep { @accel[Maneuver.Correction] * coord(t) },
-    Maneuver.Insertion: for t: TimeStep { @accel[Maneuver.Insertion] * coord(t) },
+    Maneuver#Departure: for t: TimeStep { @accel[Maneuver#Departure] * coord(t) },
+    Maneuver#Correction: for t: TimeStep { @accel[Maneuver#Correction] * coord(t) },
+    Maneuver#Insertion: for t: TimeStep { @accel[Maneuver#Insertion] * coord(t) },
 };
 ```
 
@@ -517,7 +519,7 @@ Access elements by providing both a label and a range variable:
 
 ```
 node departure_v: Velocity[TimeStep] = for t: TimeStep {
-    @v[Maneuver.Departure, t]
+    @v[Maneuver#Departure, t]
 };
 ```
 
@@ -551,7 +553,7 @@ param delta_v: Velocity[Maneuver] = table[Maneuver] {
 };
 ```
 
-Named axes in `table[...]` accept the same full paths as indexed types, including module-qualified paths such as `mission.Maneuver`. Labels in ordinary table bodies are bare (`Departure`, not `Maneuver.Departure`) because `table[...]` explicitly supplies exactly one owner for each row or column axis. Rows are terminated with `;`.
+Named axes in `table[...]` accept the same full paths as indexed types, including module-qualified paths such as `mission::Maneuver`. Labels in ordinary table bodies are bare (`Departure`, not `Maneuver#Departure`) because `table[...]` explicitly supplies exactly one owner for each row or column axis. Rows are terminated with `;`.
 
 A table that uses a named axis must contain at least one data row. An empty body, or a 2D column header without a following data row, is a parse error. Every 3D+ slice section must likewise contain at least one data row.
 
@@ -574,13 +576,13 @@ For three or more indexes, use slice sections with qualified labels:
 
 ```
 param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
-    [Time.T1]
+    [Time#T1]
     : Departure, Correction, Insertion;
     Launch:  5000.0 kg, 0.0 kg,    0.0 kg;
     Cruise:     0.0 kg, 4500.0 kg, 0.0 kg;
     Arrival:    0.0 kg, 0.0 kg,    4000.0 kg;
 
-    [Time.T2]
+    [Time#T2]
     : Departure, Correction, Insertion;
     Launch:  4800.0 kg, 0.0 kg,    0.0 kg;
     Cruise:     0.0 kg, 4300.0 kg, 0.0 kg;
@@ -589,7 +591,7 @@ param m: Mass[Time, Phase, Maneuver] = table[Time, Phase, Maneuver] {
 ```
 
 Each `[SliceLabel]` section contains its own header row and data rows. Named
-slice labels use `Index.Variant` syntax (or `module.Index.Variant` when the
+slice labels use `Index#Variant` syntax (or `module::Index#Variant` when the
 index is imported); `Fin` slice labels use `#N`.
 
 ### Finite-Index Tables
@@ -633,7 +635,7 @@ param m3d: Dimensionless[Fin(2), Phase, Maneuver] = table[Fin(2), Phase, Maneuve
 ```
 
 Slice labels (all but the last two axes) always require an explicit marker:
-`[Index.Variant]` for named axes or `[#N]` for `Fin` axes. The same conventions
+`[Index#Variant]` for named axes or `[#N]` for `Fin` axes. The same conventions
 apply to multi-declaration shared axes: a `Fin` row axis has unlabeled rows, and
 a `Fin` slice axis uses `[#N]` sections.
 
@@ -658,7 +660,7 @@ const node mass_per_unit:     Mass[Component]
 
 - Each slot on the left-hand side is a full declaration: kind (`param` / `node` / `const node`), name, and type annotation.
 - The `table[SharedAxis, (…)]` bracket declares the row axis followed by a parenthesized slot tuple. The comma before the tuple is required. Each tuple entry is either `_` (1-D slot typed `T[SharedAxis]`) or a named axis, including module-qualified axes (2-D slot typed `T[SharedAxis, ExtraAxis]`).
-- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`. Every 2-D slot cell must use the qualified `ExtraAxis.Variant` form (including the full module path when imported), because one heterogeneous header can concatenate columns owned by different axes.
+- The header row `: …;` has exactly one cell per column. For 1-D slots the cell must be `_`. Every 2-D slot cell uses a bare contextual label; the corresponding slot-tuple axis supplies its unique owner.
 - Data-row labels remain bare because the shared row axis is explicit in the table prefix.
 
 Mixed 1-D / 2-D slots:
@@ -672,7 +674,7 @@ param      n_installed:        Int[Component],
 const node mass_per_unit:      Mass[Component],
 param      power_mode_active:  Bool[Component, OperationMode]
   = table[Component, (_, _, _, OperationMode)] {
-      :            _,       _, _,      OperationMode.Safe, OperationMode.Nominal;
+      :            _,       _, _,      Safe, Nominal;
       ComponentA:  10.0 W,  1, 2.5 kg,               true,                  true;
       ComponentB:  12.0 W,  2, 3.1 kg,              false,                  true;
   };
@@ -682,7 +684,7 @@ Currently, at most one slot may carry an extra axis; multiple adjacent extra-axi
 
 ### N-D with slice sections
 
-When the shared-axis prefix has more than one axis, the body uses slice sections. Each slice section begins with a `[Axis.Variant, …]` label covering every shared axis **except the last** (which becomes the row axis), followed by a header row and data rows as usual.
+When the shared-axis prefix has more than one axis, the body uses slice sections. Each slice section begins with a `[Axis#Variant, …]` label covering every shared axis **except the last** (which becomes the row axis), followed by a header row and data rows as usual.
 
 ```
 pub index Phase = { Launch, Cruise };
@@ -692,23 +694,23 @@ pub index OperationMode = { Safe, Nominal };
 param      power_consumption: Power[Phase, Component],
 param      power_mode_active: Bool[Phase, Component, OperationMode]
   = table[Phase, Component, (_, OperationMode)] {
-      [Phase.Launch]
-      :            _,       OperationMode.Safe, OperationMode.Nominal;
+      [Phase#Launch]
+      :            _,       Safe, Nominal;
       ComponentA:  5.0 W,                 true,                 false;
       ComponentB:  6.0 W,                false,                 false;
 
-      [Phase.Cruise]
-      :            _,       OperationMode.Safe, OperationMode.Nominal;
+      [Phase#Cruise]
+      :            _,       Safe, Nominal;
       ComponentA:  10.0 W,                true,                  true;
       ComponentB:  12.0 W,               false,                  true;
   };
 ```
 
-Slice labels must qualify each shared axis in the declared order (`Phase.Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
+Slice labels must qualify each shared axis in the declared order (`Phase#Launch`, not bare `Launch`), matching the convention used for single-decl 3D+ tables.
 
 ### Editor integration
 
-Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. Axis and qualified header/slice references participate in navigation and rename as well. The formatter preserves the multi-decl surface form while canonicalizing alignment and retaining every required axis qualifier. Cell-level inlay hints (projecting slot names into the header row of the source) remain future work.
+Each slot in a multi-declaration is its own declaration for the purposes of navigation: `gotoDefinition`, `findReferences`, `rename`, and `hover` all land on the slot header, and each slot receives its own inlay hint at its name. Axis, contextual header-label, and qualified slice references participate in navigation and rename as well. The formatter preserves the multi-decl surface form while canonicalizing alignment and retaining every required axis qualifier. Cell-level inlay hints (projecting slot names into the header row of the source) remain future work.
 
 - Multi-declarations are **pure syntactic sugar**: each slot desugars to an ordinary declaration with its own `table[SharedAxis] { … }` initializer. Cross-slot references work exactly as for any other declarations (`@other_slot[Variant]`).
 - Attributes (`#[…]`) are not allowed on a multi-declaration. Visibility is
@@ -936,14 +938,14 @@ pub index Element = { A, B };
 pub index TimeStep = range(0.0 s, 2.0 s, step: 1.0 s);
 
 param initial: Dimensionless[Element] = {
-    Element.A: 1.0,
-    Element.B: 2.0,
+    Element#A: 1.0,
+    Element#B: 2.0,
 };
 param coupling: Dimensionless[Element, Element] = {
-    (Element.A, Element.A): 1.0,
-    (Element.A, Element.B): 1.0,
-    (Element.B, Element.A): 1.0,
-    (Element.B, Element.B): 0.0,
+    (Element#A, Element#A): 1.0,
+    (Element#A, Element#B): 1.0,
+    (Element#B, Element#A): 1.0,
+    (Element#B, Element#B): 0.0,
 };
 
 node trajectory: Dimensionless[TimeStep, Element] = unfold(

@@ -34,25 +34,34 @@ fn reject_runtime_units_at_include_boundary(
         })
 }
 
-fn imported_module_target<'map>(
-    alias: &ModuleAliasName,
-    module_map: &'map HashMap<ModuleAliasName, ProjectModuleBinding>,
-) -> Option<&'map graphcal_compiler::dag_id::DagId> {
-    module_map.get(alias).and_then(|binding| {
-        (binding.role == graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag)
-            .then_some(&binding.target)
-    })
+fn imported_module_target(
+    owner: &graphcal_compiler::syntax::names::NamespacePath,
+    module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
+) -> Option<graphcal_compiler::dag_id::DagId> {
+    let (root, children) = owner.segments().split_first()?;
+    let alias = ModuleAliasName::from_atom(root.clone());
+    let binding = module_map.get(&alias)?;
+    if binding.role != graphcal_compiler::syntax::module_resolve::ModuleAliasRole::ImportedDag {
+        return None;
+    }
+    Some(
+        children
+            .iter()
+            .fold(binding.target.clone(), |target, child| {
+                target.child(child.as_str())
+            }),
+    )
 }
 
 fn is_imported_dynamic_unit_during_lowering(
-    alias: &ModuleAliasName,
+    alias: &graphcal_compiler::syntax::names::NamespacePath,
     name: &graphcal_compiler::syntax::dimension::UnitName,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
     module_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
 ) -> bool {
     imported_module_target(alias, module_map).is_some_and(|target| {
         module_interfaces
-            .get(target)
+            .get(&target)
             .is_some_and(|interface| interface.is_exported_dynamic_unit(name))
     })
 }
@@ -97,7 +106,7 @@ pub(super) fn imported_runtime_unit_reference(
             && unit.spelling().qualifier().is_some_and(|alias| {
                 imported_module_target(alias, module_map).is_some_and(|target| {
                     exported_dynamic_units
-                        .get(target)
+                        .get(&target)
                         .is_some_and(|names| names.contains(unit.spelling().name()))
                 })
             })
@@ -661,7 +670,7 @@ fn process_dag_body_include_declarations<'a>(
 /// its private implementation children.
 ///
 /// Each cloned DAG TIR also receives the dep-file values named by the DAG
-/// body's explicit imports, so `import dep.{const as local}` resolves under the
+/// body's explicit imports, so `import dep::{const as local}` resolves under the
 /// local alias at inline-call eval time.
 pub(super) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TirBuilder,
@@ -725,7 +734,7 @@ pub(super) fn merge_dep_dag_tirs(
 ///
 /// 1. Resolve the include's source — file include reads the dep's full
 ///    AST; inline DAG include reads the dag block's body and pre-processes
-///    `import <self>.{...}` against the dag's parent file (Concept 9: a
+///    `import <self>::{...}` against the dag's parent file (Concept 9: a
 ///    DAG's `<self>` is its file of definition, regardless of where the
 ///    include sits).
 /// 2. Assemble the body with canonical imported targets set up.

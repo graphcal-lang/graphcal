@@ -1,4 +1,4 @@
 import plugin "phasor.wasm" as phasor {
     fn identity(z: Complex<Length>) -> Complex<Length>;
 }
-node invalid: Complex<Length> = phasor.identity(complex(1.0 m, 2.0 m));
+node invalid: Complex<Length> = phasor::identity(complex(1.0 m, 2.0 m));

@@ -39,7 +39,7 @@ import plugin "plugins/fluids.wasm" as fluids {
   such as the built-in `"graphcal:demo"` — is an identity provided natively
   by the embedder's host function registry.
 - The **alias** (`as fluids`) is mandatory. Extern functions are only
-  callable qualified through it — `fluids.density(...)` — never bare. This
+  callable qualified through it — `fluids::density(...)` — never bare. This
   mirrors the explicitness of module imports and keeps the built-in
   function namespace closed.
 - Each `fn` declares **named parameters** and a **result type**. Parameter
@@ -83,7 +83,7 @@ fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
 ```
 
 ```
-node scale: Length = demo.geometric_mean(4.0 m, 9.0 m);   // = 6 m
+node scale: Length = demo::geometric_mean(4.0 m, 9.0 m);   // = 6 m
 ```
 
 One rule keeps checking decidable: **every dimension variable must first
@@ -111,8 +111,8 @@ import plugin "plugins/dsp.wasm" as dsp {
 }
 
 index Maneuver = { Departure, Correction, Insertion };
-node dv: Velocity[Maneuver] = { Maneuver.Departure: 2.0 km/s, Maneuver.Correction: 0.5 km/s, Maneuver.Insertion: 1.5 km/s };
-node dv_smooth: Velocity[Maneuver] = dsp.smooth(@dv, 3.0);
+node dv: Velocity[Maneuver] = { Maneuver#Departure: 2.0 km/s, Maneuver#Correction: 0.5 km/s, Maneuver#Insertion: 1.5 km/s };
+node dv_smooth: Velocity[Maneuver] = dsp::smooth(@dv, 3.0);
 ```
 
 Index variables follow the same explicit discipline as dimension
@@ -150,7 +150,7 @@ import plugin "plugins/stats.wasm" as stats {
 
 type DvSpan { DvSpan(lo: Velocity, hi: Velocity) }
 
-node dv_span: DvSpan = stats.span(@dv);
+node dv_span: DvSpan = stats::span(@dv);
 node spread: Velocity = @dv_span.lo - @dv_span.hi;
 ```
 
@@ -182,7 +182,7 @@ graph like any other expression:
 param v0: Velocity = 100.0 m/s;
 param v1: Velocity = 300.0 m/s;
 
-node v_mid: Velocity = demo.lerp(@v0, @v1, 0.25);
+node v_mid: Velocity = demo::lerp(@v0, @v1, 0.25);
 ```
 
 Restrictions, all enforced at compile time:
@@ -197,9 +197,9 @@ Restrictions, all enforced at compile time:
 
 ```
 index Sample = { A, B };
-node xs: Length[Sample] = { Sample.A: 1.0 m, Sample.B: 2.0 m };
+node xs: Length[Sample] = { Sample#A: 1.0 m, Sample#B: 2.0 m };
 node mids: Length[Sample] = for s: Sample {
-    demo.lerp(@xs[s], 10.0 m, 0.5)
+    demo::lerp(@xs[s], 10.0 m, 0.5)
 };
 ```
 

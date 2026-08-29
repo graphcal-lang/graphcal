@@ -3,8 +3,8 @@ use crate::syntax::ast::{
     PlotPropertyName, Visibility,
 };
 use crate::syntax::decl_name::DeclName;
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ScopedName;
-use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::Token;
 
@@ -47,13 +47,15 @@ const fn decl_accepts_bindable_visibility(decl: &Declaration) -> bool {
 
 const fn set_decl_visibility(decl: &mut Declaration, visibility: BindableVisibility) {
     match &mut decl.kind {
-        // Params and use-sites carry no visibility field. Import/include
-        // visibility is expressed only on explicitly selected items.
+        // Params and includes carry no blanket visibility. Selective items
+        // carry their own `pub`; whole imports use ImportDecl.visibility.
         DeclKind::Param(_)
-        | DeclKind::Import(_)
         | DeclKind::Include(_)
         | DeclKind::Sugar(_)
         | DeclKind::PluginImport(_) => {}
+        DeclKind::Import(d) => {
+            d.visibility = visibility_without_bindability(visibility);
+        }
         DeclKind::Node(d) | DeclKind::ConstNode(d) => {
             d.visibility = visibility_without_bindability(visibility);
         }
@@ -187,15 +189,15 @@ impl Parser<'_> {
             ));
         }
 
-        // Import/include use-sites have no blanket visibility. Public facade
-        // bindings must be written explicitly in the selective list so a
-        // dependency cannot silently widen this file's API.
+        // Includes have no blanket visibility. Whole-DAG imports accept
+        // leading `pub`; selective imports still use per-item `pub` and are
+        // rejected semantically when the whole declaration is public.
         if let Some(found) = found
-            && matches!(self.lexer.peek(), Some(Token::Import | Token::Include))
+            && self.lexer.peek() == Some(&Token::Include)
             && let Some(vis_span) = visibility_span
         {
             return Err(self.unexpected_token(
-                "an import/include without leading visibility; put `pub` on each selected item, for example `include pkg.engine(...).{ pub thrust };`",
+                "an include without leading visibility; put `pub` on selected outcomes",
                 found,
                 vis_span,
             ));
@@ -345,6 +347,22 @@ impl Parser<'_> {
                 vis_span,
             ));
         }
+        if visibility == BindableVisibility::Public
+            && matches!(
+                &decl.kind,
+                DeclKind::Import(crate::syntax::ast::ImportDecl {
+                    kind: crate::syntax::ast::ImportKind::Selective(_),
+                    ..
+                }) | DeclKind::PluginImport(_)
+            )
+            && let Some(vis_span) = visibility_span
+        {
+            return Err(self.unexpected_token(
+                "a whole-DAG import after `pub`; selective re-exports use per-item `pub` and plugin aliases remain private",
+                "non-DAG import",
+                vis_span,
+            ));
+        }
         set_decl_visibility(&mut decl, visibility);
 
         // Extend the declaration span to include `pub` / `pub(bind)` prefix
@@ -455,8 +473,8 @@ impl Parser<'_> {
         Ok(Attribute { name, args, span })
     }
 
-    /// Parse a single attribute argument: a path (`ident`, `Idx.Var`) or
-    /// a parenthesized group (`(Idx.A, Idx.B)`).
+    /// Parse a single attribute argument: a Term path, `Index#Label`, a
+    /// finite position, or a parenthesized group.
     fn parse_attribute_arg(&mut self) -> Result<AttributeArg, ParseError> {
         self.with_nesting_budget(Self::parse_attribute_arg_inner)
     }
@@ -496,21 +514,21 @@ impl Parser<'_> {
                 span: hash_span.merge(num_span),
             })
         } else {
-            // Path: ident or ident.ident.ident...
-            let first = self.parse_any_ident()?;
-            let start_span = first.span;
-            let mut end_span = start_span;
-            let mut rest_segments = Vec::new();
-            while self.lexer.peek() == Some(&Token::Dot) {
-                self.expect(Token::Dot)?;
-                let segment = self.parse_any_ident()?;
-                end_span = segment.span;
-                rest_segments.push(segment);
+            let path = self.parse_ident_path()?;
+            if self.lexer.peek() == Some(&Token::Hash) {
+                self.expect(Token::Hash)?;
+                let label = self.parse_any_ident()?.into_spanned::<IndexVariantName>();
+                let span = path.span().merge(label.span);
+                Ok(AttributeArg::IndexLabel {
+                    index: path.into_spanned_name_path(),
+                    label,
+                    span,
+                })
+            } else {
+                Ok(AttributeArg::Path {
+                    path: path.into_spanned_name_path(),
+                })
             }
-            Ok(AttributeArg::Path {
-                segments: NonEmpty::new(first, rest_segments),
-                span: start_span.merge(end_span),
-            })
         }
     }
 }

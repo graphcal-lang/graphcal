@@ -93,7 +93,7 @@ mod tests {
 
     #[test]
     fn aliases_do_not_make_repeated_producers_unique() {
-        let items = include_items("include source().{ value as first, value as second };");
+        let items = include_items("include source()::{ value as first, value as second };");
         let error = validate_unique_include_producers(&items).unwrap_err();
         assert_eq!(error.name.as_str(), "value");
         assert_eq!(error.first, items[0].name.span);
@@ -103,8 +103,8 @@ mod tests {
     #[test]
     fn unique_producers_are_order_independent() {
         for source in [
-            "include source().{ first as x, second as y };",
-            "include source().{ second as y, first as x };",
+            "include source()::{ first as x, second as y };",
+            "include source()::{ second as y, first as x };",
         ] {
             assert!(validate_unique_include_producers(&include_items(source)).is_ok());
         }

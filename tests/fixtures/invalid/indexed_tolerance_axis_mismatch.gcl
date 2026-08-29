@@ -4,12 +4,12 @@ index Case = { A, B };
 index Other = { X, Y };
 
 node actual: Length[Case] = {
-    Case.A: 1.0 m,
-    Case.B: 2.0 m,
+    Case#A: 1.0 m,
+    Case#B: 2.0 m,
 };
 node wrong: Length[Other] = {
-    Other.X: 1.0 m,
-    Other.Y: 2.5 m,
+    Other#X: 1.0 m,
+    Other#Y: 2.5 m,
 };
 
 assert bad = @actual ~= @wrong +/- 0.1 m;

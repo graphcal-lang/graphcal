@@ -56,8 +56,7 @@ impl LoweringModuleInterface {
             .filter(|(unit, info)| {
                 !unit.is_qualified()
                     && info.scale.is_dynamic()
-                    && external_surface
-                        .is_explicit_export(&DeclName::from_atom(unit.name().atom().clone()))
+                    && external_surface.is_unit_explicit_export(unit.name().atom())
             })
             .map(|(unit, _)| unit.name().clone())
             .collect();

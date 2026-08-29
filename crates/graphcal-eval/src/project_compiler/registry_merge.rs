@@ -217,9 +217,7 @@ fn merge_registry_into_builder_filtered(
         if dim_bindings.contains_key(name.as_str()) {
             continue;
         }
-        if external_surface.is_some_and(|surface| {
-            !surface.is_explicit_export(&DeclName::from_atom(name.atom().clone()))
-        }) {
+        if external_surface.is_some_and(|surface| !surface.is_static_explicit_export(name.atom())) {
             continue;
         }
         builder.register_dimension(name.clone(), dim.clone());
@@ -233,7 +231,7 @@ fn merge_registry_into_builder_filtered(
     // Import units.
     //
     // Module imports (`unit_alias` present) expose only the dependency's own
-    // `pub` units, re-keyed under the import alias (`alias.unit`); the
+    // `pub` units, re-keyed under the import alias (`alias::unit`); the
     // dependency's alias-qualified imports and non-pub units stay internal to
     // it, and nothing lands in the importer's bare unit scope. Bare names in
     // the importer come only from its own declarations, selective imports,
@@ -253,19 +251,19 @@ fn merge_registry_into_builder_filtered(
             if name.is_qualified() {
                 continue;
             }
-            if external_surface.is_some_and(|surface| {
-                !surface.is_explicit_export(&DeclName::from_atom(name.name().atom().clone()))
-            }) {
+            if external_surface
+                .is_some_and(|surface| !surface.is_unit_explicit_export(name.name().atom()))
+            {
                 continue;
             }
             graphcal_compiler::syntax::dimension::UnitRef::qualified(
-                alias.clone(),
+                graphcal_compiler::syntax::names::NamespacePath::root(alias.atom().clone()),
                 name.name().clone(),
             )
         } else {
-            if external_surface.is_some_and(|surface| {
-                !surface.is_explicit_export(&DeclName::from_atom(name.name().atom().clone()))
-            }) {
+            if external_surface
+                .is_some_and(|surface| !surface.is_unit_explicit_export(name.name().atom()))
+            {
                 continue;
             }
             name.clone()
@@ -291,9 +289,9 @@ fn merge_registry_into_builder_filtered(
             continue;
         }
         if !index_bindings.contains_key(idx_def.name.as_str()) {
-            if external_surface.is_some_and(|surface| {
-                !surface.is_explicit_export(&DeclName::from_atom(idx_def.name.atom().clone()))
-            }) {
+            if external_surface
+                .is_some_and(|surface| !surface.is_static_explicit_export(idx_def.name.atom()))
+            {
                 continue;
             }
             builder.register_index(idx_def.clone());
@@ -310,9 +308,9 @@ fn merge_registry_into_builder_filtered(
         if type_bindings.contains_key(type_def.name().as_str()) {
             continue;
         }
-        if external_surface.is_some_and(|surface| {
-            !surface.is_explicit_export(&DeclName::from_atom(type_def.name().atom().clone()))
-        }) {
+        if external_surface
+            .is_some_and(|surface| !surface.is_static_explicit_export(type_def.name().atom()))
+        {
             continue;
         }
         builder.register_type(type_def.clone());

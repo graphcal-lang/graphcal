@@ -1,1 +1,1 @@
-node result: Dimensionless = @combine(a: 1.0, a: 2.0).out;
+node result: Dimensionless = @combine(a: 1.0, a: 2.0)::out;

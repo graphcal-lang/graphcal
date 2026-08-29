@@ -243,7 +243,7 @@ fn multi_file_project_evaluates_on_bare_wasm() {
             PlaygroundFile {
                 path: "src/demo/main.gcl".to_string(),
                 content:
-                    "import demo.constants.{factor};\nnode doubled: Dimensionless = @factor * 2.0;"
+                    "import demo.constants::{factor};\nnode doubled: Dimensionless = @factor * 2.0;"
                         .to_string(),
             },
         ],

@@ -172,6 +172,8 @@ pub(crate) enum LexicalToken {
     Comma,
     #[token("@")]
     At,
+    #[token("::")]
+    DoubleColon,
     #[token(":")]
     Colon,
     #[token(".")]
@@ -290,6 +292,7 @@ impl LexicalToken {
             Self::Semicolon => LexicalItem::Syntax(Token::Semicolon),
             Self::Comma => LexicalItem::Syntax(Token::Comma),
             Self::At => LexicalItem::Syntax(Token::At),
+            Self::DoubleColon => LexicalItem::Syntax(Token::DoubleColon),
             Self::Colon => LexicalItem::Syntax(Token::Colon),
             Self::Dot => LexicalItem::Syntax(Token::Dot),
             Self::Underscore => LexicalItem::Syntax(Token::Underscore),
@@ -510,6 +513,7 @@ pub enum Token {
     Semicolon,
     Comma,
     At,
+    DoubleColon,
     Colon,
     Dot,
 
@@ -591,6 +595,7 @@ impl std::fmt::Display for Token {
             Self::Semicolon => write!(f, ";"),
             Self::Comma => write!(f, ","),
             Self::At => write!(f, "@"),
+            Self::DoubleColon => write!(f, "::"),
             Self::Colon => write!(f, ":"),
             Self::Dot => write!(f, "."),
             Self::Underscore => write!(f, "_"),
@@ -1046,13 +1051,13 @@ mod tests {
 
     #[test]
     fn lex_import_statement() {
-        let tokens = lex_tokens("import helper.{G0, isp};");
+        let tokens = lex_tokens("import helper::{G0, isp};");
         assert_eq!(
             tokens,
             vec![
                 Token::Import,
                 Token::Ident, // helper
-                Token::Dot,
+                Token::DoubleColon,
                 Token::LBrace,
                 Token::Ident, // G0
                 Token::Comma,
@@ -1092,13 +1097,13 @@ mod tests {
 
     #[test]
     fn lex_use_statement_with_alias() {
-        let tokens = lex_tokens("import f.{x as y};");
+        let tokens = lex_tokens("import f::{x as y};");
         assert_eq!(
             tokens,
             vec![
                 Token::Import,
                 Token::Ident, // f
-                Token::Dot,
+                Token::DoubleColon,
                 Token::LBrace,
                 Token::Ident, // x
                 Token::As,
@@ -1120,13 +1125,13 @@ mod tests {
 
     #[test]
     fn lex_import_type() {
-        let tokens = lex_tokens("import f.{type T, T};");
+        let tokens = lex_tokens("import f::{type T, T};");
         assert_eq!(
             tokens,
             vec![
                 Token::Import,
                 Token::Ident, // f
-                Token::Dot,
+                Token::DoubleColon,
                 Token::LBrace,
                 Token::Type,
                 Token::Ident, // T

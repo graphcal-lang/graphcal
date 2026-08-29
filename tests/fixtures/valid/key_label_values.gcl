@@ -3,16 +3,16 @@
 // and carried in constructor payloads.
 index Maneuver = { Departure, Correction, Insertion };
 
-node critical: Key<Maneuver> = Maneuver.Departure;
-node fallback: Key<Maneuver> = Maneuver.Correction;
+node critical: Key<Maneuver> = Maneuver#Departure;
+node fallback: Key<Maneuver> = Maneuver#Correction;
 
-node is_critical_first: Bool = @critical == Maneuver.Departure;
+node is_critical_first: Bool = @critical == Maneuver#Departure;
 node differs: Bool = @critical != @fallback;
 
 node contingency: Dimensionless = match @critical {
-    Maneuver.Departure => 1.1,
-    Maneuver.Correction => 1.5,
-    Maneuver.Insertion => 1.25,
+    Maneuver#Departure => 1.1,
+    Maneuver#Correction => 1.5,
+    Maneuver#Insertion => 1.25,
 };
 
 type Report {

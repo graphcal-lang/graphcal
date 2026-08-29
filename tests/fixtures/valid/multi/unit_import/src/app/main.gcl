@@ -1,9 +1,9 @@
 // Units follow the same scoping rules as every other imported category:
-// a module imported with an alias exposes its `pub` units as `alias.unit`.
+// a module imported with an alias exposes its `pub` units as `alias::unit`.
 // The bare name `mile` would be an unknown unit here (D003); only a local
-// declaration, a selective import (`import app.units.{ unit mile };`), or a
+// declaration, a selective import (`import app.units::{ unit mile };`), or a
 // prelude unit resolves bare.
 import app.units as u;
 
 param a: Length = 3218.688 m;
-node b: Length = @a -> u.mile;
+node b: Length = @a -> u::mile;

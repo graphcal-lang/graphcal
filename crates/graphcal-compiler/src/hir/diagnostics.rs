@@ -38,7 +38,8 @@ pub fn validate_type_annotation(
             }
             validate_type_annotation(arg, src)
         }),
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
@@ -146,7 +147,8 @@ fn type_expr_has_index_name_at_span(type_ann: &TypeExpr, span: Span) -> bool {
         TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_index_name_at_span(arg, span)),
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime
@@ -171,7 +173,8 @@ fn type_expr_has_dim_term_at_span(type_ann: &TypeExpr, span: Span) -> bool {
         TypeExprKind::DatetimeApplication { type_args } => type_args
             .iter()
             .any(|arg| type_expr_has_dim_term_at_span(arg, span)),
-        TypeExprKind::Dimensionless
+        TypeExprKind::IndexLabel { .. }
+        | TypeExprKind::Dimensionless
         | TypeExprKind::Bool
         | TypeExprKind::Int
         | TypeExprKind::Datetime => false,
@@ -383,6 +386,32 @@ pub fn expr_lower_error_to_graphcal(
             };
         }
         hir::ExprLowerError::ModuleResolve {
+            source:
+                ModuleResolveError::UnexpectedDeclKind {
+                    name,
+                    actual: crate::syntax::module_resolve::DeclSymbolKind::Assert,
+                    ..
+                },
+            span,
+        } => {
+            return GraphcalError::GraphRefToAssert {
+                name: name.to_unowned_def_name(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ModuleResolve {
+            source: ModuleResolveError::PrivateName { owner, name, .. },
+            span,
+        } => {
+            return GraphcalError::ImportPrivateItem {
+                name: name.clone(),
+                file_path: owner.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
+        hir::ExprLowerError::ModuleResolve {
             source: ModuleResolveError::UnknownIndexVariant { index, variant },
             span,
         } => {
@@ -438,6 +467,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownFunction { span, .. }
         | hir::ExprLowerError::UnknownExternFunction { span, .. }
         | hir::ExprLowerError::NamedArgumentsOnFunction { span, .. }
+        | hir::ExprLowerError::PositionalArgumentsOnConstructor { span, .. }
         | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
         | hir::ExprLowerError::WrongArity { span, .. }
         | hir::ExprLowerError::InvalidTimezone { span, .. }
@@ -448,7 +478,8 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::TimeZoneRegistryInvariant { span, .. } => *span,
         hir::ExprLowerError::NonexistentCivilDateTime { datetime_span, .. }
         | hir::ExprLowerError::RepeatedCivilDateTime { datetime_span, .. } => *datetime_span,
-        hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. } => *duplicate,
+        hir::ExprLowerError::DuplicateLocalBinding { duplicate, .. }
+        | hir::ExprLowerError::LocalBindingShadowsTerm { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
         message: err.to_string(),
@@ -472,6 +503,7 @@ pub fn hir_lower_error_to_graphcal(
     let span = match &err {
         hir::HirLowerError::ModuleResolve { span, .. }
         | hir::HirLowerError::UnknownTypePath { span, .. }
+        | hir::HirLowerError::IndexLabelAsType { span, .. }
         | hir::HirLowerError::GenericConstraintMismatch { span, .. }
         | hir::HirLowerError::ExpectedIndexFoundNat { span, .. }
         | hir::HirLowerError::UnknownGenericParam { span, .. }
@@ -480,7 +512,8 @@ pub fn hir_lower_error_to_graphcal(
         | hir::HirLowerError::ExpectedTimeScale { span }
         | hir::HirLowerError::UnknownTimeScale { span, .. }
         | hir::HirLowerError::WrongDatetimeArgCount { span, .. } => *span,
-        hir::HirLowerError::DuplicateGenericParam { duplicate, .. } => *duplicate,
+        hir::HirLowerError::DuplicateGenericParam { duplicate, .. }
+        | hir::HirLowerError::GenericParamShadowsStatic { duplicate, .. } => *duplicate,
     };
     GraphcalError::EvalError {
         message: err.to_string(),

@@ -311,6 +311,7 @@ impl From<IncludeDecl<Raw>> for IncludeDecl<Desugared> {
 impl From<ParamBinding<Raw>> for ParamBinding<Desugared> {
     fn from(p: ParamBinding<Raw>) -> Self {
         Self {
+            category: p.category,
             name: p.name,
             value: p.value.into(),
             span: p.span,
@@ -465,6 +466,7 @@ impl From<TypeExprKind<Raw>> for TypeExprKind<Desugared> {
             TypeExprKind::KeyApplication { generic_args } => Self::KeyApplication {
                 generic_args: generic_args.into_iter().map(Into::into).collect(),
             },
+            TypeExprKind::IndexLabel { index, label } => Self::IndexLabel { index, label },
         }
     }
 }

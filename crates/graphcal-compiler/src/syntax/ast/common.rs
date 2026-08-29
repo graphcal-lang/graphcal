@@ -1,6 +1,7 @@
 use crate::syntax::import_category::ImportItemNamespace;
+use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::module_name::ModuleAliasName;
-use crate::syntax::names::NameAtom;
+use crate::syntax::names::{NameAtom, NamePath};
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
@@ -15,20 +16,22 @@ pub struct Attribute {
 
 /// An argument inside an attribute's parenthesized list.
 ///
-/// Supports plain identifiers (`pressure_safe`), qualified paths
-/// (`Index.Variant`), finite structural steps (`#2`), and parenthesized groups
-/// (`(Mode.Boost, Phase.Launch)`, `(Mode.Boost, #2)`).
+/// Supports Term names (`pressure_safe`, `checks::pressure_safe`), index labels
+/// (`Mode#Boost`), finite structural positions (`#2`), and parenthesized groups.
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
-    /// A path of one or more `.`-separated segments: `foo`, `Index.Variant`.
-    Path {
-        segments: NonEmpty<Ident>,
+    /// A syntax-directed Term name.
+    Path { path: Spanned<NamePath> },
+    /// An owner-qualified index label selected by `#`.
+    IndexLabel {
+        index: Spanned<NamePath>,
+        label: Spanned<IndexVariantName>,
         span: Span,
     },
     /// A finite structural position key: `#N` — matches the `#N` slice-label
     /// syntax of `table` expressions over `Fin(N)` axes.
     FinitePosition { position: u64, span: Span },
-    /// A parenthesized group of args: `(Index.A, Index.B).`
+    /// A parenthesized group of args: `(Index#A, Index#B).`
     Group { elements: Vec<Self>, span: Span },
 }
 
@@ -37,7 +40,8 @@ impl AttributeArg {
     #[must_use]
     pub(crate) const fn span(&self) -> Span {
         match self {
-            Self::Path { span, .. }
+            Self::Path { path } => path.span,
+            Self::IndexLabel { span, .. }
             | Self::FinitePosition { span, .. }
             | Self::Group { span, .. } => *span,
         }
@@ -92,21 +96,21 @@ impl From<Visibility> for BindableVisibility {
 /// The kind of an `import` or `include` declaration.
 ///
 /// For `import`:
-///   - `Selective(items)`: brace-list form `import path.{X, Y};` — brings only
+///   - `Selective(items)`: brace-list form `import path::{X, Y};` — brings only
 ///     the listed names. Does NOT also bring the leaf module.
 ///   - `Module { alias: None }`: bare form `import path;` — brings the leaf
 ///     module under its own name.
 ///   - `Module { alias: Some(a) }`: aliased form `import path as a;`.
 ///
 /// For `include`:
-///   - `Selective(items)`: brace-list form `include path(args).{y};` — exposes
+///   - `Selective(items)`: brace-list form `include path(args)::{y};` — exposes
 ///     the listed outputs as nodes.
 ///   - `Module { alias: None }`: bare form `include path(args);` — sugar for
 ///     `as <leaf>`.
 ///   - `Module { alias: Some(a) }`: aliased form `include path(args) as a;`.
 #[derive(Debug, Clone)]
 pub enum ImportKind {
-    /// Brace-list selector: `path.{ X, Y as Z, ... }`.
+    /// Brace-list selector: `path::{ X, Y as Z, ... }`.
     Selective(Vec<ImportItem>),
     /// Bare or aliased form.
     Module {

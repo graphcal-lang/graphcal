@@ -157,7 +157,7 @@ impl RegistryBuilder {
 
     /// Register a `dag` declaration body keyed by the declaration's name.
     ///
-    /// Accessed later during dim-checking of inline `@dag(args).out`
+    /// Accessed later during dim-checking of inline `@dag(args)::out`
     /// expressions.
     pub(crate) fn register_dag(&mut self, name: DeclName, decl: DagDecl) {
         self.dags.insert(name, decl);

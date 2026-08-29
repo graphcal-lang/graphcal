@@ -13,8 +13,8 @@ param readings: Dimensionless[Fin(8)] = table[Fin(8)] {
     100.7;
 };
 
-node second: Key<Fin(8)> = key(Fin(8), 1);
-node second_reading: Dimensionless = @readings[@second];
+node second_key: Key<Fin(8)> = key(Fin(8), 1);
+node second_reading: Dimensionless = @readings[@second_key];
 
 param requested: Int = 5;
 node channel: Key<Fin(8)> = fin_key(Fin(8), @requested);

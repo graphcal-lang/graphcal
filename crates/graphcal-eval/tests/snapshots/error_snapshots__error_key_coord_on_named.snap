@@ -7,7 +7,7 @@ dimension mismatch: expected Key<C> for a coordinate axis C, found Key<Maneuver>
 Begin snippet for key_coord_on_named.gcl starting at line 4, column 1
 
 snippet line 4: 
-snippet line 5: node t: Dimensionless = coord(Maneuver.Departure);
+snippet line 5: node t: Dimensionless = coord(Maneuver#Departure);
     label at line 5, columns 31 to 48: has dimension Key<Maneuver>
 diagnostic help: coord() applies to coordinate-axis keys only; named keys are opaque and Fin keys expose to_int()
 diagnostic code: graphcal::D001

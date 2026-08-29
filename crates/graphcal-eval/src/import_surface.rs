@@ -104,41 +104,83 @@ pub fn extract_external_decl_surface(file: &File) -> ExternalDeclSurface {
 pub fn extract_external_decl_surface_from_declarations(
     declarations: &[Declaration],
 ) -> ExternalDeclSurface {
+    fn insert_explicit(
+        surface: &mut ExternalDeclSurface,
+        namespace: ImportItemNamespace,
+        name: &NameAtom,
+    ) {
+        match namespace {
+            ImportItemNamespace::Term => {
+                surface.insert_explicit_export(DeclName::from_atom(name.clone()));
+            }
+            ImportItemNamespace::Type
+            | ImportItemNamespace::Dimension
+            | ImportItemNamespace::Index => surface.insert_static_export(name.clone()),
+            ImportItemNamespace::Unit => surface.insert_unit_export(name.clone()),
+        }
+    }
+
     let mut surface = ExternalDeclSurface::default();
     for decl in declarations {
         match &decl.kind {
             DeclKind::Param(param) => {
                 surface.insert_input_port(param.name.value.clone());
             }
-            DeclKind::Import(d) => {
-                if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
-                    &d.kind
-                {
+            DeclKind::Import(d) => match &d.kind {
+                graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => {
                     for item in items {
                         if item.is_pub {
-                            surface.insert_explicit_export(DeclName::from_atom(
-                                item.local_name_atom().clone(),
-                            ));
+                            insert_explicit(&mut surface, item.namespace, item.local_name_atom());
                         }
                     }
                 }
-            }
+                graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias }
+                    if d.visibility.is_public() =>
+                {
+                    let name = alias.as_ref().map_or_else(
+                        || d.path.leaf().name.clone(),
+                        |alias| alias.value.atom().clone(),
+                    );
+                    surface.insert_explicit_export(DeclName::from_atom(name));
+                }
+                graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {}
+            },
             DeclKind::Include(d) => {
                 if let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
                     &d.kind
                 {
                     for item in items {
                         if item.is_pub {
-                            surface.insert_explicit_export(DeclName::from_atom(
-                                item.local_name_atom().clone(),
-                            ));
+                            insert_explicit(
+                                &mut surface,
+                                ImportItemNamespace::Term,
+                                item.local_name_atom(),
+                            );
                         }
                     }
                 }
             }
             _ if decl_is_explicit_export(decl) => {
                 if let Some(identity) = decl_identity(decl) {
-                    surface.insert_explicit_export(DeclName::from_atom(identity.name.clone()));
+                    match identity.kind {
+                        ProjectDeclKind::Dimension
+                        | ProjectDeclKind::Index
+                        | ProjectDeclKind::Type => {
+                            surface.insert_static_export(identity.name.clone());
+                        }
+                        ProjectDeclKind::Unit => {
+                            surface.insert_unit_export(identity.name.clone());
+                        }
+                        ProjectDeclKind::Param
+                        | ProjectDeclKind::Node
+                        | ProjectDeclKind::Const
+                        | ProjectDeclKind::Assert
+                        | ProjectDeclKind::Plot
+                        | ProjectDeclKind::Figure
+                        | ProjectDeclKind::Layer
+                        | ProjectDeclKind::Dag => surface
+                            .insert_explicit_export(DeclName::from_atom(identity.name.clone())),
+                    }
                 }
             }
             _ => {}
@@ -168,7 +210,7 @@ impl ImportItemPresence {
 
 /// Compile-time policy for a term selected by a pure import.
 ///
-/// Both cross-file imports and an inline DAG's `import <self>.{...}` consume
+/// Both cross-file imports and an inline DAG's `import <self>::{...}` consume
 /// this classification. Keeping the permitted actions and rejection reasons
 /// exhaustive prevents either path from silently accepting a new declaration
 /// kind when the language grows.
@@ -612,18 +654,16 @@ mod tests {
         let file = parse(
             "import pkg.core;\n\
              include pkg.engine() as engine;\n\
-             import pkg.core.{ pub dim Exposed, helper };\n\
-             include pkg.engine().{ pub thrust, fuel_flow };\n",
+             import pkg.core::{ pub dim Exposed, helper };\n\
+             include pkg.engine()::{ pub thrust, fuel_flow };\n",
         );
         let surface = extract_external_decl_surface(&file);
 
-        for exported in ["Exposed", "thrust"] {
-            assert!(
-                surface.is_explicit_export(&DeclName::expect_valid(exported)),
-                "{exported} should be explicitly exported"
-            );
-        }
-        for private in ["core", "engine", "helper", "fuel_flow"] {
+        assert!(
+            surface.is_explicit_export(&DeclName::expect_valid("thrust")),
+            "thrust should be explicitly exported in the Term surface"
+        );
+        for private in ["Exposed", "core", "engine", "helper", "fuel_flow"] {
             assert!(
                 !surface.is_externally_nameable(&DeclName::expect_valid(private)),
                 "{private} must remain private"

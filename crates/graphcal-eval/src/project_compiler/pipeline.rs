@@ -67,7 +67,6 @@ fn lower_single_file_to_hir(
         &mut ctx,
         cancellation,
     )?;
-
     // Resolve qualified references in both the body and pending include
     // bindings before lowering either representation.
     let file_ast = rewrite_qualified_refs_in_compilation_body(

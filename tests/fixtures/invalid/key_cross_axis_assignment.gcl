@@ -3,4 +3,4 @@
 index Maneuver = { Departure, Correction };
 index Phase = { Launch, Cruise };
 
-node k: Key<Maneuver> = Phase.Launch;
+node k: Key<Maneuver> = Phase#Launch;

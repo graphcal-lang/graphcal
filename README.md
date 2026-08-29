@@ -36,6 +36,7 @@ graphcal eval rocket.gcl
 ## Why Graphcal?
 
 - **Type- and unit-safe:** dimensional mistakes such as `km + kg` are rejected at compile time.
+- **Explicit name resolution:** Static, Term, and Unit lookups are separate; `::`, `#`, and `.` make module members, index labels, and runtime fields unambiguous.
 - **Reactive:** changing a parameter recomputes its dependents.
 - **Git-friendly:** `.gcl` files are plain text and diff cleanly.
 - **Engineering-focused:** build reusable computation graphs with dimensions, units, assertions, and visualization.

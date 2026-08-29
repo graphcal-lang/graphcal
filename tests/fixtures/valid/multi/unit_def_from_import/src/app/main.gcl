@@ -3,7 +3,7 @@
 // file's own declarations are resolved.
 import app.units as u;
 
-const unit halfmile: Length = 0.5 u.mile;
+const unit halfmile: Length = 0.5 u::mile;
 
 param a: Length = 1609.344 m;
 node b: Length = @a -> halfmile;

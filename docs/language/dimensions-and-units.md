@@ -115,20 +115,20 @@ Unit scale factors must be **positive and finite**. Static unit definitions such
 
 ### Unit Scoping
 
-Static units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported static units (`import app.units.{ unit mile };`). A module imported with an alias exposes its `pub const unit` declarations under that alias — `import app.units as u;` makes the static unit available as `u.mile`, and only as `u.mile`:
+Static units follow the same scoping rules as every other imported category. A *bare* reference (`@a -> mile`) resolves against the file's own unit scope: the prelude's units, the file's own declarations, and selectively imported static units (`import app.units::{ unit mile };`). A module imported with an alias exposes its `pub const unit` declarations under that alias — `import app.units as u;` makes the static unit available as `u::mile`, and only as `u::mile`:
 
 ```
 import app.units as u;            // defines `pub const unit mile: Length = 1609.344 m;`
 
 param a: Length = 3218.688 m;
-node b: Length = @a -> u.mile;    // 2 u.mile
+node b: Length = @a -> u::mile;    // 2 u::mile
 ```
 
-Referencing an alias-imported unit by its bare name is an unknown-unit error (`D003`). Module aliases are single segments, so a unit reference is at most `alias.unit`; deeper paths are rejected at parse time (`P017`).
+Referencing an alias-imported unit by its bare name is an unknown-unit error (`D003`). A unit member uses the same explicit boundary as every other imported category: `alias::unit`, or `alias.child::unit` after dotted child-DAG traversal.
 
-Because each alias scopes its own names, two modules may define the same unit name *differently* and both stay usable — `ua.mile` and `ub.mile` never collide. Selectively importing the same bare name from two modules is rejected as a duplicate import, like any other name clash.
+Because each alias scopes its own names, two modules may define the same unit name *differently* and both stay usable — `ua::mile` and `ub::mile` never collide. Selectively importing the same bare name from two modules is rejected as a duplicate import, like any other name clash.
 
-Local `const unit` definitions can reference imported const units in their bodies, with either import form: `const unit halfmile: Length = 0.5 u.mile;` after `import app.units as u;`, or `const unit halfmile: Length = 0.5 mile;` after `import app.units.{ unit mile };`.
+Local `const unit` definitions can reference imported const units in their bodies, with either import form: `const unit halfmile: Length = 0.5 u::mile;` after `import app.units as u;`, or `const unit halfmile: Length = 0.5 mile;` after `import app.units::{ unit mile };`.
 
 ### Dynamic Units
 
@@ -152,7 +152,7 @@ Only the scale's concrete value is deferred until evaluation, after its referenc
 
 A dynamic unit belongs to the runtime DAG whose params and nodes determine its scale. It cannot cross a namespace-composition boundary: directly importing or qualifying it is rejected (`M025`), and including a module that declares one is rejected (`M026`). An include copies declarations and unit scope into another DAG; allowing that operation to manufacture instance-qualified type-system definitions would make unit identity depend on elaboration rather than one canonical definition.
 
-Keep a dynamic unit private inside the entry DAG or inside a DAG invoked explicitly with `@module(...).output`. An explicit call evaluates the unit against that call's bindings without exposing the unit itself to the caller. If callers need to share the unit name, declare a `const unit`; if they need a variable conversion rate, model the conversion as an explicit value calculation.
+Keep a dynamic unit private inside the entry DAG or inside a DAG invoked explicitly with `@module(...)::output`. An explicit call evaluates the unit against that call's bindings without exposing the unit itself to the caller. If callers need to share the unit name, declare a `const unit`; if they need a variable conversion rate, model the conversion as an explicit value calculation.
 
 ### Using Units
 

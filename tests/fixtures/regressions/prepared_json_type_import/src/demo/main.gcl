@@ -1,4 +1,4 @@
-import demo.vocabulary.{ type Request };
+import demo.vocabulary::{ type Request };
 
 param request: Request;
 pub node accepted: Bool = true;
