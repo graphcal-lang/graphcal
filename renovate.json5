@@ -5,6 +5,16 @@
   lockFileMaintenance: {
     enabled: true,
   },
+  customManagers: [
+    {
+      customType: "regex",
+      description: "Update cargo-hawk installed by taiki-e/install-action",
+      managerFilePatterns: ["/^\\.github\\/workflows\\/ci\\.yaml$/"],
+      matchStrings: ["tool:\\s*cargo-hawk@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      depNameTemplate: "cargo-hawk",
+      datasourceTemplate: "crate",
+    },
+  ],
   packageRules: [
     {
       matchUpdateTypes: ["lockFileMaintenance"],

@@ -3,8 +3,7 @@
 # cannot observe, so CI excludes them with explicit --exclude-crate flags:
 # graphcal_compiler, graphcal_eval, graphcal_io, graphcal_package,
 # graphcal_plugin, graphcal_plugin_abi, graphcal_plugin_host, graphcal_tenax,
-# graphcal_test_support.
-# graphcal_wasm is not reported because it is consumed only across the Wasm ABI.
+# graphcal_test_support, graphcal_wasm.
 [[production]]
 package = "graphcal"
 bin = "graphcal"

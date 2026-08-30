@@ -59,7 +59,7 @@ jobs:
 
       - uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2.86.5
         with:
-          tool: cargo-hawk@0.1.9
+          tool: cargo-hawk@0.1.13
 
       - name: Check closed-world public surface
         run: >-
@@ -73,6 +73,7 @@ jobs:
           --exclude-crate graphcal_plugin_host
           --exclude-crate graphcal_tenax
           --exclude-crate graphcal_test_support
+          --exclude-crate graphcal_wasm
 
   dependency-policy:
     runs-on: ubuntu-latest
