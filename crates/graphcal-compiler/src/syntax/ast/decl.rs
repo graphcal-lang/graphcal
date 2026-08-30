@@ -966,7 +966,7 @@ pub struct DimDecl {
 }
 
 /// Whether a unit is allowed in compile-time (`const`) contexts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnitConstness {
     /// A compile-time unit: prelude units, `base unit`, or `const unit`.
     Const,

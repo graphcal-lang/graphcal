@@ -214,13 +214,22 @@ pub(crate) fn resolve_unit_dimension_impl(
 #[derive(Debug, Clone)]
 pub struct UnitRegistry {
     pub(crate) units: HashMap<UnitRef, UnitInfo>,
+    pub(crate) aliases: HashMap<UnitRef, UnitRef>,
 }
 
 impl UnitRegistry {
     /// Look up a unit by reference (bare or module-alias-qualified).
     #[must_use]
     pub fn get_unit(&self, name: &UnitRef) -> Option<&UnitInfo> {
-        self.units.get(name)
+        let mut current = name.clone();
+        let mut remaining = self.aliases.len() + 1;
+        loop {
+            if let Some(info) = self.units.get(&current) {
+                return Some(info);
+            }
+            current = self.aliases.get(&current)?.clone();
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Iterate over every unit reference and its complete semantic definition.

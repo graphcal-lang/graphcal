@@ -9,9 +9,13 @@ use super::*;
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::static_dependencies::{
+    StaticReference, StaticReferenceNamespaces, declaration_static_references,
+};
+use graphcal_compiler::ir::static_interface::{StaticInputKind, StaticRole, static_interface};
 use graphcal_compiler::registry::types::IndexBindingTarget;
 use graphcal_compiler::syntax::import_category::ImportItemNamespace;
-use graphcal_compiler::syntax::names::{NameAtom, NamePath};
+use graphcal_compiler::syntax::names::NameAtom;
 
 /// Collect the set of type-system names declared locally in a file
 /// (dims, units, indexes, types). Used to distinguish a private-local
@@ -51,177 +55,25 @@ fn collect_required_binding_names(
 ) -> HashMap<NameAtom, ImportItemNamespace> {
     declarations
         .iter()
-        .filter_map(|declaration| match &declaration.kind {
-            DeclKind::Dimension(dimension) if dimension.definition.is_none() => Some((
-                dimension.name.value.atom().clone(),
-                ImportItemNamespace::Dimension,
-            )),
-            DeclKind::Index(index) if index.kind.is_required() => {
-                Some((index.name.value.atom().clone(), ImportItemNamespace::Index))
+        .filter_map(|declaration| {
+            let interface = static_interface(&declaration.kind)?;
+            if interface.role() != StaticRole::RequiredInput {
+                return None;
             }
-            DeclKind::Type(type_decl)
-                if matches!(
-                    type_decl.body,
-                    graphcal_compiler::desugar::desugared_ast::TypeDeclBody::Required
-                ) =>
-            {
-                Some((
-                    type_decl.name.value.atom().clone(),
-                    ImportItemNamespace::Type,
-                ))
-            }
-            _ => None,
+            let name = match &declaration.kind {
+                DeclKind::Dimension(dimension) => dimension.name.value.atom().clone(),
+                DeclKind::Type(type_decl) => type_decl.name.value.atom().clone(),
+                DeclKind::Index(index) => index.name.value.atom().clone(),
+                _ => return None,
+            };
+            let namespace = match interface.kind() {
+                StaticInputKind::Type => ImportItemNamespace::Type,
+                StaticInputKind::Dimension => ImportItemNamespace::Dimension,
+                StaticInputKind::Index => ImportItemNamespace::Index,
+            };
+            Some((name, namespace))
         })
         .collect()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AmbiguousReferenceNamespace {
-    TypeOrDimension,
-    IndexTypeOrDimension,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TypeSystemReference {
-    Known {
-        name: NameAtom,
-        namespace: ImportItemNamespace,
-    },
-    Ambiguous {
-        name: NameAtom,
-        namespaces: AmbiguousReferenceNamespace,
-    },
-}
-
-impl TypeSystemReference {
-    const fn known(name: NameAtom, namespace: ImportItemNamespace) -> Self {
-        Self::Known { name, namespace }
-    }
-
-    const fn ambiguous(name: NameAtom, namespaces: AmbiguousReferenceNamespace) -> Self {
-        Self::Ambiguous { name, namespaces }
-    }
-
-    const fn name(&self) -> &NameAtom {
-        match self {
-            Self::Known { name, .. } | Self::Ambiguous { name, .. } => name,
-        }
-    }
-}
-
-fn collect_bare_path(
-    path: &NamePath,
-    namespace: ImportItemNamespace,
-    refs: &mut Vec<TypeSystemReference>,
-) {
-    if let Some(name) = path.as_bare() {
-        refs.push(TypeSystemReference::known(name.clone(), namespace));
-    }
-}
-
-fn collect_ambiguous_bare_path(
-    path: &NamePath,
-    namespaces: AmbiguousReferenceNamespace,
-    refs: &mut Vec<TypeSystemReference>,
-) {
-    if let Some(name) = path.as_bare() {
-        refs.push(TypeSystemReference::ambiguous(name.clone(), namespaces));
-    }
-}
-
-/// Walk a `TypeExpr` collecting every bare type-system name reference.
-/// Qualified references name dependency/external modules and cannot refer to
-/// importer-local substitution ports.
-fn collect_type_expr_names(
-    type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
-    refs: &mut Vec<TypeSystemReference>,
-) {
-    use graphcal_compiler::desugar::desugared_ast::{IndexExpr, TypeExprKind};
-    match &type_expr.kind {
-        TypeExprKind::DimExpr(dim_expr) => match dim_expr.terms.as_slice() {
-            // The parser intentionally retains a bare nominal type as a
-            // singleton dimension expression until semantic resolution.
-            [item] if item.term.power.is_none() => collect_ambiguous_bare_path(
-                &item.term.name.value,
-                AmbiguousReferenceNamespace::TypeOrDimension,
-                refs,
-            ),
-            terms => {
-                for item in terms {
-                    collect_bare_path(&item.term.name.value, ImportItemNamespace::Dimension, refs);
-                }
-            }
-        },
-        TypeExprKind::Indexed { base, indexes } => {
-            collect_type_expr_names(base, refs);
-            for index in indexes {
-                if let IndexExpr::Name(path) = index {
-                    collect_bare_path(&path.value, ImportItemNamespace::Index, refs);
-                }
-            }
-        }
-        TypeExprKind::TypeApplication { name, generic_args } => {
-            collect_bare_path(&name.value, ImportItemNamespace::Type, refs);
-            for arg in generic_args {
-                collect_generic_arg_names(arg, refs);
-            }
-        }
-        TypeExprKind::ComplexApplication { generic_args }
-        | TypeExprKind::KeyApplication { generic_args } => {
-            // `Complex` and `Key` are built in; collect only names in their
-            // generic arguments.
-            for arg in generic_args {
-                collect_generic_arg_names(arg, refs);
-            }
-        }
-        TypeExprKind::DatetimeApplication { type_args } => {
-            // `Datetime` is a built-in — no top-level name to push.
-            for arg in type_args {
-                collect_type_expr_names(arg, refs);
-            }
-        }
-        TypeExprKind::IndexLabel { .. }
-        | TypeExprKind::Dimensionless
-        | TypeExprKind::Bool
-        | TypeExprKind::Int
-        | TypeExprKind::Datetime => {}
-    }
-}
-
-fn collect_generic_arg_names(
-    arg: &graphcal_compiler::syntax::ast::GenericArg<graphcal_compiler::syntax::phase::Desugared>,
-    refs: &mut Vec<TypeSystemReference>,
-) {
-    use graphcal_compiler::desugar::desugared_ast::IndexExpr;
-    use graphcal_compiler::syntax::ast::GenericArg;
-    match arg {
-        GenericArg::Type(type_expr) => collect_type_expr_names(type_expr, refs),
-        GenericArg::Index(IndexExpr::Name(path)) => {
-            collect_bare_path(&path.value, ImportItemNamespace::Index, refs);
-        }
-        GenericArg::Index(IndexExpr::Finite { .. } | IndexExpr::BareNat(_))
-        | GenericArg::Nat(_) => {}
-        GenericArg::Ambiguous(ambiguous) => collect_ambiguous_generic_names(ambiguous, refs),
-    }
-}
-
-fn collect_ambiguous_generic_names(
-    arg: &graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg,
-    refs: &mut Vec<TypeSystemReference>,
-) {
-    match arg {
-        graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg::Name(ident) => {
-            refs.push(TypeSystemReference::ambiguous(
-                ident.name.clone(),
-                AmbiguousReferenceNamespace::IndexTypeOrDimension,
-            ));
-        }
-        graphcal_compiler::desugar::desugared_ast::AmbiguousGenericArg::Mul(operands, _) => {
-            for operand in operands {
-                collect_ambiguous_generic_names(operand, refs);
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -241,42 +93,36 @@ fn index_substitution(target: &IndexBindingTarget) -> ReferenceSubstitution {
 }
 
 fn reference_substitution(
-    reference: &TypeSystemReference,
+    reference: &StaticReference,
     index_bindings: &IndexBindings,
     type_bindings: &HashMap<StructTypeName, StructTypeName>,
     dim_bindings: &HashMap<DimName, DimName>,
 ) -> Result<ReferenceSubstitution, &'static str> {
-    let name = reference.name();
-    match reference {
-        TypeSystemReference::Known {
-            namespace: ImportItemNamespace::Index,
-            ..
-        } => Ok(index_bindings
+    let Some(name) = reference.bare_name() else {
+        return Ok(ReferenceSubstitution::Unbound);
+    };
+    match reference.namespaces() {
+        StaticReferenceNamespaces::Exact(StaticInputKind::Index) => Ok(index_bindings
             .get(&IndexName::from_atom(name.clone()))
             .map_or(ReferenceSubstitution::Unbound, index_substitution)),
-        TypeSystemReference::Known {
-            namespace: ImportItemNamespace::Type,
-            ..
-        } => Ok(type_bindings
+        StaticReferenceNamespaces::Exact(StaticInputKind::Type) => Ok(type_bindings
             .get(&StructTypeName::from_atom(name.clone()))
             .map_or(ReferenceSubstitution::Unbound, |target| {
                 ReferenceSubstitution::ImporterLocal(target.atom().clone())
             })),
-        TypeSystemReference::Known {
-            namespace: ImportItemNamespace::Dimension,
-            ..
-        } => Ok(dim_bindings
+        StaticReferenceNamespaces::Exact(StaticInputKind::Dimension) => Ok(dim_bindings
             .get(&DimName::from_atom(name.clone()))
             .map_or(ReferenceSubstitution::Unbound, |target| {
                 ReferenceSubstitution::ImporterLocal(target.atom().clone())
             })),
-        TypeSystemReference::Known { .. } => Ok(ReferenceSubstitution::Unbound),
-        TypeSystemReference::Ambiguous { namespaces, .. } => {
-            let index = match namespaces {
-                AmbiguousReferenceNamespace::IndexTypeOrDimension => index_bindings
+        namespaces @ (StaticReferenceNamespaces::TypeOrDimension
+        | StaticReferenceNamespaces::IndexTypeOrDimension) => {
+            let index = if namespaces == StaticReferenceNamespaces::IndexTypeOrDimension {
+                index_bindings
                     .get(&IndexName::from_atom(name.clone()))
-                    .map(index_substitution),
-                AmbiguousReferenceNamespace::TypeOrDimension => None,
+                    .map(index_substitution)
+            } else {
+                None
             };
             let type_name = type_bindings
                 .get(&StructTypeName::from_atom(name.clone()))
@@ -331,67 +177,6 @@ fn reexported_declaration_identity(kind: &DeclKind) -> Option<(DeclName, &'stati
     }
 }
 
-fn declaration_signature_references(kind: &DeclKind) -> Vec<TypeSystemReference> {
-    let mut refs = Vec::new();
-    match kind {
-        DeclKind::Param(param) => collect_type_expr_names(&param.type_ann, &mut refs),
-        DeclKind::Node(node) => collect_type_expr_names(&node.type_ann, &mut refs),
-        DeclKind::ConstNode(constant) => {
-            collect_type_expr_names(&constant.type_ann, &mut refs);
-        }
-        DeclKind::Unit(unit) => {
-            for item in &unit.dim_type.terms {
-                collect_bare_path(
-                    &item.term.name.value,
-                    ImportItemNamespace::Dimension,
-                    &mut refs,
-                );
-            }
-        }
-        DeclKind::Dimension(dimension) => {
-            if let Some(definition) = &dimension.definition {
-                for item in &definition.terms {
-                    collect_bare_path(
-                        &item.term.name.value,
-                        ImportItemNamespace::Dimension,
-                        &mut refs,
-                    );
-                }
-            }
-        }
-        DeclKind::Type(type_decl) => {
-            if let graphcal_compiler::desugar::desugared_ast::TypeDeclBody::Constructors(members) =
-                &type_decl.body
-            {
-                for member in members {
-                    if let Some(fields) = &member.payload {
-                        for field in fields {
-                            collect_type_expr_names(&field.type_ann, &mut refs);
-                        }
-                    }
-                }
-            }
-            for default in type_decl
-                .generic_params
-                .iter()
-                .filter_map(|param| param.default.as_ref())
-            {
-                collect_generic_arg_names(default, &mut refs);
-            }
-            // Bare references to lexical generic parameters are not module API
-            // dependencies, even when a local declaration has the same leaf.
-            let generic_params = type_decl
-                .generic_params
-                .iter()
-                .map(|param| param.name.value.atom().clone())
-                .collect::<HashSet<_>>();
-            refs.retain(|reference| !generic_params.contains(reference.name()));
-        }
-        _ => {}
-    }
-    refs
-}
-
 /// A9 case 2 / V006 — re-exported decls must not name a private-at-importer
 /// symbol in their effective signature.
 ///
@@ -429,19 +214,21 @@ pub(super) fn check_generics_leakage(
             continue;
         }
 
-        let refs = declaration_signature_references(&decl.kind);
+        let refs = declaration_static_references(&decl.kind);
 
         // Only a concrete importer-side substitution can leak an importer
         // declaration. Unsubstituted names remain dependency-local or builtin;
         // required ports, however, must have a substitution by this phase.
         for reference in refs {
+            let Some(reference_name) = reference.bare_name() else {
+                continue;
+            };
             let substitution =
                 reference_substitution(&reference, index_bindings, type_bindings, dim_bindings)
                     .map_err(|detail| {
                         CompileError::Eval(GraphcalError::internal_error(
                             format!(
-                                "generic-leakage substitution for `{}` is inconsistent: {detail}",
-                                reference.name()
+                                "generic-leakage substitution for `{reference_name}` is inconsistent: {detail}"
                             ),
                             importer_src,
                             DiagnosticAnchor::Source(include_span),
@@ -450,12 +237,11 @@ pub(super) fn check_generics_leakage(
             let substituted = match substitution {
                 ReferenceSubstitution::StructuralIndex => continue,
                 ReferenceSubstitution::Unbound => {
-                    if let Some(namespace) = required_bindings.get(reference.name()) {
+                    if let Some(namespace) = required_bindings.get(reference_name) {
                         return Err(CompileError::Eval(GraphcalError::internal_error(
                             format!(
-                                "required {} binding `{}` is absent during generic-leakage analysis",
+                                "required {} binding `{reference_name}` is absent during generic-leakage analysis",
                                 namespace_diagnostic_name(*namespace),
-                                reference.name()
                             ),
                             importer_src,
                             DiagnosticAnchor::Source(include_span),

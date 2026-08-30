@@ -239,6 +239,13 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::InvalidStaticBindingValue { name, span } => {
+            return GraphcalError::InvalidTypeLevelBindingValue {
+                name: name.to_string(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         hir::ExprLowerError::UnknownLocalRef { name, span } => {
             return GraphcalError::UnknownLocalRef {
                 name: name.to_string(),
@@ -455,6 +462,7 @@ pub fn expr_lower_error_to_graphcal(
     let span = match err {
         hir::ExprLowerError::Type(err) => return hir_lower_error_to_graphcal(err, src),
         hir::ExprLowerError::ModuleResolve { span, .. }
+        | hir::ExprLowerError::InvalidStaticBindingValue { span, .. }
         | hir::ExprLowerError::UnknownLocalRef { span, .. }
         | hir::ExprLowerError::UnknownGraphRef { span, .. }
         | hir::ExprLowerError::BareGraphDeclarationRef { span, .. }

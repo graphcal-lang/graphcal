@@ -593,7 +593,9 @@ mod tests {
                 graphcal_compiler::syntax::module_resolve::ExportedImportItem {
                     name: graphcal_compiler::syntax::names::NameAtom::parse("Information")
                         .unwrap(),
-                    kind: graphcal_compiler::syntax::module_resolve::ExportedImportItemKind::Unit,
+                    kind: graphcal_compiler::syntax::module_resolve::ExportedImportItemKind::Unit(
+                        graphcal_compiler::syntax::ast::UnitConstness::Const,
+                    ),
                 },
             ],
         );

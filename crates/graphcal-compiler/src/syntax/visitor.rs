@@ -22,7 +22,7 @@ use crate::syntax::phase::Phase;
 ///
 /// Default implementations for container nodes recurse into children.
 /// Override leaf methods to intercept specific node types.
-pub(crate) trait ExprVisitor<P: Phase> {
+pub trait ExprVisitor<P: Phase> {
     type Error;
 
     /// Top-level dispatch. Override to add pre/post-visit logic.

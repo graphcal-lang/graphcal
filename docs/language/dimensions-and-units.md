@@ -150,9 +150,9 @@ Dynamic unit definitions are fully checked even when the unit is never used. The
 
 Only the scale's concrete value is deferred until evaluation, after its referenced params and nodes have been computed. That value must be positive and finite; otherwise any declaration using the unit fails instead of receiving a fallback scale.
 
-A dynamic unit belongs to the runtime DAG whose params and nodes determine its scale. It cannot cross a namespace-composition boundary: directly importing or qualifying it is rejected (`M025`), and including a module that declares one is rejected (`M026`). An include copies declarations and unit scope into another DAG; allowing that operation to manufacture instance-qualified type-system definitions would make unit identity depend on elaboration rather than one canonical definition.
+A plain `unit` belongs to the concrete runtime DAG instance whose params and nodes determine its scale. This capability follows the source marker, not constant folding: every plain `unit` is non-importable (`M025`), even when its right-hand side contains no `@` reference. Use `const unit` when a blueprint-stable unit must cross an `import` boundary.
 
-Keep a dynamic unit private inside the entry DAG or inside a DAG invoked explicitly with `@module(...)::output`. An explicit call evaluates the unit against that call's bindings without exposing the unit itself to the caller. If callers need to share the unit name, declare a `const unit`; if they need a variable conversion rate, model the conversion as an explicit value calculation.
+Concrete `include` and direct-call instances may use plain units. Each repeated or nested instance receives its own `(unit declaration, instance)` identity, so different bindings can produce different scales without collision. The scale participates in that instance's dependency ordering and cycle checks, and outputs keep the corresponding unit presentation. An include does not turn the unit into an importable global name: a module include exposes it through that concrete instance namespace (`fx::EUR`), while a selective include can project an instance-specific alias (`unit EUR as euros`). Any blueprint-stable dimension or base unit used in the surrounding annotation remains an explicit `import`.
 
 ### Using Units
 

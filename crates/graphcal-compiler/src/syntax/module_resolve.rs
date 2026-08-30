@@ -27,7 +27,10 @@ use thiserror::Error;
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
-use crate::syntax::ast::{IdentPath, ImportItem, ImportKind, ModulePath};
+use crate::syntax::ast::{
+    ExprKind, IdentPath, ImportItem, ImportKind, InputBindingCategory, ModulePath, UnitConstness,
+    UnresolvedRef,
+};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
@@ -368,14 +371,46 @@ impl ModuleSymbolLookup<StructTypeNameNamespace> for ModuleTypeSymbol {
     }
 }
 
-/// Constructor symbol plus the generic signature of its owning type.
+/// Unit symbol plus whether its scale is compile-time or instance-specific.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModuleUnitSymbol {
+    symbol: ModuleSymbol<UnitNameNamespace>,
+    constness: UnitConstness,
+}
+
+impl ModuleUnitSymbol {
+    const fn constness(&self) -> UnitConstness {
+        self.constness
+    }
+}
+
+impl ModuleSymbolLookup<UnitNameNamespace> for ModuleUnitSymbol {
+    fn resolved(&self) -> &ResolvedUnitName {
+        self.symbol.resolved()
+    }
+
+    fn visibility(&self) -> SymbolVisibility {
+        self.symbol.visibility()
+    }
+
+    fn span(&self) -> Span {
+        self.symbol.span()
+    }
+}
+
+/// Constructor symbol plus the identity and generic signature of its owning type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModuleConstructorSymbol {
     symbol: ModuleSymbol<ConstructorNameNamespace>,
+    owner_type: StructTypeName,
     generic_params: Vec<GenericParamSignature>,
 }
 
 impl ModuleConstructorSymbol {
+    const fn owner_type(&self) -> &StructTypeName {
+        &self.owner_type
+    }
+
     fn generic_params(&self) -> &[GenericParamSignature] {
         &self.generic_params
     }
@@ -448,7 +483,7 @@ pub struct ModuleSymbols {
     owner: DagId,
     decls: HashMap<DeclName, ModuleDeclSymbol>,
     dimensions: HashMap<DimName, ModuleSymbol<DimNameNamespace>>,
-    units: HashMap<UnitName, ModuleSymbol<UnitNameNamespace>>,
+    units: HashMap<UnitName, ModuleUnitSymbol>,
     struct_types: HashMap<StructTypeName, ModuleTypeSymbol>,
     indexes: HashMap<IndexName, ModuleIndexSymbol>,
     constructors: HashMap<ConstructorName, ModuleConstructorSymbol>,
@@ -502,7 +537,7 @@ impl ModuleSymbols {
 
     /// Unit namespace symbols.
     #[must_use]
-    pub(crate) const fn units(&self) -> &HashMap<UnitName, ModuleSymbol<UnitNameNamespace>> {
+    pub(crate) const fn units(&self) -> &HashMap<UnitName, ModuleUnitSymbol> {
         &self.units
     }
 
@@ -592,6 +627,7 @@ impl ModuleSymbols {
                 ast::DeclKind::Unit(u) => self.insert_unit(
                     &u.name,
                     SymbolVisibility::from(u.visibility),
+                    u.constness,
                     UnitNameNamespace::DISPLAY_NAME,
                 )?,
                 ast::DeclKind::Type(t) => self.insert_type_decl(&mut exclusive_names, t)?,
@@ -675,6 +711,7 @@ impl ModuleSymbols {
                 )?;
                 self.insert_constructor(
                     &member.name,
+                    &type_decl.name.value,
                     visibility,
                     ConstructorNameNamespace::DISPLAY_NAME,
                     generic_params.clone(),
@@ -761,15 +798,26 @@ impl ModuleSymbols {
         &mut self,
         name: &Spanned<UnitName>,
         visibility: SymbolVisibility,
+        constness: UnitConstness,
         namespace_name: &'static str,
     ) -> Result<(), ModuleResolveError> {
-        insert_symbol(
-            &self.owner,
-            &mut self.units,
-            name,
-            visibility,
-            namespace_name,
-        )
+        if let Some(first) = self.units.get(name.value.as_str()) {
+            return Err(ModuleResolveError::DuplicateSymbol {
+                owner: self.owner.clone(),
+                namespace: namespace_name,
+                name: name.value.to_string(),
+                first: first.span(),
+                duplicate: name.span,
+            });
+        }
+        self.units.insert(
+            name.value.clone(),
+            ModuleUnitSymbol {
+                symbol: ModuleSymbol::new(&self.owner, name.value.clone(), visibility, name.span),
+                constness,
+            },
+        );
+        Ok(())
     }
 
     fn insert_struct_type(
@@ -801,6 +849,7 @@ impl ModuleSymbols {
     fn insert_constructor(
         &mut self,
         name: &Spanned<ConstructorName>,
+        owner_type: &StructTypeName,
         visibility: SymbolVisibility,
         namespace_name: &'static str,
         generic_params: Vec<GenericParamSignature>,
@@ -818,6 +867,7 @@ impl ModuleSymbols {
             name.value.clone(),
             ModuleConstructorSymbol {
                 symbol: ModuleSymbol::new(&self.owner, name.value.clone(), visibility, name.span),
+                owner_type: owner_type.clone(),
                 generic_params,
             },
         );
@@ -1067,9 +1117,50 @@ pub enum ExportedImportItemKind {
     Decl(DeclSymbolKind),
     Constructor,
     Dimension,
-    Unit,
+    Unit(UnitConstness),
     Type,
     Index,
+}
+
+/// Semantic target category produced by crossing an include projection boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IncludeProjection {
+    StaticDeclaration,
+    ConstNode,
+    Constructor,
+    RuntimeTerm,
+    Assertion,
+    Visualization,
+    StaticUnit,
+    RuntimeUnit,
+}
+
+/// The single capability table for selective include projection.
+///
+/// Reusable DAGs are importable blueprints, but they are not members of a
+/// configured instance. Every resolver and external-surface check must consume
+/// this classification rather than maintaining its own declaration-kind list.
+#[must_use]
+pub const fn include_projection(kind: ExportedImportItemKind) -> Option<IncludeProjection> {
+    match kind {
+        ExportedImportItemKind::Decl(DeclSymbolKind::Const) => Some(IncludeProjection::ConstNode),
+        ExportedImportItemKind::Decl(DeclSymbolKind::Param | DeclSymbolKind::Node) => {
+            Some(IncludeProjection::RuntimeTerm)
+        }
+        ExportedImportItemKind::Decl(DeclSymbolKind::Assert) => Some(IncludeProjection::Assertion),
+        ExportedImportItemKind::Decl(
+            DeclSymbolKind::Plot | DeclSymbolKind::Figure | DeclSymbolKind::Layer,
+        ) => Some(IncludeProjection::Visualization),
+        ExportedImportItemKind::Decl(DeclSymbolKind::Dag) => None,
+        ExportedImportItemKind::Constructor => Some(IncludeProjection::Constructor),
+        ExportedImportItemKind::Dimension
+        | ExportedImportItemKind::Type
+        | ExportedImportItemKind::Index => Some(IncludeProjection::StaticDeclaration),
+        ExportedImportItemKind::Unit(UnitConstness::Const) => Some(IncludeProjection::StaticUnit),
+        ExportedImportItemKind::Unit(UnitConstness::Dynamic) => {
+            Some(IncludeProjection::RuntimeUnit)
+        }
+    }
 }
 
 impl ExportedImportItemKind {
@@ -1079,7 +1170,7 @@ impl ExportedImportItemKind {
         match self {
             Self::Decl(_) | Self::Constructor => ImportItemNamespace::Term,
             Self::Dimension => ImportItemNamespace::Dimension,
-            Self::Unit => ImportItemNamespace::Unit,
+            Self::Unit(_) => ImportItemNamespace::Unit,
             Self::Type => ImportItemNamespace::Type,
             Self::Index => ImportItemNamespace::Index,
         }
@@ -1094,6 +1185,54 @@ impl ExportedImportItemKind {
             ImportItemNamespace::Index => 4,
         }
     }
+}
+
+/// Canonical semantic target of one public module-surface spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ExportedBindingTarget {
+    Decl {
+        identity: ResolvedDeclName,
+        kind: DeclSymbolKind,
+    },
+    Constructor(ResolvedConstructorName),
+    Dimension(ResolvedDimName),
+    Unit {
+        identity: ResolvedUnitName,
+        constness: UnitConstness,
+    },
+    Type(ResolvedStructTypeName),
+    Index(ResolvedIndexName),
+}
+
+impl ExportedBindingTarget {
+    /// Exact selective-import category of this canonical target.
+    #[must_use]
+    pub const fn kind(&self) -> ExportedImportItemKind {
+        match self {
+            Self::Decl { kind, .. } => ExportedImportItemKind::Decl(*kind),
+            Self::Constructor(_) => ExportedImportItemKind::Constructor,
+            Self::Dimension(_) => ExportedImportItemKind::Dimension,
+            Self::Unit { constness, .. } => ExportedImportItemKind::Unit(*constness),
+            Self::Type(_) => ExportedImportItemKind::Type,
+            Self::Index(_) => ExportedImportItemKind::Index,
+        }
+    }
+
+    /// Canonical declaration identity when this target inhabits the Term declaration namespace.
+    #[must_use]
+    pub const fn declaration(&self) -> Option<&ResolvedDeclName> {
+        match self {
+            Self::Decl { identity, .. } => Some(identity),
+            _ => None,
+        }
+    }
+}
+
+/// One source-visible public spelling paired atomically with category and canonical target.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExportedBinding {
+    pub name: NameAtom,
+    pub target: ExportedBindingTarget,
 }
 
 /// One public symbol rendered in the exact category used by selective imports.
@@ -1399,96 +1538,166 @@ impl ModuleResolver {
         &self.scopes
     }
 
-    /// List the module's public surface in canonical selective-import categories.
+    /// List the module's public surface as source spelling plus typed canonical target.
     ///
-    /// Native declarations and selective re-exports are indistinguishable here:
-    /// callers receive the local exported spelling and the marker required to
-    /// import it. Imports expose only items explicitly marked `pub` in their
-    /// selective list; namespaced imports never widen this surface.
+    /// Native declarations and selective re-exports are indistinguishable here.
+    /// Imports expose only items explicitly marked `pub` in their selective list;
+    /// namespaced imports never widen this surface.
     ///
     /// # Errors
     ///
     /// Returns [`ModuleResolveError`] if `owner` or a re-exported declaration's
     /// canonical owner is missing.
-    pub fn exported_import_items(
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive traversal preserves declaration order across every Term category"
+    )]
+    pub fn exported_bindings(
         &self,
         owner: &DagId,
-    ) -> Result<Vec<ExportedImportItem>, ModuleResolveError> {
+    ) -> Result<Vec<ExportedBinding>, ModuleResolveError> {
         let symbols = self.module_symbols(owner)?;
         let scope = self.module_scope(owner)?;
-        let mut items = Vec::new();
+        let mut bindings = Vec::new();
 
         for (name, symbol) in &symbols.decls {
             if symbol.visibility().is_public() {
-                items.push(ExportedImportItem {
+                bindings.push(ExportedBinding {
                     name: name.atom().clone(),
-                    kind: ExportedImportItemKind::Decl(symbol.kind()),
+                    target: ExportedBindingTarget::Decl {
+                        identity: symbol.resolved().clone(),
+                        kind: symbol.kind(),
+                    },
                 });
             }
         }
         for (name, symbol) in &scope.selected_decls {
             if symbol.visibility().is_public() {
-                items.push(ExportedImportItem {
+                bindings.push(ExportedBinding {
                     name: name.atom().clone(),
-                    kind: ExportedImportItemKind::Decl(self.decl_symbol_kind(symbol.resolved())?),
+                    target: ExportedBindingTarget::Decl {
+                        identity: symbol.resolved().clone(),
+                        kind: self.decl_symbol_kind(symbol.resolved())?,
+                    },
+                });
+            }
+        }
+        for (name, symbol) in &symbols.constructors {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Constructor(symbol.resolved().clone()),
+                });
+            }
+        }
+        for (name, symbol) in &scope.selected_constructors {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Constructor(symbol.resolved().clone()),
+                });
+            }
+        }
+        for (name, symbol) in &symbols.struct_types {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Type(symbol.resolved().clone()),
+                });
+            }
+        }
+        for (name, symbol) in &scope.selected_struct_types {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Type(symbol.resolved().clone()),
+                });
+            }
+        }
+        for (name, symbol) in &symbols.dimensions {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Dimension(symbol.resolved().clone()),
+                });
+            }
+        }
+        for (name, symbol) in &scope.selected_dimensions {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Dimension(symbol.resolved().clone()),
+                });
+            }
+        }
+        for (name, symbol) in &symbols.units {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Unit {
+                        identity: symbol.resolved().clone(),
+                        constness: symbol.constness(),
+                    },
+                });
+            }
+        }
+        for (name, symbol) in &scope.selected_units {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Unit {
+                        identity: symbol.resolved().clone(),
+                        constness: self.unit_constness(symbol.resolved())?,
+                    },
+                });
+            }
+        }
+        for (name, symbol) in &symbols.indexes {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Index(symbol.resolved().clone()),
+                });
+            }
+        }
+        for (name, symbol) in &scope.selected_indexes {
+            if symbol.visibility().is_public() {
+                bindings.push(ExportedBinding {
+                    name: name.atom().clone(),
+                    target: ExportedBindingTarget::Index(symbol.resolved().clone()),
                 });
             }
         }
 
-        macro_rules! push_namespace {
-            ($local:expr, $selected:expr, $kind:expr) => {
-                for (name, symbol) in $local {
-                    if symbol.visibility().is_public() {
-                        items.push(ExportedImportItem {
-                            name: name.atom().clone(),
-                            kind: $kind,
-                        });
-                    }
-                }
-                for (name, symbol) in $selected {
-                    if symbol.visibility().is_public() {
-                        items.push(ExportedImportItem {
-                            name: name.atom().clone(),
-                            kind: $kind,
-                        });
-                    }
-                }
-            };
-        }
-
-        push_namespace!(
-            &symbols.constructors,
-            &scope.selected_constructors,
-            ExportedImportItemKind::Constructor
-        );
-        push_namespace!(
-            &symbols.struct_types,
-            &scope.selected_struct_types,
-            ExportedImportItemKind::Type
-        );
-        push_namespace!(
-            &symbols.dimensions,
-            &scope.selected_dimensions,
-            ExportedImportItemKind::Dimension
-        );
-        push_namespace!(
-            &symbols.units,
-            &scope.selected_units,
-            ExportedImportItemKind::Unit
-        );
-        push_namespace!(
-            &symbols.indexes,
-            &scope.selected_indexes,
-            ExportedImportItemKind::Index
-        );
-
-        items.sort_by(|left, right| {
-            left.kind
+        bindings.sort_by(|left, right| {
+            left.target
+                .kind()
                 .sort_rank()
-                .cmp(&right.kind.sort_rank())
+                .cmp(&right.target.kind().sort_rank())
                 .then_with(|| left.name.cmp(&right.name))
         });
-        Ok(items)
+        Ok(bindings)
+    }
+
+    /// Render the typed exported bindings in selective-import categories.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModuleResolveError`] when [`Self::exported_bindings`] cannot
+    /// resolve a canonical target.
+    pub fn exported_import_items(
+        &self,
+        owner: &DagId,
+    ) -> Result<Vec<ExportedImportItem>, ModuleResolveError> {
+        self.exported_bindings(owner).map(|bindings| {
+            bindings
+                .into_iter()
+                .map(|binding| ExportedImportItem {
+                    name: binding.name,
+                    kind: binding.target.kind(),
+                })
+                .collect()
+        })
     }
 
     /// Return selectively imported DAG bindings as local name → canonical DAG.
@@ -1589,6 +1798,310 @@ impl ModuleResolver {
             ModuleAliasRole::IncludedInstance,
             SymbolVisibility::Private,
         )
+    }
+
+    /// Redirect selected Static aliases to supplied effective binding targets.
+    ///
+    /// Include selection normally points at the instantiated source declaration.
+    /// A bound type, dimension, or declared index instead projects the concrete
+    /// importer-side target, so its local alias must resolve to that identity.
+    #[expect(
+        clippy::too_many_lines,
+        clippy::single_match_else,
+        reason = "typed Static projection updates three disjoint resolver namespaces; explicit matches keep fallback identity construction visible"
+    )]
+    pub fn apply_include_static_projection_bindings(
+        &mut self,
+        owner: &DagId,
+        source_target: Option<&DagId>,
+        include: &ast::IncludeDecl,
+    ) -> Result<(), ModuleResolveError> {
+        let ImportKind::Selective(items) = &include.kind else {
+            return Ok(());
+        };
+        let has_static_bindings = include
+            .param_bindings
+            .iter()
+            .any(|binding| binding.category != InputBindingCategory::Unmarked);
+        for item in items {
+            if let Some(target) = source_target {
+                for addition in
+                    self.import_item_additions(target, item, ModuleAccess::PublicOnly)?
+                {
+                    let Some(kind) = self.import_addition_kind(&addition)? else {
+                        continue;
+                    };
+                    if include_projection(kind).is_none() {
+                        return Err(ModuleResolveError::IncludeItemNotProjectable {
+                            owner: target.clone(),
+                            name: item.name.name.to_string(),
+                            kind,
+                            span: item.name.span,
+                        });
+                    }
+                }
+            }
+            let category = match item.namespace {
+                ImportItemNamespace::Type => Some(InputBindingCategory::Type),
+                ImportItemNamespace::Dimension => Some(InputBindingCategory::Dimension),
+                ImportItemNamespace::Index => Some(InputBindingCategory::Index),
+                ImportItemNamespace::Unit | ImportItemNamespace::Term => None,
+            };
+            let binding = category.and_then(|category| {
+                include.param_bindings.iter().find(|binding| {
+                    binding.category == category && binding.name.name == item.name.name
+                })
+            });
+            let binding_path = binding.and_then(|binding| match &binding.value.kind {
+                ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Some(path.to_name_path()),
+                _ => None,
+            });
+            let visibility = if item.is_pub {
+                SymbolVisibility::Public
+            } else {
+                SymbolVisibility::Private
+            };
+            let local = item.local_name_atom().clone();
+            let source = item.name.name.clone();
+            match item.namespace {
+                ImportItemNamespace::Type => {
+                    let source_name = StructTypeName::from_atom(source);
+                    if binding_path.is_none() && has_static_bindings {
+                        let Some(target) = source_target else {
+                            continue;
+                        };
+                        let source_symbol = self
+                            .module_symbols(target)?
+                            .struct_types
+                            .get(&source_name)
+                            .ok_or_else(|| ModuleResolveError::UnknownName {
+                                owner: target.clone(),
+                                namespace: StructTypeNameNamespace::DISPLAY_NAME,
+                                name: source_name.to_string(),
+                            })?;
+                        let generic_params = source_symbol.generic_params.clone();
+                        let local_name = StructTypeName::from_atom(local);
+                        self.scopes
+                            .get_mut(owner)
+                            .ok_or_else(|| ModuleResolveError::UnknownModule {
+                                owner: owner.clone(),
+                            })?
+                            .selected_struct_types
+                            .remove(&local_name);
+                        self.modules
+                            .get_mut(owner)
+                            .ok_or_else(|| ModuleResolveError::UnknownModule {
+                                owner: owner.clone(),
+                            })?
+                            .struct_types
+                            .insert(
+                                local_name,
+                                ModuleTypeSymbol {
+                                    symbol: ModuleSymbol {
+                                        resolved: ResolvedStructTypeName::from_def(
+                                            owner.clone(),
+                                            source_name,
+                                        ),
+                                        visibility,
+                                        span: item.local_span(),
+                                    },
+                                    generic_params,
+                                },
+                            );
+                        continue;
+                    }
+                    let resolved = match binding_path {
+                        Some(path) => self.resolve_struct_type_path(owner, &path)?,
+                        None => {
+                            let Some(target) = source_target else {
+                                continue;
+                            };
+                            ResolvedStructTypeName::from_def(target.clone(), source_name)
+                        }
+                    };
+                    self.scopes
+                        .get_mut(owner)
+                        .ok_or_else(|| ModuleResolveError::UnknownModule {
+                            owner: owner.clone(),
+                        })?
+                        .selected_struct_types
+                        .insert(
+                            StructTypeName::from_atom(local),
+                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                        );
+                }
+                ImportItemNamespace::Dimension => {
+                    let resolved = match binding_path {
+                        Some(path) => self.resolve_dimension_path(owner, &path)?,
+                        None => {
+                            let Some(target) = source_target else {
+                                continue;
+                            };
+                            ResolvedDimName::from_def(target.clone(), DimName::from_atom(source))
+                        }
+                    };
+                    self.scopes
+                        .get_mut(owner)
+                        .ok_or_else(|| ModuleResolveError::UnknownModule {
+                            owner: owner.clone(),
+                        })?
+                        .selected_dimensions
+                        .insert(
+                            DimName::from_atom(local),
+                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                        );
+                }
+                ImportItemNamespace::Index => {
+                    if binding.is_some() && binding_path.is_none() {
+                        let local = IndexName::from_atom(local);
+                        self.modules
+                            .get_mut(owner)
+                            .ok_or_else(|| ModuleResolveError::UnknownModule {
+                                owner: owner.clone(),
+                            })?
+                            .indexes
+                            .insert(
+                                local.clone(),
+                                ModuleIndexSymbol {
+                                    symbol: ModuleSymbol::new(
+                                        owner,
+                                        local,
+                                        visibility,
+                                        item.local_span(),
+                                    ),
+                                    variants: HashMap::new(),
+                                },
+                            );
+                        continue;
+                    }
+                    let resolved = match binding_path {
+                        Some(path) => self.resolve_index_path(owner, &path)?,
+                        None => {
+                            let Some(target) = source_target else {
+                                continue;
+                            };
+                            ResolvedIndexName::from_def(
+                                target.clone(),
+                                IndexName::from_atom(source),
+                            )
+                        }
+                    };
+                    self.scopes
+                        .get_mut(owner)
+                        .ok_or_else(|| ModuleResolveError::UnknownModule {
+                            owner: owner.clone(),
+                        })?
+                        .selected_indexes
+                        .insert(
+                            IndexName::from_atom(local),
+                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                        );
+                }
+                ImportItemNamespace::Unit => {
+                    let Some(target) = source_target else {
+                        continue;
+                    };
+                    let resolved =
+                        ResolvedUnitName::from_def(target.clone(), UnitName::from_atom(source));
+                    self.scopes
+                        .get_mut(owner)
+                        .ok_or_else(|| ModuleResolveError::UnknownModule {
+                            owner: owner.clone(),
+                        })?
+                        .selected_units
+                        .insert(
+                            UnitName::from_atom(local),
+                            ImportedSymbol::new(resolved, item.local_span(), visibility),
+                        );
+                }
+                ImportItemNamespace::Term => {
+                    let Some(source_target) = source_target else {
+                        continue;
+                    };
+                    let source_constructor = ConstructorName::from_atom(item.name.name.clone());
+                    let resolved = match self.exported_symbol_for_import(
+                        source_target,
+                        source_constructor.atom(),
+                        ModuleAccess::PublicOnly,
+                        ModuleSymbols::constructors,
+                        |scope| &scope.selected_constructors,
+                    )? {
+                        ExportLookup::Public(resolved) => resolved,
+                        ExportLookup::Private | ExportLookup::Missing => continue,
+                    };
+                    let owner_type = self.constructor_owner_type(&resolved)?;
+                    let source_symbol = self
+                        .module_symbols(resolved.owner())?
+                        .constructors
+                        .get(&source_constructor)
+                        .cloned()
+                        .ok_or_else(|| ModuleResolveError::UnknownName {
+                            owner: resolved.owner().clone(),
+                            namespace: ConstructorNameNamespace::DISPLAY_NAME,
+                            name: source_constructor.to_string(),
+                        })?;
+                    if include.param_bindings.iter().any(|binding| {
+                        binding.category == InputBindingCategory::Type
+                            && binding.name.name == *owner_type.atom()
+                    }) {
+                        return Err(ModuleResolveError::ConstructorOwnerRebound {
+                            owner: owner.clone(),
+                            constructor: item.name.name.to_string(),
+                            owner_type,
+                            span: item.name.span,
+                        });
+                    }
+                    let has_specialized_owner = has_static_bindings
+                        && items.iter().any(|candidate| {
+                            candidate.namespace == ImportItemNamespace::Type
+                                && candidate.name.name == *owner_type.atom()
+                        });
+                    let resolved = if has_specialized_owner {
+                        let resolved = ResolvedConstructorName::from_def(
+                            owner.clone(),
+                            resolved.to_unowned_def_name(),
+                        );
+                        self.modules
+                            .get_mut(owner)
+                            .ok_or_else(|| ModuleResolveError::UnknownModule {
+                                owner: owner.clone(),
+                            })?
+                            .constructors
+                            .insert(
+                                resolved.to_unowned_def_name(),
+                                ModuleConstructorSymbol {
+                                    symbol: ModuleSymbol {
+                                        resolved: resolved.clone(),
+                                        visibility,
+                                        span: item.local_span(),
+                                    },
+                                    owner_type: StructTypeName::from_atom(
+                                        owner_type.atom().clone(),
+                                    ),
+                                    generic_params: source_symbol.generic_params,
+                                },
+                            );
+                        resolved
+                    } else {
+                        resolved
+                    };
+                    let scope = self.scopes.get_mut(owner).ok_or_else(|| {
+                        ModuleResolveError::UnknownModule {
+                            owner: owner.clone(),
+                        }
+                    })?;
+                    let local = ConstructorName::from_atom(local);
+                    let (span, visibility) = scope.selected_constructors.get(&local).map_or_else(
+                        || (item.local_span(), visibility),
+                        |existing| (existing.span(), existing.visibility()),
+                    );
+                    scope
+                        .selected_constructors
+                        .insert(local, ImportedSymbol::new(resolved, span, visibility));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Make an instantiated include's own indexes resolvable in the importer.
@@ -1762,6 +2275,40 @@ impl ModuleResolver {
             .ok_or_else(|| ModuleResolveError::UnknownName {
                 owner: name.owner().clone(),
                 namespace: DeclNameNamespace::DISPLAY_NAME,
+                name: name.as_str().to_string(),
+            })
+    }
+
+    fn unit_constness(&self, name: &ResolvedUnitName) -> Result<UnitConstness, ModuleResolveError> {
+        let symbols = self.module_symbols(name.owner())?;
+        symbols
+            .units
+            .get(name.as_str())
+            .map(ModuleUnitSymbol::constness)
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: name.owner().clone(),
+                namespace: UnitNameNamespace::DISPLAY_NAME,
+                name: name.as_str().to_string(),
+            })
+    }
+
+    fn constructor_owner_type(
+        &self,
+        name: &ResolvedConstructorName,
+    ) -> Result<ResolvedStructTypeName, ModuleResolveError> {
+        let symbols = self.module_symbols(name.owner())?;
+        symbols
+            .constructors
+            .get(name.as_str())
+            .map(|constructor| {
+                ResolvedStructTypeName::from_def(
+                    name.owner().clone(),
+                    constructor.owner_type().clone(),
+                )
+            })
+            .ok_or_else(|| ModuleResolveError::UnknownName {
+                owner: name.owner().clone(),
+                namespace: ConstructorNameNamespace::DISPLAY_NAME,
                 name: name.as_str().to_string(),
             })
     }
@@ -2068,9 +2615,46 @@ impl ModuleResolver {
             }
             ImportKind::Selective(items) => items
                 .iter()
-                .map(|item| self.import_item_additions(target, item, access))
+                .map(|item| {
+                    let additions = self.import_item_additions(target, item, access)?;
+                    if role == ModuleAliasRole::IncludedInstance {
+                        for addition in &additions {
+                            let Some(kind) = self.import_addition_kind(addition)? else {
+                                continue;
+                            };
+                            if include_projection(kind).is_none() {
+                                return Err(ModuleResolveError::IncludeItemNotProjectable {
+                                    owner: target.clone(),
+                                    name: item.name.name.to_string(),
+                                    kind,
+                                    span: item.name.span,
+                                });
+                            }
+                        }
+                    }
+                    Ok(additions)
+                })
                 .collect::<Result<Vec<_>, _>>()
                 .map(|chunks| chunks.into_iter().flatten().collect()),
+        }
+    }
+
+    fn import_addition_kind(
+        &self,
+        addition: &ImportAddition,
+    ) -> Result<Option<ExportedImportItemKind>, ModuleResolveError> {
+        match addition {
+            ImportAddition::ModuleAlias { .. } => Ok(None),
+            ImportAddition::Decl { target, .. } => Ok(Some(ExportedImportItemKind::Decl(
+                self.decl_symbol_kind(target)?,
+            ))),
+            ImportAddition::Dimension { .. } => Ok(Some(ExportedImportItemKind::Dimension)),
+            ImportAddition::Unit { target, .. } => Ok(Some(ExportedImportItemKind::Unit(
+                self.unit_constness(target)?,
+            ))),
+            ImportAddition::StructType { .. } => Ok(Some(ExportedImportItemKind::Type)),
+            ImportAddition::Index { .. } => Ok(Some(ExportedImportItemKind::Index)),
+            ImportAddition::Constructor { .. } => Ok(Some(ExportedImportItemKind::Constructor)),
         }
     }
 
@@ -3351,6 +3935,24 @@ pub enum ModuleResolveError {
         expected: SurfaceNameKind,
         actual: SurfaceNameKind,
     },
+    /// A selective include chose an importable blueprint that is not an instance member.
+    #[error("cannot project `{name}` from configured instance `{owner}` ({kind:?})")]
+    IncludeItemNotProjectable {
+        owner: DagId,
+        name: String,
+        kind: ExportedImportItemKind,
+        span: Span,
+    },
+    /// A constructor cannot survive replacement of its owning nominal type.
+    #[error(
+        "cannot project constructor `{constructor}` because its owner `{owner_type}` is rebound in `{owner}`"
+    )]
+    ConstructorOwnerRebound {
+        owner: DagId,
+        constructor: String,
+        owner_type: ResolvedStructTypeName,
+        span: Span,
+    },
     /// A name exists but has the wrong declaration kind for the use site.
     #[error("expected {expected} declaration `{name}`, found {actual}")]
     UnexpectedDeclKind {
@@ -4242,6 +4844,197 @@ mod tests {
                 namespace: _,
                 name,
             } if owner == lib_id && name == "hidden"
+        ));
+    }
+
+    #[test]
+    fn include_projection_classification_is_shared_and_exhaustive() {
+        let cases = [
+            (
+                ExportedImportItemKind::Decl(DeclSymbolKind::Const),
+                Some(IncludeProjection::ConstNode),
+            ),
+            (
+                ExportedImportItemKind::Decl(DeclSymbolKind::Param),
+                Some(IncludeProjection::RuntimeTerm),
+            ),
+            (
+                ExportedImportItemKind::Decl(DeclSymbolKind::Node),
+                Some(IncludeProjection::RuntimeTerm),
+            ),
+            (
+                ExportedImportItemKind::Decl(DeclSymbolKind::Assert),
+                Some(IncludeProjection::Assertion),
+            ),
+            (
+                ExportedImportItemKind::Decl(DeclSymbolKind::Plot),
+                Some(IncludeProjection::Visualization),
+            ),
+            (
+                ExportedImportItemKind::Decl(DeclSymbolKind::Figure),
+                Some(IncludeProjection::Visualization),
+            ),
+            (
+                ExportedImportItemKind::Decl(DeclSymbolKind::Layer),
+                Some(IncludeProjection::Visualization),
+            ),
+            (ExportedImportItemKind::Decl(DeclSymbolKind::Dag), None),
+            (
+                ExportedImportItemKind::Constructor,
+                Some(IncludeProjection::Constructor),
+            ),
+            (
+                ExportedImportItemKind::Type,
+                Some(IncludeProjection::StaticDeclaration),
+            ),
+            (
+                ExportedImportItemKind::Dimension,
+                Some(IncludeProjection::StaticDeclaration),
+            ),
+            (
+                ExportedImportItemKind::Index,
+                Some(IncludeProjection::StaticDeclaration),
+            ),
+            (
+                ExportedImportItemKind::Unit(UnitConstness::Const),
+                Some(IncludeProjection::StaticUnit),
+            ),
+            (
+                ExportedImportItemKind::Unit(UnitConstness::Dynamic),
+                Some(IncludeProjection::RuntimeUnit),
+            ),
+        ];
+
+        for (kind, expected) in cases {
+            assert_eq!(include_projection(kind), expected);
+        }
+    }
+
+    #[test]
+    fn selective_include_rejects_dag_projection_at_selector() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let instance_id = main_id.instance_child("projection");
+        let lib = desugared_source("pub dag child { pub node output: Dimensionless = 1.0; }");
+        let main = desugared_source("include lib()::{ child };");
+        let (include_path, include_kind) = first_include(&main);
+        let ImportKind::Selective(items) = include_kind else {
+            panic!("expected selective include")
+        };
+
+        let mut resolver = ModuleResolver::default();
+        resolver.add_module(lib_id, &lib.declarations).unwrap();
+        resolver
+            .add_module(instance_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+
+        let error = resolver
+            .register_include(&main_id, include_path, include_kind, &instance_id)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ModuleResolveError::IncludeItemNotProjectable {
+                name,
+                kind: ExportedImportItemKind::Decl(DeclSymbolKind::Dag),
+                span,
+                ..
+            } if name == "child" && span == items[0].name.span
+        ));
+    }
+
+    #[test]
+    fn selective_include_constructor_keeps_source_canonical_identity() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let instance_id = main_id.instance_child("projection");
+        let lib = desugared_source("pub type Choice { Pick }");
+        let main = desugared_source("include lib()::{ Pick as Selected };");
+        let include = main
+            .declarations
+            .iter()
+            .find_map(|declaration| match &declaration.kind {
+                ast::DeclKind::Include(include) => Some(include),
+                _ => None,
+            })
+            .expect("include declaration");
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(instance_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_include(&main_id, &include.path, &include.kind, &instance_id)
+            .unwrap();
+        resolver
+            .apply_include_static_projection_bindings(&main_id, Some(&lib_id), include)
+            .unwrap();
+
+        let constructor_target = resolver
+            .resolve_constructor_path(&main_id, &path(&["Selected"]))
+            .unwrap();
+        assert_eq!(constructor_target.owner(), &lib_id);
+        assert_eq!(constructor_target.as_str(), "Pick");
+    }
+
+    #[test]
+    fn selective_include_rejects_constructor_when_owner_type_is_rebound() {
+        let lib_id = DagId::root_in_package("test", "lib");
+        let main_id = DagId::root_in_package("test", "main");
+        let instance_id = main_id.instance_child("projection");
+        let lib = desugared_source("pub(bind) type Choice { Pick }");
+        let main = desugared_source(
+            "type Replacement { Replacement }
+             include lib(type Choice: Replacement)::{ Pick };",
+        );
+        let include = main
+            .declarations
+            .iter()
+            .find_map(|declaration| match &declaration.kind {
+                ast::DeclKind::Include(include) => Some(include),
+                _ => None,
+            })
+            .expect("include declaration");
+        let ImportKind::Selective(items) = &include.kind else {
+            panic!("expected selective include")
+        };
+
+        let mut resolver = ModuleResolver::default();
+        resolver
+            .add_module(lib_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(instance_id.clone(), &lib.declarations)
+            .unwrap();
+        resolver
+            .add_module(main_id.clone(), &main.declarations)
+            .unwrap();
+        resolver
+            .register_include(&main_id, &include.path, &include.kind, &instance_id)
+            .unwrap();
+
+        let error = resolver
+            .apply_include_static_projection_bindings(&main_id, Some(&lib_id), include)
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ModuleResolveError::ConstructorOwnerRebound {
+                constructor,
+                owner_type,
+                span,
+                ..
+            } if constructor == "Pick"
+                && owner_type.owner() == &lib_id
+                && owner_type.as_str() == "Choice"
+                && span == items[0].name.span
         ));
     }
 

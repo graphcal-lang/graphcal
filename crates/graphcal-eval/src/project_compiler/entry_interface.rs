@@ -232,21 +232,6 @@ pub(super) fn build_checked_entry_interface(
         }
     }
 
-    if required_index.is_none() {
-        required_index = tir
-            .root()
-            .semantic()
-            .collection_refs
-            .index_defs
-            .values()
-            .filter(|definition| definition.is_required())
-            .min_by(|left, right| left.name.cmp(&right.name))
-            .map(|definition| RequiredEntryIndex {
-                name: definition.name.clone(),
-                anchor: DiagnosticAnchor::WholeFile,
-            });
-    }
-
     Ok(CheckedEntryInterface {
         parameters,
         outputs,

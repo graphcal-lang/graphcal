@@ -521,9 +521,8 @@ import_category
 
 (* `pub` inside the brace list marks that one item for re-export at the
    importer (issue #452). Import/include use-sites never carry a leading
-   visibility marker. Category markers are valid only on `import` items,
-   not on `include` output selectors. Bare import items select term
-   declarations and constructors. *)
+   visibility marker. Category markers select Static or Unit entities on
+   either boundary; bare items select Term declarations and constructors. *)
 
 (* --- include --- *)
 (* Include instantiates a DAG with optional param bindings, embedding
@@ -558,7 +557,7 @@ include_item_list
    = include_item, { ",", include_item }, [ "," ];
 
 include_item
-   = { attribute }, [ "pub" ], IDENT, [ "as", IDENT ];
+   = { attribute }, [ "pub" ], [ import_category ], IDENT, [ "as", IDENT ];
 
 include_param_bindings
    = "(", [ include_param_binding,

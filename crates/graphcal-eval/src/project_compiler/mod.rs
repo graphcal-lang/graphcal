@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use graphcal_compiler::desugar::desugared_ast::{Expr, ModulePath};
+use graphcal_compiler::desugar::desugared_ast::ModulePath;
 use graphcal_compiler::ir::imported_binding::{HirImportedBinding, ImportedBinding};
 use graphcal_compiler::ir::resolve::{DeclCategory, ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::declared_type::DeclaredType;
@@ -49,9 +49,10 @@ pub(crate) use entry_interface::CheckedEntryInterface;
 pub use hir_project::HirProject;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
-    DepToImporter, DynamicUnitBoundary, FrontendRegistryImport, HirFile, ImportAlias,
-    ImportContext, IncludeInstanceRequest, IndexBindings, LoweringModuleInterface, ModuleArtifact,
-    ProjectModuleBinding, ProjectSemanticContext,
+    DepToImporter, FrontendRegistryImport, HirFile, ImportAlias, ImportContext,
+    IncludeInstanceRequest, IndexBindings, LoweringModuleInterface, ModuleArtifact,
+    ProjectModuleBinding, ProjectSemanticContext, ProjectedStaticAlias, RuntimeUnitBoundary,
+    UnitProjectionAlias,
 };
 use qualified_refs::rewrite_qualified_refs_in_compilation_body;
 pub(crate) use session::CheckedProjectRuntimeParts;

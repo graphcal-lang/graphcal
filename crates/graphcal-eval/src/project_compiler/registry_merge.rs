@@ -1,6 +1,8 @@
 //! Frontend registry seeding and concrete-instance registry composition.
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::static_dependencies::static_import_rejection;
+use graphcal_compiler::syntax::ast::ImportItemNamespace;
 
 #[allow(
     clippy::wildcard_imports,
@@ -24,7 +26,8 @@ pub(super) fn merge_registry_into_builder(
         dim_bindings,
         None,
         None,
-        DynamicUnitBoundary::ConcreteInstance,
+        RuntimeUnitBoundary::ConcreteInstance,
+        None,
     )
 }
 
@@ -44,31 +47,70 @@ pub(super) fn seed_imported_type_system(
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
     frontend_registry_imports: &[FrontendRegistryImport<'_>],
+    projected_static_aliases: &[ProjectedStaticAlias],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
     file_src: &NamedSource<Arc<String>>,
 ) -> Result<(), GraphcalError> {
     for (dep_dag_id, names) in imported_type_system_names {
-        let dep_loaded = &project.files()[dep_dag_id];
-        let artifact = module_artifacts.get(dep_dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("HIR interface for imported module `{dep_dag_id}` is unavailable"),
-                file_src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        register_selected_resolved_dimensions_and_units(
-            builder,
-            artifact.frontend_registry(),
-            names,
-            dep_loaded.named_source(),
-        )?;
-        graphcal_compiler::ir::lower::register_selected_declarations(
-            dep_loaded.ast(),
-            builder,
-            dep_loaded.named_source(),
-            &names.without_resolved_dimensions_and_units(),
-            dep_dag_id,
-        )?;
+        if let Some(dep_loaded) = project.files().get(dep_dag_id) {
+            let artifact = module_artifacts.get(dep_dag_id).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("HIR interface for imported module `{dep_dag_id}` is unavailable"),
+                    file_src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            register_selected_resolved_dimensions_and_units(
+                builder,
+                artifact.frontend_registry(),
+                names,
+                dep_loaded.named_source(),
+            )?;
+            graphcal_compiler::ir::lower::register_selected_declarations(
+                dep_loaded.ast(),
+                builder,
+                dep_loaded.named_source(),
+                &names.without_resolved_dimensions_and_units(),
+                dep_dag_id,
+            )?;
+        } else {
+            let Some((owner_file, inline_dag)) = project.inline_dag(dep_dag_id) else {
+                return Err(GraphcalError::internal_error(
+                    format!("selected Static projection owner `{dep_dag_id}` is unavailable"),
+                    file_src,
+                    DiagnosticAnchor::WholeFile,
+                ));
+            };
+            let inline_body = graphcal_compiler::desugar::desugared_ast::File {
+                declarations: inline_dag.body(owner_file).to_vec(),
+            };
+            graphcal_compiler::ir::lower::register_selected_declarations(
+                &inline_body,
+                builder,
+                owner_file.named_source(),
+                names,
+                dep_dag_id,
+            )?;
+        }
+    }
+    for alias in projected_static_aliases {
+        match alias {
+            ProjectedStaticAlias::Type { alias, target, .. } => {
+                builder.register_type_alias(alias.clone(), target.clone());
+            }
+            ProjectedStaticAlias::Dimension { alias, target } => {
+                builder.register_dimension_alias(alias.clone(), target.clone());
+            }
+            ProjectedStaticAlias::Index { alias, target } => {
+                builder.register_index_alias(alias.clone(), target.clone());
+            }
+            ProjectedStaticAlias::Unit { alias, target } => {
+                builder.register_unit_alias(
+                    graphcal_compiler::syntax::dimension::UnitRef::local(alias.clone()),
+                    graphcal_compiler::syntax::dimension::UnitRef::local(target.clone()),
+                );
+            }
+        }
     }
     for import in frontend_registry_imports {
         merge_registry_into_builder_export_filtered(builder, import).map_err(|conflict| {
@@ -169,7 +211,8 @@ fn merge_registry_into_builder_export_filtered(
         &HashMap::new(),
         Some(import.external_surface),
         Some(&import.unit_alias),
-        import.dynamic_unit_boundary,
+        import.runtime_unit_boundary,
+        import.pure_import_declarations,
     )
 }
 
@@ -186,7 +229,8 @@ pub(in crate::project_compiler) struct UnitMergeConflict {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "registry merge keeps typed binding and module-boundary policies explicit"
+    clippy::too_many_lines,
+    reason = "registry merge keeps typed binding and module-boundary policies explicit in one ordered pass"
 )]
 fn merge_registry_into_builder_filtered(
     builder: &mut RegistryBuilder,
@@ -196,25 +240,34 @@ fn merge_registry_into_builder_filtered(
     dim_bindings: &HashMap<DimName, DimName>,
     external_surface: Option<&ExternalDeclSurface>,
     unit_alias: Option<&ModuleAliasName>,
-    dynamic_unit_boundary: DynamicUnitBoundary,
+    runtime_unit_boundary: RuntimeUnitBoundary,
+    pure_import_declarations: Option<&[graphcal_compiler::desugar::desugared_ast::Declaration]>,
 ) -> Result<(), UnitMergeConflict> {
+    let pure_import_rejects = |name: &graphcal_compiler::syntax::names::NameAtom,
+                               namespace: ImportItemNamespace| {
+        pure_import_declarations.is_some_and(|declarations| {
+            static_import_rejection(declarations, name, namespace).is_some()
+        })
+    };
     // Import base-dimension metadata for display formatting and registry
     // invariants. This includes private transitive dependencies of exported
     // dimensions and units; module resolution still prevents those names from
     // becoming source-visible in the importer.
     for (id, name) in dep_registry.dimensions.base_dim_names() {
-        if dim_bindings.contains_key(name.as_str()) {
+        let dimension_name = graphcal_compiler::syntax::dimension::DimName::expect_valid(name);
+        if dim_bindings.contains_key(name.as_str())
+            || pure_import_rejects(dimension_name.atom(), ImportItemNamespace::Dimension)
+        {
             continue;
         }
-        builder.register_base_dimension(
-            graphcal_compiler::syntax::dimension::DimName::expect_valid(name),
-            id.clone(),
-        );
+        builder.register_base_dimension(dimension_name, id.clone());
     }
 
     // Import named dimensions (derived dimensions like Velocity = Length/Time).
     for (name, dim) in dep_registry.dimensions.all_dimensions() {
-        if dim_bindings.contains_key(name.as_str()) {
+        if dim_bindings.contains_key(name.as_str())
+            || pure_import_rejects(name.atom(), ImportItemNamespace::Dimension)
+        {
             continue;
         }
         if external_surface.is_some_and(|surface| !surface.is_static_explicit_export(name.atom())) {
@@ -244,7 +297,9 @@ fn merge_registry_into_builder_filtered(
     // dep registry) is idempotent; a *different* definition under the same
     // reference is a conflict.
     for (name, info) in dep_registry.units.all_units() {
-        if info.scale.is_dynamic() && !dynamic_unit_boundary.includes_dynamic_units() {
+        if pure_import_rejects(name.name().atom(), ImportItemNamespace::Unit)
+            || (!info.constness.is_const() && !runtime_unit_boundary.includes_runtime_units())
+        {
             continue;
         }
         let target = if let Some(alias) = unit_alias {
@@ -285,7 +340,9 @@ fn merge_registry_into_builder_filtered(
     // into the importer would incorrectly make the importer a library even if
     // it only needs a qualified type from the dependency.
     for idx_def in dep_registry.indexes.declared_indexes() {
-        if external_surface.is_some() && idx_def.is_required() {
+        if pure_import_rejects(idx_def.name.atom(), ImportItemNamespace::Index)
+            || (external_surface.is_some() && idx_def.is_required())
+        {
             continue;
         }
         if !index_bindings.contains_key(idx_def.name.as_str()) {
@@ -305,7 +362,9 @@ fn merge_registry_into_builder_filtered(
 
     // Import struct types — skip bound types (they are replaced by the importer's type).
     for type_def in dep_registry.types.all_types() {
-        if type_bindings.contains_key(type_def.name().as_str()) {
+        if type_bindings.contains_key(type_def.name().as_str())
+            || pure_import_rejects(type_def.name().atom(), ImportItemNamespace::Type)
+        {
             continue;
         }
         if external_surface
@@ -313,7 +372,14 @@ fn merge_registry_into_builder_filtered(
         {
             continue;
         }
-        builder.register_type(type_def.clone());
+        let mut specialized = type_def.clone();
+        graphcal_compiler::ir::lower::specialize_type_definition(
+            &mut specialized,
+            index_bindings,
+            type_bindings,
+            dim_bindings,
+        );
+        builder.register_type(specialized);
     }
     Ok(())
 }

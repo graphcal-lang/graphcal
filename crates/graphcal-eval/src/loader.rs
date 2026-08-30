@@ -1701,15 +1701,23 @@ fn register_module_imports(
                     resolver.register_import_decl(owner, import, target.target())?;
                 }
             }
-            DeclKind::Include(include)
-                if resolved_imports
-                    .resolved_target(&ModulePathKey::from_path(&include.path))
-                    .is_some() =>
-            {
-                let instance_scope = include_instance_scope(include);
-                let prefix = instance_scope.merge_scope_name();
-                let target = owner.instance_child(prefix.as_str());
-                resolver.register_include(owner, &include.path, &include.kind, &target)?;
+            DeclKind::Include(include) => {
+                let resolved_edge =
+                    resolved_imports.resolved_target(&ModulePathKey::from_path(&include.path));
+                let source_target = resolved_edge
+                    .map(|target| target.target().clone())
+                    .or_else(|| resolver.resolve_module_path(owner, &include.path).ok());
+                if resolved_edge.is_some() {
+                    let instance_scope = include_instance_scope(include);
+                    let prefix = instance_scope.merge_scope_name();
+                    let target = owner.instance_child(prefix.as_str());
+                    resolver.register_include(owner, &include.path, &include.kind, &target)?;
+                }
+                resolver.apply_include_static_projection_bindings(
+                    owner,
+                    source_target.as_ref(),
+                    include,
+                )?;
             }
             _ => {}
         }

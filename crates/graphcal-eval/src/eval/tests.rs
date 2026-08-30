@@ -103,6 +103,222 @@ fn selective_import_rejects_required_static_inputs() {
 }
 
 #[test]
+fn qualified_import_rejects_required_static_members() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub(bind) type Element;"),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\n\
+                 type Local { Local(value: lib::Element) }\n\
+                 node output: Dimensionless = 1.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::ImportRequiredStaticInput { .. })
+    ));
+}
+
+#[test]
+fn qualified_import_rejects_transitive_required_static_dependencies() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub(bind) type Element;\n\
+                 pub type Box { Box(value: Element) }\n\
+                 pub type Wrapper { Wrapper(value: Box) }",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib as lib;\n\
+                 type Local { Local(value: lib::Wrapper) }\n\
+                 node output: Dimensionless = 1.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
+            dependency_kind: graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            ref dependency,
+            ..
+        }) if dependency == "Element"
+    ));
+}
+
+#[test]
+fn selective_import_rejects_transitive_required_static_dependencies() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub(bind) type Element;\n\
+                 pub type Box { Box(value: Element) }\n\
+                 pub type Wrapper { Wrapper(value: Box) }",
+            ),
+            (
+                "main.gcl",
+                "import pipeline.lib::{ type Wrapper };\nnode output: Dimensionless = 1.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::ImportUnresolvedStaticDependency {
+            dependency_kind: graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            ref dependency,
+            ..
+        }) if dependency == "Element"
+    ));
+}
+
+#[test]
+fn selective_include_projects_effective_bound_static_target() {
+    let source = "type Concrete { Concrete }\n\
+                  dag target { pub(bind) type Slot; }\n\
+                  include target(type Slot: Concrete)::{ type Slot as Effective };\n\
+                  node value: Effective = Concrete;\n\
+                  node output: Dimensionless = 1.0;";
+    compile_and_eval(source).expect("the projected type is the effective binding target");
+}
+
+#[test]
+fn cross_file_selective_include_projects_effective_bound_static_target() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub(bind) type Slot;"),
+            (
+                "main.gcl",
+                "type Concrete { Concrete }\n\
+                 include pipeline.lib(type Slot: Concrete)::{ type Slot as Effective };\n\
+                 type Envelope { Envelope(value: Effective) }\n\
+                 node output: Dimensionless = 1.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    compile_and_eval_project(&root, &HashMap::new(), None, &fs())
+        .expect("cross-file projection uses the concrete binding target");
+}
+
+#[test]
+fn selective_include_projects_closed_static_and_runtime_unit_categories() {
+    let source = "dag target {\n\
+                      pub type Record { Record }\n\
+                      pub dim Distance = Length;\n\
+                      pub index Axis = { Only };\n\
+                      pub unit double_metre: Length = 2.0 m;\n\
+                  }\n\
+                  include target()::{\n\
+                      type Record as EffectiveRecord,\n\
+                      dim Distance as EffectiveDistance,\n\
+                      index Axis as EffectiveAxis,\n\
+                      unit double_metre as effective_double_metre,\n\
+                  };\n\
+                  type Envelope { Envelope(value: EffectiveRecord) }\n\
+                  node distance: EffectiveDistance = 1.0 m;\n\
+                  node indexed: Dimensionless[EffectiveAxis] = for i: EffectiveAxis { 1.0 };\n\
+                  node scaled: Length = 1.0 effective_double_metre;";
+    let result = compile_and_eval(source).expect("all typed projection markers resolve");
+    assert_quantity_value(&result, "distance", 1.0);
+    assert_quantity_value(&result, "scaled", 2.0);
+}
+
+#[test]
+fn selective_include_projects_specialized_adt_constructors() {
+    let source = "dag target {\n\
+                      pub(bind) dim Quantity;\n\
+                      param amount: Quantity;\n\
+                      pub type Reading { Missing, Present(value: Quantity) }\n\
+                      pub node supplied: Reading = Present(value: @amount);\n\
+                  }\n\
+                  include target(amount: 2.0 m, dim Quantity: Length)::{\n\
+                      type Reading,\n\
+                      Missing as NoReading,\n\
+                      Present as HasReading,\n\
+                      supplied,\n\
+                  };\n\
+                  node local: Reading = HasReading(value: 2.0 m);\n\
+                  node reading: Reading = @supplied;\n\
+                  node output: Length = match @reading {\n\
+                      HasReading(value: amount) => amount,\n\
+                      NoReading => 0.0 m,\n\
+                  };";
+    let result = compile_and_eval(source)
+        .expect("constructors retain the specialized nominal type identity");
+    assert_quantity_value(&result, "output", 2.0);
+}
+
+#[test]
+fn selective_include_rejects_dag_blueprint_projection() {
+    let source = "dag target {\n\
+                      pub dag child { pub node output: Dimensionless = 1.0; }\n\
+                  }\n\
+                  include target()::{ child };\n\
+                  node output: Dimensionless = 1.0;";
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::IncludeItemNotProjectable {
+            ref name,
+            ..
+        }) if name == "child"
+    ));
+}
+
+#[test]
+fn selective_include_rejects_constructor_of_rebound_owner_type() {
+    let source = "type Replacement { Replacement }\n\
+                  dag target { pub(bind) type Choice { Pick } }\n\
+                  include target(type Choice: Replacement)::{ Pick };\n\
+                  node output: Dimensionless = 1.0;";
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::IncludeConstructorOwnerRebound {
+            ref constructor,
+            ref owner_type,
+            ..
+        }) if constructor == "Pick" && owner_type.ends_with("Choice")
+    ));
+}
+
+#[test]
+fn selective_include_projects_structural_index_binding_target() {
+    let source = "dag target { pub(bind) index Axis; }\n\
+                  include target(index Axis: Fin(2))::{ index Axis as EffectiveAxis };\n\
+                  node indexed: Dimensionless[EffectiveAxis] = for i: EffectiveAxis { 1.0 };";
+    compile_and_eval(source).expect("the projected index has structural Fin(2) identity");
+}
+
+#[test]
+fn include_rejects_required_static_inputs_as_binding_targets() {
+    let source = "pub(bind) type Replacement;\n\
+                  dag target { pub(bind) type Slot; }\n\
+                  include target(type Slot: Replacement) as configured;\n\
+                  node output: Dimensionless = 1.0;";
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::InvalidStaticBindingTarget {
+            kind: graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+            ref name,
+            ref target,
+            ..
+        }) if name == "Slot" && target == "Replacement"
+    ));
+}
+
+#[test]
 fn include_requires_every_required_static_input_category() {
     for (declaration, expected_kind) in [
         (
@@ -701,7 +917,7 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
         &[
             (
                 "lib.gcl",
-                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\n",
+                "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\npub unit DoubleUSD: Money = 2.0 USD;\n",
             ),
             (
                 "main.gcl",
@@ -733,6 +949,21 @@ fn pure_imports_reject_assertion_outcomes_and_runtime_unit_scales() {
             CompileError::Eval(GraphcalError::ImportRuntimeUnit { .. })
         ),
         "unexpected unit-definition import error: {unit_definition_error:?}"
+    );
+
+    std::fs::write(
+        &unit_root,
+        "import pipeline.lib::{ unit DoubleUSD };\nnode price: Money = 1.0 DoubleUSD;\n",
+    )
+    .unwrap();
+    let constant_scale_runtime_error = compile_to_tir_project(&unit_root, None, &fs())
+        .expect_err("plain units remain runtime even with a constant scale expression");
+    assert!(
+        matches!(
+            constant_scale_runtime_error,
+            CompileError::Eval(GraphcalError::ImportRuntimeUnit { .. })
+        ),
+        "unexpected constant-scale runtime-unit error: {constant_scale_runtime_error:?}"
     );
 }
 

@@ -16,7 +16,7 @@ use miette::NamedSource;
 
 use crate::builtin::{AggregationFn, BuiltinFnName};
 use crate::diagnostic_anchor::DiagnosticAnchor;
-use crate::dimension::Dimension;
+use crate::dimension::{BaseDimId, Dimension};
 use crate::hir::{self, ConstRef, FunctionRef, NominalConstructor, NominalTypeDef};
 use crate::nat::NatOverflowError;
 use crate::registry::declared_type::IndexTypeRef;
@@ -32,7 +32,10 @@ use crate::syntax::type_name::{FieldName, GenericParamName};
 use crate::tir::materialized_shape::{
     MaterializedExpressionKey, MaterializedShape, MaterializedShapeError,
 };
-use crate::tir::typed::NatPolyForm;
+use crate::tir::typed::{
+    NatPolyForm, ResolvedDimArg, ResolvedDimTerm, ResolvedGenericArg, ResolvedIndex,
+    ResolvedTypeExpr,
+};
 
 use super::super::builtins::infer_fn_dim;
 use super::super::helpers::{
@@ -970,11 +973,13 @@ fn infer_hir_type_inner(
         hir::ExprKind::DagCall {
             target,
             args,
+            static_bindings,
             output,
         } => infer_hir_dag_call(
             expr,
             target,
             args,
+            static_bindings,
             output,
             owner_decl_name,
             declared_types,
@@ -5136,11 +5141,216 @@ fn hir_arm_types_match(
     rules::match_arms_rule(arm_types, |i| arms[i].body.span, expr.span, registry, src)
 }
 
+fn specialize_dag_call_dimension(
+    dimension: &Dimension,
+    bindings: &hir::expr::DagCallStaticBindings,
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Dimension, GraphcalError> {
+    dimension.iter().try_fold(
+        Dimension::dimensionless(),
+        |acc, (base, exponent)| {
+            let factor = match base {
+                BaseDimId::UserDefined(name) => bindings
+                    .dimensions
+                    .get(name)
+                    .map_or_else(
+                        || Ok(Dimension::base(base.clone())),
+                        |target| {
+                            tir.dimension(target).cloned().ok_or_else(|| {
+                                GraphcalError::InternalError {
+                                    message: format!(
+                                        "DAG-call dimension binding target `{target}` is absent from the semantic registry"
+                                    ),
+                                    src: src.clone(),
+                                    span: span.into(),
+                                }
+                            })
+                        },
+                    )?,
+                BaseDimId::Prelude(_) => Dimension::base(base.clone()),
+            };
+            let factor = factor.pow(*exponent).map_err(|error| {
+                GraphcalError::InternalError {
+                    message: format!("DAG-call dimension substitution overflowed: {error}"),
+                    src: src.clone(),
+                    span: span.into(),
+                }
+            })?;
+            acc.checked_mul(&factor).map_err(|error| {
+                GraphcalError::InternalError {
+                    message: format!("DAG-call dimension substitution overflowed: {error}"),
+                    src: src.clone(),
+                    span: span.into(),
+                }
+            })
+        },
+    )
+}
+
+fn specialize_dag_call_index(
+    index: &ResolvedIndex,
+    bindings: &hir::expr::DagCallStaticBindings,
+) -> ResolvedIndex {
+    match index {
+        ResolvedIndex::Concrete(name, span) => bindings.indexes.get(name).map_or_else(
+            || index.clone(),
+            |target| match target {
+                hir::expr::DagCallIndexBinding::Declared(target) => {
+                    ResolvedIndex::Concrete(target.clone(), *span)
+                }
+                hir::expr::DagCallIndexBinding::Finite(target) => {
+                    ResolvedIndex::Finite(NatPolyForm::from_constant(target.size_u64()), *span)
+                }
+            },
+        ),
+        ResolvedIndex::GenericParam(_, _) | ResolvedIndex::Finite(_, _) => index.clone(),
+    }
+}
+
+fn specialize_dag_call_dim_arg(
+    dimension: &ResolvedDimArg,
+    bindings: &hir::expr::DagCallStaticBindings,
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<ResolvedDimArg, GraphcalError> {
+    match dimension {
+        ResolvedDimArg::Concrete(dimension) => {
+            { specialize_dag_call_dimension(dimension, bindings, tir, src, span) }
+                .map(ResolvedDimArg::Concrete)
+        }
+        ResolvedDimArg::Expr { terms, span } => terms
+            .iter()
+            .map(|term| match term {
+                ResolvedDimTerm::Concrete { dim, power, op } => {
+                    specialize_dag_call_dimension(dim, bindings, tir, src, *span).map(|dim| {
+                        ResolvedDimTerm::Concrete {
+                            dim,
+                            power: *power,
+                            op: *op,
+                        }
+                    })
+                }
+                ResolvedDimTerm::GenericParam { .. } => Ok(term.clone()),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(|terms| ResolvedDimArg::Expr { terms, span: *span }),
+        ResolvedDimArg::Dimensionless | ResolvedDimArg::GenericParam(_, _) => Ok(dimension.clone()),
+    }
+}
+
+fn specialize_dag_call_type(
+    resolved: &ResolvedTypeExpr,
+    bindings: &hir::expr::DagCallStaticBindings,
+    tir: &crate::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<ResolvedTypeExpr, GraphcalError> {
+    let recurse =
+        |resolved: &ResolvedTypeExpr| specialize_dag_call_type(resolved, bindings, tir, src, span);
+    match resolved {
+        ResolvedTypeExpr::Quantity(dimension) => {
+            { specialize_dag_call_dimension(dimension, bindings, tir, src, span) }
+                .map(ResolvedTypeExpr::Quantity)
+        }
+        ResolvedTypeExpr::Complex {
+            dimension,
+            span: type_span,
+        } => specialize_dag_call_dim_arg(dimension, bindings, tir, src, span).map(|dimension| {
+            ResolvedTypeExpr::Complex {
+                dimension,
+                span: *type_span,
+            }
+        }),
+        ResolvedTypeExpr::IndexArg(index) => Ok(ResolvedTypeExpr::IndexArg(
+            specialize_dag_call_index(index, bindings),
+        )),
+        ResolvedTypeExpr::Key {
+            index,
+            span: type_span,
+        } => Ok(ResolvedTypeExpr::Key {
+            index: specialize_dag_call_index(index, bindings),
+            span: *type_span,
+        }),
+        ResolvedTypeExpr::Struct(name, type_span) => Ok(ResolvedTypeExpr::Struct(
+            bindings.types.get(name).unwrap_or(name).clone(),
+            *type_span,
+        )),
+        ResolvedTypeExpr::GenericStruct {
+            name,
+            generic_args,
+            span: type_span,
+        } => {
+            let generic_args = generic_args
+                .iter()
+                .map(|argument| match argument {
+                    ResolvedGenericArg::Dim(dimension) => {
+                        { specialize_dag_call_dim_arg(dimension, bindings, tir, src, span) }
+                            .map(ResolvedGenericArg::Dim)
+                    }
+                    ResolvedGenericArg::Index(index) => Ok(ResolvedGenericArg::Index(
+                        specialize_dag_call_index(index, bindings),
+                    )),
+                    ResolvedGenericArg::Nat(_, _) => Ok(argument.clone()),
+                    ResolvedGenericArg::Type(resolved) => {
+                        recurse(resolved).map(ResolvedGenericArg::Type)
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ResolvedTypeExpr::GenericStruct {
+                name: bindings.types.get(name).unwrap_or(name).clone(),
+                generic_args,
+                span: *type_span,
+            })
+        }
+        ResolvedTypeExpr::GenericDimExpr {
+            terms,
+            span: type_span,
+        } => {
+            let terms = terms
+                .iter()
+                .map(|term| match term {
+                    ResolvedDimTerm::Concrete { dim, power, op } => {
+                        specialize_dag_call_dimension(dim, bindings, tir, src, span).map(|dim| {
+                            ResolvedDimTerm::Concrete {
+                                dim,
+                                power: *power,
+                                op: *op,
+                            }
+                        })
+                    }
+                    ResolvedDimTerm::GenericParam { .. } => Ok(term.clone()),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ResolvedTypeExpr::GenericDimExpr {
+                terms,
+                span: *type_span,
+            })
+        }
+        ResolvedTypeExpr::Indexed { base, indexes } => Ok(ResolvedTypeExpr::Indexed {
+            base: Box::new(recurse(base)?),
+            indexes: indexes
+                .iter()
+                .map(|index| specialize_dag_call_index(index, bindings))
+                .collect(),
+        }),
+        ResolvedTypeExpr::Dimensionless
+        | ResolvedTypeExpr::Bool
+        | ResolvedTypeExpr::Int
+        | ResolvedTypeExpr::Datetime(_)
+        | ResolvedTypeExpr::GenericDimParam(_, _)
+        | ResolvedTypeExpr::GenericTypeParam(_, _) => Ok(resolved.clone()),
+    }
+}
+
 #[expect(clippy::too_many_arguments, reason = "DAG-call expression context")]
 fn infer_hir_dag_call(
     expr: &hir::Expr,
     target: &crate::syntax::span::Spanned<crate::dag_id::DagId>,
     args: &[hir::expr::ParamBinding],
+    static_bindings: &hir::expr::DagCallStaticBindings,
     output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     owner_decl_name: Option<&ResolvedDeclName>,
     declared_types: &HashMap<ScopedName, DeclaredType>,
@@ -5234,7 +5444,9 @@ fn infer_hir_dag_call(
             builtin_fns,
             src,
         )?;
-        if !resolved_type_matches_inferred(expected, &found) {
+        let expected =
+            specialize_dag_call_type(expected, static_bindings, tir, src, binding.target.span)?;
+        if !resolved_type_matches_inferred(&expected, &found) {
             return Err(GraphcalError::DagArgTypeMismatch {
                 param_name: target_key.as_str().to_string(),
                 expected: expected.format(registry),
@@ -5279,5 +5491,7 @@ fn infer_hir_dag_call(
             span: output.span.into(),
         });
     }
-    substitute_resolved_type_with_type_params(output_decl, &GenericSubstitutions::default(), src)
+    let output_decl =
+        specialize_dag_call_type(output_decl, static_bindings, tir, src, output.span)?;
+    substitute_resolved_type_with_type_params(&output_decl, &GenericSubstitutions::default(), src)
 }

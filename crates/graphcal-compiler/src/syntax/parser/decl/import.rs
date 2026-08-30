@@ -39,7 +39,7 @@ impl Parser<'_> {
             ));
         }
 
-        let (kind, end_span) = self.parse_import_tail("`::{`, `as`, or `;` after path", true)?;
+        let (kind, end_span) = self.parse_import_tail("`::{`, `as`, or `;` after path")?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -214,7 +214,7 @@ impl Parser<'_> {
         };
 
         let (kind, end_span) =
-            self.parse_import_tail("`::{`, `as`, or `;` after param bindings", false)?;
+            self.parse_import_tail("`::{`, `as`, or `;` after param bindings")?;
         let span = start_span.merge(end_span);
 
         Ok(Declaration {
@@ -264,7 +264,6 @@ impl Parser<'_> {
     fn parse_import_tail(
         &mut self,
         hint: &str,
-        allow_category_marker: bool,
     ) -> Result<(ImportKind, crate::syntax::span::Span), ParseError> {
         match self.lexer.peek() {
             Some(Token::DoubleColon) => {
@@ -281,7 +280,7 @@ impl Parser<'_> {
                         span,
                     ));
                 }
-                let names = self.parse_import_brace_list(allow_category_marker)?;
+                let names = self.parse_import_brace_list()?;
                 let (_, end_span) = self.expect(Token::Semicolon)?;
                 Ok((ImportKind::Selective(names), end_span))
             }
@@ -307,7 +306,6 @@ impl Parser<'_> {
     /// Parse the `{ X, Y as Z, ... }` body of a brace-list selector.
     fn parse_import_brace_list(
         &mut self,
-        allow_category_marker: bool,
     ) -> Result<Vec<crate::syntax::ast::ImportItem>, ParseError> {
         self.expect(Token::LBrace)?;
 
@@ -334,37 +332,29 @@ impl Parser<'_> {
                 false
             };
 
-            let (namespace, marker_span) = match p.lexer.peek() {
+            let namespace = match p.lexer.peek() {
                 Some(Token::Type) => {
                     let (_, span) = p.advance()?;
-                    (crate::syntax::ast::ImportItemNamespace::Type, Some(span))
+                    let _ = span;
+                    crate::syntax::ast::ImportItemNamespace::Type
                 }
                 Some(Token::Dimension) => {
                     let (_, span) = p.advance()?;
-                    (
-                        crate::syntax::ast::ImportItemNamespace::Dimension,
-                        Some(span),
-                    )
+                    let _ = span;
+                    crate::syntax::ast::ImportItemNamespace::Dimension
                 }
                 Some(Token::Unit) => {
                     let (_, span) = p.advance()?;
-                    (crate::syntax::ast::ImportItemNamespace::Unit, Some(span))
+                    let _ = span;
+                    crate::syntax::ast::ImportItemNamespace::Unit
                 }
                 Some(Token::Index) => {
                     let (_, span) = p.advance()?;
-                    (crate::syntax::ast::ImportItemNamespace::Index, Some(span))
+                    let _ = span;
+                    crate::syntax::ast::ImportItemNamespace::Index
                 }
-                _ => (crate::syntax::ast::ImportItemNamespace::Term, None),
+                _ => crate::syntax::ast::ImportItemNamespace::Term,
             };
-            if !allow_category_marker
-                && let (Some(marker), Some(span)) = (namespace.marker(), marker_span)
-            {
-                return Err(p.unexpected_token(
-                    "an identifier (category markers are only allowed in `import`, not `include`)",
-                    marker,
-                    span,
-                ));
-            }
 
             // Accept any identifier (imports can be any casing).
             let name = p.parse_any_ident()?;

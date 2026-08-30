@@ -5176,13 +5176,13 @@ fn eval_unit_def_from_selective_import() {
     );
 }
 
-// --- Dynamic units stay encapsulated across module boundaries (#823) ---
+// --- Dynamic units retain concrete include-instance identity (#1517) ---
 
 #[test]
-fn include_rejects_a_dynamic_unit_namespace() {
+fn include_accepts_a_dynamic_unit_namespace() {
     for fixture_path in [
-        "invalid/multi/dynamic_unit_import/src/app/main.gcl",
-        "invalid/multi/dynamic_unit_import_selective/src/app/main.gcl",
+        "valid/multi/dynamic_unit_include/src/app/main.gcl",
+        "valid/multi/dynamic_unit_include_selective/src/app/main.gcl",
     ] {
         let output = graphcal_bin()
             .args(["check", &fixture(fixture_path)])
@@ -5190,17 +5190,9 @@ fn include_rejects_a_dynamic_unit_namespace() {
             .expect("failed to run graphcal");
 
         assert!(
-            !output.status.success(),
-            "fixture unexpectedly passed: {fixture_path}"
-        );
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains("graphcal::M026"),
-            "{fixture_path}: {stderr}"
-        );
-        assert!(
-            stderr.contains("cannot `include` runtime-dependent unit"),
-            "{fixture_path}: {stderr}"
+            output.status.success(),
+            "fixture unexpectedly failed: {fixture_path}: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

@@ -36,7 +36,7 @@ use crate::registry::reserved_name::{ReservedNameNamespace, validate_reserved_na
 use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::{IanaTimeZoneId, TimeZoneRegistry};
 use crate::registry::types::UnitRegistry;
-use crate::syntax::ast::{Ident, IdentPath, UnresolvedRef};
+use crate::syntax::ast::{Ident, IdentPath, InputBindingCategory, UnresolvedRef};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexEntryKey, IndexName, IndexVariantName, ResolvedIndexVariant};
 use crate::syntax::local_name::LocalName;
@@ -69,6 +69,9 @@ pub enum ExprLowerError {
         source: ModuleResolveError,
         span: Span,
     },
+    /// A categorized Static DAG-call binding did not contain a type-level value.
+    #[error("invalid Static binding value for `{name}`")]
+    InvalidStaticBindingValue { name: NameAtom, span: Span },
     /// A local reference had no lexical binding in scope.
     #[error("unknown local variable `{name}`")]
     UnknownLocalRef { name: LocalName, span: Span },
@@ -214,6 +217,7 @@ pub struct ExprLoweringContext<'a> {
     time_zones: &'a TimeZoneRegistry,
     prelude: Option<&'a PreludeTypeScope>,
     unit_registry: Option<&'a UnitRegistry>,
+    unit_bindings: Option<&'a HashMap<SyntaxUnitRef, ResolvedUnitName>>,
     decl_bindings: Option<&'a HashMap<ScopedName, ResolvedDeclName>>,
     instance_templates: Option<&'a HashMap<DagId, DagId>>,
 }
@@ -234,6 +238,7 @@ impl<'a> ExprLoweringContext<'a> {
             time_zones,
             prelude: None,
             unit_registry: None,
+            unit_bindings: None,
             decl_bindings: None,
             instance_templates: None,
         }
@@ -249,6 +254,7 @@ impl<'a> ExprLoweringContext<'a> {
             time_zones: self.time_zones,
             prelude: Some(prelude),
             unit_registry: self.unit_registry,
+            unit_bindings: self.unit_bindings,
             decl_bindings: self.decl_bindings,
             instance_templates: self.instance_templates,
         }
@@ -265,6 +271,26 @@ impl<'a> ExprLoweringContext<'a> {
             time_zones: self.time_zones,
             prelude: self.prelude,
             unit_registry: Some(unit_registry),
+            unit_bindings: self.unit_bindings,
+            decl_bindings: self.decl_bindings,
+            instance_templates: self.instance_templates,
+        }
+    }
+
+    /// Add source-visible unit projections with their concrete semantic identities.
+    #[must_use]
+    pub(crate) const fn with_unit_bindings(
+        self,
+        unit_bindings: &'a HashMap<SyntaxUnitRef, ResolvedUnitName>,
+    ) -> Self {
+        Self {
+            owner: self.owner,
+            resolver: self.resolver,
+            generic_scope: self.generic_scope,
+            time_zones: self.time_zones,
+            prelude: self.prelude,
+            unit_registry: self.unit_registry,
+            unit_bindings: Some(unit_bindings),
             decl_bindings: self.decl_bindings,
             instance_templates: self.instance_templates,
         }
@@ -284,6 +310,7 @@ impl<'a> ExprLoweringContext<'a> {
             time_zones: self.time_zones,
             prelude: self.prelude,
             unit_registry: self.unit_registry,
+            unit_bindings: self.unit_bindings,
             decl_bindings: Some(decl_bindings),
             instance_templates: self.instance_templates,
         }
@@ -303,6 +330,7 @@ impl<'a> ExprLoweringContext<'a> {
             time_zones: self.time_zones,
             prelude: self.prelude,
             unit_registry: self.unit_registry,
+            unit_bindings: self.unit_bindings,
             decl_bindings: self.decl_bindings,
             instance_templates: Some(instance_templates),
         }
@@ -314,6 +342,11 @@ impl<'a> ExprLoweringContext<'a> {
             Some(prelude) => ctx.with_prelude(prelude),
             None => ctx,
         }
+    }
+
+    fn resolve_prelude_dimension_path(self, path: &NamePath) -> Option<ResolvedDimName> {
+        self.prelude
+            .and_then(|prelude| prelude.resolve_dimension_path(path))
     }
 
     fn resolve_prelude_unit_ref(self, reference: &SyntaxUnitRef) -> Option<ResolvedUnitName> {
@@ -383,7 +416,7 @@ fn lower_assert_body_tolerant(
     match body {
         ast::AssertBody::Expr(expr) => {
             let (lowered, diagnostics) = lower_expr_tolerant(expr, ctx);
-            (AssertBody::Expr(lowered), diagnostics)
+            (AssertBody::Expr(Box::new(lowered)), diagnostics)
         }
         ast::AssertBody::Tolerance {
             actual,
@@ -747,6 +780,7 @@ pub enum ExprKind {
     DagCall {
         target: Spanned<DagId>,
         args: Vec<ParamBinding>,
+        static_bindings: DagCallStaticBindings,
         output: Spanned<ResolvedDeclName>,
     },
 }
@@ -1184,7 +1218,7 @@ fn find_extern_call_inner(expr: &Expr) -> Option<(&ExternFnRef, Span)> {
 /// A lowered assertion body.
 #[derive(Debug, Clone)]
 pub enum AssertBody {
-    Expr(Expr),
+    Expr(Box<Expr>),
     Tolerance {
         actual: Box<Expr>,
         expected: Box<Expr>,
@@ -1204,6 +1238,21 @@ pub struct FieldInit {
 pub struct ParamBinding {
     pub target: Spanned<ResolvedDeclName>,
     pub value: Expr,
+}
+
+/// Canonical Static substitutions supplied by one direct DAG call.
+#[derive(Debug, Clone, Default)]
+pub struct DagCallStaticBindings {
+    pub types: HashMap<ResolvedStructTypeName, ResolvedStructTypeName>,
+    pub dimensions: HashMap<ResolvedDimName, ResolvedDimName>,
+    pub indexes: HashMap<ResolvedIndexName, DagCallIndexBinding>,
+}
+
+/// Concrete index target supplied to a direct DAG call.
+#[derive(Debug, Clone)]
+pub enum DagCallIndexBinding {
+    Declared(ResolvedIndexName),
+    Finite(crate::registry::types::FiniteIndex),
 }
 
 /// A resolved map literal entry.
@@ -1303,6 +1352,23 @@ struct ExprLowerer<'a> {
     local_scopes: Vec<HashMap<LocalName, LocalDef>>,
     next_local: u32,
     diagnostics: Vec<ExprLowerError>,
+}
+
+fn static_binding_value_path(
+    binding: &ast::ParamBinding,
+    owner: &DagId,
+) -> Result<NamePath, ExprLowerError> {
+    match &binding.value.kind {
+        ast::ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Ok(path.to_name_path()),
+        _ => Err(ExprLowerError::ModuleResolve {
+            source: ModuleResolveError::UnknownName {
+                owner: owner.clone(),
+                namespace: "Static",
+                name: binding.name.name.to_string(),
+            },
+            span: binding.value.span,
+        }),
+    }
 }
 
 impl<'a> ExprLowerer<'a> {
@@ -1663,10 +1729,8 @@ impl<'a> ExprLowerer<'a> {
                         source,
                         span: path.span(),
                     })?;
-                let lowered_args = args
-                    .iter()
-                    .map(|arg| self.lower_param_binding(&target, arg))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let (lowered_args, static_bindings) =
+                    self.lower_dag_call_bindings(&target, args)?;
                 let output_path = NamePath::local(output.value.atom().clone());
                 let lowered_output = self
                     .ctx
@@ -1679,6 +1743,7 @@ impl<'a> ExprLowerer<'a> {
                 ExprKind::DagCall {
                     target: Spanned::new(target, path.span()),
                     args: lowered_args,
+                    static_bindings,
                     output: Spanned::new(lowered_output, output.span),
                 }
             }
@@ -1699,22 +1764,30 @@ impl<'a> ExprLowerer<'a> {
             .map(|item| {
                 let reference = &item.name.value;
                 let path = reference.to_name_path();
-                let resolved = match self.ctx.resolver.resolve_unit_path(self.ctx.owner, &path) {
-                    Ok(resolved) => resolved,
-                    Err(ModuleResolveError::UnknownName { .. }) => self
-                        .ctx
-                        .resolve_prelude_unit_ref(reference)
-                        .or_else(|| self.ctx.resolve_registry_unit_ref(reference))
-                        .ok_or_else(|| ExprLowerError::UnknownUnit {
-                            name: reference.clone(),
-                            span: item.name.span,
-                        })?,
-                    Err(source) => {
-                        return Err(ExprLowerError::ModuleResolve {
-                            source,
-                            span: item.name.span,
-                        });
-                    }
+                let resolved = match self
+                    .ctx
+                    .unit_bindings
+                    .and_then(|bindings| bindings.get(reference))
+                    .cloned()
+                {
+                    Some(resolved) => resolved,
+                    None => match self.ctx.resolver.resolve_unit_path(self.ctx.owner, &path) {
+                        Ok(resolved) => resolved,
+                        Err(ModuleResolveError::UnknownName { .. }) => self
+                            .ctx
+                            .resolve_prelude_unit_ref(reference)
+                            .or_else(|| self.ctx.resolve_registry_unit_ref(reference))
+                            .ok_or_else(|| ExprLowerError::UnknownUnit {
+                                name: reference.clone(),
+                                span: item.name.span,
+                            })?,
+                        Err(source) => {
+                            return Err(ExprLowerError::ModuleResolve {
+                                source,
+                                span: item.name.span,
+                            });
+                        }
+                    },
                 };
                 Ok(ResolvedUnitExprItem {
                     op: item.op,
@@ -1819,6 +1892,113 @@ impl<'a> ExprLowerer<'a> {
             name: field.name.clone(),
             value: self.lower_expr(&field.value),
         }
+    }
+
+    fn lower_dag_call_bindings(
+        &mut self,
+        target: &DagId,
+        bindings: &[ast::ParamBinding],
+    ) -> Result<(Vec<ParamBinding>, DagCallStaticBindings), ExprLowerError> {
+        let mut params = Vec::new();
+        let mut static_bindings = DagCallStaticBindings::default();
+        for binding in bindings {
+            let input_path = NamePath::local(binding.name.name.clone());
+            match binding.category {
+                InputBindingCategory::Unmarked => {
+                    params.push(self.lower_param_binding(target, binding)?);
+                }
+                InputBindingCategory::Type => {
+                    let input = self
+                        .ctx
+                        .resolver
+                        .resolve_struct_type_path(target, &input_path)
+                        .map_err(|source| ExprLowerError::ModuleResolve {
+                            source,
+                            span: binding.name.span,
+                        })?;
+                    let value_path = static_binding_value_path(binding, self.ctx.owner)?;
+                    let value = self
+                        .ctx
+                        .resolver
+                        .resolve_struct_type_path(self.ctx.owner, &value_path)
+                        .map_err(|source| ExprLowerError::ModuleResolve {
+                            source,
+                            span: binding.value.span,
+                        })?;
+                    static_bindings.types.insert(input, value);
+                }
+                InputBindingCategory::Dimension => {
+                    let input = self
+                        .ctx
+                        .resolver
+                        .resolve_dimension_path(target, &input_path)
+                        .map_err(|source| ExprLowerError::ModuleResolve {
+                            source,
+                            span: binding.name.span,
+                        })?;
+                    let value_path = static_binding_value_path(binding, self.ctx.owner)?;
+                    let value = match self
+                        .ctx
+                        .resolver
+                        .resolve_dimension_path(self.ctx.owner, &value_path)
+                    {
+                        Ok(value) => value,
+                        Err(source @ ModuleResolveError::UnknownName { .. }) => self
+                            .ctx
+                            .resolve_prelude_dimension_path(&value_path)
+                            .ok_or(ExprLowerError::ModuleResolve {
+                                source,
+                                span: binding.value.span,
+                            })?,
+                        Err(source) => {
+                            return Err(ExprLowerError::ModuleResolve {
+                                source,
+                                span: binding.value.span,
+                            });
+                        }
+                    };
+                    static_bindings.dimensions.insert(input, value);
+                }
+                InputBindingCategory::Index => {
+                    let input = self
+                        .ctx
+                        .resolver
+                        .resolve_index_path(target, &input_path)
+                        .map_err(|source| ExprLowerError::ModuleResolve {
+                            source,
+                            span: binding.name.span,
+                        })?;
+                    let value = match binding.value.index_binding_arg() {
+                        Some(ast::IndexExpr::Name(path)) => self
+                            .ctx
+                            .resolver
+                            .resolve_index_path(self.ctx.owner, &path.value)
+                            .map(DagCallIndexBinding::Declared)
+                            .map_err(|source| ExprLowerError::ModuleResolve {
+                                source,
+                                span: binding.value.span,
+                            })?,
+                        Some(ast::IndexExpr::Finite {
+                            cardinality: ast::NatExpr::Literal(cardinality, _),
+                            ..
+                        }) => crate::registry::types::FiniteIndex::try_from_u64(cardinality)
+                            .map(DagCallIndexBinding::Finite)
+                            .map_err(|_| ExprLowerError::InvalidStaticBindingValue {
+                                name: binding.name.name.clone(),
+                                span: binding.value.span,
+                            })?,
+                        _ => {
+                            return Err(ExprLowerError::InvalidStaticBindingValue {
+                                name: binding.name.name.clone(),
+                                span: binding.value.span,
+                            });
+                        }
+                    };
+                    static_bindings.indexes.insert(input, value);
+                }
+            }
+        }
+        Ok((params, static_bindings))
     }
 
     fn lower_param_binding(
@@ -2040,7 +2220,10 @@ impl<'a> ExprLowerer<'a> {
             .resolve_decl_path(self.ctx.owner, &name.to_name_path())
         {
             Ok(_) => Ok(()),
-            Err(ModuleResolveError::UnknownModuleAlias { .. }) => {
+            Err(
+                ModuleResolveError::UnknownModuleAlias { .. }
+                | ModuleResolveError::UnknownName { .. },
+            ) => {
                 let Some(template) = self
                     .ctx
                     .instance_templates
@@ -2052,8 +2235,14 @@ impl<'a> ExprLowerer<'a> {
                     return Ok(());
                 }
 
-                let template_name =
-                    ResolvedDeclName::from_def(template.clone(), resolved.to_unowned_def_name());
+                let template_path = NamePath::local(resolved.atom().clone());
+                let template_name = self
+                    .ctx
+                    .resolver
+                    .resolve_decl_path(template, &template_path)
+                    .unwrap_or_else(|_| {
+                        ResolvedDeclName::from_def(template.clone(), resolved.to_unowned_def_name())
+                    });
                 if self
                     .ctx
                     .resolver

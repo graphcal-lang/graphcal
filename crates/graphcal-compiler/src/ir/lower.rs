@@ -39,7 +39,8 @@ use crate::syntax::decl_name::{DeclName, ResolvedDeclName};
 use crate::syntax::dimension::{DimName, ResolvedDimName, ResolvedUnitName, UnitName, UnitRef};
 use crate::syntax::index_name::{IndexName, ResolvedIndexName};
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
-use crate::syntax::names::{NameAtom, NameNamespace, NamePath, ResolvedName};
+use crate::syntax::names::{NameAtom, NameNamespace, NamePath, NamespacePath, ResolvedName};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{
     ConstructorName, GenericParamName, ResolvedStructTypeName, StructTypeName,
@@ -477,6 +478,13 @@ impl HirDag {
     #[must_use]
     pub const fn imported_bindings(&self) -> &HashMap<ScopedName, HirImportedBinding> {
         &self.imported_bindings
+    }
+
+    /// Runtime unit definitions after concrete include ownership has been
+    /// assigned.
+    #[must_use]
+    pub fn dynamic_unit_scales(&self) -> &[DynamicUnitScaleEntry] {
+        &self.dynamic_unit_scales
     }
 
     /// Declarations authored directly in this DAG that define its runtime
@@ -1037,6 +1045,7 @@ fn build_ir_from_resolved(
             })
             .collect(),
         dynamic_unit_scales,
+        unit_bindings: HashMap::new(),
         imported_bindings,
         external_surface: resolved.external_surface,
         plugin_imports: ast
@@ -1051,6 +1060,15 @@ fn build_ir_from_resolved(
     };
 
     Ok((builder, unfrozen))
+}
+
+/// Value declaration metadata needed to create a selective include alias.
+#[derive(Debug, Clone)]
+pub struct IncludeAliasDeclaration {
+    /// Producer-owned type annotation before importer-side Static substitution.
+    pub type_ann: TypeExpr,
+    /// Whether the alias must remain in the compile-time constant category.
+    pub is_const: bool,
 }
 
 /// An IR without a frozen registry, awaiting a call to [`freeze`](Self::freeze).
@@ -1077,6 +1095,8 @@ pub struct UnfrozenIR {
     expected_fail: HashMap<ScopedName, ParsedExpectedFailMetadata>,
     // Dynamic unit scales declared by this body or merged includes.
     dynamic_unit_scales: Vec<UnfrozenDynamicUnitScaleEntry>,
+    // Source-visible projected units mapped to concrete instance identities.
+    unit_bindings: HashMap<UnitRef, ResolvedUnitName>,
     // Lexical binding lookup only; each value carries one canonical target.
     imported_bindings: HashMap<ScopedName, HirImportedBinding>,
     // Explicit exports and named `param` input ports used by downstream
@@ -1090,6 +1110,59 @@ pub struct UnfrozenIR {
 }
 
 impl UnfrozenIR {
+    /// Return the effective local declaration exposed by an include selector.
+    ///
+    /// This observes aliases created by earlier include/import composition, not
+    /// only declarations authored directly in the producer's source AST.
+    #[must_use]
+    pub fn include_alias_declaration(&self, name: &DeclName) -> Option<IncludeAliasDeclaration> {
+        let local = ScopedName::local(name.clone());
+        self.consts
+            .iter()
+            .find(|entry| entry.name == local)
+            .map(|entry| IncludeAliasDeclaration {
+                type_ann: entry.type_ann.clone(),
+                is_const: true,
+            })
+            .or_else(|| {
+                self.params
+                    .iter()
+                    .find(|entry| entry.name == local)
+                    .map(|entry| IncludeAliasDeclaration {
+                        type_ann: entry.type_ann.clone(),
+                        is_const: false,
+                    })
+            })
+            .or_else(|| {
+                self.nodes
+                    .iter()
+                    .find(|entry| entry.name == local)
+                    .map(|entry| IncludeAliasDeclaration {
+                        type_ann: entry.type_ann.clone(),
+                        is_const: false,
+                    })
+            })
+    }
+
+    /// Publish a synthesized Term alias as part of this module's external surface.
+    pub fn export_term_alias(&mut self, name: DeclName) {
+        self.external_surface.insert_explicit_export(name);
+    }
+
+    /// Add a local alias for a dynamic unit already exposed under an include prefix.
+    pub fn add_dynamic_unit_projection_alias(
+        &mut self,
+        prefix: &ModuleAliasName,
+        source: &UnitName,
+        alias: UnitName,
+    ) {
+        let prefixed =
+            UnitRef::qualified(NamespacePath::root(prefix.atom().clone()), source.clone());
+        if let Some(target) = self.unit_bindings.get(&prefixed).cloned() {
+            self.unit_bindings.insert(UnitRef::local(alias), target);
+        }
+    }
+
     /// Freeze into a complete [`HirDag`] by providing a built [`Registry`] and
     /// the resolution context.
     ///
@@ -1195,6 +1268,7 @@ impl UnfrozenIR {
             )
             .with_prelude(&prelude)
             .with_unit_registry(&registry.units)
+            .with_unit_bindings(&self.unit_bindings)
             .with_decl_bindings(&decl_bindings)
             .with_instance_templates(&instance_templates);
             crate::hir::lower_expr(expr, expr_ctx).map_err(|err| {
@@ -1383,6 +1457,7 @@ impl UnfrozenIR {
                         )
                         .with_prelude(&prelude)
                         .with_unit_registry(&registry.units)
+                        .with_unit_bindings(&self.unit_bindings)
                         .with_decl_bindings(&decl_bindings)
                         .with_instance_templates(&instance_templates);
                         crate::hir::lower_assert_body(&entry.body, expr_ctx).map_err(|err| {
@@ -1819,6 +1894,16 @@ impl UnfrozenIR {
             }
         }
 
+        fn prefix_unit_ref(reference: &UnitRef, prefix: &ModuleAliasName) -> UnitRef {
+            let rest = reference
+                .qualifier()
+                .map_or_else(Vec::new, |owner| owner.segments().to_vec());
+            UnitRef::qualified(
+                NamespacePath::new(NonEmpty::new(prefix.atom().clone(), rest)),
+                reference.name().clone(),
+            )
+        }
+
         fn rebase_descendant_or_preserve_external(
             owner: crate::dag_id::DagId,
             dependency_owner: &crate::dag_id::DagId,
@@ -2074,7 +2159,11 @@ impl UnfrozenIR {
         // instances may use the same source spelling with different value
         // bindings; canonical ownership, not that spelling, distinguishes the
         // scale definitions.
+        let dep_unit_bindings = std::mem::take(&mut dep.unit_bindings);
         for mut entry in dep.dynamic_unit_scales {
+            let is_public = dep
+                .external_surface
+                .is_unit_explicit_export(entry.spelling.name().atom());
             substitute_indexes(&mut entry.expr, index_bindings);
             substitute_type_names_in_expr(&mut entry.expr, type_bindings);
             prefix_expr_refs(&mut entry.expr, prefix, dep_names, dep_scoped_names);
@@ -2093,6 +2182,15 @@ impl UnfrozenIR {
                 include_span,
             )?;
             entry.src = entry.src.or_dependency(dep_src);
+            if is_public {
+                self.unit_bindings.insert(
+                    prefix_unit_ref(&entry.spelling, prefix),
+                    ResolvedUnitName::from_def(
+                        entry.unit_owner.clone(),
+                        entry.spelling.name().clone(),
+                    ),
+                );
+            }
             if self.dynamic_unit_scales.iter().any(|existing| {
                 existing.unit_owner == entry.unit_owner && existing.spelling == entry.spelling
             }) {
@@ -2103,6 +2201,19 @@ impl UnfrozenIR {
                 });
             }
             self.dynamic_unit_scales.push(entry);
+        }
+        for (spelling, target) in dep_unit_bindings {
+            let rebased_owner = require_rebased_instance_owner(
+                target.owner(),
+                dependency_owner,
+                &instance_owner,
+                importer_src,
+                include_span,
+            )?;
+            self.unit_bindings.insert(
+                prefix_unit_ref(&spelling, prefix),
+                ResolvedUnitName::from_def(rebased_owner, target.to_unowned_def_name()),
+            );
         }
 
         // Merge consts
@@ -3097,6 +3208,31 @@ where
         | TypeExprKind::Int
         | TypeExprKind::Datetime => {}
     }
+}
+
+/// Apply include-time Static substitutions to a registered nominal signature.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "the include boundary uses the project's canonical binding-map types"
+)]
+pub fn specialize_type_definition(
+    definition: &mut crate::registry::type_def::TypeDef,
+    index_bindings: &HashMap<IndexName, types::IndexBindingTarget>,
+    type_bindings: &HashMap<StructTypeName, StructTypeName>,
+    dim_bindings: &HashMap<DimName, DimName>,
+) {
+    definition.transform_signatures(
+        |argument| {
+            substitute_generic_arg_indexes(argument, index_bindings);
+            substitute_generic_arg_nominal_names(argument, type_bindings);
+            substitute_generic_arg_nominal_names(argument, dim_bindings);
+        },
+        |type_expr| {
+            substitute_type_expr_indexes(type_expr, index_bindings);
+            substitute_type_expr_nominal_names(type_expr, type_bindings);
+            substitute_type_expr_nominal_names(type_expr, dim_bindings);
+        },
+    );
 }
 
 /// Rewrite struct-type names within an expression according to a binding map.

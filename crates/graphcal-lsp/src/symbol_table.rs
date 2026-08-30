@@ -599,6 +599,7 @@ impl<'a> HirRefCollector<'a> {
                 target,
                 args,
                 output,
+                ..
             } => {
                 if let Some(parent) = target.value.parent() {
                     Self::reference(

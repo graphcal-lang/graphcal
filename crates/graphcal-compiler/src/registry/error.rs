@@ -202,33 +202,18 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    #[error("cannot `import` runtime-dependent unit `{name}`")]
+    #[error("cannot `import` runtime unit `{name}`")]
     #[diagnostic(
         code(graphcal::M025),
         help(
-            "keep the unit private inside an entry or explicitly called DAG; otherwise declare a `const unit` or model the conversion explicitly"
+            "use the unit through a concrete `include` or direct DAG call instance; otherwise declare a `const unit` to grant blueprint import capability"
         )
     )]
     ImportRuntimeUnit {
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("this unit scale depends on a runtime instance")]
-        span: SourceSpan,
-    },
-
-    #[error("cannot `include` runtime-dependent unit `{name}`")]
-    #[diagnostic(
-        code(graphcal::M026),
-        help(
-            "keep the unit private inside an entry or explicitly called DAG; otherwise declare a `const unit` or model the conversion explicitly"
-        )
-    )]
-    IncludeRuntimeUnit {
-        name: crate::syntax::dimension::UnitRef,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this include would give a unit a hidden runtime instance")]
+        #[label("a plain `unit` belongs to a runtime instance")]
         span: SourceSpan,
     },
 
@@ -243,6 +228,73 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("required Static input has no blueprint-stable target")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "cannot `import` `{name}` because it depends on required {dependency_kind} input `{dependency}`"
+    )]
+    #[diagnostic(
+        code(graphcal::M029),
+        help(
+            "supply the required Static input through `include` before projecting this declaration"
+        )
+    )]
+    ImportUnresolvedStaticDependency {
+        name: String,
+        dependency_kind: crate::ir::static_interface::StaticInputKind,
+        dependency: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("declaration is not blueprint-closed")]
+        span: SourceSpan,
+    },
+
+    #[error("cannot bind {kind} input `{name}` to non-concrete {kind} `{target}`")]
+    #[diagnostic(
+        code(graphcal::M030),
+        help("bind to a fixed declaration or an optional `pub(bind)` declaration with a default")
+    )]
+    InvalidStaticBindingTarget {
+        kind: crate::ir::static_interface::StaticInputKind,
+        name: String,
+        target: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("required Static inputs are holes, not concrete targets")]
+        span: SourceSpan,
+    },
+
+    #[error("cannot project `{name}` from a configured DAG instance")]
+    #[diagnostic(
+        code(graphcal::M031),
+        help(
+            "DAGs are reusable blueprints, not instance members; address the child with a dotted blueprint path such as `module.child`"
+        )
+    )]
+    IncludeItemNotProjectable {
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this declaration is not an instance projection")]
+        span: SourceSpan,
+    },
+
+    #[error(
+        "cannot project constructor `{constructor}` because its owning type `{owner_type}` is rebound"
+    )]
+    #[diagnostic(
+        code(graphcal::M032),
+        help(
+            "project constructors only when their source nominal type keeps its canonical identity; use constructors of the replacement type instead"
+        )
+    )]
+    IncludeConstructorOwnerRebound {
+        constructor: String,
+        owner_type: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("source constructor no longer belongs to the projected type")]
         span: SourceSpan,
     },
 
@@ -1740,11 +1792,13 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    /// A required typed Static input was not bound through an include chain.
-    #[error("required {kind} `{name}` must be bound via parameterized include")]
+    /// A required typed Static input was not bound at a DAG instantiation boundary.
+    #[error("required {kind} `{name}` must be bound at DAG instantiation")]
     #[diagnostic(
         code(graphcal::I010),
-        help("bind the input with its explicit `{kind}` marker at the include site")
+        help(
+            "bind the input with its explicit `{kind}` marker at the include or direct-call site"
+        )
     )]
     RequiredStaticInputNotBound {
         kind: crate::ir::static_interface::StaticInputKind,
@@ -2272,8 +2326,11 @@ impl GraphcalError {
             | Self::ImportPlotItem { src, .. }
             | Self::ImportAssertionItem { src, .. }
             | Self::ImportRuntimeUnit { src, .. }
-            | Self::IncludeRuntimeUnit { src, .. }
             | Self::ImportRequiredStaticInput { src, .. }
+            | Self::ImportUnresolvedStaticDependency { src, .. }
+            | Self::InvalidStaticBindingTarget { src, .. }
+            | Self::IncludeItemNotProjectable { src, .. }
+            | Self::IncludeConstructorOwnerRebound { src, .. }
             | Self::DuplicateIncludeSelection { src, .. }
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
@@ -2510,7 +2567,6 @@ mod tests {
             ("InvalidEpochTimeScaleArgument", "D029"),
             ("UnsupportedEpochTimeScale", "D030"),
             ("ImportRuntimeItem", "M020"),
-            ("IncludeRuntimeUnit", "M026"),
         ] {
             assert_eq!(catalog.get(variant).map(String::as_str), Some(expected));
         }

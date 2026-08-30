@@ -233,6 +233,23 @@ impl TypeDef {
         &self.kind
     }
 
+    pub(crate) fn transform_signatures(
+        &mut self,
+        mut transform_generic: impl FnMut(&mut crate::desugar::desugared_ast::GenericArg),
+        mut transform_type: impl FnMut(&mut TypeExpr),
+    ) {
+        self.generic_params
+            .iter_mut()
+            .filter_map(|parameter| parameter.default.as_mut())
+            .for_each(&mut transform_generic);
+        if let TypeDefKind::Union { members } = &mut self.kind {
+            members
+                .iter_mut()
+                .flat_map(|member| &mut member.fields)
+                .for_each(|field| transform_type(&mut field.type_ann));
+        }
+    }
+
     /// Returns the union members if this is a tagged union.
     ///
     /// Returns `None` only for a required (unbound) type stub.
@@ -283,6 +300,7 @@ impl TypeDef {
 #[derive(Debug, Clone)]
 pub struct TypeRegistry {
     pub(crate) types: HashMap<StructTypeName, TypeDef>,
+    pub(crate) aliases: HashMap<StructTypeName, StructTypeName>,
     /// Constructor namespace: each constructor name resolves to the
     /// union it belongs to. With no module system, the namespace is
     /// flat. Duplicate names are rejected upstream during name
@@ -295,7 +313,15 @@ impl TypeRegistry {
     /// Look up a type definition by type name.
     #[must_use]
     pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
-        self.types.get(name)
+        let mut current = StructTypeName::try_new(name).ok()?;
+        let mut remaining = self.aliases.len() + 1;
+        loop {
+            if let Some(definition) = self.types.get(&current) {
+                return Some(definition);
+            }
+            current = self.aliases.get(&current)?.clone();
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Look up the union that owns a constructor name, plus the

@@ -945,14 +945,26 @@ fn parse_import_category_items_with_aliases() {
 }
 
 #[test]
-fn parse_include_rejects_import_category_markers() {
-    for marker in ["type", "dim", "unit", "index"] {
-        let source = format!("include helper()::{{{marker} Item}};");
-        assert!(
-            Parser::new(&source).parse_file().is_err(),
-            "marker: {marker}"
-        );
-    }
+fn parse_include_accepts_typed_projection_markers() {
+    let file =
+        Parser::new("include helper()::{type Record, dim Distance, unit metre, index Axis};")
+            .parse_file()
+            .unwrap();
+    let DeclKind::Include(include) = &file.declarations[0].kind else {
+        panic!("expected include");
+    };
+    let crate::syntax::ast::ImportKind::Selective(items) = &include.kind else {
+        panic!("expected selective include");
+    };
+    assert_eq!(
+        items.iter().map(|item| item.namespace).collect::<Vec<_>>(),
+        vec![
+            ImportItemNamespace::Type,
+            ImportItemNamespace::Dimension,
+            ImportItemNamespace::Unit,
+            ImportItemNamespace::Index,
+        ]
+    );
 }
 
 #[test]

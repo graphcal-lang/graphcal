@@ -1,0 +1,6 @@
+// Plain units are instance-scoped and remain usable through a concrete include.
+import app.fx::{ dim Money, unit USD };
+include app.fx() as fx;
+
+param mine: Money = 100.0 USD;
+node p: Money = @mine -> fx::EUR;
