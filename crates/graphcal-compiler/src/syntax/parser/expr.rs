@@ -29,7 +29,7 @@ fn skip_ws_and_line_comments(bytes: &[u8], mut pos: usize) -> usize {
     }
 }
 
-fn scan_ascii_ident(bytes: &[u8], pos: usize) -> Option<usize> {
+const fn scan_ascii_ident(bytes: &[u8], pos: usize) -> Option<usize> {
     if pos >= bytes.len() || (!bytes[pos].is_ascii_alphabetic() && bytes[pos] != b'_') {
         return None;
     }
