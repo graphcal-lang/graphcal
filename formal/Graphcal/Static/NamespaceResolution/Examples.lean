@@ -90,7 +90,7 @@ private def phaseAlias : Binding := {
 
 private def externalState : StaticEntity := {
   id := staticId libraryDag 0
-  kind := .nominalType
+  kind := .nominalType .fixed
 }
 
 private def externalStateBinding : Binding := {
@@ -219,7 +219,7 @@ private def inputParamEntity : TermEntity := {
 
 private def inputTypeEntity : StaticEntity := {
   id := staticId libraryDag 1
-  kind := .nominalType
+  kind := .nominalType .requiredInput
 }
 
 private def inputParamBinding : Binding := {
@@ -249,9 +249,9 @@ theorem unmarked_input_selects_param :
 /-- A `type` marker selects the same-spelled Static nominal type. -/
 theorem type_marked_input_selects_nominal_type :
     resolveInputBinding sameSpelledInputs {
-      category := .nominalType
+      category := .marked .nominalType
       target := inputHead
-    } = .ok (.nominalType inputTypeEntity) := by
+    } = .ok (.static .nominalType inputTypeEntity) := by
   decide
 
 /-- An unmarked selector never retries Static when no parameter exists. -/
@@ -268,10 +268,7 @@ theorem unmarked_input_does_not_fall_back_to_type :
 
 /-- The source marker inventory has no `param` marker variant. -/
 theorem input_binding_categories_are_exhaustive (category : InputBindingCategory) :
-    category = .unmarked ∨
-      category = .nominalType ∨
-      category = .dimension ∨
-      category = .index := by
+    category = .unmarked ∨ ∃ kind, category = .marked kind := by
   cases category <;> simp
 
 private def massNode : Binding := {
@@ -317,7 +314,7 @@ private def lengthDimension : Binding := {
   name := "Length"
   entity := .static {
     id := staticId rootDag 4
-    kind := .dimension
+    kind := .dimension .fixed
   }
 }
 

@@ -56,9 +56,9 @@ private def namespaceWire : Namespace → WireNamespace
 
 private def inputCategoryWire : InputBindingCategory → WireInputCategory
   | .unmarked => .unmarked
-  | .nominalType => .nominalType
-  | .dimension => .dimension
-  | .index => .index
+  | .marked .nominalType => .nominalType
+  | .marked .dimension => .dimension
+  | .marked .index => .index
 
 private def resolutionRule : ResolutionError → String
   | .unknown _ => "unknown"
@@ -86,7 +86,7 @@ private def entityForNamespace
     (serial : Nat) : Namespace → Entity
   | .static => .static {
       id := ⟨owner, serial⟩
-      kind := .dimension
+      kind := .dimension .fixed
     }
   | .term => .term {
       id := ⟨owner, serial⟩
@@ -181,24 +181,19 @@ private def duplicateCases : List WireCase :=
   }
 
 private def inputCategories : List InputBindingCategory :=
-  [.unmarked, .nominalType, .dimension, .index]
+  [.unmarked, .marked .nominalType, .marked .dimension, .marked .index]
 
 private def inputEntity : InputBindingCategory → Entity
   | .unmarked => .term {
       id := ⟨blueprintDag, 0⟩
       kind := .param
     }
-  | .nominalType => .static {
-      id := ⟨blueprintDag, 1⟩
-      kind := .nominalType
-    }
-  | .dimension => .static {
-      id := ⟨blueprintDag, 2⟩
-      kind := .dimension
-    }
-  | .index => .static {
-      id := ⟨blueprintDag, 3⟩
-      kind := .index
+  | .marked kind => .static {
+      id := ⟨blueprintDag, match kind with
+        | .nominalType => 1
+        | .dimension => 2
+        | .index => 3⟩
+      kind := kind.toStaticKind .requiredInput
     }
 
 private def inputEnvironment (target : InputBindingCategory) : Environment :=
@@ -242,7 +237,7 @@ private def labelEnvironment : Environment :=
     name := "NotIndex"
     entity := .static {
       id := ⟨rootDag, 12⟩
-      kind := .dimension
+      kind := .dimension .fixed
     }
   }]
 
