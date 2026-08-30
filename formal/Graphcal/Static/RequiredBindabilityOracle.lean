@@ -33,7 +33,7 @@ structure WireCase where
 /-- Stable boundary spelling for the declaration kinds modeled by V002. -/
 def nominalKindWireName : NominalKind → String
   | .index => "index"
-  | .type => "type"
+  | .nominalType => "type"
   | .dimension => "dimension"
 
 /-- Stable boundary spelling for the three visibility capabilities. -/
@@ -68,7 +68,7 @@ These are the complete finite domains of the first VGD slice. Listing them
 explicitly makes adding a new semantic state a reviewed change rather than
 silently omitting it from conformance testing.
 -/
-def nominalKinds : List NominalKind := [.index, .type, .dimension]
+def nominalKinds : List NominalKind := [.index, .nominalType, .dimension]
 def visibilities : List Visibility := [.local, .exported, .exportedBindable]
 def requirements : List Requirement := [.defaulted, .required]
 

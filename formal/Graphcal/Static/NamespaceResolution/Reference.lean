@@ -1,6 +1,8 @@
-import Graphcal.Static.NamespaceResolution.Model
+import Graphcal.Static.IncludeProjection
 
 namespace Graphcal.Static.NamespaceResolution
+
+open Graphcal.Static
 
 /-- Executable cardinality summary for one exact lookup query. -/
 inductive LookupSummary where
@@ -104,13 +106,13 @@ def validateStatic
   match entity with
   | .static staticEntity =>
       match use, staticEntity.kind with
-      | .type, .nominalType
-      | .type, .dimension
+      | .type, .nominalType _
+      | .type, .dimension _
       | .type, .genericTypeParam
       | .type, .genericDimParam
-      | .dimension, .dimension
+      | .dimension, .dimension _
       | .dimension, .genericDimParam
-      | .index, .index
+      | .index, .index _
       | .index, .genericIndexParam
       | .nat, .genericNatParam
       | .timeScale, .timeScale => .ok staticEntity
@@ -137,11 +139,12 @@ def validateTerm
       | .blueprintGraphRead, .constNode
       | .instanceGraphRead, .param
       | .instanceGraphRead, .node
-      | .instanceGraphRead, .constNode
-      | .includeOutcome, .param
-      | .includeOutcome, .node
-      | .includeOutcome, .assertion
-      | .includeOutcome, .visualization => .ok termEntity
+      | .instanceGraphRead, .constNode => .ok termEntity
+      | .includeProjection, _ =>
+          if IncludeProjectable (.term termEntity) then
+            .ok termEntity
+          else
+            .error (.invalidTermUse use termEntity)
       | _, _ => .error (.invalidTermUse use termEntity)
   | other => .error (.wrongNamespace .term other)
 
@@ -155,7 +158,7 @@ def validateUnit (entity : Entity) : Except ResolutionError UnitEntity :=
 def requireConcreteIndex
     (entity : StaticEntity) : Except ResolutionError StaticEntity :=
   match entity.kind with
-  | .index => .ok entity
+  | .index .fixed | .index .optionalInput => .ok entity
   | _ => .error (.labelOwnerNotIndex entity)
 
 /-- Validate that a Term label retains the canonical owner selected by `#`. -/
@@ -191,11 +194,18 @@ def validateInputTarget
     (entity : Entity) : Except ResolutionError InputBindingTarget :=
   match category, entity with
   | .unmarked, .term ⟨id, .param⟩ => .ok (.param ⟨id, .param⟩)
-  | .nominalType, .static ⟨id, .nominalType⟩ =>
-      .ok (.nominalType ⟨id, .nominalType⟩)
-  | .dimension, .static ⟨id, .dimension⟩ =>
-      .ok (.dimension ⟨id, .dimension⟩)
-  | .index, .static ⟨id, .index⟩ => .ok (.index ⟨id, .index⟩)
+  | .marked .nominalType, .static ⟨id, .nominalType .optionalInput⟩ =>
+      .ok (.static .nominalType ⟨id, .nominalType .optionalInput⟩)
+  | .marked .nominalType, .static ⟨id, .nominalType .requiredInput⟩ =>
+      .ok (.static .nominalType ⟨id, .nominalType .requiredInput⟩)
+  | .marked .dimension, .static ⟨id, .dimension .optionalInput⟩ =>
+      .ok (.static .dimension ⟨id, .dimension .optionalInput⟩)
+  | .marked .dimension, .static ⟨id, .dimension .requiredInput⟩ =>
+      .ok (.static .dimension ⟨id, .dimension .requiredInput⟩)
+  | .marked .index, .static ⟨id, .index .optionalInput⟩ =>
+      .ok (.static .index ⟨id, .index .optionalInput⟩)
+  | .marked .index, .static ⟨id, .index .requiredInput⟩ =>
+      .ok (.static .index ⟨id, .index .requiredInput⟩)
   | category, entity => .error (.invalidInputTarget category entity)
 
 /-- Resolve one categorized DAG input target without cross-namespace fallback. -/

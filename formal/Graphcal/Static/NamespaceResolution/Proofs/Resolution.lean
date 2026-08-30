@@ -57,7 +57,9 @@ theorem validateTerm_success_iff
         have resultEq : result = entity := by
           cases use <;> cases entity with
           | mk id kind =>
-              cases kind <;> simp [validateTerm] at accepted <;> simp_all
+              cases kind <;>
+                simp [validateTerm, IncludeProjectable, includeProjection?] at accepted <;>
+                simp_all
         subst result
         exact ⟨rfl, (validateTerm_ok_iff_permitted use entity).1 accepted⟩
       · rintro ⟨candidateEq, permitted⟩
@@ -69,21 +71,32 @@ theorem validateTerm_success_iff
 /-- Concrete-index validation agrees with the label-owner requirement. -/
 theorem requireConcreteIndex_ok_iff
     (entity : StaticEntity) :
-    requireConcreteIndex entity = .ok entity ↔ entity.kind = .index := by
+    requireConcreteIndex entity = .ok entity ↔
+      entity.concreteInputKind = some .index := by
   cases entity with
-  | mk id kind => cases kind <;> simp [requireConcreteIndex]
+  | mk id kind =>
+      cases kind with
+      | nominalType role | dimension role | index role =>
+          cases role <;> simp [requireConcreteIndex, StaticEntity.concreteInputKind,
+            StaticEntity.inputRole]
+      | genericTypeParam | genericDimParam | genericIndexParam
+      | genericNatParam | timeScale =>
+          simp [requireConcreteIndex, StaticEntity.concreteInputKind,
+            StaticEntity.inputRole]
 
 /-- A successful concrete-index check preserves the candidate and proves its kind. -/
 theorem requireConcreteIndex_success_iff
     (candidate result : StaticEntity) :
     requireConcreteIndex candidate = .ok result ↔
-      result = candidate ∧ candidate.kind = .index := by
+      result = candidate ∧ candidate.concreteInputKind = some .index := by
   constructor
   · intro accepted
     cases candidate with
     | mk id kind =>
         cases kind <;> simp [requireConcreteIndex] at accepted
-        exact ⟨accepted.symm, rfl⟩
+        case index role =>
+          cases role <;> simp at accepted
+          all_goals exact ⟨accepted.symm, rfl⟩
   · rintro ⟨rfl, isIndex⟩
     exact (requireConcreteIndex_ok_iff result).2 isIndex
 
@@ -125,7 +138,7 @@ def LabelResolves
     (result : TermEntity) : Prop :=
   ∃ indexEntity,
     HeadResolves environment .static owner (.static indexEntity) ∧
-      indexEntity.kind = .index ∧
+      indexEntity.concreteInputKind = some .index ∧
       Lookup
         (Query.exact (.indexLabels indexEntity.id) .term label)
         environment
@@ -144,7 +157,14 @@ theorem resolveLabel_complete
   have ownerAccepted := resolveHead_complete ownerResolved
   have indexPermitted : StaticPermits .index indexEntity := by
     cases indexEntity with
-    | mk id kind => cases kind <;> simp_all [StaticPermits]
+    | mk id kind =>
+        cases kind with
+        | nominalType role | dimension role | index role =>
+            cases role <;> simp_all [StaticPermits, StaticEntity.concreteInputKind,
+              StaticEntity.inputRole]
+        | genericTypeParam | genericDimParam | genericIndexParam
+        | genericNatParam | timeScale =>
+            simp_all [StaticEntity.concreteInputKind, StaticEntity.inputRole]
   have indexAccepted := (validateStatic_ok_iff_permitted .index indexEntity).2 indexPermitted
   have concreteAccepted := (requireConcreteIndex_ok_iff indexEntity).2 ownerIsIndex
   have labelAccepted := (lookup_accepts_iff_spec _ _ _).2 labelResolved

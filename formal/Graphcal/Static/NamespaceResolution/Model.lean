@@ -1,4 +1,9 @@
+import Graphcal.Static.Interface
+
 namespace Graphcal.Static.NamespaceResolution
+
+abbrev StaticInputKind := Interface.StaticInputKind
+abbrev StaticRole := Interface.StaticRole
 
 /--
 An atomic source spelling. Structured names are represented by the owner/path
@@ -80,17 +85,44 @@ def NamespaceTarget.scope : NamespaceTarget → ScopeId
   | .instance id => .instance id
   | .plugin id => .plugin id
 
-/-- Closed Static categories. Generic constraints remain explicit categories. -/
+/--
+Closed Static categories. Input-capable declarations retain whether they are
+concrete definitions or required static input ports; generic constraints remain
+explicit categories.
+-/
 inductive StaticKind where
-  | nominalType
-  | dimension
-  | index
+  | nominalType (role : StaticRole)
+  | dimension (role : StaticRole)
+  | index (role : StaticRole)
   | genericTypeParam
   | genericDimParam
   | genericIndexParam
   | genericNatParam
   | timeScale
   deriving DecidableEq, Repr
+
+/-- Build the semantic Static kind for one shared input category. -/
+def StaticInputKind.toStaticKind
+    (kind : StaticInputKind)
+    (role : StaticRole) : StaticKind :=
+  match kind with
+  | .nominalType => .nominalType role
+  | .dimension => .dimension role
+  | .index => .index role
+
+/-- The shared typed input category, when this Static kind can be bound. -/
+def StaticKind.inputKind : StaticKind → Option StaticInputKind
+  | .nominalType _ => some .nominalType
+  | .dimension _ => some .dimension
+  | .index _ => some .index
+  | _ => none
+
+/-- Whether an input-capable Static declaration is a required input port. -/
+def StaticKind.isRequiredInput : StaticKind → Bool
+  | .nominalType .requiredInput
+  | .dimension .requiredInput
+  | .index .requiredInput => true
+  | _ => false
 
 /--
 Closed Term categories. Constructors are flat Terms while index labels retain a
@@ -128,6 +160,39 @@ structure StaticEntity where
   id : StaticId
   kind : StaticKind
   deriving DecidableEq, Repr
+
+/-- The typed binding role carried by a Static entity, when any. -/
+def StaticEntity.inputRole
+    (entity : StaticEntity) : Option (StaticInputKind × StaticRole) :=
+  match entity.kind with
+  | .nominalType role => some (.nominalType, role)
+  | .dimension role => some (.dimension, role)
+  | .index role => some (.index, role)
+  | _ => none
+
+/-- The required-input category carried by a Static entity, when any. -/
+def StaticEntity.requiredInputKind (entity : StaticEntity) : Option StaticInputKind :=
+  match entity.inputRole with
+  | some (kind, .requiredInput) => some kind
+  | _ => none
+
+/-- The optional-input category carried by a Static entity, when any. -/
+def StaticEntity.optionalInputKind (entity : StaticEntity) : Option StaticInputKind :=
+  match entity.inputRole with
+  | some (kind, .optionalInput) => some kind
+  | _ => none
+
+/-- Any caller-bindable Static input category carried by this entity. -/
+def StaticEntity.bindableInputKind (entity : StaticEntity) : Option StaticInputKind :=
+  match entity.inputRole with
+  | some (kind, .optionalInput) | some (kind, .requiredInput) => some kind
+  | _ => none
+
+/-- Any non-required concrete category that may be an effective binding target. -/
+def StaticEntity.concreteInputKind (entity : StaticEntity) : Option StaticInputKind :=
+  match entity.inputRole with
+  | some (kind, .fixed) | some (kind, .optionalInput) => some kind
+  | _ => none
 
 structure TermEntity where
   id : TermId
@@ -240,7 +305,7 @@ inductive TermUse where
   | localGraphRead
   | blueprintGraphRead
   | instanceGraphRead
-  | includeOutcome
+  | includeProjection
   deriving DecidableEq, Repr
 
 /-- Preserved call syntax; it must not choose the callee category. -/
@@ -274,20 +339,18 @@ def Reference.resultSpace : Reference → Namespace
   | .call _ _ => .term
 
 /--
-The four source forms for a DAG input binding. `unmarked` means exactly a
-parameter; there is deliberately no source `param` marker constructor.
+The source forms for a DAG input binding. `unmarked` means exactly a parameter;
+marked selectors reuse the one shared Static input category inventory.
 -/
 inductive InputBindingCategory where
   | unmarked
-  | nominalType
-  | dimension
-  | index
+  | marked (kind : StaticInputKind)
   deriving DecidableEq, Repr
 
 /-- Namespace selected before an input target is looked up. -/
 def InputBindingCategory.space : InputBindingCategory → Namespace
   | .unmarked => .term
-  | .nominalType | .dimension | .index => .static
+  | .marked _ => .static
 
 /-- One parsed DAG input selector, shared by `include` and direct DAG calls. -/
 structure InputBindingSelector where
@@ -298,9 +361,7 @@ structure InputBindingSelector where
 /-- Exact semantic target produced by a categorized DAG input selector. -/
 inductive InputBindingTarget where
   | param (entity : TermEntity)
-  | nominalType (entity : StaticEntity)
-  | dimension (entity : StaticEntity)
-  | index (entity : StaticEntity)
+  | static (kind : StaticInputKind) (entity : StaticEntity)
   deriving DecidableEq, Repr
 
 /-- Only Static and Term introduce lexical/generic binders. -/
@@ -355,7 +416,7 @@ def NominalTypeDecl.bindings (decl : NominalTypeDecl) : List Binding :=
   {
     scope := .dag decl.owner
     name := decl.name
-    entity := .static { id := decl.id, kind := .nominalType }
+    entity := .static { id := decl.id, kind := .nominalType .fixed }
   } :: decl.constructors.map fun constructor => {
     scope := .dag decl.owner
     name := constructor.name
@@ -370,7 +431,7 @@ def IndexDecl.bindings (decl : IndexDecl) : List Binding :=
   {
     scope := .dag decl.owner
     name := decl.name
-    entity := .static { id := decl.id, kind := .index }
+    entity := .static { id := decl.id, kind := .index .fixed }
   } :: decl.labels.map fun label => {
     scope := .indexLabels decl.id
     name := label.name

@@ -1,6 +1,8 @@
-import Graphcal.Static.NamespaceResolution.Model
+import Graphcal.Static.IncludeProjection
 
 namespace Graphcal.Static.NamespaceResolution
+
+open Graphcal.Static
 
 /-- No binding in an environment answers the given query. -/
 def NoMatch (environment : Environment) (query : Query) : Prop :=
@@ -89,13 +91,13 @@ def HeadResolves
 
 /-- Static lookup is followed by explicit kind validation. -/
 def StaticPermits : StaticUse → StaticEntity → Prop
-  | .type, ⟨_, .nominalType⟩ => True
-  | .type, ⟨_, .dimension⟩ => True
+  | .type, ⟨_, .nominalType _⟩ => True
+  | .type, ⟨_, .dimension _⟩ => True
   | .type, ⟨_, .genericTypeParam⟩ => True
   | .type, ⟨_, .genericDimParam⟩ => True
-  | .dimension, ⟨_, .dimension⟩ => True
+  | .dimension, ⟨_, .dimension _⟩ => True
   | .dimension, ⟨_, .genericDimParam⟩ => True
-  | .index, ⟨_, .index⟩ => True
+  | .index, ⟨_, .index _⟩ => True
   | .index, ⟨_, .genericIndexParam⟩ => True
   | .nat, ⟨_, .genericNatParam⟩ => True
   | .timeScale, ⟨_, .timeScale⟩ => True
@@ -117,27 +119,23 @@ def TermPermits : TermUse → TermEntity → Prop
   | .instanceGraphRead, ⟨_, .param⟩ => True
   | .instanceGraphRead, ⟨_, .node⟩ => True
   | .instanceGraphRead, ⟨_, .constNode⟩ => True
-  | .includeOutcome, ⟨_, .param⟩ => True
-  | .includeOutcome, ⟨_, .node⟩ => True
-  | .includeOutcome, ⟨_, .assertion⟩ => True
-  | .includeOutcome, ⟨_, .visualization⟩ => True
+  | .includeProjection, entity => IncludeProjectable (.term entity)
   | _, _ => False
 
-/-- Exact category relation for DAG input bindings. -/
+/-- Exact category and required-input relation for DAG input bindings. -/
 inductive InputTargetMatches :
     InputBindingCategory → Entity → InputBindingTarget → Prop where
   | param (id : TermId) :
       InputTargetMatches .unmarked (.term ⟨id, .param⟩)
         (.param ⟨id, .param⟩)
-  | nominalType (id : StaticId) :
-      InputTargetMatches .nominalType (.static ⟨id, .nominalType⟩)
-        (.nominalType ⟨id, .nominalType⟩)
-  | dimension (id : StaticId) :
-      InputTargetMatches .dimension (.static ⟨id, .dimension⟩)
-        (.dimension ⟨id, .dimension⟩)
-  | index (id : StaticId) :
-      InputTargetMatches .index (.static ⟨id, .index⟩)
-        (.index ⟨id, .index⟩)
+  | optionalStatic (kind : StaticInputKind) (id : StaticId) :
+      InputTargetMatches (.marked kind)
+        (.static ⟨id, kind.toStaticKind .optionalInput⟩)
+        (.static kind ⟨id, kind.toStaticKind .optionalInput⟩)
+  | requiredStatic (kind : StaticInputKind) (id : StaticId) :
+      InputTargetMatches (.marked kind)
+        (.static ⟨id, kind.toStaticKind .requiredInput⟩)
+        (.static kind ⟨id, kind.toStaticKind .requiredInput⟩)
 
 /--
 An unmarked input performs one Term lookup and requires `param`; marked inputs
@@ -181,7 +179,7 @@ inductive Resolves (environment : Environment) : Reference → Entity → Prop w
       {indexEntity : StaticEntity}
       {labelEntity : TermEntity}
       (ownerResolved : HeadResolves environment .static owner (.static indexEntity))
-      (ownerIsIndex : indexEntity.kind = .index)
+      (ownerIsIndex : indexEntity.concreteInputKind = some .index)
       (labelResolved :
         Lookup
           (Query.exact (.indexLabels indexEntity.id) .term label)
