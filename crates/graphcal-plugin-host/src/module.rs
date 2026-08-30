@@ -766,12 +766,10 @@ impl BufferProtocol {
                 ),
             })?;
         Ok(bytes
-            .chunks_exact(size_of::<f64>())
-            .map(|chunk| {
-                let mut raw = [0_u8; size_of::<f64>()];
-                raw.copy_from_slice(chunk);
-                f64::from_le_bytes(raw)
-            })
+            .as_chunks::<{ size_of::<f64>() }>()
+            .0
+            .iter()
+            .map(|raw| f64::from_le_bytes(*raw))
             .collect())
     }
 

@@ -333,7 +333,7 @@ impl Sha256Digest {
             return Err(Sha256DigestError { value });
         }
         let mut digest = [0_u8; 32];
-        for (index, pair) in bytes.chunks_exact(2).enumerate() {
+        for (index, pair) in bytes.as_chunks::<2>().0.iter().enumerate() {
             let (Some(high), Some(low)) = (hex_nibble(pair[0]), hex_nibble(pair[1])) else {
                 return Err(Sha256DigestError { value });
             };
