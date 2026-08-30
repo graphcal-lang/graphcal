@@ -89,6 +89,13 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
 
+      - uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
+        with:
+          tool: cargo-audit@0.22.2
+
+      - name: Audit dependencies
+        run: cargo audit --deny warnings
+
       - name: Check dependency policy
         run: cargo deny --locked check --hide-inclusion-graph
 
