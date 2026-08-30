@@ -9,6 +9,7 @@ formal-conformance: formal
     GRAPHCAL_NAMESPACE_RESOLUTION_ORACLE="$(pwd)/formal/.lake/build/bin/namespace-resolution-oracle" cargo test --package graphcal-eval --test namespace_formal_conformance -- --ignored
 
 lint: formal
+    cargo audit --deny warnings
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --all-features
     CARGO_BUILD_WARNINGS=deny cargo clippy --workspace --all-targets --no-default-features
     cargo fmt --check

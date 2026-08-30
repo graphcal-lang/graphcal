@@ -8,10 +8,11 @@
   customManagers: [
     {
       customType: "regex",
-      description: "Update cargo-hawk installed by taiki-e/install-action",
-      managerFilePatterns: ["/^\\.github\\/workflows\\/ci\\.yaml$/"],
-      matchStrings: ["tool:\\s*cargo-hawk@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
-      depNameTemplate: "cargo-hawk",
+      description: "Update Cargo tools installed by taiki-e/install-action",
+      managerFilePatterns: ["/^\\.github\\/workflows\\/.*\\.ya?ml$/"],
+      matchStrings: [
+        "tool:\\s*(?<depName>cargo-[\\w-]+)@(?<currentValue>\\d+\\.\\d+\\.\\d+)",
+      ],
       datasourceTemplate: "crate",
     },
   ],
