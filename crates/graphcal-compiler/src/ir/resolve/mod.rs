@@ -12,9 +12,8 @@ use std::sync::Arc;
 
 use miette::NamedSource;
 
-use super::required_bindability::{
-    self, InterfaceDecl, NominalKind, Requirement, Violation as RequiredBindabilityViolation,
-};
+use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
+use super::static_interface::{Requirement, StaticInputKind as NominalKind};
 
 use crate::desugar::desugared_ast::{
     AssertBody, DeclKind, DimExpr, ExprKind, File, IndexExpr, TypeDeclBody, TypeExpr, TypeExprKind,

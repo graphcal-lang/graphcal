@@ -634,7 +634,7 @@ include pkg.lib()::{ cost };
     assert!(
         matches!(
             &result,
-            Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound { name, .. }))
+            Err(CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { name, .. }))
                 if name == "Phase"
         ),
         "explicit instance should report its unsatisfied index: {result:?}",

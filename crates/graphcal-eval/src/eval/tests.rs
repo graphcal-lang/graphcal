@@ -63,6 +63,105 @@ fn write_pipeline_project(
 }
 
 #[test]
+fn selective_import_rejects_required_static_inputs() {
+    for (declaration, import_item, expected_kind) in [
+        (
+            "pub(bind) type Element;",
+            "type Element",
+            graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+        ),
+        (
+            "pub(bind) dim Quantity;",
+            "dim Quantity",
+            graphcal_compiler::ir::static_interface::StaticInputKind::Dimension,
+        ),
+        (
+            "pub(bind) index Axis;",
+            "index Axis",
+            graphcal_compiler::ir::static_interface::StaticInputKind::Index,
+        ),
+    ] {
+        let (_directory, root) = write_pipeline_project(
+            &[
+                ("lib.gcl", declaration),
+                (
+                    "main.gcl",
+                    &format!(
+                        "import pipeline.lib::{{ {import_item} }};\nnode output: Dimensionless = 1.0;"
+                    ),
+                ),
+            ],
+            "main.gcl",
+        );
+        let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::ImportRequiredStaticInput { kind, .. })
+                if kind == expected_kind
+        ));
+    }
+}
+
+#[test]
+fn include_requires_every_required_static_input_category() {
+    for (declaration, expected_kind) in [
+        (
+            "pub(bind) type Element;",
+            graphcal_compiler::ir::static_interface::StaticInputKind::Type,
+        ),
+        (
+            "pub(bind) dim Quantity;",
+            graphcal_compiler::ir::static_interface::StaticInputKind::Dimension,
+        ),
+        (
+            "pub(bind) index Axis;",
+            graphcal_compiler::ir::static_interface::StaticInputKind::Index,
+        ),
+    ] {
+        let (_directory, root) = write_pipeline_project(
+            &[
+                ("lib.gcl", declaration),
+                (
+                    "main.gcl",
+                    "include pipeline.lib() as configured;\nnode output: Dimensionless = 1.0;",
+                ),
+            ],
+            "main.gcl",
+        );
+        let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { kind, .. })
+                if kind == expected_kind
+        ));
+    }
+}
+
+#[test]
+fn fixed_static_declarations_are_not_binding_ports() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub type Element { Element }"),
+            (
+                "main.gcl",
+                "type LocalElement { LocalElement }\n\
+                 include pipeline.lib(type Element: LocalElement) as configured;\n\
+                 node output: Dimensionless = 1.0;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::DagInputCategoryMismatch {
+            expected: "type",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn bare_graph_declaration_refs_fail_before_dependency_planning() {
     let cases = [
         (
@@ -5907,10 +6006,10 @@ include pass_through(samples: 1.0 m) as output;
 
     let result = compile_and_eval(source);
     match result {
-        Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound { name, .. })) => {
+        Err(CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { name, .. })) => {
             assert_eq!(name, "Step");
         }
-        other => panic!("expected RequiredIndexNotBound, got {other:?}"),
+        other => panic!("expected RequiredStaticInputNotBound, got {other:?}"),
     }
 }
 

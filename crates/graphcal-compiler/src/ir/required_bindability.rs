@@ -1,35 +1,7 @@
 //! Pure semantic core for required-interface bindability validation (V002).
 
-use std::fmt;
-
+use crate::ir::static_interface::{Requirement, StaticInputKind as NominalKind};
 use crate::syntax::ast::BindableVisibility;
-
-/// Nominal declaration kinds that may obtain a missing definition from an
-/// `include` binding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NominalKind {
-    Index,
-    Type,
-    Dimension,
-}
-
-impl fmt::Display for NominalKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Index => "index",
-            Self::Type => "type",
-            Self::Dimension => "dim",
-        })
-    }
-}
-
-/// Whether an interface declaration supplies its own definition or requires
-/// one from outside the declaring module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Requirement {
-    Defaulted,
-    Required,
-}
 
 /// Declaration-interface states relevant to V002.
 ///

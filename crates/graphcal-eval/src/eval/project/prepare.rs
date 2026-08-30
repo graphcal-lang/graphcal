@@ -1,6 +1,7 @@
 //! Transition from a checked semantic project to a reusable runtime plan.
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::ir::static_interface::StaticInputKind;
 use graphcal_compiler::registry::error::GraphcalError;
 
 use crate::eval::types::CompileError;
@@ -31,11 +32,14 @@ pub(super) fn prepare_checked_project(
                 DiagnosticAnchor::Builtin,
             )));
         };
-        return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-            name: index.name().to_string(),
-            src: source,
-            span: span.into(),
-        }));
+        return Err(CompileError::Eval(
+            GraphcalError::RequiredStaticInputNotBound {
+                kind: StaticInputKind::Index,
+                name: index.name().to_string(),
+                src: source,
+                span: span.into(),
+            },
+        ));
     }
 
     let plan = crate::exec_plan::compile_checked_with_cancellation(

@@ -12,6 +12,7 @@ use crate::import_surface::{
     decl_identity, pure_import_term_disposition,
 };
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
+use graphcal_compiler::ir::static_interface::{StaticInputKind, StaticRole, static_interface};
 use graphcal_compiler::registry::reserved_name::ReservedNameNamespace;
 use graphcal_compiler::registry::resolve_types::{AttributeTarget, DeclarationKind};
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
@@ -22,16 +23,16 @@ use graphcal_compiler::syntax::names::NameAtom;
 ///
 /// Built once per dep file and reused for every binding rather than re-scanning
 /// `declarations` four or five times per binding.
-struct DepDeclIndex<'a> {
+struct DepDeclIndex {
     params: HashSet<DeclName>,
     /// Param declaration names whose value must be supplied at each instantiation.
     required_params: HashSet<DeclName>,
     /// Plot declaration names (requestable through include brace lists; #847).
     plots: HashSet<DeclName>,
-    types: HashSet<StructTypeName>,
-    dims: HashSet<DimName>,
-    /// Maps index name to its declaration (needed for kind/required checks).
-    indexes: HashMap<IndexName, &'a graphcal_compiler::desugar::desugared_ast::IndexDecl>,
+    types: HashMap<StructTypeName, StaticRole>,
+    dims: HashMap<DimName, StaticRole>,
+    /// Maps index name to its validated Static input role.
+    indexes: HashMap<IndexName, StaticRole>,
     /// "Other" declarations (const node / node / assert) that are invalid as
     /// binding targets; used to produce precise "is actually a …" diagnostics.
     other: HashMap<DeclName, DeclarationKind>,
@@ -171,7 +172,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
     Ok(())
 }
 
-impl DepDeclIndex<'_> {
+impl DepDeclIndex {
     fn is_const(&self, name: &str) -> bool {
         matches!(self.other.get(name), Some(DeclarationKind::ConstNode))
     }
@@ -213,6 +214,47 @@ fn ensure_include_item_selectable(
         })),
         ImportItemPresence::ExplicitExport | ImportItemPresence::InputPort => Ok(()),
     }
+}
+
+fn static_import_interface(
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    name: &NameAtom,
+    namespace: ImportItemNamespace,
+) -> Option<graphcal_compiler::ir::static_interface::StaticInterface> {
+    let expected_kind = match namespace {
+        ImportItemNamespace::Type => StaticInputKind::Type,
+        ImportItemNamespace::Dimension => StaticInputKind::Dimension,
+        ImportItemNamespace::Index => StaticInputKind::Index,
+        ImportItemNamespace::Term | ImportItemNamespace::Unit => return None,
+    };
+    declarations.iter().find_map(|declaration| {
+        let identity = decl_identity(declaration)?;
+        let interface = static_interface(&declaration.kind)?;
+        (identity.name == name && interface.kind() == expected_kind).then_some(interface)
+    })
+}
+
+fn reject_required_static_import(
+    declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    name: &NameAtom,
+    namespace: ImportItemNamespace,
+    src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<(), CompileError> {
+    let Some(interface) = static_import_interface(declarations, name, namespace) else {
+        return Ok(());
+    };
+    if !interface.role().is_required() {
+        return Ok(());
+    }
+    Err(CompileError::Eval(
+        GraphcalError::ImportRequiredStaticInput {
+            kind: interface.kind(),
+            name: name.to_string(),
+            src: src.clone(),
+            span: span.into(),
+        },
+    ))
 }
 
 fn reject_runtime_unit_import(
@@ -443,14 +485,13 @@ fn file_exports_plot(
 
 fn build_dep_decl_index(
     decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
-) -> DepDeclIndex<'_> {
+) -> DepDeclIndex {
     let mut params = HashSet::new();
     let mut required_params = HashSet::new();
     let mut plots = HashSet::new();
-    let mut types = HashSet::new();
-    let mut dims = HashSet::new();
-    let mut indexes: HashMap<IndexName, &graphcal_compiler::desugar::desugared_ast::IndexDecl> =
-        HashMap::new();
+    let mut types = HashMap::new();
+    let mut dims = HashMap::new();
+    let mut indexes = HashMap::new();
     let mut other: HashMap<DeclName, DeclarationKind> = HashMap::new();
     for d in decls {
         match &d.kind {
@@ -460,17 +501,25 @@ fn build_dep_decl_index(
                     required_params.insert(p.name.value.clone());
                 }
             }
-            DeclKind::Type(t) => {
-                types.insert(t.name.value.clone());
+            DeclKind::Type(type_decl) => {
+                let interface = static_interface(&d.kind)
+                    .expect("type declarations always have a Static interface");
+                types.insert(type_decl.name.value.clone(), interface.role());
             }
-            DeclKind::BaseDimension(dim) => {
-                dims.insert(dim.name.value.clone());
+            DeclKind::BaseDimension(dimension) => {
+                let interface = static_interface(&d.kind)
+                    .expect("base dimensions always have a Static interface");
+                dims.insert(dimension.name.value.clone(), interface.role());
             }
-            DeclKind::Dimension(dim) => {
-                dims.insert(dim.name.value.clone());
+            DeclKind::Dimension(dimension) => {
+                let interface = static_interface(&d.kind)
+                    .expect("dimension declarations always have a valid Static interface");
+                dims.insert(dimension.name.value.clone(), interface.role());
             }
-            DeclKind::Index(idx) => {
-                indexes.insert(idx.name.value.clone(), idx);
+            DeclKind::Index(index) => {
+                let interface = static_interface(&d.kind)
+                    .expect("index declarations always have a valid Static interface");
+                indexes.insert(index.name.value.clone(), interface.role());
             }
             DeclKind::ConstNode(c) => {
                 other.insert(c.name.value.clone(), DeclarationKind::ConstNode);
@@ -515,7 +564,7 @@ struct ClassifiedBindings {
 /// absent or has the wrong capability.
 fn classify_param_bindings(
     param_bindings: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
-    dep_index: &DepDeclIndex<'_>,
+    dep_index: &DepDeclIndex,
     file_src: &NamedSource<Arc<String>>,
     dep_path_for_error: &str,
 ) -> Result<ClassifiedBindings, CompileError> {
@@ -535,7 +584,12 @@ fn classify_param_bindings(
                 out.params
                     .insert(DeclName::expect_valid(binding_name), binding.value.clone());
             }
-            InputBindingCategory::Type if dep_index.types.contains(binding_name.as_str()) => {
+            InputBindingCategory::Type
+                if dep_index
+                    .types
+                    .get(binding_name.as_str())
+                    .is_some_and(|role| role.is_bindable()) =>
+            {
                 let rhs_name = lowering::extract_type_name_from_binding_expr(
                     &binding.value,
                     binding_name,
@@ -546,7 +600,12 @@ fn classify_param_bindings(
                     StructTypeName::expect_valid(rhs_name),
                 );
             }
-            InputBindingCategory::Dimension if dep_index.dims.contains(binding_name.as_str()) => {
+            InputBindingCategory::Dimension
+                if dep_index
+                    .dims
+                    .get(binding_name.as_str())
+                    .is_some_and(|role| role.is_bindable()) =>
+            {
                 let rhs_name = lowering::extract_type_name_from_binding_expr(
                     &binding.value,
                     binding_name,
@@ -558,7 +617,10 @@ fn classify_param_bindings(
                 );
             }
             InputBindingCategory::Index
-                if dep_index.indexes.contains_key(binding_name.as_str()) =>
+                if dep_index
+                    .indexes
+                    .get(binding_name.as_str())
+                    .is_some_and(|role| role.is_bindable()) =>
             {
                 let dep_name = IndexName::expect_valid(binding_name);
                 let target =
@@ -602,8 +664,55 @@ fn classify_param_bindings(
     Ok(out)
 }
 
+fn validate_required_static_bindings(
+    dep_index: &DepDeclIndex,
+    type_bindings: &DepToImporter<StructTypeName>,
+    dim_bindings: &DepToImporter<DimName>,
+    index_bindings: &IndexBindings,
+    file_src: &NamedSource<Arc<String>>,
+    include_span: Span,
+) -> Result<(), CompileError> {
+    let mut missing = dep_index
+        .types
+        .iter()
+        .filter(|(name, role)| role.is_required() && !type_bindings.contains_key(*name))
+        .map(|(name, _)| (StaticInputKind::Type, name.to_string()))
+        .chain(
+            dep_index
+                .dims
+                .iter()
+                .filter(|(name, role)| role.is_required() && !dim_bindings.contains_key(*name))
+                .map(|(name, _)| (StaticInputKind::Dimension, name.to_string())),
+        )
+        .chain(
+            dep_index
+                .indexes
+                .iter()
+                .filter(|(name, role)| role.is_required() && !index_bindings.contains_key(*name))
+                .map(|(name, _)| (StaticInputKind::Index, name.to_string())),
+        )
+        .collect::<Vec<_>>();
+    missing.sort_by(|(first_kind, first_name), (second_kind, second_name)| {
+        first_kind
+            .marker()
+            .cmp(second_kind.marker())
+            .then_with(|| first_name.cmp(second_name))
+    });
+    let Some((kind, name)) = missing.into_iter().next() else {
+        return Ok(());
+    };
+    Err(CompileError::Eval(
+        GraphcalError::RequiredStaticInputNotBound {
+            kind,
+            name,
+            src: file_src.clone(),
+            span: include_span.into(),
+        },
+    ))
+}
+
 fn validate_required_param_bindings(
-    dep_index: &DepDeclIndex<'_>,
+    dep_index: &DepDeclIndex,
     bindings: &HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
     dag_name: &str,
     file_src: &NamedSource<Arc<String>>,
@@ -817,19 +926,14 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
         selective_names.as_deref(),
     );
 
-    // Required indexes must always be bound.
-    for dep_decl in &dep_loaded.ast().declarations {
-        if let DeclKind::Index(idx) = &dep_decl.kind
-            && idx.kind.is_required()
-            && !index_bindings.contains_key(idx.name.value.as_str())
-        {
-            return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-                name: idx.name.value.to_string(),
-                src: file_src.clone(),
-                span: include_decl.path.span().into(),
-            }));
-        }
-    }
+    validate_required_static_bindings(
+        &dep_index,
+        &type_bindings,
+        &dim_bindings,
+        &index_bindings,
+        file_src,
+        include_decl.path.span(),
+    )?;
     validate_required_param_bindings(
         &dep_index,
         &bindings,
@@ -1048,19 +1152,14 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     let surface_outputs =
         include_surface_outputs(&dag_body.declarations, &prefix, selective_names.as_deref());
 
-    // Strict binding check: all required indexes must be bound.
-    for dep_decl in &dag_body.declarations {
-        if let DeclKind::Index(idx) = &dep_decl.kind
-            && idx.kind.is_required()
-            && !index_bindings.contains_key(idx.name.value.as_str())
-        {
-            return Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound {
-                name: idx.name.value.to_string(),
-                src: file_src.clone(),
-                span: include_decl.path.span().into(),
-            }));
-        }
-    }
+    validate_required_static_bindings(
+        &dep_index,
+        &type_bindings,
+        &dim_bindings,
+        &index_bindings,
+        file_src,
+        include_decl.path.span(),
+    )?;
     validate_required_param_bindings(&dep_index, &bindings, dag_name, file_src, decl.span)?;
 
     let pub_reexport_items: HashSet<DeclName> = match &include_decl.kind {
@@ -1182,6 +1281,13 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                         ImportItemNamespace::Term => ReservedNameNamespace::Term,
                     };
                     validate_reserved_alias(namespace, import_item, file_src)?;
+                    reject_required_static_import(
+                        declarations,
+                        orig_name,
+                        import_item.namespace,
+                        file_src,
+                        import_item.name.span,
+                    )?;
                     if import_item.namespace == ImportItemNamespace::Unit {
                         reject_runtime_unit_import(
                             dep,

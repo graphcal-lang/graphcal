@@ -232,6 +232,20 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("cannot `import` required {kind} input `{name}`")]
+    #[diagnostic(
+        code(graphcal::M028),
+        help("supply this typed input through `include` or a direct DAG call")
+    )]
+    ImportRequiredStaticInput {
+        kind: crate::ir::static_interface::StaticInputKind,
+        name: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("required Static input has no blueprint-stable target")]
+        span: SourceSpan,
+    },
+
     #[error("selective include chooses {namespace} producer `{name}` more than once")]
     #[diagnostic(
         code(graphcal::M027),
@@ -1726,20 +1740,18 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
-    /// A required index was not bound through an include chain.
-    ///
-    /// Required indexes (`index Foo;`, `index Foo: Time;`) must be bound when the
-    /// declaring DAG is included. A standalone file containing one is a library.
-    #[error("required index `{name}` must be bound via parameterized include")]
+    /// A required typed Static input was not bound through an include chain.
+    #[error("required {kind} `{name}` must be bound via parameterized include")]
     #[diagnostic(
         code(graphcal::I010),
-        help("bind the index by name at the include site, for example `{name}: SomeIndex`")
+        help("bind the input with its explicit `{kind}` marker at the include site")
     )]
-    RequiredIndexNotBound {
+    RequiredStaticInputNotBound {
+        kind: crate::ir::static_interface::StaticInputKind,
         name: String,
         #[source_code]
         src: NamedSource<Arc<String>>,
-        #[label("required index is not bound")]
+        #[label("required {kind} input is not bound")]
         span: SourceSpan,
     },
 
@@ -2261,6 +2273,7 @@ impl GraphcalError {
             | Self::ImportAssertionItem { src, .. }
             | Self::ImportRuntimeUnit { src, .. }
             | Self::IncludeRuntimeUnit { src, .. }
+            | Self::ImportRequiredStaticInput { src, .. }
             | Self::DuplicateIncludeSelection { src, .. }
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
@@ -2361,7 +2374,7 @@ impl GraphcalError {
             | Self::IndexBindingNotAnIndex { src, .. }
             | Self::IndexKindMismatch { src, .. }
             | Self::IndexBindingDimensionMismatch { src, .. }
-            | Self::RequiredIndexNotBound { src, .. }
+            | Self::RequiredStaticInputNotBound { src, .. }
             | Self::ImportRuntimeItem { src, .. }
             | Self::InvalidTimezone { src, .. }
             | Self::InvalidDatetimeLiteral { src, .. }

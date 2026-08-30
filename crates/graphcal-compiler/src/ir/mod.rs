@@ -6,3 +6,4 @@ pub mod lower;
 pub(crate) mod override_reconciliation;
 pub(crate) mod required_bindability;
 pub mod resolve;
+pub mod static_interface;
