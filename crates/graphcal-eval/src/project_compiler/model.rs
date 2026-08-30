@@ -45,17 +45,17 @@ pub(super) struct ImportAlias {
 pub(super) struct LoweringModuleInterface {
     frontend_registry: Registry,
     external_surface: ExternalDeclSurface,
-    exported_dynamic_units: HashSet<UnitName>,
+    exported_runtime_units: HashSet<UnitName>,
 }
 
 impl LoweringModuleInterface {
     pub(super) fn new(frontend_registry: Registry, external_surface: ExternalDeclSurface) -> Self {
-        let exported_dynamic_units = frontend_registry
+        let exported_runtime_units = frontend_registry
             .units
             .all_units()
             .filter(|(unit, info)| {
                 !unit.is_qualified()
-                    && info.scale.is_dynamic()
+                    && !info.constness.is_const()
                     && external_surface.is_unit_explicit_export(unit.name().atom())
             })
             .map(|(unit, _)| unit.name().clone())
@@ -63,7 +63,7 @@ impl LoweringModuleInterface {
         Self {
             frontend_registry,
             external_surface,
-            exported_dynamic_units,
+            exported_runtime_units,
         }
     }
 
@@ -75,12 +75,12 @@ impl LoweringModuleInterface {
         &self.external_surface
     }
 
-    pub(super) fn is_exported_dynamic_unit(&self, name: &UnitName) -> bool {
-        self.exported_dynamic_units.contains(name)
+    pub(super) fn is_exported_runtime_unit(&self, name: &UnitName) -> bool {
+        self.exported_runtime_units.contains(name)
     }
 
-    pub(super) const fn exported_dynamic_units(&self) -> &HashSet<UnitName> {
-        &self.exported_dynamic_units
+    pub(super) const fn exported_runtime_units(&self) -> &HashSet<UnitName> {
+        &self.exported_runtime_units
     }
 }
 
@@ -132,6 +132,12 @@ pub(super) struct ProjectSemanticContext<'project> {
     pub(super) module_templates: &'project mut ModuleTemplateStore,
 }
 
+/// One typed dynamic-unit projection requested by a selective include.
+pub(super) struct UnitProjectionAlias {
+    pub(super) source: UnitName,
+    pub(super) alias: UnitName,
+}
+
 /// Typed request for one concrete file-root or inline-DAG instance.
 pub(super) struct IncludeInstanceRequest {
     pub(super) template: ModuleTemplateRef,
@@ -143,6 +149,7 @@ pub(super) struct IncludeInstanceRequest {
     pub(super) type_bindings: DepToImporter<StructTypeName>,
     pub(super) dim_bindings: DepToImporter<DimName>,
     pub(super) selective_names: Option<Vec<ImportAlias>>,
+    pub(super) unit_projection_aliases: Vec<UnitProjectionAlias>,
     pub(super) assertion_aliases: HashMap<DeclName, DeclName>,
     pub(super) surface_outputs: Vec<ScopedName>,
     pub(super) requested_plots: HashMap<DeclName, graphcal_compiler::ir::lower::RequestedPlot>,
@@ -166,6 +173,28 @@ impl ProjectModuleBinding {
     }
 }
 
+/// One source-visible Static or Unit projection alias and its effective target.
+#[derive(Debug, Clone)]
+pub(super) enum ProjectedStaticAlias {
+    Type {
+        alias: StructTypeName,
+        target: StructTypeName,
+        specialized: bool,
+    },
+    Dimension {
+        alias: DimName,
+        target: DimName,
+    },
+    Index {
+        alias: IndexName,
+        target: IndexBindingTarget,
+    },
+    Unit {
+        alias: UnitName,
+        target: UnitName,
+    },
+}
+
 /// Mutable state accumulated while processing one body's imports.
 pub(super) struct ImportContext<'a> {
     pub(super) imported_names: ImportedValueNames,
@@ -175,6 +204,7 @@ pub(super) struct ImportContext<'a> {
         graphcal_compiler::dag_id::DagId,
         graphcal_compiler::ir::lower::SelectedDeclarations,
     >,
+    pub(super) projected_static_aliases: Vec<ProjectedStaticAlias>,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
     pub(super) frontend_registry_imports: Vec<FrontendRegistryImport<'a>>,
     pub(super) include_instances: Vec<IncludeInstanceRequest>,
@@ -182,13 +212,13 @@ pub(super) struct ImportContext<'a> {
 
 /// Whether registry composition is a pure import or concrete instance boundary.
 #[derive(Debug, Clone, Copy)]
-pub(super) enum DynamicUnitBoundary {
+pub(super) enum RuntimeUnitBoundary {
     PureImport,
     ConcreteInstance,
 }
 
-impl DynamicUnitBoundary {
-    pub(super) const fn includes_dynamic_units(self) -> bool {
+impl RuntimeUnitBoundary {
+    pub(super) const fn includes_runtime_units(self) -> bool {
         matches!(self, Self::ConcreteInstance)
     }
 }
@@ -197,7 +227,11 @@ impl DynamicUnitBoundary {
 pub(super) struct FrontendRegistryImport<'a> {
     pub(super) registry: &'a Registry,
     pub(super) external_surface: &'a ExternalDeclSurface,
+    /// Source declarations used to enforce per-member import capability.
+    /// `None` denotes a concrete include instance rather than a pure import.
+    pub(super) pure_import_declarations:
+        Option<&'a [graphcal_compiler::desugar::desugared_ast::Declaration]>,
     pub(super) unit_alias: ModuleAliasName,
-    pub(super) dynamic_unit_boundary: DynamicUnitBoundary,
+    pub(super) runtime_unit_boundary: RuntimeUnitBoundary,
     pub(super) import_span: Span,
 }

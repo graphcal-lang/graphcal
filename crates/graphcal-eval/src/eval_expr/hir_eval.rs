@@ -297,6 +297,7 @@ fn eval_hir_expr_inner(
             target,
             args,
             output,
+            ..
         } => eval_hir_dag_call(
             expr.span,
             target,

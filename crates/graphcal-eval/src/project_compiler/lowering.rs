@@ -8,30 +8,99 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
     reason = "project compiler pass uses the shared internal model"
 )]
 use super::*;
-use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, ExprKind};
+use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind, File};
+use graphcal_compiler::syntax::phase::Desugared;
 use graphcal_compiler::syntax::span::Spanned;
+use graphcal_compiler::syntax::visitor::ExprVisitor;
 
 use super::generic_leakage::{check_generics_leakage, collect_local_type_names};
 use super::registry_merge::{merge_registry_into_builder, seed_imported_type_system};
 
-fn reject_runtime_units_at_include_boundary(
-    registry: &Registry,
+struct DirectDagCallValidator<'a> {
+    project: &'a crate::loader::LoadedProject,
+    owner: &'a graphcal_compiler::dag_id::DagId,
+    importer_declarations: &'a [Declaration],
+    resolver: &'a graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    src: &'a NamedSource<Arc<String>>,
+}
+
+impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
+    type Error = CompileError;
+
+    fn visit_inline_dag_ref(
+        &mut self,
+        expr: &Expr,
+        args: &[graphcal_compiler::desugar::desugared_ast::ParamBinding],
+    ) -> Result<(), Self::Error> {
+        let ExprKind::InlineDagRef { path, .. } = &expr.kind else {
+            return Ok(());
+        };
+        if let Ok(target) = self.resolver.resolve_module_path(self.owner, path) {
+            let declarations = self.project.files().get(&target).map_or_else(
+                || {
+                    self.project
+                        .inline_dag(&target)
+                        .map(|(file, dag)| dag.body(file))
+                },
+                |file| Some(file.ast().declarations.as_slice()),
+            );
+            if let Some(declarations) = declarations {
+                imports::validate_direct_dag_call_bindings(
+                    args,
+                    declarations,
+                    self.importer_declarations,
+                    &target.to_string(),
+                    self.src,
+                    expr.span,
+                )?;
+            }
+        }
+        args.iter()
+            .try_for_each(|binding| self.visit_expr(&binding.value))
+    }
+}
+
+fn validate_direct_dag_calls(
+    ast: &File,
+    project: &crate::loader::LoadedProject,
+    owner: &graphcal_compiler::dag_id::DagId,
+    resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     src: &NamedSource<Arc<String>>,
-    span: Span,
 ) -> Result<(), CompileError> {
-    registry
-        .units
-        .all_units()
-        .filter(|(_, info)| info.scale.is_dynamic())
-        .map(|(unit, _)| unit)
-        .min()
-        .map_or(Ok(()), |unit| {
-            Err(CompileError::Eval(GraphcalError::IncludeRuntimeUnit {
-                name: unit.clone(),
-                src: src.clone(),
-                span: span.into(),
-            }))
-        })
+    let mut validator = DirectDagCallValidator {
+        project,
+        owner,
+        importer_declarations: &ast.declarations,
+        resolver,
+        src,
+    };
+    let mut visit = |expr: &Expr| validator.visit_expr(expr);
+    for declaration in &ast.declarations {
+        match &declaration.kind {
+            DeclKind::Param(param) => {
+                if let Some(value) = &param.value {
+                    visit(value)?;
+                }
+            }
+            DeclKind::Node(node) => visit(&node.value)?,
+            DeclKind::ConstNode(constant) => visit(&constant.value)?,
+            DeclKind::Assert(assertion) => match &assertion.body {
+                graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(expr) => visit(expr)?,
+                graphcal_compiler::desugar::desugared_ast::AssertBody::Tolerance {
+                    actual,
+                    expected,
+                    tolerance,
+                    ..
+                } => {
+                    visit(actual)?;
+                    visit(expected)?;
+                    visit(tolerance)?;
+                }
+            },
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn imported_module_target(
@@ -62,7 +131,7 @@ fn is_imported_dynamic_unit_during_lowering(
     imported_module_target(alias, module_map).is_some_and(|target| {
         module_interfaces
             .get(&target)
-            .is_some_and(|interface| interface.is_exported_dynamic_unit(name))
+            .is_some_and(|interface| interface.is_exported_runtime_unit(name))
     })
 }
 
@@ -95,7 +164,7 @@ fn remap_imported_dynamic_unit_error(
 pub(super) fn imported_runtime_unit_reference(
     dag: &graphcal_compiler::tir::typed::DagTIR,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    exported_dynamic_units: &HashMap<
+    exported_runtime_units: &HashMap<
         graphcal_compiler::dag_id::DagId,
         HashSet<graphcal_compiler::syntax::dimension::UnitName>,
     >,
@@ -105,7 +174,7 @@ pub(super) fn imported_runtime_unit_reference(
         if invalid.is_none()
             && unit.spelling().qualifier().is_some_and(|alias| {
                 imported_module_target(alias, module_map).is_some_and(|target| {
-                    exported_dynamic_units
+                    exported_runtime_units
                         .get(&target)
                         .is_some_and(|names| names.contains(unit.spelling().name()))
                 })
@@ -163,6 +232,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         module_resolver,
         module_templates,
     } = semantic_context;
+    validate_direct_dag_calls(file_ast, project, file_dag_id, module_resolver, file_src)?;
     let include_debug_names = include_debug_name_map(&ctx);
 
     let mut registry_seed = |builder: &mut RegistryBuilder| {
@@ -171,6 +241,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
             project,
             &ctx.imported_type_system_names,
             &ctx.frontend_registry_imports,
+            &ctx.projected_static_aliases,
             module_artifacts,
             file_src,
         )
@@ -212,6 +283,7 @@ pub(in crate::project_compiler) fn lower_file_to_hir(
         file_dag_id,
         &ctx.include_instances,
         module_artifacts,
+        module_resolver,
         module_templates,
         file_src,
         file_ast,
@@ -283,6 +355,26 @@ pub(super) fn module_resolve_compile_error(
         } => CompileError::Eval(GraphcalError::ImportCategoryMismatch {
             file_path: owner.to_string(),
             mismatch,
+            src: src.clone(),
+            span: span.into(),
+        }),
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError::IncludeItemNotProjectable {
+            name,
+            span,
+            ..
+        } => CompileError::Eval(GraphcalError::IncludeItemNotProjectable {
+            name,
+            src: src.clone(),
+            span: span.into(),
+        }),
+        graphcal_compiler::syntax::module_resolve::ModuleResolveError::ConstructorOwnerRebound {
+            constructor,
+            owner_type,
+            span,
+            ..
+        } => CompileError::Eval(GraphcalError::IncludeConstructorOwnerRebound {
+            constructor,
+            owner_type: owner_type.to_string(),
             src: src.clone(),
             span: span.into(),
         }),
@@ -388,6 +480,7 @@ fn compile_loaded_dag_module_ir<'a>(
         imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
         imported_type_system_names: HashMap::new(),
+        projected_static_aliases: Vec::new(),
         module_map: HashMap::new(),
         frontend_registry_imports: Vec::new(),
         include_instances: Vec::new(),
@@ -399,6 +492,7 @@ fn compile_loaded_dag_module_ir<'a>(
         dag_body,
         file_src,
         module_artifacts,
+        module_resolver,
         &mut ctx,
     )?;
     process_dag_body_include_declarations(
@@ -426,12 +520,20 @@ fn compile_loaded_dag_module_ir<'a>(
         &ctx.imported_names,
         &mut ctx.include_instances,
     );
+    validate_direct_dag_calls(
+        dag_ast.as_ref(),
+        project,
+        loaded_dag.dag_id(),
+        module_resolver,
+        file_src,
+    )?;
     let mut registry_seed = |builder: &mut RegistryBuilder| {
         seed_imported_type_system(
             builder,
             project,
             &ctx.imported_type_system_names,
             &ctx.frontend_registry_imports,
+            &ctx.projected_static_aliases,
             module_artifacts,
             file_src,
         )
@@ -453,6 +555,7 @@ fn compile_loaded_dag_module_ir<'a>(
         loaded_dag.dag_id(),
         &ctx.include_instances,
         module_artifacts,
+        module_resolver,
         module_templates,
         file_src,
         dag_ast.as_ref(),
@@ -575,11 +678,12 @@ fn extend_imported_bindings(
 }
 
 fn process_dag_body_import_declarations<'a>(
-    project: &crate::loader::LoadedProject,
+    project: &'a crate::loader::LoadedProject,
     loaded_dag: &crate::loader::LoadedDag,
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -600,8 +704,10 @@ fn process_dag_body_import_declarations<'a>(
             target,
             &import_decl.path,
             &import_decl.kind,
+            dag_body,
             file_src,
             module_artifacts,
+            module_resolver,
             ctx,
         )?;
     }
@@ -632,6 +738,7 @@ fn process_dag_body_include_declarations<'a>(
                 target.source_file(),
                 include_decl,
                 decl,
+                dag_body,
                 file_src,
                 module_artifacts,
                 ctx,
@@ -652,6 +759,7 @@ fn process_dag_body_include_declarations<'a>(
             },
             include_decl,
             decl,
+            dag_body,
             file_src,
             ctx,
         )?;
@@ -757,6 +865,7 @@ fn elaborate_include_instances(
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
     include_instances: &[IncludeInstanceRequest],
     module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     module_templates: &mut ModuleTemplateStore,
     importer_src: &NamedSource<Arc<String>>,
     importer_ast: &graphcal_compiler::desugar::desugared_ast::File,
@@ -810,6 +919,7 @@ fn elaborate_include_instances(
                     imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
                     imported_type_system_names: HashMap::new(),
+                    projected_static_aliases: Vec::new(),
                     module_map: HashMap::new(),
                     frontend_registry_imports: Vec::new(),
                     include_instances: Vec::new(),
@@ -818,6 +928,7 @@ fn elaborate_include_instances(
                     project,
                     dep_dag_id,
                     module_artifacts,
+                    module_resolver,
                     &mut body_ctx,
                     cancellation,
                 )?;
@@ -826,12 +937,20 @@ fn elaborate_include_instances(
                     &body_ctx.imported_names,
                     &mut body_ctx.include_instances,
                 );
+                validate_direct_dag_calls(
+                    rewritten_body.as_ref(),
+                    project,
+                    dep_dag_id,
+                    module_resolver,
+                    dep_src,
+                )?;
                 let mut registry_seed = |builder: &mut RegistryBuilder| {
                     seed_imported_type_system(
                         builder,
                         project,
                         &body_ctx.imported_type_system_names,
                         &body_ctx.frontend_registry_imports,
+                        &body_ctx.projected_static_aliases,
                         module_artifacts,
                         dep_src,
                     )
@@ -851,6 +970,7 @@ fn elaborate_include_instances(
                     dep_dag_id,
                     &body_ctx.include_instances,
                     module_artifacts,
+                    module_resolver,
                     module_templates,
                     dep_src,
                     rewritten_body.as_ref(),
@@ -905,6 +1025,7 @@ fn elaborate_include_instances(
                     imported_bindings: HashMap::new(),
                     imported_source_order: Vec::new(),
                     imported_type_system_names: HashMap::new(),
+                    projected_static_aliases: Vec::new(),
                     module_map: HashMap::new(),
                     frontend_registry_imports: Vec::new(),
                     include_instances: Vec::new(),
@@ -915,6 +1036,7 @@ fn elaborate_include_instances(
                     inline_body,
                     importer_src,
                     module_artifacts,
+                    module_resolver,
                     &mut body_ctx,
                 )?;
                 process_dag_body_include_declarations(
@@ -941,6 +1063,13 @@ fn elaborate_include_instances(
                     &body_ctx.imported_names,
                     &mut body_ctx.include_instances,
                 );
+                validate_direct_dag_calls(
+                    stripped_body.as_ref(),
+                    project,
+                    dag_id,
+                    module_resolver,
+                    importer_src,
+                )?;
 
                 let mut registry_seed = |builder: &mut RegistryBuilder| {
                     seed_imported_type_system(
@@ -948,6 +1077,7 @@ fn elaborate_include_instances(
                         project,
                         &body_ctx.imported_type_system_names,
                         &body_ctx.frontend_registry_imports,
+                        &body_ctx.projected_static_aliases,
                         module_artifacts,
                         importer_src,
                     )
@@ -968,6 +1098,7 @@ fn elaborate_include_instances(
                     dag_id,
                     &body_ctx.include_instances,
                     module_artifacts,
+                    module_resolver,
                     module_templates,
                     importer_src,
                     stripped_body.as_ref(),
@@ -994,12 +1125,6 @@ fn elaborate_include_instances(
                     inline_body,
                 )
             };
-
-        reject_runtime_units_at_include_boundary(
-            &dep_registry,
-            importer_src,
-            instance.include_span,
-        )?;
 
         // Capture importer-owned candidates before the dependency registry is
         // merged, so a dependency declaration with the same leaf name cannot
@@ -1069,6 +1194,20 @@ fn elaborate_include_instances(
         )?;
 
         // ---- 5. Merge dependency assembly into importer ---------------------
+        let selective_alias_declarations =
+            instance
+                .selective_names
+                .as_ref()
+                .map_or_else(HashMap::new, |selective| {
+                    selective
+                        .iter()
+                        .filter_map(|alias| {
+                            dep_unfrozen
+                                .include_alias_declaration(&alias.original)
+                                .map(|declaration| (alias.original.clone(), declaration))
+                        })
+                        .collect::<HashMap<_, _>>()
+                });
         let source_order_start = unfrozen.source_order.len();
         unfrozen.merge_dependency(
             dep_unfrozen,
@@ -1089,10 +1228,18 @@ fn elaborate_include_instances(
         )?;
 
         // ---- 6. Add selective aliases -------------------------------------
+        for projection in &instance.unit_projection_aliases {
+            unfrozen.add_dynamic_unit_projection_alias(
+                &merge_prefix,
+                &projection.source,
+                projection.alias.clone(),
+            );
+        }
         if let Some(selective) = &instance.selective_names {
             add_selective_aliases_inner(
-                body_decls_for_aliases,
+                &selective_alias_declarations,
                 selective,
+                &instance.pub_reexport_items,
                 &merge_prefix,
                 &AliasSubstitutions {
                     index: &instance.index_bindings,
@@ -1335,13 +1482,16 @@ struct AliasResolutionOwners<'a> {
 /// selected item, rewriting the type annotation through `subs` so it lands
 /// in the importer's merged registry.
 ///
-/// `decls` is the dep's source list — the dag body's declarations for
-/// inline-DAG includes, the file's top-level declarations for file
-/// includes. Names not found in `decls` (e.g., type-system-only items) are
-/// silently skipped.
+/// `declarations` is the producer's effective HIR-facing value surface after
+/// its own includes have been elaborated. Type-system-only items are absent.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "selective alias materialization carries substitutions, ownership, visibility, and source provenance"
+)]
 fn add_selective_aliases_inner(
-    decls: &[graphcal_compiler::desugar::desugared_ast::Declaration],
+    declarations: &HashMap<DeclName, graphcal_compiler::ir::lower::IncludeAliasDeclaration>,
     selective: &[ImportAlias],
+    public_originals: &HashSet<DeclName>,
     prefix: &ModuleAliasName,
     subs: &AliasSubstitutions<'_>,
     owners: &AliasResolutionOwners<'_>,
@@ -1362,16 +1512,10 @@ fn add_selective_aliases_inner(
         // built — the qualification stays structural through HIR.
         let target = ScopedName::qualified(prefix.clone(), orig_name.clone());
 
-        let type_ann = decls.iter().find_map(|d| match &d.kind {
-            DeclKind::Param(p) if &p.name.value == orig_name => Some(p.type_ann.clone()),
-            DeclKind::Node(n) if &n.name.value == orig_name => Some(n.type_ann.clone()),
-            DeclKind::ConstNode(c) if &c.name.value == orig_name => Some(c.type_ann.clone()),
-            _ => None,
-        });
-
-        let Some(mut type_ann) = type_ann else {
+        let Some(declaration) = declarations.get(orig_name) else {
             continue;
         };
+        let mut type_ann = declaration.type_ann.clone();
 
         graphcal_compiler::ir::lower::substitute_type_expr_indexes(&mut type_ann, subs.index);
         graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(
@@ -1380,10 +1524,7 @@ fn add_selective_aliases_inner(
         );
         graphcal_compiler::ir::lower::substitute_type_expr_nominal_names(&mut type_ann, subs.dim);
 
-        let is_const = decls
-            .iter()
-            .any(|d| matches!(&d.kind, DeclKind::ConstNode(c) if &c.name.value == orig_name));
-        let alias_kind = if is_const {
+        let alias_kind = if declaration.is_const {
             // A const alias body is a reference path to the prefixed target;
             // HIR lowering resolves it against the merged entries.
             ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(
@@ -1405,7 +1546,10 @@ fn add_selective_aliases_inner(
         };
         let alias_expr = Expr::new(alias_kind, import_span);
 
-        if is_const {
+        if public_originals.contains(orig_name) {
+            unfrozen.export_term_alias(local_name.clone());
+        }
+        if declaration.is_const {
             unfrozen.add_const_alias(
                 ScopedName::local(local_name.clone()),
                 type_ann,

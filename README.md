@@ -37,6 +37,7 @@ graphcal eval rocket.gcl
 
 - **Type- and unit-safe:** dimensional mistakes such as `km + kg` are rejected at compile time.
 - **Explicit name resolution:** Static, Term, and Unit lookups are separate; `::`, `#`, and `.` make module members, index labels, and runtime fields unambiguous.
+- **Typed reusable interfaces:** `include` and direct DAG calls bind required or optional `type`, `dim`, and `index` inputs by exact category; transitive re-exports retain canonical identities, specialized ADT constructors follow their owner type, nested DAG blueprints use dotted paths, and concrete instances keep plain-unit scales isolated.
 - **Reactive:** changing a parameter recomputes its dependents.
 - **Git-friendly:** `.gcl` files are plain text and diff cleanly.
 - **Engineering-focused:** build reusable computation graphs with dimensions, units, assertions, and visualization.

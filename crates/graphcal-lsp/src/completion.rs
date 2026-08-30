@@ -113,7 +113,7 @@ const fn exported_import_item_kind(
         }
         ExportedImportItemKind::Constructor => CompletionItemKind::CONSTRUCTOR,
         ExportedImportItemKind::Dimension => CompletionItemKind::CLASS,
-        ExportedImportItemKind::Unit => CompletionItemKind::UNIT,
+        ExportedImportItemKind::Unit(_) => CompletionItemKind::UNIT,
         ExportedImportItemKind::Type => CompletionItemKind::STRUCT,
         ExportedImportItemKind::Index => CompletionItemKind::ENUM,
     }

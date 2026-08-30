@@ -94,11 +94,15 @@ pub struct RegistryBuilder {
     base_dim_symbols: BTreeMap<BaseDimId, String>,
 
     dimensions: HashMap<DimName, Dimension>,
+    dimension_aliases: HashMap<DimName, DimName>,
     units: HashMap<UnitRef, UnitInfo>,
+    unit_aliases: HashMap<UnitRef, UnitRef>,
     types: HashMap<StructTypeName, TypeDef>,
+    type_aliases: HashMap<StructTypeName, StructTypeName>,
     ctors: HashMap<ConstructorName, StructTypeName>,
     indexes: HashMap<IndexName, IndexDef>,
     finite_indexes: HashMap<FiniteIndex, IndexDef>,
+    index_aliases: HashMap<IndexName, IndexBindingTarget>,
     dags: HashMap<DeclName, DagDecl>,
     /// Base dimensions whose real-world units are affine (offset) scales,
     /// e.g. Temperature (°C, °F). User unit definitions on these dimensions
@@ -126,15 +130,21 @@ impl RegistryBuilder {
                 base_dim_names: self.base_dim_names,
                 base_dim_symbols: self.base_dim_symbols,
                 dimensions: self.dimensions,
+                aliases: self.dimension_aliases,
             },
-            units: UnitRegistry { units: self.units },
+            units: UnitRegistry {
+                units: self.units,
+                aliases: self.unit_aliases,
+            },
             types: TypeRegistry {
                 types: self.types,
+                aliases: self.type_aliases,
                 ctors: self.ctors,
             },
             indexes: IndexRegistry {
                 indexes: self.indexes,
                 finite_indexes: self.finite_indexes,
+                aliases: self.index_aliases,
             },
             time_zones: TimeZoneRegistry::bundled(),
             dags: DagRegistry { dags: self.dags },
@@ -186,16 +196,20 @@ impl RegistryBuilder {
                 .entry(name.clone())
                 .or_insert_with(|| dim.clone());
         }
+        self.dimension_aliases
+            .extend(parent.dimensions.aliases.clone());
         for (name, info) in &parent.units.units {
             self.units
                 .entry(name.clone())
                 .or_insert_with(|| info.clone());
         }
+        self.unit_aliases.extend(parent.units.aliases.clone());
         for (name, def) in &parent.types.types {
             self.types
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
         }
+        self.type_aliases.extend(parent.types.aliases.clone());
         for (ctor, union_name) in &parent.types.ctors {
             self.ctors
                 .entry(ctor.clone())
@@ -211,6 +225,7 @@ impl RegistryBuilder {
                 .entry(*index)
                 .or_insert_with(|| def.clone());
         }
+        self.index_aliases.extend(parent.indexes.aliases.clone());
         for (name, decl) in &parent.dags.dags {
             self.dags
                 .entry(name.clone())
@@ -300,6 +315,11 @@ impl RegistryBuilder {
         self.dimensions.insert(name, dim);
     }
 
+    /// Register a source-visible dimension alias without changing identity.
+    pub fn register_dimension_alias(&mut self, alias: DimName, target: DimName) {
+        self.dimension_aliases.insert(alias, target);
+    }
+
     /// Register a named unit with its dimension and SI scale factor.
     pub(crate) fn register_unit(
         &mut self,
@@ -345,6 +365,11 @@ impl RegistryBuilder {
         self.register_unit_with_scale(name, dimension, scale, UnitConstness::Dynamic);
     }
 
+    /// Register a source-visible unit alias without changing scale identity.
+    pub fn register_unit_alias(&mut self, alias: UnitRef, target: UnitRef) {
+        self.unit_aliases.insert(alias, target);
+    }
+
     /// Register a type definition.
     ///
     /// For tagged unions (the common case), also populates the
@@ -363,9 +388,19 @@ impl RegistryBuilder {
         self.types.insert(def.name().clone(), def);
     }
 
+    /// Register a source-visible type alias without changing nominal identity.
+    pub fn register_type_alias(&mut self, alias: StructTypeName, target: StructTypeName) {
+        self.type_aliases.insert(alias, target);
+    }
+
     /// Register an index definition.
     pub fn register_index(&mut self, def: IndexDef) {
         self.indexes.insert(def.name.clone(), def);
+    }
+
+    /// Register a source-visible index alias to a declared or structural target.
+    pub fn register_index_alias(&mut self, alias: IndexName, target: IndexBindingTarget) {
+        self.index_aliases.insert(alias, target);
     }
 
     /// Ensure that a concrete structural `Fin(N)` definition exists.
@@ -387,13 +422,29 @@ impl RegistryBuilder {
     /// Look up a dimension by name.
     #[must_use]
     pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
-        self.dimensions.get(name)
+        let mut current = DimName::try_new(name).ok()?;
+        let mut remaining = self.dimension_aliases.len() + 1;
+        loop {
+            if let Some(dimension) = self.dimensions.get(&current) {
+                return Some(dimension);
+            }
+            current = self.dimension_aliases.get(&current)?.clone();
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Look up a unit by name.
     #[must_use]
     pub fn get_unit(&self, name: &UnitRef) -> Option<&UnitInfo> {
-        self.units.get(name)
+        let mut current = name.clone();
+        let mut remaining = self.unit_aliases.len() + 1;
+        loop {
+            if let Some(info) = self.units.get(&current) {
+                return Some(info);
+            }
+            current = self.unit_aliases.get(&current)?.clone();
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Iterate over every unit reference and its complete semantic definition.
@@ -404,13 +455,36 @@ impl RegistryBuilder {
     /// Look up a type definition by type name.
     #[must_use]
     pub fn get_type(&self, name: &str) -> Option<&TypeDef> {
-        self.types.get(name)
+        let mut current = StructTypeName::try_new(name).ok()?;
+        let mut remaining = self.type_aliases.len() + 1;
+        loop {
+            if let Some(definition) = self.types.get(&current) {
+                return Some(definition);
+            }
+            current = self.type_aliases.get(&current)?.clone();
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Look up a declared index definition by name.
     #[must_use]
     pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
-        self.indexes.get(name)
+        let mut current = IndexBindingTarget::Declared(IndexName::try_new(name).ok()?);
+        let mut remaining = self.index_aliases.len() + 1;
+        loop {
+            match current {
+                IndexBindingTarget::Declared(ref declared) => {
+                    if let Some(definition) = self.indexes.get(declared) {
+                        return Some(definition);
+                    }
+                    current = self.index_aliases.get(declared)?.clone();
+                }
+                IndexBindingTarget::Finite(index) => {
+                    return self.finite_indexes.get(&index);
+                }
+            }
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Look up a compiler-generated structural index by typed identity.

@@ -635,6 +635,16 @@ impl ProjectTypeStore {
             })?;
             self.insert_unit_definition(identity, info)?;
         }
+        for dynamic in hir.dynamic_unit_scales() {
+            let info = hir
+                .registry
+                .units
+                .get_unit(&dynamic.spelling)
+                .ok_or_else(|| ProjectTypeStoreInsertError::MissingUnit {
+                    identity: dynamic.unit.clone(),
+                })?;
+            self.insert_unit_definition(dynamic.unit.clone(), info)?;
+        }
         for name in symbols.indexes().keys() {
             let identity = ResolvedIndexName::from_def(owner.clone(), name.clone());
             let index = hir

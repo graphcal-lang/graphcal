@@ -990,9 +990,12 @@ Graphcal has separate mechanisms for compile-time names and runtime instances:
   never creates a default runtime instance, evaluates assertions, or exports a
   runtime-dependent unit scale.
 - `include` creates an explicit DAG instance, with optional value/index/type/
-  dimension bindings. Assertions belong to that concrete instance. A module
-  that declares a runtime-dependent unit cannot be included (`M026`): dynamic
-  units stay encapsulated inside an entry or explicitly called DAG.
+  dimension bindings. Assertions and plain-unit scales belong to that concrete
+  instance. Repeated and nested instances preserve distinct runtime-unit
+  identities; plain units remain unavailable through `import`.
+- A direct DAG call validates the same categorized Static binding batch as an
+  include. HIR retains canonical type/dimension/index substitutions on the call,
+  and TIR specializes parameter and output signatures per occurrence.
 
 Import/include paths are dot-separated module paths in source. Loader internals
 drop spans and store path segments in `ModulePathKey`; compiled DAG identity is
@@ -1033,8 +1036,8 @@ the canonical template with a fresh concrete owner, while
 substitutions. The current evaluator still monomorphizes declarations into the
 importer, but semantic declaration records carry the explicit concrete owner;
 source-facing prefixes are lookup/presentation names, not the source of semantic
-identity. Runtime-dependent units are deliberately excluded from this include
-composition model rather than fabricating instance-qualified unit definitions.
+identity. Runtime-dependent units are rebased onto that concrete owner and are
+installed in the project type store under their instance-qualified identities.
 
 Generic-leakage analysis carries bare signature references as typed
 index/type/dimension categories. It checks importer visibility only after an

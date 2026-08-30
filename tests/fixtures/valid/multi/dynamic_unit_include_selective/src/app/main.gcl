@@ -1,0 +1,6 @@
+// A selective include preserves instance-local dynamic-unit identity.
+import app.fx::{ dim Money, unit USD };
+include app.fx()::{ p, unit EUR as euros };
+
+param mine: Money = 100.0 USD;
+node converted: Money = @mine -> euros;

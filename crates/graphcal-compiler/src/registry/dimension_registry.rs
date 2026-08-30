@@ -151,13 +151,22 @@ pub struct DimensionRegistry {
     /// Base dimension ID → default unit symbol for runtime display.
     pub(crate) base_dim_symbols: BTreeMap<BaseDimId, String>,
     pub(crate) dimensions: HashMap<DimName, Dimension>,
+    pub(crate) aliases: HashMap<DimName, DimName>,
 }
 
 impl DimensionRegistry {
     /// Look up a dimension by name.
     #[must_use]
     pub fn get_dimension(&self, name: &str) -> Option<&Dimension> {
-        self.dimensions.get(name)
+        let mut current = DimName::try_new(name).ok()?;
+        let mut remaining = self.aliases.len() + 1;
+        loop {
+            if let Some(dimension) = self.dimensions.get(&current) {
+                return Some(dimension);
+            }
+            current = self.aliases.get(&current)?.clone();
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Iterate over all named dimensions.

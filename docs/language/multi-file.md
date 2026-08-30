@@ -166,6 +166,15 @@ dependencies do not introduce extra source names into the consumer: import a
 sibling only when consumer source names it directly. Constructors remain a
 separate term import when consumer source explicitly constructs a value.
 
+A direct or module-qualified import is valid only when that retained Static
+dependency closure has no unresolved required input. A required `pub(bind)`
+`type`, `dim`, or `index` cannot itself cross a pure import boundary, and neither
+can a declaration whose signature transitively depends on one. Instantiate the
+owning blueprint with `include` and supply exact-category bindings instead.
+Whole-module aliases may still name a blueprint for a later qualified include;
+the restriction applies when source selects a non-closed member as an imported
+compile-time value.
+
 ### Aliasing items
 
 Each item in a brace list may be aliased independently:
@@ -287,9 +296,14 @@ include nasa.rocket.compute_thrust(orbit: @o)::{ thrust };
 include nasa.rocket.compute_thrust(orbit: @o)::{ thrust, isp, mass_flow as mdot };
 node t: Force = @thrust;
 
-// Category markers are import-only; include selectors are unmarked Terms.
-// The selected Term must be a projectable param, node, assertion, or visualization.
-// include nasa.rocket.compute_thrust(orbit: @o)::{ dim thrust }; // parse error
+// Non-Term projections use the same explicit markers as selective imports.
+include nasa.rocket.compute_thrust(orbit: @o)::{
+    type Orbit as EffectiveOrbit,
+    dim Thrust as EffectiveThrust,
+    unit newton as effective_newton,
+    index Maneuver as EffectiveManeuver,
+};
+// An unmarked item still selects only a projectable Term.
 ```
 
 | Form                                                            | Result                                                |
@@ -305,6 +319,31 @@ must be public, including for a same-file DAG. Across a module boundary, the
 DAG named by `path.dag` must also be `pub`. Renaming an output does not change
 its visibility. Private nodes inside the included DAG remain implementation
 details.
+
+A constructor is a projectable part of its owning type's API. Selecting the
+owner type and its constructors therefore permits construction and matching of
+a Static-specialized ADT:
+
+```graphcal
+dag sensor {
+    pub(bind) dim Quantity;
+    pub type Reading { Missing, Present(value: Quantity) }
+}
+
+include sensor(dim Quantity: Length)::{
+    type Reading,
+    Missing,
+    Present,
+};
+node reading: Reading = Present(value: 2.0 m);
+```
+
+The constructor keeps the same specialization as `Reading`; rebinding the
+owner type itself while selecting one of its constructors is rejected (`M032`).
+A nested `dag` is a reusable blueprint, not a member of the configured
+instance, so selecting it from an include brace list is rejected at that item
+(`M031`). Address nested blueprints with a dot-separated DAG path instead, for
+example `include library.parent.child(args)::{output};`.
 
 `graphcal eval` therefore shows only the entry DAG and the include's selected
 or projectable outputs by default. Use `--output-view all` when debugging to
@@ -353,8 +392,10 @@ canonical declaration regardless of include order or nesting. Include-binding
 expressions belong to the importer, while declaration signatures and producer
 bodies belong to the included file; diagnostics report the file that owns the
 failing expression instead of applying one file's spans to another's text.
-Dynamic units do not cross an include boundary (`M026`); keep their runtime
-scales private inside an entry or explicitly called DAG.
+A plain `unit` remains instance-scoped across this boundary. Its scale is
+evaluated from the concrete include's bindings, and repeated or nested includes
+retain independent unit identities and scales. Plain units are still unavailable
+through `import`; use `const unit` for a blueprint-stable imported unit.
 
 ### `include` does not require `import` of the DAG
 
@@ -391,6 +432,12 @@ include nasa.rocket.compute_thrust(orbit: @o)::{ pub thrust, mass_flow };
 //                                                      ^^^^^^^^^ private here
 ```
 
+A downstream include may select a public alias created by an earlier selective
+include. Graphcal materializes that alias as an instance declaration, so const
+and runtime outputs preserve their canonical target through multi-hop facades,
+including `as` aliases and namespace-form access. Assertions and plots retain
+their dedicated instance categories rather than becoming ordinary values.
+
 Bare and aliased includes create private configured instances. Leading
 `pub include` and `pub(bind) include` forms are parse errors; Graphcal does
 not expose a dependency-controlled output namespace wholesale.
@@ -415,7 +462,13 @@ dag mission {
 
 Each call site is a fresh instantiation, and the DAG's `assert`
 declarations are checked per instantiation just like the `include`
-path. Calls are runtime graph instantiations regardless of whether the target
+path. Required Static inputs use the same explicit markers as an include:
+`type Element: LocalElement`, `dim Measure: Length`, and
+`index Axis: LocalAxis` (or `Fin(N)`). Omitting any required Static input is
+`I010`; supplied bindings specialize parameter and output signatures at that
+call occurrence.
+
+Calls are runtime graph instantiations regardless of whether the target
 is a file root or a source-nested `dag`, so they are rejected in `const node`
 bodies and domain bounds. Because an expression has no reporting surface, a failing (or
 erroring) assert fails the calling expression itself — the calling
@@ -884,7 +937,7 @@ For ordinary declarations, visibility and bindability form a **two-axis split**:
 |--------------|:---------:|:---------:|-------------------------------------------------------------------------|
 | (none)       | no        | no        | internal helpers, private values                                        |
 | `pub`        | yes       | no        | constants, derived dims / units / types consumers read but don't rewire |
-| `pub(bind)`  | yes       | yes       | required indexes / types / dims                                         |
+| `pub(bind)`  | yes       | yes       | optional or required indexes / types / dims                             |
 
 `param` is outside that annotation matrix. The declaration kind directly
 creates a named DAG input port:
@@ -941,10 +994,18 @@ import lib::{internal_helper};
 
 ### Required items must be `pub(bind)`
 
-Required `index` / `type` / `dim` declarations (no body) form the
-*bindable* interface of a library — importers must supply a binding.
-They must therefore be declared `pub(bind)`. Writing bare `pub` on a
-required item is error `V002`:
+`pub(bind)` gives a Static declaration one of two typed input roles:
+
+- a declaration with a body/default is an **optional input**; omitting its
+  include binding preserves the declaration's default identity, while supplying
+  one projects the concrete binding target;
+- a declaration with no body is a **required input** and every include instance
+  must supply a binding of the exact same category.
+
+An ordinary `pub` declaration is fixed and cannot be overridden. Required
+`index` / `type` / `dim` declarations form the bindable interface of a library,
+so they must be declared `pub(bind)`. Writing bare `pub` on a required item is
+error `V002`:
 
 ```graphcal
 // ERROR: required index must be declared `pub(bind)`

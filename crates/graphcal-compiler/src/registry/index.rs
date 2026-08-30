@@ -482,13 +482,29 @@ impl fmt::Display for IndexBindingTarget {
 pub struct IndexRegistry {
     pub(crate) indexes: HashMap<IndexName, IndexDef>,
     pub(crate) finite_indexes: HashMap<FiniteIndex, IndexDef>,
+    pub(crate) aliases: HashMap<IndexName, IndexBindingTarget>,
 }
 
 impl IndexRegistry {
     /// Look up a declared index definition by name.
     #[must_use]
     pub fn get_index(&self, name: &str) -> Option<&IndexDef> {
-        self.indexes.get(name)
+        let mut current = IndexBindingTarget::Declared(IndexName::try_new(name).ok()?);
+        let mut remaining = self.aliases.len() + 1;
+        loop {
+            match current {
+                IndexBindingTarget::Declared(ref declared) => {
+                    if let Some(definition) = self.indexes.get(declared) {
+                        return Some(definition);
+                    }
+                    current = self.aliases.get(declared)?.clone();
+                }
+                IndexBindingTarget::Finite(index) => {
+                    return self.finite_indexes.get(&index);
+                }
+            }
+            remaining = remaining.checked_sub(1)?;
+        }
     }
 
     /// Look up a compiler-generated structural index by typed identity.

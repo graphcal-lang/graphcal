@@ -1337,7 +1337,7 @@ fn run_analysis_with_cancellation(
             let import_surfaces = collect_import_surfaces(&project, module_resolver, cancellation)?;
             // Library files (required param/index not yet bound) cannot be evaluated
             // standalone. Skip the eval pipeline so editors don't surface false-positive
-            // `RequiredIndexNotBound` / `RequiredParamNotProvided` diagnostics when the
+            // `RequiredStaticInputNotBound` / `RequiredParamNotProvided` diagnostics when the
             // user opens such a file for editing.
             let (mut diagnostics, eval_values) = if checked.is_library() {
                 (HashMap::new(), HashMap::new())

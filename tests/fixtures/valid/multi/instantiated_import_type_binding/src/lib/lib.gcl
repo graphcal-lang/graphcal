@@ -1,5 +1,5 @@
 // lib.gcl -- library with a bindable type
-pub type Widget {
+pub(bind) type Widget {
     Widget(size: Length),
 }
 

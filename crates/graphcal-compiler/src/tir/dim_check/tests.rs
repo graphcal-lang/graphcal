@@ -342,10 +342,10 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
 fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
     let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body = crate::hir::AssertBody::Expr(crate::hir::Expr::new(
+    tir.root_mut().asserts[0].body = crate::hir::AssertBody::Expr(Box::new(crate::hir::Expr::new(
         crate::hir::ExprKind::StringLiteral("not bool".to_string()),
         span,
-    ));
+    )));
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }

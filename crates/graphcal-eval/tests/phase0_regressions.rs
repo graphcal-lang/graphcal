@@ -22,6 +22,25 @@ fn compile_graphcal_error(source: &str) -> GraphcalError {
     }
 }
 
+fn write_test_project(
+    package: &str,
+    files: &[(&str, &str)],
+    entry: &str,
+) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let package_dir = dir.path().join("src").join(package);
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        format!("[package]\nname = \"{package}\"\n"),
+    )
+    .unwrap();
+    for (name, source) in files {
+        std::fs::write(package_dir.join(name), source).unwrap();
+    }
+    (dir, package_dir.join(entry))
+}
+
 fn has_decl_error(result: &EvalResult, name: &str) -> bool {
     result
         .all
@@ -46,6 +65,148 @@ fn assert_rejected_or_decl_error(source: &str, decl_name: &str, bug: &str) {
         Ok(result) if has_decl_error(&result, decl_name) => {}
         Ok(result) => panic!("{bug}: accepted invalid program successfully: {result:?}"),
     }
+}
+
+#[test]
+fn transitive_const_reexports_preserve_selective_and_qualified_bindings() {
+    let (_dir, root) = write_test_project(
+        "reexport_const",
+        &[
+            ("a.gcl", "pub const node c: Dimensionless = 2.0;\n"),
+            ("b.gcl", "import reexport_const.a::{ pub c as from_b };\n"),
+            (
+                "c.gcl",
+                "import reexport_const.b::{ pub from_b as from_c };\n",
+            ),
+            (
+                "main.gcl",
+                r"
+import reexport_const.c::{ from_c as selected };
+import reexport_const.c as facade;
+node selective_result: Dimensionless = @selected + 1.0;
+node qualified_result: Dimensionless = @facade::from_c + 2.0;
+",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect("three-hop const re-export must preserve its canonical binding");
+    assert!((value_for(&result, "selective_result").si_value().unwrap() - 3.0).abs() < 1e-9);
+    assert!((value_for(&result, "qualified_result").si_value().unwrap() - 4.0).abs() < 1e-9);
+}
+
+#[test]
+fn nested_include_reexports_preserve_alias_and_namespace_access() {
+    let (_dir, root) = write_test_project(
+        "reexport_include",
+        &[
+            (
+                "source.gcl",
+                "param p: Dimensionless = 1.0;\npub node x: Dimensionless = @p;\n",
+            ),
+            (
+                "middle.gcl",
+                "include reexport_include.source(p: 2.0)::{ pub x as middle_x };\n",
+            ),
+            (
+                "outer.gcl",
+                "include reexport_include.middle()::{ pub middle_x as outer_x };\n",
+            ),
+            (
+                "main.gcl",
+                r"
+include reexport_include.outer()::{ outer_x as selected };
+include reexport_include.outer() as namespace;
+node selective_result: Dimensionless = @selected + 1.0;
+node qualified_result: Dimensionless = @namespace::outer_x + 2.0;
+",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect("nested include re-export must preserve effective value aliases");
+    assert!((value_for(&result, "selective_result").si_value().unwrap() - 3.0).abs() < 1e-9);
+    assert!((value_for(&result, "qualified_result").si_value().unwrap() - 4.0).abs() < 1e-9);
+}
+
+#[test]
+fn reexported_assertions_and_plots_keep_pure_import_rejections() {
+    let files = [
+        (
+            "source.gcl",
+            "pub assert okay = true;\npub plot chart = { mark: point, encode: { x: 1.0 } };\n",
+        ),
+        (
+            "facade.gcl",
+            "include reexport_roles.source()::{ pub okay, pub chart };\n",
+        ),
+        (
+            "assert_main.gcl",
+            "import reexport_roles.facade::{ okay };\n",
+        ),
+        (
+            "plot_main.gcl",
+            "import reexport_roles.facade::{ chart };\n",
+        ),
+    ];
+    let (_assert_dir, assert_root) =
+        write_test_project("reexport_roles", &files, "assert_main.gcl");
+    let assertion = compile_and_eval_project(
+        &assert_root,
+        &HashMap::new(),
+        None,
+        &RealFileSystem::default(),
+    );
+    assert!(matches!(
+        assertion,
+        Err(CompileError::Eval(
+            GraphcalError::ImportAssertionItem { .. }
+        ))
+    ));
+
+    let (_plot_dir, plot_root) = write_test_project("reexport_roles", &files, "plot_main.gcl");
+    let plot = compile_and_eval_project(
+        &plot_root,
+        &HashMap::new(),
+        None,
+        &RealFileSystem::default(),
+    );
+    assert!(matches!(
+        plot,
+        Err(CompileError::Eval(GraphcalError::ImportPlotItem { .. }))
+    ));
+}
+
+#[test]
+fn constructor_and_dag_reexports_keep_compile_time_categories() {
+    let (_dir, root) = write_test_project(
+        "reexport_api",
+        &[
+            (
+                "api.gcl",
+                "pub type Choice { Pick }\npub dag helper { pub node out: Dimensionless = 2.0; }\n",
+            ),
+            (
+                "facade.gcl",
+                "import reexport_api.api::{ pub type Choice, pub Pick, pub helper };\n",
+            ),
+            (
+                "main.gcl",
+                r"
+import reexport_api.facade::{ type Choice, Pick, helper };
+node choice: Choice = Pick;
+node result: Dimensionless = @helper()::out;
+",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect("constructor and DAG facade exports must remain usable");
+    assert!(matches!(value_for(&result, "choice"), Value::Struct { .. }));
+    assert!((value_for(&result, "result").si_value().unwrap() - 2.0).abs() < 1e-9);
 }
 
 #[test]
@@ -380,7 +541,7 @@ unit Bad: Length = (demo::factor(@trigger)) m;
 }
 
 #[test]
-fn include_rejects_runtime_dependent_unit_namespace() {
+fn include_supports_runtime_dependent_unit_namespace() {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/dynamic_include");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -397,21 +558,19 @@ fn include_rejects_runtime_dependent_unit_namespace() {
     let root = package_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "include dynamic_include.lib(factor: 2.0) as priced;\n",
+        "import dynamic_include.lib::{ dim Money, unit USD };\ninclude dynamic_include.lib(factor: 2.0) as priced;\ninclude dynamic_include.lib(factor: 4.0)::{ unit EUR as expensive_euros };\nnode dollars: Money = @priced::out -> USD;\nnode namespace_unit: Money = 1.0 USD -> priced::EUR;\nnode selective_unit: Money = 1.0 USD -> expensive_euros;\n",
     )
     .unwrap();
 
-    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CompileError::Eval(GraphcalError::IncludeRuntimeUnit { ref name, .. })
-            if name.name().as_str() == "EUR"
-    ));
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect("runtime units must be executable inside concrete include instances");
+    assert!((value_for(&result, "dollars").si_value().unwrap() - 6.0).abs() < 1e-9);
+    assert!((value_for(&result, "namespace_unit").si_value().unwrap() - 1.0).abs() < 1e-9);
+    assert!((value_for(&result, "selective_unit").si_value().unwrap() - 1.0).abs() < 1e-9);
 }
 
 #[test]
-fn repeated_includes_reject_runtime_dependent_unit_namespace() {
+fn repeated_includes_keep_runtime_unit_scales_instance_scoped() {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/dynamic_instances");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -428,21 +587,18 @@ fn repeated_includes_reject_runtime_dependent_unit_namespace() {
     let root = package_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "include dynamic_instances.lib(factor: 2.0) as cheap;\ninclude dynamic_instances.lib(factor: 4.0) as expensive;\n",
+        "import dynamic_instances.lib::{ dim Money, unit USD };\ninclude dynamic_instances.lib(factor: 2.0) as cheap;\ninclude dynamic_instances.lib(factor: 4.0) as expensive;\nnode cheap_usd: Money = @cheap::out -> USD;\nnode expensive_usd: Money = @expensive::out -> USD;\n",
     )
     .unwrap();
 
-    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        CompileError::Eval(GraphcalError::IncludeRuntimeUnit { ref name, .. })
-            if name.name().as_str() == "EUR"
-    ));
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect("repeated includes must retain independent runtime-unit scales");
+    assert!((value_for(&result, "cheap_usd").si_value().unwrap() - 6.0).abs() < 1e-9);
+    assert!((value_for(&result, "expensive_usd").si_value().unwrap() - 12.0).abs() < 1e-9);
 }
 
 #[test]
-fn nested_include_rejects_runtime_dependent_unit_namespace() {
+fn nested_includes_keep_runtime_unit_scales_instance_scoped() {
     let dir = tempfile::tempdir().unwrap();
     let package_dir = dir.path().join("src/nested_dynamic_instances");
     std::fs::create_dir_all(&package_dir).unwrap();
@@ -464,17 +620,14 @@ fn nested_include_rejects_runtime_dependent_unit_namespace() {
     let root = package_dir.join("main.gcl");
     std::fs::write(
         &root,
-        "include nested_dynamic_instances.wrapper(first_factor: 2.0, second_factor: 3.0) as low;\ninclude nested_dynamic_instances.wrapper(first_factor: 4.0, second_factor: 5.0) as high;\n",
+        "import nested_dynamic_instances.lib::{ dim Money, unit USD };\ninclude nested_dynamic_instances.wrapper(first_factor: 2.0, second_factor: 3.0) as low;\ninclude nested_dynamic_instances.wrapper(first_factor: 4.0, second_factor: 5.0) as high;\nnode low_usd: Money = @low::out -> USD;\nnode high_usd: Money = @high::out -> USD;\n",
     )
     .unwrap();
 
-    let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
-        .unwrap_err();
-    let CompileError::Eval(GraphcalError::IncludeRuntimeUnit { name, src, .. }) = error else {
-        panic!("expected M026 include-boundary error, got {error:?}");
-    };
-    assert_eq!(name.name().as_str(), "EUR");
-    assert!(src.name().ends_with("wrapper.gcl"), "wrong source: {src:?}");
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .expect("nested repeated includes must retain independent runtime-unit scales");
+    assert!((value_for(&result, "low_usd").si_value().unwrap() - 15.0).abs() < 1e-9);
+    assert!((value_for(&result, "high_usd").si_value().unwrap() - 27.0).abs() < 1e-9);
 }
 
 #[test]
@@ -634,11 +787,76 @@ include pkg.lib()::{ cost };
     assert!(
         matches!(
             &result,
-            Err(CompileError::Eval(GraphcalError::RequiredIndexNotBound { name, .. }))
+            Err(CompileError::Eval(GraphcalError::RequiredStaticInputNotBound { name, .. }))
                 if name == "Phase"
         ),
         "explicit instance should report its unsatisfied index: {result:?}",
     );
+}
+
+#[test]
+fn direct_dag_calls_apply_categorized_static_bindings() {
+    let source = r"
+type Local { Local }
+index Axis = { A };
+dag target {
+    pub(bind) type Element;
+    pub(bind) dim Measure;
+    pub(bind) index I;
+    param item: Element;
+    param quantity: Measure;
+    param key_value: Key<I>;
+    pub node out: Measure = @quantity;
+}
+node result: Length = @target(
+    item: Local,
+    quantity: 1.0 m,
+    key_value: Axis#A,
+    type Element: Local,
+    dim Measure: Length,
+    index I: Axis,
+)::out;
+";
+    let result = compile_and_eval(source).expect("categorized direct DAG call must compile");
+    assert!((value_for(&result, "result").si_value().unwrap() - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn direct_dag_calls_reject_omitted_required_static_bindings() {
+    let cases = [
+        (
+            "type",
+            r"
+dag target { pub(bind) type Element; pub node out: Dimensionless = 1.0; }
+node result: Dimensionless = @target()::out;
+",
+        ),
+        (
+            "dim",
+            r"
+dag target { pub(bind) dim Measure; pub node out: Dimensionless = 1.0; }
+node result: Dimensionless = @target()::out;
+",
+        ),
+        (
+            "index",
+            r"
+dag target { pub(bind) index Axis; pub node out: Dimensionless = 1.0; }
+node result: Dimensionless = @target()::out;
+",
+        ),
+    ];
+    for (expected_kind, source) in cases {
+        let error = compile_graphcal_error(source);
+        assert!(
+            matches!(
+                error,
+                GraphcalError::RequiredStaticInputNotBound { kind, .. }
+                    if kind.to_string() == expected_kind
+            ),
+            "missing required {expected_kind} was not diagnosed: {error:?}",
+        );
+    }
 }
 
 #[test]

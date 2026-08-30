@@ -1289,7 +1289,7 @@ param event: Datetime<TT>(
         std::fs::create_dir_all(dir.path().join("src/app")).unwrap();
         std::fs::write(
             dir.path().join("src/app/lib.gcl"),
-            "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\npub assert positive = @rate > 0.0;\n",
+            "pub base dim Money;\npub base unit USD: Money;\nparam rate: Dimensionless = 2.0;\npub unit EUR: Money = (@rate) USD;\npub node out: Money = 1.0 EUR;\npub assert positive = @rate > 0.0;\n",
         )
         .unwrap();
         let main_path = dir.path().join("src/app/main.gcl");
@@ -1300,7 +1300,6 @@ param event: Datetime<TT>(
                 "import app.lib as lib;\nnode price: lib::Money = 1.0 lib::EUR;\n",
                 "graphcal::M025",
             ),
-            ("include app.lib() as lib;\n", "graphcal::M026"),
         ] {
             std::fs::write(&main_path, source).unwrap();
             let diagnostics = produce_diagnostics_for_file(&main_path, source);
@@ -1311,6 +1310,93 @@ param event: Datetime<TT>(
             ));
             assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
         }
+
+        let source = "import app.lib::{ dim Money, unit USD };\ninclude app.lib(rate: 3.0) as priced;\nnode price: Money = @priced::out -> USD;\n";
+        std::fs::write(&main_path, source).unwrap();
+        let diagnostics = produce_diagnostics_for_file(&main_path, source);
+        assert!(
+            diagnostics.is_empty(),
+            "concrete includes must retain runtime-unit namespaces: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn transitive_reexport_bindings_reach_lsp_clients() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("graphcal.toml"),
+            "[package]\nname = \"app\"\n",
+        )
+        .unwrap();
+        let package = dir.path().join("src/app");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("a.gcl"),
+            "pub const node c: Dimensionless = 2.0;\n",
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("b.gcl"),
+            "import app.a::{ pub c as from_b };\n",
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("c.gcl"),
+            "import app.b::{ pub from_b as from_c };\n",
+        )
+        .unwrap();
+        let main_path = package.join("main.gcl");
+        let source = "import app.c::{ from_c as selected };\nnode result: Dimensionless = @selected + 1.0;\n";
+        std::fs::write(&main_path, source).unwrap();
+
+        let diagnostics = produce_diagnostics_for_file(&main_path, source);
+        assert!(
+            diagnostics.is_empty(),
+            "transitive canonical binding must remain usable in LSP compilation: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn include_projection_policy_diagnostics_reach_lsp_clients() {
+        for (source, expected) in [
+            (
+                "dag target { pub dag child { pub node output: Dimensionless = 1.0; } }\n\
+                 include target()::{ child };\n",
+                "graphcal::M031",
+            ),
+            (
+                "type Replacement { Replacement }\n\
+                 dag target { pub(bind) type Choice { Pick } }\n\
+                 include target(type Choice: Replacement)::{ Pick };\n",
+                "graphcal::M032",
+            ),
+        ] {
+            let diagnostics = produce_diagnostics(source, "projection.gcl");
+            assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+            assert!(matches!(
+                diagnostics[0].code.as_ref(),
+                Some(NumberOrString::String(code)) if code == expected
+            ));
+            assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+        }
+    }
+
+    #[test]
+    fn required_static_direct_call_diagnostics_reach_lsp_clients() {
+        let unbound = "dag target { pub(bind) dim Measure; pub node out: Dimensionless = 1.0; }\nnode result: Dimensionless = @target()::out;\n";
+        let diagnostics = produce_diagnostics(unbound, "unbound_call.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(matches!(
+            diagnostics[0].code.as_ref(),
+            Some(NumberOrString::String(code)) if code == "graphcal::I010"
+        ));
+
+        let bound = "dag target { pub(bind) dim Measure; param value: Measure; pub node out: Measure = @value; }\nnode result: Length = @target(value: 1.0 m, dim Measure: Length)::out;\n";
+        let diagnostics = produce_diagnostics(bound, "bound_call.gcl");
+        assert!(
+            diagnostics.is_empty(),
+            "categorized Static call binding must reach HIR/TIR: {diagnostics:?}"
+        );
     }
 
     #[test]

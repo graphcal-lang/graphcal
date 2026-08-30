@@ -493,7 +493,7 @@ impl NamePath {
 
     /// Construct a one-segment local name.
     #[must_use]
-    pub(crate) const fn local(name: NameAtom) -> Self {
+    pub const fn local(name: NameAtom) -> Self {
         Self { owner: None, name }
     }
 

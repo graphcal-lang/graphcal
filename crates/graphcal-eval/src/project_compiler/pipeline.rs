@@ -55,6 +55,7 @@ fn lower_single_file_to_hir(
         imported_bindings: HashMap::new(),
         imported_source_order: Vec::new(),
         imported_type_system_names: HashMap::new(),
+        projected_static_aliases: Vec::new(),
         module_map: HashMap::new(),
         frontend_registry_imports: Vec::new(),
         include_instances: Vec::new(),
@@ -64,6 +65,7 @@ fn lower_single_file_to_hir(
         project,
         file_dag_id,
         module_artifacts,
+        module_resolver,
         &mut ctx,
         cancellation,
     )?;
@@ -234,9 +236,9 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         )));
     }
 
-    let exported_dynamic_units = module_interfaces
+    let exported_runtime_units = module_interfaces
         .iter()
-        .map(|(owner, interface)| (owner.clone(), interface.exported_dynamic_units().clone()))
+        .map(|(owner, interface)| (owner.clone(), interface.exported_runtime_units().clone()))
         .collect();
 
     Ok(HirProject {
@@ -244,7 +246,7 @@ pub(in crate::project_compiler) fn lower_project_perfile<'project>(
         load_order: project.load_order().to_vec(),
         files,
         plugins: project.plugins(),
-        exported_dynamic_units,
+        exported_runtime_units,
         module_resolver,
         cancellation: cancellation.clone(),
     })
@@ -300,7 +302,7 @@ pub(in crate::project_compiler) fn check_hir_project(
         load_order,
         mut files,
         plugins,
-        exported_dynamic_units,
+        exported_runtime_units,
         module_resolver,
         cancellation,
     } = hir;
@@ -330,7 +332,7 @@ pub(in crate::project_compiler) fn check_hir_project(
         let compiled = checking::check_hir_file(
             hir_file,
             &module_artifacts,
-            &exported_dynamic_units,
+            &exported_runtime_units,
             &module_resolver,
             &project_types,
             &cancellation,

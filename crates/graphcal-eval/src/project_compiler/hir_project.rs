@@ -26,7 +26,7 @@ pub struct HirProject<'project> {
     >,
     /// Minimal semantic fact needed to reject runtime units at a pure import
     /// boundary. Full frontend registries are discarded after HIR lowering.
-    pub(super) exported_dynamic_units: HashMap<DagId, HashSet<UnitName>>,
+    pub(super) exported_runtime_units: HashMap<DagId, HashSet<UnitName>>,
     pub(super) module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
     pub(super) cancellation: graphcal_compiler::cancellation::CancellationToken,
 }
