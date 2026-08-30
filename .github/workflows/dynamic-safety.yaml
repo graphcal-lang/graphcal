@@ -94,7 +94,7 @@ jobs:
           cargo test -p graphcal-lsp --release
           analysis_schedule_state::loom_tests -- --test-threads=1
 
-  collect:
+  dynamic-safety-gate:
     needs: [plugin-miri, plugin-asan, lsp-loom]
     if: always()
     runs-on: ubuntu-latest
