@@ -73,6 +73,7 @@ jobs:
           --exclude-crate graphcal_plugin_host
           --exclude-crate graphcal_tenax
           --exclude-crate graphcal_test_support
+          --exclude-crate graphcal_wasm
 
   dependency-policy:
     runs-on: ubuntu-latest

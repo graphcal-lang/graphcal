@@ -20,7 +20,7 @@ test: formal-conformance
 
 # Audit the closed-world CLI surface while preserving documented external crate
 # and ABI boundaries that Hawk cannot observe from the shipped binary.
-# Baseline: zero findings with cargo-hawk 0.1.9 on Rust 1.97.1 (2026-08-14).
+# Baseline: zero findings with cargo-hawk 0.1.13 on Rust 1.98.0 (2026-08-30).
 hawk:
     cargo hawk check -D warnings \
         --exclude-crate graphcal_compiler \
@@ -31,7 +31,8 @@ hawk:
         --exclude-crate graphcal_plugin_abi \
         --exclude-crate graphcal_plugin_host \
         --exclude-crate graphcal_tenax \
-        --exclude-crate graphcal_test_support
+        --exclude-crate graphcal_test_support \
+        --exclude-crate graphcal_wasm
 
 wasm-test:
     wasm-pack test --node crates/graphcal-wasm
