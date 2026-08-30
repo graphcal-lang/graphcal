@@ -2,20 +2,6 @@ name: Mutation tests
 
 on:
   pull_request:
-    paths:
-      - ".cargo/mutants*.toml"
-      - ".github/workflows/mutants.yaml"
-      - "internals/check-mutants-ratchet.py"
-      - "internals/mutation_baseline.py"
-      - "internals/run-mutants-ratcheted.py"
-      - "internals/update-mutants-baseline.py"
-      - "internals/test_check_mutants_ratchet.py"
-      - "internals/test_mutation_baseline.py"
-      - "internals/test_run_mutants_ratcheted.py"
-      - "internals/test_update_mutants_baseline.py"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "crates/**/*.rs"
   schedule:
     # A discovery campaign runs every day. Monday's campaign also audits the
     # open baseline before excluding it from discovery.
@@ -42,8 +28,56 @@ env:
   UV_VERSION: "0.12.x"
 
 jobs:
+  mutation-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            ':(glob).cargo/mutants*.toml' \
+            .github/workflows/mutants.yaml \
+            internals/check-mutants-ratchet.py \
+            internals/mutation_baseline.py \
+            internals/run-mutants-ratcheted.py \
+            internals/update-mutants-baseline.py \
+            internals/test_check_mutants_ratchet.py \
+            internals/test_mutation_baseline.py \
+            internals/test_run_mutants_ratcheted.py \
+            internals/test_update_mutants_baseline.py \
+            Cargo.lock \
+            Cargo.toml \
+            ':(glob)crates/**/*.rs'
+          diff_status=$?
+          set -e
+
+          case "$diff_status" in
+            0) echo "relevant=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "relevant=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Failed to inspect pull-request changes" >&2; exit 1 ;;
+          esac
+
   ratchet-tool:
     name: mutation ratchet tool
+    needs: mutation-changes
+    if: needs.mutation-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,7 +101,10 @@ jobs:
 
   changed-region:
     name: changed-region (informational)
-    if: github.event_name == 'pull_request'
+    needs: mutation-changes
+    if: >-
+      ${{ github.event_name == 'pull_request'
+      && needs.mutation-changes.outputs.relevant == 'true' }}
     continue-on-error: true
     runs-on: ubuntu-latest
     steps:
@@ -105,6 +142,33 @@ jobs:
           name: mutants-changed-${{ github.sha }}
           path: mutants.out
           if-no-files-found: ignore
+
+  mutation-gate:
+    needs: [mutation-changes, ratchet-tool]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check mutation results
+        env:
+          CHANGES_RESULT: ${{ needs.mutation-changes.result }}
+          RATCHET_RESULT: ${{ needs.ratchet-tool.result }}
+          RELEVANT: ${{ needs.mutation-changes.outputs.relevant }}
+        run: |
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "Mutation change detection failed"
+            exit 1
+          fi
+
+          expected="skipped"
+          if [[ "$RELEVANT" == "true" ]]; then
+            expected="success"
+          fi
+
+          if [[ "$RATCHET_RESULT" != "$expected" ]]; then
+            echo "The mutation ratchet tool had an unexpected result"
+            exit 1
+          fi
+          echo "Mutation jobs passed"
 
   daily:
     name: daily (${{ matrix.shard.name }})
