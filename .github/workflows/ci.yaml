@@ -332,7 +332,7 @@ jobs:
 
       - uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f # v1.49.0
 
-  collect:
+  ci-gate:
     needs: [checks, public-surface, dependency-policy, test, formal, qa-corpus, windows, wasm, coverage, msrv, typos]
     if: always()
     runs-on: ubuntu-latest
