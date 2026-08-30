@@ -2,14 +2,6 @@ name: Dynamic safety
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/dynamic-safety.yaml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "crates/graphcal-compiler/**"
-      - "crates/graphcal-eval/**"
-      - "crates/graphcal-lsp/**"
-      - "crates/graphcal-plugin/**"
   push:
     branches: [main]
   schedule:
@@ -25,7 +17,49 @@ env:
   SAFETY_NIGHTLY: nightly-2026-02-21
 
 jobs:
+  dynamic-safety-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+            .github/workflows/dynamic-safety.yaml \
+            Cargo.lock \
+            Cargo.toml \
+            crates/graphcal-compiler \
+            crates/graphcal-eval \
+            crates/graphcal-lsp \
+            crates/graphcal-plugin
+          diff_status=$?
+          set -e
+
+          case "$diff_status" in
+            0) echo "relevant=false" >> "$GITHUB_OUTPUT" ;;
+            1) echo "relevant=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Failed to inspect pull-request changes" >&2; exit 1 ;;
+          esac
+
   plugin-miri:
+    needs: dynamic-safety-changes
+    if: needs.dynamic-safety-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,6 +82,8 @@ jobs:
         run: cargo "+$SAFETY_NIGHTLY" miri test -p graphcal-plugin --test abi_memory
 
   plugin-asan:
+    needs: dynamic-safety-changes
+    if: needs.dynamic-safety-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,6 +110,8 @@ jobs:
           -p graphcal-plugin --test abi_memory
 
   lsp-loom:
+    needs: dynamic-safety-changes
+    if: needs.dynamic-safety-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,19 +133,32 @@ jobs:
           analysis_schedule_state::loom_tests -- --test-threads=1
 
   dynamic-safety-gate:
-    needs: [plugin-miri, plugin-asan, lsp-loom]
+    needs: [dynamic-safety-changes, plugin-miri, plugin-asan, lsp-loom]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         env:
+          CHANGES_RESULT: ${{ needs.dynamic-safety-changes.result }}
+          RELEVANT: ${{ needs.dynamic-safety-changes.outputs.relevant }}
           MIRI_RESULT: ${{ needs.plugin-miri.result }}
           ASAN_RESULT: ${{ needs.plugin-asan.result }}
           LOOM_RESULT: ${{ needs.lsp-loom.result }}
         run: |
-          for result in "$MIRI_RESULT" "$ASAN_RESULT" "$LOOM_RESULT"; do
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
-              echo "One or more dynamic-safety jobs failed"
+          if [[ "$CHANGES_RESULT" != "success" ]]; then
+            echo "Dynamic-safety change detection failed"
+            exit 1
+          fi
+
+          results=("$MIRI_RESULT" "$ASAN_RESULT" "$LOOM_RESULT")
+          expected="skipped"
+          if [[ "$RELEVANT" == "true" ]]; then
+            expected="success"
+          fi
+
+          for result in "${results[@]}"; do
+            if [[ "$result" != "$expected" ]]; then
+              echo "One or more dynamic-safety jobs had an unexpected result"
               exit 1
             fi
           done
