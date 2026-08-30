@@ -101,3 +101,18 @@ jobs:
           name: fuzz-${{ matrix.target }}-${{ github.sha }}
           path: fuzz/artifacts/${{ matrix.target }}
           if-no-files-found: ignore
+
+  fuzz-gate:
+    needs: fuzz
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check fuzz results
+        env:
+          FUZZ_RESULT: ${{ needs.fuzz.result }}
+        run: |
+          if [[ "$FUZZ_RESULT" != "success" ]]; then
+            echo "One or more fuzz jobs failed"
+            exit 1
+          fi
+          echo "All fuzz jobs passed"
