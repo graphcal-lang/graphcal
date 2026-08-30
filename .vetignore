@@ -6,3 +6,6 @@ Cargo.lock
 
 # Ignoring docs for now
 /docs
+
+# Auto-generated files
+/formal/lake-manifest.json
