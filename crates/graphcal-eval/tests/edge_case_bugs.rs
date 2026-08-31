@@ -1105,6 +1105,28 @@ fn display_label(result: &EvalResult, name: &str) -> Option<String> {
     }
 }
 
+fn assert_all_quantity_leaves_use_km(value: &Value) {
+    match value {
+        Value::Quantity {
+            si_value,
+            display_unit,
+            ..
+        } => {
+            let display_unit = display_unit
+                .as_ref()
+                .expect("every comprehension quantity must retain its display unit");
+            assert_eq!(display_unit.label, "km");
+            assert!((*si_value / display_unit.scale() - 1.5).abs() < f64::EPSILON);
+        }
+        Value::Indexed { entries, .. } => {
+            for entry in entries.values() {
+                assert_all_quantity_leaves_use_km(entry);
+            }
+        }
+        other => panic!("expected an indexed value or quantity, got {other:?}"),
+    }
+}
+
 #[test]
 fn display_unit_propagates_through_reads() {
     let source = include_str!("../../../tests/fixtures/valid/convert_display_propagation.gcl");
@@ -1151,5 +1173,23 @@ fn display_unit_propagates_through_reads() {
             }
         }
         other => panic!("expected indexed, got {other:?}"),
+    }
+}
+
+#[test]
+fn display_unit_propagates_through_multi_axis_and_nested_for_bodies() {
+    let source = r#"
+        index A = { X, Y };
+        index B = { P, Q };
+
+        node single: Length[A] = for a: A { 1500.0 m -> km };
+        node multi: Length[A, B] = for a: A, b: B { 1500.0 m -> km };
+        node nested: Length[A, B] = for a: A { for b: B { 1500.0 m -> km } };
+        node wrapped: Length[A, B] = (for a: A, b: B { 1500.0 m }) -> km;
+    "#;
+    let result = compile_and_eval(source).unwrap();
+
+    for name in ["single", "multi", "nested", "wrapped"] {
+        assert_all_quantity_leaves_use_km(&find_entry(&result, name));
     }
 }
