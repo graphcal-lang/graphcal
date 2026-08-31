@@ -4,8 +4,31 @@ on:
   workflow_dispatch:
 
 jobs:
+  precondition:
+    name: Check release preconditions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - name: Install Nushell
+        uses: hustcer/setup-nu@9215c80adb545a85c419d5085b76eb6d082f49e7 # v3.27
+        with:
+          version: "0.115.1"
+
+      - name: Check crates.io release preconditions
+        run: nu --no-config-file scripts/check-crates-io-release.nu
+
   create-tag:
     name: Create a Git tag
+    needs:
+      - precondition
     runs-on: ubuntu-latest
     permissions:
       contents: write
