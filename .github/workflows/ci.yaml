@@ -277,6 +277,7 @@ jobs:
             --no-typescript \
             --no-pack
           rm -f target/wasm-report/pkg/.gitignore
+          test "$(wc -c < target/wasm-report/pkg/graphcal_wasm_bg.wasm)" -le 5242880
           cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl \
             --output target/wasm-report/rocket.report.html
           node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html

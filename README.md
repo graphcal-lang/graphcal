@@ -60,8 +60,9 @@ graphcal eval rocket.gcl
 graphcal eval rocket.gcl --param 'isp=450.0 s'
 # Or bind several params from inline JSON:
 graphcal eval rocket.gcl --params-json '{"dry_mass":"1500.0 kg","isp":"450.0 s"}'
-# Build a shareable, self-contained HTML report (experimental; drop --static
-# for an interactive page once you build the wasm engine, see the CLI reference):
+# Build a shareable, self-contained interactive HTML report (experimental):
+graphcal report build rocket.gcl
+# Or omit controls and the embedded browser engine:
 graphcal report build rocket.gcl --static
 ```
 

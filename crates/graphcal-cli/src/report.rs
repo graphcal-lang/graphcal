@@ -5,6 +5,7 @@
 //! (#1410). This module is the imperative shell; document assembly and
 //! rendering live in the `graphcal-report` crate.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
@@ -23,10 +24,11 @@ use graphcal_report::report_markdown::render_report_markdown;
 
 use crate::overrides::{JsonOverrideSource, ParameterArgs, ParameterJsonSource, ParsedOverrides};
 
-/// Default engine bundle location, produced by `just wasm-report`.
-const DEFAULT_ENGINE_DIR: &str = "target/wasm-report/pkg";
-/// Environment variable overriding the engine bundle location.
+/// Environment variable overriding the browser engine bundled with the CLI.
 const ENGINE_DIR_ENV: &str = "GRAPHCAL_REPORT_ENGINE_DIR";
+/// Browser engine generated from this release's `graphcal-wasm` crate.
+const EMBEDDED_ENGINE_GLUE_JS: &str = include_str!("../assets/report-engine/graphcal_wasm.js");
+const EMBEDDED_ENGINE_WASM: &[u8] = include_bytes!("../assets/report-engine/graphcal_wasm_bg.wasm");
 
 #[derive(Subcommand)]
 pub enum ReportCommands {
@@ -52,9 +54,10 @@ pub struct BuildArgs {
     /// Build a non-interactive report: no embedded engine, no controls
     #[arg(long = "static")]
     pub static_only: bool,
-    /// Directory holding the browser engine bundle (`graphcal_wasm.js` and
-    /// `graphcal_wasm_bg.wasm` from `wasm-pack --target no-modules`).
-    /// Defaults to `$GRAPHCAL_REPORT_ENGINE_DIR`, then `target/wasm-report/pkg`
+    /// Override the bundled browser engine with `graphcal_wasm.js` and
+    /// `graphcal_wasm_bg.wasm` from `wasm-pack --target no-modules`.
+    /// Defaults to `$GRAPHCAL_REPORT_ENGINE_DIR`, then the engine embedded in
+    /// this CLI release.
     #[arg(long, value_name = "DIR")]
     pub engine_dir: Option<PathBuf>,
 }
@@ -84,11 +87,10 @@ pub enum ReportError {
     )]
     HydrationUnsupported { reason: String },
     #[error(
-        "the browser engine bundle was not found at {path}\n\
-         build it with `just wasm-report` (requires wasm-pack), point \
-         --engine-dir (or ${ENGINE_DIR_ENV}) at a `wasm-pack --target \
-         no-modules` build of crates/graphcal-wasm, or pass --static to \
-         build a non-interactive report"
+        "the browser engine bundle override was not found at {path}\n\
+         ensure the directory contains `graphcal_wasm.js` and \
+         `graphcal_wasm_bg.wasm`, or remove the --engine-dir / \
+         ${ENGINE_DIR_ENV} override to use the engine bundled with the CLI"
     )]
     EngineMissing { path: PathBuf },
     #[error("could not read the engine bundle file {path}: {source}")]
@@ -156,8 +158,11 @@ pub fn run_build(
     };
     let hydration = match &engine {
         None => None,
-        Some((glue_js, wasm)) => Some(Hydration {
-            engine: EngineBundle { glue_js, wasm },
+        Some(engine) => Some(Hydration {
+            engine: EngineBundle {
+                glue_js: engine.glue_js.as_ref(),
+                wasm: engine.wasm.as_ref(),
+            },
             project: hydration_project(&project, args, &fs)?,
             baseline_bindings: baseline_binding_strings(overrides),
         }),
@@ -265,27 +270,43 @@ fn source_digests(
     digests
 }
 
-/// Locate and read the browser engine bundle (no-modules glue + wasm).
-fn load_engine_bundle(args: &BuildArgs) -> Result<(String, Vec<u8>), ReportError> {
-    let dir = args
+struct LoadedEngineBundle {
+    glue_js: Cow<'static, str>,
+    wasm: Cow<'static, [u8]>,
+}
+
+/// Use the release-matched embedded browser engine unless the caller
+/// explicitly supplies a development bundle.
+fn load_engine_bundle(args: &BuildArgs) -> Result<LoadedEngineBundle, ReportError> {
+    let Some(dir) = args
         .engine_dir
         .clone()
         .or_else(|| std::env::var_os(ENGINE_DIR_ENV).map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_ENGINE_DIR));
+    else {
+        return Ok(LoadedEngineBundle {
+            glue_js: Cow::Borrowed(EMBEDDED_ENGINE_GLUE_JS),
+            wasm: Cow::Borrowed(EMBEDDED_ENGINE_WASM),
+        });
+    };
+
     let glue_path = dir.join("graphcal_wasm.js");
     let wasm_path = dir.join("graphcal_wasm_bg.wasm");
     if !glue_path.is_file() || !wasm_path.is_file() {
         return Err(ReportError::EngineMissing { path: dir });
     }
-    let glue = std::fs::read_to_string(&glue_path).map_err(|source| ReportError::EngineRead {
-        path: glue_path,
-        source,
-    })?;
+    let glue_js =
+        std::fs::read_to_string(&glue_path).map_err(|source| ReportError::EngineRead {
+            path: glue_path,
+            source,
+        })?;
     let wasm = std::fs::read(&wasm_path).map_err(|source| ReportError::EngineRead {
         path: wasm_path,
         source,
     })?;
-    Ok((glue, wasm))
+    Ok(LoadedEngineBundle {
+        glue_js: Cow::Owned(glue_js),
+        wasm: Cow::Owned(wasm),
+    })
 }
 
 fn validate_hydration_parameter_source(

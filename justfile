@@ -39,16 +39,25 @@ hawk:
 wasm-test:
     wasm-pack test --node crates/graphcal-wasm
 
-# Build the no-modules engine bundle consumed by hydrated reports
-# (`graphcal report build` embeds it; see docs/cli-reference.md).
+# Build the no-modules engine bundle embedded in hydrated reports.
 wasm-report:
     rm -rf target/wasm-report/pkg
     wasm-pack build crates/graphcal-wasm --target no-modules --out-dir ../../target/wasm-report/pkg --profile wasm-release --no-typescript --no-pack
     rm -f target/wasm-report/pkg/.gitignore
 
-# Build a hydrated demo report with the real engine and drive its embedded
-# payload through the prepared-project API under Node.
-report-smoke: wasm-report
+# Regenerate the release-matched browser engine embedded in the CLI.
+wasm-report-update: wasm-report
+    mkdir -p crates/graphcal-cli/assets/report-engine
+    cp target/wasm-report/pkg/graphcal_wasm.js target/wasm-report/pkg/graphcal_wasm_bg.wasm crates/graphcal-cli/assets/report-engine/
+    GRAPHCAL_UPDATE_REPORT_ENGINE=1 cargo check -p graphcal
+
+# Explicitly verify the check that every source-checkout CLI build performs.
+wasm-report-check:
+    cargo check -p graphcal
+
+# Build a hydrated demo report with the embedded engine and drive its payload
+# through the prepared-project API under Node.
+report-smoke: wasm-report wasm-report-check
     cargo run -p graphcal -- report build tests/fixtures/valid/rocket.gcl --output target/wasm-report/rocket.report.html
     node internals/report-hydration-smoke.mjs target/wasm-report/rocket.report.html
 

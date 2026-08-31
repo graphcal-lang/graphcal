@@ -597,13 +597,13 @@ email attachment. The static baseline renders without JavaScript; charts and
 interactivity need it. Output is deterministic — identical sources, engine,
 and compiler produce a byte-identical page, and there is no build timestamp.
 
-**Engine bundle.** Hydration embeds a WebAssembly build of the evaluator,
-which is not bundled with the CLI binary. Build it once with
-`just wasm-report` (requires [wasm-pack](https://rustwasm.github.io/wasm-pack/)),
-or point `--engine-dir` (or `$GRAPHCAL_REPORT_ENGINE_DIR`) at any
-`wasm-pack build crates/graphcal-wasm --target no-modules` output. Without
-an engine the build fails with recovery instructions; `--static` builds a
-non-interactive report that needs no engine.
+**Engine bundle.** The CLI embeds a release-matched WebAssembly build of the
+evaluator, so interactive reports work from any directory without a separate
+installation step. Graphcal developers can override it with `--engine-dir` or
+`$GRAPHCAL_REPORT_ENGINE_DIR`, pointing at a
+`wasm-pack build crates/graphcal-wasm --target no-modules` output. An invalid
+explicit override fails rather than silently using a different engine;
+`--static` builds a non-interactive report without embedding the engine.
 
 Models the browser engine cannot run — plugin imports, package
 dependencies — fail loudly at build time with the reason; build them with
@@ -622,7 +622,7 @@ Options:
 | `--params-json-max-bytes <BYTES>` | Maximum JSON parameter document size (default: 1 MiB) |
 | `--root <DIR>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 | `--static` | Build a non-interactive report: no embedded engine, no controls |
-| `--engine-dir <DIR>` | Directory holding the browser engine bundle (default: `$GRAPHCAL_REPORT_ENGINE_DIR`, then `target/wasm-report/pkg`) |
+| `--engine-dir <DIR>` | Override the bundled browser engine (default: `$GRAPHCAL_REPORT_ENGINE_DIR`, then the release-matched embedded engine) |
 
 Exit codes: `0` success; `1` the report was written but contains evaluation
 errors or failed assertions (rendered as error chips and FAIL badges); `2` the
