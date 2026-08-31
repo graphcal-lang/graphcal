@@ -6890,6 +6890,30 @@ fn report_build_hydrated_embeds_engine_project_and_runtime() {
 }
 
 #[test]
+fn report_build_uses_release_engine_outside_source_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let html_path = dir.path().join("out.html");
+
+    let output = graphcal_bin()
+        .args(["report", "build"])
+        .arg(&model)
+        .args(["--output"])
+        .arg(&html_path)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let html = std::fs::read_to_string(&html_path).unwrap();
+    assert!(html.contains("id=\"graphcal-engine-glue\""));
+    assert!(html.contains("id=\"graphcal-engine-wasm\""));
+}
+
+#[test]
 fn report_build_engine_dir_with_partial_bundle_reports_engine_missing() {
     // One present file must not pass the bundle check: both the glue and the
     // wasm are required, and a half-present dir is "not found", not a read
@@ -7012,7 +7036,7 @@ fn report_build_hydrated_rejects_package_dependencies() {
 }
 
 #[test]
-fn report_build_without_engine_fails_loudly_with_recovery_paths() {
+fn report_build_with_missing_engine_override_fails_with_recovery_path() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
     let html_path = dir.path().join("out.html");
@@ -7029,8 +7053,8 @@ fn report_build_without_engine_fails_loudly_with_recovery_paths() {
     assert_eq!(output.status.code(), Some(2));
     assert!(!html_path.exists());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--static"), "stderr: {stderr}");
-    assert!(stderr.contains("wasm-report"), "stderr: {stderr}");
+    assert!(stderr.contains("bundle override"), "stderr: {stderr}");
+    assert!(stderr.contains("bundled with the CLI"), "stderr: {stderr}");
 }
 
 #[test]

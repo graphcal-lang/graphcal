@@ -14,9 +14,9 @@ repos:
       - id: check-json
       - id: check-added-large-files
         args: [--enforce-all]
-        # Vendored Vega bundles (~500 KB each) are pinned, hashed assets;
-        # see crates/graphcal-report/assets/README.md.
-        exclude: '^crates/graphcal-report/assets/.*\.min\.js$'
+        # The report engine (~4.6 MiB) and Vega bundles (~500 KiB each) are
+        # intentional pinned assets; see their asset-directory READMEs.
+        exclude: '^(crates/graphcal-cli/assets/report-engine/graphcal_wasm_bg\.wasm|crates/graphcal-report/assets/.*\.min\.js)$'
       - id: check-merge-conflict
       - id: check-symlinks
       - id: mixed-line-ending
