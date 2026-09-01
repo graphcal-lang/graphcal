@@ -259,7 +259,11 @@ pub(super) fn eval_int_binop(
             if r == 0 {
                 return Err(ctx.eval_error("integer modulo by zero", span));
             }
-            l.checked_rem(r)
+            // The mathematical remainder is zero for every dividend when the
+            // divisor is -1. `checked_rem` nevertheless returns `None` for
+            // `i64::MIN % -1` because the corresponding machine instruction
+            // traps, so handle this total case explicitly.
+            if r == -1 { Some(0) } else { l.checked_rem(r) }
         }
         BinOp::Pow(_) => {
             if r < 0 {

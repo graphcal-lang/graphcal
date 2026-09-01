@@ -3600,6 +3600,17 @@ fn eval_int_modulo_by_zero() {
 }
 
 #[test]
+fn eval_minimum_integer_literal_modulo_negative_one() {
+    let result = compile_and_eval(
+        "param min: Int = -9223372036854775808;\nnode remainder: Int = @min % -1;",
+    )
+    .unwrap();
+
+    assert_eq!(find_int_value(&result, "min"), i64::MIN);
+    assert_eq!(find_int_value(&result, "remainder"), 0);
+}
+
+#[test]
 fn eval_int_negative_exponent() {
     // `-1` is parsed as UnaryOp::Neg(Integer(1)), not a literal, so dim_check
     // rejects it as a non-literal exponent before the evaluator sees it.
