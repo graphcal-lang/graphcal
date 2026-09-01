@@ -35,7 +35,7 @@ Edit the rocket equation and try changing a unit or dimension. Dimension errors 
   </graphcal-playground>
 </div>
 
-Expected initial output includes `delta_v = 3778.220768 m/s`.
+Expected initial output includes `delta_v = 3778.221 m/s`.
 
 ```bash
 $ graphcal eval rocket.gcl
@@ -45,7 +45,7 @@ isp        = 320 s
 g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
-delta_v    = 3778.220768 m/s
+delta_v    = 3778.221 m/s
 ```
 
 ## Defining Dimensions

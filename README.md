@@ -28,7 +28,7 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 
 ```sh
 graphcal eval rocket.gcl
-# delta_v = 3778.220768 m/s
+# delta_v = 3778.221 m/s
 ```
 
 [Try the example in the browser playground](https://graphcal.org/docs/playground/) without installing anything.

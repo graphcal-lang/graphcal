@@ -111,7 +111,7 @@ fuel_mass  = 2800 kg
 isp        = 320 s
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
-delta_v    = 3778.220768 m/s
+delta_v    = 3778.221 m/s
 ```
 
 Graphcal resolves each `import` against the package tree.

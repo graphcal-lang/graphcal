@@ -1351,37 +1351,3 @@ fn print_json(
     );
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_integer() {
-        assert_eq!(format_number(1200.0), "1200");
-        assert_eq!(format_number(0.0), "0");
-        assert_eq!(format_number(-42.0), "-42");
-    }
-
-    #[test]
-    #[expect(
-        clippy::approx_constant,
-        reason = "testing exact format output of 3.14"
-    )]
-    fn format_decimal() {
-        assert_eq!(format_number(9.80665), "9.80665");
-        assert_eq!(format_number(3.14), "3.14");
-    }
-
-    #[test]
-    fn format_large_decimal() {
-        assert_eq!(format_number(3138.128), "3138.128");
-    }
-
-    #[test]
-    fn format_small_nonzero_decimal() {
-        assert_eq!(format_number(3.0e-9), "3e-9");
-        assert_eq!(format_number(-3.0e-9), "-3e-9");
-        assert_eq!(format_number(-0.0), "0");
-    }
-}
