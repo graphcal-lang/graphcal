@@ -20,10 +20,6 @@ use crate::execution_facts::RuntimeValueMap;
 
 use super::ResolvedDeclKey;
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "dependency-ordered const evaluation keeps each canonical DAG pool and its diagnostics together"
-)]
 pub(super) fn eval_const_pools_for_dags(
     tir: &TIR,
     dag_ids: &HashSet<graphcal_compiler::dag_id::DagId>,

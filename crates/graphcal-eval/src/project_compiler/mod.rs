@@ -48,9 +48,33 @@ mod template;
 
 pub(crate) use entry_interface::CheckedEntryInterface;
 #[cfg(test)]
-pub(crate) use execution_check::{
-    check_execution_facts_with_cancellation, resolve_struct_field_constraints,
-};
+pub(crate) fn check_execution_facts_with_cancellation(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<crate::execution_facts::CheckedExecutionFacts, GraphcalError> {
+    execution_check::check_execution_facts_with_inherited(
+        tir,
+        &crate::execution_facts::CheckedExecutionFacts::empty(),
+        src,
+        cancellation,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_struct_field_constraints(
+    tir: &graphcal_compiler::tir::typed::TIR,
+    const_values: &crate::execution_facts::RuntimeValueMap,
+    src: &NamedSource<Arc<String>>,
+) -> Result<
+    HashMap<
+        graphcal_compiler::tir::typed::StructFieldConstraintKey,
+        crate::domain_check::ResolvedDomainConstraint,
+    >,
+    GraphcalError,
+> {
+    execution_check::resolve_struct_field_constraints(tir, const_values, src)
+}
 pub use hir_project::HirProject;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{

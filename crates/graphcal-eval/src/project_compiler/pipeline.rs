@@ -140,7 +140,7 @@ fn dag_const_values(
 
 /// Store one pure compile-time module artifact for downstream imports.
 fn store_module_artifact(
-    compiled: CompiledFile,
+    compiled: &CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &mut ModuleArtifactStore,
@@ -365,7 +365,7 @@ pub(in crate::project_compiler) fn check_hir_project(
 
         inherited_execution_facts = compiled.checked_execution_facts.clone();
         store_module_artifact(
-            compiled,
+            &compiled,
             file_dag_id,
             &file_src,
             &mut module_artifacts,

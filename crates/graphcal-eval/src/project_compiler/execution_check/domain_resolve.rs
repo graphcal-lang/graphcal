@@ -400,7 +400,7 @@ fn generic_nat_bindings(
 /// field-domain checks. This pass focuses on the runtime-relevant pieces: bound
 /// evaluation, `min ≤ max`, and storage.
 #[cfg(test)]
-pub(crate) fn resolve_struct_field_constraints(
+pub(super) fn resolve_struct_field_constraints(
     tir: &TIR,
     const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,

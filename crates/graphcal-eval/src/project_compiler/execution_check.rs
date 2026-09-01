@@ -17,8 +17,6 @@ mod const_schedule;
 mod domain_resolve;
 
 use const_schedule::{build_runtime_dag, eval_const_pools_for_dags};
-#[cfg(test)]
-pub(crate) use domain_resolve::resolve_struct_field_constraints;
 use domain_resolve::{
     check_dag_const_struct_field_constraints_at_compile_time, resolve_domain_constraints_for_dag,
     resolve_struct_field_constraints_for_dags,
@@ -38,12 +36,12 @@ pub(super) fn check_execution_facts_with_inherited(
 }
 
 #[cfg(test)]
-pub(crate) fn check_execution_facts_with_cancellation(
+pub(super) fn resolve_struct_field_constraints(
     tir: &TIR,
+    const_values: &RuntimeValueMap,
     src: &NamedSource<Arc<String>>,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedExecutionFacts, GraphcalError> {
-    check_execution_facts_with_inherited(tir, &CheckedExecutionFacts::empty(), src, cancellation)
+) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, GraphcalError> {
+    domain_resolve::resolve_struct_field_constraints(tir, const_values, src)
 }
 
 fn visible_values_with_imports(
