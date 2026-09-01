@@ -11,7 +11,6 @@ use crate::project_compiler::ProjectCompiler;
 
 mod model_schema;
 mod output;
-mod prepare;
 mod prepared;
 
 pub use model_schema::{
