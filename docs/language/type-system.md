@@ -1150,7 +1150,6 @@ The compiler determines the dimension of the result of each arithmetic operation
 | `a * b` | Product | `dim(a) * dim(b)` -- exponents add |
 | `a / b` | Quotient | `dim(a) / dim(b)` -- exponents subtract |
 | `a ^ n` | Power | `dim(a) ^ n` -- a dimensioned base requires exact integer/rational syntax |
-| `a % b` | Same as operands | `dim(a)` must equal `dim(b)` |
 
 Examples:
 
@@ -1235,7 +1234,7 @@ This section lists the type of each expression form and the constraints the comp
 | `a - b` | type of `a` | Same numeric kind and dimension |
 | `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports real×real, real×complex, complex×real, and complex×complex |
 | `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, and complex÷complex |
-| `a % b` | `dim(a)` | Real quantities or integers only; dimensions must match |
+| `a % b` | `Int` | Both operands must be `Int`; quantity remainder is not defined |
 | `a ^ n` | `dim(a) ^ n` | Real quantities or integers only; `n` is dimensionless and a dimensioned base requires an exact integer or parenthesized rational |
 | `-a` | type and dimension of `a` | Real quantity, complex quantity, or integer |
 

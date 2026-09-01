@@ -35,9 +35,13 @@ left.
 | `a - b` | Subtraction | Subtraction | Dimensions must match |
 | `a * b` | Multiplication | Multiplication | Dimensions multiply |
 | `a / b` | Division | Integer division | Dimensions divide |
-| `a % b` | Remainder | Remainder | Dimensions must match |
+| `a % b` | Not supported | Remainder | `Int` operands only |
 | `a ^ n` | Exponentiation | Integer exponentiation (non-negative exponent) | Dimension raised to power |
 | `-a` | Negation | Negation | Dimension preserved |
+
+`%` is defined only for `Int % Int`; Graphcal does not implicitly apply an
+IEEE floating-point remainder to real quantities. The result follows truncating
+integer remainder semantics, and a zero divisor is an evaluation error.
 
 ### Complex arithmetic
 
