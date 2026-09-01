@@ -216,7 +216,7 @@ impl ParameterBindingBuilder<'_> {
         let DeclaredType::Key(index) = &port.declared_type else {
             return Err(self.project.binding_kind_error(port, "Key"));
         };
-        let Some(definition) = index_def_for_ref(&index, &self.project.tir) else {
+        let Some(definition) = index_def_for_ref(index, &self.project.tir) else {
             return Err(self
                 .project
                 .binding_value_error(port, "index definition is unavailable"));
@@ -620,10 +620,6 @@ impl ProjectCompiler<'_, HostFunctionRegistry> {
     /// # Errors
     ///
     /// Returns a compile, binding, evaluation, or cancellation diagnostic.
-    #[expect(
-        clippy::implicit_hasher,
-        reason = "public API accepts HashMap without requiring a specific hasher"
-    )]
     pub fn eval(
         self,
         overrides: &std::collections::HashMap<

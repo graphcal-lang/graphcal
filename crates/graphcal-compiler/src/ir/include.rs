@@ -24,7 +24,13 @@ use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 
 use super::{
     extern_fns::resolve_plugin_imports,
-    lower::*,
+    lower::{
+        AssertEntry, BodySource, ConstEntry, DynamicUnitScaleEntry, FigureEntry, HirDag,
+        IncludeAliasDeclaration, LayerEntry, LoweredPlotBody, LoweredPlotField,
+        LoweredPlotProperty, NodeEntry, ParamDefault, ParamEntry, ParsedExpectedFailMetadata,
+        PlotEntry, RequestedPlot, UnfrozenAssertEntry, UnfrozenConstEntry, UnfrozenIR,
+        UnfrozenNodeEntry, UnfrozenParamDefault, UnfrozenParamEntry, UnfrozenPlotEntry,
+    },
     registry_build::{assert_body_uses_local_units, expr_uses_local_units, plot_uses_local_units},
 };
 

@@ -292,8 +292,11 @@ all already HIR.
 
 ### 1.5 IR Assembly and the Freeze Boundary
 
-`ir/lower.rs` and `ir/resolve/` assemble a desugared AST into an `UnfrozenIR`,
-and `UnfrozenIR::freeze` lowers it into a `HirDag`.
+`ir/lower.rs`, `ir/include.rs`, `ir/registry_build.rs`, `ir/extern_fns.rs`,
+and `ir/resolve/` assemble a desugared AST into an `UnfrozenIR`.
+`UnfrozenIR::freeze` then lowers it into a `HirDag`. The files separate the
+IR model/freeze boundary, include rewriting, registry construction, and extern
+signature resolution even though they cooperate during assembly.
 
 The assembly stage (syntactic, pre-resolution):
 
@@ -502,7 +505,10 @@ The compiler crate owns the functional core through TIR.
 | `hir/`                        | Canonical semantic type/value expressions and lowering boundary |
 | `hir/source_interface.rs`     | Direct parameter/node/index provenance retained through HIR     |
 | `ir/instance.rs`              | Typed template-instance edges and binding environments         |
-| `ir/lower.rs`                 | IR assembly, body-source provenance, strict HIR freeze boundary |
+| `ir/lower.rs`                 | IR model, assembly coordination, and strict HIR freeze boundary |
+| `ir/include.rs`               | Include assembly and typed pre-freeze substitution             |
+| `ir/registry_build.rs`        | Dimension, unit, index, and nominal registry construction      |
+| `ir/extern_fns.rs`            | External plugin signature resolution                           |
 | `ir/required_bindability.rs`  | Pure V002 required-interface validation                       |
 | `ir/resolve/`                 | Declaration-shell collection and validation                   |
 | `registry/`                   | Dimensions, units, indexes, types, values, built-ins          |
@@ -522,7 +528,8 @@ elaboration out of runtime modules even though both currently share this crate.
 | Path                              | Purpose                                                        |
 | --------------------------------- | -------------------------------------------------------------- |
 | `loader.rs`                       | `LoadedProject`, source arena, and loader-resolved module edges |
-| `project_compiler/session.rs`     | Public `ProjectCompiler` and validated `CheckedProject`         |
+| `loader/inline_dags.rs`           | Shared package, loose-file, and virtual inline-DAG lifting      |
+| `project_compiler/session.rs`     | Configurable `ProjectCompiler` builder and `CheckedProject`     |
 | `project_compiler/imports.rs`     | Compile-time imports and typed instance requests                |
 | `project_compiler/recursion.rs`   | Inline-DAG instance cycle detection                             |
 | `project_compiler/generic_leakage.rs` | Include-boundary generic visibility checks                  |
@@ -536,9 +543,10 @@ elaboration out of runtime modules even though both currently share this crate.
 | `project_compiler/pipeline.rs`    | Dependency-ordered HIR lowering and checking continuations       |
 | `project_compiler/qualified_refs.rs` | Module-aware ambiguous reference classification             |
 | `project_compiler/registry_merge.rs` | Frontend-only registry composition                          |
-| `eval/project/prepare.rs`         | Checked-project to runtime-plan transition                      |
 | `eval/project/model_schema.rs`    | Finite typed arena for recursive model-value definitions        |
-| `eval/project/prepared.rs`        | Reusable typed binding and evaluation API                       |
+| `eval/project/prepared.rs`        | Checked-to-prepared transition and reusable evaluation surface  |
+| `eval/project/binding_compile.rs` | Closed external-value lowering and binding-row validation       |
+| `eval/project/tenax_model.rs`     | Generic model and strict Tenax-v2 projection                    |
 | `eval/project/output.rs`          | Presentation-only output projection                            |
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
 | `decl_key.rs`                     | Runtime declaration keys backed by `ResolvedName<Decl>`         |
@@ -1320,41 +1328,51 @@ Note: `hir/types.rs`, `hir/lower.rs`, `hir/expr.rs`, and `hir/mod.rs` form a mut
 
 ### Stage 8 - IR lowering, TIR, dimension checking, and late surface helpers
 
-Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `tir/dim_check/helpers.rs`, `tir/typed/ops.rs`, `tir/typed.rs`, and `tir/dim_check/mod.rs` are mutually dependent. `decl/multi.rs` and `decl/mod.rs` are also mutually dependent and appear here because their actual imports depend on AST aggregate/re-export files that sort after the core checker files.
+Note: `ir/lower.rs`, `ir/include.rs`, `ir/registry_build.rs`, and
+`ir/extern_fns.rs` cooperate as one assembly group while keeping their
+responsibilities separate. `tir/typed/model.rs`, `tir/typed/type_expr.rs`,
+`tir/typed/collect.rs`, `tir/dim_check/helpers.rs`, `tir/typed/ops.rs`,
+`tir/typed.rs`, and `tir/dim_check/mod.rs` are mutually dependent.
+`decl/multi.rs` and `decl/mod.rs` are also mutually dependent and appear here
+because their actual imports depend on AST aggregate/re-export files that sort
+after the core checker files.
 
 1. `crates/graphcal-compiler/src/ir/imported_binding.rs`
 2. `crates/graphcal-compiler/src/ir/instance.rs`
 3. `crates/graphcal-compiler/src/ir/override_reconciliation.rs`
-4. `crates/graphcal-compiler/src/ir/lower.rs`
-5. `crates/graphcal-compiler/src/tir/materialized_shape.rs`
-6. `crates/graphcal-compiler/src/tir/presentation.rs`
-7. `crates/graphcal-compiler/src/tir/typed/model.rs`
-8. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
-9. `crates/graphcal-compiler/src/tir/typed/collect.rs`
-10. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
-11. `crates/graphcal-compiler/src/tir/typed/ops.rs`
-12. `crates/graphcal-compiler/src/tir/typed.rs`
-13. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
-14. `crates/graphcal-compiler/src/tir/typed/tests.rs`
-15. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
-16. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
-17. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
-18. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
-19. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
-20. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
-21. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
-22. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
-23. `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
-24. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
-25. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
-26. `crates/graphcal-compiler/src/plot_props.rs`
-27. `crates/graphcal-compiler/src/plot_shape.rs`
-28. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
-29. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
-30. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
-31. `crates/graphcal-compiler/src/ir/resolve/formal_conformance.rs`
-32. `crates/graphcal-compiler/src/ir/static_dependencies.rs`
-33. `crates/graphcal-compiler/src/ir/static_external_surface_formal_conformance.rs`
+4. `crates/graphcal-compiler/src/ir/extern_fns.rs`
+5. `crates/graphcal-compiler/src/ir/registry_build.rs`
+6. `crates/graphcal-compiler/src/ir/include.rs`
+7. `crates/graphcal-compiler/src/ir/lower.rs`
+8. `crates/graphcal-compiler/src/tir/materialized_shape.rs`
+9. `crates/graphcal-compiler/src/tir/presentation.rs`
+10. `crates/graphcal-compiler/src/tir/typed/model.rs`
+11. `crates/graphcal-compiler/src/tir/typed/type_expr.rs`
+12. `crates/graphcal-compiler/src/tir/typed/collect.rs`
+13. `crates/graphcal-compiler/src/tir/dim_check/helpers.rs`
+14. `crates/graphcal-compiler/src/tir/typed/ops.rs`
+15. `crates/graphcal-compiler/src/tir/typed.rs`
+16. `crates/graphcal-compiler/src/tir/dim_check/mod.rs`
+17. `crates/graphcal-compiler/src/tir/typed/tests.rs`
+18. `crates/graphcal-compiler/src/ir/resolve/tests.rs`
+19. `crates/graphcal-compiler/src/tir/dim_check/infer/mod.rs`
+20. `crates/graphcal-compiler/src/tir/dim_check/infer/complex.rs`
+21. `crates/graphcal-compiler/src/tir/dim_check/infer/builtin_call.rs`
+22. `crates/graphcal-compiler/src/tir/dim_check/tests.rs`
+23. `crates/graphcal-compiler/src/tir/dim_check/infer/rules.rs`
+24. `crates/graphcal-compiler/src/tir/dim_check/infer/linear_algebra.rs`
+25. `crates/graphcal-compiler/src/tir/dim_check/infer/hir.rs`
+26. `crates/graphcal-compiler/src/syntax/parser/decl/multi.rs`
+27. `crates/graphcal-compiler/src/syntax/parser/decl/mod.rs`
+28. `crates/graphcal-compiler/src/syntax/parser/decl/value.rs`
+29. `crates/graphcal-compiler/src/plot_props.rs`
+30. `crates/graphcal-compiler/src/plot_shape.rs`
+31. `crates/graphcal-compiler/src/tir/dim_check/plot.rs`
+32. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
+33. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
+34. `crates/graphcal-compiler/src/ir/resolve/formal_conformance.rs`
+35. `crates/graphcal-compiler/src/ir/static_dependencies.rs`
+36. `crates/graphcal-compiler/src/ir/static_external_surface_formal_conformance.rs`
 
 ### Stage 9 - Filesystem abstraction (`graphcal-io`)
 
@@ -1430,47 +1448,50 @@ Note: `eval_expr/work_budget.rs`, `eval_expr/linear_algebra_lu.rs`, `eval_expr/l
 ### Stage 14 - Project loading, checking, and runtime orchestration
 
 Note: loader I/O, pure project checking, and runtime preparation are now
-separate module families. `project_compiler/entry_interface.rs` attaches
-checked semantic facts to the direct HIR source interface;
-`project_compiler/model.rs` supplies the remaining internal pass model;
-`eval/project/prepare.rs` is the only transition that consumes `CheckedProject`
-into an execution plan.
+separate module families. `loader/inline_dags.rs` is the shared lifting
+algorithm for every loader mode. `project_compiler/entry_interface.rs`
+attaches checked semantic facts to the direct HIR source interface;
+`project_compiler/model.rs` supplies the remaining internal pass model.
+`eval/project/prepared.rs` owns the checked-to-prepared transition and delegates
+binding compilation and model projection to focused child modules.
 
 1. `crates/graphcal-eval/src/package_cache.rs`
 2. `crates/graphcal-eval/src/eval/types.rs`
 3. `crates/graphcal-eval/src/eval/display.rs`
-4. `crates/graphcal-eval/src/loader.rs`
-5. `crates/graphcal-eval/src/inline_dag.rs`
-6. `crates/graphcal-eval/src/project_compiler/template.rs`
-7. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
-8. `crates/graphcal-eval/src/project_compiler/model.rs`
-9. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
-10. `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
-11. `crates/graphcal-eval/src/project_compiler/recursion.rs`
-12. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
-13. `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
-14. `crates/graphcal-eval/src/project_compiler/imports.rs`
-15. `crates/graphcal-eval/src/project_compiler/lowering.rs`
-16. `crates/graphcal-eval/src/project_compiler/execution_check/const_schedule.rs`
-17. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
-18. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
-19. `crates/graphcal-eval/src/exec_plan.rs`
-20. `crates/graphcal-eval/src/project_compiler/checking.rs`
-21. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
-22. `crates/graphcal-eval/src/project_compiler/session.rs`
-23. `crates/graphcal-eval/src/project_compiler/mod.rs`
-24. `crates/graphcal-eval/src/eval/plot_data.rs`
-25. `crates/graphcal-eval/src/eval/public_projection.rs`
-26. `crates/graphcal-eval/src/eval/runtime.rs`
-27. `crates/graphcal-eval/src/eval/project/model_schema.rs`
-28. `crates/graphcal-eval/src/eval/project/output.rs`
-29. `crates/graphcal-eval/src/eval/project/prepared.rs`
-30. `crates/graphcal-eval/src/eval/project/prepare.rs`
-31. `crates/graphcal-eval/src/eval/project/mod.rs`
-32. `crates/graphcal-eval/src/eval/mod.rs`
-33. `crates/graphcal-eval/src/eval/tests.rs`
-34. `crates/graphcal-eval/src/graph_ir/mod.rs`
-35. `crates/graphcal-eval/src/graph_ir/dot.rs`
+4. `crates/graphcal-eval/src/loader/inline_dags.rs`
+5. `crates/graphcal-eval/src/loader.rs`
+6. `crates/graphcal-eval/src/inline_dag.rs`
+7. `crates/graphcal-eval/src/project_compiler/template.rs`
+8. `crates/graphcal-eval/src/project_compiler/entry_interface.rs`
+9. `crates/graphcal-eval/src/project_compiler/model.rs`
+10. `crates/graphcal-eval/src/project_compiler/hir_project.rs`
+11. `crates/graphcal-eval/src/project_compiler/qualified_refs.rs`
+12. `crates/graphcal-eval/src/project_compiler/recursion.rs`
+13. `crates/graphcal-eval/src/project_compiler/generic_leakage.rs`
+14. `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
+15. `crates/graphcal-eval/src/project_compiler/imports.rs`
+16. `crates/graphcal-eval/src/project_compiler/lowering.rs`
+17. `crates/graphcal-eval/src/project_compiler/execution_check/const_schedule.rs`
+18. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
+19. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
+20. `crates/graphcal-eval/src/exec_plan.rs`
+21. `crates/graphcal-eval/src/project_compiler/checking.rs`
+22. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+23. `crates/graphcal-eval/src/project_compiler/session.rs`
+24. `crates/graphcal-eval/src/project_compiler/mod.rs`
+25. `crates/graphcal-eval/src/eval/plot_data.rs`
+26. `crates/graphcal-eval/src/eval/public_projection.rs`
+27. `crates/graphcal-eval/src/eval/runtime.rs`
+28. `crates/graphcal-eval/src/eval/project/model_schema.rs`
+29. `crates/graphcal-eval/src/eval/project/output.rs`
+30. `crates/graphcal-eval/src/eval/project/binding_compile.rs`
+31. `crates/graphcal-eval/src/eval/project/tenax_model.rs`
+32. `crates/graphcal-eval/src/eval/project/prepared.rs`
+33. `crates/graphcal-eval/src/eval/project/mod.rs`
+34. `crates/graphcal-eval/src/eval/mod.rs`
+35. `crates/graphcal-eval/src/eval/tests.rs`
+36. `crates/graphcal-eval/src/graph_ir/mod.rs`
+37. `crates/graphcal-eval/src/graph_ir/dot.rs`
 
 ### Stage 15 - Typed test generation (`graphcal-test-support`)
 

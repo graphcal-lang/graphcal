@@ -27,7 +27,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{ConstructorName, GenericParamName};
 use crate::syntax::visitor::ExprVisitor;
 
-use super::lower::*;
+use super::lower::{BodySource, UnfrozenDynamicUnitScaleEntry};
 
 /// Register dimensions, units, indexes, and struct types from a file's declarations
 /// into the registry.

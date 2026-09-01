@@ -4,7 +4,12 @@
 //! file resolves. DAG discovery, source-body location, same-file lookup, and
 //! file-root self-import handling are one algorithm here.
 
-use super::*;
+use super::{
+    Arc, DagBodyLocator, DagId, DeclKind, Declaration, File, FileSystemReader, HashMap, HashSet,
+    InlineBodyImportResolution, LoadedDag, ModulePath, ModulePathKey, NamedSource,
+    PackageInlineLiftContext, PackageManifest, Path, PathBuf, ResolvedModuleTarget,
+    resolve_import_path, resolve_package_import_path,
+};
 
 struct InlineDagLiftContext<'a, ResolveExternal> {
     file_dag_id: &'a DagId,
