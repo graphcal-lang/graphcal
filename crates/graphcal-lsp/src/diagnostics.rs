@@ -1196,6 +1196,26 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn unit_constructor_empty_parentheses_report_s010() {
+        for source in [
+            "type Status { Nominal, Coast }\nnode status: Status = Coast();",
+            "type Status { Nominal, Coast }\n\
+             node status: Status = Coast;\n\
+             node result: Dimensionless = match @status { Nominal => 0.0, Coast() => 1.0 };",
+        ] {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            let [diagnostic] = diagnostics.as_slice() else {
+                panic!("expected one diagnostic, got {diagnostics:?}");
+            };
+            assert_eq!(
+                diagnostic.code,
+                Some(NumberOrString::String("graphcal::S010".to_string()))
+            );
+            assert!(diagnostic.message.contains("empty parentheses"));
+        }
+    }
+
+    #[test]
     fn graph_value_may_share_a_time_scale_spelling() {
         let source = "node UTC: Dimensionless = 1.0;\n\
                       node copied: Dimensionless = @UTC;\n\

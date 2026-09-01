@@ -1105,6 +1105,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("constructor `{constructor}` cannot use empty parentheses")]
+    #[diagnostic(
+        code(graphcal::S010),
+        help(
+            "write a unit constructor as `{constructor}`; payload constructors require named field arguments"
+        )
+    )]
+    EmptyParenthesizedConstructor {
+        constructor: ConstructorName,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("empty parentheses are invalid here")]
+        span: SourceSpan,
+    },
+
     #[error("extra field(s) {extra:?} in construction of `{type_name}`")]
     #[diagnostic(
         code(graphcal::S005),
@@ -2431,6 +2446,7 @@ impl GraphcalError {
             | Self::UnknownField { src, .. }
             | Self::MissingFields { src, .. }
             | Self::MissingPatternFields { src, .. }
+            | Self::EmptyParenthesizedConstructor { src, .. }
             | Self::ExtraFields { src, .. }
             | Self::FieldDimensionMismatch { src, .. }
             | Self::NotAStruct { src, .. }

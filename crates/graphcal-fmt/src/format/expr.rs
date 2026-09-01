@@ -1,6 +1,7 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, Expr, ExprKind, FieldInit, ForBinding, IndexArg, MapEntry, MapEntryKey, MatchArm,
-    MatchPattern, ModulePath, ParamBinding, PatternBinding, TableIndexSpec, UnaryOp,
+    MatchPattern, ModulePath, ParamBinding, PatternBinding, PatternBindings, TableIndexSpec,
+    UnaryOp,
 };
 use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
@@ -1074,7 +1075,13 @@ pub fn format_match(
 
 /// Append a parenthesized `field: var` binding list to a pattern head.
 /// Shared by the path and constructor pattern arms.
-fn append_pattern_bindings(name: RcDoc<'static>, bindings: &[PatternBinding]) -> RcDoc<'static> {
+fn append_pattern_bindings(
+    name: RcDoc<'static>,
+    bindings: &PatternBindings<PatternBinding>,
+) -> RcDoc<'static> {
+    let PatternBindings::Parenthesized(bindings) = bindings else {
+        return name;
+    };
     let binding_docs: Vec<RcDoc<'static>> = bindings
         .iter()
         .map(|b| match b {
@@ -1094,21 +1101,13 @@ fn append_pattern_bindings(name: RcDoc<'static>, bindings: &[PatternBinding]) ->
 pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
     match p {
         MatchPattern::Path { path, bindings, .. } => {
-            let name = RcDoc::text(path.display_path());
-            if bindings.is_empty() {
-                return name;
-            }
-            append_pattern_bindings(name, bindings)
+            append_pattern_bindings(RcDoc::text(path.display_path()), bindings)
         }
         MatchPattern::IndexLabel { index, variant, .. } => {
             RcDoc::text(format!("{}#{}", index.value, variant.value))
         }
         MatchPattern::Constructor { name, bindings, .. } => {
-            let name = RcDoc::text(name.value.as_str().to_string());
-            if bindings.is_empty() {
-                return name;
-            }
-            append_pattern_bindings(name, bindings)
+            append_pattern_bindings(RcDoc::text(name.value.as_str().to_string()), bindings)
         }
     }
 }

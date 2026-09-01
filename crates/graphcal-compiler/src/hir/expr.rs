@@ -145,6 +145,12 @@ pub enum ExprLowerError {
         constructor: ResolvedConstructorName,
         span: Span,
     },
+    /// Empty parentheses targeted a constructor instead of a zero-argument function.
+    #[error("constructor `{constructor}` cannot use empty parentheses")]
+    EmptyParenthesizedConstructor {
+        constructor: ResolvedConstructorName,
+        span: Span,
+    },
     /// A built-in function was called with the wrong number of arguments.
     #[error("function `{name}` expects {expected} argument(s), got {got}")]
     WrongArity {
@@ -1306,7 +1312,7 @@ pub struct MatchArm {
 pub enum MatchPattern {
     Constructor {
         constructor: Spanned<ResolvedConstructorName>,
-        bindings: Vec<PatternBinding>,
+        bindings: ast::PatternBindings<PatternBinding>,
         span: Span,
     },
     IndexLabel {
@@ -1319,6 +1325,7 @@ impl MatchPattern {
     fn bound_locals(&self) -> Vec<LocalDef> {
         match self {
             Self::Constructor { bindings, .. } => bindings
+                .as_slice()
                 .iter()
                 .filter_map(|binding| match binding {
                     PatternBinding::Bind { local, .. } => Some(local.clone()),
@@ -1523,9 +1530,16 @@ impl<'a> ExprLowerer<'a> {
                     }
                 }
                 ResolvedCallable::Constructor(constructor) => {
-                    return Err(ExprLowerError::PositionalArgumentsOnConstructor {
-                        constructor,
-                        span: expr.span,
+                    return Err(if args.is_empty() {
+                        ExprLowerError::EmptyParenthesizedConstructor {
+                            constructor,
+                            span: expr.span,
+                        }
+                    } else {
+                        ExprLowerError::PositionalArgumentsOnConstructor {
+                            constructor,
+                            span: expr.span,
+                        }
                     });
                 }
             },
@@ -2753,10 +2767,7 @@ impl<'a> ExprLowerer<'a> {
                         })?,
                     name.span,
                 ),
-                bindings: bindings
-                    .iter()
-                    .map(|binding| self.lower_pattern_binding(binding))
-                    .collect::<Result<Vec<_>, _>>()?,
+                bindings: self.lower_pattern_bindings(bindings)?,
                 span: *span,
             }),
             ast::MatchPattern::IndexLabel {
@@ -2791,7 +2802,7 @@ impl<'a> ExprLowerer<'a> {
     fn lower_path_pattern(
         &mut self,
         path: &crate::syntax::ast::IdentPath,
-        bindings: &[ast::PatternBinding],
+        bindings: &ast::PatternBindings<ast::PatternBinding>,
         span: Span,
     ) -> Result<MatchPattern, ExprLowerError> {
         let name_path = path.to_name_path();
@@ -2802,10 +2813,7 @@ impl<'a> ExprLowerer<'a> {
         {
             Ok(constructor) => Ok(MatchPattern::Constructor {
                 constructor: Spanned::new(constructor, path.span()),
-                bindings: bindings
-                    .iter()
-                    .map(|binding| self.lower_pattern_binding(binding))
-                    .collect::<Result<Vec<_>, _>>()?,
+                bindings: self.lower_pattern_bindings(bindings)?,
                 span,
             }),
             Err(source) => match source {
@@ -2817,6 +2825,20 @@ impl<'a> ExprLowerer<'a> {
                 }),
                 source => Err(ExprLowerError::ModuleResolve { source, span }),
             },
+        }
+    }
+
+    fn lower_pattern_bindings(
+        &mut self,
+        bindings: &ast::PatternBindings<ast::PatternBinding>,
+    ) -> Result<ast::PatternBindings<PatternBinding>, ExprLowerError> {
+        match bindings {
+            ast::PatternBindings::Bare => Ok(ast::PatternBindings::Bare),
+            ast::PatternBindings::Parenthesized(bindings) => bindings
+                .iter()
+                .map(|binding| self.lower_pattern_binding(binding))
+                .collect::<Result<Vec<_>, _>>()
+                .map(ast::PatternBindings::Parenthesized),
         }
     }
 

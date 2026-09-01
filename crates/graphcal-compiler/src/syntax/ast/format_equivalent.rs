@@ -44,9 +44,9 @@ use crate::syntax::ast::{
     IndexDecl, IndexDeclKind, IndexExpr, LayerDecl, MapEntry, MapEntryKey, MarkSpec, MatchArm,
     MatchPattern, ModulePath, MultiDataRow, MultiDecl, MultiDeclSharedAxes, MultiDeclSlice,
     MultiDeclSlot, MultiHeaderCell, MultiSlotAxis, MultiSlotColumnSpan, NatExpr, ParamBinding,
-    ParamDecl, PatternBinding, PlotDecl, PlotField, RawDeclSugar, RawExprSugar, TableIndexSpec,
-    TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef, UnitExpr,
-    UnitExprItem, UnresolvedRef, ValueDecl,
+    ParamDecl, PatternBinding, PatternBindings, PlotDecl, PlotField, RawDeclSugar, RawExprSugar,
+    TableIndexSpec, TypeDecl, TypeDeclBody, TypeExpr, TypeExprKind, UnionMember, UnitDecl, UnitDef,
+    UnitExpr, UnitExprItem, UnresolvedRef, ValueDecl,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
@@ -179,6 +179,18 @@ impl<T: FormatEquivalent> FormatEquivalent for [T] {
 impl<T: FormatEquivalent> FormatEquivalent for Vec<T> {
     fn format_equivalent(&self, other: &Self) -> bool {
         self.as_slice().format_equivalent(other.as_slice())
+    }
+}
+
+impl<T: FormatEquivalent> FormatEquivalent for PatternBindings<T> {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Bare, Self::Bare) => true,
+            (Self::Parenthesized(bindings), Self::Parenthesized(other_bindings)) => {
+                bindings.format_equivalent(other_bindings)
+            }
+            (Self::Bare, Self::Parenthesized(_)) | (Self::Parenthesized(_), Self::Bare) => false,
+        }
     }
 }
 

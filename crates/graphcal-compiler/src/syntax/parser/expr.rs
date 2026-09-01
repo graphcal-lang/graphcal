@@ -967,10 +967,10 @@ impl Parser<'_> {
     /// the first argument is of the form `IDENT :` — the constructor
     /// form. Pure byte scan; the lexer is not advanced.
     ///
-    /// Empty `()` is treated as a function call (returns `false`) — a
-    /// unit constructor is written `Ctor`, not `Ctor()`. A `Ctor()` call
-    /// site with empty parens parses as a zero-arg function call and
-    /// later fails at name-resolution time if no such function exists.
+    /// Empty `()` remains positional call syntax (returns `false`) so ordinary
+    /// zero-argument functions keep their call shape. If name resolution finds
+    /// a constructor instead, HIR lowering emits the constructor-specific S010
+    /// diagnostic.
     fn is_named_arg_call(&mut self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
