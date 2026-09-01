@@ -15,15 +15,15 @@ use graphcal_compiler::tir::typed::{DagTIR, StructFieldConstraintKey, TIR};
 
 use crate::decl_key::RuntimeDeclKey;
 use crate::domain_check::{
-    ResolvedDomainBound as EvaluatedDomainBound,
-    ResolvedDomainBounds as EvaluatedDomainBounds, ResolvedDomainConstraint,
+    ResolvedDomainBound as EvaluatedDomainBound, ResolvedDomainBounds as EvaluatedDomainBounds,
+    ResolvedDomainConstraint,
 };
 use crate::eval_expr::{EvalContext, HirLocalValueMap, RuntimeValue, eval_hir_expr};
 use crate::execution_facts::{CheckedDagExecutionFacts, RuntimeValueMap};
 
-use super::visible_values_with_imports;
 #[cfg(test)]
 use super::known_const_values;
+use super::visible_values_with_imports;
 
 /// Resolve domain constraints from type annotations on consts, params, and nodes.
 ///
@@ -415,8 +415,7 @@ pub(crate) fn resolve_struct_field_constraints(
 
 struct FieldConstraintResolutionContext<'a> {
     tir: &'a TIR,
-    dag_facts:
-        &'a HashMap<graphcal_compiler::dag_id::DagId, Arc<CheckedDagExecutionFacts>>,
+    dag_facts: &'a HashMap<graphcal_compiler::dag_id::DagId, Arc<CheckedDagExecutionFacts>>,
     all_const_values: &'a RuntimeValueMap,
     builtin_fns: &'a graphcal_compiler::registry::builtins::BuiltinFunctions,
     fallback_src: &'a NamedSource<Arc<String>>,
@@ -901,4 +900,3 @@ fn format_quantity_bound_display(expr: &graphcal_compiler::hir::Expr, si_value: 
         _ => graphcal_compiler::registry::format::format_number(si_value),
     }
 }
-

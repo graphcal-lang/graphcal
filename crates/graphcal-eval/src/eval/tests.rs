@@ -5052,12 +5052,8 @@ fn project_struct_field_constraints_preserve_same_leaf_struct_owner() {
     let (tir, project) = compile_to_tir_project(&root, None, &fs()).unwrap();
     let src = &project.root_file().named_source();
     let constraints =
-        crate::project_compiler::resolve_struct_field_constraints(
-            &tir,
-            &HashMap::new(),
-            src,
-        )
-        .unwrap();
+        crate::project_compiler::resolve_struct_field_constraints(&tir, &HashMap::new(), src)
+            .unwrap();
     let a_id = loaded_file_dag_id(&project, "a.gcl");
     let b_id = loaded_file_dag_id(&project, "b.gcl");
 

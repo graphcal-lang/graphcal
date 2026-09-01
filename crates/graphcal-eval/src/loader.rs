@@ -2337,8 +2337,7 @@ fn load_package_file_dfs(
         if path.segments.len() == 1 && path.segments[0].name == file_stem {
             continue;
         }
-        let Ok(resolved) =
-            resolve_package_import_path(path, package_id, context, &named_source)
+        let Ok(resolved) = resolve_package_import_path(path, package_id, context, &named_source)
         else {
             continue;
         };
@@ -2762,12 +2761,9 @@ fn resolve_package_inline_body_import(
             context.file_dag_id.clone(),
         ));
     }
-    let Ok(resolved) = resolve_package_import_path(
-        path,
-        context.package_id,
-        context.context,
-        context.src,
-    ) else {
+    let Ok(resolved) =
+        resolve_package_import_path(path, context.package_id, context.context, context.src)
+    else {
         return InlineBodyImportResolution::Unresolved;
     };
     let source_file =
@@ -2885,8 +2881,7 @@ fn load_file_dfs<F: FileSystemReader>(
             continue;
         }
 
-        let resolved =
-            resolve_import_path(path, project_root, &named_source, manifest, fs)?;
+        let resolved = resolve_import_path(path, project_root, &named_source, manifest, fs)?;
 
         // Path sandboxing: reject imports that resolve outside the project root.
         if !resolved.file.starts_with(project_root) {
@@ -2947,8 +2942,7 @@ fn load_file_dfs<F: FileSystemReader>(
             continue;
         }
 
-        let Ok(resolved) =
-            resolve_import_path(path, project_root, &named_source, manifest, fs)
+        let Ok(resolved) = resolve_import_path(path, project_root, &named_source, manifest, fs)
         else {
             continue;
         };

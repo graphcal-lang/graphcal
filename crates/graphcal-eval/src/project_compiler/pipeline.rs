@@ -324,8 +324,7 @@ pub(in crate::project_compiler) fn check_hir_project(
             ))
         })?;
     let mut module_artifacts = ModuleArtifactStore::default();
-    let mut inherited_execution_facts =
-        crate::execution_facts::CheckedExecutionFacts::empty();
+    let mut inherited_execution_facts = crate::execution_facts::CheckedExecutionFacts::empty();
 
     for file_dag_id in &load_order {
         cancellation.checkpoint()?;

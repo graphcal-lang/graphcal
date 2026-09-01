@@ -47,14 +47,17 @@ mod session;
 mod template;
 
 pub(crate) use entry_interface::CheckedEntryInterface;
+#[cfg(test)]
+pub(crate) use execution_check::{
+    check_execution_facts_with_cancellation, resolve_struct_field_constraints,
+};
 pub use hir_project::HirProject;
 pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
     DepToImporter, FrontendRegistryImport, HirFile, ImportAlias, ImportContext,
     IncludeInstanceRequest, IndexBindings, LoweringModuleInterface, ModuleArtifact,
     ModuleArtifactStore, ProjectModuleBinding, ProjectSemanticContext, ProjectedStaticAlias,
-    RuntimeUnitBoundary,
-    UnitProjectionAlias,
+    RuntimeUnitBoundary, UnitProjectionAlias,
 };
 use qualified_refs::rewrite_qualified_refs_in_compilation_body;
 pub(crate) use session::CheckedProjectRuntimeParts;
@@ -62,10 +65,6 @@ pub use session::{
     CheckedProject, ProjectCompiler, check_project, check_project_with_host_fns,
     check_project_with_host_fns_and_cancellation, check_project_with_host_metadata,
     check_project_with_host_metadata_and_cancellation,
-};
-#[cfg(test)]
-pub(crate) use execution_check::{
-    check_execution_facts_with_cancellation, resolve_struct_field_constraints,
 };
 #[cfg(test)]
 pub(crate) use session::{compile_to_tir, compile_to_tir_project};

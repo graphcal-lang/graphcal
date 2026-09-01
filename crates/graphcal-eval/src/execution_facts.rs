@@ -163,5 +163,4 @@ impl CheckedExecutionFacts {
     pub fn for_dag(&self, dag_id: &DagId) -> Option<&CheckedDagExecutionFacts> {
         self.by_dag.get(dag_id).map(AsRef::as_ref)
     }
-
 }

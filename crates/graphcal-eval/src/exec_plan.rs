@@ -72,11 +72,8 @@ pub fn compile_with_cancellation(
     src: &NamedSource<Arc<String>>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<ExecPlan, GraphcalError> {
-    let facts = crate::project_compiler::check_execution_facts_with_cancellation(
-        tir,
-        src,
-        cancellation,
-    )?;
+    let facts =
+        crate::project_compiler::check_execution_facts_with_cancellation(tir, src, cancellation)?;
     compile_checked_with_cancellation(tir, &facts, src, cancellation)
 }
 

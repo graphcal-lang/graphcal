@@ -119,8 +119,7 @@ pub(super) struct ModuleArtifact {
 #[derive(Default)]
 pub(super) struct ModuleArtifactStore {
     by_file: HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
-    owner_to_file:
-        HashMap<graphcal_compiler::dag_id::DagId, graphcal_compiler::dag_id::DagId>,
+    owner_to_file: HashMap<graphcal_compiler::dag_id::DagId, graphcal_compiler::dag_id::DagId>,
 }
 
 impl ModuleArtifactStore {
