@@ -46,19 +46,16 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(
     let runtime_units = dag
         .params
         .iter()
-        .filter_map(|entry| entry.default_expr.as_ref().map(|expr| (entry, expr)))
-        .map(|(entry, expr)| {
-            let entry_src = entry
-                .default_src
-                .as_ref()
-                .map_or(src, |source| source.resolve(src));
+        .filter_map(|entry| entry.default.as_ref().map(|default| (entry, default)))
+        .map(|(entry, default)| {
+            let entry_src = default.src.resolve(src);
             Ok((
                 dag.require_bound_decl_identity(
                     &entry.name,
                     entry_src,
                     DiagnosticAnchor::Source(entry.span),
                 )?,
-                collect_unit_names(expr),
+                collect_unit_names(&default.expr),
             ))
         })
         .chain(dag.nodes.iter().map(|entry| {
@@ -242,10 +239,12 @@ pub(super) fn collect_resolved_dag_dependencies(
             entry.declaration_owner.clone(),
             entry.name.member().clone(),
         );
-        let deps = entry.default_expr.as_ref().map_or_else(
-            hir::ExprDependencies::default,
-            hir::collect_expr_dependencies,
-        );
+        let deps = entry
+            .default
+            .as_ref()
+            .map_or_else(hir::ExprDependencies::default, |default| {
+                hir::collect_expr_dependencies(&default.expr)
+            });
         resolved.runtime_deps.insert(key, deps.graph_refs);
     }
 
@@ -299,18 +298,11 @@ pub(super) fn collect_resolved_collection_refs(
         )?;
     }
     for entry in params {
-        if let Some(expr) = &entry.default_expr {
-            let default_src = entry.default_src.as_ref().ok_or_else(|| {
-                internal_error(
-                    format!("parameter `{}` is missing default provenance", entry.name),
-                    src,
-                    entry.span,
-                )
-            })?;
+        if let Some(default) = &entry.default {
             collect_resolved_collection_refs_from_expr(
-                expr,
+                &default.expr,
                 ctx,
-                default_src.resolve(src),
+                default.src.resolve(src),
                 &mut refs,
             )?;
         }
@@ -706,18 +698,11 @@ pub(super) fn collect_resolved_constructor_refs(
         )?;
     }
     for entry in params {
-        if let Some(expr) = &entry.default_expr {
-            let default_src = entry.default_src.as_ref().ok_or_else(|| {
-                internal_error(
-                    format!("parameter `{}` is missing default provenance", entry.name),
-                    src,
-                    entry.span,
-                )
-            })?;
+        if let Some(default) = &entry.default {
             collect_resolved_constructor_refs_from_expr(
-                expr,
+                &default.expr,
                 ctx,
-                default_src.resolve(src),
+                default.src.resolve(src),
                 &mut refs,
             )?;
         }

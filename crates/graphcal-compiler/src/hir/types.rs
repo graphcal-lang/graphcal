@@ -74,7 +74,7 @@ pub struct TypeAnnotation {
 #[derive(Debug, Clone)]
 pub struct DomainBound {
     pub kind: crate::syntax::ast::DomainBoundKind,
-    pub value: crate::hir::Expr,
+    pub value: crate::hir::CheckedExpr,
     pub span: Span,
 }
 

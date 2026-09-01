@@ -403,10 +403,10 @@ pub fn lower_expr_tolerant(
 pub(crate) fn lower_expr(
     expr: &ast::Expr,
     ctx: ExprLoweringContext<'_>,
-) -> Result<Expr, ExprLowerError> {
+) -> Result<CheckedExpr, ExprLowerError> {
     let (lowered, mut diagnostics) = lower_expr_tolerant(expr, ctx);
     if diagnostics.is_empty() {
-        Ok(lowered)
+        Ok(CheckedExpr(lowered))
     } else {
         Err(diagnostics.swap_remove(0))
     }
@@ -457,10 +457,10 @@ fn lower_assert_body_tolerant(
 pub(crate) fn lower_assert_body(
     body: &ast::AssertBody,
     ctx: ExprLoweringContext<'_>,
-) -> Result<AssertBody, ExprLowerError> {
+) -> Result<CheckedAssertBody, ExprLowerError> {
     let (lowered, mut diagnostics) = lower_assert_body_tolerant(body, ctx);
     if diagnostics.is_empty() {
-        Ok(lowered)
+        Ok(CheckedAssertBody(lowered))
     } else {
         Err(diagnostics.swap_remove(0))
     }
@@ -557,6 +557,48 @@ impl<'a, V> LocalEnv<'a, V> {
 impl<V> Default for LocalEnv<'_, V> {
     fn default() -> Self {
         Self::root()
+    }
+}
+
+/// An HIR assertion body proven not to contain tolerant-lowering error nodes.
+#[derive(Debug, Clone)]
+pub struct CheckedAssertBody(AssertBody);
+
+impl std::ops::Deref for CheckedAssertBody {
+    type Target = AssertBody;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl CheckedAssertBody {
+    pub(crate) const fn from_assert_body_for_test(body: AssertBody) -> Self {
+        Self(body)
+    }
+}
+
+/// An HIR expression proven not to contain tolerant-lowering error nodes.
+#[derive(Debug, Clone)]
+pub struct CheckedExpr(Expr);
+
+impl std::ops::Deref for CheckedExpr {
+    type Target = Expr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[cfg(test)]
+impl CheckedExpr {
+    pub(crate) fn into_expr_for_test(self) -> Expr {
+        self.0
+    }
+
+    pub(crate) fn expr_mut_for_test(&mut self) -> &mut Expr {
+        &mut self.0
     }
 }
 
@@ -3041,7 +3083,8 @@ mod tests {
             node_value(&main, "phase"),
             ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
-        .unwrap();
+        .unwrap()
+        .into_expr_for_test();
 
         let ExprKind::VariantLiteral(variant) = expr.kind else {
             panic!("expected variant literal, got {expr:?}");
@@ -3075,7 +3118,8 @@ mod tests {
             node_value(&main, "amount"),
             ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
-        .unwrap();
+        .unwrap()
+        .into_expr_for_test();
 
         let ExprKind::QuantityLiteral { unit, .. } = expr.kind else {
             panic!("expected quantity literal, got {expr:?}");
@@ -3103,7 +3147,8 @@ mod tests {
             node_value(&main, "burn"),
             ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
-        .unwrap();
+        .unwrap()
+        .into_expr_for_test();
 
         let ExprKind::ConstRef(target) = expr.kind else {
             panic!("expected const-like ref, got {expr:?}");
@@ -3131,7 +3176,8 @@ mod tests {
             node_value(&file, "t"),
             ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
-        .unwrap();
+        .unwrap()
+        .into_expr_for_test();
 
         let ExprKind::FnCall { args, .. } = expr.kind else {
             panic!("expected function call, got {expr:?}");
@@ -3170,7 +3216,8 @@ mod tests {
             node_value(&file, "t"),
             ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
-        .unwrap();
+        .unwrap()
+        .into_expr_for_test();
 
         let ExprKind::FnCall { callee, args } = expr.kind else {
             panic!("expected function call, got {expr:?}");
@@ -3204,7 +3251,8 @@ mod tests {
             node_value(&file, "x"),
             ExprLoweringContext::new(&owner, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
-        .unwrap();
+        .unwrap()
+        .into_expr_for_test();
 
         let ExprKind::ForComp { bindings, body } = expr.kind else {
             panic!("expected for comp, got {expr:?}");
@@ -3235,7 +3283,8 @@ mod tests {
             node_value(&main, "dv"),
             ExprLoweringContext::new(&main_id, &resolver, &scope, &TimeZoneRegistry::bundled()),
         )
-        .unwrap();
+        .unwrap()
+        .into_expr_for_test();
 
         let ExprKind::Match { arms, .. } = expr.kind else {
             panic!("expected match, got {expr:?}");

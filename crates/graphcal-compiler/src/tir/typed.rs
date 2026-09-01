@@ -1323,23 +1323,16 @@ fn check_hir_body_policies(
         )?;
     }
     for entry in &dag.params {
-        let Some(expr) = &entry.default_expr else {
+        let Some(default) = &entry.default else {
             continue;
         };
-        let default_src = entry.default_src.as_ref().ok_or_else(|| {
-            internal_error(
-                format!("parameter `{}` is missing default provenance", entry.name),
-                src,
-                entry.span,
-            )
-        })?;
         // Params are exempt from A10 (a rebinding importer is forced to
         // rebind the param too — V005 at the include site).
         HirPolicyChecker {
             ctx,
-            src: default_src.resolve(src),
+            src: default.src.resolve(src),
         }
-        .check_expr(expr, BodyPhase::Runtime, false)?;
+        .check_expr(&default.expr, BodyPhase::Runtime, false)?;
     }
     check_sink_body_policies(dag, external_surface, ctx, src)
 }
@@ -1424,7 +1417,7 @@ fn check_sink_body_policies(
         )?;
         let check_literals = key.owner() == ctx.owner && is_explicit_export(key.as_str());
         let checker = HirPolicyChecker { ctx, src: body_src };
-        match &entry.body {
+        match &*entry.body {
             hir::AssertBody::Expr(expr) => {
                 checker.check_expr(expr, BodyPhase::Runtime, check_literals)?;
             }

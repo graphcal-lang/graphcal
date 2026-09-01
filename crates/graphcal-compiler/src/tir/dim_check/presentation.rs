@@ -493,7 +493,7 @@ fn declaration_body(
     dag: &crate::tir::typed::DagTIR,
     key: &ResolvedDeclName,
     fallback_src: &NamedSource<Arc<String>>,
-) -> Option<(hir::Expr, NamedSource<Arc<String>>)> {
+) -> Option<(hir::CheckedExpr, NamedSource<Arc<String>>)> {
     dag.consts()
         .iter()
         .find(|entry| dag.bound_decl_identity(&entry.name) == Some(key))
@@ -508,14 +508,10 @@ fn declaration_body(
                 .iter()
                 .find(|entry| dag.bound_decl_identity(&entry.name) == Some(key))
                 .and_then(|entry| {
-                    entry.default_expr.as_ref().map(|expr| {
+                    entry.default.as_ref().map(|default| {
                         (
-                            expr.clone(),
-                            entry
-                                .default_src
-                                .as_ref()
-                                .map_or(fallback_src, |source| source.resolve(fallback_src))
-                                .clone(),
+                            default.expr.clone(),
+                            default.src.resolve(fallback_src).clone(),
                         )
                     })
                 })
