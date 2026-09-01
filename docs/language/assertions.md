@@ -375,7 +375,7 @@ bindings happen to be equal.
 | A016 | `#[expected_fail(...)]` Fin position is outside the indexed assertion axis |
 | A017 | `#[hidden]` on an invalid declaration kind |
 | A018 | `#[hidden]` on a non-plot include item |
-| A019 | Repeated singleton `#[assumes]` or `#[expected_fail]` attribute |
+| A019 | Repeated singleton `#[assumes]`, `#[expected_fail]`, or `#[hidden]` attribute |
 | A020 | Empty `#[assumes]` argument list |
 | A021 | Duplicate assertion name in `#[assumes(...)]` |
 | A022 | Non-identifier argument in `#[assumes(...)]` |

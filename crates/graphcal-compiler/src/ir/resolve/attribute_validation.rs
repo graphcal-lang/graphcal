@@ -4,7 +4,7 @@
 //! owning compiler phases. This module enforces the source-shape invariants
 //! that must be identical at every attribute boundary.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -87,16 +87,15 @@ pub enum AttributeValidationError {
 
 /// Parse known attributes and enforce shared singleton/argument invariants.
 ///
-/// `assumes` and `expected_fail` are singleton metadata. `assumes` must also
-/// contain a non-empty set of unique plain assertion names. The function has
-/// no registry or I/O dependencies, so declarations and include items cannot
-/// drift onto separate validation rules.
+/// Singleton metadata is classified by [`AttributeName::is_singleton`].
+/// `assumes` must also contain a non-empty set of unique plain assertion names.
+/// The function has no registry or I/O dependencies, so declarations and
+/// include items cannot drift onto separate validation rules.
 pub fn validate_attributes<'a>(
     attributes: &'a [Attribute],
     target: &AttributeTarget,
 ) -> Result<Vec<ValidatedAttribute<'a>>, AttributeValidationError> {
-    let mut first_assumes = None;
-    let mut first_expected_fail = None;
+    let mut first_singletons = HashMap::new();
 
     attributes
         .iter()
@@ -123,16 +122,15 @@ pub fn validate_attributes<'a>(
                 });
             }
 
+            if name.is_singleton() {
+                reject_repeated_singleton(name, &mut first_singletons, attribute.span)?;
+            }
+
             let assumes_arguments = match name {
-                AttributeName::Assumes => {
-                    reject_repeated_singleton(name, &mut first_assumes, attribute.span)?;
-                    validate_assumes_arguments(attribute)?
-                }
-                AttributeName::ExpectedFail => {
-                    reject_repeated_singleton(name, &mut first_expected_fail, attribute.span)?;
+                AttributeName::Assumes => validate_assumes_arguments(attribute)?,
+                AttributeName::ExpectedFail | AttributeName::Hidden | AttributeName::Lazy => {
                     Vec::new()
                 }
-                AttributeName::Hidden | AttributeName::Lazy => Vec::new(),
             };
 
             Ok(ValidatedAttribute {
@@ -144,20 +142,22 @@ pub fn validate_attributes<'a>(
         .collect()
 }
 
-const fn reject_repeated_singleton(
+fn reject_repeated_singleton(
     name: AttributeName,
-    first: &mut Option<Span>,
+    first: &mut HashMap<AttributeName, Span>,
     duplicate: Span,
 ) -> Result<(), AttributeValidationError> {
-    let Some(first_span) = *first else {
-        *first = Some(duplicate);
-        return Ok(());
-    };
-    Err(AttributeValidationError::RepeatedSingleton {
-        name,
-        first: first_span,
-        duplicate,
-    })
+    match first.entry(name) {
+        Entry::Vacant(entry) => {
+            entry.insert(duplicate);
+            Ok(())
+        }
+        Entry::Occupied(entry) => Err(AttributeValidationError::RepeatedSingleton {
+            name,
+            first: *entry.get(),
+            duplicate,
+        }),
+    }
 }
 
 fn validate_assumes_arguments(
@@ -320,6 +320,10 @@ mod tests {
             (
                 "#[assumes(first)]\n#[assumes(second)]\nnode output: Dimensionless = 1.0;",
                 AttributeTarget::declaration(DeclarationKind::Node),
+            ),
+            (
+                "#[hidden]\n#[hidden]\nnode output: Dimensionless = 1.0;",
+                AttributeTarget::declaration(DeclarationKind::Plot),
             ),
         ] {
             let attributes = attributes(source);

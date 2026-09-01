@@ -493,6 +493,43 @@ fn repeated_expected_fail_is_rejected_on_file_and_inline_include_items() {
 }
 
 #[test]
+fn repeated_hidden_is_rejected_on_plots_and_include_items() {
+    let declaration = "node x: Dimensionless = 1.0;\n\
+                       #[hidden]\n\
+                       #[hidden]\n\
+                       plot chart = { mark: point, encode: { x: @x } };";
+    let declaration_error = compile_and_eval_named(declaration, "test.gcl").unwrap_err();
+    assert!(matches!(
+        declaration_error,
+        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
+            name: AttributeName::Hidden,
+            ..
+        })
+    ));
+
+    let producer = "pub node x: Dimensionless = 1.0;\n\
+                    pub plot chart = { mark: point, encode: { x: @x } };\n";
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", producer),
+            (
+                "main.gcl",
+                "include pipeline.lib()::{ #[hidden] #[hidden] chart };\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let include_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        include_error,
+        CompileError::Eval(GraphcalError::RepeatedSingletonAttribute {
+            name: AttributeName::Hidden,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
     for scale in graphcal_compiler::registry::time_scale::TimeScale::ALL {
         for declaration in [

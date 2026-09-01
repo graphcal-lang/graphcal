@@ -1153,6 +1153,11 @@ param event: Datetime<TT>(
                 "graphcal::A019",
                 true,
             ),
+            (
+                "node x: Dimensionless = 1.0;\n#[hidden]\n#[hidden]\nplot chart = { mark: point, encode: { x: @x } };",
+                "graphcal::A019",
+                true,
+            ),
         ];
 
         for (source, expected_code, has_related_span) in cases {

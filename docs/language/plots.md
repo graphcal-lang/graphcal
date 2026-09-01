@@ -263,9 +263,10 @@ plot curve_a = { mark: line, encode: { ... } };
 
 A `#[hidden]` plot still participates in the computation graph and can be
 referenced by `figure` and `layer` declarations — it simply does not appear
-as a standalone chart. `#[hidden]` is valid only on `plot` declarations
-(figures and layers cannot be referenced by anything, so hiding one would be
-equivalent to deleting it).
+as a standalone chart. `#[hidden]` is singleton metadata and may appear at most
+once on a target. It is valid only on `plot` declarations (figures and layers
+cannot be referenced by anything, so hiding one would be equivalent to deleting
+it).
 
 Display and cross-file visibility are independent axes: `pub` makes a plot
 includable by consumer files (like `pub` on any other declaration) and says
