@@ -88,10 +88,11 @@ All three operands are arbitrary expressions. They can reference `@param`,
 
 - `actual` and `expected` must have the **same dimension**.
 - `tolerance` must also have the **same dimension** as `actual` and `expected`.
-- `tolerance` must be **non-negative**. A literal negative tolerance is a
-  compile error (`A015`); a tolerance computed at runtime that turns out
-  negative makes the assertion report an `ERROR`. Zero tolerance is legal and
-  means exact-match semantics.
+- `tolerance` must be **non-negative**. A sign-negative literal tolerance,
+  including `-0.0`, is a compile error (`A015`); a tolerance computed at runtime
+  that turns out negative makes the assertion report an `ERROR`. Unsigned
+  literal zero is legal; at runtime, either signed zero has exact-match
+  semantics.
 
 The check passes when `abs(actual - expected) <= tolerance`.
 

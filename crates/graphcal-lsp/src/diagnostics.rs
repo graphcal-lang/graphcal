@@ -1180,6 +1180,22 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn literal_negative_zero_tolerance_reports_a015() {
+        let source = "param x: Dimensionless = 1.0;\n\
+                      assert exact = @x ~= 1.0 +/- -0.0;";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::A015".to_string()))
+        );
+        assert!(diagnostic.message.contains("negative tolerance"));
+    }
+
+    #[test]
     fn graph_value_may_share_a_time_scale_spelling() {
         let source = "node UTC: Dimensionless = 1.0;\n\
                       node copied: Dimensionless = @UTC;\n\

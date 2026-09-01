@@ -1622,7 +1622,7 @@ pub enum GraphcalError {
     #[diagnostic(
         code(graphcal::A015),
         help(
-            "the tolerance in `~= expected +/- tolerance` must be non-negative; use `0` for exact-match semantics"
+            "a literal tolerance must not have a negative sign; use `0` for exact-match semantics"
         )
     )]
     NegativeTolerance {

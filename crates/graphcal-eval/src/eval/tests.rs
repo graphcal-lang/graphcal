@@ -1988,6 +1988,30 @@ fn assert_on_transitively_failed_dependency_reports_dependency_name() {
 }
 
 #[test]
+fn assert_literal_negative_zero_tolerance_is_rejected() {
+    let error = compile_and_eval(
+        "param measured: Length = 1.0 m;\n\
+         assert exact = @measured ~= 1.0 m +/- -0.0 m;",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::NegativeTolerance { ref found, .. }) if found == "-0"
+    ));
+}
+
+#[test]
+fn assert_runtime_negative_zero_tolerance_is_zero() {
+    let result = compile_and_eval(
+        "param x: Dimensionless = 1.0;\n\
+         param tolerance: Dimensionless = -0.0;\n\
+         assert exact = @x ~= 1.0 +/- @tolerance;",
+    )
+    .unwrap();
+    assert_eq!(result.assertions[0].1, super::types::AssertResult::Pass);
+}
+
+#[test]
 fn assert_zero_tolerance_exact_match_passes() {
     // #815: zero tolerance stays legal — exact-match semantics.
     let result = compile_and_eval(
