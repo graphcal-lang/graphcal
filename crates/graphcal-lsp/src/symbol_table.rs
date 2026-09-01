@@ -317,7 +317,6 @@ impl<'a> HirRefCollector<'a> {
                     hir::ConstRef::Decl(name) => SymbolKey::Declaration(name.clone()),
                     hir::ConstRef::Constructor(name) => SymbolKey::Constructor(name.clone()),
                     hir::ConstRef::Builtin(builtin) => SymbolKey::BuiltinConstant(*builtin),
-                    hir::ConstRef::TimeScale(scale) => SymbolKey::TimeScale(*scale),
                     hir::ConstRef::GenericNatParam(_) => return,
                 };
                 Self::reference(table, const_ref.span, target);

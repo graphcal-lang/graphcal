@@ -1,5 +1,5 @@
 use super::*;
-use crate::builtin::BuiltinConst;
+use crate::builtin::{BuiltinConst, BuiltinFnName};
 use crate::registry::time_scale::TimeScale;
 use crate::syntax::decl_name::ResolvedDeclName;
 use crate::syntax::parser::Parser;
@@ -166,6 +166,60 @@ fn resolve_rejects_every_builtin_constant_spelling_for_graph_values() {
             ));
         }
     }
+}
+
+#[test]
+fn resolve_rejects_every_builtin_term_spelling_for_constructors() {
+    let contextual = [
+        "scan",
+        "unfold",
+        "key",
+        "fin_key",
+        "floor_key",
+        "ceil_key",
+        "nearest_key",
+    ];
+    for name in BuiltinConst::ALL
+        .iter()
+        .map(|name| name.as_str())
+        .chain(BuiltinFnName::ALL.iter().map(|name| name.as_str()))
+        .chain(contextual)
+    {
+        for declaration in [
+            format!("type Flag {{ {name} }}"),
+            format!("type Flag {{ {name}() }}"),
+            format!("type Flag {{ {name}(value: Dimensionless) }}"),
+        ] {
+            let err = parse_and_resolve(&declaration).unwrap_err();
+            assert!(matches!(
+                err,
+                GraphcalError::BuiltinNameShadowed { name: rejected, .. }
+                    if rejected == name
+            ));
+        }
+    }
+}
+
+#[test]
+fn every_time_scale_spelling_is_available_to_term_constructors() {
+    for scale in TimeScale::ALL {
+        compile_to_tir(&format!(
+            "type Flag {{ {scale} }}\nnode flag: Flag = {scale};"
+        ))
+        .unwrap();
+    }
+}
+
+#[test]
+fn bare_time_scale_without_a_term_reports_the_static_namespace() {
+    let err = compile_to_tir("node invalid: Dimensionless = UTC;").unwrap_err();
+    assert!(matches!(
+        err,
+        GraphcalError::TimeScaleInValuePosition {
+            scale: TimeScale::UTC,
+            ..
+        }
+    ));
 }
 
 #[test]

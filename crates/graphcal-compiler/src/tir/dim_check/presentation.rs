@@ -254,7 +254,6 @@ impl PresentationResolver<'_> {
                 hir::ConstRef::Decl(target) => self.declaration(target),
                 hir::ConstRef::Builtin(_)
                 | hir::ConstRef::Constructor(_)
-                | hir::ConstRef::TimeScale(_)
                 | hir::ConstRef::GenericNatParam(_) => Ok(PresentationProvenance::None),
             },
             ExprKind::DagCall { output, .. } => {

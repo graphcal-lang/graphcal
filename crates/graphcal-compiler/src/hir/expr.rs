@@ -85,6 +85,9 @@ pub enum ExprLowerError {
         kind: DeclSymbolKind,
         span: Span,
     },
+    /// A Static-only time-scale spelling was used where a Term value was required.
+    #[error("time scale `{scale}` cannot be used as a value")]
+    TimeScaleInValuePosition { scale: TimeScale, span: Span },
     /// A single expression tree introduced more local bindings than HIR can index.
     #[error("too many local bindings in one expression")]
     TooManyLocals { span: Span },
@@ -1061,7 +1064,6 @@ pub enum ConstRef {
     Decl(ResolvedDeclName),
     Constructor(ResolvedConstructorName),
     Builtin(BuiltinConst),
-    TimeScale(TimeScale),
     GenericNatParam(super::types::GenericParamId),
 }
 
@@ -1808,10 +1810,11 @@ impl<'a> ExprLowerer<'a> {
     /// Resolve a syntactic reference path in value position.
     ///
     /// This is the single classification point of the compiler: it decides,
-    /// in one pass, whether a path names a lexical local, a built-in constant
-    /// or time scale, a constructor, a type-system entity, a generic `Nat`
-    /// parameter, or a declaration — and resolves it to its canonical
-    /// identity at the same time. Lexical scope shadows module symbols.
+    /// in one pass, whether a path names a lexical local, a built-in constant,
+    /// a constructor, a type-system entity, a generic `Nat` parameter, or a
+    /// declaration — and resolves it to its canonical identity at the same
+    /// time. Lexical scope shadows module symbols. Time scales are resolved
+    /// only by the dedicated Static contexts that consume them.
     fn lower_unresolved_path(&self, path: &IdentPath) -> Result<ExprKind, ExprLowerError> {
         path.as_bare().map_or_else(
             || self.lower_dotted_path_ref(path),
@@ -1823,10 +1826,14 @@ impl<'a> ExprLowerer<'a> {
     ///
     /// Priority:
     /// 1. Lexical locals (for/scan/unfold/match bindings)
-    /// 2. Built-in constants (`PI`, `E`, ...) and time scales (`UTC`, ...)
+    /// 2. Built-in Term constants (`PI`, `E`, ...)
     /// 3. Constructors (a bare constructor name is a nullary call)
     /// 4. Type-system names (struct types, dimensions, indexes, variants)
     /// 5. Generic `Nat` parameters and declarations (const/node/param)
+    ///
+    /// A time-scale spelling participates only after Term lookup fails, to
+    /// produce a targeted wrong-namespace diagnostic rather than resolving a
+    /// Static atom into the expression HIR.
     fn lower_bare_name_ref(&self, ident: &Ident) -> Result<ExprKind, ExprLowerError> {
         let span = ident.span;
         if let Ok(local) = self.lookup_local(&LocalName::from_atom(ident.name.clone()), span) {
@@ -1865,14 +1872,21 @@ impl<'a> ExprLowerer<'a> {
                     span,
                 })
             }
-            Err(ExprLowerError::UnknownGraphRef { .. }) => Err(ExprLowerError::ModuleResolve {
-                source: ModuleResolveError::UnknownName {
-                    owner: self.ctx.owner.clone(),
-                    namespace: "Term",
-                    name: ident.name.to_string(),
-                },
-                span,
-            }),
+            Err(ExprLowerError::UnknownGraphRef { .. }) => {
+                ident.name.as_str().parse::<TimeScale>().map_or_else(
+                    |_| {
+                        Err(ExprLowerError::ModuleResolve {
+                            source: ModuleResolveError::UnknownName {
+                                owner: self.ctx.owner.clone(),
+                                namespace: "Term",
+                                name: ident.name.to_string(),
+                            },
+                            span,
+                        })
+                    },
+                    |scale| Err(ExprLowerError::TimeScaleInValuePosition { scale, span }),
+                )
+            }
             Err(error) => Err(error),
         }
     }
@@ -2025,9 +2039,6 @@ impl<'a> ExprLowerer<'a> {
         if !name.is_qualified() {
             if let Some(builtin) = BuiltinConst::parse(name.member().as_str()) {
                 return Ok(ConstRef::Builtin(builtin));
-            }
-            if let Ok(scale) = name.member().as_str().parse::<TimeScale>() {
-                return Ok(ConstRef::TimeScale(scale));
             }
             let generic_name = GenericParamName::from_atom(name.member().atom().clone());
             if let Some(binding) = self.ctx.generic_scope.get(&generic_name)

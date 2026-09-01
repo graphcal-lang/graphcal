@@ -472,6 +472,7 @@ fn compile_loaded_dag_module_ir<'a>(
         loaded_dag.parent_dag_id(),
         parent_loaded.ast(),
         loaded_dag.resolved_imports(),
+        module_resolver,
         file_src,
     )?;
 
@@ -501,6 +502,7 @@ fn compile_loaded_dag_module_ir<'a>(
         dag_body,
         file_src,
         module_artifacts,
+        module_resolver,
         &mut ctx,
     )?;
 
@@ -720,6 +722,7 @@ fn process_dag_body_include_declarations<'a>(
     dag_body: &[Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     for decl in dag_body {
@@ -741,6 +744,7 @@ fn process_dag_body_include_declarations<'a>(
                 dag_body,
                 file_src,
                 module_artifacts,
+                module_resolver,
                 ctx,
             )?;
             continue;
@@ -761,6 +765,7 @@ fn process_dag_body_include_declarations<'a>(
             decl,
             dag_body,
             file_src,
+            module_resolver,
             ctx,
         )?;
     }
@@ -1017,6 +1022,7 @@ fn elaborate_include_instances(
                     parent_dag_id,
                     parent_loaded.ast(),
                     loaded_inline.resolved_imports(),
+                    module_resolver,
                     importer_src,
                 )?;
 
@@ -1045,6 +1051,7 @@ fn elaborate_include_instances(
                     inline_body,
                     importer_src,
                     module_artifacts,
+                    module_resolver,
                     &mut body_ctx,
                 )?;
                 extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);

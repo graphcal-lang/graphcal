@@ -1078,13 +1078,6 @@ fn infer_hir_const_ref(
             infer_resolved_decl_ref_type(resolved, target.span, declared_types, dag, src)
         }
         ConstRef::Builtin(_) => Ok(InferredType::Quantity(Dimension::dimensionless())),
-        ConstRef::TimeScale(_) => Err(GraphcalError::DimensionMismatch {
-            expected: "value expression".to_string(),
-            found: "time scale".to_string(),
-            help: "time scales are static arguments; write `epoch<TT>(\"...\")`".to_string(),
-            src: src.clone(),
-            span: target.span.into(),
-        }),
         ConstRef::Constructor(constructor) => {
             let target_def = dag
                 .semantic

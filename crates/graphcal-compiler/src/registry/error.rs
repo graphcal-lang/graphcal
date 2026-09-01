@@ -7,6 +7,7 @@ use crate::builtin::BuiltinFnName;
 use crate::datetime_literal::CivilDateTimeLiteral;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::registry::resolve_types::{AttributeTarget, DeclarationKind};
+use crate::registry::time_scale::TimeScale;
 use crate::registry::time_zone::IanaTimeZoneId;
 use crate::syntax::attribute::AttributeName;
 use crate::syntax::decl_name::DeclName;
@@ -393,6 +394,21 @@ pub enum GraphcalError {
         #[source_code]
         src: NamedSource<Arc<String>>,
         #[label("missing `@` sigil")]
+        span: SourceSpan,
+    },
+
+    #[error("time scale `{scale}` cannot be used as a value")]
+    #[diagnostic(
+        code(graphcal::N018),
+        help(
+            "time scales are Static atoms; use `{scale}` in `Datetime<{scale}>` or `epoch<{scale}>(...)`"
+        )
+    )]
+    TimeScaleInValuePosition {
+        scale: TimeScale,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("no Term named `{scale}` is in scope")]
         span: SourceSpan,
     },
 
@@ -2366,6 +2382,7 @@ impl GraphcalError {
             | Self::HiddenIncludeItemNotAPlot { src, .. }
             | Self::UnknownGraphRef { src, .. }
             | Self::BareGraphDeclarationRef { src, .. }
+            | Self::TimeScaleInValuePosition { src, .. }
             | Self::UnknownFunction { src, .. }
             | Self::UnknownExternFunction { src, .. }
             | Self::NamedArgumentsOnFunction { src, .. }
