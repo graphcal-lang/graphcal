@@ -2410,6 +2410,7 @@ fn try_const_int(expr: &hir::Expr) -> Option<i64> {
                 BinOp::Sub => l.checked_sub(r),
                 BinOp::Mul => l.checked_mul(r),
                 BinOp::Div if r != 0 => l.checked_div(r),
+                BinOp::Mod if r == -1 => Some(0),
                 BinOp::Mod if r != 0 => l.checked_rem(r),
                 BinOp::Pow(_) if r >= 0 => u32::try_from(r).ok().and_then(|e| l.checked_pow(e)),
                 _ => None,

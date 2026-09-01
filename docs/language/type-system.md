@@ -1214,7 +1214,7 @@ This section lists the type of each expression form and the constraints the comp
 
 | Expression | Type | Notes |
 |-----------|------|-------|
-| `42` | `Int` | No decimal point or exponent |
+| `42` | `Int` | No decimal point or exponent; range is `-9223372036854775808` through `9223372036854775807` |
 | `3.14` | `Dimensionless` | Floating-point literal without a unit |
 | `400.0 km` | Dimension of the unit (`Length`) | Floating-point literal with a unit; integer literals cannot have units |
 | `true`, `false` | `Bool` | |

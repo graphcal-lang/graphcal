@@ -309,6 +309,26 @@ impl Parser<'_> {
         match self.lexer.peek() {
             Some(Token::Minus) => {
                 let (_, op_span) = self.advance()?;
+
+                // The magnitude of `i64::MIN` is one larger than `i64::MAX`,
+                // so it cannot first be represented as a positive `Integer`
+                // and then negated like ordinary negative literals. Preserve
+                // unary-minus precedence by folding only a direct literal that
+                // is not the base of a power expression.
+                if let Some((&Token::Number, literal_span)) = self.lexer.peek_with_span()
+                    && self.lexer.slice_at(literal_span).replace('_', "") == "9223372036854775808"
+                {
+                    let mut after_literal = self.lexer.clone();
+                    after_literal.next_token();
+                    if after_literal.peek() != Some(&Token::Caret) {
+                        self.lexer.next_token();
+                        return Ok(Expr::new(
+                            ExprKind::Integer(i64::MIN),
+                            op_span.merge(literal_span),
+                        ));
+                    }
+                }
+
                 let operand = self.parse_unary()?;
                 let span = op_span.merge(operand.span);
                 Ok(Expr::new(
@@ -1994,6 +2014,24 @@ mod tests {
             result.is_err(),
             "integer literal with unit should be an error"
         );
+    }
+
+    #[test]
+    fn single_expr_accepts_minimum_integer_literal() {
+        let expr = Parser::new("-9223372036854775808")
+            .parse_single_expr()
+            .unwrap();
+        assert!(matches!(expr.kind, ExprKind::Integer(i64::MIN)));
+    }
+
+    #[test]
+    fn single_expr_rejects_integer_literals_outside_i64_range() {
+        for source in ["9223372036854775808", "-9223372036854775809"] {
+            assert!(
+                Parser::new(source).parse_single_expr().is_err(),
+                "`{source}` must be outside the Int domain"
+            );
+        }
     }
 
     #[test]
