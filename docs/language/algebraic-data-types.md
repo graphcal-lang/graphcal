@@ -127,7 +127,8 @@ node fuel_proxy: Force = match @maneuver {
 
 - Each arm uses a constructor pattern (bare or module-qualified) and binds its fields
 - `_` discards a field value
-- Each field binding must be explicit: `field: variable` or `field: _`
+- For constructors with payload fields, every field binding must be explicit: `field: variable` or `field: _`; omitting the binding list is not allowed
+- Unit constructors have no payload and use the fieldless spelling, such as `Coast`
 - Named-index labels can also be matched exhaustively with qualified, fieldless patterns such as `Maneuver#Departure` or `mission::Maneuver#Departure`
 
 ### Exhaustiveness Checking

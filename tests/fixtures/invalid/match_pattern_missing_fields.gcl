@@ -1,0 +1,12 @@
+// Error: match patterns must cover every payload field
+pub type Maneuver {
+    Impulsive(delta_v: Velocity, epoch: Time),
+    Coast(duration: Time),
+}
+
+node plan: Maneuver = Impulsive(delta_v: 3.1 km/s, epoch: 120.0 s);
+
+node result: Velocity = match @plan {
+    Impulsive(delta_v: bound_dv) => bound_dv,
+    Coast(duration: _) => 0.0 km/s,
+};

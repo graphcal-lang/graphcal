@@ -5092,6 +5092,21 @@ fn infer_hir_match(
                         hir::expr::PatternBinding::Wildcard { .. } => {}
                     }
                 }
+                let missing = target
+                    .variant
+                    .fields()
+                    .iter()
+                    .filter(|field| !seen_pattern_fields.contains(field.name()))
+                    .map(|field| field.name().clone())
+                    .collect::<Vec<_>>();
+                if !missing.is_empty() {
+                    return Err(GraphcalError::MissingPatternFields {
+                        constructor: target.variant.name(),
+                        missing,
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                }
                 arm_types.push(infer_hir_type(
                     &arm.body,
                     owner_decl_name,

@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-eval/tests/error_snapshots.rs
+expression: rendered
+---
+missing field(s) ["a", "b"] in match pattern for `Wrap`
+    Diagnostic severity: error
+Begin snippet for match_pattern_no_fields.gcl starting at line 8, column 1
+
+snippet line 8: node x: Length = match @w {
+snippet line 9:     Wrap => 0.0 m,
+    label at line 9, columns 5 to 8: incomplete pattern
+snippet line 10: };
+diagnostic help: all constructor fields must be bound as `field: variable` or discarded with `field: _`
+diagnostic code: graphcal::S009

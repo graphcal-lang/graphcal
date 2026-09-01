@@ -1,0 +1,10 @@
+// Error: a bare pattern cannot match a payload constructor
+pub type Wrap {
+    Wrap(a: Length, b: Length),
+}
+
+node w: Wrap = Wrap(a: 1.0 m, b: 2.0 m);
+
+node x: Length = match @w {
+    Wrap => 0.0 m,
+};
