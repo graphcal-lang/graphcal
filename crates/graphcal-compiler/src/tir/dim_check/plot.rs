@@ -105,7 +105,7 @@ pub(super) fn check_plot_properties_dag(
                         )
                     ),
                 ));
-            };
+            }
             check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
     }

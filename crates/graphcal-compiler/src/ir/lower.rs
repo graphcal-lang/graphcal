@@ -2314,25 +2314,29 @@ impl UnfrozenIR {
             if rebound.is_some() {
                 entry.override_reconciliations.clear();
             }
-            if let Some(binding_expr) = rebound {
-                // The binding expression and its spans belong to the immediate
-                // importer, independently of the producer-owned signature.
-                entry.default = Some(UnfrozenParamDefault {
-                    expr: binding_expr.clone(),
-                    resolution_owner: importer_owner.clone(),
-                    src: BodySource::own(),
-                });
-            } else if let Some(default) = &mut entry.default {
-                // Keep the producer default, substitute its type-level names,
-                // and carry its existing source across this merge boundary.
-                substitute_indexes(&mut default.expr, index_bindings);
-                substitute_type_names_in_expr(&mut default.expr, type_bindings);
-                prefix_expr_refs(&mut default.expr, prefix, dep_names, dep_scoped_names);
-                default.src = default.src.clone().or_dependency(dep_src);
-                default.resolution_owner = merge_body_resolution_owner(
-                    default.resolution_owner.clone(),
-                    expr_uses_local_units(&default.expr, &dynamic_unit_names),
-                )?;
+            match (rebound, &mut entry.default) {
+                (Some(binding_expr), _) => {
+                    // The binding expression and its spans belong to the immediate
+                    // importer, independently of the producer-owned signature.
+                    entry.default = Some(UnfrozenParamDefault {
+                        expr: binding_expr.clone(),
+                        resolution_owner: importer_owner.clone(),
+                        src: BodySource::own(),
+                    });
+                }
+                (None, Some(default)) => {
+                    // Keep the producer default, substitute its type-level names,
+                    // and carry its existing source across this merge boundary.
+                    substitute_indexes(&mut default.expr, index_bindings);
+                    substitute_type_names_in_expr(&mut default.expr, type_bindings);
+                    prefix_expr_refs(&mut default.expr, prefix, dep_names, dep_scoped_names);
+                    default.src = default.src.clone().or_dependency(dep_src);
+                    default.resolution_owner = merge_body_resolution_owner(
+                        default.resolution_owner.clone(),
+                        expr_uses_local_units(&default.expr, &dynamic_unit_names),
+                    )?;
+                }
+                (None, None) => {}
             }
             substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
