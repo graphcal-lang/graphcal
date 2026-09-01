@@ -187,11 +187,12 @@ that declaration where runtime values are allowed.
 The `import` and `include` keywords serve different purposes:
 
 - **`import`** brings compile-time names into scope: `dim`, `unit`,
-  `type`, `index`, `const node`, `dag`, `assert`. Importing runtime items
-  (`param`, non-`const` `node`) is an error (M020).
+  `type`, `index`, `const node`, and `dag`. Importing runtime items
+  (`param`, non-`const` `node`) is an error (M020). Assertions are concrete
+  instance outcomes and are also not importable (M024).
 - **`include`** instantiates a DAG, optionally with parameter bindings,
-  and exposes selected values in the enclosing graph. Selectable values include
-  explicit node exports and effective param values.
+  and exposes selected values in the enclosing graph. Selectable items include
+  explicit node exports, effective param values, and instance-local assertions.
 
 ```
 // constants.gcl
@@ -213,7 +214,9 @@ include orbital_velocity(gm: @gm_earth, r: @r_earth + @parking_alt)
 
 See [Multi-File Projects](multi-file.md) for full details on visibility
 (`pub`, `pub(bind)`), required parameters and indexes, and parameterized
-includes.
+includes. To execute a dependency assertion, create a concrete `include` and
+select the assertion in its brace list; see
+[Assertions and Module Boundaries](multi-file.md#assertions-and-module-boundaries).
 
 ## Why DAG Blocks?
 

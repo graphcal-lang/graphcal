@@ -1352,6 +1352,25 @@ node bad: Length = @x.foo;";
     );
 }
 
+#[test]
+fn check_record_field_access_requires_same_named_constructor() {
+    let valid = "\
+pub type Box { Box(value: Dimensionless) }
+param box: Box = Box(value: 1.0);
+node value: Dimensionless = @box.value;";
+    check(valid).unwrap();
+
+    let non_record = "\
+pub type Box { Make(value: Dimensionless) }
+param box: Box = Make(value: 1.0);
+node value: Dimensionless = @box.value;";
+    let err = check(non_record).unwrap_err();
+    assert!(
+        matches!(err, GraphcalError::NotAStruct { .. }),
+        "got: {err:?}"
+    );
+}
+
 // --- Struct extra fields ---
 
 #[test]
