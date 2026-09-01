@@ -338,6 +338,11 @@ instantiations of the same DAG never collide and JSON output never silently
 drops an instance. This qualification applies only to output names — the CLI parameter-binding
 surface is unaffected.
 
+Text output rounds finite quantities to seven significant decimal digits. It
+uses positional notation when the rounded decimal exponent is from -4 through
+14 and scientific notation outside that window. JSON output preserves the
+underlying binary64 value and does not apply this presentation rounding.
+
 **Exit codes:**
 
 | Code | Meaning |
@@ -357,7 +362,7 @@ isp        = 320 s
 g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.333333
-delta_v    = 3778.220768 m/s
+delta_v    = 3778.221 m/s
 ```
 
 ```bash
@@ -369,7 +374,7 @@ isp        = 320 s
 g0         = 9.80665 m/s^2
 v_exhaust  = 3138.128 m/s
 mass_ratio = 3.916667
-delta_v    = 4284.300858 m/s
+delta_v    = 4284.301 m/s
 ```
 
 ```bash

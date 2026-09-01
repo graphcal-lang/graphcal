@@ -934,6 +934,7 @@ fn eval_rocket_text_output() {
     assert!(lines[0].contains("1200"));
     assert!(lines[3].contains("9.80665"));
     assert!(lines[4].contains("3138.128"));
+    assert!(lines[6].contains("3778.221"));
 }
 
 #[test]
@@ -952,6 +953,75 @@ fn eval_rocket_json_output() {
         (json["param"]["dry_mass"]["si_value"].as_f64().unwrap() - 1200.0).abs() < f64::EPSILON
     );
     assert!(json["node"]["v_exhaust"]["si_value"].as_f64().is_some());
+}
+
+#[test]
+fn eval_text_uses_significant_digits_while_json_preserves_numeric_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "number-formatting.gcl",
+        r"
+node a: Dimensionless = 1.23456789e-5;
+node b: Dimensionless = 9.87654321e-6;
+node c: Dimensionless = 0.000123456789;
+node d: Dimensionless = 6.02214076e23;
+node e: Dimensionless = 1.602176634e-19;
+",
+    );
+
+    let text = graphcal_bin()
+        .args(["eval", model.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        text.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    for (name, expected) in [
+        ("a", "1.234568e-5"),
+        ("b", "9.876543e-6"),
+        ("c", "0.0001234568"),
+        ("d", "6.022141e23"),
+        ("e", "1.602177e-19"),
+    ] {
+        let prefix = format!("{name} ");
+        let line = stdout
+            .lines()
+            .find(|line| line.trim_start().starts_with(&prefix))
+            .unwrap_or_else(|| panic!("missing `{name}` in:\n{stdout}"));
+        assert!(line.ends_with(expected), "unexpected `{name}` line: {line}");
+    }
+
+    let json = graphcal_bin()
+        .args(["eval", model.to_str().unwrap(), "--format", "json"])
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        json.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let output: serde_json::Value = serde_json::from_slice(&json.stdout).expect("invalid JSON");
+    for (name, source_spelling) in [
+        ("a", "1.23456789e-5"),
+        ("b", "9.87654321e-6"),
+        ("c", "0.000123456789"),
+        ("d", "6.02214076e23"),
+        ("e", "1.602176634e-19"),
+    ] {
+        let actual = output["node"][name]["si_value"]
+            .as_f64()
+            .unwrap_or_else(|| panic!("missing numeric JSON value for `{name}`"));
+        let expected = source_spelling.parse::<f64>().unwrap();
+        let relative_error = ((actual - expected) / expected).abs();
+        assert!(
+            relative_error <= f64::EPSILON,
+            "JSON node `{name}` changed by relative error {relative_error}"
+        );
+    }
 }
 
 #[test]
