@@ -253,7 +253,12 @@ fn matrix_value(
 }
 
 fn finite_product(lhs: f64, rhs: f64, context: &'static str) -> Result<f64, LinearAlgebraError> {
-    numeric::computed_finite_quantity(lhs * rhs, context).map_err(LinearAlgebraError::from)
+    let result = lhs * rhs;
+    if lhs != 0.0 && rhs != 0.0 {
+        numeric::computed_nonzero_quantity(result, context).map_err(LinearAlgebraError::from)
+    } else {
+        numeric::computed_finite_quantity(result, context).map_err(LinearAlgebraError::from)
+    }
 }
 
 fn sum_products(

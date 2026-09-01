@@ -3582,6 +3582,24 @@ fn eval_integers_milestone() {
 }
 
 #[test]
+fn eval_nonzero_multiplication_underflow_is_an_error() {
+    assert_node_error(
+        "param tiny: Length = 1.0e-300 m;\nnode area: Area = @tiny * @tiny;",
+        "area",
+        "arithmetic operation underflowed to zero",
+    );
+}
+
+#[test]
+fn eval_zero_operand_does_not_report_underflow() {
+    let result = compile_and_eval(
+        "param zero: Length = 0.0 m;\nparam tiny: Length = 1.0e-300 m;\nnode area: Area = @zero * @tiny;",
+    )
+    .unwrap();
+    assert!(find_value(&result, "area").abs() < f64::EPSILON);
+}
+
+#[test]
 fn eval_int_division_by_zero() {
     assert_node_error(
         "param x: Int = 10;\nnode y: Int = @x / 0;",
@@ -5774,7 +5792,7 @@ mod prop {
 
     proptest! {
         #[test]
-        fn division_of_finite_nonzero_is_finite(
+        fn division_of_finite_nonzero_is_finite_or_reports_range_loss(
             a in proptest::num::f64::NORMAL,
             b in proptest::num::f64::NORMAL,
         ) {
@@ -5792,9 +5810,12 @@ mod prop {
                     prop_assert!(z.is_finite(), "division produced non-finite: {z}");
                 }
                 Err(NodeError::EvalFailed { message }) => {
-                    // Overflow to infinity is correctly caught
+                    // Complete underflow and overflow are both surfaced rather
+                    // than silently becoming zero or infinity.
                     prop_assert!(
-                        message.contains("overflow") || message.contains("infinite"),
+                        message.contains("underflow")
+                            || message.contains("overflow")
+                            || message.contains("infinite"),
                         "unexpected error: {message}"
                     );
                 }

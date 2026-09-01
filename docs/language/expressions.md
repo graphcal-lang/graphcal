@@ -94,7 +94,10 @@ expression that constant-folds to one is also accepted: `2 ^ 3 ^ 2` parses as
 !!! note "Finite quantities"
     Floating-point literals must be finite. Real or complex operations that
     would create `NaN` or `inf` are surfaced as errors instead of producing a
-    runtime value.
+    runtime value. A non-zero-preserving real operation—multiplication,
+    division, power, or an elementwise product—also errors if non-zero inputs
+    underflow completely to zero. Representable subnormal results remain valid,
+    and zero produced by cancellation or an explicit zero operand remains valid.
 
 ## Comparison Operators
 

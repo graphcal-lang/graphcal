@@ -108,6 +108,16 @@ pub(super) fn check_finite(
         .map_err(|err| ctx.eval_error(err.to_string(), span))
 }
 
+fn check_nonzero(
+    value: f64,
+    context: &str,
+    ctx: &EvalContext<'_>,
+    span: Span,
+) -> Result<f64, GraphcalError> {
+    super::numeric::computed_nonzero_quantity(value, context)
+        .map_err(|err| ctx.eval_error(err.to_string(), span))
+}
+
 /// Evaluate equality for same-typed, unindexed values.
 ///
 /// Mismatched operand types are evaluation errors. Indexed values reaching
@@ -298,7 +308,11 @@ pub(super) fn eval_exact_quantity_power(
     let result = exponent
         .pow_f64(base)
         .map_err(|error| ctx.eval_error(error.to_string(), span))?;
-    check_finite(result, "power operation", ctx, span)
+    if base == 0.0 {
+        check_finite(result, "power operation", ctx, span)
+    } else {
+        check_nonzero(result, "power operation", ctx, span)
+    }
 }
 
 /// Evaluate an arithmetic binary operator on two f64 values.
@@ -331,5 +345,9 @@ pub(super) fn eval_quantity_binop(
             );
         }
     };
-    check_finite(result, "arithmetic operation", ctx, span)
+    if matches!(op, BinOp::Mul | BinOp::Div | BinOp::Pow(_)) && l != 0.0 && r != 0.0 {
+        check_nonzero(result, "arithmetic operation", ctx, span)
+    } else {
+        check_finite(result, "arithmetic operation", ctx, span)
+    }
 }
