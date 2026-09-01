@@ -3,12 +3,22 @@
 use thiserror::Error;
 
 /// Known attribute names in the language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AttributeName {
     Assumes,
     ExpectedFail,
     Hidden,
     Lazy,
+}
+
+impl AttributeName {
+    /// Whether at most one occurrence may be attached to a source target.
+    #[must_use]
+    pub const fn is_singleton(self) -> bool {
+        match self {
+            Self::Assumes | Self::ExpectedFail | Self::Hidden | Self::Lazy => true,
+        }
+    }
 }
 
 impl std::fmt::Display for AttributeName {
