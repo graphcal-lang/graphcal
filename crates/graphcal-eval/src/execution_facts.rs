@@ -153,8 +153,7 @@ pub struct CheckedExecutionFacts {
 }
 
 impl CheckedExecutionFacts {
-    #[cfg(test)]
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             by_dag: Arc::new(HashMap::new()),
             struct_field_constraints: Arc::new(HashMap::new()),
@@ -165,26 +164,4 @@ impl CheckedExecutionFacts {
         self.by_dag.get(dag_id).map(AsRef::as_ref)
     }
 
-    pub fn merge<'a>(facts: impl IntoIterator<Item = &'a Self>) -> Self {
-        let mut by_dag = HashMap::new();
-        let mut struct_field_constraints = HashMap::new();
-        for checked in facts {
-            by_dag.extend(
-                checked
-                    .by_dag
-                    .iter()
-                    .map(|(dag_id, dag_facts)| (dag_id.clone(), Arc::clone(dag_facts))),
-            );
-            struct_field_constraints.extend(
-                checked
-                    .struct_field_constraints
-                    .iter()
-                    .map(|(key, constraint)| (key.clone(), constraint.clone())),
-            );
-        }
-        Self {
-            by_dag: Arc::new(by_dag),
-            struct_field_constraints: Arc::new(struct_field_constraints),
-        }
-    }
 }

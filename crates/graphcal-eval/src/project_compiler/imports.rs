@@ -1,6 +1,5 @@
 //! Import processing functions for project-based compilation.
 
-use super::recursion;
 #[allow(
     clippy::wildcard_imports,
     clippy::allow_attributes,
@@ -85,7 +84,6 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
                 _ => None,
             })
             .collect();
-    recursion::check_dag_recursion(&dag_definitions, file_src)?;
 
     for (_declaration, import, target) in loaded_file.imports_with_targets() {
         cancellation.checkpoint()?;

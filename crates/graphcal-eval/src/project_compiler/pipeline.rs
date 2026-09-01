@@ -143,7 +143,7 @@ fn store_module_artifact(
     compiled: CompiledFile,
     file_dag_id: &graphcal_compiler::dag_id::DagId,
     file_src: &NamedSource<Arc<String>>,
-    module_artifacts: &mut HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &mut ModuleArtifactStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), CompileError> {
     cancellation.checkpoint()?;
@@ -185,18 +185,24 @@ fn store_module_artifact(
     let dag_tirs = compiled.tir.dag_registry().clone();
     let extern_functions = compiled.tir.extern_functions().clone();
 
-    module_artifacts.insert(
-        file_dag_id.clone(),
-        ModuleArtifact {
-            checked_execution_facts: compiled.checked_execution_facts,
-            const_values_by_dag,
-            declared_types_by_dag,
-            override_dependencies,
-            dag_tirs,
-            extern_functions,
-        },
-    );
-    Ok(())
+    module_artifacts
+        .insert(
+            file_dag_id.clone(),
+            ModuleArtifact {
+                const_values_by_dag,
+                declared_types_by_dag,
+                override_dependencies,
+                dag_tirs,
+                extern_functions,
+            },
+        )
+        .map_err(|error| {
+            CompileError::Eval(GraphcalError::internal_error(
+                error.to_string(),
+                file_src,
+                DiagnosticAnchor::WholeFile,
+            ))
+        })
 }
 
 /// Lower the complete loaded project into one authoritative HIR value.
@@ -317,7 +323,9 @@ pub(in crate::project_compiler) fn check_hir_project(
                 DiagnosticAnchor::Builtin,
             ))
         })?;
-    let mut module_artifacts = HashMap::new();
+    let mut module_artifacts = ModuleArtifactStore::default();
+    let mut inherited_execution_facts =
+        crate::execution_facts::CheckedExecutionFacts::empty();
 
     for file_dag_id in &load_order {
         cancellation.checkpoint()?;
@@ -332,6 +340,7 @@ pub(in crate::project_compiler) fn check_hir_project(
         let compiled = checking::check_hir_file(
             hir_file,
             &module_artifacts,
+            &inherited_execution_facts,
             &exported_runtime_units,
             &module_resolver,
             &project_types,
@@ -355,6 +364,7 @@ pub(in crate::project_compiler) fn check_hir_project(
             });
         }
 
+        inherited_execution_facts = compiled.checked_execution_facts.clone();
         store_module_artifact(
             compiled,
             file_dag_id,

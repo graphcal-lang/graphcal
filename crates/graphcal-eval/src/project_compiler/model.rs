@@ -100,7 +100,6 @@ pub(super) struct HirFile {
 
 /// Checked compile-time artifact made available to downstream modules.
 pub(super) struct ModuleArtifact {
-    pub(super) checked_execution_facts: crate::execution_facts::CheckedExecutionFacts,
     pub(super) const_values_by_dag:
         HashMap<graphcal_compiler::dag_id::DagId, HashMap<DeclName, RuntimeValue>>,
     pub(super) declared_types_by_dag:
@@ -111,6 +110,69 @@ pub(super) struct ModuleArtifact {
         graphcal_compiler::syntax::plugin::ExternFnKey,
         graphcal_compiler::ir::lower::ExternFunctionEntry,
     >,
+}
+
+/// Checked module artifacts indexed both by physical file and canonical DAG owner.
+///
+/// The owner index keeps imported type/value lookup O(1) without erasing the
+/// physical-file grouping needed when dependency TIRs are merged.
+#[derive(Default)]
+pub(super) struct ModuleArtifactStore {
+    by_file: HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    owner_to_file:
+        HashMap<graphcal_compiler::dag_id::DagId, graphcal_compiler::dag_id::DagId>,
+}
+
+impl ModuleArtifactStore {
+    pub(super) fn insert(
+        &mut self,
+        file: graphcal_compiler::dag_id::DagId,
+        artifact: ModuleArtifact,
+    ) -> Result<(), ModuleArtifactOwnerConflict> {
+        if let Some(owner) = artifact
+            .declared_types_by_dag
+            .keys()
+            .find(|owner| self.owner_to_file.contains_key(*owner))
+        {
+            return Err(ModuleArtifactOwnerConflict {
+                owner: owner.clone(),
+            });
+        }
+        self.owner_to_file.extend(
+            artifact
+                .declared_types_by_dag
+                .keys()
+                .cloned()
+                .map(|owner| (owner, file.clone())),
+        );
+        self.by_file.insert(file, artifact);
+        Ok(())
+    }
+
+    pub(super) fn for_owner(
+        &self,
+        owner: &graphcal_compiler::dag_id::DagId,
+    ) -> Option<&ModuleArtifact> {
+        self.owner_to_file
+            .get(owner)
+            .and_then(|file| self.by_file.get(file))
+    }
+
+    pub(super) fn values(&self) -> impl Iterator<Item = &ModuleArtifact> {
+        self.by_file.values()
+    }
+
+    pub(super) fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&graphcal_compiler::dag_id::DagId, &ModuleArtifact)> {
+        self.by_file.iter()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("canonical DAG owner `{owner}` was emitted by more than one module artifact")]
+pub(super) struct ModuleArtifactOwnerConflict {
+    owner: graphcal_compiler::dag_id::DagId,
 }
 
 /// Result of checking one file in project context.

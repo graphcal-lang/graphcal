@@ -52,7 +52,8 @@ pub(crate) use model::{CompiledFile, IncludeDebugNameMap};
 use model::{
     DepToImporter, FrontendRegistryImport, HirFile, ImportAlias, ImportContext,
     IncludeInstanceRequest, IndexBindings, LoweringModuleInterface, ModuleArtifact,
-    ProjectModuleBinding, ProjectSemanticContext, ProjectedStaticAlias, RuntimeUnitBoundary,
+    ModuleArtifactStore, ProjectModuleBinding, ProjectSemanticContext, ProjectedStaticAlias,
+    RuntimeUnitBoundary,
     UnitProjectionAlias,
 };
 use qualified_refs::rewrite_qualified_refs_in_compilation_body;

@@ -1240,10 +1240,10 @@ impl LoadedProject {
 
     /// Build module-aware symbol tables for every loaded file and inline DAG.
     ///
-    /// The loader remains the only layer that resolves import paths to
-    /// canonical [`DagId`]s. This method hands those pre-resolved edges to the
-    /// compiler's pure module resolver, which can then resolve syntactic name
-    /// paths to [`graphcal_compiler::syntax::names::ResolvedName`] values.
+    /// The loader resolves filesystem and package import paths to canonical
+    /// [`DagId`]s. This method hands those edges to the compiler's pure module
+    /// resolver; same-file and synthetic include scopes may then be resolved
+    /// against the module scopes already constructed here.
     ///
     /// # Errors
     ///
@@ -2284,7 +2284,6 @@ fn load_package_file_dfs(
     cancellation.checkpoint()?;
     let dag_names = collect_inline_dag_names(&ast.declarations);
     let package_root = context.root_for(package_id)?;
-    let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
     let file_stem = canonical_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -2303,8 +2302,7 @@ fn load_package_file_dfs(
         if path.segments.len() == 1 && path.segments[0].name == file_stem {
             continue;
         }
-        let resolved =
-            resolve_package_import_path(path, package_id, context, &named_source, parent_dir)?;
+        let resolved = resolve_package_import_path(path, package_id, context, &named_source)?;
         if dependency_kind == FileRootDependencyKind::Import
             && resolved.path == canonical_path
             && resolved.package == *package_id
@@ -2340,7 +2338,7 @@ fn load_package_file_dfs(
             continue;
         }
         let Ok(resolved) =
-            resolve_package_import_path(path, package_id, context, &named_source, parent_dir)
+            resolve_package_import_path(path, package_id, context, &named_source)
         else {
             continue;
         };
@@ -2450,7 +2448,6 @@ fn resolve_package_import_path(
     current_package: &PackageInstanceId,
     context: &PackageLoadContext<'_>,
     src: &NamedSource<Arc<String>>,
-    _parent_dir: &Path,
 ) -> Result<PackageResolvedPath, CompileError> {
     let segments = import_path
         .segments
@@ -2770,10 +2767,6 @@ fn resolve_package_inline_body_import(
         context.package_id,
         context.context,
         context.src,
-        context
-            .canonical_path
-            .parent()
-            .unwrap_or_else(|| Path::new(".")),
     ) else {
         return InlineBodyImportResolution::Unresolved;
     };
@@ -2871,7 +2864,6 @@ fn load_file_dfs<F: FileSystemReader>(
     let dag_names = collect_inline_dag_names(&ast.declarations);
 
     // Find import and include declarations and recurse.
-    let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
     let file_stem = canonical_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -2894,7 +2886,7 @@ fn load_file_dfs<F: FileSystemReader>(
         }
 
         let resolved =
-            resolve_import_path(path, parent_dir, project_root, &named_source, manifest, fs)?;
+            resolve_import_path(path, project_root, &named_source, manifest, fs)?;
 
         // Path sandboxing: reject imports that resolve outside the project root.
         if !resolved.file.starts_with(project_root) {
@@ -2956,7 +2948,7 @@ fn load_file_dfs<F: FileSystemReader>(
         }
 
         let Ok(resolved) =
-            resolve_import_path(path, parent_dir, project_root, &named_source, manifest, fs)
+            resolve_import_path(path, project_root, &named_source, manifest, fs)
         else {
             continue;
         };
@@ -3024,7 +3016,6 @@ fn load_file_dfs<F: FileSystemReader>(
         &ast,
         &dag_id,
         canonical_path,
-        parent_dir,
         project_root,
         &named_source,
         manifest,
@@ -3128,7 +3119,6 @@ fn lift_inline_dags<F: FileSystemReader>(
     ast: &File,
     self_dag_id: &DagId,
     canonical_path: &Path,
-    parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
     manifest: Option<&PackageManifest>,
@@ -3145,7 +3135,6 @@ fn lift_inline_dags<F: FileSystemReader>(
         file_dag_id: self_dag_id,
         same_file_dag_ids: &same_file_dag_ids,
         canonical_path,
-        parent_dir,
         project_root,
         src,
         manifest,
@@ -3161,7 +3150,6 @@ struct InlineLiftContext<'a, F: FileSystemReader> {
     file_dag_id: &'a DagId,
     same_file_dag_ids: &'a HashSet<DagId>,
     canonical_path: &'a Path,
-    parent_dir: &'a Path,
     project_root: &'a Path,
     src: &'a NamedSource<Arc<String>>,
     manifest: Option<&'a PackageManifest>,
@@ -3254,7 +3242,6 @@ fn resolve_inline_body_import<F: FileSystemReader>(
     }
     let Ok(resolved) = resolve_import_path(
         path,
-        context.parent_dir,
         context.project_root,
         context.src,
         context.manifest,
@@ -3523,7 +3510,6 @@ fn root_in_package_namespace<F: FileSystemReader>(
 /// and `std` route to the (deferred) stdlib resolver.
 fn resolve_import_path<F: FileSystemReader>(
     import_path: &ModulePath,
-    _parent_dir: &Path,
     project_root: &Path,
     src: &NamedSource<Arc<String>>,
     manifest: Option<&PackageManifest>,
