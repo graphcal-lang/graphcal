@@ -279,8 +279,10 @@ the single resolution stage of the compiler:
 Expression lowering is diagnostic-accumulating: `lower_expr_tolerant` turns an
 unresolvable reference into an explicit `hir::ExprKind::Error` node and records
 the diagnostic, so IDE consumers keep working on incomplete code. The strict
-`lower_expr` entry point rejects any tree containing an error node, so the
-batch pipeline never observes one.
+`lower_expr` entry point returns `CheckedExpr`, and strict assertion lowering
+returns `CheckedAssertBody`. These wrappers cannot be constructed from tolerant
+HIR and expose no production mutation path, so batch declarations, bounds, and
+visualization bodies cannot represent an error-node tree.
 
 TIR stores HIR expressions and HIR-derived semantic metadata in
 `DagSemanticBody`. Frozen declaration shells retain source-facing names, spans,
@@ -371,10 +373,13 @@ files are not merged at the AST stage; dependency DAG TIRs are merged into the
 same `DagRegistry` during project lowering/finalization using their canonical
 `DagId`s.
 
-Each category-specific declaration record on `DagTIR` owns its HIR body exactly
-once (`ConstEntry.expr`, `ParamEntry.default_expr`, `NodeEntry.expr`,
-`AssertEntry.body`, and plot/figure/layer bodies). A private declaration index
-maps canonical IDs to those records; no semantic side map clones bodies.
+Each category-specific declaration record on `DagTIR` owns its strictly lowered
+HIR body exactly once (`ConstEntry.expr`, `ParamEntry.default`, `NodeEntry.expr`,
+`AssertEntry.body`, and plot/figure/layer bodies). A parameter default is one
+atomic `ParamDefault` value containing its `CheckedExpr` and definition-source
+provenance; the expression and its source cannot drift across include rewrites.
+A private declaration index maps canonical IDs to those records; no semantic
+side map clones bodies.
 `DagSemanticBody` contains derived facts only:
 
 - `semantic.dependencies`: owner-qualified declaration dependency maps.
@@ -397,9 +402,10 @@ Dimension = BTreeMap<BaseDimId, Rational>
 ```
 
 Dimension inference is split by expression families under
-`tir/dim_check/infer/` and operates on HIR expressions, consulting the semantic
-body for canonical index/constructor/inline-DAG ownership. Function-signature
-checking treats a missing parameter for an already-bound dimension variable as
+`tir/dim_check/infer/` and operates on HIR expressions. Every
+`DimCheckContext` carries its concrete `DagTIR`; checking cannot run in a
+context that lacks canonical index/constructor/inline-DAG ownership.
+Function-signature checking treats a missing parameter for an already-bound dimension variable as
 an internal invariant failure; mismatch help never fabricates a parameter
 name. Index-access checking classifies structural `Fin` identities separately
 from declared axes: structural cardinality forms need no registry entry, while
@@ -920,15 +926,19 @@ ExecPlan
   const_values: Arc<RuntimeValueMap>  // retained checked fact store
   imported_values: RuntimeValueMap
   topo_order: Vec<RuntimeDeclKey>
-  assumes_map
-  expected_fail
+  assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>
+  expected_fail: HashMap<RuntimeDeclKey, ExpectedFail>
   domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>
   struct_field_constraints: Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>
 ```
 
 It contains no cloned HIR bodies and no parser or registry-building work;
 evaluation reads declaration/assertion/visualization records from the checked
-`TIR`. `ResolvedDomainConstraint` lives in `graphcal-eval/src/domain_check.rs` and has
+`TIR`. Runtime planning keeps assertion metadata under canonical
+`RuntimeDeclKey`s and converts back to source-facing `ScopedName`s only while
+assembling public output. Per-DAG execution facts retain only the stores read in
+that scope; project-wide struct-field constraints have a single authoritative
+map. `ResolvedDomainConstraint` lives in `graphcal-eval/src/domain_check.rs` and has
 separate quantity (`f64`), integer (`i64`), and same-scale datetime instant
 representations, so constraint families cannot mix after resolution.
 `RuntimeDeclKey` lives in `graphcal-eval/src/decl_key.rs` and keeps runtime maps
@@ -1415,8 +1425,7 @@ Note: `eval_expr/work_budget.rs`, `eval_expr/linear_algebra_lu.rs`, `eval_expr/l
 19. `crates/graphcal-eval/src/eval_expr/unit_scale.rs`
 20. `crates/graphcal-eval/src/eval_expr/hir_eval.rs`
 21. `crates/graphcal-eval/src/eval_expr/mod.rs`
-22. `crates/graphcal-eval/src/exec_plan.rs`
-23. `crates/graphcal-eval/src/import_surface.rs`
+22. `crates/graphcal-eval/src/import_surface.rs`
 
 ### Stage 14 - Project loading, checking, and runtime orchestration
 
@@ -1445,22 +1454,23 @@ into an execution plan.
 16. `crates/graphcal-eval/src/project_compiler/execution_check/const_schedule.rs`
 17. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
 18. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
-19. `crates/graphcal-eval/src/project_compiler/checking.rs`
-20. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
-21. `crates/graphcal-eval/src/project_compiler/session.rs`
-22. `crates/graphcal-eval/src/project_compiler/mod.rs`
-23. `crates/graphcal-eval/src/eval/plot_data.rs`
-24. `crates/graphcal-eval/src/eval/public_projection.rs`
-25. `crates/graphcal-eval/src/eval/runtime.rs`
-26. `crates/graphcal-eval/src/eval/project/model_schema.rs`
-27. `crates/graphcal-eval/src/eval/project/output.rs`
-28. `crates/graphcal-eval/src/eval/project/prepared.rs`
-29. `crates/graphcal-eval/src/eval/project/prepare.rs`
-30. `crates/graphcal-eval/src/eval/project/mod.rs`
-31. `crates/graphcal-eval/src/eval/mod.rs`
-32. `crates/graphcal-eval/src/eval/tests.rs`
-33. `crates/graphcal-eval/src/graph_ir/mod.rs`
-34. `crates/graphcal-eval/src/graph_ir/dot.rs`
+19. `crates/graphcal-eval/src/exec_plan.rs`
+20. `crates/graphcal-eval/src/project_compiler/checking.rs`
+21. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+22. `crates/graphcal-eval/src/project_compiler/session.rs`
+23. `crates/graphcal-eval/src/project_compiler/mod.rs`
+24. `crates/graphcal-eval/src/eval/plot_data.rs`
+25. `crates/graphcal-eval/src/eval/public_projection.rs`
+26. `crates/graphcal-eval/src/eval/runtime.rs`
+27. `crates/graphcal-eval/src/eval/project/model_schema.rs`
+28. `crates/graphcal-eval/src/eval/project/output.rs`
+29. `crates/graphcal-eval/src/eval/project/prepared.rs`
+30. `crates/graphcal-eval/src/eval/project/prepare.rs`
+31. `crates/graphcal-eval/src/eval/project/mod.rs`
+32. `crates/graphcal-eval/src/eval/mod.rs`
+33. `crates/graphcal-eval/src/eval/tests.rs`
+34. `crates/graphcal-eval/src/graph_ir/mod.rs`
+35. `crates/graphcal-eval/src/graph_ir/dot.rs`
 
 ### Stage 15 - Typed test generation (`graphcal-test-support`)
 
