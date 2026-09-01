@@ -33,6 +33,7 @@ pub(in crate::project_compiler) use crate::import_surface::{
 
 mod checking;
 mod entry_interface;
+mod execution_check;
 mod generic_leakage;
 mod hir_project;
 mod imports;
@@ -60,6 +61,10 @@ pub use session::{
     CheckedProject, ProjectCompiler, check_project, check_project_with_host_fns,
     check_project_with_host_fns_and_cancellation, check_project_with_host_metadata,
     check_project_with_host_metadata_and_cancellation,
+};
+#[cfg(test)]
+pub(crate) use execution_check::{
+    check_execution_facts_with_cancellation, resolve_struct_field_constraints,
 };
 #[cfg(test)]
 pub(crate) use session::{compile_to_tir, compile_to_tir_project};

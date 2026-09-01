@@ -200,7 +200,7 @@ pub(super) fn check_hir_file(
             .values()
             .map(|artifact| &artifact.checked_execution_facts),
     );
-    let checked_execution_facts = crate::exec_plan::check_execution_facts_with_inherited(
+    let checked_execution_facts = execution_check::check_execution_facts_with_inherited(
         &tir,
         &inherited_execution_facts,
         file_src,
