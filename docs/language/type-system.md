@@ -618,8 +618,9 @@ index the algebraic type as a whole: `Vec3<Velocity, ECI>[Maneuver]`.
 
 #### Algebraic Type with One Constructor
 
-A one-constructor type can be record-shaped. By convention, its constructor
-has the same name as its type:
+A one-constructor type is record-shaped only when its constructor has the same
+name as its type. This is a semantic requirement for direct field access, not a
+naming convention:
 
 ```
 type Orbit {
@@ -631,8 +632,21 @@ type Vec3<D: Dim, Frame: Type> {
 }
 ```
 
-Because every value has the same constructor and payload shape, its fields can
-be accessed directly with `@value.field`.
+Because every value has the same, same-named constructor and payload shape, its
+fields can be accessed directly with `@value.field`. A one-constructor union
+whose constructor has another name remains a valid algebraic type, but it is
+not record-shaped and must be destructured with `match`:
+
+```graphcal
+type Box { Make(value: Dimensionless) }
+node box: Box = Make(value: 1.0);
+node value: Dimensionless = match @box {
+    Make(value: value) => value,
+};
+```
+
+`@box.value` is rejected for this `Box`; use `type Box { Box(value: ...) }` when
+direct record field access is intended.
 
 #### Algebraic Type with Multiple Constructors
 

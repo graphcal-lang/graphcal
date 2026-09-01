@@ -73,15 +73,17 @@ node result: TransferResult =
 ### Field Access
 
 Field access works on a record-shaped value because there is exactly one
-constructor, so the payload field set is unambiguous:
+constructor and its name matches the type, so the payload field set is
+unambiguous:
 
 ```
 node total: Velocity = @result.total_dv;
 node time_hours: Time = @result.tof -> h;
 ```
 
-For types with multiple constructors, field access is rejected — destructure
-through `match` instead.
+For types with multiple constructors, or one constructor whose name differs
+from the type name, field access is rejected — destructure through `match`
+instead.
 
 Public output projection also resolves every algebraic value through its
 canonical constructor schema. Field dimensions and display metadata are kept
