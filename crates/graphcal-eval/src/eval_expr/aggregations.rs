@@ -133,8 +133,12 @@ fn aggregate_product(
 ) -> Result<f64, AggregationError> {
     entries.values().try_fold(1.0_f64, |product, value| {
         let value = quantity_entry(value, "product element")?;
-        numeric::computed_finite_quantity(product * value, "product()")
-            .map_err(AggregationError::from)
+        let result = product * value;
+        if product != 0.0 && value != 0.0 {
+            numeric::computed_nonzero_quantity(result, "product()").map_err(AggregationError::from)
+        } else {
+            numeric::computed_finite_quantity(result, "product()").map_err(AggregationError::from)
+        }
     })
 }
 

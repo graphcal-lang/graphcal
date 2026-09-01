@@ -42,6 +42,9 @@ pub enum QuantityValidationError {
     /// A computed quantity result was infinite.
     #[error("{context} produced infinite result")]
     InfiniteResult { context: String },
+    /// A mathematically non-zero computation lost its entire value to zero.
+    #[error("{context} underflowed to zero")]
+    UnderflowToZero { context: String },
 }
 
 /// Validate that a quantity value is finite.
@@ -241,6 +244,24 @@ pub fn computed_finite_quantity(
         Err(QuantityValidationError::InfiniteResult {
             context: context.into(),
         })
+    } else {
+        Ok(value)
+    }
+}
+
+/// Validate a computation that is mathematically guaranteed to remain non-zero.
+///
+/// Callers must establish that the operation and its inputs have that property.
+/// This keeps legitimate zero results, such as cancellation, separate from
+/// complete floating-point underflow.
+pub fn computed_nonzero_quantity(
+    value: f64,
+    context: impl Into<String>,
+) -> Result<f64, QuantityValidationError> {
+    let context = context.into();
+    let value = computed_finite_quantity(value, context.clone())?;
+    if value == 0.0 {
+        Err(QuantityValidationError::UnderflowToZero { context })
     } else {
         Ok(value)
     }
