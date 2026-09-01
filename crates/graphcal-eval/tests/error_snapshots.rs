@@ -493,6 +493,27 @@ fn error_missing_struct_field() {
 }
 
 #[test]
+fn error_match_pattern_missing_fields() {
+    let source = include_str!("../../../tests/fixtures/invalid/match_pattern_missing_fields.gcl");
+    let rendered = render_error(source, "match_pattern_missing_fields.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_match_pattern_empty_fields() {
+    let source = include_str!("../../../tests/fixtures/invalid/match_pattern_empty_fields.gcl");
+    let rendered = render_error(source, "match_pattern_empty_fields.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_match_pattern_no_fields() {
+    let source = include_str!("../../../tests/fixtures/invalid/match_pattern_no_fields.gcl");
+    let rendered = render_error(source, "match_pattern_no_fields.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_recursive_fn() {
     let source = include_str!("../../../tests/fixtures/invalid/recursive_fn.gcl");
     let rendered = render_error(source, "recursive_fn.gcl");

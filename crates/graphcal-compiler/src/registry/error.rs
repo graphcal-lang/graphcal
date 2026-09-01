@@ -1073,6 +1073,22 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("missing field(s) {missing:?} in match pattern for `{constructor}`")]
+    #[diagnostic(
+        code(graphcal::S009),
+        help(
+            "all constructor fields must be bound as `field: variable` or discarded with `field: _`"
+        )
+    )]
+    MissingPatternFields {
+        constructor: ConstructorName,
+        missing: Vec<FieldName>,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("incomplete pattern")]
+        span: SourceSpan,
+    },
+
     #[error("extra field(s) {extra:?} in construction of `{type_name}`")]
     #[diagnostic(
         code(graphcal::S005),
@@ -2397,6 +2413,7 @@ impl GraphcalError {
             | Self::UnknownStructType { src, .. }
             | Self::UnknownField { src, .. }
             | Self::MissingFields { src, .. }
+            | Self::MissingPatternFields { src, .. }
             | Self::ExtraFields { src, .. }
             | Self::FieldDimensionMismatch { src, .. }
             | Self::NotAStruct { src, .. }
