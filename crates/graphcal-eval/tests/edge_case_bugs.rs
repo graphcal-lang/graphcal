@@ -1105,6 +1105,45 @@ fn display_label(result: &EvalResult, name: &str) -> Option<String> {
     }
 }
 
+fn assert_quantity_leaves_use_display_unit(
+    value: &Value,
+    expected_si_value: f64,
+    expected_display_label: &str,
+    context: &str,
+) -> usize {
+    match value {
+        Value::Quantity {
+            si_value,
+            display_unit,
+            ..
+        } => {
+            assert_eq!(
+                si_value.to_bits(),
+                expected_si_value.to_bits(),
+                "quantity leaf in `{context}` must retain its SI value"
+            );
+            assert_eq!(
+                display_unit.as_ref().map(|unit| unit.label.as_str()),
+                Some(expected_display_label),
+                "quantity leaf in `{context}` must retain its display unit"
+            );
+            1
+        }
+        Value::Indexed { entries, .. } => entries
+            .values()
+            .map(|entry| {
+                assert_quantity_leaves_use_display_unit(
+                    entry,
+                    expected_si_value,
+                    expected_display_label,
+                    context,
+                )
+            })
+            .sum(),
+        other => panic!("expected quantity or indexed value for `{context}`, got {other:?}"),
+    }
+}
+
 #[test]
 fn display_unit_propagates_through_reads() {
     let source = include_str!("../../../tests/fixtures/valid/convert_display_propagation.gcl");
@@ -1151,5 +1190,39 @@ fn display_unit_propagates_through_reads() {
             }
         }
         other => panic!("expected indexed, got {other:?}"),
+    }
+}
+
+#[test]
+fn display_unit_is_preserved_in_multi_axis_and_nested_for_bodies() {
+    let source = r#"
+index A = { X, Y };
+index B = { P, Q };
+
+node single: Length[A] = for a: A {
+    1500.0 m -> km
+};
+node multi: Length[A, B] = for a: A, b: B {
+    1500.0 m -> km
+};
+node nested: Length[A, B] = for a: A {
+    for b: B {
+        1500.0 m -> km
+    }
+};
+node wrapped: Length[A, B] = (for a: A, b: B {
+    1500.0 m
+}) -> km;
+"#;
+    let result = compile_and_eval(source).unwrap();
+
+    for (name, expected_leaf_count) in [("single", 2), ("multi", 4), ("nested", 4), ("wrapped", 4)]
+    {
+        let value = find_entry(&result, name);
+        assert_eq!(
+            assert_quantity_leaves_use_display_unit(&value, 1500.0, "km", name),
+            expected_leaf_count,
+            "`{name}` must contain the expected number of quantity leaves"
+        );
     }
 }
