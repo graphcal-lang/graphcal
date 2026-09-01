@@ -6,7 +6,7 @@ use graphcal_compiler::registry::error::GraphcalError;
 
 use crate::eval::types::CompileError;
 use crate::host_fns::HostFunctionRegistry;
-use crate::project_compiler::{CheckedProject, CheckedProjectRuntimeParts};
+use crate::project_compiler::{CheckedProject, CheckedProjectRuntimeParts, ProjectCompiler};
 
 use super::PreparedProject;
 
@@ -49,6 +49,47 @@ pub(super) fn prepare_checked_project(
         cancellation,
     )?;
     PreparedProject::from_compiled(compiled, plan, source, host_fns.clone(), module_resolver)
+}
+
+impl ProjectCompiler<'_, HostFunctionRegistry> {
+    /// Check and prepare this configured session for repeated evaluation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a compile, plan, interface, plugin, or cancellation diagnostic.
+    pub fn prepare(self) -> Result<PreparedProject, CompileError> {
+        let cancellation = self.cancellation_token().clone();
+        let host_fns = self.callable_host().clone();
+        self.check()?
+            .prepare_with_host_fns_and_cancellation(&host_fns, &cancellation)
+    }
+
+    /// Check, prepare, bind, and evaluate one row.
+    ///
+    /// # Errors
+    ///
+    /// Returns a compile, binding, evaluation, or cancellation diagnostic.
+    #[expect(
+        clippy::implicit_hasher,
+        reason = "public API accepts HashMap without requiring a specific hasher"
+    )]
+    pub fn eval(
+        self,
+        overrides: &std::collections::HashMap<
+            graphcal_compiler::syntax::decl_name::DeclName,
+            graphcal_compiler::desugar::desugared_ast::Expr,
+        >,
+    ) -> Result<crate::eval::types::EvalResult, CompileError> {
+        let cancellation = self.cancellation_token().clone();
+        let prepared = self.prepare()?;
+        let mut bindings = prepared.binding_builder();
+        for (name, expression) in overrides {
+            cancellation.checkpoint()?;
+            bindings.bind_expression(name, expression)?;
+        }
+        let row = bindings.finish()?;
+        prepared.evaluate_with_cancellation(&row, &cancellation)
+    }
 }
 
 impl CheckedProject {

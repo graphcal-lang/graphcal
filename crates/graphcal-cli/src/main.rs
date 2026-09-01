@@ -34,8 +34,7 @@ use thiserror::Error;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_eval::eval::{
-    CompileError, EvalOutputView, EvalResult, check_project_with_host_fns, format_number,
-    prepare_from_project_with_host_fns,
+    CompileError, EvalOutputView, EvalResult, ProjectCompiler, format_number,
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, load_project};
@@ -659,7 +658,9 @@ fn handle_eval(
     // `graphcal.toml`, falling back to the loose file's parent directory.
     let outcome = build_rooted_filesystem(file, root).and_then(|fs| {
         load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
-            let prepared = prepare_from_project_with_host_fns(&project, &host_fns)?;
+            let prepared = ProjectCompiler::new(&project)
+                .host_fns(&host_fns)
+                .prepare()?;
             let mut bindings = prepared.binding_builder();
             for (name, expression) in &overrides.values {
                 match overrides.json_sources.get(name) {
@@ -853,8 +854,9 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>) {
     let mut error_count = 0;
     for file in &targets {
         let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-            load_project_with_plugins(file, project_root, &fs)
-                .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns))
+            load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
+                ProjectCompiler::new(&project).host_fns(&host_fns).check()
+            })
         });
         match outcome {
             Ok(_) => {
@@ -903,8 +905,9 @@ fn run_graph(
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
     );
     let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-        load_project_with_plugins(file, project_root, &fs)
-            .and_then(|(project, host_fns)| check_project_with_host_fns(&project, &host_fns))
+        load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
+            ProjectCompiler::new(&project).host_fns(&host_fns).check()
+        })
     });
     match outcome {
         Ok(checked) => match graphcal_eval::graph_ir::project_tir(checked.tir()) {

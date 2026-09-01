@@ -128,11 +128,9 @@ fn eval_project_with_plugin(
     let project = load_project(&root, None, &fs)?;
     let mut registry = HostFunctionRegistry::new();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
-        &project,
-        &HashMap::new(),
-        &registry,
-    )
+    graphcal_eval::eval::ProjectCompiler::new(&project)
+        .host_fns(&registry)
+        .eval(&HashMap::new())
 }
 
 fn value_for<'a>(result: &'a EvalResult, name: &str) -> &'a Value {
@@ -241,7 +239,10 @@ node x: Dimensionless = 1.0;
     let project = load_project(&root, None, &fs).unwrap();
     let mut registry = HostFunctionRegistry::new();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    let err = graphcal_eval::eval::check_project_with_host_fns(&project, &registry).unwrap_err();
+    let err = graphcal_eval::eval::ProjectCompiler::new(&project)
+        .host_fns(&registry)
+        .check()
+        .unwrap_err();
     assert!(
         matches!(
             err,
@@ -320,12 +321,10 @@ fn from_source_projects_report_missing_filesystem() {
     let source = format!("{LERP_IMPORT}\nnode x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);\n");
     let project = LoadedProject::from_source(&source, "buffer.gcl").unwrap();
     let registry = HostFunctionRegistry::new();
-    let err = graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
-        &project,
-        &HashMap::new(),
-        &registry,
-    )
-    .unwrap_err();
+    let err = graphcal_eval::eval::ProjectCompiler::new(&project)
+        .host_fns(&registry)
+        .eval(&HashMap::new())
+        .unwrap_err();
     let CompileError::Eval(GraphcalError::PluginLoadFailed { reason, .. }) = err else {
         panic!("expected PluginLoadFailed, got {err:?}");
     };
@@ -431,11 +430,9 @@ fn eval_package_project(
     let project = load_project(&root, None, &fs)?;
     let mut registry = HostFunctionRegistry::new();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
-        &project,
-        &HashMap::new(),
-        &registry,
-    )
+    graphcal_eval::eval::ProjectCompiler::new(&project)
+        .host_fns(&registry)
+        .eval(&HashMap::new())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -548,12 +545,10 @@ node result: Dimensionless = worker::work(7.0);
         graphcal_plugin_host::PluginLimits::default().with_fuel_per_call(100),
     );
     register_project_plugins(&host, &project, &mut registry);
-    let result = graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
-        &project,
-        &HashMap::new(),
-        &registry,
-    )
-    .unwrap();
+    let result = graphcal_eval::eval::ProjectCompiler::new(&project)
+        .host_fns(&registry)
+        .eval(&HashMap::new())
+        .unwrap();
 
     assert!((value_for(&result, "result").si_value().unwrap() - 7.0).abs() < f64::EPSILON);
 }
@@ -636,12 +631,10 @@ node b: Length = wasm::lerp(1.0 m, 3.0 m, 0.5);
     let project = load_project(&root, None, &fs).unwrap();
     let mut registry = graphcal_eval::host_fns::demo_registry();
     register_project_plugins(&PluginHost::new(), &project, &mut registry);
-    let result = graphcal_eval::eval::compile_and_eval_from_project_with_host_fns(
-        &project,
-        &HashMap::new(),
-        &registry,
-    )
-    .unwrap();
+    let result = graphcal_eval::eval::ProjectCompiler::new(&project)
+        .host_fns(&registry)
+        .eval(&HashMap::new())
+        .unwrap();
 
     assert!((value_for(&result, "a").si_value().unwrap() - 0.25).abs() < 1e-12);
     assert!((value_for(&result, "b").si_value().unwrap() - 2.0).abs() < 1e-12);

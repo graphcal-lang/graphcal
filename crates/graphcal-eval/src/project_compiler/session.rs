@@ -13,67 +13,37 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use super::{CompiledFile, lowering, pipeline};
 
 /// One whole-project compilation session.
-pub struct ProjectCompiler<'project> {
+///
+/// Configuration is accumulated before a terminal `lower`, `check`,
+/// `prepare`, or `eval` operation. The host type records whether the session
+/// owns callable implementations or signature metadata only.
+pub struct ProjectCompiler<'project, Host = crate::host_fns::HostFunctionRegistry> {
     project: &'project LoadedProject,
     cancellation: graphcal_compiler::cancellation::CancellationToken,
-    module_resolver: graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    host: Host,
 }
 
 impl<'project> ProjectCompiler<'project> {
-    /// Start a compilation session for one loaded project.
-    ///
-    /// # Errors
-    ///
-    /// Returns a module-resolution diagnostic when the loaded project cannot
-    /// form one canonical project scope.
-    pub fn new(project: &'project LoadedProject) -> Result<Self, CompileError> {
-        Self::with_cancellation(
+    /// Start a compilation session with the built-in demo host registry.
+    #[must_use]
+    pub fn new(project: &'project LoadedProject) -> Self {
+        Self {
             project,
-            &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-        )
+            cancellation: graphcal_compiler::cancellation::CancellationToken::unbounded(),
+            host: crate::host_fns::demo_registry(),
+        }
     }
+}
 
-    /// Start a cooperatively cancellable compilation session.
-    ///
-    /// # Errors
-    ///
-    /// Returns a module-resolution diagnostic or cancellation.
-    pub fn with_cancellation(
-        project: &'project LoadedProject,
+impl<'project, Host> ProjectCompiler<'project, Host> {
+    /// Replace the cooperative cancellation capability.
+    #[must_use]
+    pub fn cancellation(
+        mut self,
         cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    ) -> Result<Self, CompileError> {
-        cancellation.checkpoint()?;
-        pipeline::validate_project_dag_recursion(project)?;
-        let root_source = project.root_file().named_source();
-        let module_resolver = project
-            .build_module_resolver()
-            .map_err(|error| match error {
-                crate::loader::ModuleResolverBuildError::ModuleResolve(error) => {
-                    lowering::module_resolve_compile_error(error, root_source)
-                }
-                crate::loader::ModuleResolverBuildError::RecursiveIncludeExpansion {
-                    cycle,
-                    ..
-                } => CompileError::Eval(
-                    graphcal_compiler::registry::error::GraphcalError::internal_error(
-                        format!(
-                            "recursive DAG instantiation: {}",
-                            cycle
-                                .iter()
-                                .map(std::string::ToString::to_string)
-                                .collect::<Vec<_>>()
-                                .join(" -> ")
-                        ),
-                        root_source,
-                        DiagnosticAnchor::WholeFile,
-                    ),
-                ),
-            })?;
-        Ok(Self {
-            project,
-            cancellation: cancellation.clone(),
-            module_resolver,
-        })
+    ) -> Self {
+        self.cancellation = cancellation.clone();
+        self
     }
 
     /// Lower every module exactly once into the authoritative HIR boundary.
@@ -84,7 +54,89 @@ impl<'project> ProjectCompiler<'project> {
     /// diagnostic. Static type/dimension checks and host verification are not
     /// performed.
     pub fn lower(self) -> Result<super::HirProject<'project>, CompileError> {
-        pipeline::lower_project_perfile(self.project, self.module_resolver, &self.cancellation)
+        self.cancellation.checkpoint()?;
+        pipeline::validate_project_dag_recursion(self.project)?;
+        let root_source = self.project.root_file().named_source();
+        let module_resolver =
+            self.project
+                .build_module_resolver()
+                .map_err(|error| match error {
+                    crate::loader::ModuleResolverBuildError::ModuleResolve(error) => {
+                        lowering::module_resolve_compile_error(error, root_source)
+                    }
+                    crate::loader::ModuleResolverBuildError::RecursiveIncludeExpansion {
+                        cycle,
+                        ..
+                    } => CompileError::Eval(
+                        graphcal_compiler::registry::error::GraphcalError::internal_error(
+                            format!(
+                                "recursive DAG instantiation: {}",
+                                cycle
+                                    .iter()
+                                    .map(std::string::ToString::to_string)
+                                    .collect::<Vec<_>>()
+                                    .join(" -> ")
+                            ),
+                            root_source,
+                            DiagnosticAnchor::WholeFile,
+                        ),
+                    ),
+                })?;
+        pipeline::lower_project_perfile(self.project, module_resolver, &self.cancellation)
+    }
+
+    pub(crate) const fn cancellation_token(
+        &self,
+    ) -> &graphcal_compiler::cancellation::CancellationToken {
+        &self.cancellation
+    }
+}
+
+impl<'project> ProjectCompiler<'project, crate::host_fns::HostFunctionRegistry> {
+    /// Replace callable host functions for checking and runtime preparation.
+    #[must_use]
+    pub fn host_fns(mut self, host: &crate::host_fns::HostFunctionRegistry) -> Self {
+        self.host = host.clone();
+        self
+    }
+
+    /// Switch to signature-only host metadata for static checking.
+    #[must_use]
+    pub fn host_metadata(
+        self,
+        host: &crate::host_fns::HostFunctionMetadata,
+    ) -> ProjectCompiler<'project, crate::host_fns::HostFunctionMetadata> {
+        ProjectCompiler {
+            project: self.project,
+            cancellation: self.cancellation,
+            host: host.clone(),
+        }
+    }
+
+    /// Lower and perform every mandatory static check.
+    ///
+    /// # Errors
+    ///
+    /// Returns a compile, plugin-signature, or cancellation diagnostic.
+    pub fn check(self) -> Result<CheckedProject, CompileError> {
+        let metadata = self.host.metadata();
+        self.lower()?.check_with_host_metadata(&metadata)
+    }
+
+    pub(crate) const fn callable_host(&self) -> &crate::host_fns::HostFunctionRegistry {
+        &self.host
+    }
+}
+
+impl ProjectCompiler<'_, crate::host_fns::HostFunctionMetadata> {
+    /// Lower and check against signature-only host metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns a compile, plugin-signature, or cancellation diagnostic.
+    pub fn check(self) -> Result<CheckedProject, CompileError> {
+        let metadata = self.host.clone();
+        self.lower()?.check_with_host_metadata(&metadata)
     }
 }
 
@@ -180,63 +232,7 @@ pub struct CheckedProjectRuntimeParts {
 ///
 /// Returns a compile diagnostic when any project module is invalid.
 pub fn check_project(project: &LoadedProject) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_fns(project, &crate::host_fns::demo_registry())
-}
-
-/// Check a project with embedder-provided extern implementations and metadata.
-///
-/// # Errors
-///
-/// Returns a compile or plugin-signature diagnostic.
-pub fn check_project_with_host_fns(
-    project: &LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_metadata(project, &host_fns.metadata())
-}
-
-/// Check a project using non-callable extern signature metadata.
-///
-/// # Errors
-///
-/// Returns a compile or plugin-signature diagnostic.
-pub fn check_project_with_host_metadata(
-    project: &LoadedProject,
-    host_metadata: &crate::host_fns::HostFunctionMetadata,
-) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_metadata_and_cancellation(
-        project,
-        host_metadata,
-        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
-    )
-}
-
-/// Check a project once with cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a compile, plugin-signature, or cancellation diagnostic.
-pub fn check_project_with_host_fns_and_cancellation(
-    project: &LoadedProject,
-    host_fns: &crate::host_fns::HostFunctionRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProject, CompileError> {
-    check_project_with_host_metadata_and_cancellation(project, &host_fns.metadata(), cancellation)
-}
-
-/// Check a project with non-callable metadata and cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a compile, plugin-signature, or cancellation diagnostic.
-pub fn check_project_with_host_metadata_and_cancellation(
-    project: &LoadedProject,
-    host_metadata: &crate::host_fns::HostFunctionMetadata,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProject, CompileError> {
-    ProjectCompiler::with_cancellation(project, cancellation)?
-        .lower()?
-        .check_with_host_metadata(host_metadata)
+    ProjectCompiler::new(project).check()
 }
 
 /// Test-only projection of a fully checked project into its TIR.

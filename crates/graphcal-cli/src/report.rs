@@ -12,7 +12,7 @@ use clap::{Args, Subcommand};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use graphcal_eval::eval::{CompileError, EvalResult, prepare_from_project_with_host_fns};
+use graphcal_eval::eval::{CompileError, EvalResult, ProjectCompiler};
 use graphcal_eval::loader::{LoadedProject, build_rooted_filesystem, discover_project_root};
 use graphcal_report::plot_page::VegaScriptSource;
 use graphcal_report::report_html::render_report_html;
@@ -120,7 +120,9 @@ pub fn run_build(
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let (project, host_fns) =
         crate::load_project_with_plugins(&args.file, args.root.as_deref(), &fs)?;
-    let prepared = prepare_from_project_with_host_fns(&project, &host_fns)?;
+    let prepared = ProjectCompiler::new(&project)
+        .host_fns(&host_fns)
+        .prepare()?;
 
     let mut bindings = prepared.binding_builder();
     for (name, expression) in &overrides.values {

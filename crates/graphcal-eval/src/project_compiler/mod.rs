@@ -85,11 +85,7 @@ use model::{
 };
 use qualified_refs::rewrite_qualified_refs_in_compilation_body;
 pub(crate) use session::CheckedProjectRuntimeParts;
-pub use session::{
-    CheckedProject, ProjectCompiler, check_project, check_project_with_host_fns,
-    check_project_with_host_fns_and_cancellation, check_project_with_host_metadata,
-    check_project_with_host_metadata_and_cancellation,
-};
+pub use session::{CheckedProject, ProjectCompiler, check_project};
 #[cfg(test)]
 pub(crate) use session::{compile_to_tir, compile_to_tir_project};
 use template::{ElaboratedModuleTemplate, ModuleTemplateRef, ModuleTemplateStore};

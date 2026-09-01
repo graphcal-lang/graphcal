@@ -1475,7 +1475,10 @@ fn checked_project_preparation_does_not_recompile_dependencies() {
         },
     );
 
-    let checked = check_project_with_host_fns(&project, &host_fns).unwrap();
+    let checked = ProjectCompiler::new(&project)
+        .host_fns(&host_fns)
+        .check()
+        .unwrap();
     assert_eq!(
         calls.load(Ordering::SeqCst),
         0,
@@ -1504,7 +1507,9 @@ fn cancellation_is_observed_at_every_pipeline_checkpoint() {
             graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(
                 *successful_checkpoints,
             );
-        compile_and_eval_from_project_with_cancellation(&project, &HashMap::new(), &cancellation)
+        ProjectCompiler::new(&project)
+            .cancellation(&cancellation)
+            .eval(&HashMap::new())
             .is_ok()
     });
     let Some(checkpoint_count) = first_success else {
@@ -1520,12 +1525,10 @@ fn cancellation_is_observed_at_every_pipeline_checkpoint() {
             graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(
                 successful_checkpoints,
             );
-        let error = compile_and_eval_from_project_with_cancellation(
-            &project,
-            &HashMap::new(),
-            &cancellation,
-        )
-        .expect_err("every pre-completion cancellation point must unwind");
+        let error = ProjectCompiler::new(&project)
+            .cancellation(&cancellation)
+            .eval(&HashMap::new())
+            .expect_err("every pre-completion cancellation point must unwind");
         assert!(
             error.is_cancelled(),
             "checkpoint {successful_checkpoints} produced the wrong outcome: {error:?}"
@@ -1553,11 +1556,9 @@ fn cancellation_stops_an_in_flight_evaluation() {
 
     thread::spawn(move || {
         worker_barrier.wait();
-        let result = compile_and_eval_from_project_with_cancellation(
-            &project,
-            &HashMap::new(),
-            &cancellation,
-        );
+        let result = ProjectCompiler::new(&project)
+            .cancellation(&cancellation)
+            .eval(&HashMap::new());
         sender.send(result).unwrap();
     });
 

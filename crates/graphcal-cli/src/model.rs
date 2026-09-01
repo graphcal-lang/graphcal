@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_eval::eval::{CompileError, ModelDefinitionError, prepare_from_project_with_host_fns};
+use graphcal_eval::eval::{CompileError, ModelDefinitionError, ProjectCompiler};
 use graphcal_eval::loader::{build_rooted_filesystem, load_project};
 use thiserror::Error;
 
@@ -24,7 +24,9 @@ pub fn serve(file: &Path, outputs: &[String], root: Option<&Path>) -> Result<(),
         &project,
         &mut host_fns,
     );
-    let prepared = prepare_from_project_with_host_fns(&project, &host_fns)?;
+    let prepared = ProjectCompiler::new(&project)
+        .host_fns(&host_fns)
+        .prepare()?;
     let model = prepared.tenax_v2_model(&output_names)?;
     graphcal_tenax::serve_stdio(&prepared, &model).map_err(ModelServeError::Protocol)
 }
