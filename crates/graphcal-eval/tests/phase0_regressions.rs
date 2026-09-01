@@ -926,14 +926,57 @@ fn self_reference_outside_unfold_is_still_a_cycle() {
 }
 
 #[test]
-fn fully_qualified_self_import_is_not_a_circular_import() {
-    // Regression: the top-level import loop lacked the self-path guard the
-    // inline-dag loop has, so `import nasa.main.velocity::{v};` inside
-    // main.gcl recursed into itself and reported the misleading
-    // `circular import detected: main.gcl -> main.gcl` (and, once guarded,
-    // panicked on the not-yet-registered self DagId). Self-file imports are
-    // not supported, but they must fail with a structured diagnostic, not a
-    // bogus cycle or a panic.
+fn virtual_file_root_self_import_is_rejected() {
+    for source in ["import self::{ ghost };\n", "import self;\n"] {
+        let error =
+            graphcal_eval::loader::LoadedProject::from_source(source, "self.gcl").unwrap_err();
+
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+        ));
+    }
+}
+
+#[test]
+fn same_named_inline_dag_takes_precedence_over_file_root_self_import() {
+    graphcal_eval::loader::LoadedProject::from_source(
+        "dag self { pub const node value: Dimensionless = 1.0; }\n\
+         import self::{ value };\n",
+        "self.gcl",
+    )
+    .expect("the single-segment path addresses the same-named inline DAG");
+}
+
+#[test]
+fn fully_qualified_file_root_self_import_is_rejected() {
+    let (_dir, root) = write_test_project(
+        "nasa",
+        &[(
+            "main.gcl",
+            "const node value: Dimensionless = 1.0;\n\
+             import nasa.main::{ value };\n",
+        )],
+        "main.gcl",
+    );
+
+    let error = compile_and_eval_project(
+        &root,
+        &std::collections::HashMap::new(),
+        None,
+        &RealFileSystem::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+    ));
+}
+
+#[test]
+fn fully_qualified_same_file_inline_dag_import_is_not_a_circular_import() {
+    // A fully qualified path may resolve to an inline DAG owned by the same
+    // physical file. Only the exact file-root target is forbidden.
     let dir = tempfile::tempdir().unwrap();
     let root_dir = dir.path().join("src/nasa");
     std::fs::create_dir_all(&root_dir).unwrap();

@@ -608,10 +608,18 @@ dag analyze {
 }
 ```
 
-Self-imports use exactly the same pure-import policy as cross-file imports:
-constants, constructors, DAGs, and marked type-system names are compile-time
-items; params and nodes require an instance; assertions and visualization
-requests are rejected because there is no hidden enclosing-file instance.
+Self-imports are only valid inside isolated inline DAG bodies. A file root
+cannot import its own file, either by its single-segment virtual-package name or
+by a fully qualified package path (`M033`): its top-level declarations are
+already in scope, so such an import would be redundant and aliases would have
+ambiguous duplicate-binding semantics. A same-named inline DAG still takes
+precedence over the file's virtual-package name.
+
+Inside an inline DAG, self-imports use exactly the same pure-import policy as
+cross-file imports: constants, constructors, DAGs, and marked type-system names
+are compile-time items; params and nodes require an instance; assertions and
+visualization requests are rejected because there is no hidden enclosing-file
+instance.
 
 In a real package, the same reference uses the full package path:
 
