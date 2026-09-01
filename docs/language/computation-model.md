@@ -36,10 +36,27 @@ kind itself supplies the external-input role, so params never take `pub` or
 - Its effective value is also externally readable: callers may select it from
   an `include` or project it from an inline call. The result is the supplied
   binding, or the default when no binding was supplied.
-- A param with a default (`= expr`) keeps that value when the caller does not
-  supply the port.
+- A param with a default (`= expr`) evaluates that expression when the caller
+  does not supply the port. A default is an ordinary runtime graph expression:
+  it may reference params, nodes, and const nodes with `@`.
 - A param without a default is **required**. Leaving a required port unsatisfied
   is a compile error.
+
+Defaults participate in the same dependency graph as nodes. They are evaluated
+in topological dependency order rather than source order, and a cycle through a
+param default is rejected like any other graph cycle. Overriding a dependency
+causes every unsupplied dependent default to evaluate from the overridden
+value. Supplying the defaulted param itself replaces its default expression for
+that DAG instance.
+
+```graphcal
+param base_thrust: Dimensionless = 10.0;
+param margin: Dimensionless = @base_thrust * 2.0;
+node total: Dimensionless = @margin + 1.0;
+```
+
+Here, overriding `base_thrust` with `100.0` makes the unsupplied `margin` equal
+`200.0`; overriding `margin` itself bypasses `@base_thrust * 2.0`.
 
 Use a private `node` for an internal computed value or a private `const node`
 for an internal fixed value. If a sub-computation needs internal
@@ -84,8 +101,8 @@ The `@` prefix is the central scoping mechanism:
 
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
-| `@name` | Parameter, node, or const node in the graph | `node` expressions, `dag` block bodies |
-| `@dag(args)::out` | Runtime DAG instantiation projecting one output | Runtime expressions only |
+| `@name` | Parameter, node, or const node in the graph | `node` expressions, param defaults, `dag` block bodies |
+| `@dag(args)::out` | Runtime DAG instantiation projecting one output | Runtime expressions, including param defaults |
 | `NAME` | Built-in constant (`PI`, `E`, `TAU`, etc.) | Everywhere |
 | `name` | Local variable (loop variable, match binding) | Expression bodies |
 
@@ -108,7 +125,7 @@ numeric value silently.
 | Context | `@` Allowed? |
 |---------|-------------|
 | `node` expression | Yes |
-| `param` default value | No |
+| `param` default value | Yes |
 | `const node` expression | No |
 | `dag` block body (inside `node` expressions) | Yes |
 
@@ -118,13 +135,13 @@ numeric value silently.
 2. **Resolve** -- Imports are loaded; references are resolved while lowering to the compiler's internal representation
 3. **Dimension check** -- All expressions are checked for dimensional consistency
 4. **Const evaluation** -- Constants are evaluated in dependency order
-5. **DAG construction** -- A dependency graph is built from `param` and `node` declarations
-6. **Topological evaluation** -- Nodes are evaluated in topological order
+5. **DAG construction** -- A dependency graph is built from `param` defaults and `node` declarations
+6. **Topological evaluation** -- Unsupplied param defaults and nodes are evaluated in dependency order
 7. **Assertion checking** -- Assert declarations are evaluated and reported
 
 ### Cycle Detection
 
-Circular dependencies between nodes are detected at compile time:
+Circular dependencies between nodes and param defaults are detected at compile time:
 
 ```
 node a: Dimensionless = @b + 1.0;
