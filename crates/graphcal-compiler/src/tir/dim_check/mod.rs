@@ -771,15 +771,19 @@ fn check_hir_assert_body(
                 });
             }
 
-            // A negative tolerance makes the assertion unsatisfiable (even an
-            // exact match fails `abs(delta) <= tol`), so a statically-known
-            // negative value is a compile error (#815). Tolerances computed
-            // at runtime are validated by the evaluator instead.
+            // A sign-negative literal tolerance is rejected even when its
+            // IEEE value is `-0.0`, preserving the source-level rule that
+            // negative tolerance literals are invalid (#815, #1415).
+            // Tolerances computed at runtime are validated by the evaluator.
             if let Some(value) = statically_known_tolerance(tolerance)
-                && value < 0.0
+                && value.is_sign_negative()
             {
+                let found = match value {
+                    value if value == 0.0 && value.is_sign_negative() => "-0".to_string(),
+                    value => crate::registry::format::format_number(value),
+                };
                 return Err(GraphcalError::NegativeTolerance {
-                    found: crate::registry::format::format_number(value),
+                    found,
                     src: src.clone(),
                     span: tolerance.span.into(),
                 });
