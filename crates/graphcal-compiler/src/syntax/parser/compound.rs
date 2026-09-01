@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, KeyFormKind, MatchArm, MatchPattern, NatExpr,
-    PatternBinding,
+    PatternBinding, PatternBindings,
 };
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
@@ -94,9 +94,9 @@ impl Parser<'_> {
             let bindings =
                 self.parse_comma_separated(Token::RParen, Self::parse_pattern_binding)?;
             let (_, rparen_span) = self.expect(Token::RParen)?;
-            (bindings, rparen_span)
+            (PatternBindings::Parenthesized(bindings), rparen_span)
         } else {
-            (Vec::new(), path.span())
+            (PatternBindings::Bare, path.span())
         };
 
         Ok(MatchPattern::Path {
@@ -761,18 +761,19 @@ node x: Dimensionless = match @r {
 
     #[test]
     fn parse_match_constructor_pattern_with_parens() {
-        let source = "node fuel: Force = match @maneuver { LowThrust(thrust: thrust, duration: _) => thrust, Coast => 0.0 N };";
+        let source = "node fuel: Force = match @maneuver { LowThrust(thrust: thrust, duration: _) => thrust, Coast() => 0.0 N, Idle => 0.0 N };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
             DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Match { arms, .. } => {
-                    assert_eq!(arms.len(), 2);
+                    assert_eq!(arms.len(), 3);
                     let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
                         panic!("expected syntactic path pattern");
                     };
                     assert_eq!(path.as_bare().unwrap().name, "LowThrust");
                     assert_eq!(bindings.len(), 2);
-                    match &bindings[0] {
+                    assert!(matches!(bindings, PatternBindings::Parenthesized(_)));
+                    match &bindings.as_slice()[0] {
                         PatternBinding::Bind { field, var } => {
                             assert_eq!(field.value.as_str(), "thrust");
                             assert_eq!(var.name, "thrust");
@@ -781,7 +782,7 @@ node x: Dimensionless = match @r {
                             panic!("expected bind, got {other:?}")
                         }
                     }
-                    match &bindings[1] {
+                    match &bindings.as_slice()[1] {
                         PatternBinding::Wildcard { field, .. } => {
                             assert_eq!(field.value.as_str(), "duration");
                         }
@@ -792,7 +793,11 @@ node x: Dimensionless = match @r {
                     let MatchPattern::Path { bindings, .. } = &arms[1].pattern else {
                         panic!("expected syntactic path pattern");
                     };
-                    assert!(bindings.is_empty());
+                    assert!(bindings.is_explicit_empty());
+                    let MatchPattern::Path { bindings, .. } = &arms[2].pattern else {
+                        panic!("expected syntactic path pattern");
+                    };
+                    assert!(matches!(bindings, PatternBindings::Bare));
                 }
                 other => panic!("expected Match, got {other:?}"),
             },

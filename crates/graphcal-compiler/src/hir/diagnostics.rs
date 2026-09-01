@@ -464,6 +464,13 @@ pub fn expr_lower_error_to_graphcal(
                 span: (*span).into(),
             };
         }
+        hir::ExprLowerError::EmptyParenthesizedConstructor { constructor, span } => {
+            return GraphcalError::EmptyParenthesizedConstructor {
+                constructor: constructor.to_unowned_def_name(),
+                src: src.clone(),
+                span: (*span).into(),
+            };
+        }
         _ => {}
     }
     let span = match err {
@@ -484,6 +491,7 @@ pub fn expr_lower_error_to_graphcal(
         | hir::ExprLowerError::UnknownExternFunction { span, .. }
         | hir::ExprLowerError::NamedArgumentsOnFunction { span, .. }
         | hir::ExprLowerError::PositionalArgumentsOnConstructor { span, .. }
+        | hir::ExprLowerError::EmptyParenthesizedConstructor { span, .. }
         | hir::ExprLowerError::UnsupportedFunctionGenericArgs { span, .. }
         | hir::ExprLowerError::WrongArity { span, .. }
         | hir::ExprLowerError::InvalidTimezone { span, .. }

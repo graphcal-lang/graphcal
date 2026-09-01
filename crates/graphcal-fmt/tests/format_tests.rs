@@ -56,6 +56,14 @@ macro_rules! roundtrip_test {
 
 roundtrip_test!(roundtrip_functions, "invalid/functions.gcl");
 
+#[test]
+fn preserves_explicit_empty_match_pattern_parentheses() {
+    let source = "node result: Dimensionless = match @status { Coast() => 1.0, Idle => 0.0 };\n";
+    let formatted = format_source(source).unwrap();
+    assert!(formatted.contains("Coast() =>"), "{formatted}");
+    assert!(formatted.contains("Idle =>"), "{formatted}");
+}
+
 // ---------------------------------------------------------------------------
 // Comment preservation
 // ---------------------------------------------------------------------------

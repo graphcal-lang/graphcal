@@ -111,8 +111,9 @@ frames).
 
 Construct a variant by its constructor name. If another module exports a
 same-named constructor, qualify the constructor with the module alias (for
-example, `rocket::LowThrust(...)`). The parens-with-named-args form is the
-canonical syntax:
+example, `rocket::LowThrust(...)`). Payload constructors use parentheses with
+named arguments. Unit constructors are fieldless and must omit parentheses;
+`Coast()` is a compile error (`S010`):
 
 ```
 node maneuver: ManeuverKind = LowThrust(thrust: 0.5 N, duration: 3600.0 s);
@@ -136,7 +137,7 @@ node fuel_proxy: Force = match @maneuver {
 - Each arm uses a constructor pattern (bare or module-qualified) and binds its fields
 - `_` discards a field value
 - For constructors with payload fields, every field binding must be explicit: `field: variable` or `field: _`; omitting the binding list is not allowed
-- Unit constructors have no payload and use the fieldless spelling, such as `Coast`
+- Unit constructors have no payload and must use the fieldless spelling, such as `Coast`; `Coast()` is a compile error (`S010`)
 - Named-index labels can also be matched exhaustively with qualified, fieldless patterns such as `Maneuver#Departure` or `mission::Maneuver#Departure`
 
 ### Exhaustiveness Checking

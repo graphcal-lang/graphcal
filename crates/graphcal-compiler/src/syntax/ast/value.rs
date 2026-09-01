@@ -1318,6 +1318,54 @@ pub struct MatchArm<P: Phase = Raw> {
     pub span: Span,
 }
 
+/// Field-binding syntax attached to a constructor match pattern.
+///
+/// Bare unit patterns and explicitly parenthesized patterns remain distinct so
+/// semantic checking can reject `Ctor()` without conflating it with `Ctor`.
+#[derive(Debug, Clone)]
+pub enum PatternBindings<B> {
+    Bare,
+    Parenthesized(Vec<B>),
+}
+
+impl<B> PatternBindings<B> {
+    #[must_use]
+    pub fn as_slice(&self) -> &[B] {
+        match self {
+            Self::Bare => &[],
+            Self::Parenthesized(bindings) => bindings,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_explicit_empty(&self) -> bool {
+        matches!(self, Self::Parenthesized(bindings) if bindings.is_empty())
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, B> {
+        self.as_slice().iter()
+    }
+}
+
+impl<'a, B> IntoIterator for &'a PatternBindings<B> {
+    type Item = &'a B;
+    type IntoIter = std::slice::Iter<'a, B>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver#Departure`.
 #[derive(Debug, Clone)]
 pub enum MatchPattern {
@@ -1330,13 +1378,13 @@ pub enum MatchPattern {
     /// remain syntactic paths instead of being half-resolved.
     Path {
         path: IdentPath,
-        bindings: Vec<PatternBinding>,
+        bindings: PatternBindings<PatternBinding>,
         span: Span,
     },
     /// Tagged-union constructor pattern: `Impulsive(delta_v: dv)` or `Nominal`.
     Constructor {
         name: Spanned<ConstructorName>,
-        bindings: Vec<PatternBinding>,
+        bindings: PatternBindings<PatternBinding>,
         span: Span,
     },
     /// Named-index label pattern: `Maneuver#Departure`.
@@ -1364,7 +1412,7 @@ impl MatchPattern {
     #[must_use]
     pub fn bindings(&self) -> &[PatternBinding] {
         match self {
-            Self::Path { bindings, .. } | Self::Constructor { bindings, .. } => bindings,
+            Self::Path { bindings, .. } | Self::Constructor { bindings, .. } => bindings.as_slice(),
             Self::IndexLabel { .. } => &[],
         }
     }

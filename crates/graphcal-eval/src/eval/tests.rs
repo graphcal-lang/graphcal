@@ -259,6 +259,61 @@ fn selective_include_projects_specialized_adt_constructors() {
 }
 
 #[test]
+fn constructor_empty_parentheses_are_rejected() {
+    for (source, expected_constructor) in [
+        (
+            "type Status { Nominal, Coast }\nnode status: Status = Coast();",
+            "Coast",
+        ),
+        (
+            "type Status { Nominal, Coast }\n\
+             node status: Status = Coast;\n\
+             node result: Dimensionless = match @status {\n\
+                 Nominal => 0.0,\n\
+                 Coast() => 1.0,\n\
+             };",
+            "Coast",
+        ),
+        (
+            "type Reading { Missing, Present(value: Length) }\n\
+             node reading: Reading = Present();",
+            "Present",
+        ),
+    ] {
+        let error = compile_and_eval(source).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CompileError::Eval(GraphcalError::EmptyParenthesizedConstructor {
+                    constructor,
+                    ..
+                }) if constructor.as_str() == expected_constructor
+            ),
+            "unexpected error: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn payload_constructor_empty_pattern_keeps_missing_field_diagnostic() {
+    let source = "type Reading { Missing, Present(value: Length) }\n\
+                  node reading: Reading = Present(value: 2.0 m);\n\
+                  node output: Length = match @reading {\n\
+                      Missing => 0.0 m,\n\
+                      Present() => 1.0 m,\n\
+                  };";
+    let error = compile_and_eval(source).unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            CompileError::Eval(GraphcalError::MissingPatternFields { constructor, .. })
+                if constructor.as_str() == "Present"
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
 fn selective_include_rejects_dag_blueprint_projection() {
     let source = "dag target {\n\
                       pub dag child { pub node output: Dimensionless = 1.0; }\n\

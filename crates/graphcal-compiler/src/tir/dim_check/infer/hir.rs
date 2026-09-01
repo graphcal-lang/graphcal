@@ -5036,6 +5036,13 @@ fn infer_hir_match(
                     &target.owning_type,
                     TypeNominalUse::Constructor(&constructor.value),
                 )?;
+                if bindings.is_explicit_empty() && target.variant.fields().is_empty() {
+                    return Err(GraphcalError::EmptyParenthesizedConstructor {
+                        constructor: target.variant.name(),
+                        src: src.clone(),
+                        span: (*span).into(),
+                    });
+                }
                 if !type_name.matches_resolved(&target.owning_type) {
                     return Err(GraphcalError::UnknownField {
                         type_name: type_name.name().clone(),
