@@ -25,11 +25,17 @@ type ManeuverKind {
 
 The outer braces are the declaration's member body, so `type T { ... }` uses neither `=` nor a trailing semicolon. This differs intentionally from named RHS definitions such as `index I = { ... };`, which use `= rhs;` even when the RHS is braced.
 
-Constructors live in a namespace that is distinct from the type
-namespace — a single lexeme can name both a type and a constructor
-without ambiguity. Payload field names must be unique within one constructor.
-The same field name may still appear in different constructors because each
-payload schema is checked independently.
+Constructors live in the Term namespace, which is distinct from the type
+namespace — a single lexeme can name both a type and a constructor without
+ambiguity. A constructor may not reuse the spelling of a built-in Term, such
+as the constants `PI`, `E`, and `TAU`, built-in functions such as `sum`, or
+contextual callables such as `scan`; the built-in owns that spelling regardless
+of whether the constructor has payload fields. Time scales such as `UTC` are
+Static atoms rather than Terms, so they may be reused as constructor spellings.
+
+Payload field names must be unique within one constructor. The same field name
+may still appear in different constructors because each payload schema is
+checked independently.
 
 ## Record-Shaped One-Constructor Types
 

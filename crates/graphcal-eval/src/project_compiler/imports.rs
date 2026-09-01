@@ -9,7 +9,8 @@ use super::recursion;
 use super::*;
 use crate::import_surface::{
     ProjectDeclIdentity, ProjectDeclKind, PureImportRejection, PureImportTermDisposition,
-    decl_identity, pure_import_term_disposition,
+    decl_identity, pure_import_term_disposition, validate_constructor_alias,
+    validate_reserved_alias,
 };
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::ir::static_dependencies::{
@@ -114,6 +115,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             &loaded_file.ast().declarations,
             file_src,
             module_artifacts,
+            module_resolver,
             ctx,
         )?;
     }
@@ -142,6 +144,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             declaration,
             &loaded_file.ast().declarations,
             file_src,
+            module_resolver,
             ctx,
         )?;
     }
@@ -182,6 +185,7 @@ pub(in crate::project_compiler) fn process_file_body_declarations<'a>(
             declaration,
             &loaded_file.ast().declarations,
             file_src,
+            module_resolver,
             ctx,
         )?;
     }
@@ -453,6 +457,21 @@ fn validate_include_item_attributes(
     Ok(hidden)
 }
 
+fn exported_bindings(
+    resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
+    owner: &graphcal_compiler::dag_id::DagId,
+    file_src: &NamedSource<Arc<String>>,
+    span: Span,
+) -> Result<Vec<graphcal_compiler::syntax::module_resolve::ExportedBinding>, CompileError> {
+    resolver.exported_bindings(owner).map_err(|error| {
+        CompileError::Eval(GraphcalError::InternalError {
+            message: format!("module resolver could not enumerate exports of `{owner}`: {error}"),
+            src: file_src.clone(),
+            span: span.into(),
+        })
+    })
+}
+
 fn validate_include_producers(
     items: &[graphcal_compiler::desugar::desugared_ast::ImportItem],
     file_src: &NamedSource<Arc<String>>,
@@ -465,33 +484,6 @@ fn validate_include_producers(
                     file_src,
                 ),
             )
-        })
-}
-
-fn validate_reserved_alias(
-    namespace: ReservedNameNamespace,
-    import_item: &graphcal_compiler::desugar::desugared_ast::ImportItem,
-    file_src: &NamedSource<Arc<String>>,
-) -> Result<(), CompileError> {
-    let local_name = import_item.local_name_atom();
-    graphcal_compiler::registry::reserved_name::validate_reserved_name(namespace, local_name)
-        .map_err(|_| {
-            let kind = match namespace {
-                ReservedNameNamespace::Static => match import_item.namespace {
-                    ImportItemNamespace::Type => "type alias",
-                    ImportItemNamespace::Dimension => "dimension alias",
-                    ImportItemNamespace::Index => "index alias",
-                    ImportItemNamespace::Term | ImportItemNamespace::Unit => "Static alias",
-                },
-                ReservedNameNamespace::Unit => "unit alias",
-                ReservedNameNamespace::Term => "Term alias",
-            };
-            CompileError::Eval(GraphcalError::BuiltinNameShadowed {
-                kind,
-                name: local_name.to_string(),
-                src: file_src.clone(),
-                span: import_item.local_span().into(),
-            })
         })
 }
 
@@ -1003,10 +995,17 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
     importer_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     file_src: &NamedSource<Arc<String>>,
     module_artifacts: &'a HashMap<graphcal_compiler::dag_id::DagId, LoweringModuleInterface>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     ctx: &mut ImportContext<'a>,
 ) -> Result<(), CompileError> {
     let dep_loaded = &project.files()[import_dag_id];
     let dep_index = build_dep_decl_index(&dep_loaded.ast().declarations);
+    let exported_bindings = exported_bindings(
+        module_resolver,
+        import_dag_id,
+        file_src,
+        include_decl.path.span(),
+    )?;
 
     // A module-form include introduces a source-visible alias and therefore
     // participates in duplicate-alias checks. A selective include introduces
@@ -1091,6 +1090,12 @@ pub(in crate::project_compiler) fn process_file_include<'a>(
                     file_src,
                     import_item.name.span,
                 )?;
+                if let Some(binding) = exported_bindings.iter().find(|binding| {
+                    binding.name == *orig_name
+                        && binding.target.kind().namespace() == import_item.namespace
+                }) {
+                    validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
+                }
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
@@ -1280,6 +1285,7 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     importer_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     file_src: &NamedSource<Arc<String>>,
+    module_resolver: &graphcal_compiler::syntax::module_resolve::ModuleResolver,
     ctx: &mut ImportContext<'_>,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::desugar::desugared_ast::ImportKind;
@@ -1315,6 +1321,8 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
     let dag_body = graphcal_compiler::desugar::desugared_ast::File {
         declarations: dag_def.body.clone(),
     };
+    let exported_bindings =
+        exported_bindings(module_resolver, dag_id, file_src, include_decl.path.span())?;
 
     // Classify bindings against the DAG body's declarations. Typed index
     // compatibility is deferred to the same registry-backed path as file DAGs.
@@ -1362,6 +1370,12 @@ pub(in crate::project_compiler) fn process_inline_dag_include(
                     file_src,
                     import_item.name.span,
                 )?;
+                if let Some(binding) = exported_bindings.iter().find(|binding| {
+                    binding.name == *orig_name
+                        && binding.target.kind().namespace() == import_item.namespace
+                }) {
+                    validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
+                }
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
@@ -1587,6 +1601,9 @@ pub(in crate::project_compiler) fn process_pure_import<'a>(
                     binding.name == *orig_name
                         && binding.target.kind().namespace() == import_item.namespace
                 });
+                if let Some(binding) = resolved_export {
+                    validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
+                }
                 // Boundary check: resolver exports include transitive public
                 // re-exports, while the source scan preserves input-port
                 // semantics for directly authored params.

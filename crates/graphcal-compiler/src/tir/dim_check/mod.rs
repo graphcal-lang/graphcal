@@ -1273,7 +1273,6 @@ pub fn concrete_constructor_applications(
                 }
                 crate::hir::ConstRef::Decl(_)
                 | crate::hir::ConstRef::Builtin(_)
-                | crate::hir::ConstRef::TimeScale(_)
                 | crate::hir::ConstRef::GenericNatParam(_) => return,
             },
             _ => return,

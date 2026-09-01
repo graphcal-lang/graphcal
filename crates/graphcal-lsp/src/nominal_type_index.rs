@@ -42,9 +42,7 @@ impl NominalTypeIndex {
             hir::ExprKind::ConstRef(target) => match &target.value {
                 hir::ConstRef::Decl(name) => self.declaration_types.get(name).cloned(),
                 hir::ConstRef::Constructor(constructor) => Some(constructor.clone()),
-                hir::ConstRef::Builtin(_)
-                | hir::ConstRef::TimeScale(_)
-                | hir::ConstRef::GenericNatParam(_) => None,
+                hir::ConstRef::Builtin(_) | hir::ConstRef::GenericNatParam(_) => None,
             },
             hir::ExprKind::ConstructorCall { callee, .. } => Some(callee.value.clone()),
             hir::ExprKind::IndexAccess { expr, .. }

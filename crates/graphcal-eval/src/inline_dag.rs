@@ -11,16 +11,18 @@ use miette::NamedSource;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, File};
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::ir::imported_binding::HirImportedBinding;
 use graphcal_compiler::ir::lower::DagBodySelfImports;
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::registry::error::GraphcalError;
 use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::module_resolve::ModuleResolver;
 
 use crate::import_surface::{
     ImportItemPresence, PureImportTermDisposition, file_import_item_presence,
-    import_item_not_found_error, pure_import_term_disposition,
+    import_item_not_found_error, pure_import_term_disposition, validate_constructor_alias,
 };
 
 /// Pre-process `import <self>::{...}` declarations inside a dag body.
@@ -68,8 +70,20 @@ pub fn preprocess_dag_body_self_imports(
         crate::loader::ModulePathKey,
         crate::loader::InlineBodyImportResolution,
     >,
+    module_resolver: &ModuleResolver,
     src: &NamedSource<Arc<String>>,
 ) -> Result<DagBodySelfImports, GraphcalError> {
+    let exported_bindings = module_resolver
+        .exported_bindings(parent_dag_id)
+        .map_err(|error| {
+            GraphcalError::internal_error(
+                format!(
+                    "module resolver could not enumerate exports of `{parent_dag_id}`: {error}"
+                ),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
     let mut names = ImportedValueNames::default();
     let mut bindings: HashMap<ScopedName, HirImportedBinding> = HashMap::new();
     let mut stripped_body: Vec<Declaration> = Vec::with_capacity(body.len());
@@ -122,6 +136,12 @@ pub fn preprocess_dag_body_self_imports(
                             });
                         }
                         ImportItemPresence::ExplicitExport | ImportItemPresence::InputPort => {}
+                    }
+                    if let Some(binding) = exported_bindings.iter().find(|binding| {
+                        binding.name == *orig_name
+                            && binding.target.kind().namespace() == item.namespace
+                    }) {
+                        validate_constructor_alias(binding.target.kind(), item, src)?;
                     }
 
                     match item.namespace {

@@ -515,7 +515,28 @@ fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
              node event: Datetime<{scale}> = epoch<{scale}>(\"2024-01-01T00:00:00\");"
         );
         compile_and_eval_named(&aliased, "test.gcl").unwrap();
+
+        let constructor = format!(
+            "type ScaleTag {{ {scale} }}\n\
+             node tag: ScaleTag = {scale};\n\
+             node event: Datetime<{scale}> = epoch<{scale}>(\"2024-01-01T00:00:00\");"
+        );
+        compile_and_eval_named(&constructor, "test.gcl").unwrap();
     }
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub type ScaleTag { Only }\n"),
+            (
+                "main.gcl",
+                "import pipeline.lib::{ type ScaleTag, Only as UTC };\n\
+                 node tag: ScaleTag = UTC;\n\
+                 node event: Datetime<UTC> = epoch<UTC>(\"2024-01-01T00:00:00\");\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
 
     let bare_error = compile_and_eval_named(
         "node UTC: Dimensionless = 1.0;\nnode invalid: Dimensionless = UTC;",
@@ -534,6 +555,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let library = "pub dim CustomDim = Length;\n\
                    pub const unit custom_unit: Length = 2.0 m;\n\
                    pub type CustomType { CustomType }\n\
+                   pub type Choice { Only }\n\
                    pub index CustomIndex = { One };\n\
                    pub const node constant: Dimensionless = 1.0;\n\
                    pub node runtime: Dimensionless = 2.0;\n";
@@ -543,6 +565,9 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         ("type CustomType as Bool", "Bool"),
         ("index CustomIndex as Length", "Length"),
         ("constant as E", "E"),
+        ("Only as E", "E"),
+        ("Only as sum", "sum"),
+        ("Only as scan", "scan"),
     ];
 
     for (item, expected_name) in invalid_imports {
@@ -559,7 +584,9 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
 
     let invalid_includes = [
         "include pipeline.lib()::{ runtime as E };\n",
+        "include pipeline.lib()::{ type Choice, Only as E };\n",
         "dag producer { pub node value: Dimensionless = 1.0; }\ninclude producer()::{ value as E };\n",
+        "dag producer { pub type Choice { Only } }\ninclude producer()::{ type Choice, Only as E };\n",
     ];
     for main in invalid_includes {
         let error = if main.starts_with("dag") {
@@ -586,6 +613,42 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let reexport_error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
     assert!(matches!(
         reexport_error,
+        CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "E"
+    ));
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("lib.gcl", "pub type Choice { Only }\n"),
+            ("middle.gcl", "import pipeline.lib::{ pub Only as sum };\n"),
+            ("main.gcl", "import pipeline.middle as middle;\n"),
+        ],
+        "main.gcl",
+    );
+    let constructor_reexport_error =
+        compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        constructor_reexport_error,
+        CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "sum"
+    ));
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub type Choice { Only }\n\
+                 pub dag consumer {\n\
+                     import pipeline.lib::{ Only as E };\n\
+                     pub node output: Dimensionless = 1.0;\n\
+                 }\n",
+            ),
+            ("main.gcl", "include pipeline.lib.consumer()::{ output };\n"),
+        ],
+        "main.gcl",
+    );
+    let self_import_error =
+        compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+    assert!(matches!(
+        self_import_error,
         CompileError::Eval(GraphcalError::BuiltinNameShadowed { name, .. }) if name == "E"
     ));
 }

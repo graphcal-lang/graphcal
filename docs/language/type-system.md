@@ -160,7 +160,11 @@ aliases. See [Dimension Algebra](#dimension-algebra).
 
 **Time scales** (`S : TimeScale`) are the closed nine-member set above. `S` is
 semantic notation only: there is no source-level `TimeScale` kind and no
-time-scale variable.
+time-scale variable. Their spellings are resolved only in Static time-scale
+positions such as `Datetime<UTC>` and `epoch<UTC>(...)`; an ordinary expression
+performs Term lookup instead. Consequently, a Term constructor may be named
+`UTC`, while bare `UTC` without such a Term receives a wrong-namespace
+diagnostic rather than becoming a runtime value.
 
 **Nats** (`N : Nat`) are type-level natural numbers: literals, `Nat` generic
 parameters, and polynomial expressions over them:

@@ -9,10 +9,12 @@ use graphcal_compiler::desugar::desugared_ast::{
     DeclKind, Declaration, File, TypeDecl, TypeDeclBody,
 };
 use graphcal_compiler::registry::error::GraphcalError;
+use graphcal_compiler::registry::reserved_name::{ReservedNameNamespace, validate_reserved_name};
 use graphcal_compiler::registry::resolve_types::ExternalDeclSurface;
-use graphcal_compiler::syntax::ast::ImportItemNamespace;
+use graphcal_compiler::syntax::ast::{ImportItem, ImportItemNamespace};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
+use graphcal_compiler::syntax::module_resolve::ExportedImportItemKind;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
 use miette::NamedSource;
@@ -196,6 +198,51 @@ pub enum ImportItemPresence {
     Private,
     ExplicitExport,
     InputPort,
+}
+
+/// Validate the source-visible local spelling introduced by one selective item.
+pub fn validate_constructor_alias(
+    kind: ExportedImportItemKind,
+    import_item: &ImportItem,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    match kind {
+        ExportedImportItemKind::Constructor => {
+            validate_reserved_alias(ReservedNameNamespace::Term, import_item, src)
+        }
+        ExportedImportItemKind::Decl(_)
+        | ExportedImportItemKind::Dimension
+        | ExportedImportItemKind::Unit(_)
+        | ExportedImportItemKind::Type
+        | ExportedImportItemKind::Index => Ok(()),
+    }
+}
+
+/// Validate one alias against the reserved vocabulary of its semantic namespace.
+pub fn validate_reserved_alias(
+    namespace: ReservedNameNamespace,
+    import_item: &ImportItem,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    let local_name = import_item.local_name_atom();
+    validate_reserved_name(namespace, local_name).map_err(|_| {
+        let kind = match namespace {
+            ReservedNameNamespace::Static => match import_item.namespace {
+                ImportItemNamespace::Type => "type alias",
+                ImportItemNamespace::Dimension => "dimension alias",
+                ImportItemNamespace::Index => "index alias",
+                ImportItemNamespace::Term | ImportItemNamespace::Unit => "Static alias",
+            },
+            ReservedNameNamespace::Unit => "unit alias",
+            ReservedNameNamespace::Term => "Term alias",
+        };
+        GraphcalError::BuiltinNameShadowed {
+            kind,
+            name: local_name.to_string(),
+            src: src.clone(),
+            span: import_item.local_span().into(),
+        }
+    })
 }
 
 impl ImportItemPresence {
