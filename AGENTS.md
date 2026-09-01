@@ -17,12 +17,21 @@
 - Design ideas and feature proposals are tracked as GitHub issues.
 - The detailed discussion file can be found in `.local/` directory. Note that these are raw notes and may contain incomplete or obsolete information.
 
+## README.md
+
+- Keep `README.md` minimal and avoid updating it during feature implementations or bug fixes.
+- Update `README.md` only when existing information is stale or a similarly essential correction is required.
+
+## Testing
+
+- If a build reports that the embedded browser engine is stale for the current Graphcal sources, run `just wasm-report-update` before rerunning lint or tests. Do not bypass the freshness check.
+
 ## Implementation Guidelines
 
 - When you add/modify/remove a feature, please also update the followings accordingly:
   - The test cases in the codebase (unit tests, integration tests, snapshot tests, property-based tests, etc.).
   - The corresponding LSP features in the `crates/graphcal-lsp/` directory (diagnostics, code actions, inlay hints, etc.).
-  - The user-facing documentation in `docs/` directory and the `README.md` file in the project root.
+  - The user-facing documentation in the `docs/` directory.
   - The tree-sitter grammar in the `graphcal-lang/tree-sitter-graphcal` repository.
   - The Zed extension in the `graphcal-lang/zed-graphcal` repository (syntax highlighting, LSP features, etc.).
   - The VS Code extension in the `graphcal-lang/vscode-graphcal` repository, including the TextMate grammar and LSP features.

@@ -1400,6 +1400,21 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn file_root_self_import_diagnostic_reaches_lsp_clients() {
+        let source = "import self::{ ghost };\n";
+        let diagnostics = produce_diagnostics(source, "self.gcl");
+
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(matches!(
+            diagnostics[0].code.as_ref(),
+            Some(NumberOrString::String(code)) if code == "graphcal::M033"
+        ));
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(diagnostics[0].range.start.line, 0);
+        assert!(diagnostics[0].range.end.character > diagnostics[0].range.start.character);
+    }
+
+    #[test]
     fn inline_self_import_policy_diagnostics_reach_lsp_clients() {
         for (source, expected) in [
             (

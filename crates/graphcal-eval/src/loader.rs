@@ -1158,6 +1158,12 @@ impl LoadedProject {
         let ast = graphcal_compiler::syntax::desugar::desugar_multi_decls_in_file(raw_ast);
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
+        let file_stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("");
+        let dag_names = collect_inline_dag_names(&ast.declarations);
+        reject_file_root_stem_imports(&ast.declarations, file_stem, &dag_names, &named_source)?;
         // `name` is also a diagnostic label and may be an absolute virtual URI
         // path. A standalone in-memory file has no filesystem hierarchy, so a
         // rooted label contributes only its leaf to semantic DAG identity.
@@ -2168,6 +2174,51 @@ impl<'a> PackageLoadContext<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileRootDependencyKind {
+    Import,
+    Include,
+}
+
+const fn file_root_dependency(
+    declaration: &Declaration,
+) -> Option<(&ModulePath, FileRootDependencyKind)> {
+    match &declaration.kind {
+        DeclKind::Import(import) => Some((&import.path, FileRootDependencyKind::Import)),
+        DeclKind::Include(include) => Some((&include.path, FileRootDependencyKind::Include)),
+        _ => None,
+    }
+}
+
+fn file_root_self_import_error(path: &ModulePath, src: &NamedSource<Arc<String>>) -> CompileError {
+    CompileError::Eval(GraphcalError::FileRootSelfImport {
+        path: path.display_path(),
+        src: src.clone(),
+        span: path.span().into(),
+    })
+}
+
+fn reject_file_root_stem_imports(
+    declarations: &[Declaration],
+    file_stem: &str,
+    dag_names: &HashSet<String>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), CompileError> {
+    declarations.iter().try_for_each(|declaration| {
+        let Some((path, FileRootDependencyKind::Import)) = file_root_dependency(declaration) else {
+            return Ok(());
+        };
+        let is_file_root_self_import = path.segments.len() == 1
+            && path.segments[0].name == file_stem
+            && !dag_names.contains(path.segments[0].name.as_str());
+        if is_file_root_self_import {
+            Err(file_root_self_import_error(path, src))
+        } else {
+            Ok(())
+        }
+    })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "package-aware DFS state mirrors the single-package project loader"
@@ -2238,14 +2289,13 @@ fn load_package_file_dfs(
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("");
+    reject_file_root_stem_imports(&ast.declarations, file_stem, &dag_names, &named_source)?;
     let mut resolved_imports_paths: HashMap<ModulePathKey, PackageResolvedPath> = HashMap::new();
 
     for decl in &ast.declarations {
         cancellation.checkpoint()?;
-        let path = match &decl.kind {
-            DeclKind::Import(import_decl) => &import_decl.path,
-            DeclKind::Include(include_decl) => &include_decl.path,
-            _ => continue,
+        let Some((path, dependency_kind)) = file_root_dependency(decl) else {
+            continue;
         };
         if path.segments.len() == 1 && dag_names.contains(path.segments[0].name.as_str()) {
             continue;
@@ -2255,6 +2305,13 @@ fn load_package_file_dfs(
         }
         let resolved =
             resolve_package_import_path(path, package_id, context, &named_source, parent_dir)?;
+        if dependency_kind == FileRootDependencyKind::Import
+            && resolved.path == canonical_path
+            && resolved.package == *package_id
+            && resolved.inline_path.is_empty()
+        {
+            return Err(file_root_self_import_error(path, &named_source));
+        }
         if resolved.path == canonical_path && resolved.package == *package_id {
             resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved);
             continue;
@@ -2815,24 +2872,23 @@ fn load_file_dfs<F: FileSystemReader>(
 
     // Find import and include declarations and recurse.
     let parent_dir = canonical_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_stem = canonical_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    reject_file_root_stem_imports(&ast.declarations, file_stem, &dag_names, &named_source)?;
     let mut resolved_imports_paths: HashMap<ModulePathKey, ResolvedFilePath> = HashMap::new();
     for decl in &ast.declarations {
         cancellation.checkpoint()?;
-        let path = match &decl.kind {
-            DeclKind::Import(import_decl) => &import_decl.path,
-            DeclKind::Include(include_decl) => &include_decl.path,
-            _ => continue,
+        let Some((path, dependency_kind)) = file_root_dependency(decl) else {
+            continue;
         };
 
         // Skip single-segment paths that reference an inline DAG declared in
-        // this file, or that name the file's own virtual package (Concept 7).
+        // this file, or includes that name the file's own virtual package.
         if path.segments.len() == 1 && dag_names.contains(path.segments[0].name.as_str()) {
             continue;
         }
-        let file_stem = canonical_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
         if path.segments.len() == 1 && path.segments[0].name == file_stem {
             continue;
         }
@@ -2847,6 +2903,12 @@ fn load_file_dfs<F: FileSystemReader>(
                 src: named_source,
                 span: path.span().into(),
             }));
+        }
+        if dependency_kind == FileRootDependencyKind::Import
+            && resolved.file == canonical_path
+            && resolved.inline_path.is_empty()
+        {
+            return Err(file_root_self_import_error(path, &named_source));
         }
 
         resolved_imports_paths.insert(ModulePathKey::from_path(path), resolved.clone());
@@ -4485,6 +4547,21 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
 
         let project = load_project(&fixture.root_file, None, &overlay).unwrap();
         assert_eq!(project.files[&project.root].source.as_str(), overlay_source);
+    }
+
+    #[test]
+    fn dependency_enabled_loader_rejects_file_root_self_import() {
+        let fixture = locked_package_fixture(
+            "import mission.main::{ ghost };",
+            "pub const node one: Dimensionless = 1.0;",
+        );
+
+        let error = load_project(&fixture.root_file, None, &RealFileSystem::default())
+            .expect_err("the package-aware loader must reject an exact self-file target");
+        assert!(matches!(
+            error,
+            CompileError::Eval(GraphcalError::FileRootSelfImport { .. })
+        ));
     }
 
     #[test]

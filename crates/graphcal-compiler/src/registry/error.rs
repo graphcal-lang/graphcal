@@ -1227,6 +1227,21 @@ pub enum GraphcalError {
         span: SourceSpan,
     },
 
+    #[error("a file-root `import` cannot target its own file `{path}`")]
+    #[diagnostic(
+        code(graphcal::M033),
+        help(
+            "top-level declarations are already in scope; self-imports are only meaningful inside isolated inline DAG bodies"
+        )
+    )]
+    FileRootSelfImport {
+        path: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("this import resolves to its own file root")]
+        span: SourceSpan,
+    },
+
     #[error("name `{name}` not found in imported file `{file_path}`")]
     #[diagnostic(
         code(graphcal::M003),
@@ -2392,6 +2407,7 @@ impl GraphcalError {
             | Self::ExtraVariants { src, .. }
             | Self::IndexMismatch { src, .. }
             | Self::ImportFileNotFound { src, .. }
+            | Self::FileRootSelfImport { src, .. }
             | Self::ImportNameNotFound { src, .. }
             | Self::ImportCategoryMismatch { src, .. }
             | Self::DuplicateModuleName { src, .. }
