@@ -134,7 +134,6 @@ pub struct CheckedDagExecutionFacts {
     pub const_values: Arc<RuntimeValueMap>,
     pub topo_order: Arc<Vec<RuntimeDeclKey>>,
     pub domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
-    pub struct_field_constraints: Arc<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>>,
 }
 
 impl CheckedDagExecutionFacts {
