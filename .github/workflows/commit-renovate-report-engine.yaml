@@ -87,10 +87,10 @@ jobs:
             esac
           done < <(git diff --name-only)
           git diff --check
-          git diff --quiet && {
+          if git diff --quiet; then
             echo "regenerated engine unexpectedly matches the PR branch" >&2
             exit 1
-          }
+          fi
 
       - name: Mint report-engine App token
         if: steps.source.outputs.ready == 'true'
