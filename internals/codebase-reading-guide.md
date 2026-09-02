@@ -145,6 +145,7 @@ HirProject  (every file-root and inline `HirDag`; no checked/runtime facts)
   v
 CheckedProject / TIR  (DagTIR + DagSemanticBody)
   |
+  |  crates/graphcal-eval/src/project_compiler/execution_check/
   |  crates/graphcal-eval/src/exec_plan.rs
   v
 ExecPlan
@@ -525,6 +526,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `project_compiler/hir_project.rs` | Complete resolved-project phase value                            |
 | `project_compiler/lowering.rs`    | Pure per-file and inline-DAG HIR elaboration                     |
 | `project_compiler/checking.rs`    | HIR-to-TIR interface resolution and mandatory static checks      |
+| `project_compiler/execution_check/` | Constant scheduling, domain resolution, and checked execution facts |
 | `project_compiler/pipeline.rs`    | Dependency-ordered HIR lowering and checking continuations       |
 | `project_compiler/qualified_refs.rs` | Module-aware ambiguous reference classification             |
 | `project_compiler/registry_merge.rs` | Frontend-only registry composition                          |
@@ -536,7 +538,7 @@ elaboration out of runtime modules even though both currently share this crate.
 | `decl_key.rs`                     | Runtime declaration keys backed by `ResolvedName<Decl>`         |
 | `execution_facts.rs`              | Per-DAG checked constants, constraints, schedules, and source   |
 | `runtime_presentation.rs`         | Value-shaped sidecars carrying presentation invocation identities |
-| `exec_plan.rs`          | Const evaluation, runtime topological order, domain prep      |
+| `exec_plan.rs`          | Thin runtime-plan selection from retained checked facts       |
 | `domain_check.rs`       | Runtime and compile-time domain validation                    |
 | `eval/runtime.rs`       | Evaluation loop                                               |
 | `eval/display.rs`       | Application of checked structured presentation facts          |
@@ -1162,7 +1164,7 @@ just lint
 | Visitor pattern                  | `syntax/visitor.rs`                    | Centralized AST traversal                                           |
 | `BTreeSet` in dep values         | IR/TIR deps                            | Deterministic graph construction                                    |
 | `IndexMap` in output-facing maps | eval/display output                    | Stable user-facing order                                            |
-| Separate const/runtime phases    | `exec_plan.rs`                         | Compile-time values and runtime values have different failure modes |
+| Separate const/runtime phases    | `project_compiler/execution_check/`    | Compile-time values and runtime values have different failure modes |
 | Display units outside dimensions | `eval/display.rs`                      | Compute in SI, display in requested units                           |
 | Deliberate absent-state fallbacks | `clippy.toml`                           | Core `unwrap_or_default` calls require a reasoned lint expectation  |
 
@@ -1284,12 +1286,13 @@ Note: `registry/types.rs` and `registry/prelude.rs` are mutually dependent. `reg
 
 ### Stage 6 - Name resolution (IR)
 
-1. `crates/graphcal-compiler/src/ir/required_bindability.rs`
-2. `crates/graphcal-compiler/src/ir/resolve/names.rs`
-3. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
-4. `crates/graphcal-compiler/src/ir/resolve/attribute_validation.rs`
-5. `crates/graphcal-compiler/src/ir/resolve/include_selection.rs`
-6. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
+1. `crates/graphcal-compiler/src/ir/static_interface.rs`
+2. `crates/graphcal-compiler/src/ir/required_bindability.rs`
+3. `crates/graphcal-compiler/src/ir/resolve/names.rs`
+4. `crates/graphcal-compiler/src/ir/resolve/deps.rs`
+5. `crates/graphcal-compiler/src/ir/resolve/attribute_validation.rs`
+6. `crates/graphcal-compiler/src/ir/resolve/include_selection.rs`
+7. `crates/graphcal-compiler/src/ir/resolve/mod.rs`
 
 ### Stage 7 - HIR and builtin signatures
 
@@ -1340,6 +1343,8 @@ Note: `tir/typed/model.rs`, `tir/typed/type_expr.rs`, `tir/typed/collect.rs`, `t
 29. `crates/graphcal-compiler/src/tir/dim_check/model_schema.rs`
 30. `crates/graphcal-compiler/src/tir/dim_check/presentation.rs`
 31. `crates/graphcal-compiler/src/ir/resolve/formal_conformance.rs`
+32. `crates/graphcal-compiler/src/ir/static_dependencies.rs`
+33. `crates/graphcal-compiler/src/ir/static_external_surface_formal_conformance.rs`
 
 ### Stage 9 - Filesystem abstraction (`graphcal-io`)
 
@@ -1437,22 +1442,25 @@ into an execution plan.
 13. `crates/graphcal-eval/src/project_compiler/registry_merge.rs`
 14. `crates/graphcal-eval/src/project_compiler/imports.rs`
 15. `crates/graphcal-eval/src/project_compiler/lowering.rs`
-16. `crates/graphcal-eval/src/project_compiler/checking.rs`
-17. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
-18. `crates/graphcal-eval/src/project_compiler/session.rs`
-19. `crates/graphcal-eval/src/project_compiler/mod.rs`
-20. `crates/graphcal-eval/src/eval/plot_data.rs`
-21. `crates/graphcal-eval/src/eval/public_projection.rs`
-22. `crates/graphcal-eval/src/eval/runtime.rs`
-23. `crates/graphcal-eval/src/eval/project/model_schema.rs`
-24. `crates/graphcal-eval/src/eval/project/output.rs`
-25. `crates/graphcal-eval/src/eval/project/prepared.rs`
-26. `crates/graphcal-eval/src/eval/project/prepare.rs`
-27. `crates/graphcal-eval/src/eval/project/mod.rs`
-28. `crates/graphcal-eval/src/eval/mod.rs`
-29. `crates/graphcal-eval/src/eval/tests.rs`
-30. `crates/graphcal-eval/src/graph_ir/mod.rs`
-31. `crates/graphcal-eval/src/graph_ir/dot.rs`
+16. `crates/graphcal-eval/src/project_compiler/execution_check/const_schedule.rs`
+17. `crates/graphcal-eval/src/project_compiler/execution_check/domain_resolve.rs`
+18. `crates/graphcal-eval/src/project_compiler/execution_check.rs`
+19. `crates/graphcal-eval/src/project_compiler/checking.rs`
+20. `crates/graphcal-eval/src/project_compiler/pipeline.rs`
+21. `crates/graphcal-eval/src/project_compiler/session.rs`
+22. `crates/graphcal-eval/src/project_compiler/mod.rs`
+23. `crates/graphcal-eval/src/eval/plot_data.rs`
+24. `crates/graphcal-eval/src/eval/public_projection.rs`
+25. `crates/graphcal-eval/src/eval/runtime.rs`
+26. `crates/graphcal-eval/src/eval/project/model_schema.rs`
+27. `crates/graphcal-eval/src/eval/project/output.rs`
+28. `crates/graphcal-eval/src/eval/project/prepared.rs`
+29. `crates/graphcal-eval/src/eval/project/prepare.rs`
+30. `crates/graphcal-eval/src/eval/project/mod.rs`
+31. `crates/graphcal-eval/src/eval/mod.rs`
+32. `crates/graphcal-eval/src/eval/tests.rs`
+33. `crates/graphcal-eval/src/graph_ir/mod.rs`
+34. `crates/graphcal-eval/src/graph_ir/dot.rs`
 
 ### Stage 15 - Typed test generation (`graphcal-test-support`)
 

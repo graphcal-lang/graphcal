@@ -788,7 +788,7 @@ fn process_dag_body_include_declarations<'a>(
 pub(super) fn merge_dep_dag_tirs(
     tir: &mut graphcal_compiler::tir::typed::TirBuilder,
     module_map: &HashMap<ModuleAliasName, ProjectModuleBinding>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &ModuleArtifactStore,
     src: &NamedSource<Arc<String>>,
 ) -> Result<(), CompileError> {
     for (alias, binding) in module_map {
@@ -799,7 +799,7 @@ pub(super) fn merge_dep_dag_tirs(
         }
     }
 
-    for (dep_dag_id, dep_eval) in module_artifacts {
+    for (dep_dag_id, dep_eval) in module_artifacts.iter() {
         // Extern signatures travel with the dep's dag bodies: a qualified
         // inline call into a dep dag that uses extern functions resolves its
         // signature from the importer's merged TIR at eval time. Repeated

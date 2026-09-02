@@ -12,7 +12,7 @@ use super::*;
 fn declared_type_for_target(
     target: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
     local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &ModuleArtifactStore,
 ) -> Option<DeclaredType> {
     let name = ScopedName::local(target.to_unowned_def_name());
     local_interfaces
@@ -20,8 +20,8 @@ fn declared_type_for_target(
         .and_then(|types| types.get(&name))
         .or_else(|| {
             module_artifacts
-                .values()
-                .find_map(|artifact| artifact.declared_types_by_dag.get(target.owner()))
+                .for_owner(target.owner())
+                .and_then(|artifact| artifact.declared_types_by_dag.get(target.owner()))
                 .and_then(|types| types.get(&name))
         })
         .cloned()
@@ -29,11 +29,11 @@ fn declared_type_for_target(
 
 fn value_for_target(
     target: &graphcal_compiler::syntax::decl_name::ResolvedDeclName,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &ModuleArtifactStore,
 ) -> Option<RuntimeValue> {
     module_artifacts
-        .values()
-        .find_map(|artifact| artifact.const_values_by_dag.get(target.owner()))
+        .for_owner(target.owner())
+        .and_then(|artifact| artifact.const_values_by_dag.get(target.owner()))
         .and_then(|values| values.get(&target.to_unowned_def_name()))
         .cloned()
 }
@@ -41,7 +41,7 @@ fn value_for_target(
 fn resolve_imported_bindings(
     hir: &graphcal_compiler::ir::lower::HirDag,
     local_interfaces: &HashMap<graphcal_compiler::dag_id::DagId, HashMap<ScopedName, DeclaredType>>,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &ModuleArtifactStore,
     src: &NamedSource<Arc<String>>,
 ) -> Result<HashMap<ScopedName, ImportedBinding>, CompileError> {
     hir.imported_bindings()
@@ -114,7 +114,8 @@ fn local_declared_interfaces(
 /// Check one physical file's root and inline-DAG HIR modules.
 pub(super) fn check_hir_file(
     hir: HirFile,
-    module_artifacts: &HashMap<graphcal_compiler::dag_id::DagId, ModuleArtifact>,
+    module_artifacts: &ModuleArtifactStore,
+    inherited_execution_facts: &crate::execution_facts::CheckedExecutionFacts,
     exported_runtime_units: &HashMap<
         graphcal_compiler::dag_id::DagId,
         HashSet<graphcal_compiler::syntax::dimension::UnitName>,
@@ -195,14 +196,9 @@ pub(super) fn check_hir_file(
         file_src,
         cancellation,
     )?;
-    let inherited_execution_facts = crate::execution_facts::CheckedExecutionFacts::merge(
-        module_artifacts
-            .values()
-            .map(|artifact| &artifact.checked_execution_facts),
-    );
-    let checked_execution_facts = crate::exec_plan::check_execution_facts_with_inherited(
+    let checked_execution_facts = execution_check::check_execution_facts_with_inherited(
         &tir,
-        &inherited_execution_facts,
+        inherited_execution_facts,
         file_src,
         cancellation,
     )?;
