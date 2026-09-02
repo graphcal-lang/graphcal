@@ -1472,6 +1472,49 @@ fn eval_output_view_is_consistent_for_empty_file_include_and_json() {
 }
 
 #[test]
+fn eval_non_selective_include_preserves_one_authored_presentation() {
+    let dir = tempfile::tempdir().unwrap();
+    let package = dir.path().join("src/presentation");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"presentation\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("library.gcl"),
+        "pub node displayed_mass: Mass = 1000.0 g;\n",
+    )
+    .unwrap();
+    let root = write_temp_file(
+        dir.path(),
+        "src/presentation/main.gcl",
+        "include presentation.library();\n",
+    );
+
+    for extra in [None, Some("all")] {
+        let mut command = graphcal_bin();
+        command.args(["eval", root.to_str().unwrap()]);
+        if let Some(view) = extra {
+            command.args(["--output-view", view]);
+        }
+        let output = command.output().expect("failed to run graphcal");
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let outputs = stdout
+            .lines()
+            .filter(|line| line.starts_with("library::displayed_mass "))
+            .collect::<Vec<_>>();
+        assert_eq!(outputs.len(), 1, "stdout:\n{stdout}");
+        assert!(outputs[0].ends_with("= 1000 g"), "stdout:\n{stdout}");
+    }
+}
+
+#[test]
 fn eval_surface_still_reports_hidden_internal_failures() {
     let dir = tempfile::tempdir().unwrap();
     let root = write_temp_file(

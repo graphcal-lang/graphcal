@@ -909,6 +909,71 @@ pub dag calculation {
 }
 
 #[test]
+fn semantic_include_outputs_preserve_presentation_and_unique_names() {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/include_presentation");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"include_presentation\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("library.gcl"),
+        "pub node displayed_mass: Mass = 1000.0 g;\n",
+    )
+    .unwrap();
+
+    for (root_name, include, expected_name) in [
+        (
+            "non_selective.gcl",
+            "include include_presentation.library();\n",
+            "library::displayed_mass",
+        ),
+        (
+            "selective.gcl",
+            "include include_presentation.library()::{ displayed_mass };\n",
+            "displayed_mass",
+        ),
+    ] {
+        let root = package.join(root_name);
+        std::fs::write(&root, include).unwrap();
+        let result =
+            compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+                .unwrap_or_else(|error| panic!("semantic include must evaluate: {error:?}"));
+
+        let unique_names = result
+            .all
+            .iter()
+            .map(|(name, _, _)| name.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            unique_names.len(),
+            result.all.len(),
+            "semantic output names must be unique: {:?}",
+            result.all
+        );
+        let surface = result
+            .output_values(graphcal_eval::eval::EvalOutputView::Surface)
+            .collect::<Vec<_>>();
+        assert_eq!(surface.len(), 1, "unexpected output surface: {surface:?}");
+        let (name, value, _) = surface[0];
+        assert_eq!(name.to_string(), expected_name);
+        let graphcal_eval::eval::Value::Quantity {
+            si_value,
+            display_unit: Some(unit),
+            ..
+        } = value.as_ref().expect("successful included value")
+        else {
+            panic!("expected presented included quantity: {value:?}");
+        };
+        assert_eq!(unit.label, "g");
+        let displayed = graphcal_eval::eval::quantity_display_value(*si_value, Some(unit)).unwrap();
+        assert!((displayed - 1000.0).abs() < f64::EPSILON);
+    }
+}
+
+#[test]
 fn explicitly_rebinding_the_dependent_param_reconciles_type_override() {
     let result = compile_reconciliation_project(
         r"
