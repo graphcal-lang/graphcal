@@ -1,0 +1,122 @@
+name: Commit Renovate report engine
+
+# The privileged continuation validates the live PR author, repository, and
+# exact head SHA before handling fixed-path artifacts, and executes no PR code.
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: [Build Renovate report engine]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: commit-renovate-report-engine-${{ github.event.workflow_run.pull_requests[0].number }}
+  cancel-in-progress: true
+
+jobs:
+  commit:
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate source run and locate artifact
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_PR_HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          echo "ready=false" >>"$GITHUB_OUTPUT"
+          test -n "$RUN_PR_NUMBER" || exit 0
+          test -n "$RUN_PR_HEAD_SHA" || exit 0
+
+          pr=$(gh api "repos/$REPOSITORY/pulls/$RUN_PR_NUMBER")
+          test "$(jq -r .state <<<"$pr")" = open || exit 0
+          test "$(jq -r .user.login <<<"$pr")" = 'renovate[bot]' || exit 0
+          test "$(jq -r .head.repo.full_name <<<"$pr")" = "$REPOSITORY" || exit 0
+          test "$(jq -r .head.sha <<<"$pr")" = "$RUN_PR_HEAD_SHA" || exit 0
+
+          artifact_id=$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name == "report-engine") | .id' | head -n 1)
+          test -n "$artifact_id" || exit 0
+
+          echo "head_ref=$(jq -r .head.ref <<<"$pr")" >>"$GITHUB_OUTPUT"
+          echo "head_sha=$RUN_PR_HEAD_SHA" >>"$GITHUB_OUTPUT"
+          echo "ready=true" >>"$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.source.outputs.ready == 'true'
+        with:
+          ref: ${{ steps.source.outputs.head_sha }}
+          persist-credentials: false
+
+      - name: Download regenerated engine
+        if: steps.source.outputs.ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: report-engine
+          path: ${{ runner.temp }}/report-engine
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Stage regenerated engine
+        if: steps.source.outputs.ready == 'true'
+        run: |
+          engine_dir=crates/graphcal-cli/assets/report-engine
+          generated_dir="$RUNNER_TEMP/report-engine"
+          for file in graphcal_wasm.js graphcal_wasm_bg.wasm source-tree.digest; do
+            test -f "$generated_dir/$file"
+            test ! -L "$generated_dir/$file"
+            cp "$generated_dir/$file" "$engine_dir/$file"
+          done
+
+          test -z "$(git ls-files --others --exclude-standard)"
+          while IFS= read -r changed; do
+            case "$changed" in
+              "$engine_dir/graphcal_wasm.js" | \
+              "$engine_dir/graphcal_wasm_bg.wasm" | \
+              "$engine_dir/source-tree.digest") ;;
+              *) echo "unexpected generated change: $changed" >&2; exit 1 ;;
+            esac
+          done < <(git diff --name-only)
+          git diff --check
+          git diff --quiet && {
+            echo "regenerated engine unexpectedly matches the PR branch" >&2
+            exit 1
+          }
+
+      - name: Mint report-engine App token
+        if: steps.source.outputs.ready == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.REPORT_ENGINE_APP_ID }}
+          private-key: ${{ secrets.REPORT_ENGINE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Commit regenerated engine
+        if: steps.source.outputs.ready == 'true'
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_REF: ${{ steps.source.outputs.head_ref }}
+        run: |
+          engine_dir=crates/graphcal-cli/assets/report-engine
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$engine_dir"
+          git commit -m "Regenerate embedded report engine"
+
+          original_origin=$(git remote get-url origin)
+          trap 'git remote set-url origin "$original_origin"' EXIT
+          git remote set-url origin \
+            "https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/$HEAD_REF"
