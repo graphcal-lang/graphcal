@@ -1136,6 +1136,52 @@ only typed include substitutions into the importer. Unsubstituted builtin,
 dependency-local, and qualified names retain their original identity rather
 than being reinterpreted as a same-spelled importer declaration.
 
+### Reusable template bodies must be parametric (`V007`)
+
+A `pub(bind)` Static declaration with a local definition is an optional input,
+not a constant. Graphcal checks each reusable DAG body once with every bindable
+`type`, `dim`, and `index` treated as a rigid port. An executable body must
+therefore remain valid for every admissible binding; it cannot rely on the
+concrete structure or algebra of an optional port's default. Violations are
+error `V007`.
+
+For example, a bindable type's default fields and constructors are not part of
+the reusable contract:
+
+```graphcal
+pub(bind) type Record { Record(x: Dimensionless) }
+param record: Record;
+
+// ERROR V007: another valid `Record` binding need not have field `x`.
+pub node x: Dimensionless = @record.x;
+```
+
+Likewise, equality between a bindable dimension's default and a fixed
+dimension cannot justify an executable body:
+
+```graphcal
+pub(bind) dim Output = Length;
+param length: Length = 1.0 m;
+
+// ERROR V007: `Output` may be rebound to a dimension other than Length.
+pub node result: Output = @length;
+```
+
+Use the port parametrically instead, pass concrete behavior or values through a
+`param`, or remove `bind` when the default definition is an essential part of
+the contract:
+
+```graphcal
+pub(bind) dim Output = Length;
+param value: Output;
+pub node result: Output = @value; // OK for every Output binding
+```
+
+The rule covers `node`, `const node`, `assert`, `plot`, `figure`, `layer`, and
+runtime `unit` bodies. Parameter defaults are intentionally outside V007: they
+are checked as input defaults, and nominal `type`/`index` defaults remain
+subject to V005 reconciliation when an include replaces their dependency.
+
 ## Parameterized Includes
 
 A param binding or explicitly marked `type`, `dim`, or `index` binding in an
