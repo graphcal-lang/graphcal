@@ -511,7 +511,9 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
             let entry_ctx = ctx.for_decl(&owner);
             let assert_result = assert_dependency_failure(&entry.body, &errors).map_or_else(
                 || {
-                    let ef = plan.expected_fail.get(&entry.name);
+                    let ef = plan
+                        .expected_fail
+                        .get(&RuntimeDeclKey::resolved(owner.clone()));
                     evaluate_assert_with_expected_fail(
                         &entry.body,
                         ef,
@@ -658,7 +660,40 @@ pub(super) fn evaluate_plan_with_values_and_bindings_and_cancellation(
         .flatten()
         .collect();
     cancellation.checkpoint()?;
-    let assumes_map: HashMap<ScopedName, Vec<ScopedName>> = plan.assumes_map.clone();
+    let source_names_by_key = tir
+        .root()
+        .source_order()
+        .iter()
+        .map(|(name, _)| local_key(name).map(|key| (key, name.clone())))
+        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
+    let assumes_map = plan
+        .assumes_map
+        .iter()
+        .map(|(assertion, assumers)| {
+            let assertion_name = source_names_by_key.get(assertion).cloned().ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!("assertion `{assertion}` is missing from checked source order"),
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )
+            })?;
+            let assumer_names = assumers
+                .iter()
+                .map(|assumer| {
+                    source_names_by_key.get(assumer).cloned().ok_or_else(|| {
+                        GraphcalError::internal_error(
+                            format!(
+                                "assertion assumer `{assumer}` is missing from checked source order"
+                            ),
+                            src,
+                            DiagnosticAnchor::WholeFile,
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, GraphcalError>>()?;
+            Ok((assertion_name, assumer_names))
+        })
+        .collect::<Result<HashMap<_, _>, GraphcalError>>()?;
 
     let result = EvalResult {
         consts,
@@ -1348,9 +1383,9 @@ fn evaluate_plot(
     let body_exprs = lowered
         .encodings
         .iter()
-        .map(|(_, expr)| expr)
-        .chain(lowered.mark_properties.iter().map(|f| &f.value))
-        .chain(lowered.properties.iter().map(|f| &f.value));
+        .map(|(_, expr)| &**expr)
+        .chain(lowered.mark_properties.iter().map(|field| &*field.value))
+        .chain(lowered.properties.iter().map(|field| &*field.value));
     if let Some(message) = dependency_failure_message(body_exprs, errors) {
         return Err(PlotEvaluationError::Render(message));
     }
@@ -1413,30 +1448,38 @@ fn evaluate_plot(
     // is an internal inconsistency.
     let mut mark_properties = Vec::new();
     for field in &lowered.mark_properties {
-        let Some(mark_prop) = super::types::MarkProperty::from_name(field.name.as_str()) else {
+        let graphcal_compiler::ir::lower::LoweredPlotProperty::Mark(mark_prop) = &field.property
+        else {
             return Err(PlotEvaluationError::Fatal(ctx.internal_error(
-                format!("unknown checked mark property `{}`", field.name),
+                format!(
+                    "checked mark property has incompatible classification `{}`",
+                    field.property.name()
+                ),
                 field.value.span,
             )));
         };
         let field_value = eval_plot_property(&field.value, values, ctx)
-            .map_err(|e| format!("mark property `{}`: {e}", field.name))?;
-        mark_properties.push((mark_prop, field_value));
+            .map_err(|error| format!("mark property `{}`: {error}", field.property.name()))?;
+        mark_properties.push((*mark_prop, field_value));
     }
 
     // Evaluate top-level properties (e.g., title, width, height)
     let mut properties = Vec::new();
     for field in &lowered.properties {
-        let Some(plot_prop) = super::types::PlotProperty::from_name(field.name.as_str()) else {
+        let graphcal_compiler::ir::lower::LoweredPlotProperty::Plot(plot_prop) = &field.property
+        else {
             return Err(PlotEvaluationError::Fatal(ctx.internal_error(
-                format!("unknown checked plot property `{}`", field.name),
+                format!(
+                    "checked plot property has incompatible classification `{}`",
+                    field.property.name()
+                ),
                 field.value.span,
             )));
         };
         let field_value = eval_plot_property(&field.value, values, ctx)
-            .map_err(|e| format!("property `{}`: {e}", field.name))?;
+            .map_err(|error| format!("property `{}`: {error}", plot_prop.name()))?;
         check_positive_property(plot_prop.name(), plot_prop.value_type(), &field_value)?;
-        properties.push((plot_prop, field_value));
+        properties.push((*plot_prop, field_value));
     }
 
     Ok(PlotSpec {
@@ -1550,22 +1593,29 @@ fn eval_composition_fields(
     let empty_locals = HirLocalValueMap::root();
     let mut properties = Vec::new();
     for field in fields {
-        let Some(comp_prop) = super::types::CompositionProperty::from_name(field.name.as_str())
+        let graphcal_compiler::ir::lower::LoweredPlotProperty::Composition(comp_prop) =
+            &field.property
         else {
-            // Unknown names are rejected at check time (#845); an entry that
-            // still reaches evaluation is an internal inconsistency.
-            return Err(format!("internal: unknown property `{}`", field.name));
+            return Err(format!(
+                "internal: checked composition property has incompatible classification `{}`",
+                field.property.name()
+            ));
         };
         if let graphcal_compiler::hir::ExprKind::StringLiteral(s) = &field.value.kind {
-            properties.push((comp_prop, PlotFieldValue::String(s.clone())));
+            properties.push((*comp_prop, PlotFieldValue::String(s.clone())));
             continue;
         }
-        let rv = eval_hir_expr(&field.value, values, &empty_locals, ctx)
-            .map_err(|e| format!("property `{}`: {}", field.name, eval_failed_node_error(&e)))?;
+        let rv = eval_hir_expr(&field.value, values, &empty_locals, ctx).map_err(|error| {
+            format!(
+                "property `{}`: {}",
+                comp_prop.name(),
+                eval_failed_node_error(&error)
+            )
+        })?;
         let field_value = runtime_to_plot_field_value(&rv)
-            .map_err(|e| format!("property `{}`: {e}", field.name))?;
+            .map_err(|error| format!("property `{}`: {error}", comp_prop.name()))?;
         check_positive_property(comp_prop.name(), comp_prop.value_type(), &field_value)?;
-        properties.push((comp_prop, field_value));
+        properties.push((*comp_prop, field_value));
     }
     let plot_names = plot_name_spans.iter().map(|p| p.value.clone()).collect();
     Ok(CompositionFields {

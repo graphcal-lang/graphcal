@@ -283,7 +283,7 @@ struct DimCheckContext<'a> {
     cancellation: &'a crate::cancellation::CancellationToken,
     materialized_shapes: &'a infer::hir::MaterializedShapeCollector,
     declared_types: &'a HashMap<ScopedName, DeclaredType>,
-    dag: Option<&'a crate::tir::typed::DagTIR>,
+    dag: &'a crate::tir::typed::DagTIR,
     tir: &'a crate::tir::typed::TIR,
     registry: &'a SemanticRegistry,
     builtin_fns: &'a crate::registry::builtins::BuiltinFunctions,
@@ -314,9 +314,8 @@ impl DimCheckContext<'_> {
         &self,
         name: &crate::syntax::module_name::ScopedName,
     ) -> Option<&crate::hir::Expr> {
-        let dag = self.dag?;
-        let key = dag.bound_decl_identity(name)?;
-        dag.value_expr(key)
+        let key = self.dag.bound_decl_identity(name)?;
+        self.dag.value_expr(key)
     }
 
     /// Look up the module-aware HIR assertion body for a local assertion.
@@ -325,14 +324,11 @@ impl DimCheckContext<'_> {
         name: &crate::syntax::module_name::ScopedName,
         span: crate::syntax::span::Span,
     ) -> Result<&crate::hir::AssertBody, GraphcalError> {
-        let dag = self.dag.ok_or_else(|| GraphcalError::InternalError {
-            message: "HIR assertion lookup requires semantic DAG context".to_string(),
-            src: self.src.clone(),
-            span: span.into(),
-        })?;
         let key =
-            dag.require_bound_decl_identity(name, self.src, DiagnosticAnchor::Source(span))?;
-        dag.assert_body(&key)
+            self.dag
+                .require_bound_decl_identity(name, self.src, DiagnosticAnchor::Source(span))?;
+        self.dag
+            .assert_body(&key)
             .ok_or_else(|| GraphcalError::InternalError {
                 message: format!("TIR assertion entry missing for `{name}`"),
                 src: self.src.clone(),
@@ -346,16 +342,11 @@ impl DimCheckContext<'_> {
         expr: &crate::hir::Expr,
         owner: &ResolvedDeclName,
     ) -> Result<InferredType, GraphcalError> {
-        let dag = self.dag.ok_or_else(|| GraphcalError::InternalError {
-            message: "HIR assertion inference requires semantic DAG context".to_string(),
-            src: self.src.clone(),
-            span: expr.span.into(),
-        })?;
         infer::hir::infer_hir_type_with_materialized_shapes_and_cancellation(
             expr,
             Some(owner),
             self.declared_types,
-            dag,
+            self.dag,
             self.tir,
             self.registry,
             self.builtin_fns,
@@ -379,15 +370,10 @@ fn validate_decl_concrete_type_obligations(
             src: ctx.src.clone(),
             span: type_ann_span.into(),
         })?;
-    let dag = ctx.dag.ok_or_else(|| GraphcalError::InternalError {
-        message: format!("semantic DAG missing while validating `{name}`"),
-        src: ctx.src.clone(),
-        span: type_ann_span.into(),
-    })?;
     let inferred = InferredType::from(declared);
     infer::hir::validate_concrete_type_obligations(
         &inferred,
-        dag,
+        ctx.dag,
         ctx.tir,
         ctx.registry,
         ctx.builtin_fns,
@@ -398,14 +384,7 @@ fn validate_decl_concrete_type_obligations(
 }
 
 fn validate_hir_concrete_type_obligations(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    let dag = ctx.dag.ok_or_else(|| {
-        GraphcalError::internal_error(
-            "semantic DAG missing while validating constructor applications",
-            ctx.src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
-    for application in concrete_constructor_applications(ctx.tir, dag, ctx.src)? {
+    for application in concrete_constructor_applications(ctx.tir, ctx.dag, ctx.src)? {
         ctx.checkpoint()?;
         let inferred = InferredType::Struct(
             InferredStructType::from_ref(application.identity().clone()),
@@ -417,7 +396,7 @@ fn validate_hir_concrete_type_obligations(ctx: &DimCheckContext<'_>) -> Result<(
         );
         infer::hir::validate_concrete_type_obligations(
             &inferred,
-            dag,
+            ctx.dag,
             ctx.tir,
             ctx.registry,
             ctx.builtin_fns,
@@ -445,11 +424,6 @@ fn check_decl_expr_type(
                 src: annotation_src.clone(),
                 span: (*type_ann_span).into(),
             })?;
-    let dag = body_ctx.dag.ok_or_else(|| GraphcalError::InternalError {
-        message: format!("semantic DAG missing while checking `{name}`"),
-        src: body_ctx.src.clone(),
-        span: (*type_ann_span).into(),
-    })?;
     let hir_expr =
         body_ctx
             .hir_expr_for_decl(name)
@@ -458,7 +432,7 @@ fn check_decl_expr_type(
                 src: body_ctx.src.clone(),
                 span: (*type_ann_span).into(),
             })?;
-    let owner = dag.require_bound_decl_identity(
+    let owner = body_ctx.dag.require_bound_decl_identity(
         name,
         body_ctx.src,
         DiagnosticAnchor::Source(*type_ann_span),
@@ -467,7 +441,7 @@ fn check_decl_expr_type(
         hir_expr,
         Some(&owner),
         body_ctx.declared_types,
-        dag,
+        body_ctx.dag,
         body_ctx.tir,
         body_ctx.registry,
         body_ctx.builtin_fns,
@@ -475,13 +449,10 @@ fn check_decl_expr_type(
         body_ctx.cancellation,
         body_ctx.materialized_shapes.clone(),
     )?;
-    let matches = body_ctx
-        .dag
-        .and_then(|dag| dag.resolved_decl_types.get(name))
-        .map_or_else(
-            || types_match(declared, &inferred),
-            |resolved| resolved_type_matches_inferred(resolved, &inferred),
-        );
+    let matches = body_ctx.dag.resolved_decl_types.get(name).map_or_else(
+        || types_match(declared, &inferred),
+        |resolved| resolved_type_matches_inferred(resolved, &inferred),
+    );
     if !matches {
         return Err(GraphcalError::DimensionMismatchInAnnotation {
             declared: format_declared_type(declared, body_ctx.registry),
@@ -496,10 +467,7 @@ fn check_decl_expr_type(
 
 /// Require every runtime unit factor to be one scalar Dimensionless quantity.
 fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    let Some(dag) = ctx.dag else {
-        return Ok(());
-    };
-    for entry in dag.semantic.dynamic_unit_scales.values() {
+    for entry in ctx.dag.semantic.dynamic_unit_scales.values() {
         ctx.checkpoint()?;
         if entry.declared_dimension != entry.base_unit_dimension {
             return Err(GraphcalError::UnitDefinitionDimensionMismatch {
@@ -521,7 +489,7 @@ fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Graph
             &entry.expr,
             None,
             entry_ctx.declared_types,
-            dag,
+            entry_ctx.dag,
             entry_ctx.tir,
             entry_ctx.registry,
             entry_ctx.builtin_fns,
@@ -1155,23 +1123,11 @@ pub fn collect_override_dependency_summary_with_cancellation(
         cancellation.checkpoint()?;
         let declared_types = dag.build_declared_types(src)?;
         for param in &dag.params {
-            let Some(default_expr) = &param.default_expr else {
+            let Some(default) = &param.default else {
                 continue;
             };
             cancellation.checkpoint()?;
-            let default_src =
-                param
-                    .default_src
-                    .as_ref()
-                    .ok_or_else(|| GraphcalError::InternalError {
-                        message: format!(
-                            "parameter `{}` is missing default provenance",
-                            param.name
-                        ),
-                        src: src.clone(),
-                        span: param.span.into(),
-                    })?;
-            let body_src = default_src.resolve(src);
+            let body_src = default.src.resolve(src);
             let owner = dag.require_bound_decl_identity(
                 &param.name,
                 body_src,
@@ -1179,7 +1135,7 @@ pub fn collect_override_dependency_summary_with_cancellation(
             )?;
             let (_, mut dependencies) =
                 infer::hir::infer_hir_type_with_nominal_dependencies_and_cancellation(
-                    default_expr,
+                    &default.expr,
                     &owner,
                     &declared_types,
                     dag,
@@ -1438,7 +1394,7 @@ fn check_dimensions_dag(
         cancellation,
         materialized_shapes,
         declared_types: &declared_types,
-        dag: Some(dag),
+        dag,
         tir,
         registry,
         builtin_fns,
@@ -1468,17 +1424,10 @@ fn check_dimensions_dag(
         let annotation_src = entry.type_src.resolve(src);
         let annotation_ctx = ctx.for_body(annotation_src);
         validate_decl_concrete_type_obligations(&annotation_ctx, &entry.name, entry.type_ann.span)?;
-        let Some(_value_expr) = entry.default_expr.as_ref() else {
+        let Some(default) = entry.default.as_ref() else {
             continue;
         };
-        let Some(default_src) = entry.default_src.as_ref() else {
-            return Err(GraphcalError::InternalError {
-                message: format!("parameter `{}` is missing default provenance", entry.name),
-                src: annotation_src.clone(),
-                span: entry.span.into(),
-            });
-        };
-        let body_ctx = ctx.for_body(default_src.resolve(src));
+        let body_ctx = ctx.for_body(default.src.resolve(src));
         check_decl_expr_type(&body_ctx, &entry.name, &entry.type_ann.span, annotation_src)?;
     }
 
@@ -1560,13 +1509,7 @@ enum ExpectedBound {
 /// Other targets (e.g., `Bool`) are rejected by
 /// [`check_domain_constraint_targets_dag`] before this bound check runs.
 fn check_domain_constraint_dimensions_dag(ctx: &DimCheckContext<'_>) -> Result<(), GraphcalError> {
-    let dag = ctx.dag.ok_or_else(|| {
-        GraphcalError::internal_error(
-            "domain-bound checking requires semantic DAG context",
-            ctx.src,
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
+    let dag = ctx.dag;
     // A merged dependency declaration's domain bounds keep the dependency
     // file's spans, so they are checked against that body's source (#868).
     let decl_iter = dag

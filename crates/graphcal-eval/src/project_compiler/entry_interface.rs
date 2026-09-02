@@ -179,7 +179,7 @@ pub(super) fn build_checked_entry_interface(
                 parameters.push(CheckedEntryParameter {
                     name: name.clone(),
                     declared_type,
-                    has_default: entry.default_expr.is_some(),
+                    has_default: entry.default.is_some(),
                     runtime_key: checked_runtime_key(tir, &scoped, source, *span)?,
                     span: *span,
                 });

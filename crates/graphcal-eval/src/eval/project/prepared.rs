@@ -604,7 +604,9 @@ impl PreparedProject {
                 .map_err(|probe| ModelExecutionError::Internal(probe.to_string()))?;
             let result = crate::eval::runtime::evaluate_assert_with_expected_fail(
                 &assertion.body,
-                self.plan.expected_fail.get(&assertion.name),
+                self.plan
+                    .expected_fail
+                    .get(&RuntimeDeclKey::resolved(owner.clone())),
                 &values,
                 &empty_locals,
                 &ctx.for_decl(&owner),

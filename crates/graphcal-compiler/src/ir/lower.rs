@@ -55,20 +55,59 @@ use crate::syntax::visitor::{ExprVisitor, ExprVisitorMut};
 #[derive(Debug, Clone, Default)]
 pub struct LoweredPlotBody {
     /// Encoding channel expressions (`x: ...`, `y: ...`).
-    pub encodings: Vec<(crate::syntax::ast::EncodingChannel, crate::hir::Expr)>,
+    pub encodings: Vec<(crate::syntax::ast::EncodingChannel, crate::hir::CheckedExpr)>,
     /// Mark property expressions (`stroke_width: ...`).
     pub mark_properties: Vec<LoweredPlotField>,
     /// Plot-level property expressions (`title: ...`).
     pub properties: Vec<LoweredPlotField>,
 }
 
-/// A named plot/figure/layer field expression lowered to HIR.
+/// Typed classification of a plot, mark, or composition property name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredPlotProperty {
+    Mark(crate::plot_props::MarkProperty),
+    Plot(crate::plot_props::PlotProperty),
+    Composition(crate::plot_props::CompositionProperty),
+    Unknown(crate::syntax::ast::PlotPropertyName),
+}
+
+impl LoweredPlotProperty {
+    fn mark(name: crate::syntax::ast::PlotPropertyName) -> Self {
+        crate::plot_props::MarkProperty::from_name(name.as_str())
+            .map(Self::Mark)
+            .unwrap_or(Self::Unknown(name))
+    }
+
+    fn plot(name: crate::syntax::ast::PlotPropertyName) -> Self {
+        crate::plot_props::PlotProperty::from_name(name.as_str())
+            .map(Self::Plot)
+            .unwrap_or(Self::Unknown(name))
+    }
+
+    fn composition(name: crate::syntax::ast::PlotPropertyName) -> Self {
+        crate::plot_props::CompositionProperty::from_name(name.as_str())
+            .map(Self::Composition)
+            .unwrap_or(Self::Unknown(name))
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Mark(property) => property.name(),
+            Self::Plot(property) => property.name(),
+            Self::Composition(property) => property.name(),
+            Self::Unknown(name) => name.as_str(),
+        }
+    }
+}
+
+/// A typed plot/figure/layer field expression lowered to HIR.
 #[derive(Debug, Clone)]
 pub struct LoweredPlotField {
-    pub name: crate::syntax::ast::PlotPropertyName,
+    pub property: LoweredPlotProperty,
     /// Span of the property name in the source, for validation diagnostics.
     pub(crate) name_span: crate::syntax::span::Span,
-    pub value: crate::hir::Expr,
+    pub value: crate::hir::CheckedExpr,
 }
 
 /// Where a merged declaration body's spans index into (#868).
@@ -145,7 +184,7 @@ pub struct ConstEntry {
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
     pub type_ann: crate::hir::TypeAnnotation,
-    pub(crate) expr: crate::hir::Expr,
+    pub(crate) expr: crate::hir::CheckedExpr,
     pub span: Span,
     /// Source of the type annotation and declaration span.
     pub(crate) type_src: BodySource,
@@ -153,20 +192,26 @@ pub struct ConstEntry {
     pub(crate) body_src: BodySource,
 }
 
-/// A param declaration with type annotation and lowered default.
+/// A lowered parameter default and the source that owns its spans.
+#[derive(Debug, Clone)]
+pub struct ParamDefault {
+    pub expr: crate::hir::CheckedExpr,
+    /// An include binding is importer-owned even when the signature is
+    /// producer-owned.
+    pub(crate) src: BodySource,
+}
+
+/// A param declaration with type annotation and an atomic lowered default.
 #[derive(Debug, Clone)]
 pub struct ParamEntry {
     pub name: ScopedName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
     pub type_ann: crate::hir::TypeAnnotation,
-    pub default_expr: Option<crate::hir::Expr>,
+    pub default: Option<ParamDefault>,
     pub span: Span,
     /// Source of the type annotation and declaration span.
     pub(crate) type_src: BodySource,
-    /// Source of the default expression, when present. An include binding is
-    /// importer-owned even though the parameter signature is producer-owned.
-    pub(crate) default_src: Option<BodySource>,
     /// Include overrides whose nominal dependencies must be checked after
     /// canonical type inference.
     pub(crate) override_reconciliations:
@@ -180,7 +225,7 @@ pub struct NodeEntry {
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
     pub type_ann: crate::hir::TypeAnnotation,
-    pub expr: crate::hir::Expr,
+    pub expr: crate::hir::CheckedExpr,
     pub span: Span,
     /// Source of the type annotation and declaration span.
     pub(crate) type_src: BodySource,
@@ -194,7 +239,7 @@ pub struct AssertEntry {
     pub name: ScopedName,
     /// Canonical semantic owner, independent of the source-facing scoped name.
     pub(crate) declaration_owner: crate::dag_id::DagId,
-    pub body: crate::hir::AssertBody,
+    pub body: crate::hir::CheckedAssertBody,
     pub span: Span,
     /// Source of the assertion body and its spans.
     pub(crate) body_src: BodySource,
@@ -221,6 +266,15 @@ pub struct UnfrozenConstEntry {
     body_src: BodySource,
 }
 
+/// A syntactic parameter default awaiting lowering at [`UnfrozenIR::freeze`].
+#[derive(Debug, Clone)]
+struct UnfrozenParamDefault {
+    expr: Expr,
+    /// Module scope used to resolve the default expression.
+    resolution_owner: crate::dag_id::DagId,
+    src: BodySource,
+}
+
 /// A param declaration awaiting default lowering at [`UnfrozenIR::freeze`].
 #[derive(Debug, Clone)]
 pub struct UnfrozenParamEntry {
@@ -229,16 +283,10 @@ pub struct UnfrozenParamEntry {
     type_ann: TypeExpr,
     /// Module scope for the parameter signature (type annotation and domain bounds).
     type_resolution_owner: crate::dag_id::DagId,
-    default_expr: Option<Expr>,
-    /// Module scope for the default expression when present. Include-time
-    /// param bindings are importer-written expressions, so this can differ
-    /// from `type_resolution_owner`.
-    default_resolution_owner: crate::dag_id::DagId,
+    default: Option<UnfrozenParamDefault>,
     span: Span,
     /// Source of the type annotation and declaration span.
     type_src: BodySource,
-    /// Source of the default expression, when present.
-    default_src: Option<BodySource>,
     /// Include overrides awaiting canonical typed dependency checking.
     override_reconciliations:
         Vec<crate::ir::override_reconciliation::PendingOverrideReconciliation>,
@@ -309,7 +357,7 @@ pub struct DynamicUnitScaleEntry {
     /// Source spelling under which the unit is registered in this IR.
     pub spelling: UnitRef,
     /// Strictly lowered scalar expression.
-    pub expr: crate::hir::Expr,
+    pub expr: crate::hir::CheckedExpr,
     /// Dimension declared on the unit definition.
     pub declared_dimension: Dimension,
     /// Dimension proved from the RHS base-unit expression.
@@ -919,17 +967,19 @@ fn build_ir_from_resolved(
             cancellation.checkpoint()?;
             let decl_name = entry.name;
             let type_ann = take_type_ann(&mut type_anns, &decl_name, entry.span, src)?;
-            let default_src = entry.default_expr.as_ref().map(|_| BodySource::own());
+            let default = entry.default_expr.map(|expr| UnfrozenParamDefault {
+                expr,
+                resolution_owner: dag_id.clone(),
+                src: BodySource::own(),
+            });
             Ok(UnfrozenParamEntry {
                 name: ScopedName::from(decl_name),
                 declaration_owner: dag_id.clone(),
                 type_ann,
                 type_resolution_owner: dag_id.clone(),
-                default_expr: entry.default_expr,
-                default_resolution_owner: dag_id.clone(),
+                default,
                 span: entry.span,
                 type_src: BodySource::own(),
-                default_src,
                 override_reconciliations: Vec::new(),
             })
         })
@@ -1379,24 +1429,21 @@ impl UnfrozenIR {
             .iter()
             .map(|entry| {
                 cancellation.checkpoint()?;
-                let default_expr = match (&entry.default_expr, &entry.default_src) {
-                    (Some(expr), Some(default_src)) => Some(lower_in(
-                        expr,
-                        &entry.default_resolution_owner,
-                        default_src.resolve(src),
-                    )?),
-                    (None, None) => None,
-                    _ => {
-                        return Err(GraphcalError::InternalError {
-                            message: format!(
-                                "parameter `{}` has inconsistent default-expression provenance",
-                                entry.name
-                            ),
-                            src: src.clone(),
-                            span: entry.span.into(),
-                        });
-                    }
-                };
+                let default = entry
+                    .default
+                    .as_ref()
+                    .map(|default| {
+                        lower_in(
+                            &default.expr,
+                            &default.resolution_owner,
+                            default.src.resolve(src),
+                        )
+                        .map(|expr| ParamDefault {
+                            expr,
+                            src: default.src.clone(),
+                        })
+                    })
+                    .transpose()?;
                 Ok(ParamEntry {
                     name: entry.name.clone(),
                     declaration_owner: entry.declaration_owner.clone(),
@@ -1405,10 +1452,9 @@ impl UnfrozenIR {
                         &entry.type_resolution_owner,
                         entry.type_src.resolve(src),
                     )?,
-                    default_expr,
+                    default,
                     span: entry.span,
                     type_src: entry.type_src.clone(),
-                    default_src: entry.default_src.clone(),
                     override_reconciliations: entry.override_reconciliations.clone(),
                 })
             })
@@ -1489,12 +1535,15 @@ impl UnfrozenIR {
                             .map(|lowered| (encoding.channel, lowered))
                     })
                     .collect::<Result<Vec<_>, GraphcalError>>()?;
-                let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField]| {
+                let lower_fields = |fields: &[crate::desugar::desugared_ast::PlotField],
+                                    classify: fn(
+                    crate::syntax::ast::PlotPropertyName,
+                ) -> LoweredPlotProperty| {
                     fields
                         .iter()
                         .map(|field| {
                             Ok(LoweredPlotField {
-                                name: field.name.value.clone(),
+                                property: classify(field.name.value.clone()),
                                 name_span: field.name.span,
                                 value: lower_in(
                                     &field.value,
@@ -1510,8 +1559,14 @@ impl UnfrozenIR {
                     mark_type: entry.decl.mark.mark_type,
                     body: LoweredPlotBody {
                         encodings,
-                        mark_properties: lower_fields(&entry.decl.mark.properties)?,
-                        properties: lower_fields(&entry.decl.properties)?,
+                        mark_properties: lower_fields(
+                            &entry.decl.mark.properties,
+                            LoweredPlotProperty::mark,
+                        )?,
+                        properties: lower_fields(
+                            &entry.decl.properties,
+                            LoweredPlotProperty::plot,
+                        )?,
                     },
                     body_src: entry.body_src.clone(),
                     displayed: entry.displayed,
@@ -1525,7 +1580,7 @@ impl UnfrozenIR {
                 .iter()
                 .map(|field| {
                     Ok(LoweredPlotField {
-                        name: field.name.value.clone(),
+                        property: LoweredPlotProperty::composition(field.name.value.clone()),
                         name_span: field.name.span,
                         value: lower_in(&field.value, resolution_owner, body_src)?,
                     })
@@ -1624,7 +1679,9 @@ impl UnfrozenIR {
         for entry in &mut self.params {
             entry.declaration_owner = owner.clone();
             entry.type_resolution_owner = owner.clone();
-            entry.default_resolution_owner = owner.clone();
+            if let Some(default) = &mut entry.default {
+                default.resolution_owner = owner.clone();
+            }
         }
         for entry in &mut self.nodes {
             entry.declaration_owner = owner.clone();
@@ -1734,7 +1791,7 @@ impl UnfrozenIR {
                 param.override_reconciliations.clear();
                 continue;
             }
-            let Some(default_expr) = &param.default_expr else {
+            let Some(default) = &param.default else {
                 continue;
             };
             NominalOverridePreflight {
@@ -1745,7 +1802,7 @@ impl UnfrozenIR {
                 importer_src,
                 include_span,
             }
-            .visit_expr(default_expr)?;
+            .visit_expr(&default.expr)?;
             param.override_reconciliations.push(
                 crate::ir::override_reconciliation::PendingOverrideReconciliation::new(
                     param.name.member().clone(),
@@ -2257,30 +2314,30 @@ impl UnfrozenIR {
             if rebound.is_some() {
                 entry.override_reconciliations.clear();
             }
-            let default_resolution_owner = if let Some(binding_expr) = rebound {
-                // The binding expression and its spans belong to the immediate
-                // importer, independently of the producer-owned signature.
-                entry.default_expr = Some(binding_expr.clone());
-                entry.default_src = Some(BodySource::own());
-                importer_owner.clone()
-            } else if let Some(ref mut expr) = entry.default_expr {
-                // Keep the producer default, substitute its type-level names,
-                // and carry its existing source across this merge boundary.
-                substitute_indexes(expr, index_bindings);
-                substitute_type_names_in_expr(expr, type_bindings);
-                prefix_expr_refs(expr, prefix, dep_names, dep_scoped_names);
-                entry.default_src = entry
-                    .default_src
-                    .map(|source| source.or_dependency(dep_src));
-                merge_body_resolution_owner(
-                    entry.default_resolution_owner,
-                    expr_uses_local_units(expr, &dynamic_unit_names),
-                )?
-            } else {
-                // Required param without binding — stays None, caught later in exec_plan.
-                entry.default_src = None;
-                merge_resolution_owner(entry.default_resolution_owner)
-            };
+            match (rebound, &mut entry.default) {
+                (Some(binding_expr), _) => {
+                    // The binding expression and its spans belong to the immediate
+                    // importer, independently of the producer-owned signature.
+                    entry.default = Some(UnfrozenParamDefault {
+                        expr: binding_expr.clone(),
+                        resolution_owner: importer_owner.clone(),
+                        src: BodySource::own(),
+                    });
+                }
+                (None, Some(default)) => {
+                    // Keep the producer default, substitute its type-level names,
+                    // and carry its existing source across this merge boundary.
+                    substitute_indexes(&mut default.expr, index_bindings);
+                    substitute_type_names_in_expr(&mut default.expr, type_bindings);
+                    prefix_expr_refs(&mut default.expr, prefix, dep_names, dep_scoped_names);
+                    default.src = default.src.clone().or_dependency(dep_src);
+                    default.resolution_owner = merge_body_resolution_owner(
+                        default.resolution_owner.clone(),
+                        expr_uses_local_units(&default.expr, &dynamic_unit_names),
+                    )?;
+                }
+                (None, None) => {}
+            }
             substitute_type_expr_indexes(&mut entry.type_ann, index_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, type_bindings);
             substitute_type_expr_nominal_names(&mut entry.type_ann, dim_bindings);
@@ -2295,11 +2352,9 @@ impl UnfrozenIR {
                 )?,
                 type_ann: entry.type_ann,
                 type_resolution_owner: merge_resolution_owner(entry.type_resolution_owner),
-                default_expr: entry.default_expr,
-                default_resolution_owner,
+                default: entry.default,
                 span: entry.span,
                 type_src: entry.type_src.or_dependency(dep_src),
-                default_src: entry.default_src,
                 override_reconciliations: entry.override_reconciliations,
             });
         }

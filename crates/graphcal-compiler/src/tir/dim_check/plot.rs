@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 
 use crate::hir::ExprKind;
-use crate::ir::lower::LoweredPlotField;
+use crate::ir::lower::{LoweredPlotField, LoweredPlotProperty};
 use crate::plot_props::{CompositionProperty, MarkProperty, PlotProperty, PlotPropertyType};
 use crate::plot_shape::{PlotChannelShape, PlotLeafKind, align_plot_channel_axes};
 use crate::registry::error::GraphcalError;
@@ -42,7 +42,7 @@ pub(super) fn check_plot_properties_dag(
         let types = check_plot_encodings(&entry_ctx, &owner, body)?;
         channel_types.insert(owner.clone(), types);
         for field in &body.mark_properties {
-            let Some(prop) = MarkProperty::from_name(field.name.as_str()) else {
+            let LoweredPlotProperty::Mark(prop) = &field.property else {
                 return Err(invalid_property(
                     &entry_ctx,
                     field,
@@ -53,7 +53,7 @@ pub(super) fn check_plot_properties_dag(
             check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
         for field in &body.properties {
-            let Some(prop) = PlotProperty::from_name(field.name.as_str()) else {
+            let LoweredPlotProperty::Plot(prop) = &field.property else {
                 return Err(invalid_property(
                     &entry_ctx,
                     field,
@@ -72,9 +72,7 @@ pub(super) fn check_plot_properties_dag(
             crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
         )?;
         for field in &entry.fields {
-            let prop = CompositionProperty::from_name(field.name.as_str())
-                .filter(|p| p.applies_to_figure());
-            let Some(prop) = prop else {
+            let LoweredPlotProperty::Composition(prop) = &field.property else {
                 return Err(invalid_property(
                     &entry_ctx,
                     field,
@@ -91,6 +89,23 @@ pub(super) fn check_plot_properties_dag(
                     ),
                 ));
             };
+            if !prop.applies_to_figure() {
+                return Err(invalid_property(
+                    &entry_ctx,
+                    field,
+                    "a figure declaration",
+                    &format!(
+                        "{}; figures render as side-by-side concatenation, so sizes belong on \
+                         the constituent plots or layers",
+                        valid_names(
+                            CompositionProperty::ALL
+                                .iter()
+                                .filter(|p| p.applies_to_figure())
+                                .map(|p| p.name()),
+                        )
+                    ),
+                ));
+            }
             check_property_value(&entry_ctx, &owner, prop.name(), prop.value_type(), field)?;
         }
     }
@@ -102,7 +117,7 @@ pub(super) fn check_plot_properties_dag(
             crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
         )?;
         for field in &entry.fields {
-            let Some(prop) = CompositionProperty::from_name(field.name.as_str()) else {
+            let LoweredPlotProperty::Composition(prop) = &field.property else {
                 return Err(invalid_property(
                     &entry_ctx,
                     field,
@@ -288,7 +303,7 @@ fn invalid_property(
     valid: &str,
 ) -> GraphcalError {
     GraphcalError::InvalidPlotProperty {
-        property: field.name.as_str().to_string(),
+        property: field.property.name().to_string(),
         context,
         valid: valid.to_string(),
         src: ctx.src.clone(),

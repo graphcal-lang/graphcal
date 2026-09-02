@@ -1113,8 +1113,8 @@ impl ResolvedTypeDefs {
 pub struct ResolvedDomainBound {
     /// Whether this is a `min:` or `max:` bound.
     pub kind: crate::syntax::ast::DomainBoundKind,
-    /// The bound expression, lowered.
-    pub value: hir::Expr,
+    /// The bound expression, strictly lowered.
+    pub value: hir::CheckedExpr,
     /// Span of the whole bound.
     pub span: Span,
     /// Source file whose bytes are indexed by `span` and the expression spans.
@@ -1536,7 +1536,7 @@ impl TIR {
         self.root()
             .params
             .iter()
-            .any(|param| param.default_expr.is_none())
+            .any(|param| param.default.is_none())
             || self
                 .root_declared_indexes()
                 .any(crate::registry::types::IndexDef::is_required)
@@ -1795,7 +1795,7 @@ impl DagTIR {
     #[must_use]
     pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
         match self.declaration_index.values.get(key) {
-            Some(ValueDeclarationSlot::Const(slot)) => Some(&self.consts[*slot].expr),
+            Some(ValueDeclarationSlot::Const(slot)) => Some(&*self.consts[*slot].expr),
             Some(ValueDeclarationSlot::Param(_) | ValueDeclarationSlot::Node(_)) | None => None,
         }
     }
@@ -1804,8 +1804,11 @@ impl DagTIR {
     #[must_use]
     pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&hir::Expr> {
         match self.declaration_index.values.get(key) {
-            Some(ValueDeclarationSlot::Param(slot)) => self.params[*slot].default_expr.as_ref(),
-            Some(ValueDeclarationSlot::Node(slot)) => Some(&self.nodes[*slot].expr),
+            Some(ValueDeclarationSlot::Param(slot)) => self.params[*slot]
+                .default
+                .as_ref()
+                .map(|default| &*default.expr),
+            Some(ValueDeclarationSlot::Node(slot)) => Some(&*self.nodes[*slot].expr),
             Some(ValueDeclarationSlot::Const(_)) | None => None,
         }
     }
@@ -1822,7 +1825,7 @@ impl DagTIR {
         self.declaration_index
             .assertions
             .get(key)
-            .map(|slot| &self.asserts[*slot].body)
+            .map(|slot| &*self.asserts[*slot].body)
     }
 
     /// Visit every source unit reference used by this DAG.
@@ -1846,52 +1849,52 @@ impl DagTIR {
 
         self.consts
             .iter()
-            .map(|entry| &entry.expr)
+            .map(|entry| &*entry.expr)
             .chain(
                 self.params
                     .iter()
-                    .filter_map(|entry| entry.default_expr.as_ref()),
+                    .filter_map(|entry| entry.default.as_ref().map(|default| &*default.expr)),
             )
-            .chain(self.nodes.iter().map(|entry| &entry.expr))
+            .chain(self.nodes.iter().map(|entry| &*entry.expr))
             .chain(
                 self.semantic
                     .domain_bounds
                     .values()
                     .flatten()
-                    .map(|bound| &bound.value),
+                    .map(|bound| &*bound.value),
             )
             .chain(
                 self.semantic
                     .type_defs
                     .constrained_fields()
                     .flat_map(|(_, field)| field.domain_bounds().iter())
-                    .map(|bound| &bound.value),
+                    .map(|bound| &*bound.value),
             )
             .chain(self.plots.iter().flat_map(|entry| {
                 entry
                     .body
                     .encodings
                     .iter()
-                    .map(|(_, expr)| expr)
-                    .chain(entry.body.mark_properties.iter().map(|field| &field.value))
-                    .chain(entry.body.properties.iter().map(|field| &field.value))
+                    .map(|(_, expr)| &**expr)
+                    .chain(entry.body.mark_properties.iter().map(|field| &*field.value))
+                    .chain(entry.body.properties.iter().map(|field| &*field.value))
             }))
             .chain(
                 self.figures
                     .iter()
                     .flat_map(|entry| &entry.fields)
                     .chain(self.layers.iter().flat_map(|entry| &entry.fields))
-                    .map(|field| &field.value),
+                    .map(|field| &*field.value),
             )
             .chain(
                 self.semantic
                     .dynamic_unit_scales
                     .values()
-                    .map(|entry| &entry.expr),
+                    .map(|entry| &*entry.expr),
             )
             .for_each(|expr| visit_root(expr, visitor));
 
-        self.asserts.iter().for_each(|entry| match &entry.body {
+        self.asserts.iter().for_each(|entry| match &*entry.body {
             hir::AssertBody::Expr(expr) => visit_root(expr, visitor),
             hir::AssertBody::Tolerance {
                 actual,

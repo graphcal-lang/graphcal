@@ -149,7 +149,6 @@ fn check_dag_execution_facts(
                 topo_order: Arc::new(build_runtime_dag(dag, src, cancellation)?),
                 domain_constraints: Arc::new(HashMap::new()),
                 const_values: Arc::new(const_values),
-                struct_field_constraints: Arc::new(HashMap::new()),
             }),
         );
     }
@@ -187,28 +186,7 @@ fn check_dag_execution_facts(
         cancellation,
     )?;
     let mut all_field_constraints = inherited.struct_field_constraints.as_ref().clone();
-    for (owner, constraints) in field_constraints {
-        all_field_constraints.extend(
-            constraints
-                .iter()
-                .map(|(key, constraint)| (key.clone(), constraint.clone())),
-        );
-        if dag_ids.contains(&owner) {
-            let facts = dag_facts
-                .get_mut(&owner)
-                .and_then(Arc::get_mut)
-                .ok_or_else(|| {
-                    GraphcalError::internal_error(
-                        format!(
-                            "new field-constraint owner `{owner}` has no uniquely owned checked facts"
-                        ),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    )
-                })?;
-            facts.struct_field_constraints = Arc::new(constraints);
-        }
-    }
+    all_field_constraints.extend(field_constraints.into_values().flatten());
     for dag_id in &dag_ids {
         let dag = &tir.dag_registry()[dag_id];
         let facts = &dag_facts[dag_id];

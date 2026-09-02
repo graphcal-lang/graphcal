@@ -320,7 +320,7 @@ fn cycle_detection_uses_semantic_dependencies() {
 #[test]
 fn node_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("node y: Dimensionless = sqrt(4.0);");
-    tir.root_mut().nodes[0].expr.kind =
+    tir.root_mut().nodes[0].expr.expr_mut_for_test().kind =
         crate::hir::ExprKind::StringLiteral("not dimensionless".to_string());
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
@@ -332,7 +332,7 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
         "index Phase = { Burn };\n\
          node y: Dimensionless[Phase] = for p: Phase { match p { Phase#Burn => 1.0 } };",
     );
-    tir.root_mut().nodes[0].expr.kind =
+    tir.root_mut().nodes[0].expr.expr_mut_for_test().kind =
         crate::hir::ExprKind::StringLiteral("not indexed".to_string());
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
@@ -342,10 +342,12 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
 fn assert_entry_body_is_authoritative_for_hir_dimension_check() {
     let (mut tir, src) = module_aware_tir("assert ok = sqrt(4.0) == 2.0;");
     let span = tir.root().asserts[0].span;
-    tir.root_mut().asserts[0].body = crate::hir::AssertBody::Expr(Box::new(crate::hir::Expr::new(
-        crate::hir::ExprKind::StringLiteral("not bool".to_string()),
-        span,
-    )));
+    tir.root_mut().asserts[0].body = crate::hir::CheckedAssertBody::from_assert_body_for_test(
+        crate::hir::AssertBody::Expr(Box::new(crate::hir::Expr::new(
+            crate::hir::ExprKind::StringLiteral("not bool".to_string()),
+            span,
+        ))),
+    );
 
     assert!(check_dimensions_tir(&mut tir, &src).is_err());
 }
@@ -1198,7 +1200,7 @@ fn hir_normalizes_omitted_dimension_and_unit_powers() {
         crate::dimension::Rational::ONE
     );
 
-    let expression = param.default_expr.as_ref().unwrap();
+    let expression = &param.default.as_ref().unwrap().expr;
     let crate::hir::ExprKind::QuantityLiteral { unit, .. } = &expression.kind else {
         panic!("expected quantity literal");
     };

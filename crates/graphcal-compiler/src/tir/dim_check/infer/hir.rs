@@ -5398,7 +5398,7 @@ fn infer_hir_dag_call(
                     src,
                     DiagnosticAnchor::Source(param.span),
                 )?;
-                if param.default_expr.is_none() {
+                if param.default.is_none() {
                     required_param_keys.insert(key.clone());
                 }
                 let resolved = dag_tir

@@ -7,7 +7,6 @@ use miette::NamedSource;
 
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::registry::error::GraphcalError;
-use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::tir::typed::{StructFieldConstraintKey, TIR};
 
 use crate::decl_key::RuntimeDeclKey;
@@ -28,10 +27,10 @@ pub struct ExecPlan {
     pub(crate) topo_order: Vec<RuntimeDeclKey>,
     /// Mapping from assert name to the list of declarations that assume it.
     /// Key-lookup only, order irrelevant.
-    pub(crate) assumes_map: HashMap<ScopedName, Vec<ScopedName>>,
+    pub(crate) assumes_map: HashMap<RuntimeDeclKey, Vec<RuntimeDeclKey>>,
     /// Mapping from assert name to its expected-fail configuration.
     /// Key-lookup only, order irrelevant.
-    pub(crate) expected_fail: HashMap<ScopedName, graphcal_compiler::ir::resolve::ExpectedFail>,
+    pub(crate) expected_fail: HashMap<RuntimeDeclKey, graphcal_compiler::ir::resolve::ExpectedFail>,
     /// Resolved domain constraints for runtime validation, keyed by declaration name.
     /// Key-lookup only, order irrelevant.
     pub(crate) domain_constraints: Arc<HashMap<RuntimeDeclKey, ResolvedDomainConstraint>>,
@@ -113,12 +112,36 @@ pub fn compile_checked_with_cancellation(
             })
             .collect(),
         topo_order: root_facts.topo_order.as_ref().clone(),
-        assumes_map: tir.root().assumes_map().clone(),
+        assumes_map: tir
+            .root()
+            .assumes_map()
+            .iter()
+            .map(|(name, assumers)| {
+                let key = tir.root().require_bound_decl_identity(
+                    name,
+                    src,
+                    DiagnosticAnchor::WholeFile,
+                )?;
+                let assumers = assumers
+                    .iter()
+                    .map(|assumer| {
+                        tir.root()
+                            .require_bound_decl_identity(assumer, src, DiagnosticAnchor::WholeFile)
+                            .map(RuntimeDeclKey::resolved)
+                    })
+                    .collect::<Result<Vec<_>, GraphcalError>>()?;
+                Ok((RuntimeDeclKey::resolved(key), assumers))
+            })
+            .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         expected_fail: tir
             .root()
             .expected_fail_entries()
-            .map(|(name, expected)| (name.clone(), expected.clone()))
-            .collect(),
+            .map(|(name, expected)| {
+                tir.root()
+                    .require_bound_decl_identity(name, src, DiagnosticAnchor::WholeFile)
+                    .map(|key| (RuntimeDeclKey::resolved(key), expected.clone()))
+            })
+            .collect::<Result<HashMap<_, _>, GraphcalError>>()?,
         domain_constraints: Arc::clone(&root_facts.domain_constraints),
         struct_field_constraints: Arc::clone(&facts.struct_field_constraints),
         checked_execution_facts: facts.clone(),

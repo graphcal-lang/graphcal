@@ -115,7 +115,7 @@ fn hir_exists_before_static_checking_and_tir_requires_validation() {
     assert!(hir_stdout.contains("bad"));
     assert!(hir_stdout.contains("type_ann: TypeAnnotation"));
     assert!(hir_stdout.contains("domain_bounds: ["));
-    assert!(hir_stdout.contains("value: Expr"));
+    assert!(hir_stdout.contains("value: CheckedExpr"));
     assert!(!hir_stdout.contains("type_resolution_owner"));
 
     let tir = run(&["dump", "tir", invalid.to_str().unwrap()]);

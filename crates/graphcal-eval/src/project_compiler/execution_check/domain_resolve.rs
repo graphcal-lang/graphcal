@@ -622,7 +622,6 @@ pub(super) fn resolve_struct_field_constraints_with_cancellation(
                     const_values: Arc::new(values),
                     topo_order: Arc::new(Vec::new()),
                     domain_constraints: Arc::new(HashMap::new()),
-                    struct_field_constraints: Arc::new(HashMap::new()),
                 }),
             )
         })
