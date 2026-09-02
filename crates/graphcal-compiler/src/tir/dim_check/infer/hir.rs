@@ -83,6 +83,59 @@ enum NominalDependencyTracking {
     Collect(NominalDependencyCollector),
 }
 
+/// One executable use that observes a nominal type's concrete definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::tir::dim_check) struct TypeDefinitionDependency {
+    identity: ResolvedStructTypeName,
+    span: Span,
+}
+
+impl TypeDefinitionDependency {
+    pub(in crate::tir::dim_check) const fn identity(&self) -> &ResolvedStructTypeName {
+        &self.identity
+    }
+
+    pub(in crate::tir::dim_check) const fn span(&self) -> Span {
+        self.span
+    }
+}
+
+#[derive(Clone, Default)]
+struct TypeDefinitionDependencyCollector {
+    dependencies: Rc<RefCell<Vec<TypeDefinitionDependency>>>,
+}
+
+impl TypeDefinitionDependencyCollector {
+    fn record(&self, identity: &ResolvedStructTypeName, span: Span) {
+        self.dependencies
+            .borrow_mut()
+            .push(TypeDefinitionDependency {
+                identity: identity.clone(),
+                span,
+            });
+    }
+
+    fn snapshot(&self) -> Vec<TypeDefinitionDependency> {
+        self.dependencies.borrow().clone()
+    }
+}
+
+#[derive(Clone, Default)]
+enum TypeDefinitionDependencyTracking {
+    #[default]
+    Disabled,
+    Collect(TypeDefinitionDependencyCollector),
+}
+
+impl TypeDefinitionDependencyTracking {
+    fn record(&self, identity: &ResolvedStructTypeName, span: Span) {
+        match self {
+            Self::Disabled => {}
+            Self::Collect(collector) => collector.record(identity, span),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(in crate::tir::dim_check) struct MaterializedShapeCollector {
     shapes: Rc<RefCell<HashMap<MaterializedExpressionKey, MaterializedShape>>>,
@@ -203,6 +256,7 @@ struct HirInferenceControl {
     cancellation: crate::cancellation::CancellationToken,
     generic_substitutions: Option<ConcreteGenericSubstitutions>,
     nominal_dependencies: NominalDependencyTracking,
+    type_definition_dependencies: TypeDefinitionDependencyTracking,
     materialized_shapes: Option<(MaterializedShapeCollector, Option<ResolvedDeclName>)>,
 }
 
@@ -220,6 +274,7 @@ impl HirLocalTypes<'_> {
             cancellation,
             generic_substitutions,
             NominalDependencyTracking::Disabled,
+            TypeDefinitionDependencyTracking::Disabled,
             None,
         )
     }
@@ -232,6 +287,21 @@ impl HirLocalTypes<'_> {
             cancellation,
             None,
             NominalDependencyTracking::Collect(collector.clone()),
+            TypeDefinitionDependencyTracking::Disabled,
+            None,
+        );
+        (locals, collector)
+    }
+
+    fn collecting_type_definition_dependencies(
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> (Self, TypeDefinitionDependencyCollector) {
+        let collector = TypeDefinitionDependencyCollector::default();
+        let locals = Self::root_with_tracking(
+            cancellation,
+            None,
+            NominalDependencyTracking::Disabled,
+            TypeDefinitionDependencyTracking::Collect(collector.clone()),
             None,
         );
         (locals, collector)
@@ -246,6 +316,7 @@ impl HirLocalTypes<'_> {
             cancellation,
             None,
             NominalDependencyTracking::Disabled,
+            TypeDefinitionDependencyTracking::Disabled,
             Some((collector, owner)),
         )
     }
@@ -254,6 +325,7 @@ impl HirLocalTypes<'_> {
         cancellation: &crate::cancellation::CancellationToken,
         generic_substitutions: Option<ConcreteGenericSubstitutions>,
         nominal_dependencies: NominalDependencyTracking,
+        type_definition_dependencies: TypeDefinitionDependencyTracking,
         materialized_shapes: Option<(MaterializedShapeCollector, Option<ResolvedDeclName>)>,
     ) -> Self {
         Self {
@@ -262,6 +334,7 @@ impl HirLocalTypes<'_> {
                 cancellation: cancellation.clone(),
                 generic_substitutions,
                 nominal_dependencies,
+                type_definition_dependencies,
                 materialized_shapes,
             }),
         }
@@ -298,9 +371,24 @@ type ResolvedDeclKey = ResolvedDeclName;
 
 #[derive(Debug, Clone, Copy)]
 enum TypeNominalUse<'a> {
-    Field(&'a FieldName),
-    Constructor(&'a ResolvedConstructorName),
+    Field {
+        field: &'a FieldName,
+        span: Span,
+    },
+    Constructor {
+        constructor: &'a ResolvedConstructorName,
+        span: Span,
+    },
     TypeArgument,
+}
+
+impl TypeNominalUse<'_> {
+    const fn definition_span(self) -> Option<Span> {
+        match self {
+            Self::Field { span, .. } | Self::Constructor { span, .. } => Some(span),
+            Self::TypeArgument => None,
+        }
+    }
 }
 
 fn check_type_override_dependency(
@@ -311,6 +399,12 @@ fn check_type_override_dependency(
     nominal_use: TypeNominalUse<'_>,
 ) -> Result<(), GraphcalError> {
     local_types.control.nominal_dependencies.record_type(actual);
+    if let Some(span) = nominal_use.definition_span() {
+        local_types
+            .control
+            .type_definition_dependencies
+            .record(actual, span);
+    }
     let Some(owner_decl) = owner_decl else {
         return Ok(());
     };
@@ -332,10 +426,10 @@ fn check_type_override_dependency(
                 continue;
             }
             let detail = match nominal_use {
-                TypeNominalUse::Field(field) => {
+                TypeNominalUse::Field { field, .. } => {
                     format!("field `{field}` of type `{overridden}`")
                 }
-                TypeNominalUse::Constructor(constructor) => format!(
+                TypeNominalUse::Constructor { constructor, .. } => format!(
                     "constructor `{}` of type `{overridden}`",
                     constructor.as_str()
                 ),
@@ -601,6 +695,65 @@ pub(in crate::tir::dim_check) fn infer_hir_type_with_nominal_dependencies_and_ca
         src,
     )?;
     Ok((inferred, collector.snapshot()))
+}
+
+fn contains_type_definition_observation(expr: &hir::Expr) -> bool {
+    let mut found = false;
+    hir::visit_expr(expr, &mut |candidate| {
+        if found {
+            return;
+        }
+        found = match &candidate.kind {
+            hir::ExprKind::FieldAccess { .. } | hir::ExprKind::ConstructorCall { .. } => true,
+            hir::ExprKind::ConstRef(target) => {
+                matches!(&target.value, hir::ConstRef::Constructor(_))
+            }
+            hir::ExprKind::Match { arms, .. } => arms
+                .iter()
+                .any(|arm| matches!(&arm.pattern, hir::expr::MatchPattern::Constructor { .. })),
+            _ => false,
+        };
+    });
+    found
+}
+
+/// Collect uses that inspect nominal type definitions while inferring a whole body.
+///
+/// Running through the ordinary inference recursion preserves every lexical
+/// local environment instead of speculatively inferring detached subexpressions.
+/// Bodies without a definition-observing operation need no inference; this is
+/// important for context-typed leaves such as plot label strings.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors syntax inference context"
+)]
+pub(in crate::tir::dim_check) fn collect_hir_type_definition_dependencies_with_cancellation(
+    expr: &hir::Expr,
+    owner_decl_name: Option<&ResolvedDeclName>,
+    declared_types: &HashMap<ScopedName, DeclaredType>,
+    dag: &crate::tir::typed::DagTIR,
+    tir: &crate::tir::typed::TIR,
+    registry: &FormattingRegistry,
+    builtin_fns: &crate::registry::builtins::BuiltinFunctions,
+    src: &NamedSource<Arc<String>>,
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<Vec<TypeDefinitionDependency>, GraphcalError> {
+    if !contains_type_definition_observation(expr) {
+        return Ok(Vec::new());
+    }
+    let (locals, collector) = HirLocalTypes::collecting_type_definition_dependencies(cancellation);
+    infer_hir_type(
+        expr,
+        owner_decl_name,
+        declared_types,
+        &locals,
+        dag,
+        tir,
+        registry,
+        builtin_fns,
+        src,
+    )?;
+    Ok(collector.snapshot())
 }
 
 #[expect(
@@ -1014,9 +1167,13 @@ fn infer_resolved_decl_ref_type(
     tir: &crate::tir::typed::TIR,
     src: &NamedSource<Arc<String>>,
 ) -> Result<InferredType, GraphcalError> {
-    let local_name = ScopedName::local(target.to_unowned_def_name());
+    // HIR references preserve their definition-time owner. A concrete semantic
+    // instance is the authoritative boundary that maps those references to the
+    // corresponding runtime declaration before any type lookup.
+    let runtime_target = dag.runtime_decl_identity(target);
+    let local_name = ScopedName::local(runtime_target.to_unowned_def_name());
 
-    if target.owner() == &dag.dag_id
+    if runtime_target.owner() == &dag.dag_id
         && let Some(inferred) = infer_bound_decl_type(&local_name, declared_types, dag, src)?
     {
         return Ok(inferred);
@@ -1026,14 +1183,14 @@ fn infer_resolved_decl_ref_type(
         .semantic
         .decl_bindings
         .iter()
-        .filter_map(|(name, resolved)| (resolved == target).then_some(name))
+        .filter_map(|(name, resolved)| (resolved == &runtime_target).then_some(name))
     {
         if let Some(inferred) = infer_bound_decl_type(name, declared_types, dag, src)? {
             return Ok(inferred);
         }
     }
 
-    if let Some(target_dag) = tir.dag_containing_declaration(target)
+    if let Some(target_dag) = tir.dag_containing_declaration(&runtime_target)
         && let Some(inferred) = infer_bound_decl_type(
             &local_name,
             &target_dag.build_declared_types(src)?,
@@ -1108,7 +1265,10 @@ fn infer_hir_const_ref(
                 dag,
                 owner_decl_name,
                 &target_def.owning_type,
-                TypeNominalUse::Constructor(constructor),
+                TypeNominalUse::Constructor {
+                    constructor,
+                    span: target.span,
+                },
             )?;
             if !target_def.variant.fields().is_empty() {
                 return Err(GraphcalError::EvalError {
@@ -3755,7 +3915,10 @@ fn infer_hir_field_access(
         dag,
         owner_decl_name,
         type_name.resolved(),
-        TypeNominalUse::Field(&field.value),
+        TypeNominalUse::Field {
+            field: &field.value,
+            span: field.span,
+        },
     )?;
     let type_def =
         struct_type_def_for_inferred(type_name, Some(dag), registry).ok_or_else(|| {
@@ -4052,7 +4215,10 @@ fn infer_hir_constructor_call(
         dag,
         owner_decl_name,
         &target.owning_type,
-        TypeNominalUse::Constructor(&callee.value),
+        TypeNominalUse::Constructor {
+            constructor: &callee.value,
+            span: callee.span,
+        },
     )?;
     constructor_generic_args.iter().try_for_each(|arg| {
         check_hir_generic_arg_override_dependencies(arg, local_types, dag, owner_decl_name)
@@ -5048,7 +5214,10 @@ fn infer_hir_match(
                     dag,
                     owner_decl_name,
                     &target.owning_type,
-                    TypeNominalUse::Constructor(&constructor.value),
+                    TypeNominalUse::Constructor {
+                        constructor: &constructor.value,
+                        span: constructor.span,
+                    },
                 )?;
                 if bindings.is_explicit_empty() && target.variant.fields().is_empty() {
                     return Err(GraphcalError::EmptyParenthesizedConstructor {

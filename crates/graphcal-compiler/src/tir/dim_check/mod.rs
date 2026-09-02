@@ -1086,7 +1086,9 @@ pub type OverrideDependencySummary = HashMap<ResolvedDeclName, HashSet<NominalOv
 /// HIR records each possible nominal override before substituting an include
 /// instance. Once a source module has been checked, its canonical dependency
 /// summary distinguishes a true dependency on the replaced nominal from an
-/// unrelated use of the replacement type or index itself.
+/// unrelated use of the replacement type or index itself. The refinement is
+/// applied to every materialized semantic instance, not only the entry DAG,
+/// because each instance owns its own executable reconciliation facts.
 pub fn reconcile_external_override_dependencies<S>(
     tir: &mut crate::tir::typed::TIR,
     summary: &OverrideDependencySummary,
@@ -1094,30 +1096,31 @@ pub fn reconcile_external_override_dependencies<S>(
 ) where
     S: std::hash::BuildHasher,
 {
-    tir.root_mut()
-        .semantic
-        .override_reconciliations
-        .retain(|_, reconciliations| {
-            reconciliations.retain_mut(|reconciliation| {
-                if !complete_owners.contains(reconciliation.source_decl.owner()) {
-                    return true;
-                }
-                let dependencies = summary.get(&reconciliation.source_decl);
-                reconciliation.targets.retain(|target| {
-                    let source = match target {
-                        crate::tir::typed::ResolvedOverrideTarget::Index { source, .. } => {
-                            NominalOverrideIdentity::Index(source.clone())
-                        }
-                        crate::tir::typed::ResolvedOverrideTarget::Type { source, .. } => {
-                            NominalOverrideIdentity::Type(source.clone())
-                        }
-                    };
-                    dependencies.is_some_and(|dependencies| dependencies.contains(&source))
+    for dag in tir.dags.values_mut() {
+        dag.semantic
+            .override_reconciliations
+            .retain(|_, reconciliations| {
+                reconciliations.retain_mut(|reconciliation| {
+                    if !complete_owners.contains(reconciliation.source_decl.owner()) {
+                        return true;
+                    }
+                    let dependencies = summary.get(&reconciliation.source_decl);
+                    reconciliation.targets.retain(|target| {
+                        let source = match target {
+                            crate::tir::typed::ResolvedOverrideTarget::Index { source, .. } => {
+                                NominalOverrideIdentity::Index(source.clone())
+                            }
+                            crate::tir::typed::ResolvedOverrideTarget::Type { source, .. } => {
+                                NominalOverrideIdentity::Type(source.clone())
+                            }
+                        };
+                        dependencies.is_some_and(|dependencies| dependencies.contains(&source))
+                    });
+                    !reconciliation.targets.is_empty()
                 });
-                !reconciliation.targets.is_empty()
+                !reconciliations.is_empty()
             });
-            !reconciliations.is_empty()
-        });
+    }
 }
 
 /// Collect canonical nominal dependencies for every checked parameter default

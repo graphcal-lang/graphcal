@@ -616,6 +616,51 @@ include reusable(type Record: Other, record: Other(x: 2.0)) as instance;
 }
 
 #[test]
+fn template_closure_analysis_preserves_comprehension_locals() {
+    let result = compile_and_eval(
+        r"
+pub index Item = { First, Second };
+pub type Record { Record(value: Dimensionless) }
+param records: Record[Item] = {
+    Item#First: Record(value: 1.0),
+    Item#Second: Record(value: 2.0),
+};
+pub node values: Dimensionless[Item] = for item: Item {
+    @records[item].value
+};
+",
+    );
+    assert!(
+        result.is_ok(),
+        "closure analysis lost the comprehension local: {result:?}"
+    );
+}
+
+#[test]
+fn template_closure_reports_type_use_after_scoped_inference() {
+    let error = compile_graphcal_error(
+        r"
+pub index Item = { First, Second };
+pub(bind) type Record { Record(value: Dimensionless) }
+param records: Record[Item];
+pub node values: Dimensionless[Item] = for item: Item {
+    @records[item].value
+};
+",
+    );
+    assert!(
+        matches!(
+            error,
+            GraphcalError::TemplateBodyDependsOnStaticDefault {
+                port_kind: graphcal_compiler::static_interface::StaticInputKind::Type,
+                ..
+            }
+        ),
+        "unexpected closure diagnostic: {error:?}"
+    );
+}
+
+#[test]
 fn template_body_rejects_defaulted_bindable_type_structure() {
     for source in [
         r"
@@ -715,6 +760,90 @@ unit scaled: Length = (@factor) m;
             "unexpected error for `{expected_body}`: {error:?}"
         );
     }
+}
+
+#[test]
+fn nested_semantic_value_bindings_compose_outer_index_substitution() {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/index_rebase");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"index_rebase\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("producer.gcl"),
+        r"
+pub(bind) index Axis;
+pub node flags: Bool[Axis] = for axis: Axis { true };
+",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("consumer.gcl"),
+        r"
+pub(bind) index Axis;
+param input: Bool[Axis];
+pub node output: Bool[Axis] = for axis: Axis { @input[axis] };
+",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("composed.gcl"),
+        r"
+pub(bind) index Axis;
+include index_rebase.producer(index Axis: Axis) as producer;
+include index_rebase.consumer(
+    index Axis: Axis,
+    input: @producer::flags
+) as consumer;
+pub node flags: Bool[Axis] = for axis: Axis { @consumer::output[axis] };
+",
+    )
+    .unwrap();
+    let root = package.join("main.gcl");
+    std::fs::write(
+        &root,
+        r"
+pub index Concrete = { One, Two };
+include index_rebase.composed(index Axis: Concrete)::{ flags };
+",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|error| panic!("nested Static substitution must compose: {error:?}"));
+    let value = result
+        .nodes
+        .iter()
+        .find(|(name, _)| name.to_string() == "flags")
+        .expect("projected flags node")
+        .1
+        .as_ref()
+        .expect("successful flags value");
+    let graphcal_eval::eval::Value::Indexed {
+        index_name,
+        entries,
+        ..
+    } = value
+    else {
+        panic!("expected indexed flags, got {value:?}");
+    };
+    assert_eq!(
+        index_name
+            .declared_resolved()
+            .expect("declared concrete index")
+            .atom()
+            .as_str(),
+        "Concrete"
+    );
+    assert_eq!(entries.len(), 2);
+    assert!(
+        entries
+            .values()
+            .all(|value| matches!(value, graphcal_eval::eval::Value::Bool(true)))
+    );
 }
 
 #[test]

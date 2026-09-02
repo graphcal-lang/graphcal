@@ -612,11 +612,71 @@ fn extend_binding_constructor_refs(
     result
 }
 
-fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRecord) {
+fn resolve_instance_override_target(
+    target: &crate::ir::override_reconciliation::PendingOverrideTarget,
+    substitution: &StaticSubstitution,
+    src: &NamedSource<Arc<String>>,
+    include_span: crate::syntax::span::Span,
+) -> Result<super::ResolvedOverrideTarget, GraphcalError> {
     use crate::ir::override_reconciliation::PendingOverrideTarget;
-    use crate::registry::declared_type::IndexTypeRef;
-    use crate::registry::types::IndexBindingTarget;
 
+    match target {
+        PendingOverrideTarget::Index {
+            overridden,
+            source_owner,
+            ..
+        } => {
+            let source = ResolvedIndexName::from_def(source_owner.clone(), overridden.clone());
+            let replacement = substitution.indexes.get(&source).ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic override reconciliation for index `{source}` has no canonical Static substitution"
+                    ),
+                    src,
+                    DiagnosticAnchor::Source(include_span),
+                )
+            })?;
+            Ok(super::ResolvedOverrideTarget::Index {
+                overridden: overridden.clone(),
+                source,
+                replacement: match replacement {
+                    InstanceIndexBindingTarget::Declared(name) => {
+                        IndexTypeRef::from_resolved(name.clone())
+                    }
+                    InstanceIndexBindingTarget::Finite(index) => {
+                        IndexTypeRef::from_finite_index(*index)
+                    }
+                },
+            })
+        }
+        PendingOverrideTarget::Type {
+            overridden,
+            source_owner,
+            ..
+        } => {
+            let source = ResolvedStructTypeName::from_def(source_owner.clone(), overridden.clone());
+            let replacement = substitution.types.get(&source).cloned().ok_or_else(|| {
+                GraphcalError::internal_error(
+                    format!(
+                        "semantic override reconciliation for type `{source}` has no canonical Static substitution"
+                    ),
+                    src,
+                    DiagnosticAnchor::Source(include_span),
+                )
+            })?;
+            Ok(super::ResolvedOverrideTarget::Type {
+                overridden: overridden.clone(),
+                source,
+                replacement,
+            })
+        }
+    }
+}
+
+fn install_override_reconciliations(
+    instance: &mut DagTIR,
+    edge: &HirInstanceRecord,
+) -> Result<(), GraphcalError> {
     let owner = edge.instance.id.owner();
     instance.semantic.override_reconciliations = edge
         .override_reconciliations
@@ -630,59 +690,28 @@ fn install_override_reconciliations(instance: &mut DagTIR, edge: &HirInstanceRec
                     let targets = pending
                         .targets
                         .iter()
-                        .map(|target| match target {
-                            PendingOverrideTarget::Index {
-                                overridden,
-                                source_owner,
-                                replacement,
-                                replacement_owner,
-                            } => super::ResolvedOverrideTarget::Index {
-                                overridden: overridden.clone(),
-                                source: crate::syntax::index_name::ResolvedIndexName::from_def(
-                                    source_owner.clone(),
-                                    overridden.clone(),
-                                ),
-                                replacement: match replacement {
-                                    IndexBindingTarget::Declared(name) => IndexTypeRef::with_owner(
-                                        replacement_owner.clone(),
-                                        name.clone(),
-                                    ),
-                                    IndexBindingTarget::Finite(index) => {
-                                        IndexTypeRef::from_finite_index(*index)
-                                    }
-                                },
-                            },
-                            PendingOverrideTarget::Type {
-                                overridden,
-                                source_owner,
-                                replacement,
-                                replacement_owner,
-                            } => super::ResolvedOverrideTarget::Type {
-                                overridden: overridden.clone(),
-                                source: crate::syntax::type_name::ResolvedStructTypeName::from_def(
-                                    source_owner.clone(),
-                                    overridden.clone(),
-                                ),
-                                replacement:
-                                    crate::syntax::type_name::ResolvedStructTypeName::from_def(
-                                        replacement_owner.clone(),
-                                        replacement.clone(),
-                                    ),
-                            },
+                        .map(|target| {
+                            resolve_instance_override_target(
+                                target,
+                                &edge.instance.specialization.substitution,
+                                &pending.src,
+                                pending.include_span,
+                            )
                         })
-                        .collect();
-                    super::OverrideReconciliation {
+                        .collect::<Result<_, GraphcalError>>()?;
+                    Ok(super::OverrideReconciliation {
                         source_decl: pending.source_decl.clone(),
                         orphan_decl: pending.orphan_decl.clone(),
                         targets,
                         src: pending.src.clone(),
                         include_span: pending.include_span,
-                    }
+                    })
                 })
-                .collect();
-            (instance_port, reconciliations)
+                .collect::<Result<_, GraphcalError>>()?;
+            Ok((instance_port, reconciliations))
         })
-        .collect();
+        .collect::<Result<_, GraphcalError>>()?;
+    Ok(())
 }
 
 fn specialize_expected_fail(
@@ -978,7 +1007,7 @@ fn specialize_instance_semantics(
         .iter()
         .map(|(target, bounds)| (local_instance_decl(target, owner), bounds.clone()))
         .collect();
-    install_override_reconciliations(instance, edge);
+    install_override_reconciliations(instance, edge)?;
     instance.declaration_index = super::DagDeclarationIndex::default();
     instance.index_declaration_records().map_err(|error| {
         GraphcalError::internal_error(

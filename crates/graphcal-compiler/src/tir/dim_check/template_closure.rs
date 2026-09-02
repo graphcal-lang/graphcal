@@ -38,26 +38,6 @@ fn optional_type_port<'a>(
     })
 }
 
-fn constructor_owner<'a>(
-    ctx: &'a DimCheckContext<'_>,
-    constructor: &crate::syntax::type_name::ResolvedConstructorName,
-    span: Span,
-) -> Result<&'a ResolvedStructTypeName, GraphcalError> {
-    ctx.dag
-        .semantic
-        .constructor_refs
-        .constructor_defs
-        .get(constructor)
-        .map(|target| &target.owning_type)
-        .ok_or_else(|| GraphcalError::InternalError {
-            message: format!(
-                "template-closure validation is missing constructor metadata for `{constructor}`"
-            ),
-            src: ctx.src.clone(),
-            span: span.into(),
-        })
-}
-
 fn infer_operand(
     ctx: &DimCheckContext<'_>,
     owner: Option<&ResolvedDeclName>,
@@ -112,71 +92,22 @@ fn check_expr(
     body: &TemplateBodyIdentity,
     expr: &hir::Expr,
 ) -> Result<(), GraphcalError> {
-    let mut result = Ok(());
-    hir::visit_expr(expr, &mut |candidate| {
-        if result.is_err() {
-            return;
-        }
-        let use_site = match &candidate.kind {
-            hir::ExprKind::FieldAccess {
-                expr: operand,
-                field,
-            } => match infer_operand(ctx, owner, operand) {
-                Ok(InferredType::Struct(identity, _)) => {
-                    optional_type_port(ctx.dag, identity.resolved()).map(|port| (port, field.span))
-                }
-                Ok(_) => None,
-                Err(error) => {
-                    result = Err(error);
-                    None
-                }
-            },
-            hir::ExprKind::ConstructorCall { callee, .. } => {
-                match constructor_owner(ctx, &callee.value, callee.span) {
-                    Ok(identity) => {
-                        optional_type_port(ctx.dag, identity).map(|port| (port, callee.span))
-                    }
-                    Err(error) => {
-                        result = Err(error);
-                        None
-                    }
-                }
-            }
-            hir::ExprKind::ConstRef(target) => match &target.value {
-                hir::ConstRef::Constructor(constructor) => {
-                    match constructor_owner(ctx, constructor, target.span) {
-                        Ok(identity) => {
-                            optional_type_port(ctx.dag, identity).map(|port| (port, target.span))
-                        }
-                        Err(error) => {
-                            result = Err(error);
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            },
-            hir::ExprKind::Match { arms, .. } => arms.iter().find_map(|arm| {
-                let hir::expr::MatchPattern::Constructor { constructor, .. } = &arm.pattern else {
-                    return None;
-                };
-                match constructor_owner(ctx, &constructor.value, constructor.span) {
-                    Ok(identity) => {
-                        optional_type_port(ctx.dag, identity).map(|port| (port, constructor.span))
-                    }
-                    Err(error) => {
-                        result = Err(error);
-                        None
-                    }
-                }
-            }),
-            _ => None,
-        };
-        if let Some((port, span)) = use_site {
-            result = emit_violation(ctx, body, port, span);
-        }
-    });
-    result
+    let dependencies = infer::hir::collect_hir_type_definition_dependencies_with_cancellation(
+        expr,
+        owner,
+        ctx.declared_types,
+        ctx.dag,
+        ctx.tir,
+        ctx.registry,
+        ctx.builtin_fns,
+        ctx.src,
+        ctx.cancellation,
+    )?;
+    dependencies.into_iter().try_for_each(|dependency| {
+        optional_type_port(ctx.dag, dependency.identity()).map_or(Ok(()), |port| {
+            emit_violation(ctx, body, port, dependency.span())
+        })
+    })
 }
 
 fn local_owner(
