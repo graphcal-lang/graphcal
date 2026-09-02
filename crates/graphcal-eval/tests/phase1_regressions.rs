@@ -847,6 +847,68 @@ include index_rebase.composed(index Axis: Concrete)::{ flags };
 }
 
 #[test]
+fn structured_projection_rebases_private_presentation_dependencies() {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join("src/private_presentation");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"private_presentation\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("library.gcl"),
+        r"
+pub type Output { Output(value: Mass) }
+pub dag calculation {
+    import private_presentation.library::{ type Output, Output };
+    node raw_value: Mass = 2.0 kg;
+    node intermediate: Mass = if @raw_value > 0.0 kg {
+        @raw_value
+    } else {
+        0.0 g
+    };
+    pub node result: Output = Output(value: @intermediate);
+}
+",
+    )
+    .unwrap();
+    let root = package.join("main.gcl");
+    std::fs::write(
+        &root,
+        "include private_presentation.library.calculation()::{ result };\n",
+    )
+    .unwrap();
+
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|error| panic!("structured semantic projection must evaluate: {error:?}"));
+    assert!(
+        result.all.iter().all(|(_, value, _)| value.is_ok()),
+        "a presentation dependency used its template owner: {:?}",
+        result.all
+    );
+    let value = result
+        .nodes
+        .iter()
+        .find(|(name, _)| name.to_string() == "result")
+        .expect("projected result node")
+        .1
+        .as_ref()
+        .expect("successful projected result");
+    let graphcal_eval::eval::Value::Struct { fields, .. } = value else {
+        panic!("expected structured result, got {value:?}");
+    };
+    let graphcal_eval::eval::Value::Quantity {
+        display_unit: Some(unit),
+        ..
+    } = fields.get("value").expect("output value field")
+    else {
+        panic!("expected presented quantity field: {fields:?}");
+    };
+    assert_eq!(unit.label, "kg");
+}
+
+#[test]
 fn explicitly_rebinding_the_dependent_param_reconciles_type_override() {
     let result = compile_reconciliation_project(
         r"

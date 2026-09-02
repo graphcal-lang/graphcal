@@ -952,6 +952,24 @@ fn validate_expected_fail(
     }
 }
 
+fn install_presentation_facts(
+    tir: &mut crate::tir::typed::TIR,
+    facts: HashMap<crate::dag_id::DagId, crate::tir::presentation::DagPresentationFacts>,
+    src: &NamedSource<Arc<String>>,
+) -> Result<(), GraphcalError> {
+    for (dag_id, facts) in facts {
+        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
+            GraphcalError::internal_error(
+                format!("checked DAG `{dag_id}` disappeared while installing presentation facts"),
+                src,
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
+        dag.semantic.presentation = facts;
+    }
+    Ok(())
+}
+
 /// Check dimensions for all declarations in a file.
 ///
 /// For each const/param/node, infers the dimension of the RHS expression
@@ -1054,19 +1072,12 @@ pub fn check_dimensions_tir_with_cancellation(
     cancellation.checkpoint()?;
     let presentation_facts =
         presentation::collect_presentation_facts(tir, &checked_plot_shapes, src, cancellation)?;
-    for (dag_id, facts) in presentation_facts {
-        let dag = tir.dags.get_mut(&dag_id).ok_or_else(|| {
-            GraphcalError::internal_error(
-                format!("checked DAG `{dag_id}` disappeared while installing presentation facts"),
-                src,
-                DiagnosticAnchor::WholeFile,
-            )
-        })?;
-        dag.semantic.presentation = facts;
-    }
+    install_presentation_facts(tir, presentation_facts, src)?;
     crate::tir::typed::install_semantic_presentation_facts(tir, src)?;
-
-    Ok(())
+    let semantic_presentation_facts =
+        presentation::collect_semantic_presentation_facts(tir, src, cancellation)?;
+    install_presentation_facts(tir, semantic_presentation_facts, src)?;
+    crate::tir::typed::install_semantic_plot_projection_facts(tir, src)
 }
 
 /// Canonical nominal identity whose use in a parameter default is queried at
