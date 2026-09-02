@@ -28,6 +28,9 @@ site/
 # Vega bundles staged from crates/graphcal-report/assets by `just wasm-playground`
 docs/assets/playground/vega/
 
+# Amp orb portal metadata
+.amp/portals/*
+
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
 #  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
